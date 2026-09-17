@@ -9,13 +9,14 @@ import { buildCloseReport, openingSnapshot } from "./close";
 import { issueInvoice } from "./billing";
 import type { ActionInput, ActionResult, Context, DomainState, ValopayRecord } from "./types";
 import { assertActionRole } from "./validation";
-import { countedAttempts, evaluateRetry, policyIdFor, preregisterSample } from "./policy-engine";
+import { countedAttempts, evaluateRetry, policyIdFor, policySummary, preregisterSample, samePolicyLineage } from "./policy-engine";
+import { buildAlerts } from "./alerts";
 
 const requiresReason = new Set([
   "kill_switch", "mandate_suspend", "mandate_cancel", "mandate_reinstate", "mandate_reissue", "activation_reminder",
   "submit_policy", "approve_policy", "reject_policy", "new_policy_version", "submit_template", "approve_template",
   "confirm_allocation", "reject_allocation", "manual_allocate", "review_allocation", "resolve_exception", "record_refund",
-  "simulate_failure", "backtest_policy", "preregister_experiment", "hand_back", "mark_pack_used", "issue_invoice",
+  "simulate_failure", "backtest_policy", "preregister_experiment", "hand_back", "mark_pack_used", "issue_invoice", "notify_policy_change", "apply_policy_version",
 ]);
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -92,11 +93,15 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     const old = findRecord(state, String(input.recordId), "mandates");
     if (!["pending_activation", "expired", "cancelled", "failed"].includes(old.status)) throw new Error("Re-issue applies to mandates that expired, were cancelled, failed or never activated.");
     if (!data.consentEvidence || typeof data.consentEvidence !== "string") throw new Error("A re-issue needs a new consent record: supply data.consentEvidence.");
+    // RET-07: fresh consent covers the current approved version of the same policy, or the version named in data.policyId.
+    const target = data.policyId ? findRecord(state, String(data.policyId), "policies") : recordsOf(state, "policies").find((item) => item.id === old.data.policyId);
+    if (data.policyId && (target!.status !== "approved" || (old.data.policyId && !samePolicyLineage(state, String(old.data.policyId), target!.id)))) throw new Error("data.policyId must be an approved version of the mandate's policy.");
     // MAN-06: a new mandate and a new consent record; the old records are never edited.
     const fresh = makeRecord(state, "mandates", {
       name: `${old.name} · reissued`, status: "pending_activation", customerId: old.customerId, amountKobo: old.amountKobo, createdAt: now,
       data: {
-        workflow: old.data.workflow, frequency: old.data.frequency, policyId: old.data.policyId, origin: "reissued", reissuedFrom: old.id,
+        workflow: old.data.workflow, frequency: old.data.frequency, policyId: target?.id ?? old.data.policyId, origin: "reissued", reissuedFrom: old.id,
+        consentPolicyId: target?.id, consentPolicyVersion: target ? Number(target.data.version || 1) : undefined, consentPolicySummary: target ? policySummary(target) : undefined,
         consentEvidence: String(data.consentEvidence), consentGaps: [], consentCapturedAt: now, consentChannel: data.consentChannel || "merchant_staff",
         activationDeadline: new Date(Date.parse(now) + DEFAULT_ACTIVATION_WINDOW_DAYS * DAY_MS).toISOString(), reminderCount: 0, reissueReason: reason(input),
       },
@@ -171,6 +176,7 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     const opening = openingSnapshot(state);
     const reconciled = reconcile(state, ctx);
     const report = buildCloseReport(state, ctx, opening, reconciled.data);
+    report.alerts = buildAlerts(state, now);
     const reports = buildReports(state, now);
     const summary = `${report.observations.received} observations received, ${report.allocated.count} allocations confirmed, ${report.unallocated.count} unallocated (${report.unallocated.olderThan24Hours} older than 24h), ${report.exceptions.opened.count} exceptions opened and ${report.exceptions.closed.count} closed, ${report.customerPositionsChanged.length} customer positions changed.`;
     const close = makeRecord(state, "closes", {
@@ -276,6 +282,41 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     const checklist = [`Ownership of ${reverted.length} obligations reverted to ${fallbackOwner}`, `${cancelled.length} scheduled attempts cancelled with notices`, "Incumbent schedules re-enabled by the merchant against this checklist", "Full export delivered", "No future instructions are held for this merchant"];
     const cutover = makeRecord(state, "cutovers", { name: "Hand-back", status: "handed_back", createdAt: now, data: { checklist, fallbackOwner, confirmation: reason(input), revertedDueItemIds: reverted, cancelledAttemptIds: cancelled, handedBackAt: now } });
     return result("Hand-back completed: ownership reverted, scheduled attempts cancelled, no future instructions held.", cutover, { fallbackOwner, reverted: reverted.length, cancelled: cancelled.length });
+  }
+  if (input.action === "notify_policy_change") {
+    assertActionRole(ctx, ["Admin", "Operations"]);
+    const mandate = findRecord(state, String(input.recordId), "mandates");
+    const target = findRecord(state, String(data.policyId), "policies");
+    if (target.status !== "approved" || (mandate.data.policyId && !samePolicyLineage(state, String(mandate.data.policyId), target.id))) throw new Error("data.policyId must be an approved version of the mandate's policy.");
+    if (withinQuietHours(Date.parse(now))) throw new Error("Quiet hours 21:00–08:00 WAT: the messaging adapter refuses customer messages.");
+    const notification = makeRecord(state, "notifications", {
+      name: "Policy change notice", status: "simulated", customerId: mandate.customerId, createdAt: now,
+      data: { purpose: "policy_change", channel: "sms", class: "required", mandateId: mandate.id, policyId: target.id, policyVersion: Number(target.data.version || 1), submittedAt: now, acceptedAt: null, deliveredAt: null, renderedText: `${state.merchant.name}: the retry rules on your mandate change to ${policySummary(target)} Contact: ${state.settings.contactRoute || "your lender"}.`, simulated: true },
+    });
+    return result("Policy-change notice recorded as a simulation; it is not provider-accepted evidence and no message left the platform.", notification, { notificationId: notification.id, policyId: target.id });
+  }
+  if (input.action === "apply_policy_version") {
+    assertActionRole(ctx, ["Admin", "Operations"]);
+    const mandate = findRecord(state, String(input.recordId), "mandates");
+    const target = findRecord(state, String(data.policyId), "policies");
+    if (target.status !== "approved" || !target.data.reviewer) throw new Error("Only an approved policy version can be applied.");
+    if (mandate.data.policyId && !samePolicyLineage(state, String(mandate.data.policyId), target.id)) throw new Error("The version must belong to the mandate's policy; a different policy needs a re-issued mandate.");
+    if (mandate.data.consentPolicyId === target.id) throw new Error("The consent already covers this version.");
+    // RET-07: a notice accepted by the provider, and fresh consent where the merchant's terms require it.
+    const notice = recordsOf(state, "notifications").find((item) => (data.noticeId ? item.id === data.noticeId : item.data.mandateId === mandate.id && item.data.policyId === target.id) && item.data.purpose === "policy_change" && item.data.acceptedAt && item.data.synthetic !== true);
+    if (!notice) throw new Error("RET-07: a policy-change notice with provider acceptance evidence is required before a new version applies; a simulated notice is not evidence.");
+    const consentRequired = state.settings.policyChangeRequiresConsent === true;
+    if (consentRequired && (!data.consentEvidence || typeof data.consentEvidence !== "string")) throw new Error("RET-07: this merchant's terms require fresh consent for a policy change; supply data.consentEvidence.");
+    const history = Array.isArray(mandate.data.policyVersionHistory) ? mandate.data.policyVersionHistory : [];
+    history.push({ fromPolicyId: mandate.data.consentPolicyId ?? null, fromVersion: mandate.data.consentPolicyVersion ?? null, toPolicyId: target.id, toVersion: Number(target.data.version || 1), noticeId: notice.id, consentEvidence: consentRequired ? String(data.consentEvidence) : null, appliedAt: now, actor: ctx.actor, reason: reason(input) });
+    mandate.data.policyVersionHistory = history;
+    mandate.data.policyId = target.id;
+    mandate.data.consentPolicyId = target.id;
+    mandate.data.consentPolicyVersion = Number(target.data.version || 1);
+    mandate.data.consentPolicySummary = policySummary(target);
+    if (consentRequired) { mandate.data.consentEvidence = String(data.consentEvidence); mandate.data.consentCapturedAt = now; }
+    touch(mandate, now);
+    return result(`Policy version ${target.data.version ?? 1} now applies to this mandate after the notice${consentRequired ? " and fresh consent" : ""}; the previous version stays on record.`, mandate, { policyId: target.id, noticeId: notice.id });
   }
   if (input.action === "issue_invoice") {
     assertActionRole(ctx, ["Admin", "Finance"]);

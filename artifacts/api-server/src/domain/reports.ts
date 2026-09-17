@@ -4,6 +4,7 @@ import type { DomainState, Metric, Report, ValopayRecord } from "./types";
 import { paymentObservedAt, paymentRefunded, paymentReversed } from "./reconciliation";
 import { buildBillingStatement, monthOf, previousMonth } from "./billing";
 import { seededSample, wilsonInterval } from "./stats";
+import type { Alert } from "./alerts";
 export { billableCollection, reversalWindowDays } from "./billing";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -11,7 +12,7 @@ const metric = (key: string, label: string, value: number, unit: string, detail:
 const round = (value: number, places = 6) => Number(value.toFixed(places));
 
 /** Queue counts and headline metrics for the console overview; dashboards beyond this are stage 2 (UI-01). */
-export function buildOverview(state: DomainState, now: string) {
+export function buildOverview(state: DomainState, now: string, alerts: Alert[] = []) {
   const by = (kind: string) => recordsOf(state, kind);
   const settled = by("payments").filter((item) => item.data.settlementStatus === "settled" && item.status !== "possible_duplicate" && !paymentReversed(item));
   const outstanding = by("due-items").reduce((sum, item) => sum + Number(item.data.outstandingKobo ?? item.amountKobo), 0);
@@ -34,6 +35,7 @@ export function buildOverview(state: DomainState, now: string) {
     activity: by("audit").sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 8),
     upcoming: by("due-items").filter((item) => !["paid", "closed", "cancelled"].includes(item.status)).slice(0, 6),
     mode: state.merchant.mode, environment: "sandbox", lastClose: by("closes").at(-1)?.createdAt || "Not closed yet",
+    alerts,
   };
 }
 

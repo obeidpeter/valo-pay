@@ -2,7 +2,7 @@ import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
 import { z } from "zod";
 import { inWorkspace, loadState, saveState, roles, fail, appendAudit, verifyAudit, digest, canonical, listMerchants, findIdempotency, saveIdempotency, changeRole, type StoreContext } from "../lib/valopay-store";
-import { buildOverview, buildReports, makeRecord, validateRecord, executeAction } from "../domain";
+import { buildAlerts, buildOverview, buildReports, makeRecord, validateRecord, executeAction } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
 import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, defaultStatus, executionWindow, handBackOwners, recordKinds } from "@workspace/valopay-schema";
 import type { DomainState } from "../domain/types";
@@ -47,7 +47,7 @@ router.get("/v1/workspace",async(req,res)=>{
  res.json(S.GetWorkspaceResponse.parse(result));
 });
 router.get("/v1/overview",async(req,res)=>{
- const result=await withState(req,res,(state,ctx)=>buildOverview(state,ctx.now));
+ const result=await withState(req,res,(state,ctx)=>buildOverview(state,ctx.now,buildAlerts(state,ctx.now,verifyAudit(state))));
  res.json(S.GetOverviewResponse.parse(result));
 });
 router.get("/v1/records/:kind",async(req,res)=>{
@@ -133,6 +133,7 @@ router.patch("/v1/settings",async(req,res)=>{
   if(body.minimumTicketKobo!==undefined&&body.minimumTicketKobo<ABSOLUTE_TICKET_FLOOR_KOBO)fail("The ₦5,000 floor cannot be overridden.");
   if(body.defaultOwner&&!(handBackOwners as readonly string[]).includes(body.defaultOwner))fail("Valo execution ownership requires a verified production cutover.");
   if(body.authorisationMode&&!(authorisationModes as readonly string[]).includes(body.authorisationMode))fail(`Authorisation mode must be one of: ${authorisationModes.join(", ")}.`);
+  for(const key of ["unallocatedAlertThreshold","notificationCostAlertKobo"] as const)if(body[key]!==undefined&&(!Number.isInteger(body[key])||Number(body[key])<0))fail(`${key} must be a non-negative integer.`);
   Object.assign(state.settings,body);return getSettings(state,ctx.role);
   },true,S.UpdateSettingsResponse);
  res.json(S.UpdateSettingsResponse.parse(result));

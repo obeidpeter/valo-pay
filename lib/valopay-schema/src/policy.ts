@@ -67,3 +67,13 @@ export const measurementRules = {
   realCasesRequired: 5,
   jobsToConfirm: 4,
 } as const;
+
+/** NFR-OBS-02 and NOT-06 alert thresholds; the per-merchant ones are overridable in settings. */
+export const alertRules = {
+  /** settings.unallocatedAlertThreshold: unallocated Payments older than 24 hours before the alert fires. */
+  unallocatedThreshold: 10,
+  /** settings.notificationCostAlertKobo: NGN 8 of notification cost per successful collection in a month. */
+  notificationCostPerCollectionKobo: 800,
+  /** Hours since the last daily close before the books count as not known complete. */
+  closeOverdueHours: 36,
+} as const;

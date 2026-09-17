@@ -1021,6 +1021,38 @@
           "detail"
         ]
       },
+      "Alert": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "since": {
+            "type": "string"
+          },
+          "linkedRecordId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "severity",
+          "title",
+          "detail"
+        ]
+      },
       "Overview": {
         "type": "object",
         "properties": {
@@ -1056,6 +1088,12 @@
           },
           "lastClose": {
             "type": "string"
+          },
+          "alerts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Alert"
+            }
           }
         },
         "required": [
@@ -1065,7 +1103,8 @@
           "upcoming",
           "mode",
           "environment",
-          "lastClose"
+          "lastClose",
+          "alerts"
         ]
       },
       "RecordList": {
@@ -1398,6 +1437,15 @@
           },
           "defaultOwner": {
             "type": "string"
+          },
+          "policyChangeRequiresConsent": {
+            "type": "boolean"
+          },
+          "unallocatedAlertThreshold": {
+            "type": "integer"
+          },
+          "notificationCostAlertKobo": {
+            "type": "integer"
           }
         },
         "required": []

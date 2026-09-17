@@ -84,7 +84,16 @@ export const GetOverviewResponse = zod.object({
 })),
   "mode": zod.string(),
   "environment": zod.string(),
-  "lastClose": zod.string()
+  "lastClose": zod.string(),
+  "alerts": zod.array(zod.object({
+  "key": zod.string(),
+  "severity": zod.string(),
+  "title": zod.string(),
+  "detail": zod.string(),
+  "count": zod.number().int().optional(),
+  "since": zod.string().optional(),
+  "linkedRecordId": zod.string().optional()
+}))
 })
 
 
@@ -451,7 +460,10 @@ export const UpdateSettingsBody = zod.object({
   "authorisationMode": zod.string().optional(),
   "contactRoute": zod.string().optional(),
   "minimumTicketKobo": zod.number().int().optional(),
-  "defaultOwner": zod.string().optional()
+  "defaultOwner": zod.string().optional(),
+  "policyChangeRequiresConsent": zod.boolean().optional(),
+  "unallocatedAlertThreshold": zod.number().int().optional(),
+  "notificationCostAlertKobo": zod.number().int().optional()
 })
 
 export const UpdateSettingsResponse = zod.object({

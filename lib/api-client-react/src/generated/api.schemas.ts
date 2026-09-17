@@ -78,6 +78,16 @@ export interface Metric {
   detail: string;
 }
 
+export interface Alert {
+  key: string;
+  severity: string;
+  title: string;
+  detail: string;
+  count?: number;
+  since?: string;
+  linkedRecordId?: string;
+}
+
 export interface Overview {
   metrics: Metric[];
   queues: Metric[];
@@ -86,6 +96,7 @@ export interface Overview {
   mode: string;
   environment: string;
   lastClose: string;
+  alerts: Alert[];
 }
 
 export interface RecordList {
@@ -177,6 +188,9 @@ export interface SettingsInput {
   contactRoute?: string;
   minimumTicketKobo?: number;
   defaultOwner?: string;
+  policyChangeRequiresConsent?: boolean;
+  unallocatedAlertThreshold?: number;
+  notificationCostAlertKobo?: number;
 }
 
 export type ExportInputFormat = typeof ExportInputFormat[keyof typeof ExportInputFormat];

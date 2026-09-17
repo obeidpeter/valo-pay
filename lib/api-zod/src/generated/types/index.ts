@@ -8,6 +8,7 @@
 
 export * from './actionInput';
 export * from './actionResult';
+export * from './alert';
 export * from './createExportParams';
 export * from './createRecordParams';
 export * from './downloadExportParams';
