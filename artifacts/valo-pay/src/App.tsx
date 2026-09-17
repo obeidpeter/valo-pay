@@ -32,7 +32,8 @@ import EvidencePage from '@/pages/evidence';
 import AuditPage from '@/pages/audit';
 import SettingsPage from '@/pages/settings';
 
-const queryClient = new QueryClient();
+/** Shared by the app and reset between console tests. */
+export const queryClient = new QueryClient();
 
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");

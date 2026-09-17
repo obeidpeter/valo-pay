@@ -75,3 +75,5 @@ Kinds and data fields:
 `getGates`: prerequisites list and independent decisions always unproven on demo. limitations enumerates external missing requirements.
 
 Use every provided hook, loading/error states and query invalidation. Main agent builds API concurrently; no hardcoded operational data in client.
+
+Console tests live in `artifacts/valo-pay/tests` (`pnpm --filter @workspace/valopay run test`): the real pages rendered in jsdom against `tests/fake-api.ts`, an in-memory API that serves these routes from seeded lender state with the API's domain code and validates every response against the generated zod contract. Add a test there when a page's behaviour changes.

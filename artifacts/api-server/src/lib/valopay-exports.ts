@@ -2,22 +2,12 @@ import PDFDocument from "pdfkit";
 import { randomUUID, createHash } from "node:crypto";
 import { objectStorageClient, ObjectStorageService } from "./objectStorage";
 import type { Context, DomainState } from "../domain/types";
-import { buildReports, makeRecord, positionFor } from "../domain";
+import { buildReports, customerTimeline, makeRecord } from "../domain";
 import { getGates } from "./valopay-readiness";
 import { verifyAudit } from "./valopay-store";
 import { readExportBytes } from "./export-download";
 import { buildDisputePack, disputePackCsv, renderDisputePackPdf, type DisputePack } from "./valopay-packs";
 
-export function customerTimeline(state:DomainState,id:string){
- const customer=state.records.find(r=>r.kind==="customers"&&r.id===id);
- if(!customer)throw Object.assign(new Error("Customer not found."),{status:404});
- const related=state.records.filter(r=>r.customerId===id);
- const dueItems=related.filter(r=>r.kind==="due-items"),payments=related.filter(r=>r.kind==="payments");
- // REC-05: one derivation of the position, shared with the daily close and the dispute pack.
- const {obligationsKobo,allocatedKobo,outstandingKobo,unallocatedKobo}=positionFor(state,id);
- return {customer,position:{obligationsKobo,allocatedKobo,outstandingKobo,unallocatedKobo,note:"Derived obligations and payment evidence, not funds held by Valo Pay."},
- events:related.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)),mandates:related.filter(r=>r.kind==="mandates"),dueItems,payments};
-}
 function escapeCsv(value:unknown){
  let text=typeof value==="object"?JSON.stringify(value):String(value??"");
  if(/^[=+\-@\t\r]/.test(text))text="'"+text;

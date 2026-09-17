@@ -10,7 +10,7 @@ import { latestDecisionFor } from "../src/domain/policy-engine.js";
 import { positionFor } from "../src/domain/close.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
-import { customerTimeline } from "../src/lib/valopay-exports.js";
+import { customerTimeline } from "../src/domain/timeline.js";
 import type { DomainState, ValopayRecord } from "../src/domain/types.js";
 
 const { assertFinalState } = await import("../src/lib/valopay-store.js");
