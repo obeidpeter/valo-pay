@@ -1,8 +1,9 @@
-import { experimentRules, isOpenException } from "@workspace/valopay-schema";
+import { PLAN_GROSS_MARGIN, VARIABLE_COST_PER_COLLECTION_KOBO, experimentRules, isOpenException, measurementRules } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { DomainState, Metric, Report, ValopayRecord } from "./types";
 import { paymentObservedAt, paymentRefunded, paymentReversed } from "./reconciliation";
-import { buildBillingStatement } from "./billing";
+import { buildBillingStatement, monthOf, previousMonth } from "./billing";
+import { seededSample, wilsonInterval } from "./stats";
 export { billableCollection, reversalWindowDays } from "./billing";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -139,6 +140,94 @@ export function timeToClose(state: DomainState, now: string): { month: string; d
   return { month, days: clean ? round((Date.parse(String(clean.data.closedAt)) - monthEnd.getTime()) / DAY_MS, 2) : null, closeId: clean?.id ?? null, closedAt: clean ? String(clean.data.closedAt) : null };
 }
 
+/**
+ * REC-09: each month Finance reviews a seeded random sample of at least 200 of
+ * the previous month's automatic "certain" allocations (or all of them if
+ * fewer); the false-match rate is reported with its interval beside the
+ * automatic match rate.  The audit month is the last completed month.
+ */
+export function precisionAudit(state: DomainState, now: string) {
+  const month = previousMonth(now);
+  const population = recordsOf(state, "allocations").filter((item) => item.data.automatic === true && item.data.confidence === "certain" && ["confirmed", "superseded"].includes(item.status) && monthOf(String(item.data.confirmedAt || item.createdAt)) === month);
+  const sampleIds = seededSample(population.map((item) => item.id), `${state.merchant.id}:${month}`, measurementRules.precisionSampleSize);
+  const sampled = new Set(sampleIds);
+  const reviewed = population.filter((item) => sampled.has(item.id) && typeof item.data.reviewed === "boolean");
+  const wrong = reviewed.filter((item) => item.data.reviewed === false).length;
+  const falseMatchRate = reviewed.length ? wrong / reviewed.length : null;
+  return {
+    month, population: population.length, sampleSize: sampleIds.length, requiredSample: Math.min(measurementRules.precisionSampleSize, population.length),
+    reviewed: reviewed.length, wrong, falseMatchRate, interval: wilsonInterval(wrong, reviewed.length, measurementRules.precisionZScore), confidence: measurementRules.precisionConfidence,
+    complete: sampleIds.length > 0 && reviewed.length >= sampleIds.length, sampledAllocationIds: sampleIds, seed: `${state.merchant.id}:${month}`,
+  };
+}
+
+/** A fortnightly review counts when a named reviewer confirmed all four jobs (MEA-05). */
+function confirmingReviews(state: DomainState): ValopayRecord[] {
+  return recordsOf(state, "reviews").filter((item) => {
+    const jobs = item.data.confirmedJobs;
+    const confirmed = Array.isArray(jobs) ? jobs.length >= measurementRules.jobsToConfirm : Number(jobs) >= measurementRules.jobsToConfirm;
+    return confirmed && Boolean(item.data.reviewer);
+  }).sort((a, b) => String(a.data.reviewedAt || a.createdAt).localeCompare(String(b.data.reviewedAt || b.createdAt)));
+}
+
+/** MEA-05: the Test 5 report per lender, derived from closes, reviews, allocations, exceptions and packs; never from constants. */
+export function test5Report(state: DomainState, now: string) {
+  const nowMs = Date.parse(now);
+  const closes = recordsOf(state, "closes").sort((a, b) => String(a.data.closedAt || a.createdAt).localeCompare(String(b.data.closedAt || b.createdAt)));
+  const firstClose = closes[0] ? String(closes[0].data.closedAt || closes[0].createdAt) : null;
+  const liveDays = firstClose ? Math.max(0, Math.floor((nowMs - Date.parse(firstClose)) / DAY_MS)) : 0;
+  const reviews = confirmingReviews(state);
+  const reviewAt = (item: ValopayRecord) => Date.parse(String(item.data.reviewedAt || item.createdAt));
+  const latest = reviews.at(-1);
+  const fortnightMs = measurementRules.fortnightDays * DAY_MS;
+  const fortnightlyStaffConfirmed = Boolean(latest) && nowMs - reviewAt(latest!) <= fortnightMs;
+  // Cadence: from the first close, no gap longer than a fortnight between confirming reviews, and the last one is current.
+  let cadenceMet = Boolean(firstClose) && fortnightlyStaffConfirmed;
+  if (cadenceMet) {
+    let previous = Date.parse(firstClose!);
+    for (const review of reviews) { if (reviewAt(review) - previous > fortnightMs) { cadenceMet = false; break; } previous = reviewAt(review); }
+  }
+  const monthEnds = new Map<string, ValopayRecord>();
+  for (const close of closes) monthEnds.set(monthOf(String(close.data.closedAt || close.createdAt)), close); // the last close of each month wins
+  const overdueShareAtMonthEnds = [...monthEnds.entries()].filter(([month]) => month < monthOf(now)).map(([month, close]) => {
+    const open = Number(close.data.report?.exceptions?.openAtClose ?? NaN), overdue = Number(close.data.report?.exceptions?.overdueAtClose ?? NaN);
+    return { month, closeId: close.id, open: Number.isFinite(open) ? open : null, overdue: Number.isFinite(overdue) ? overdue : null, share: Number.isFinite(open) && Number.isFinite(overdue) ? (open ? overdue / open : 0) : null };
+  });
+  const packs = recordsOf(state, "exports").filter((item) => ["customer-pack", "dispute-pack", "gate-pack", "audit-pack"].includes(String(item.data.kind)));
+  return {
+    liveDays, requiredLiveDays: measurementRules.liveDaysRequired, liveSince: firstClose, liveDaysMet: liveDays >= measurementRules.liveDaysRequired,
+    fortnightlyStaffConfirmed, latestReviewAt: latest ? new Date(reviewAt(latest)).toISOString() : null, latestReviewer: latest ? String(latest.data.reviewer) : null, confirmingReviews: reviews.length, reviewCadenceMet: cadenceMet,
+    overdueShareAtMonthEnds,
+    packsGenerated: packs.length, realCasesUsed: packs.filter((item) => item.data.usedInRealCase === true).length, requiredRealCases: measurementRules.realCasesRequired,
+    proof: false, reason: "Synthetic sandbox measurements; Test 5 needs at least 60 live days of a design partner's own operation.",
+  };
+}
+
+/** MEA-03: unit economics per merchant for the billing period against the plan's NGN 15 per collection and 85–90% margin. */
+export function unitEconomics(state: DomainState, now: string, statement: Record<string, any>) {
+  const period = String(statement.period);
+  const collections = Number(statement.successfulCollections || 0);
+  const licenceKobo = statement.lines.reduce((sum: number, line: any) => sum + Number(line.licenceKobo || 0), 0);
+  const usageKobo = statement.lines.reduce((sum: number, line: any) => sum + Number(line.usageKobo || 0), 0);
+  const recurringKobo = licenceKobo + usageKobo;
+  const recorded = recordsOf(state, "costs").filter((item) => String(item.data.period || "") === period);
+  const byName = recorded.reduce<Record<string, number>>((acc, item) => { acc[item.name] = (acc[item.name] || 0) + item.amountKobo; return acc; }, {});
+  const recordedKobo = recorded.reduce((sum, item) => sum + item.amountKobo, 0);
+  const estimated = recorded.length === 0;
+  const variableCostKobo = estimated ? collections * VARIABLE_COST_PER_COLLECTION_KOBO : recordedKobo;
+  const costPerCollectionKobo = collections ? Math.round(variableCostKobo / collections) : null;
+  const grossMargin = recurringKobo > 0 ? Number(((recurringKobo - variableCostKobo) / recurringKobo).toFixed(4)) : null;
+  return {
+    period, successfulCollections: collections, usageFeeKobo: usageKobo, licenceKobo, volumeTier: statement.volumeTier, recurringKobo,
+    variableCostKobo, costsRecorded: byName, estimated, costPerCollectionKobo, planCostPerCollectionKobo: VARIABLE_COST_PER_COLLECTION_KOBO,
+    grossMargin, planGrossMargin: PLAN_GROSS_MARGIN,
+    annualisedRecurringRevenueKobo: recurringKobo * 12, implementationExcluded: true, recoveryFeeIncluded: false,
+    checks: { costPerCollectionWithinPlan: costPerCollectionKobo === null ? null : costPerCollectionKobo <= VARIABLE_COST_PER_COLLECTION_KOBO, marginWithinPlan: grossMargin === null ? null : grossMargin >= PLAN_GROSS_MARGIN.low },
+    note: estimated ? "No cost records for the period; variable cost is the plan's NGN 15 per collection until infrastructure, notification and support costs are recorded." : "Variable cost from the recorded cost lines for the period.",
+    synthetic: true,
+  };
+}
+
 export function buildReports(state: DomainState, now: string): Report {
   const payments = recordsOf(state, "payments");
   const allocations = recordsOf(state, "allocations");
@@ -164,12 +253,12 @@ export function buildReports(state: DomainState, now: string): Report {
 
   const experiments = recordsOf(state, "experiments").filter((item) => item.status === "preregistered" || item.status === "closed");
   const experimentRows = experiments.map((experiment) => upliftReport(state, experiment, now));
-  const exports = recordsOf(state, "exports");
-  const packs = exports.filter((item) => ["customer-pack", "dispute-pack", "gate-pack", "audit-pack"].includes(String(item.data.kind)));
   const closeTiming = timeToClose(state, now);
+  const audit = precisionAudit(state, now);
+  const test5 = test5Report(state, now);
   return {
     metrics,
-    billing,
+    billing: { ...billing, unitEconomics: unitEconomics(state, now, billing) },
     experiment: {
       results: experimentRows, result: experimentRows.length && experimentRows.every((row) => row.result === "proven") ? "proven" : "not_proven",
       note: "The recovery-fee decision needs a proven result for each design partner; a pass on one lender only is not proven (RET-11).", synthetic: true,
@@ -177,12 +266,12 @@ export function buildReports(state: DomainState, now: string): Report {
     operational: {
       allocationRate, precision,
       certainAutomaticRate: payments.length ? new Set(automaticCertain.map((a) => a.data.paymentId)).size / payments.length : 0,
-      reviewedCount: reviewedAll.length, reviewedAutomaticCount: reviewed.length, falseMatchRate: reviewedAll.length ? 1 - precision : null, requiredAuditSample: Math.min(200, automaticCertain.length),
+      reviewedCount: reviewedAll.length, reviewedAutomaticCount: reviewed.length, falseMatchRate: audit.falseMatchRate, falseMatchInterval: audit.interval, requiredAuditSample: audit.requiredSample, precisionAudit: audit,
       overdueExceptionRate: openExceptions.length ? openExceptions.filter((e) => Date.parse(String(e.data.dueBy)) < Date.parse(now)).length / openExceptions.length : 0,
-      liveDays: 0, requiredLiveDays: 60,
-      packsGenerated: packs.length, disputePacksGenerated: packs.filter((item) => ["customer-pack", "dispute-pack"].includes(String(item.data.kind))).length,
-      realCasesUsed: packs.filter((item) => item.data.usedInRealCase === true).length, requiredRealCases: 5,
-      fortnightlyStaffConfirmed: false, timeToClose: closeTiming, monthEndCloseDays: closeTiming?.days ?? null,
+      liveDays: test5.liveDays, requiredLiveDays: test5.requiredLiveDays, liveSince: test5.liveSince,
+      packsGenerated: test5.packsGenerated, disputePacksGenerated: recordsOf(state, "exports").filter((item) => ["customer-pack", "dispute-pack"].includes(String(item.data.kind))).length,
+      realCasesUsed: test5.realCasesUsed, requiredRealCases: test5.requiredRealCases,
+      fortnightlyStaffConfirmed: test5.fortnightlyStaffConfirmed, latestReviewAt: test5.latestReviewAt, reviewCadenceMet: test5.reviewCadenceMet, test5, timeToClose: closeTiming, monthEndCloseDays: closeTiming?.days ?? null,
       unallocatedOlderThan24Hours: unallocated.filter((item) => Date.parse(now) - paymentObservedAt(item) >= DAY_MS).length, proof: false, reason: "All measurements are synthetic and are not operational proof.",
     },
     closes: closeRecords,

@@ -94,7 +94,7 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     if (!data.consentEvidence || typeof data.consentEvidence !== "string") throw new Error("A re-issue needs a new consent record: supply data.consentEvidence.");
     // MAN-06: a new mandate and a new consent record; the old records are never edited.
     const fresh = makeRecord(state, "mandates", {
-      name: `${old.name} · reissued`, status: "pending_activation", customerId: old.customerId, amountKobo: old.amountKobo,
+      name: `${old.name} · reissued`, status: "pending_activation", customerId: old.customerId, amountKobo: old.amountKobo, createdAt: now,
       data: {
         workflow: old.data.workflow, frequency: old.data.frequency, policyId: old.data.policyId, origin: "reissued", reissuedFrom: old.id,
         consentEvidence: String(data.consentEvidence), consentGaps: [], consentCapturedAt: now, consentChannel: data.consentChannel || "merchant_staff",
@@ -116,7 +116,7 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     if (count >= cap) throw new Error(`Reminder cap of ${cap} reached for the ${workflow} workflow.`);
     mandate.data.reminderCount = count + 1; mandate.data.lastReminderAt = now; mandate.data.lastActionReason = reason(input); touch(mandate, now);
     const notification = makeRecord(state, "notifications", {
-      name: "Activation reminder", status: "simulated", customerId: mandate.customerId,
+      name: "Activation reminder", status: "simulated", customerId: mandate.customerId, createdAt: now,
       data: { purpose: "activation_reminder", channel: "sms", class: "reminder", mandateId: mandate.id, sequence: count + 1, cap, submittedAt: now, acceptedAt: null, deliveredAt: null, renderedText: `Reminder ${count + 1} of ${cap} to complete ${workflow === "hosted_consent" ? "the consent link" : "the activation transfer"}.`, simulated: true },
     });
     return result(`Activation reminder ${count + 1} of ${cap} recorded as a simulation; no message left the platform.`, mandate, { notificationId: notification.id });
@@ -141,7 +141,7 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     if (input.action === "new_policy_version") {
       assertActionRole(ctx, ["Admin"]);
       const { reviewer: _reviewer, approvedAt: _approvedAt, submittedAt: _submittedAt, rejectedAt: _rejectedAt, ...carried } = policy.data;
-      const copy = makeRecord(state, "policies", { name: policy.name, status: "draft", amountKobo: 0, data: { ...carried, version: Number(policy.data.version || 0) + 1, author: ctx.actor, previousVersionId: policy.id } });
+      const copy = makeRecord(state, "policies", { name: policy.name, status: "draft", amountKobo: 0, createdAt: now, data: { ...carried, version: Number(policy.data.version || 0) + 1, author: ctx.actor, previousVersionId: policy.id } });
       return result("Draft policy version created.", copy);
     }
     policy.data.lastActionReason = reason(input); touch(policy, now);
@@ -174,7 +174,7 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     const reports = buildReports(state, now);
     const summary = `${report.observations.received} observations received, ${report.allocated.count} allocations confirmed, ${report.unallocated.count} unallocated (${report.unallocated.olderThan24Hours} older than 24h), ${report.exceptions.opened.count} exceptions opened and ${report.exceptions.closed.count} closed, ${report.customerPositionsChanged.length} customer positions changed.`;
     const close = makeRecord(state, "closes", {
-      name: `Daily close ${now.slice(0, 10)}`, status: "completed",
+      name: `Daily close ${now.slice(0, 10)}`, status: "completed", createdAt: now,
       data: { summary, metrics: reports.metrics, closedAt: now, period: report.period, report, operational: reports.operational, positionAlert: report.positionRebuild.alert, synthetic: true },
     });
     return result("Daily close completed; no provider pull or LMS push occurred.", close, { ...reconciled.data, closeId: close.id, positionAlert: report.positionRebuild.alert });
@@ -238,7 +238,7 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     const code = normaliseFailureCode(data.failureCode);
     const attempt = makeRecord(state, "attempts", {
       name: code === "TIMEOUT_UNKNOWN" ? "Simulated external attempt with unknown outcome" : "Simulated external failed attempt",
-      status: code === "TIMEOUT_UNKNOWN" ? "unknown" : "failed", customerId: due.customerId, amountKobo: due.amountKobo,
+      status: code === "TIMEOUT_UNKNOWN" ? "unknown" : "failed", customerId: due.customerId, amountKobo: due.amountKobo, createdAt: now,
       data: { dueItemId: due.id, number: countedAttempts(state, due.id).length + 1, source: "external", simulated: true, failureCode: code, rawFailureCode: String(data.failureCode), occurredAt: now, actualInstruction: false },
     });
     if (due.status === "scheduled") { due.status = "in_collection"; touch(due, now); }
@@ -274,7 +274,7 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     const cancelled = cancelScheduledAttempts(state, now, "Hand-back: no future instruction is held.", () => true);
     state.merchant.killSwitch = true;
     const checklist = [`Ownership of ${reverted.length} obligations reverted to ${fallbackOwner}`, `${cancelled.length} scheduled attempts cancelled with notices`, "Incumbent schedules re-enabled by the merchant against this checklist", "Full export delivered", "No future instructions are held for this merchant"];
-    const cutover = makeRecord(state, "cutovers", { name: "Hand-back", status: "handed_back", data: { checklist, fallbackOwner, confirmation: reason(input), revertedDueItemIds: reverted, cancelledAttemptIds: cancelled, handedBackAt: now } });
+    const cutover = makeRecord(state, "cutovers", { name: "Hand-back", status: "handed_back", createdAt: now, data: { checklist, fallbackOwner, confirmation: reason(input), revertedDueItemIds: reverted, cancelledAttemptIds: cancelled, handedBackAt: now } });
     return result("Hand-back completed: ownership reverted, scheduled attempts cancelled, no future instructions held.", cutover, { fallbackOwner, reverted: reverted.length, cancelled: cancelled.length });
   }
   if (input.action === "issue_invoice") {

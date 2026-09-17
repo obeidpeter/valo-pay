@@ -63,3 +63,7 @@ export function usageFeeKobo(collectedKobo: number): number {
 }
 
 export const isKobo = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+
+/** MEA-03: the plan's unit-economics assumptions to compare against: NGN 15 variable cost per collection and 85–90% gross margin. */
+export const VARIABLE_COST_PER_COLLECTION_KOBO = 1_500;
+export const PLAN_GROSS_MARGIN = { low: 0.85, high: 0.9 } as const;

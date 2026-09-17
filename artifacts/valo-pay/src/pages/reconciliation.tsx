@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useWorkspace } from '@/lib/workspace-context';
-import { useListRecords, usePerformAction, getListRecordsQueryKey } from '@workspace/api-client-react';
+import { useListRecords, usePerformAction, getListRecordsQueryKey, useGetReports, getGetReportsQueryKey } from '@workspace/api-client-react';
 import { formatKobo, formatDate } from '@/lib/formatters';
 import { CheckSquare, Info, ShieldAlert, CornerUpLeft, Plus, ClipboardCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -20,7 +20,11 @@ export default function ReconciliationPage() {
     { merchantId: merchantId!, status: 'confirmed' },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('allocations', { merchantId: merchantId!, status: 'confirmed' }) } }
   );
-  const auditSample = (confirmedAllocations?.items || []).filter(item => item.data?.automatic === true && item.data?.confidence === 'certain');
+  // REC-09: the month's seeded sample (at least 200, or all of them) comes from the reports; only sampled allocations are reviewed.
+  const { data: reports } = useGetReports({ merchantId: merchantId! }, { query: { enabled: !!merchantId, queryKey: getGetReportsQueryKey({ merchantId: merchantId! }) } });
+  const precision = reports?.operational?.precisionAudit as Record<string, any> | undefined;
+  const sampledIds = new Set<string>(Array.isArray(precision?.sampledAllocationIds) ? (precision!.sampledAllocationIds as string[]) : []);
+  const auditSample = (confirmedAllocations?.items || []).filter(item => item.data?.automatic === true && item.data?.confidence === 'certain' && (sampledIds.size === 0 || sampledIds.has(item.id)));
   const reviewAllocation = (allocation: any, correct: boolean) => {
     setReviewCorrect(correct);
     setSelectedRecord(allocation);
@@ -244,7 +248,7 @@ export default function ReconciliationPage() {
           <div className="p-4 border-b bg-secondary/20 flex items-center gap-2">
             <ClipboardCheck className="h-5 w-5 text-primary" />
             <h2 className="font-semibold">Precision Audit</h2>
-            <span className="ml-auto text-xs text-muted-foreground">Automatic certain matches reviewed by Finance (REC-09); a wrong match is superseded and the books reopen. {auditSample.filter(item => typeof item.data?.reviewed === 'boolean').length} of {auditSample.length} reviewed.</span>
+            <span className="ml-auto text-xs text-muted-foreground">Seeded sample of the completed month's automatic certain matches reviewed by Finance (REC-09); a wrong match is superseded and the books reopen. {auditSample.filter(item => typeof item.data?.reviewed === 'boolean').length} of {auditSample.length} sampled reviewed{precision?.falseMatchRate !== null && precision?.falseMatchRate !== undefined ? ` · false-match rate ${(Number(precision.falseMatchRate) * 100).toFixed(1)}% (95% interval ${(Number(precision.interval?.low) * 100).toFixed(1)}% to ${(Number(precision.interval?.high) * 100).toFixed(1)}%)` : ''}.</span>
           </div>
           <div className="p-0 overflow-x-auto max-h-[400px]">
             <table className="w-full text-sm text-left">

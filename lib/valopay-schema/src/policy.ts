@@ -56,3 +56,14 @@ export const experimentRules = {
 } as const;
 
 export const passRuleText = "For each lender: engine minus holdout recovery rate by value ≥ 8 percentage points; the 90% confidence interval of the difference excludes zero; each arm has at least the pre-computed minimum sample. Any other result is 'not proven'.";
+
+/** REC-09 and MEA-05 measurement rules: the monthly precision sample, its interval, the fortnightly review cadence and the Test 5 live-day floor. */
+export const measurementRules = {
+  precisionSampleSize: 200,
+  precisionConfidence: 0.95,
+  precisionZScore: 1.959963984540054,
+  fortnightDays: 14,
+  liveDaysRequired: 60,
+  realCasesRequired: 5,
+  jobsToConfirm: 4,
+} as const;

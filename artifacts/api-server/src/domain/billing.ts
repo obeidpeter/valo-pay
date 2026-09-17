@@ -262,7 +262,7 @@ export function issueInvoice(state: DomainState, ctx: Context, input: { period?:
   const totalKobo = netKobo + vat;
   const sequence = existing.length + 1;
   return makeRecord(state, "invoices", {
-    name: `Invoice ${period}`, status: "issued", reference: `INV-${period}-${String(sequence).padStart(3, "0")}`, amountKobo: Math.max(0, totalKobo),
+    name: `Invoice ${period}`, status: "issued", reference: `INV-${period}-${String(sequence).padStart(3, "0")}`, amountKobo: Math.max(0, totalKobo), createdAt: now,
     data: {
       period, periodEnd: new Date(end).toISOString(), issuedAt: now, issuedBy: ctx.actor, sequence,
       terms: terms ? { commercialId: terms.id, prospect: terms.name, contractedLicenceKobo: contractedLicence, designPartner: terms.data.designPartner === true, effectiveDate: terms.data.effectiveDate ?? null } : null,
