@@ -6,6 +6,7 @@ import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import { allocatePayment, applyConfirmedAllocation, reconcile, supersedeAllocation } from "./reconciliation";
 import { buildReports } from "./reports";
 import { buildCloseReport, openingSnapshot } from "./close";
+import { issueInvoice } from "./billing";
 import type { ActionInput, ActionResult, Context, DomainState, ValopayRecord } from "./types";
 import { assertActionRole } from "./validation";
 import { countedAttempts, evaluateRetry, policyIdFor, preregisterSample } from "./policy-engine";
@@ -14,7 +15,7 @@ const requiresReason = new Set([
   "kill_switch", "mandate_suspend", "mandate_cancel", "mandate_reinstate", "mandate_reissue", "activation_reminder",
   "submit_policy", "approve_policy", "reject_policy", "new_policy_version", "submit_template", "approve_template",
   "confirm_allocation", "reject_allocation", "manual_allocate", "review_allocation", "resolve_exception", "record_refund",
-  "simulate_failure", "backtest_policy", "preregister_experiment", "hand_back", "mark_pack_used",
+  "simulate_failure", "backtest_policy", "preregister_experiment", "hand_back", "mark_pack_used", "issue_invoice",
 ]);
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -275,6 +276,12 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     const checklist = [`Ownership of ${reverted.length} obligations reverted to ${fallbackOwner}`, `${cancelled.length} scheduled attempts cancelled with notices`, "Incumbent schedules re-enabled by the merchant against this checklist", "Full export delivered", "No future instructions are held for this merchant"];
     const cutover = makeRecord(state, "cutovers", { name: "Hand-back", status: "handed_back", data: { checklist, fallbackOwner, confirmation: reason(input), revertedDueItemIds: reverted, cancelledAttemptIds: cancelled, handedBackAt: now } });
     return result("Hand-back completed: ownership reverted, scheduled attempts cancelled, no future instructions held.", cutover, { fallbackOwner, reverted: reverted.length, cancelled: cancelled.length });
+  }
+  if (input.action === "issue_invoice") {
+    assertActionRole(ctx, ["Admin", "Finance"]);
+    const invoice = issueInvoice(state, ctx, { period: data.period });
+    invoice.data.issueReason = reason(input);
+    return result(`Invoice ${invoice.reference} issued for ${invoice.data.period}: ${invoice.data.collectionsCounted} collections counted, ${invoice.data.adjustments.length} adjustment lines. Issued invoices are immutable; corrections go on the next invoice.`, invoice, { invoiceId: invoice.id, period: invoice.data.period, totals: invoice.data.totals });
   }
   if (input.action === "mark_pack_used") throw new Error("Synthetic exports can never be counted as real cases.");
   throw new Error(`Unsupported domain action: ${input.action}.`);

@@ -68,3 +68,7 @@ export function normaliseRefundStatus(raw: unknown): (typeof refundStatuses)[num
 
 export const notificationPurposes = ["activation_reminder", "pre_debit", "failed_debit", "confirmation", "final_attempt"] as const;
 export const notificationChannels = ["sms", "whatsapp", "email"] as const;
+
+/** BIL-07: why a billed collection carries a credit or debit line on a later invoice. */
+export const adjustmentReasons = ["reversal", "refund", "confirmed_duplicate", "wrong_allocation", "re_allocation"] as const;
+export type AdjustmentReason = (typeof adjustmentReasons)[number];

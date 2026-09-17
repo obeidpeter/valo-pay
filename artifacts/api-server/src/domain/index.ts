@@ -6,4 +6,5 @@ export * from "./policy-engine";
 export * from "./reconciliation";
 export * from "./reports";
 export * from "./close";
+export * from "./billing";
 export * from "./actions";

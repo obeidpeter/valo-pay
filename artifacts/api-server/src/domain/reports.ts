@@ -1,39 +1,13 @@
-import {
-  DEFAULT_REVERSAL_WINDOW_DAYS, DESIGN_PARTNER_DISCOUNT, DESIGN_PARTNER_DISCOUNT_YEAR, USAGE_FEE_BPS, USAGE_FEE_CAP_KOBO, billableChannels,
-  experimentRules, isBillableChannel, isOpenException, licenceTierFor, usageFeeKobo,
-} from "@workspace/valopay-schema";
+import { experimentRules, isOpenException } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { DomainState, Metric, Report, ValopayRecord } from "./types";
 import { paymentObservedAt, paymentRefunded, paymentReversed } from "./reconciliation";
+import { buildBillingStatement } from "./billing";
+export { billableCollection, reversalWindowDays } from "./billing";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const monthOf = (value: string) => value.slice(0, 7);
 const metric = (key: string, label: string, value: number, unit: string, detail: string): Metric => ({ key, label, value, unit, detail });
 const round = (value: number, places = 6) => Number(value.toFixed(places));
-
-/** BIL-01: the provider's own reversal window when configured, else the merchant's, else the plan's seven days. */
-export function reversalWindowDays(state: DomainState, provider: unknown): number {
-  const perProvider = (state.settings.providerReversalWindowDays || {}) as Record<string, unknown>;
-  for (const candidate of [perProvider[String(provider)], state.settings.reversalWindowDays, DEFAULT_REVERSAL_WINDOW_DAYS]) {
-    const days = Number(candidate);
-    if (Number.isFinite(days) && days >= 0) return days;
-  }
-  return DEFAULT_REVERSAL_WINDOW_DAYS;
-}
-
-/**
- * BIL-01: a collection is billable when its attempt succeeded (a direct debit
- * the platform observed), the Payment is settled and allocated, carries no
- * reversal or refund at the invoice date, and the provider's reversal window
- * has passed.  Transfers, card receipts and statement credits are reconciled
- * and reported, never billed as collections.
- */
-export function billableCollection(state: DomainState, payment: ValopayRecord, now: string, checkWindow = true): boolean {
-  if (!isBillableChannel(payment.data.channel) || payment.data.collectionStatus !== "succeeded") return false;
-  if (!["allocated", "overpaid", "partial"].includes(payment.status) || payment.data.settlementStatus !== "settled") return false;
-  if (paymentReversed(payment) || paymentRefunded(payment)) return false;
-  return !checkWindow || Date.parse(now) - paymentObservedAt(payment) >= reversalWindowDays(state, payment.data.providerConnection || state.merchant.provider) * DAY_MS;
-}
 
 /** Queue counts and headline metrics for the console overview; dashboards beyond this are stage 2 (UI-01). */
 export function buildOverview(state: DomainState, now: string) {
@@ -186,37 +160,7 @@ export function buildReports(state: DomainState, now: string): Report {
     metric("outstanding_kobo", "Outstanding due value", dueItems.reduce((sum, item) => sum + Number(item.data.outstandingKobo ?? item.amountKobo), 0), "kobo", "Due items only; we never hold money."),
   ];
 
-  const period = String(state.settings.billingPeriod || monthOf(now));
-  // Commercial prospects are evidence, not additional subscriptions on this tenant.
-  const commercial = recordsOf(state, "commercial").filter((item) => item.name === state.merchant.name && item.data.designPartner === true && item.data.signed && String(item.data.effectiveDate || "").slice(0, 7) <= period).slice(0, 1);
-  const inPeriod = payments.filter((item) => monthOf(String(item.data.observedAt || item.createdAt)) === period);
-  const billablePayments = inPeriod.filter((item) => billableCollection(state, item, now));
-  const usageBase = billablePayments.reduce((sum, item) => sum + Number(item.data.allocatedKobo || item.amountKobo), 0);
-  const usageFee = billablePayments.reduce((sum, item) => sum + usageFeeKobo(Number(item.data.allocatedKobo || item.amountKobo)), 0);
-  const tier = licenceTierFor(billablePayments.length);
-  const channelBreakdown: Record<string, { count: number; kobo: number; billable: number; reason: string }> = {};
-  for (const payment of inPeriod) {
-    const channel = String(payment.data.channel || "manual");
-    const row = (channelBreakdown[channel] ||= { count: 0, kobo: 0, billable: 0, reason: isBillableChannel(channel) ? "Direct debit attempts that succeeded are billable once settled, unreversed and past the reversal window (BIL-01)." : "Reconciled receipt, not a collection the platform executed; reported, never billed." });
-    row.count += 1; row.kobo += payment.amountKobo; if (billableCollection(state, payment, now)) row.billable += 1;
-  }
-  // Collections that pass every BIL-01 check except the reversal window are billed on a later statement, never lost.
-  const withheld = inPeriod.filter((item) => billableCollection(state, item, now, false) && !billableCollection(state, item, now));
-  const lines = commercial.map((item) => {
-    const designDiscount = item.data.designPartner === true && period.startsWith(DESIGN_PARTNER_DISCOUNT_YEAR) ? DESIGN_PARTNER_DISCOUNT : 1;
-    const usage = Math.floor(usageFee * designDiscount);
-    const contractedLicence = Number(item.data.licenceKobo || 0);
-    const licence = Math.floor(contractedLicence * designDiscount);
-    return { commercialId: item.id, prospect: item.name, implementationKobo: 0, licenceKobo: licence, contractedLicenceKobo: contractedLicence, volumeTier: tier.name, volumeTierLicenceKobo: tier.licenceKobo, tierMismatch: contractedLicence !== tier.licenceKobo, usageKobo: usage, totalKobo: licence + usage, designPartnerDiscount: designDiscount < 1 };
-  });
-  const billing = {
-    period, usageRateBps: USAGE_FEE_BPS, usageCapKobo: USAGE_FEE_CAP_KOBO, reversalWindowDays: reversalWindowDays(state, state.merchant.provider),
-    billableChannels: [...billableChannels], billableRule: "BIL-01: a collection is billable when its direct-debit attempt succeeded, the Payment is settled and unreversed at the invoice date, and the provider's reversal window has passed.",
-    eligibleAllocatedKobo: usageBase, successfulCollections: billablePayments.length, usageFeeKobo: usageFee, volumeTier: tier.name,
-    channelBreakdown, withheldInsideReversalWindow: withheld.length,
-    lines, totalKobo: lines.reduce((sum, line) => sum + line.totalKobo, 0),
-    implementationExcludedFromRecurring: true, synthetic: true,
-  };
+  const billing = buildBillingStatement(state, now);
 
   const experiments = recordsOf(state, "experiments").filter((item) => item.status === "preregistered" || item.status === "closed");
   const experimentRows = experiments.map((experiment) => upliftReport(state, experiment, now));
