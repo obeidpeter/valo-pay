@@ -24,6 +24,8 @@ export default function OverviewPage() {
           Environment: <span className="font-mono font-medium text-foreground">{overview.environment}</span> 
           <span className="mx-2">·</span> 
           Last close: {overview.lastClose ? formatDate(overview.lastClose) : 'Never'}
+          <span className="mx-2">·</span>
+          Next scheduled close: {overview.nextClose ? `${formatDate(overview.nextClose)} (${overview.closeTime} WAT)` : 'automatic close off'}
         </p>
       </header>
 
@@ -31,7 +33,7 @@ export default function OverviewPage() {
       <section>
         <h2 className="text-lg font-semibold mb-4">Alerts</h2>
         {overview.alerts.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No alert conditions: the audit chain verifies, positions rebuild, nothing is stuck unallocated over the threshold, no exception is past its deadline, and the books were closed within the last 36 hours.</p>
+          <p className="text-sm text-muted-foreground">No alert conditions: the audit chain verifies, positions rebuild, nothing is stuck unallocated over the threshold, no exception is past its deadline, the books were closed within the last 36 hours and no scheduled close was missed.</p>
         ) : (
           <ul className="space-y-2">
             {overview.alerts.map(alert => (

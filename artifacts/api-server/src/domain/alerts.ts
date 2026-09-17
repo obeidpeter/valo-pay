@@ -8,7 +8,7 @@ import { alertRules, isBillableChannel, isOpenException, type AlertSeverity } fr
 import { recordsOf } from "./records";
 import type { DomainState } from "./types";
 import { paymentObservedAt } from "./reconciliation";
-import { positionMismatches } from "./close";
+import { closeSchedule, positionMismatches } from "./close";
 import { attemptTime } from "./policy-engine";
 import { monthOf } from "./billing";
 
@@ -60,6 +60,9 @@ export function buildAlerts(state: DomainState, now: string, audit?: AuditVerifi
   const lastClose = recordsOf(state, "closes").map((item) => String(item.data.closedAt || item.createdAt)).sort().at(-1);
   if (!lastClose) alerts.push({ key: "close_overdue", severity: "medium", title: "No daily close yet", detail: "The books are not known complete until a daily close has run (REC-01)." });
   else if (nowMs - Date.parse(lastClose) > alertRules.closeOverdueHours * HOUR_MS) alerts.push({ key: "close_overdue", severity: "medium", title: "Daily close overdue", detail: `The last close was ${Math.floor((nowMs - Date.parse(lastClose)) / HOUR_MS)} hours ago; the close is due daily at the configured time (REC-01).`, since: lastClose });
+  // A scheduled close that has not run well past its time is the close analogue of a missed execution window (NFR-OBS-02).
+  const schedule = closeSchedule(state, now);
+  if (schedule.missed) alerts.push({ key: "close_missed", severity: "high", title: "Scheduled daily close missed", detail: `The automatic close at ${schedule.time} WAT is ${schedule.overdueMinutes} minutes past its time without a close; the scheduler may be stopped or the close failed (REC-01).`, since: schedule.nextAt });
   const switches = Object.entries((state.settings.policyKillSwitches || {}) as Record<string, unknown>).filter(([, on]) => on === true).map(([id]) => id);
   if (state.merchant.killSwitch || switches.length) alerts.push({ key: "kill_switch_active", severity: "info", title: state.merchant.killSwitch ? "Merchant kill switch is on" : "A policy-version kill switch is on", detail: state.merchant.killSwitch ? "No instruction is planned until an Admin releases the switch (DEB-06)." : `Policy version switch on for ${switches.length} version(s); those items wait for release (DEB-06).`, count: switches.length || undefined });
   return alerts.sort((a, b) => order[a.severity] - order[b.severity] || a.key.localeCompare(b.key));

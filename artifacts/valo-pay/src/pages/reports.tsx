@@ -43,6 +43,20 @@ function renderValue(key: string, value: unknown): string {
   return String(value);
 }
 
+/** REC-01: the schedule block on a close record and the schedule view in the operational report, typed from free-form data. */
+interface CloseScheduleView { time: string; enabled: boolean; nextAt: string; missed: boolean; overdueMinutes: number }
+interface CloseTriggerView { trigger: string; late: boolean; delayMinutes: number | null; scheduledFor: string | null }
+function scheduleView(value: unknown): CloseScheduleView | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  return { time: String(raw.time ?? ''), enabled: raw.enabled !== false, nextAt: String(raw.nextAt ?? ''), missed: raw.missed === true, overdueMinutes: Number(raw.overdueMinutes ?? 0) };
+}
+function triggerView(value: unknown): CloseTriggerView | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  return { trigger: String(raw.trigger ?? 'manual'), late: raw.late === true, delayMinutes: typeof raw.delayMinutes === 'number' ? raw.delayMinutes : null, scheduledFor: typeof raw.scheduledFor === 'string' ? raw.scheduledFor : null };
+}
+
 export default function ReportsPage() {
   const { merchantId } = useWorkspace();
   const [experimentDialog, setExperimentDialog] = useState<'create' | 'edit' | 'preregister' | null>(null);
@@ -333,6 +347,19 @@ export default function ReportsPage() {
                 <CheckSquare className="h-5 w-5 text-primary" />
                 <h2 className="font-semibold">Daily Close Snapshots</h2>
               </div>
+              {(() => {
+                const schedule = scheduleView(reports.operational?.closeSchedule);
+                if (!schedule) return null;
+                return (
+                  <p className={`text-xs ${schedule.missed ? 'text-destructive font-medium' : 'text-muted-foreground'}`}>
+                    {!schedule.enabled
+                      ? 'Automatic close off: closes are triggered by hand.'
+                      : schedule.missed
+                        ? `Scheduled close at ${schedule.time} WAT missed: ${schedule.overdueMinutes} minutes past its time.`
+                        : `Next scheduled close ${formatDate(schedule.nextAt)} (${schedule.time} WAT daily).`}
+                  </p>
+                );
+              })()}
             </div>
             <div className="overflow-x-auto max-h-[400px]">
               <table className="w-full text-sm text-left">
@@ -361,6 +388,15 @@ export default function ReportsPage() {
                             </span>
                           )) : <span className="text-muted-foreground">Closed before the REC-07 report existed.</span>}
                           {close.data?.positionAlert === true && <span className="inline-block mr-3 mb-1 px-1.5 py-0.5 rounded border border-destructive/40 text-destructive">position rebuild alert</span>}
+                          {(() => {
+                            const trigger = triggerView(close.data?.schedule);
+                            if (!trigger) return null;
+                            return (
+                              <span className={`inline-block mr-3 mb-1 px-1.5 py-0.5 rounded border ${trigger.late ? 'border-amber-500/60 text-amber-700' : 'border-border/50 text-muted-foreground'}`}>
+                                {trigger.trigger}{trigger.late ? ` · ${trigger.delayMinutes} min late` : trigger.scheduledFor ? ' · on time' : ''}
+                              </span>
+                            );
+                          })()}
                         </td>
                       </tr>
                     ))

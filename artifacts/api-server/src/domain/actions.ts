@@ -1,11 +1,12 @@
 import {
-  DEFAULT_ACTIVATION_WINDOW_DAYS, PLATFORM_OWNER, activationReminderCaps, failureCodeList, isKnownFailureCode,
-  normaliseFailureCode, normaliseOwner, passRuleText, resolutionCodesFor, resolveExceptionType, withinQuietHours,
+  DEFAULT_ACTIVATION_WINDOW_DAYS, PLATFORM_OWNER, activationReminderCaps, closeRules, failureCodeList, isKnownFailureCode,
+  nextCloseInstant, normaliseFailureCode, normaliseOwner, passRuleText, resolutionCodesFor, resolveExceptionType, withinQuietHours,
+  type CloseTrigger,
 } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import { allocatePayment, applyConfirmedAllocation, reconcile, supersedeAllocation } from "./reconciliation";
 import { buildReports } from "./reports";
-import { buildCloseReport, openingSnapshot } from "./close";
+import { buildCloseReport, closeSchedule, openingSnapshot, storedCloseCursor } from "./close";
 import { issueInvoice } from "./billing";
 import type { ActionInput, ActionResult, Context, DomainState, ValopayRecord } from "./types";
 import { assertActionRole } from "./validation";
@@ -18,7 +19,7 @@ const requiresReason = new Set([
   "confirm_allocation", "reject_allocation", "manual_allocate", "review_allocation", "resolve_exception", "record_refund",
   "simulate_failure", "backtest_policy", "preregister_experiment", "hand_back", "mark_pack_used", "issue_invoice", "notify_policy_change", "apply_policy_version",
 ]);
-const DAY_MS = 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000, MINUTE_MS = 60 * 1000;
 
 function reason(input: ActionInput): string {
   if (!input.reason?.trim()) throw new Error("A reason is required for this business or destructive action.");
@@ -42,6 +43,40 @@ function cancelScheduledAttempts(state: DomainState, now: string, cancellationRe
 
 function dueItemsUnderMandate(state: DomainState, mandateId: string): Set<string> {
   return new Set(recordsOf(state, "due-items").filter((due) => due.data.mandateId === mandateId).map((due) => due.id));
+}
+
+/**
+ * 7.5: remember the opening position, run the close, then write the REC-07
+ * report as immutable evidence.  Every close, scheduled or manual, covers the
+ * pending scheduled instant if one has passed and moves the schedule cursor to
+ * the next configured time (REC-01); a close that starts more than
+ * closeRules.lateAfterMinutes after that instant is recorded as late.
+ */
+export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTrigger): ActionResult {
+  const now = ctx.now;
+  const schedule = closeSchedule(state, now);
+  const cursor = storedCloseCursor(state);
+  const scheduledFor = cursor && Date.parse(cursor) <= Date.parse(now) ? cursor : null;
+  const delayMinutes = scheduledFor ? Math.floor((Date.parse(now) - Date.parse(scheduledFor)) / MINUTE_MS) : null;
+  const late = delayMinutes !== null && delayMinutes > closeRules.lateAfterMinutes;
+  const opening = openingSnapshot(state);
+  const reconciled = reconcile(state, ctx);
+  const report = buildCloseReport(state, ctx, opening, reconciled.data);
+  report.alerts = buildAlerts(state, now);
+  const reports = buildReports(state, now);
+  state.settings.nextCloseAt = nextCloseInstant(now, schedule.time);
+  const summary = `${report.observations.received} observations received, ${report.allocated.count} allocations confirmed, ${report.unallocated.count} unallocated (${report.unallocated.olderThan24Hours} older than 24h), ${report.exceptions.opened.count} exceptions opened and ${report.exceptions.closed.count} closed, ${report.customerPositionsChanged.length} customer positions changed.`;
+  const close = makeRecord(state, "closes", {
+    name: `Daily close ${now.slice(0, 10)}${trigger === "scheduled" ? " · scheduled" : ""}`, status: "completed", createdAt: now,
+    data: {
+      summary, metrics: reports.metrics, closedAt: now, period: report.period, report, operational: reports.operational, positionAlert: report.positionRebuild.alert,
+      schedule: { trigger, scheduledFor, delayMinutes, late, nextAt: state.settings.nextCloseAt }, synthetic: true,
+    },
+  });
+  const message = trigger === "scheduled"
+    ? `Scheduled daily close completed${late ? ` ${delayMinutes} minutes after its ${schedule.time} WAT time` : ""}; no provider pull or LMS push occurred.`
+    : "Daily close completed; no provider pull or LMS push occurred.";
+  return result(message, close, { ...reconciled.data, closeId: close.id, positionAlert: report.positionRebuild.alert, schedule: close.data.schedule });
 }
 
 export function executeAction(state: DomainState, ctx: Context, input: ActionInput): ActionResult {
@@ -172,18 +207,7 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
   }
   if (input.action === "daily_close") {
     assertActionRole(ctx, ["Admin", "Operations", "Finance"]);
-    // 7.5: remember the opening position, run the close, then write the REC-07 report as immutable evidence.
-    const opening = openingSnapshot(state);
-    const reconciled = reconcile(state, ctx);
-    const report = buildCloseReport(state, ctx, opening, reconciled.data);
-    report.alerts = buildAlerts(state, now);
-    const reports = buildReports(state, now);
-    const summary = `${report.observations.received} observations received, ${report.allocated.count} allocations confirmed, ${report.unallocated.count} unallocated (${report.unallocated.olderThan24Hours} older than 24h), ${report.exceptions.opened.count} exceptions opened and ${report.exceptions.closed.count} closed, ${report.customerPositionsChanged.length} customer positions changed.`;
-    const close = makeRecord(state, "closes", {
-      name: `Daily close ${now.slice(0, 10)}`, status: "completed", createdAt: now,
-      data: { summary, metrics: reports.metrics, closedAt: now, period: report.period, report, operational: reports.operational, positionAlert: report.positionRebuild.alert, synthetic: true },
-    });
-    return result("Daily close completed; no provider pull or LMS push occurred.", close, { ...reconciled.data, closeId: close.id, positionAlert: report.positionRebuild.alert });
+    return runDailyClose(state, ctx, "manual");
   }
   if (["confirm_allocation", "reject_allocation", "manual_allocate"].includes(input.action)) {
     assertActionRole(ctx, ["Admin", "Finance"]);

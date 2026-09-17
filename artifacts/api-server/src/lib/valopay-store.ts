@@ -2,6 +2,7 @@ import { pool, type PoolClient } from "@workspace/db";
 import { getAuth } from "@clerk/express";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
+import { closeTimeOf, nextCloseInstant } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { seedMerchant } from "./valopay-seed";
 import { createCreationLimiter } from "./creation-limit";
@@ -45,6 +46,10 @@ const conflict = (message = "Operation conflicts with the current lender state."
 export const ANONYMOUS_WORKSPACE_DAYS = 30;
 /** How many expired sandboxes one bootstrap removes, so a request never pays for a large backlog. */
 const SWEEP_BATCH = 5;
+/** Actor prefix for platform-initiated changes (the seed, the scheduled close); the expiry sweep does not count them as sandbox activity. */
+export const SYSTEM_ACTOR_PREFIX = "System · ";
+/** A UTC ISO instant as the platform writes it; guards the timestamptz cast on the stored close cursor. */
+const ISO_INSTANT_PATTERN = "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$";
 const creationLimiter = createCreationLimiter();
 const sandboxCookieName = "valopay_sandbox";
 const legacySandboxCookieName = "valo_sandbox";
@@ -93,6 +98,8 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
     // This lock is intentional: it serializes bootstrap and persona changes for
     // a server-derived principal without relying on a PostgreSQL role or GUC.
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [identity.principal]);
+    // Single source of time: the database clock, read once per transaction.
+    const now = (await client.query<{ now: Date }>("SELECT now() AS now")).rows[0]!.now.toISOString();
     let workspace = (await client.query<WorkspaceRow>(
       "SELECT id,principal_hash,role FROM valopay_workspaces WHERE principal_hash=$1 FOR UPDATE",
       [identity.principal],
@@ -111,12 +118,11 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       )).rows[0];
       if (!workspace) throw new Error("Workspace bootstrap could not be completed.");
       if (inserted) {
-        await seedWorkspace(client, workspace, identity.principal, !identity.authenticated);
+        await seedWorkspace(client, workspace, identity.principal, !identity.authenticated, now);
         // Each new anonymous sandbox pays for a few expired ones, so the table stays bounded without a scheduler.
         if (!identity.authenticated) await sweepExpiredWorkspaces(client, SWEEP_BATCH);
       }
     }
-    const now = (await client.query<{ now: Date }>("SELECT now() AS now")).rows[0]!.now.toISOString();
     context = Object.freeze({
       authenticated: identity.authenticated, role: workspace.role,
       actor: `Sandbox ${workspace.role}`, now,
@@ -400,9 +406,12 @@ export async function saveState(context: StoreContext, state: DomainState): Prom
 }
 
 /**
- * Anonymous sandboxes older than the cookie lifetime with no record change in
- * that time are removed, children first; signed-in workspaces never carry the
- * flag and are never swept.  Ordinary DML inside the caller's transaction.
+ * Anonymous sandboxes older than the cookie lifetime with no change by a
+ * person in that time are removed, children first; signed-in workspaces never
+ * carry the flag and are never swept.  Activity is read from the audit chain,
+ * which every request mutation appends to, so the scheduled close (a system
+ * actor) never keeps an abandoned sandbox alive.  Ordinary DML inside the
+ * caller's transaction.
  */
 export async function sweepExpiredWorkspaces(client: PoolClient, limit: number): Promise<number> {
   const stale = (await client.query<{ id: string }>(
@@ -410,9 +419,10 @@ export async function sweepExpiredWorkspaces(client: PoolClient, limit: number):
      WHERE w.created_at < now() - make_interval(days => $1)
        AND EXISTS (SELECT 1 FROM valopay_merchants m WHERE m.workspace_id=w.id AND m.settings->>'anonymousWorkspace'='true')
        AND NOT EXISTS (SELECT 1 FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id
-                       WHERE m.workspace_id=w.id AND r.updated_at >= now() - make_interval(days => $1))
+                       WHERE m.workspace_id=w.id AND r.kind='audit' AND r.created_at >= now() - make_interval(days => $1)
+                         AND COALESCE(r.data->>'actor','') NOT LIKE $3)
      ORDER BY w.created_at LIMIT $2 FOR UPDATE OF w SKIP LOCKED`,
-    [ANONYMOUS_WORKSPACE_DAYS, limit],
+    [ANONYMOUS_WORKSPACE_DAYS, limit, `${SYSTEM_ACTOR_PREFIX}%`],
   )).rows.map((row) => row.id);
   if (!stale.length) return 0;
   await client.query("DELETE FROM valopay_idempotency WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id = ANY($1::text[]))", [stale]);
@@ -422,17 +432,19 @@ export async function sweepExpiredWorkspaces(client: PoolClient, limit: number):
   return stale.length;
 }
 
-async function seedWorkspace(client: PoolClient, workspace: WorkspaceRow, principal: string, anonymous: boolean) {
+async function seedWorkspace(client: PoolClient, workspace: WorkspaceRow, principal: string, anonymous: boolean, now: string) {
   for (const smaller of [false, true]) {
     const state = seedMerchant(randomUUID(), smaller);
     state.settings.anonymousWorkspace = anonymous;
+    // REC-01: the first scheduled close is the next configured time after creation, from the database clock.
+    state.settings.nextCloseAt = nextCloseInstant(now, closeTimeOf(state.settings));
     const merchant = await client.query(
       `INSERT INTO valopay_merchants(id,workspace_id,info,settings)
        SELECT $1,$2,$3,$4 WHERE EXISTS (SELECT 1 FROM valopay_workspaces WHERE id=$2 AND principal_hash=$5)`,
       [state.merchant.id, workspace.id, state.merchant, state.settings, principal],
     );
     if (!rowsAffected(merchant)) throw new Error("Workspace seed ownership check failed.");
-    appendAudit(state, { actor: "System · sandbox seed", role: "Admin", now: new Date().toISOString() }, "sandbox.created", "workspace", "Created an isolated synthetic lender. Not live evidence.");
+    appendAudit(state, { actor: `${SYSTEM_ACTOR_PREFIX}sandbox seed`, role: "Admin", now }, "sandbox.created", "workspace", "Created an isolated synthetic lender. Not live evidence.");
     assertFinalState({ merchant: structuredClone(state.merchant), settings: {}, records: [] }, state, state.merchant.id);
     for (const record of state.records) {
       const inserted = await client.query(
@@ -445,6 +457,79 @@ async function seedWorkspace(client: PoolClient, workspace: WorkspaceRow, princi
       if (!rowsAffected(inserted)) throw new Error("Workspace seed record ownership check failed.");
     }
   }
+}
+
+/**
+ * A system transaction scoped to one merchant, for the scheduled close.  The
+ * scope is the merchant's own workspace and principal, so every repository
+ * query keeps its tenant predicate.  The merchant row is taken with SKIP
+ * LOCKED: two instances never close the same lender at once and a request in
+ * flight is never queued behind the scheduler.  Returns undefined when the
+ * merchant is locked elsewhere or no longer exists.
+ */
+export async function inMerchantAsSystem<T>(merchantId: string, actor: string, fn: (context: StoreContext) => Promise<T>): Promise<T | undefined> {
+  if (!actor.startsWith(SYSTEM_ACTOR_PREFIX)) throw new Error("A system transaction needs a system actor.");
+  const client = await pool.connect();
+  let context: StoreContext | undefined;
+  try {
+    await client.query("BEGIN");
+    const scope = (await client.query<{ id: string; workspace_id: string; principal_hash: string; role: string }>(
+      `SELECT m.id,m.workspace_id,w.principal_hash,w.role FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id
+       WHERE m.id=$1 FOR UPDATE OF m SKIP LOCKED`,
+      [merchantId],
+    )).rows[0];
+    if (!scope) { await client.query("ROLLBACK"); return undefined; }
+    const now = (await client.query<{ now: Date }>("SELECT now() AS now")).rows[0]!.now.toISOString();
+    context = Object.freeze({ authenticated: true, role: "Operations", actor, now });
+    sessions.set(context, { client, workspace: { id: scope.workspace_id, principal_hash: scope.principal_hash, role: scope.role }, principal: scope.principal_hash, active: true });
+    const result = await fn(context);
+    const committed = await client.query("COMMIT");
+    if (committed.command !== "COMMIT") throw new Error("The system transaction was rolled back.");
+    return result;
+  } catch (error) {
+    try { await client.query("ROLLBACK"); } catch { /* transaction is already closed */ }
+    throw error;
+  } finally {
+    if (context) {
+      const session = sessions.get(context);
+      if (session) { session.active = false; session.snapshot = undefined; session.lockedMerchantId = undefined; }
+    }
+    client.release();
+  }
+}
+
+/**
+ * Merchants whose scheduled close is due by their stored cursor, oldest first.
+ * A plain read: the caller re-checks under the merchant lock before closing.
+ */
+export async function dueScheduledCloses(limit: number): Promise<string[]> {
+  return (await pool.query<{ id: string }>(
+    `SELECT m.id FROM valopay_merchants m
+     WHERE COALESCE(m.settings->>'scheduledCloseEnabled','true') <> 'false'
+       AND (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END) <= now()
+     ORDER BY (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END), m.id
+     LIMIT $1`,
+    [limit, ISO_INSTANT_PATTERN],
+  )).rows.map((row) => row.id);
+}
+
+/**
+ * Merchants created before the scheduler existed carry no cursor.  Each gets
+ * the next configured time after the database clock, without a close, so the
+ * first scheduled close comes at its time rather than at the next tick.
+ */
+export async function initialiseCloseCursors(): Promise<number> {
+  const rows = (await pool.query<{ id: string; settings: Record<string, unknown>; now: Date }>(
+    "SELECT m.id,m.settings,now() AS now FROM valopay_merchants m WHERE m.settings->>'nextCloseAt' IS NULL",
+  )).rows;
+  if (!rows.length) return 0;
+  const updated = await pool.query(
+    `UPDATE valopay_merchants m SET settings = m.settings || jsonb_build_object('nextCloseAt', v.next_at)
+     FROM (SELECT unnest($1::text[]) AS id, unnest($2::text[]) AS next_at) v
+     WHERE m.id = v.id AND m.settings->>'nextCloseAt' IS NULL`,
+    [rows.map((row) => row.id), rows.map((row) => nextCloseInstant(row.now.toISOString(), closeTimeOf(row.settings)))],
+  );
+  return updated.rowCount || 0;
 }
 
 export function appendAudit(state: DomainState, ctx: Context, action: string, objectId: string, summary: string, changes?: unknown): ValopayRecord {

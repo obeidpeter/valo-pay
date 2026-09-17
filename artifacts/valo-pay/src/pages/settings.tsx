@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetSettings, useUpdateSettings, usePerformAction, getGetSettingsQueryKey } from '@workspace/api-client-react';
 import { Settings as SettingsIcon, Shield, PowerOff, AlertTriangle } from 'lucide-react';
-import { authorisationModes, executionWindow } from '@workspace/valopay-schema';
+import { authorisationModes, closeRules, executionWindow } from '@workspace/valopay-schema';
+import { formatDate } from '@/lib/formatters';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
@@ -165,6 +166,24 @@ export default function SettingsPage() {
                     <input type="number" min={0} className="w-full bg-background border rounded-md px-3 py-2 text-sm" value={execSettings.notificationCostAlertKobo ?? 800} onChange={(e) => setExecSettings({...execSettings, notificationCostAlertKobo: Number(e.target.value)})} />
                   ) : (
                     <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">{String(settings.settings?.notificationCostAlertKobo ?? 800)}</div>
+                  )}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-medium block mb-1">Daily close time (WAT, HH:MM, REC-01)</label>
+                  {isEditingExec ? (
+                    <input type="text" inputMode="numeric" placeholder={closeRules.defaultTime} className="w-full bg-background border rounded-md px-3 py-2 text-sm font-mono" value={execSettings.closeTime ?? closeRules.defaultTime} onChange={(e) => setExecSettings({...execSettings, closeTime: e.target.value})} />
+                  ) : (
+                    <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">{String(settings.settings?.closeTime ?? closeRules.defaultTime)} WAT</div>
+                  )}
+                </div>
+                <div>
+                  <label className="text-sm font-medium block mb-1">Automatic daily close</label>
+                  {isEditingExec ? (
+                    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={execSettings.scheduledCloseEnabled !== false} onChange={(e) => setExecSettings({...execSettings, scheduledCloseEnabled: e.target.checked})} /> Run the close at that time every day; a close missed while the platform was down runs on recovery</label>
+                  ) : (
+                    <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">{settings.settings?.scheduledCloseEnabled === false ? 'Off: closes are triggered by hand' : `On · next ${settings.settings?.nextCloseAt ? formatDate(String(settings.settings.nextCloseAt)) : 'at the configured time'}`}</div>
                   )}
                 </div>
               </div>

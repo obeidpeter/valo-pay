@@ -13,6 +13,7 @@ Observation-first collections operations for Nigerian lenders. The current appli
 - `node scripts/smoke-valopay.mjs` — API smoke checks against a fresh synthetic workspace on the development domain; no real lender data.
 - `node scripts/check-db-boundary.mjs` — disallow raw database access outside the scoped repository.
 - `node scripts/security-valopay.mjs` — negative and concurrent API checks using fresh synthetic development workspaces.
+- The API process runs the scheduled daily close (REC-01, default 07:00 WAT per lender) from `artifacts/api-server/src/lib/close-scheduler.ts`; set `VALOPAY_CLOSE_SCHEDULER=off` to run a process without it.
 - Required integrations: PostgreSQL, managed Clerk and private App Storage. Never display their environment secret values.
 
 ## Stack

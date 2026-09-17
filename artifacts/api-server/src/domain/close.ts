@@ -1,9 +1,64 @@
-import { isOpenException } from "@workspace/valopay-schema";
+import { closeRules, closeTimeOf, isOpenException, nextCloseInstant } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { Context, DomainState, ValopayRecord } from "./types";
 import { paymentObservedAt } from "./reconciliation";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000, MINUTE_MS = 60 * 1000;
+
+/** REC-01: the daily close schedule as the console, the alerts and the scheduler see it. */
+export interface CloseSchedule {
+  /** Configured WAT time, HH:MM. */
+  time: string;
+  /** Whether the automatic close is on (settings.scheduledCloseEnabled, default true). */
+  enabled: boolean;
+  /** The next scheduled instant: the stored cursor, or derived from the time for a merchant that has none yet. */
+  nextAt: string;
+  /** True when the automatic close is on and its scheduled instant passed more than closeRules.lateAfterMinutes ago without a close. */
+  missed: boolean;
+  overdueMinutes: number;
+  lateAfterMinutes: number;
+  lastAt: string | null;
+  lastTrigger: string | null;
+}
+
+/** The scheduler cursor the merchant carries (settings.nextCloseAt), when it is a valid instant. */
+export function storedCloseCursor(state: DomainState): string | null {
+  const value = state.settings.nextCloseAt;
+  return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
+}
+
+/** Whether the scheduled close is due now: the automatic close is on and the stored cursor is at or before `now`. */
+export function scheduledCloseDue(state: DomainState, now: string): boolean {
+  const cursor = storedCloseCursor(state);
+  return state.settings.scheduledCloseEnabled !== false && cursor !== null && Date.parse(cursor) <= Date.parse(now);
+}
+
+/**
+ * After a settings change, the cursor restarts from the next occurrence only
+ * when the close time changed or the automatic close was switched on.  Saving
+ * unchanged settings never moves it, so a pending missed close stays pending
+ * and is still caught up; switching the close off leaves the cursor for the
+ * next switch-on to replace.
+ */
+export function rescheduleAfterSettings(state: DomainState, previous: { time: string; enabled: boolean }, now: string): boolean {
+  const time = closeTimeOf(state.settings), enabled = state.settings.scheduledCloseEnabled !== false;
+  if (time === previous.time && (!enabled || previous.enabled)) return false;
+  state.settings.nextCloseAt = nextCloseInstant(now, time);
+  return true;
+}
+
+export function closeSchedule(state: DomainState, now: string): CloseSchedule {
+  const time = closeTimeOf(state.settings);
+  const enabled = state.settings.scheduledCloseEnabled !== false;
+  const cursor = storedCloseCursor(state);
+  const overdueMinutes = cursor ? Math.max(0, Math.floor((Date.parse(now) - Date.parse(cursor)) / MINUTE_MS)) : 0;
+  const last = recordsOf(state, "closes").sort((a, b) => String(a.data.closedAt || a.createdAt).localeCompare(String(b.data.closedAt || b.createdAt))).at(-1);
+  return {
+    time, enabled, nextAt: cursor ?? nextCloseInstant(now, time),
+    missed: enabled && overdueMinutes > closeRules.lateAfterMinutes, overdueMinutes, lateAfterMinutes: closeRules.lateAfterMinutes,
+    lastAt: last ? String(last.data.closedAt || last.createdAt) : null, lastTrigger: last ? String(last.data.schedule?.trigger ?? "manual") : null,
+  };
+}
 
 /** REC-05: a customer position is derived from due items, confirmed allocations and payments; no stored balance is authoritative. */
 export interface CustomerPosition {

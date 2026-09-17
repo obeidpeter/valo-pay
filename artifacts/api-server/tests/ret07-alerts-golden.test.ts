@@ -95,13 +95,13 @@ const reviewer = (now: string) => ctxAt(now, "Compliance reviewer");
   executeAction(state, ctxAt(now, "Finance"), { action: "daily_close" });
   assert.deepEqual(keys(buildAlerts(state, wat("2027-07-01T10:00:00"), { valid: true, count: 1, headHash: "x" })), [], "no alerts after a close");
   const later = wat("2027-07-03T09:00:00");
-  assert.deepEqual(keys(buildAlerts(state, later)), ["close_overdue"], "the close is overdue after 36 hours");
+  assert.deepEqual(keys(buildAlerts(state, later)), ["close_missed", "close_overdue"], "after 36 hours the close is overdue, and the 07:00 scheduled close the last close set up has been missed (high before medium)");
   // Position drift, the audit chain, unallocated Payments over the threshold and a dispatched instruction in observation mode.
   due.data.outstandingKobo = 1;
   state.settings.unallocatedAlertThreshold = 0;
   const alerts = buildAlerts(state, later, { valid: false, count: 7, headHash: "y" });
-  assert.deepEqual(keys(alerts), ["audit_chain_broken", "position_drift", "unallocated_over_threshold", "close_overdue"], "severity order: critical, high, medium");
-  assert.equal(alerts[1]!.linkedRecordId, due.id);
+  assert.deepEqual(keys(alerts), ["audit_chain_broken", "close_missed", "position_drift", "unallocated_over_threshold", "close_overdue"], "severity order: critical, high, medium");
+  assert.equal(alerts[2]!.linkedRecordId, due.id);
   assert.match(alerts[0]!.detail, /entry 8/);
   state.merchant.mode = "observation";
   addAttempt(state, due, { status: "sent", occurredAt: wat("2027-07-02T06:16:00"), source: "valo" });

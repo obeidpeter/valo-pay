@@ -2,9 +2,9 @@ import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
 import { z } from "zod";
 import { inWorkspace, loadState, saveState, roles, fail, appendAudit, verifyAudit, digest, canonical, listMerchants, findIdempotency, saveIdempotency, changeRole, type StoreContext } from "../lib/valopay-store";
-import { buildAlerts, buildOverview, buildReports, makeRecord, validateRecord, executeAction } from "../domain";
+import { buildAlerts, buildOverview, buildReports, makeRecord, rescheduleAfterSettings, validateRecord, executeAction } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
-import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, defaultStatus, executionWindow, handBackOwners, recordKinds } from "@workspace/valopay-schema";
+import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, isCloseTime, recordKinds } from "@workspace/valopay-schema";
 import type { DomainState } from "../domain/types";
 import { getGates, getSettings } from "../lib/valopay-readiness";
 import { importCsv } from "../lib/valopay-import";
@@ -132,7 +132,12 @@ router.patch("/v1/settings",async(req,res)=>{
   if(body.defaultOwner&&!(handBackOwners as readonly string[]).includes(body.defaultOwner))fail("Valo execution ownership requires a verified production cutover.");
   if(body.authorisationMode&&!(authorisationModes as readonly string[]).includes(body.authorisationMode))fail(`Authorisation mode must be one of: ${authorisationModes.join(", ")}.`);
   for(const key of ["unallocatedAlertThreshold","notificationCostAlertKobo"] as const)if(body[key]!==undefined&&(!Number.isInteger(body[key])||Number(body[key])<0))fail(`${key} must be a non-negative integer.`);
-  Object.assign(state.settings,body);return getSettings(state,ctx.role);
+  if(body.closeTime!==undefined&&!isCloseTime(body.closeTime))fail("closeTime must be a WAT time as HH:MM, for example 07:00 (REC-01).");
+  const previous={time:closeTimeOf(state.settings),enabled:state.settings.scheduledCloseEnabled!==false};
+  Object.assign(state.settings,body);
+  // REC-01: a changed close time or a switched-on schedule starts from its next occurrence; an unchanged save leaves a pending close pending.
+  rescheduleAfterSettings(state,previous,ctx.now);
+  return getSettings(state,ctx.role);
   },true,S.UpdateSettingsResponse);
  res.json(S.UpdateSettingsResponse.parse(result));
 });

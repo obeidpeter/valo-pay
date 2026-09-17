@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { closeRules } from "@workspace/valopay-schema";
 import type { DomainState, Merchant, ValopayRecord } from "../domain/types";
 
 export function seedMerchant(id: string, smaller = false): DomainState {
   const now = new Date();
   const date = (days: number) => new Date(now.getTime()+days*86400000).toISOString();
   const merchant: Merchant = {id,name:smaller?"Cedar Cooperative":"Meridian Credit",shortName:smaller?"CC":"MC",segment:smaller?"Smaller lender · synthetic":"Tier-2 lender · synthetic",mode:"observation",status:"active",provider:"Sandbox Rail",monthlyVolume:smaller?4000:20000,killSwitch:false,preDataReady:false,preLiveReady:false};
-  const state: DomainState = {merchant,settings:{executionStart:6,executionEnd:10,authorisationMode:"batch",contactRoute:"Contact your lender's collections team",minimumTicketKobo:1000000,defaultOwner:"lms",environment:"sandbox",reversalWindowDays:7,providerFeeSchedule:{"Sandbox Rail":{bps:50,capKobo:100000}},policyKillSwitches:{}},records:[]};
+  const state: DomainState = {merchant,settings:{executionStart:6,executionEnd:10,authorisationMode:"batch",contactRoute:"Contact your lender's collections team",minimumTicketKobo:1000000,defaultOwner:"lms",environment:"sandbox",reversalWindowDays:7,providerFeeSchedule:{"Sandbox Rail":{bps:50,capKobo:100000}},policyKillSwitches:{},closeTime:closeRules.defaultTime,scheduledCloseEnabled:true},records:[]};
   function add(kind:string,name:string,status:string,data:Record<string,unknown>={},amountKobo=0,customerId="",reference=""): ValopayRecord {
     const r:ValopayRecord={id:randomUUID(),merchantId:id,kind,name,status,data,amountKobo,customerId,reference,createdAt:date(-3),updatedAt:date(-3)};
     state.records.push(r); return r;

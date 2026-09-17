@@ -17,5 +17,7 @@ export interface Overview {
   mode: string;
   environment: string;
   lastClose: string;
+  nextClose: string;
+  closeTime: string;
   alerts: Alert[];
 }

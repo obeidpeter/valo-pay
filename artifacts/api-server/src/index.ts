@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { startCloseScheduler } from "./lib/close-scheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -22,4 +23,10 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+  // REC-01: the daily close runs at each lender's configured time unless this process is told not to schedule it.
+  if (process.env["VALOPAY_CLOSE_SCHEDULER"] === "off") {
+    logger.warn("VALOPAY_CLOSE_SCHEDULER=off: daily closes must be triggered by hand from this process.");
+  } else {
+    startCloseScheduler({ log: logger });
+  }
 });
