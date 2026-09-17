@@ -1,0 +1,61 @@
+# Valo Pay — build status
+
+## Delivery boundary
+
+This is a working, persistent **synthetic observation sandbox** built towards Stage 1. It is **not** a claim that all 137 Stage 1 MUST requirements, live acceptance tests, regulatory prerequisites or nine-month pilot evidence have been completed.
+
+The Business Plan v2.1 Gate Change Note, Technical Requirements v1.1 and Roadmap v1.1 govern scope. Stage 1 is two lenders and one aggregator. No funds are held.
+
+## Available in this build
+
+- Two isolated sample lenders per browser sandbox or signed-in workspace.
+- Customer records, masked sample identifiers, obligations and timeline.
+- Mandate tracking with imported consent provenance and provider-specific activation workflow.
+- Synthetic CSV preview, validation, duplicate detection and all-or-nothing commit.
+- External attempt records, versioned policies, independent demo-persona approvals and read-only policy evaluation.
+- Absolute ticket floor, recorded low-ticket override, combined attempt ceiling, unknown-outcome block, ownership/mode checks and simulated kill/hand-back controls.
+- Observation-to-canonical-payment resolution; certain/probable matching; Finance approvals; allocation ceilings enforced by application checks inside locked PostgreSQL transactions.
+- Exception ownership, controlled resolution notes, allocation precision review and daily close snapshots.
+- Application-enforced tenant scoping, transactional state changes, request idempotency, hash-chained audit digests and verification. No independent row-level security barrier.
+- Private App Storage PDF/JSON/CSV exports with downloadable SHA-256 checksums.
+- Synthetic billing counts, separate commercial evidence register, operational measurements and preregistered experiment parameters. Recovery and funding results stay unproven.
+- React console and versioned OpenAPI contract.
+
+## Explicit implementation deviations
+
+| Requirement | Current implementation | Consequence |
+|---|---|---|
+| Python 3.12 / FastAPI / SQLAlchemy / Celery / Redis | TypeScript / Express / Drizzle / PostgreSQL | Not exact technical-stack compliance; engineering-owner review remains necessary. |
+| Modular entity-specific resource API | Generic typed record resources plus action endpoints | Partner-specific resource adapters, API keys and outbound LMS event contracts remain to implement. |
+| Real provider and messaging adapters | Synthetic evidence and explicit disabled ingress/instructions | No debits, mandate lifecycle instructions, activation SMS or notices reach a provider. |
+| Production tenancy and MFA | Isolated sandbox sessions and Clerk sign-in; simulated personas | Not a production role-provisioning or fresh-MFA implementation. |
+| Independent database tenant isolation and immutability | Scoped repository with explicit authorization, transaction locks, application mutation guards and ordinary SQL constraints | No custom-role/RLS/trigger boundary. Privileged SQL or an unscoped application query can bypass isolation and mutation guards; this is an explicit security deviation, not live-data approval. |
+| Production outbox / scheduler / status recovery | No outbound side effects are dispatched | At-least-once receiver idempotency, lost-ack replay and provider polling are not certified. |
+| Field encryption / key destruction | Only masked synthetic identifiers are accepted | Real bank accounts, phones and payer data must not be loaded. |
+| Locked retention and independent audit anchors | Private objects, application-protected metadata, transactional chain verification | WORM retention, external anchors, daily verifier and crypto-shredding remain unimplemented; privileged database access can alter metadata and rewrite an unanchored chain. |
+| Full Test 2 inference | Stable future-failure assignment, sample estimate and 30-day settled-value accounting | Confidence interval certification and live controlled evidence remain unavailable; result is always not proven. |
+| Automated post-invoice adjustments | Synthetic billable counts with reversal exclusions | Production invoice locking, adjustment statements and cost attribution require further implementation. |
+
+## Closed production gates
+
+### Pre-data
+
+Requires NDPA registration, a signed DPA for each lender, a documented hosting/transfer basis and security foundations. The sandbox does not accept these as verified merely because an evidence reference was entered.
+
+### Pre-live
+
+Requires a qualified legal opinion, written aggregator agreement and partner credentials, independent penetration-test highs closed, mandatory MFA and fresh challenges, audited staff access, restore rehearsal, written runbooks, kill-switch drill and signed cohort cutover. A working development preview is not proof of any of these.
+
+### Nine-month decisions
+
+- **Funding:** Test 5 for both lenders, signed list-price Test 3, measured variable cost ≤₦15 and three months of lean-burn cash. All are required.
+- **Recovery fee:** For each lender, at least eight percentage points of uplift and a 90% interval excluding zero on the preregistered sample. Separate from funding.
+- **Portability:** Written permission from NIBSS and two aggregators. Routing at creation remains unbuilt.
+
+## Verification boundary
+
+Type checking, runtime API smoke checks, tenant-isolation/refusal checks and visual preview checks are development verification only. They do not replace independent security assessment, load and availability tests, real-provider recorded replay, recovery drill, legal review or lender pilot acceptance.
+
+## Intentionally not built
+
+Stage 2 connectors and routing, payment wallets, custody/settlement accounts, WhatsApp, NPS/RTP, open-banking feeds, recovery-fee charging, self-serve commercial onboarding, bulk exception tools, late-payment automation and elaborate analytics dashboards.

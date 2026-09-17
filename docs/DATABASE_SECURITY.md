@@ -1,0 +1,37 @@
+# Database security boundary
+
+## Scope and rationale
+
+Valo Pay remains an isolated **synthetic observation sandbox**, not an approved system for real lender/customer data. Its runtime security boundary is the application's scoped repository. This deliberately replaces a custom PostgreSQL role, RLS policies and a record-protection trigger that the observed managed publishing path did not reproduce faithfully.
+
+The database connection is privileged. Explicit application checks **do not** provide the same independent barrier as a non-bypass database role with correctly configured RLS. A leaked database credential, malicious server code or an unscoped query can bypass application authorization and immutability. Do not describe this redesign as preserving database-enforced isolation.
+
+## Enforcement
+
+- Identity comes from verified Clerk request context or the existing high-entropy anonymous sandbox cookie, not a caller-supplied principal/workspace identifier. An absent or malformed sandbox cookie creates a separate synthetic workspace; it never grants access to an existing workspace.
+- One repository owns runtime SQL. Workspace membership, selected merchant ownership and record predicates must be checked explicitly. Routes/domain code must not obtain raw clients or unrestricted query functions.
+- A principal transaction lock serializes workspace creation/persona changes. Merchant row locking serializes state validation, allocations, idempotency and audit sequence generation across processes, not just within one Node instance.
+- Reads, business mutations, idempotent responses and audit appends share the authorized transaction. The repository retains its own original state for mutation validation, rather than trusting a snapshot supplied by its callers.
+- The repository refuses record deletion, tenant/identity reassignment, immutable-evidence edits and changes to frozen approved/preregistered/closed versions. It validates linked records and final allocation totals before committing.
+- Ordinary database foreign keys, primary/unique indexes, safe-integer money bounds and the due-item ticket floor provide additional protections. Cross-record allocation caps and evidence immutability are application rules, not triggers.
+- Private exports are accessible only through authorized merchant metadata and checksum-verified downloads. Object storage is not part of the SQL transaction: an object uploaded before a later database failure can be orphaned, but must not become accessible through another tenant.
+- Hash chains detect corruption relative to their stored history. They do not establish independent tamper-proof evidence against a privileged actor able to rewrite both history and hashes.
+
+## Development setup and publishing
+
+The Drizzle schema defines the supported tables, foreign keys, checks and unique indexes. A fresh development setup uses the normal development schema push. Do not reintroduce custom security roles, policies or triggers as an undeclared setup prerequisite.
+
+The existing development database transitions only after replacement application enforcement exists. Retiring the old objects must use narrowly scoped, reviewed development changes, preserve data and ordinary constraints, and never cascade-delete unknown role dependencies.
+
+Production remains managed by the Publish flow. Do not introduce production migration scripts, build-hook schema pushes or startup-time DDL. Inspect the freshly generated development-to-production diff before concluding a publishing problem is resolved: successful compilation does not prove migration fidelity. Review unexpected drops/renames and confirm all required ordinary constraints and expression/partial indexes retain their semantics.
+
+Removing the original role/policy dependencies addresses their specific missing-role failure mechanism. Only a subsequent user-initiated successful publish and post-publish checks establish that the complete publishing process works.
+
+## Verification and residual requirements
+
+- Run the database-boundary check, repository mutation/integration tests, API security regression script and existing smoke checks against the final schema **without** the legacy policies and trigger.
+- Exercise foreign identities/merchant IDs, optional linked references, protected records, failed imports, transaction rollback, concurrent allocations/idempotency and audit sequencing, and authorized/unauthorized export downloads.
+- Static boundary checks are a development safeguard, not a sandbox against malicious or deliberately obfuscated code.
+- Real data remains blocked pending independent security assessment, production staff provisioning/MFA, documented hosting and legal prerequisites, tested recovery, and an explicitly approved production isolation design.
+
+Development transition evidence and reproducible checks: [Security verification](SECURITY_VERIFICATION.md).

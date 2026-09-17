@@ -1,0 +1,152 @@
+import React, { useState } from 'react';
+import { useWorkspace } from '@/lib/workspace-context';
+import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
+import { AlertTriangle, User, Calendar, CheckSquare } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { formatKobo, formatDate } from '@/lib/formatters';
+import { RecordDialog } from '@/components/record-dialog';
+
+export default function ExceptionsPage() {
+  const { merchantId } = useWorkspace();
+  const [selectedEx, setSelectedEx] = useState<any>(null);
+  const [actionKind, setActionKind] = useState<'update' | 'resolve' | ''>('');
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+
+  const { data, isLoading } = useListRecords(
+    'exceptions',
+    { merchantId: merchantId! },
+    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('exceptions', { merchantId: merchantId! }) } }
+  );
+
+  const handleAction = (ex: any, kind: 'update' | 'resolve') => {
+    setSelectedEx(ex);
+    setActionKind(kind);
+    setIsDialogOpen(true);
+  };
+
+  if (!merchantId) return null;
+
+  return (
+    <div className="space-y-6">
+      <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Exceptions</h1>
+          <p className="text-muted-foreground mt-1">Manual intervention required for these items.</p>
+        </div>
+      </header>
+
+      <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
+        <div className="p-4 border-b flex items-center gap-4 bg-secondary/20">
+          <div className="flex gap-2">
+            <Button variant="secondary" size="sm" className="bg-primary text-primary-foreground">All Open</Button>
+            <Button variant="ghost" size="sm">High Severity</Button>
+            <Button variant="ghost" size="sm">Resolved</Button>
+          </div>
+        </div>
+
+        {isLoading ? (
+          <div className="p-12 text-center text-muted-foreground animate-pulse">Loading exceptions...</div>
+        ) : !data || data.items.length === 0 ? (
+          <div className="p-16 text-center flex flex-col items-center justify-center">
+            <CheckSquare className="h-12 w-12 text-muted-foreground mb-4 opacity-20" />
+            <h3 className="text-lg font-medium">All clear</h3>
+            <p className="text-muted-foreground text-sm mt-1">No exceptions require your attention.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-secondary/30 border-b text-muted-foreground">
+                <tr>
+                  <th className="px-6 py-4 font-medium">Type & Severity</th>
+                  <th className="px-6 py-4 font-medium">Customer / Context</th>
+                  <th className="px-6 py-4 font-medium">Status & Owner</th>
+                  <th className="px-6 py-4 font-medium text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {data.items.map(exception => (
+                  <tr key={exception.id} className="hover:bg-secondary/10 transition-colors">
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-2">
+                        {String(exception.data?.severity) === 'high' && <AlertTriangle className="h-4 w-4 text-destructive" />}
+                        <span className="font-medium text-foreground">{String(exception.data?.type || 'Unknown')}</span>
+                      </div>
+                      <span className={`inline-block mt-1 px-2 py-0.5 text-[10px] uppercase font-bold rounded border ${
+                        String(exception.data?.severity) === 'high' ? 'bg-destructive/10 text-destructive border-destructive/20' : 
+                        String(exception.data?.severity) === 'medium' ? 'bg-amber-100 text-amber-800 border-amber-200' : 
+                        'bg-secondary text-secondary-foreground'
+                      }`}>
+                        {String(exception.data?.severity || 'low')}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <p className="font-mono text-xs">{exception.customerId}</p>
+                      {exception.amountKobo > 0 && (
+                         <p className="font-mono font-medium mt-1">{formatKobo(exception.amountKobo)}</p>
+                      )}
+                    </td>
+                    <td className="px-6 py-4">
+                      <p className="font-medium capitalize">{exception.status.replace('_', ' ')}</p>
+                      <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
+                        <User className="h-3 w-3" /> {String(exception.data?.owner || 'Unassigned')}
+                      </div>
+                      {!!exception.data?.dueBy && (
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
+                          <Calendar className="h-3 w-3" /> Due {formatDate(String(exception.data.dueBy))}
+                        </div>
+                      )}
+                      {!!exception.data?.notes && (
+                        <p className="text-xs text-muted-foreground mt-2 bg-secondary/30 p-1.5 rounded">{String(exception.data.notes)}</p>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 text-right space-x-2">
+                      {exception.status !== 'resolved' && exception.status !== 'closed' ? (
+                        <>
+                          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(exception, 'update')}>
+                            Edit
+                          </Button>
+                          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(exception, 'resolve')}>
+                            Resolve
+                          </Button>
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">Resolved: {String(exception.data?.resolutionCode)}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <RecordDialog
+        kind="exceptions"
+        record={selectedEx}
+        isOpen={isDialogOpen}
+        onOpenChange={setIsDialogOpen}
+        title={actionKind === 'resolve' ? 'Resolve Exception' : 'Edit Exception'}
+        actionMutation={actionKind === 'resolve' ? 'resolve_exception' : undefined}
+        fields={
+          actionKind === 'resolve' ? [
+            { name: 'resolutionCode', label: 'Resolution Code', type: 'select', isData: true, required: true, options: [
+              {label: 'Allocated', value: 'allocated'},
+              {label: 'Duplicate Confirmed', value: 'duplicate_confirmed'},
+              {label: 'No Action Required', value: 'no_action_required'},
+              {label: 'Mandate Reissued', value: 'mandate_reissued'},
+              {label: 'Customer Contacted', value: 'customer_contacted'},
+              {label: 'Ownership Corrected', value: 'ownership_corrected'},
+              {label: 'Evidence Received', value: 'evidence_received'},
+              {label: 'Refunded Externally', value: 'refunded_externally'}
+            ]}
+          ] : [
+            { name: 'owner', label: 'Owner', type: 'text', isData: true },
+            { name: 'notes', label: 'Notes', type: 'textarea', isData: true },
+            { name: 'severity', label: 'Severity', type: 'select', isData: true, options: [{label:'Low', value:'low'}, {label:'Medium', value:'medium'}, {label:'High', value:'high'}] }
+          ]
+        }
+      />
+    </div>
+  );
+}

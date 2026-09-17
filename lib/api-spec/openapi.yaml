@@ -1,0 +1,1453 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Api",
+    "version": "1.0.0",
+    "description": "Valo Pay Stage 1 observation-first sandbox API. All monetary fields are integer kobo. Live lender data and all outbound provider instructions are blocked until production readiness is verified."
+  },
+  "servers": [
+    {
+      "url": "/api"
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "operationId": "healthCheck",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/v1/workspace": {
+      "get": {
+        "operationId": "getWorkspace",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/v1/overview": {
+      "get": {
+        "operationId": "getOverview",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Overview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/v1/records/{kind}": {
+      "get": {
+        "operationId": "listRecords",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createRecord",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValopayRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/records/{kind}/{id}": {
+      "patch": {
+        "operationId": "updateRecord",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValopayRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordUpdate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/actions": {
+      "post": {
+        "operationId": "performAction",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/imports": {
+      "post": {
+        "operationId": "importRecords",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/customers/{id}/timeline": {
+      "get": {
+        "operationId": "getCustomerTimeline",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Timeline"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/v1/reports": {
+      "get": {
+        "operationId": "getReports",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/v1/gates": {
+      "get": {
+        "operationId": "getGates",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Gates"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        }
+      }
+    },
+    "/v1/settings": {
+      "get": {
+        "operationId": "getSettings",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateSettings",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/exports": {
+      "post": {
+        "operationId": "createExport",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/exports/{id}/download": {
+      "get": {
+        "operationId": "downloadExport",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Private verified export bytes",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Export not found in tenant"
+          }
+        }
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenApiDocument",
+        "tags": [
+          "valopay"
+        ],
+        "responses": {
+          "200": {
+            "description": "Versioned public API specification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/webhooks/{provider}": {
+      "post": {
+        "operationId": "disabledProviderWebhook",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "403": {
+            "description": "Disabled until a provider-specific signed adapter is configured. No events are processed."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HealthStatus": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "RecordData": {
+        "type": "object",
+        "additionalProperties": {}
+      },
+      "ValopayRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "merchantId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "customerId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/RecordData"
+          }
+        },
+        "required": [
+          "id",
+          "merchantId",
+          "kind",
+          "name",
+          "status",
+          "reference",
+          "amountKobo",
+          "customerId",
+          "createdAt",
+          "updatedAt",
+          "data"
+        ]
+      },
+      "RecordInput": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "customerId": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/RecordData"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "RecordUpdate": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "customerId": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/RecordData"
+          }
+        },
+        "required": []
+      },
+      "Merchant": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "shortName": {
+            "type": "string"
+          },
+          "segment": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "monthlyVolume": {
+            "type": "integer"
+          },
+          "killSwitch": {
+            "type": "boolean"
+          },
+          "preDataReady": {
+            "type": "boolean"
+          },
+          "preLiveReady": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "shortName",
+          "segment",
+          "mode",
+          "status",
+          "provider",
+          "monthlyVolume",
+          "killSwitch",
+          "preDataReady",
+          "preLiveReady"
+        ]
+      },
+      "Workspace": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "authenticated": {
+            "type": "boolean"
+          },
+          "merchants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Merchant"
+            }
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "productionEnabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "environment",
+          "actor",
+          "role",
+          "authenticated",
+          "merchants",
+          "roles",
+          "productionEnabled"
+        ]
+      },
+      "Metric": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "value",
+          "unit",
+          "detail"
+        ]
+      },
+      "Overview": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Metric"
+            }
+          },
+          "queues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Metric"
+            }
+          },
+          "activity": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          },
+          "upcoming": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          },
+          "mode": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "lastClose": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "metrics",
+          "queues",
+          "activity",
+          "upcoming",
+          "mode",
+          "environment",
+          "lastClose"
+        ]
+      },
+      "RecordList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ]
+      },
+      "ActionInput": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "recordId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/RecordData"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "ActionResult": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "record": {
+            "$ref": "#/components/schemas/ValopayRecord"
+          },
+          "data": {
+            "$ref": "#/components/schemas/RecordData"
+          }
+        },
+        "required": [
+          "message",
+          "data"
+        ]
+      },
+      "ImportInput": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "csv": {
+            "type": "string"
+          },
+          "syntheticOnly": {
+            "type": "boolean"
+          },
+          "commit": {
+            "type": "boolean"
+          },
+          "mapping": {
+            "$ref": "#/components/schemas/RecordData"
+          }
+        },
+        "required": [
+          "kind",
+          "csv",
+          "syntheticOnly",
+          "commit"
+        ]
+      },
+      "ImportRow": {
+        "type": "object",
+        "properties": {
+          "row": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "row",
+          "status",
+          "message"
+        ]
+      },
+      "ImportResult": {
+        "type": "object",
+        "properties": {
+          "valid": {
+            "type": "integer"
+          },
+          "invalid": {
+            "type": "integer"
+          },
+          "imported": {
+            "type": "integer"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportRow"
+            }
+          }
+        },
+        "required": [
+          "valid",
+          "invalid",
+          "imported",
+          "rows"
+        ]
+      },
+      "Report": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Metric"
+            }
+          },
+          "billing": {
+            "$ref": "#/components/schemas/RecordData"
+          },
+          "experiment": {
+            "$ref": "#/components/schemas/RecordData"
+          },
+          "operational": {
+            "$ref": "#/components/schemas/RecordData"
+          },
+          "closes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          }
+        },
+        "required": [
+          "metrics",
+          "billing",
+          "experiment",
+          "operational",
+          "closes"
+        ]
+      },
+      "Gate": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "due": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "description",
+          "status",
+          "evidence",
+          "due"
+        ]
+      },
+      "Gates": {
+        "type": "object",
+        "properties": {
+          "prerequisites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Gate"
+            }
+          },
+          "decisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Gate"
+            }
+          },
+          "limitations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cashKobo": {
+            "type": "integer"
+          },
+          "burnKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "prerequisites",
+          "decisions",
+          "limitations",
+          "cashKobo",
+          "burnKobo"
+        ]
+      },
+      "Timeline": {
+        "type": "object",
+        "properties": {
+          "customer": {
+            "$ref": "#/components/schemas/ValopayRecord"
+          },
+          "position": {
+            "$ref": "#/components/schemas/RecordData"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          },
+          "mandates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          },
+          "dueItems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          },
+          "payments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          }
+        },
+        "required": [
+          "customer",
+          "position",
+          "events",
+          "mandates",
+          "dueItems",
+          "payments"
+        ]
+      },
+      "Settings": {
+        "type": "object",
+        "properties": {
+          "merchant": {
+            "$ref": "#/components/schemas/Merchant"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/RecordData"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/RecordData"
+          },
+          "integrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          },
+          "calendar": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          }
+        },
+        "required": [
+          "merchant",
+          "settings",
+          "permissions",
+          "integrations",
+          "members",
+          "calendar"
+        ]
+      },
+      "SettingsInput": {
+        "type": "object",
+        "properties": {
+          "executionStart": {
+            "type": "integer"
+          },
+          "executionEnd": {
+            "type": "integer"
+          },
+          "authorisationMode": {
+            "type": "string"
+          },
+          "contactRoute": {
+            "type": "string"
+          },
+          "minimumTicketKobo": {
+            "type": "integer"
+          },
+          "defaultOwner": {
+            "type": "string"
+          }
+        },
+        "required": []
+      },
+      "ExportInput": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "customerId": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "csv",
+              "pdf"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "format"
+        ]
+      },
+      "ExportResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "downloadUrl": {
+            "type": "string"
+          },
+          "checksum": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "downloadUrl",
+          "checksum",
+          "generatedAt"
+        ]
+      }
+    }
+  }
+}

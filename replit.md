@@ -1,0 +1,62 @@
+# Valo Pay
+
+Observation-first collections operations for Nigerian lenders. The current application is an isolated, persistent **synthetic sandbox**, not a live-ready Stage 1 release.
+
+## Run & Operate
+
+- Use the managed `artifacts/api-server: API Server` and `artifacts/valo-pay: web` workflows; their ports are injected.
+- `pnpm run typecheck` — full typecheck across all packages
+- `pnpm run build` — typecheck + build all packages
+- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
+- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
+- The schema source includes the ordinary foreign keys, unique indexes and money/floor checks. No custom role, policy, function or trigger setup is required. Do not run DDL at app startup, in publishing build commands or against production automatically.
+- `node scripts/smoke-valopay.mjs` — API smoke checks against a fresh synthetic workspace on the development domain; no real lender data.
+- `node scripts/check-db-boundary.mjs` — disallow raw database access outside the scoped repository.
+- `node scripts/security-valopay.mjs` — negative and concurrent API checks using fresh synthetic development workspaces.
+- Required integrations: PostgreSQL, managed Clerk and private App Storage. Never display their environment secret values.
+
+## Stack
+
+- pnpm workspaces, Node.js 24, TypeScript 5.9
+- API: Express 5
+- DB: PostgreSQL + Drizzle ORM
+- Validation: Zod 3 generated API validators and Drizzle insert schemas
+- API codegen: Orval (from OpenAPI spec)
+- Build: esbuild (ESM bundle), Vite React console
+
+## Where things live
+
+- Source requirements: `docs/source/`; the v2.1 Gate Change Note supersedes old Business Plan gate wording.
+- API contract: `lib/api-spec/openapi.yaml`; generated hooks and validators must be regenerated together.
+- Domain rules: `artifacts/api-server/src/domain/`.
+- Tenant transaction, audit chain, imports and exports: `artifacts/api-server/src/lib/valopay-*`.
+- Ordinary database constraints and tables: `lib/db/src/schema/valopay.ts`.
+- Security boundary and publishing limitations: `docs/DATABASE_SECURITY.md`.
+- Console: `artifacts/valo-pay/src/`.
+- Readiness and delivery limitations: `docs/BUILD_STATUS.md`.
+
+## Architecture decisions
+
+- **Observation first.** The governing amendment permits building before legal sign-off, but prohibits live instruction. Synthetic evidence must never satisfy a real gate.
+- **Do not process real customer data.** Pre-data requires NDPA/DPA, security foundations and approved hosting basis; none is inferred from a user checking a box.
+- **Runtime adaptation, not exact TRD compliance.** This workspace uses TypeScript/Express/Drizzle instead of the specified Python/FastAPI/SQLAlchemy/Celery stack. This is a disclosed implementation deviation, not an approved requirements change.
+- **Demo personas are not production RBAC grants.** Each isolated sandbox may switch simulated actors to exercise separation of duties; real staff provisioning and mandatory MFA remain production blockers.
+- **No production adapter guessed.** Aggregator selection follows written partner access. No merchant-secret entry form, funds account, wallet, routing-at-failure or recovery-fee implementation.
+- **Internal namespace is `valopay`; visible brand is “Valo Pay”.** Keep the registered `artifacts/valo-pay` artifact ID/folder stable. A legacy sandbox-cookie reader preserves existing browser workspaces; new cookies use the current namespace.
+- **Application-enforced isolation.** The scoped repository, explicit ownership predicates and locked transactions enforce tenant isolation and protected-record rules. This is not independent database-level isolation or immutability: privileged direct SQL or an unscoped code path could bypass those checks. Real lender data remains prohibited.
+
+## Product
+
+Two synthetic lenders; customer positions and timelines; mandate tracking; schedule and external-attempt imports; policy review and read-only backtesting; canonical reconciliation and allocation approvals; exception queues; audit verification; private PDF/CSV/JSON exports; independent readiness gates and synthetic measurement.
+
+## Gotchas
+
+- Amounts are safe integer kobo. Refuse due items below 500,000; 500,000–999,999 requires a recorded merchant Admin override. This floor does not reject inbound partial payments.
+- All workspace/merchant operations, imports, exports and idempotency use the scoped repository. Only that runtime module may access the database connection; routes and domain modules must never receive raw clients or unrestricted query functions. Keep principal and merchant locking across validation, mutation and audit append.
+- Use one audit-hash canonicalisation implementation. Independent hash formats cannot share a chain.
+- Orval's post-generation barrel normalisation is intentional; generated request parameter types and validators otherwise collide.
+- App Storage provides private persistence, but retention lock, six-year policy and crypto-shredding are not certified.
+
+## Pointers
+
+- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
