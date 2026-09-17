@@ -92,9 +92,14 @@ pnpm run test:golden
 
 ### GitHub pull-request checks
 
-The local `.github/workflows/ci.yml` definition is configured to run on pull requests and pushes to `main`, using Ubuntu 24.04, Node.js 24 and pnpm 10.26.1. It installs with `pnpm install --frozen-lockfile`, runs the four commands above, then builds the API bundle and the console (the console build needs no Clerk key; see the environment table). The job has read-only repository permissions, no application secrets or database service, and does not publish, deploy, migrate, or run the synthetic database/HTTP integration suites. The workflow must first be committed to GitHub through an account with workflow-write permission; source sync with `--skip-workflows` does not install or enable it.
+The local `.github/workflows/ci.yml` definition is configured to run on pull requests and pushes to `main`, using Ubuntu 24.04, Node.js 24 and pnpm 10.26.1, with two jobs that run in parallel:
 
-The check reports failures on the pull request. Enforcing a merge block requires a GitHub branch rule that requires **TypeScript, database boundary and pure tests**; this workflow does not change repository protection settings.
+- **TypeScript, database boundary and pure tests** installs with `pnpm install --frozen-lockfile`, runs the four commands above, then builds the API bundle and the console (the console build needs no Clerk key; see the environment table).
+- **Repository and scheduler tests on PostgreSQL** starts a PostgreSQL 16 service container that exists only for the job, creates the schema in it with the development push (`pnpm --filter @workspace/db run push`), and runs `pnpm run test:integration` against it: the repository suite (workspace bootstrap, locking, rollback, idempotency, expiry sweep) and the scheduled-close suite. The container is discarded with the runner.
+
+Both jobs have read-only repository permissions and no application secrets. Neither publishes, deploys or migrates a real database, and neither runs the export-stream suite (it needs App Storage credentials) or the HTTP suites (they need the Replit development domain and Clerk). The workflow must first be committed to GitHub through an account with workflow-write permission; source sync with `--skip-workflows` does not install or enable it.
+
+The checks report failures on the pull request. Enforcing a merge block requires a GitHub branch rule that requires **TypeScript, database boundary and pure tests** and **Repository and scheduler tests on PostgreSQL**; this workflow does not change repository protection settings.
 
 ### Builds and integration checks
 
@@ -111,14 +116,13 @@ The following checks create **fresh synthetic development fixtures**. They are n
 ```sh
 pnpm run test:security-api
 pnpm run test:smoke
-NODE_ENV=development VALOPAY_RUN_INTEGRATION=1 \
-  scripts/node_modules/.bin/tsx artifacts/api-server/tests/valopay-store.integration.test.ts
-NODE_ENV=development VALOPAY_RUN_INTEGRATION=1 \
-  scripts/node_modules/.bin/tsx artifacts/api-server/tests/close-scheduler.integration.test.ts
+VALOPAY_RUN_INTEGRATION=1 pnpm run test:integration
 NODE_ENV=development VALOPAY_RUN_INTEGRATION=1 \
   node --expose-gc --import ./scripts/node_modules/tsx/dist/loader.mjs \
   artifacts/api-server/tests/export-streams.integration.test.ts
 ```
+
+`test:integration` (`scripts/run-integration-tests.mjs`) refuses to run without `VALOPAY_RUN_INTEGRATION=1` and a `DATABASE_URL`, sets `NODE_ENV=development` unless set, and runs the repository suite and the scheduled-close suite in turn. The database must be disposable and carry the pushed schema; the pull-request workflow runs the same command against its own PostgreSQL service container.
 
 The HTTP suites require Replit's `REPLIT_DEV_DOMAIN`. Never use real lender data for tests.
 

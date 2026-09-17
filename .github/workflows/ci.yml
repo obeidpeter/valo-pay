@@ -61,3 +61,58 @@ jobs:
         env:
           PORT: "5173"
           BASE_PATH: "/"
+
+  # The database-backed suites run against a PostgreSQL 16 that exists only for
+  # this job: the schema is created in it with the development push and the
+  # container is discarded with the runner.  No application secret, no real
+  # database, no deploy; the export-stream suite (App Storage credentials) and
+  # the HTTP suites (Replit development domain and Clerk) stay manual.
+  database-checks:
+    name: Repository and scheduler tests on PostgreSQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: valopay
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d valopay"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CI: "true"
+      NODE_ENV: development
+      VALOPAY_RUN_INTEGRATION: "1"
+      DATABASE_URL: postgres://postgres@127.0.0.1:5432/valopay
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.1
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create the schema in the job's throwaway database
+        run: pnpm --filter @workspace/db run push
+
+      - name: Run the repository and scheduled-close suites
+        run: pnpm run test:integration
