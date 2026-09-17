@@ -7,6 +7,7 @@ import { formatKobo } from '@/lib/formatters';
 import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
 import { useQueryClient } from '@tanstack/react-query';
+import { activationWorkflows, mandateFrequencies } from '@workspace/valopay-schema';
 
 export default function MandatesPage() {
   const { merchantId } = useWorkspace();
@@ -132,10 +133,11 @@ export default function MandatesPage() {
                     <td className="px-6 py-4 font-mono">{formatKobo(mandate.amountKobo)}</td>
                     <td className="px-6 py-4 text-xs text-muted-foreground">{String(mandate.data?.workflow || 'Standard')}</td>
                     <td className="px-6 py-4 text-right space-x-2">
-                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_suspend')}>Suspend</Button>
-                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_cancel')}>Cancel</Button>
-                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_reissue')}>Reissue</Button>
-                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'activation_reminder')}>Remind</Button>
+                      {mandate.status === 'active' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_suspend')}>Suspend</Button>}
+                      {mandate.status === 'suspended' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_reinstate')}>Reinstate</Button>}
+                      {['draft', 'submitted', 'pending_activation', 'active', 'suspended'].includes(mandate.status) && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_cancel')}>Cancel</Button>}
+                      {['pending_activation', 'expired', 'cancelled', 'failed'].includes(mandate.status) && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_reissue')}>Reissue</Button>}
+                      {mandate.status === 'pending_activation' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'activation_reminder')}>Remind</Button>}
                     </td>
                   </tr>
                 ))}
@@ -152,7 +154,7 @@ export default function MandatesPage() {
         onOpenChange={setIsDialogOpen}
         title={`Mandate Action: ${actionKind.replace('_', ' ')}`}
         actionMutation={actionKind}
-        fields={[]}
+        fields={actionKind === 'mandate_reissue' ? [{ name: 'consentEvidence', label: 'New consent evidence reference (MAN-06: a re-issue is a new mandate with a new consent record)', type: 'text', isData: true, required: true }] : []}
       />
       <Dialog.Root open={isCreateOpen} onOpenChange={setIsCreateOpen}>
         <Dialog.Portal>
@@ -165,12 +167,12 @@ export default function MandatesPage() {
               <MandateSelect label="Customer" value={draft.customerId} onChange={value => setDraft({ ...draft, customerId: value })} required options={(customers?.items || []).map(customer => ({ value: customer.id, label: `${customer.name} · ${customer.reference}` }))} />
               <MandateField label="Limit (kobo)" type="number" value={draft.amountKobo} onChange={value => setDraft({ ...draft, amountKobo: value })} required />
               <MandateField label="Provider reference" value={draft.reference} onChange={value => setDraft({ ...draft, reference: value })} required />
-              <MandateSelect label="Activation workflow" value={draft.workflow} onChange={value => setDraft({ ...draft, workflow: value })} required options={[{ value: 'hosted_consent', label: 'Hosted consent' }, { value: 'transfer_to_activate', label: 'Transfer to activate' }]} />
+              <MandateSelect label="Activation workflow" value={draft.workflow} onChange={value => setDraft({ ...draft, workflow: value })} required options={activationWorkflows.map(workflow => ({ value: workflow, label: workflow.replaceAll('_', ' ') }))} />
               <MandateField label="Consent evidence reference" value={draft.consentEvidence} onChange={value => setDraft({ ...draft, consentEvidence: value })} required />
               <label className="block text-sm font-medium">Consent gaps (one per line)</label>
               <textarea className="mt-1 min-h-[72px] w-full rounded-md border bg-transparent px-3 py-2 text-sm" value={draft.consentGaps} onChange={event => setDraft({ ...draft, consentGaps: event.target.value })} />
               <MandateSelect label="Policy" value={draft.policyId} onChange={value => setDraft({ ...draft, policyId: value })} required options={(policies?.items || []).map(policy => ({ value: policy.id, label: `${policy.name} · ${policy.status}` }))} />
-              <MandateSelect label="Frequency" value={draft.frequency} onChange={value => setDraft({ ...draft, frequency: value })} required options={[{ value: 'monthly', label: 'Monthly' }, { value: 'weekly', label: 'Weekly' }, { value: 'quarterly', label: 'Quarterly' }]} />
+              <MandateSelect label="Frequency" value={draft.frequency} onChange={value => setDraft({ ...draft, frequency: value })} required options={mandateFrequencies.map(frequency => ({ value: frequency, label: frequency.charAt(0).toUpperCase() + frequency.slice(1) }))} />
               {createError && <p className="text-sm text-destructive">{createError}</p>}
               <div className="flex justify-end gap-2 border-t pt-4">
                 <Button type="button" variant="outline" onClick={() => setIsCreateOpen(false)}>Cancel</Button>

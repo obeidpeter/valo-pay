@@ -1,16 +1,21 @@
 import { randomUUID } from "node:crypto";
 import type { DomainState, ValopayRecord } from "./types";
 
-const forbiddenBankKey = /(^|_)(account(number)?|bank_account|iban|bvn|card(number)?)(_|$)/i;
+/** Keys that name a raw financial identifier, matched on snake_case word boundaries so "accountableUser" is not an account number. */
+const forbiddenBankKey = /(^|_)(account_?(number|no|num)|bank_?account|nuban|iban|bvn|card_?(number|no|num)|pan)(_|$)/;
 const digitRun = /\d[\d -]{6,}\d/;
+const financialKey = /(bank|account|card|iban|bvn|nuban|pan)/;
+const snakeCase = (key: string): string => key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
 
 /** Rejecting raw financial identifiers keeps this synthetic sandbox non-sensitive. */
 export function assertNoRealBankDetails(value: unknown, key = ""): void {
   if (typeof value === "string") {
-    if (forbiddenBankKey.test(key) || (key.toLowerCase().includes("account") && !key.toLowerCase().includes("masked"))) {
+    const name = snakeCase(key);
+    if (name.includes("masked")) return;
+    if (forbiddenBankKey.test(name)) {
       throw new Error("Raw bank account details are not permitted; store a masked identifier only.");
     }
-    if (!key.toLowerCase().includes("masked") && digitRun.test(value) && /(bank|account|card|iban|bvn)/i.test(key)) {
+    if (digitRun.test(value) && financialKey.test(name)) {
       throw new Error("Raw financial identifiers are not permitted in this sandbox.");
     }
     return;

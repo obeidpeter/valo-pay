@@ -1,6 +1,6 @@
 import { createContext, useContext, ReactNode, useState, useEffect, useRef } from 'react';
 import { useGetWorkspace, Workspace } from '@workspace/api-client-react';
-import { useAuth } from '@clerk/react';
+import { useSessionUser } from '@/lib/auth';
 import { useQueryClient } from '@tanstack/react-query';
 
 type WorkspaceContextType = {
@@ -13,7 +13,11 @@ type WorkspaceContextType = {
 const WorkspaceContext = createContext<WorkspaceContextType | null>(null);
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  const {userId,isLoaded}=useAuth();
+  const {userId,isLoaded:authLoaded}=useSessionUser();
+  // Never hold the anonymous sandbox hostage to a slow or unreachable sign-in service.
+  const [authTimedOut,setAuthTimedOut]=useState(false);
+  useEffect(()=>{if(authLoaded)return;const timer=setTimeout(()=>setAuthTimedOut(true),5000);return()=>clearTimeout(timer);},[authLoaded]);
+  const isLoaded=authLoaded||authTimedOut;
   const queryClient=useQueryClient();
   const previousUser=useRef<string|null|undefined>(undefined);
   const { data: workspace, isLoading,error,refetch } = useGetWorkspace({query:{queryKey:["workspace",userId||"sandbox"],enabled:isLoaded,refetchInterval:30000}});

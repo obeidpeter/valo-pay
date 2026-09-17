@@ -2,11 +2,12 @@ import { parse } from "csv-parse/sync";
 import { makeRecord, validateRecord } from "../domain";
 import type { Context, DomainState } from "../domain/types";
 import { fail } from "./valopay-store";
+import { defaultStatus, importBooleanFields, importKinds as sharedImportKinds, importNumericFields } from "@workspace/valopay-schema";
 
-const importKinds=["customers","mandates","due-items","attempts","observations"];
+const importKinds:readonly string[]=sharedImportKinds;
 const topFields=new Set(["name","status","reference","amountKobo","customerId"]);
-const numeric=new Set(["amountKobo","maxAttempts","spacingHours","firstNoticeHours","retryNoticeHours","number","outstandingKobo","monthlyVolume"]);
-const boolean=new Set(["simulated","partialAllowed"]);
+const numeric=importNumericFields;
+const boolean=importBooleanFields;
 export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:string;syntheticOnly:boolean;commit:boolean;mapping?:Record<string,unknown>}){
   if(!input.syntheticOnly)fail("Pre-data gate is closed. Only synthetic sample records are accepted.",403);
   if(!importKinds.includes(input.kind))fail("This resource does not support CSV import.");
@@ -29,7 +30,7 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
         if(topFields.has(target))record[target]=decoded;else record.data[target]=decoded;
       }
       record.name ||= record.reference || `${input.kind} import ${index+1}`;
-      record.status ||= ({customers:"active",mandates:"pending_activation","due-items":"scheduled",attempts:"failed",observations:"unresolved"} as Record<string,string>)[input.kind];
+      record.status ||= defaultStatus[input.kind as keyof typeof defaultStatus];
       if(record.customerId&&!working.records.some(r=>r.id===record.customerId&&r.kind==="customers")){
         const customer=working.records.find(r=>r.kind==="customers"&&r.reference===record.customerId);
         if(customer)record.customerId=customer.id;

@@ -6,6 +6,24 @@ import { Button } from '@/components/ui/button';
 import { formatKobo, formatDate } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 
+type Unknown = Record<string, unknown> | undefined;
+const isScalar = (value: unknown) => value === null || ['string', 'number', 'boolean'].includes(typeof value);
+const scalarEntries = (record: Unknown): Array<[string, unknown]> => Object.entries(record || {}).filter(([, value]) => isScalar(value));
+const billingLines = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.lines) ? (record!.lines as Array<Record<string, any>>) : [];
+const experimentRows = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.results) ? (record!.results as Array<Record<string, any>>) : [];
+const labelOf = (key: string) => key.replace(/([A-Z])/g, ' $1').replace(/^./, first => first.toUpperCase()).trim();
+const percent = (value: unknown) => typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : 'n/a';
+function renderValue(key: string, value: unknown): string {
+  if (value === null || value === undefined) return 'n/a';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'number') {
+    if (/kobo$/i.test(key)) return formatKobo(value);
+    if (/rate$|precision$|share$/i.test(key)) return percent(value);
+    return String(value);
+  }
+  return String(value);
+}
+
 export default function ReportsPage() {
   const { merchantId } = useWorkspace();
   const [experimentDialog, setExperimentDialog] = useState<'create' | 'edit' | 'preregister' | null>(null);
@@ -85,8 +103,9 @@ export default function ReportsPage() {
           {/* Top Metrics */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             <div className="bg-card border rounded-xl p-5 shadow-sm">
-               <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Confirmed Jobs</p>
-               <div className="mt-2 text-3xl font-bold font-mono">{String(reports.operational?.confirmedJobs || 0)}</div>
+               <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Staff confirmation</p>
+               <div className="mt-2 text-3xl font-bold font-mono">{reports.operational?.fortnightlyStaffConfirmed ? 'Yes' : 'No'}</div>
+               <p className="text-xs text-muted-foreground mt-2">Fortnightly review confirmation that the four jobs moved off spreadsheets (Test 5).</p>
             </div>
             <div className="bg-card border rounded-xl p-5 shadow-sm">
                <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Required Audit Sample</p>
@@ -126,14 +145,38 @@ export default function ReportsPage() {
               </div>
               <div className="p-6">
                 <div className="space-y-4 font-mono text-sm">
-                  {Object.entries(reports.billing || {}).map(([key, value]) => (
+                  {scalarEntries(reports.billing).map(([key, value]) => (
                     <div key={key} className="flex justify-between items-baseline border-b border-dashed border-border pb-2">
-                      <span className="capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</span>
-                      <span className="font-bold">{typeof value === 'number' && key.toLowerCase().includes('kobo') ? formatKobo(value) : String(value)}</span>
+                      <span className="capitalize">{labelOf(key)}</span>
+                      <span className="font-bold">{renderValue(key, value)}</span>
                     </div>
                   ))}
-                  {Object.keys(reports.billing || {}).length === 0 && (
+                  {scalarEntries(reports.billing).length === 0 && (
                     <p className="text-muted-foreground text-center py-4">No billing data available.</p>
+                  )}
+                </div>
+                <div className="mt-6">
+                  <h3 className="text-sm font-semibold mb-2">Statement lines</h3>
+                  {billingLines(reports.billing).length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No signed design-partner terms for this period; nothing is billable.</p>
+                  ) : (
+                    <table className="w-full text-xs text-left font-mono">
+                      <thead className="text-muted-foreground border-b">
+                        <tr><th className="py-1 pr-2">Prospect</th><th className="py-1 pr-2">Tier</th><th className="py-1 pr-2 text-right">Licence</th><th className="py-1 pr-2 text-right">Usage</th><th className="py-1 pr-2 text-right">Total</th><th className="py-1">Note</th></tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {billingLines(reports.billing).map(line => (
+                          <tr key={String(line.commercialId)}>
+                            <td className="py-1 pr-2 font-sans">{String(line.prospect)}</td>
+                            <td className="py-1 pr-2">{String(line.volumeTier)}{line.tierMismatch ? ' (contract differs)' : ''}</td>
+                            <td className="py-1 pr-2 text-right">{formatKobo(Number(line.licenceKobo || 0))}</td>
+                            <td className="py-1 pr-2 text-right">{formatKobo(Number(line.usageKobo || 0))}</td>
+                            <td className="py-1 pr-2 text-right font-bold">{formatKobo(Number(line.totalKobo || 0))}</td>
+                            <td className="py-1 font-sans text-muted-foreground">{line.designPartnerDiscount ? 'Design-partner discount applied' : 'Full public price'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   )}
                 </div>
               </div>
@@ -166,15 +209,25 @@ export default function ReportsPage() {
                       </div>
                     </div>
                   ))}
-                  {Object.entries(reports.experiment || {}).map(([key, value]) => (
+                  {scalarEntries(reports.experiment).map(([key, value]) => (
                     <div key={key} className="bg-secondary/30 p-3 rounded-lg flex justify-between items-center">
-                      <span className="text-sm font-medium capitalize text-muted-foreground">{key.replace(/([A-Z])/g, ' $1').trim()}</span>
+                      <span className="text-sm font-medium capitalize text-muted-foreground">{labelOf(key)}</span>
                       <span className={`font-mono text-sm font-bold ${String(value) === 'not_proven' ? 'text-amber-600' : ''}`}>
-                        {String(value)}
+                        {renderValue(key, value)}
                       </span>
                     </div>
                   ))}
-                  {Object.keys(reports.experiment || {}).length === 0 && (
+                  {experimentRows(reports.experiment).map(row => (
+                    <div key={String(row.experimentId)} className="border rounded-lg p-3 text-xs font-mono space-y-1">
+                      <p className="text-muted-foreground truncate">Experiment {String(row.experimentId)}</p>
+                      <p>Enrolled: engine {String(row.engine)} · holdout {String(row.holdout)} · minimum per arm {String(row.minimumPerArm)}</p>
+                      <p>Mature 30-day outcomes: engine {String(row.matureEngine)} · holdout {String(row.matureHoldout)}</p>
+                      <p>Recovery by value: engine {percent(row.engineRecoveryByValue)} · holdout {percent(row.holdoutRecoveryByValue)}</p>
+                      <p>90% interval: {row.confidenceInterval90 ? String(row.confidenceInterval90) : 'not computed'} · result <span className="text-amber-600 font-bold">{String(row.result)}</span></p>
+                      <p className="font-sans text-muted-foreground">{String(row.reason || '')}</p>
+                    </div>
+                  ))}
+                  {scalarEntries(reports.experiment).length === 0 && experimentRows(reports.experiment).length === 0 && (
                     <p className="text-muted-foreground text-center py-4">No active experiments.</p>
                   )}
                 </div>

@@ -6,6 +6,21 @@ import { Button } from '@/components/ui/button';
 import { formatKobo, formatDate } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 
+/** The prerequisite and decision ids the gate register matches evidence on (data.gateId). */
+const gateOptions = [
+  { value: 'P1', label: 'P1 · Legal opinion' },
+  { value: 'P2', label: 'P2 · Aggregator partner access' },
+  { value: 'P3', label: 'P3 · NDPA registration and lender DPA' },
+  { value: 'P4', label: 'P4 · Security and operational readiness' },
+  { value: 'P5', label: 'P5 · Two design-partner lenders' },
+  { value: 'F1', label: 'F1 · Test 5 operational value' },
+  { value: 'F2', label: 'F2 · Test 3 commercial evidence' },
+  { value: 'F3', label: 'F3 · Variable cost per collection' },
+  { value: 'F4', label: 'F4 · Bridge cash in hand' },
+  { value: 'T1b', label: 'T1b · Portability decision' },
+  { value: 'T2', label: 'T2 · Recovery-fee decision' },
+];
+
 export default function EvidencePage() {
   const { merchantId } = useWorkspace();
   const [selectedRecord, setSelectedRecord] = useState<any>(null);
@@ -113,6 +128,11 @@ export default function EvidencePage() {
                       <p className="font-medium text-sm">{gate.title}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">{gate.description}</p>
                       <p className="text-xs font-mono text-muted-foreground mt-1 bg-secondary/50 inline-block px-1.5 py-0.5 rounded">Evidence: {gate.evidence}</p>
+                      {(evidence?.items || []).filter(item => String(item.data?.gateId || item.reference) === gate.id).map(item => (
+                        <button key={item.id} type="button" className="block text-xs text-primary underline mt-1" onClick={() => handleEdit(item, 'evidence')}>
+                          {item.name} · {item.status}
+                        </button>
+                      ))}
                     </div>
                   </div>
                 ))}
@@ -254,7 +274,8 @@ export default function EvidencePage() {
         title={selectedRecord ? `Edit ${actionKind}` : `Add ${actionKind}`}
         fields={
           actionKind === 'evidence' ? [
-            { name: 'name', label: 'Requirement (e.g. P1)', type: 'text', required: true },
+            { name: 'name', label: 'Evidence title', type: 'text', required: true },
+            { name: 'gateId', label: 'Prerequisite or decision it evidences', type: 'select', isData: true, required: true, options: gateOptions },
             { name: 'status', label: 'Status', type: 'select', options: [{label: 'Pending', value: 'pending'}, {label: 'Recorded', value: 'recorded'}], required: true },
             { name: 'reference', label: 'Reference URL / ID', type: 'text', isData: true, required: true },
             { name: 'notes', label: 'Notes', type: 'textarea', isData: true }

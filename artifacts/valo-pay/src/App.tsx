@@ -11,8 +11,8 @@ import {
   Router as WouterRouter,
   Redirect
 } from 'wouter';
-import { ClerkProvider, SignIn, SignUp, Show } from '@clerk/react';
-import { publishableKeyFromHost } from '@clerk/react/internal';
+import { ClerkProvider, SignIn, SignUp } from '@clerk/react';
+import { authEnabled, clerkPublishableKey } from '@/lib/auth';
 
 import { WorkspaceProvider } from '@/lib/workspace-context';
 import { Layout } from '@/components/layout';
@@ -34,10 +34,6 @@ import SettingsPage from '@/pages/settings';
 
 const queryClient = new QueryClient();
 
-const clerkPubKey = publishableKeyFromHost(
-  window.location.hostname,
-  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
-);
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -45,10 +41,6 @@ function stripBase(path: string): string {
   return basePath && path.startsWith(basePath)
     ? path.slice(basePath.length) || "/"
     : path;
-}
-
-if (!clerkPubKey) {
-  throw new Error('Missing VITE_CLERK_PUBLISHABLE_KEY in .env file');
 }
 
 function SignInPage() {
@@ -75,22 +67,14 @@ function RoutedErrorBoundary({ children }: { children: ReactNode }) {
 function ClerkProviderWithRoutes() {
   const [, setLocation] = useLocation();
 
-  return (
-    <ClerkProvider
-      publishableKey={clerkPubKey}
-      proxyUrl={clerkProxyUrl}
-      signInUrl={`${basePath}/sign-in`}
-      signUpUrl={`${basePath}/sign-up`}
-      routerPush={(to) => setLocation(stripBase(to))}
-      routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
-    >
+  const routes = (
       <QueryClientProvider client={queryClient}>
         <WorkspaceProvider>
           <TooltipProvider>
             <RoutedErrorBoundary>
               <Switch>
-                <Route path="/sign-in/*?" component={SignInPage} />
-                <Route path="/sign-up/*?" component={SignUpPage} />
+                <Route path="/sign-in/*?">{authEnabled ? <SignInPage /> : <Redirect to="/" />}</Route>
+                <Route path="/sign-up/*?">{authEnabled ? <SignUpPage /> : <Redirect to="/" />}</Route>
                 <Route>
                   <Layout>
                     <Switch>
@@ -117,6 +101,20 @@ function ClerkProviderWithRoutes() {
           </TooltipProvider>
         </WorkspaceProvider>
       </QueryClientProvider>
+  );
+
+  // Without a reachable Clerk the anonymous sandbox still runs; see lib/auth.tsx.
+  if (!authEnabled || !clerkPublishableKey) return routes;
+  return (
+    <ClerkProvider
+      publishableKey={clerkPublishableKey}
+      proxyUrl={clerkProxyUrl}
+      signInUrl={`${basePath}/sign-in`}
+      signUpUrl={`${basePath}/sign-up`}
+      routerPush={(to) => setLocation(stripBase(to))}
+      routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
+    >
+      {routes}
     </ClerkProvider>
   );
 }

@@ -11,7 +11,7 @@ This repository contains a clean snapshot of the application, not the original R
 - `artifacts/valo-pay` — React + Vite operations console.
 - `artifacts/api-server` — Express API, scoped repository, domain logic and tests.
 - `artifacts/mockup-sandbox` — existing design/component preview workspace.
-- `lib` — PostgreSQL/Drizzle schema, OpenAPI contract and generated API packages.
+- `lib` — PostgreSQL/Drizzle schema, OpenAPI contract, generated API packages and `lib/valopay-schema`, the shared per-kind schema (statuses, state machines, failure-code and exception catalogues, money and policy guardrails) that the API validator and the console both import.
 - `scripts` — development checks and source synchronization utilities.
 - `docs` — selected implementation and security documentation.
 
@@ -19,7 +19,7 @@ Keep the workspace together: the frontend and API depend on shared packages.
 
 ## Prerequisites and installation
 
-The current supported environment is Replit's Linux workspace with **Node.js 24**, **pnpm 10**, PostgreSQL, managed Clerk authentication and private App Storage.
+The current supported environment is Replit's Linux workspace with **Node.js 24**, **pnpm 10**, PostgreSQL, managed Clerk authentication and private App Storage. `package.json` requires Node 22 or later; CI runs on Node 24 with pnpm 10.26.1.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -36,7 +36,7 @@ Provide credentials through your environment's secret manager, never through com
 | `DATABASE_URL` | PostgreSQL connection, server only |
 | `CLERK_SECRET_KEY` | Clerk server authentication/proxy |
 | `CLERK_PUBLISHABLE_KEY` | Server-side Clerk configuration |
-| `VITE_CLERK_PUBLISHABLE_KEY` | Frontend Clerk configuration, needed when building |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Frontend Clerk configuration for sign-in; on a local host without it the console runs the anonymous sandbox with sign-in hidden |
 | `PRIVATE_OBJECT_DIR` | Private App Storage location |
 | `PUBLIC_OBJECT_SEARCH_PATHS` | App Storage public search locations |
 | `PORT` | Port for each process, supplied by its managed workflow |
@@ -76,13 +76,16 @@ These checks need no production credentials or running services and do not write
 pnpm run typecheck
 pnpm run check:db-boundary
 pnpm run test:pure
+pnpm run test:golden
 ```
 
 `test:pure` explicitly runs the source-snapshot safeguards, in-memory store guards/audit checks, and download-stream tests. The store test supplies an unusable loopback database URL for module initialization; it does not connect to a database.
 
+`test:golden` runs the golden tests for the shared schema, the retry engine and reconciliation (`artifacts/api-server/tests/*-golden.test.ts`). They pin the TRD v1.1 acceptance behaviour in section 10.4: the three-source replay in every order, duplicate evidence, the allocation ceiling, the notice clock, quiet hours, execution windows, attempt ceilings across sources, stable assignment and kill switches. Add a golden case whenever a rule in `lib/valopay-schema` or `artifacts/api-server/src/domain` changes. `pnpm test` runs every offline check above in one go.
+
 ### GitHub pull-request checks
 
-The local `.github/workflows/ci.yml` definition is configured to run on pull requests and pushes to `main`, using Ubuntu 24.04, Node.js 24 and pnpm 10.26.1. It installs with `pnpm install --frozen-lockfile`, then runs the three commands above. The job has read-only repository permissions, no application secrets or database service, and does not build, publish, deploy, migrate, or run the synthetic database/HTTP integration suites. The workflow must first be committed to GitHub through an account with workflow-write permission; source sync with `--skip-workflows` does not install or enable it.
+The local `.github/workflows/ci.yml` definition is configured to run on pull requests and pushes to `main`, using Ubuntu 24.04, Node.js 24 and pnpm 10.26.1. It installs with `pnpm install --frozen-lockfile`, runs the four commands above, then builds the API bundle and the console (the console build needs no Clerk key; see the environment table). The job has read-only repository permissions, no application secrets or database service, and does not publish, deploy, migrate, or run the synthetic database/HTTP integration suites. The workflow must first be committed to GitHub through an account with workflow-write permission; source sync with `--skip-workflows` does not install or enable it.
 
 The check reports failures on the pull request. Enforcing a merge block requires a GitHub branch rule that requires **TypeScript, database boundary and pure tests**; this workflow does not change repository protection settings.
 

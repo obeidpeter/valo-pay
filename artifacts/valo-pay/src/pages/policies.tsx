@@ -193,7 +193,7 @@ export default function PoliciesPage() {
           actionKind === 'create_policy' || actionKind === 'edit_policy' ? [
             { name: 'name', label: 'Policy Name', type: 'text', required: true },
             { name: 'status', label: 'Status', type: 'select', options: [{label: 'Draft', value: 'draft'}], required: true },
-            { name: 'version', label: 'Version', type: 'text', isData: true, required: true },
+            { name: 'version', label: 'Version', type: 'number', isData: true, required: true },
             { name: 'maxAttempts', label: 'Max Attempts', type: 'number', isData: true, required: true },
             { name: 'spacingHours', label: 'Spacing Hours', type: 'number', isData: true, required: true },
             { name: 'firstNoticeHours', label: 'First Notice Hours', type: 'number', isData: true, required: true },
@@ -206,7 +206,7 @@ export default function PoliciesPage() {
             { name: 'status', label: 'Status', type: 'select', options: [{label: 'Draft', value: 'draft'}], required: true },
             { name: 'purpose', label: 'Purpose', type: 'text', isData: true, required: true },
             { name: 'text', label: 'Text (Use {{amount}}, {{date}})', type: 'textarea', isData: true, required: true },
-            { name: 'version', label: 'Version', type: 'text', isData: true, required: true }
+            { name: 'version', label: 'Version', type: 'number', isData: true, required: true }
           ] :
           []
         }
