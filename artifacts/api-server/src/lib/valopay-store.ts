@@ -4,6 +4,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { seedMerchant } from "./valopay-seed";
+import { createCreationLimiter } from "./creation-limit";
 
 export const roles = ["Admin", "Operations", "Finance", "Compliance reviewer", "Read-only"];
 export const digest = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -40,6 +41,11 @@ export function fail(message: string, status = 400): never {
   throw Object.assign(new Error(message), { status });
 }
 const conflict = (message = "Operation conflicts with the current lender state."): never => fail(message, 409);
+/** Anonymous sandboxes expire after this many days without a change; the cookie carries the same lifetime. */
+export const ANONYMOUS_WORKSPACE_DAYS = 30;
+/** How many expired sandboxes one bootstrap removes, so a request never pays for a large backlog. */
+const SWEEP_BATCH = 5;
+const creationLimiter = createCreationLimiter();
 const sandboxCookieName = "valopay_sandbox";
 const legacySandboxCookieName = "valo_sandbox";
 const cookieValue = (cookies: string, name: string) => cookies.split(";").map((cookie) => cookie.trim()).find((cookie) => cookie.startsWith(`${name}=`))?.slice(name.length + 1);
@@ -47,15 +53,14 @@ const isSandboxToken = (value: string | undefined): value is string => !!value &
 
 function principalFor(req: Request, res: Response) {
   const auth = getAuth(req);
-  if (auth.userId) return { principal: digest(`clerk:${auth.userId}`), authenticated: true };
+  if (auth.userId) return { principal: digest(`clerk:${auth.userId}`), authenticated: true, address: req.ip || "unknown" };
   const cookies = req.headers.cookie || "";
   const currentToken = cookieValue(cookies, sandboxCookieName);
   const legacyToken = cookieValue(cookies, legacySandboxCookieName);
   const token = isSandboxToken(currentToken) ? currentToken : isSandboxToken(legacyToken) ? legacyToken : randomBytes(32).toString("hex");
-  if (!isSandboxToken(currentToken)) {
-    res.cookie(sandboxCookieName, token, { httpOnly: true, secure: req.secure || req.headers["x-forwarded-proto"] === "https", sameSite: "lax", maxAge: 30 * 86400000, path: "/" });
-  }
-  return { principal: digest(`demo:${token}`), authenticated: false };
+  // The cookie slides: an active sandbox keeps its 30 days from the last visit, matching the expiry sweep below.
+  res.cookie(sandboxCookieName, token, { httpOnly: true, secure: req.secure || req.headers["x-forwarded-proto"] === "https", sameSite: "lax", maxAge: ANONYMOUS_WORKSPACE_DAYS * 86400000, path: "/" });
+  return { principal: digest(`demo:${token}`), authenticated: false, address: req.ip || "unknown" };
 }
 
 function sessionFor(context: StoreContext): Session {
@@ -93,6 +98,8 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       [identity.principal],
     )).rows[0];
     if (!workspace) {
+      // A new anonymous sandbox seeds two lenders; creation is bounded per client address on top of the request limit.
+      if (!identity.authenticated && !creationLimiter.take(identity.address, Date.now())) fail("Too many new sandboxes from this address; please try again in an hour.", 429);
       const inserted = (await client.query<WorkspaceRow>(
         `INSERT INTO valopay_workspaces(id,principal_hash,role) VALUES($1,$2,'Admin')
          ON CONFLICT (principal_hash) DO NOTHING RETURNING id,principal_hash,role`,
@@ -103,7 +110,11 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
         [identity.principal],
       )).rows[0];
       if (!workspace) throw new Error("Workspace bootstrap could not be completed.");
-      if (inserted) await seedWorkspace(client, workspace, identity.principal);
+      if (inserted) {
+        await seedWorkspace(client, workspace, identity.principal, !identity.authenticated);
+        // Each new anonymous sandbox pays for a few expired ones, so the table stays bounded without a scheduler.
+        if (!identity.authenticated) await sweepExpiredWorkspaces(client, SWEEP_BATCH);
+      }
     }
     const now = (await client.query<{ now: Date }>("SELECT now() AS now")).rows[0]!.now.toISOString();
     context = Object.freeze({
@@ -388,9 +399,33 @@ export async function saveState(context: StoreContext, state: DomainState): Prom
   session.snapshot = structuredClone(state);
 }
 
-async function seedWorkspace(client: PoolClient, workspace: WorkspaceRow, principal: string) {
+/**
+ * Anonymous sandboxes older than the cookie lifetime with no record change in
+ * that time are removed, children first; signed-in workspaces never carry the
+ * flag and are never swept.  Ordinary DML inside the caller's transaction.
+ */
+export async function sweepExpiredWorkspaces(client: PoolClient, limit: number): Promise<number> {
+  const stale = (await client.query<{ id: string }>(
+    `SELECT w.id FROM valopay_workspaces w
+     WHERE w.created_at < now() - make_interval(days => $1)
+       AND EXISTS (SELECT 1 FROM valopay_merchants m WHERE m.workspace_id=w.id AND m.settings->>'anonymousWorkspace'='true')
+       AND NOT EXISTS (SELECT 1 FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id
+                       WHERE m.workspace_id=w.id AND r.updated_at >= now() - make_interval(days => $1))
+     ORDER BY w.created_at LIMIT $2 FOR UPDATE OF w SKIP LOCKED`,
+    [ANONYMOUS_WORKSPACE_DAYS, limit],
+  )).rows.map((row) => row.id);
+  if (!stale.length) return 0;
+  await client.query("DELETE FROM valopay_idempotency WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id = ANY($1::text[]))", [stale]);
+  await client.query("DELETE FROM valopay_records WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id = ANY($1::text[]))", [stale]);
+  await client.query("DELETE FROM valopay_merchants WHERE workspace_id = ANY($1::text[])", [stale]);
+  await client.query("DELETE FROM valopay_workspaces WHERE id = ANY($1::text[])", [stale]);
+  return stale.length;
+}
+
+async function seedWorkspace(client: PoolClient, workspace: WorkspaceRow, principal: string, anonymous: boolean) {
   for (const smaller of [false, true]) {
     const state = seedMerchant(randomUUID(), smaller);
+    state.settings.anonymousWorkspace = anonymous;
     const merchant = await client.query(
       `INSERT INTO valopay_merchants(id,workspace_id,info,settings)
        SELECT $1,$2,$3,$4 WHERE EXISTS (SELECT 1 FROM valopay_workspaces WHERE id=$2 AND principal_hash=$5)`,

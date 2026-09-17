@@ -6,7 +6,7 @@ import {
 import { assertNoRealBankDetails, findRecord, masked, recordsOf } from "./records";
 import type { Context, DomainState, ValopayRecord } from "./types";
 import { addBusinessDays } from "./calendar";
-import { countedAttempts, minimumTicketKobo } from "./policy-engine";
+import { countedAttempts, minimumTicketKobo, policySummary } from "./policy-engine";
 
 const roleSet = new Set<string>(roles);
 const editable = new Set<string>(editableKinds);
@@ -138,10 +138,27 @@ export function validateRecord(
     parent(state, input.customerId, "customers", "A mandate customer");
     positiveInteger(input.amountKobo, "Mandate limit");
     if (!activationWorkflows.includes(data.workflow)) throw new Error("Select a supported activation workflow.");
-    if (data.policyId) parent(state, data.policyId, "policies", "mandate policyId");
+    const consentKeys = ["consentPolicyId", "consentPolicyVersion", "consentPolicySummary", "policyVersionHistory"] as const;
+    if (data.policyId) {
+      const policy = parent(state, data.policyId, "policies", "mandate policyId");
+      // RET-07 and MAN-02: the consent record carries the policy version and its text as it stood.  A mandate that
+      // predates pinning is pinned to the version it has been running under on its next write; callers never set these.
+      if (!existing?.data.consentPolicyId) {
+        data.consentPolicyId = policy.id;
+        data.consentPolicyVersion = Number(policy.data.version || 1);
+        data.consentPolicySummary = policySummary(policy);
+      }
+    } else if (!existing) {
+      for (const key of consentKeys) delete data[key];
+    }
+    if (!existing?.data.policyVersionHistory && !existing?.data.consentPolicyId) delete data.policyVersionHistory;
     if (data.origin === "imported" && !data.consentGaps) throw new Error("Imported mandates must record consent gaps.");
     if (existing && ["consentEvidence", "workflow", "origin"].some((key) => JSON.stringify(data[key]) !== JSON.stringify(existing.data[key]))) {
       throw new Error("Consent provenance is immutable. Reissue the mandate with a new consent record.");
+    }
+    if (existing?.data.policyId && data.policyId !== existing.data.policyId) throw new Error("Move a mandate to another policy version through apply_policy_version so the notice and consent are recorded (RET-07).");
+    if (existing && consentKeys.some((key) => existing.data[key] !== undefined && JSON.stringify(data[key]) !== JSON.stringify(existing.data[key]))) {
+      throw new Error("The consented policy version is server-owned; use apply_policy_version.");
     }
   }
   if (kind === "due-items") {

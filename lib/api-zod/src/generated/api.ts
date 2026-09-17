@@ -84,7 +84,16 @@ export const GetOverviewResponse = zod.object({
 })),
   "mode": zod.string(),
   "environment": zod.string(),
-  "lastClose": zod.string()
+  "lastClose": zod.string(),
+  "alerts": zod.array(zod.object({
+  "key": zod.string(),
+  "severity": zod.string(),
+  "title": zod.string(),
+  "detail": zod.string(),
+  "count": zod.number().int().optional(),
+  "since": zod.string().optional(),
+  "linkedRecordId": zod.string().optional()
+}))
 })
 
 
@@ -92,10 +101,19 @@ export const ListRecordsParams = zod.object({
   "kind": zod.coerce.string()
 })
 
+export const listRecordsQueryLimitMax = 500;
+
+export const listRecordsQueryOffsetMin = 0;
+
+
+
 export const ListRecordsQueryParams = zod.object({
   "merchantId": zod.coerce.string(),
   "search": zod.coerce.string().optional(),
-  "status": zod.coerce.string().optional()
+  "status": zod.coerce.string().optional(),
+  "limit": zod.coerce.number().int().min(1).max(listRecordsQueryLimitMax).optional().describe('Page size; omitted returns the whole filtered set (at most 500 per page).'),
+  "offset": zod.coerce.number().int().min(listRecordsQueryOffsetMin).optional().describe('Rows to skip in the newest-first order.'),
+  "updatedSince": zod.coerce.string().optional().describe('ISO timestamp; only records updated at or after it (incremental sync).')
 })
 
 export const ListRecordsResponse = zod.object({
@@ -112,7 +130,8 @@ export const ListRecordsResponse = zod.object({
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown())
 })),
-  "total": zod.number().int()
+  "total": zod.number().int(),
+  "nextOffset": zod.number().int().optional()
 })
 
 
@@ -451,7 +470,10 @@ export const UpdateSettingsBody = zod.object({
   "authorisationMode": zod.string().optional(),
   "contactRoute": zod.string().optional(),
   "minimumTicketKobo": zod.number().int().optional(),
-  "defaultOwner": zod.string().optional()
+  "defaultOwner": zod.string().optional(),
+  "policyChangeRequiresConsent": zod.boolean().optional(),
+  "unallocatedAlertThreshold": zod.number().int().optional(),
+  "notificationCostAlertKobo": zod.number().int().optional()
 })
 
 export const UpdateSettingsResponse = zod.object({

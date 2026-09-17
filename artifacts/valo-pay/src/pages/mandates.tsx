@@ -44,6 +44,7 @@ export default function MandatesPage() {
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('policies', { merchantId: merchantId! }) } }
   );
+  const approvedVersionOptions = (policies?.items || []).filter(policy => policy.status === 'approved').map(policy => ({ value: policy.id, label: `${policy.name} · v${String(policy.data?.version || 1)}` }));
   const createMandate = useCreateRecord({
     mutation: {
       onSuccess: () => {
@@ -138,6 +139,8 @@ export default function MandatesPage() {
                       {['draft', 'submitted', 'pending_activation', 'active', 'suspended'].includes(mandate.status) && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_cancel')}>Cancel</Button>}
                       {['pending_activation', 'expired', 'cancelled', 'failed'].includes(mandate.status) && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_reissue')}>Reissue</Button>}
                       {mandate.status === 'pending_activation' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'activation_reminder')}>Remind</Button>}
+                      {['active', 'suspended', 'pending_activation'].includes(mandate.status) && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => handleAction(mandate, 'notify_policy_change')}>Notify policy change</Button>}
+                      {['active', 'suspended', 'pending_activation'].includes(mandate.status) && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => handleAction(mandate, 'apply_policy_version')}>Apply policy version</Button>}
                     </td>
                   </tr>
                 ))}
@@ -154,7 +157,13 @@ export default function MandatesPage() {
         onOpenChange={setIsDialogOpen}
         title={`Mandate Action: ${actionKind.replace('_', ' ')}`}
         actionMutation={actionKind}
-        fields={actionKind === 'mandate_reissue' ? [{ name: 'consentEvidence', label: 'New consent evidence reference (MAN-06: a re-issue is a new mandate with a new consent record)', type: 'text', isData: true, required: true }] : []}
+        fields={actionKind === 'mandate_reissue' ? [{ name: 'consentEvidence', label: 'New consent evidence reference (MAN-06: a re-issue is a new mandate with a new consent record)', type: 'text', isData: true, required: true }]
+          : actionKind === 'notify_policy_change' ? [{ name: 'policyId', label: 'Approved policy version to notify (RET-07; the sandbox records a simulated notice, not evidence)', type: 'select', isData: true, required: true, options: approvedVersionOptions }]
+          : actionKind === 'apply_policy_version' ? [
+            { name: 'policyId', label: 'Approved policy version to apply', type: 'select', isData: true, required: true, options: approvedVersionOptions },
+            { name: 'noticeId', label: 'Provider-accepted policy-change notice id (optional; the latest accepted notice for this version is used when blank)', type: 'text', isData: true },
+            { name: 'consentEvidence', label: 'Fresh consent evidence (required when the merchant terms require consent for a policy change)', type: 'text', isData: true },
+          ] : []}
       />
       <Dialog.Root open={isCreateOpen} onOpenChange={setIsCreateOpen}>
         <Dialog.Portal>

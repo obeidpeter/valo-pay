@@ -27,6 +27,11 @@ export const recordDataSchemas = {
     consentGaps: z.array(z.string()).optional(),
     consentGiven: z.boolean().optional(),
     policyId: z.string().optional(),
+    /** RET-07: the policy version the consent covers, pinned when the mandate is created or re-issued and moved only by apply_policy_version. */
+    consentPolicyId: z.string().optional(),
+    consentPolicyVersion: z.coerce.number().int().min(1).optional(),
+    consentPolicySummary: z.string().optional(),
+    policyVersionHistory: z.array(z.object({ fromPolicyId: z.string().nullable(), fromVersion: z.number().int().nullable(), toPolicyId: z.string(), toVersion: z.number().int(), noticeId: z.string().nullable(), consentEvidence: z.string().nullable(), appliedAt: isoDateOrTimestamp, actor: z.string() }).passthrough()).optional(),
     origin: z.enum(mandateOrigins).optional(),
     reminderCount: z.number().int().min(0).optional(),
     reissuedFrom: z.string().optional(),

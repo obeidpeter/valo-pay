@@ -22,6 +22,16 @@ export function positionFor(state: DomainState, customerId: string): CustomerPos
   return { customerId, obligationsKobo, allocatedKobo, outstandingKobo: Math.max(0, obligationsKobo - allocatedKobo), unallocatedKobo };
 }
 
+/** REC-05: rebuild each due item's outstanding balance from confirmed allocations and compare it with the stored view. */
+export function positionMismatches(state: DomainState): Array<{ dueItemId: string; reference: string; customerId: string; storedOutstandingKobo: number; rebuiltOutstandingKobo: number }> {
+  return recordsOf(state, "due-items").flatMap((due) => {
+    if (due.data.outstandingKobo === undefined || due.status === "cancelled") return [];
+    const applied = recordsOf(state, "allocations").filter((item) => item.status === "confirmed" && item.data.dueItemId === due.id).reduce((sum, item) => sum + item.amountKobo, 0);
+    const rebuilt = Math.max(0, due.amountKobo - applied);
+    return rebuilt === Number(due.data.outstandingKobo) ? [] : [{ dueItemId: due.id, reference: due.reference, customerId: due.customerId, storedOutstandingKobo: Number(due.data.outstandingKobo), rebuiltOutstandingKobo: rebuilt }];
+  });
+}
+
 export function positionSnapshot(state: DomainState): Map<string, CustomerPosition> {
   return new Map(recordsOf(state, "customers").map((customer) => [customer.id, positionFor(state, customer.id)]));
 }
@@ -91,13 +101,7 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
     const changed = !before || (["obligationsKobo", "allocatedKobo", "outstandingKobo", "unallocatedKobo"] as const).some((key) => before[key] !== position[key]);
     return changed ? [{ customerId, customerName: customers.get(customerId) ?? "", before: before ?? null, after: position }] : [];
   });
-  // REC-05: rebuild outstanding from allocations and compare with the stored view on each due item.
-  const mismatches = dueItems.flatMap((due) => {
-    if (due.data.outstandingKobo === undefined || due.status === "cancelled") return [];
-    const applied = recordsOf(state, "allocations").filter((item) => item.status === "confirmed" && item.data.dueItemId === due.id).reduce((sum, item) => sum + item.amountKobo, 0);
-    const rebuilt = Math.max(0, due.amountKobo - applied);
-    return rebuilt === Number(due.data.outstandingKobo) ? [] : [{ dueItemId: due.id, reference: due.reference, customerId: due.customerId, storedOutstandingKobo: Number(due.data.outstandingKobo), rebuiltOutstandingKobo: rebuilt }];
-  });
+  const mismatches = positionMismatches(state);
 
   return {
     period: { from, to },
@@ -109,7 +113,11 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
     unallocated: { ...sumOf(unallocated), olderThan24Hours: unallocated.filter((item) => Date.parse(to) - paymentObservedAt(item) >= DAY_MS).length },
     possibleDuplicates: sumOf(payments.filter((item) => item.status === "possible_duplicate")),
     variances: { count: variances.length, feeVarianceKobo: variances.reduce((sum, item) => sum + item.feeVarianceKobo, 0), batches: variances },
-    exceptions: { opened: { count: opened.length, byType: byType(opened) }, closed: { count: closed.length, byType: byType(closed) }, openAtClose: exceptions.filter((item) => isOpenException(item.status)).length },
+    exceptions: {
+      opened: { count: opened.length, byType: byType(opened) }, closed: { count: closed.length, byType: byType(closed) },
+      openAtClose: exceptions.filter((item) => isOpenException(item.status)).length,
+      overdueAtClose: exceptions.filter((item) => isOpenException(item.status) && Date.parse(String(item.data.dueBy)) < Date.parse(to)).length,
+    },
     retryDecisions: { recorded: Number(reconciled.retryDecisionsRecorded || 0), finalAttempts: Number(reconciled.finalAttemptExceptions || 0), disputesFrozen: Number(reconciled.disputesFrozen || 0), noticesNotEvidenced: Number(reconciled.noticesNotEvidenced || 0) },
     customerPositionsChanged: positionsChanged,
     positionRebuild: { customersChecked: after.size, dueItemsChecked: dueItems.length, mismatches, alert: mismatches.length > 0 },

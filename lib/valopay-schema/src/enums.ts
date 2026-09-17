@@ -66,7 +66,11 @@ export function normaliseRefundStatus(raw: unknown): (typeof refundStatuses)[num
   return "none";
 }
 
-export const notificationPurposes = ["activation_reminder", "pre_debit", "failed_debit", "confirmation", "final_attempt"] as const;
+export const notificationPurposes = ["activation_reminder", "pre_debit", "failed_debit", "confirmation", "final_attempt", "policy_change"] as const;
+
+/** NFR-OBS-02 alert severities, most urgent first. */
+export const alertSeverities = ["critical", "high", "medium", "info"] as const;
+export type AlertSeverity = (typeof alertSeverities)[number];
 export const notificationChannels = ["sms", "whatsapp", "email"] as const;
 
 /** BIL-07: why a billed collection carries a credit or debit line on a later invoice. */

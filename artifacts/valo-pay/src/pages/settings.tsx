@@ -143,6 +143,32 @@ export default function SettingsPage() {
                 )}
               </div>
               <div>
+                <label className="text-sm font-medium block mb-1">Policy change needs fresh consent (RET-07)</label>
+                {isEditingExec ? (
+                  <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={execSettings.policyChangeRequiresConsent === true} onChange={(e) => setExecSettings({...execSettings, policyChangeRequiresConsent: e.target.checked})} /> The merchant's terms require fresh consent before a new policy version applies to a customer</label>
+                ) : (
+                  <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">{settings.settings?.policyChangeRequiresConsent === true ? 'Yes: notice and fresh consent' : 'No: notice only'}</div>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm font-medium block mb-1">Unallocated alert threshold (Payments older than 24h)</label>
+                  {isEditingExec ? (
+                    <input type="number" min={0} className="w-full bg-background border rounded-md px-3 py-2 text-sm" value={execSettings.unallocatedAlertThreshold ?? 10} onChange={(e) => setExecSettings({...execSettings, unallocatedAlertThreshold: Number(e.target.value)})} />
+                  ) : (
+                    <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">{String(settings.settings?.unallocatedAlertThreshold ?? 10)}</div>
+                  )}
+                </div>
+                <div>
+                  <label className="text-sm font-medium block mb-1">Notification cost alert (kobo per collection)</label>
+                  {isEditingExec ? (
+                    <input type="number" min={0} className="w-full bg-background border rounded-md px-3 py-2 text-sm" value={execSettings.notificationCostAlertKobo ?? 800} onChange={(e) => setExecSettings({...execSettings, notificationCostAlertKobo: Number(e.target.value)})} />
+                  ) : (
+                    <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">{String(settings.settings?.notificationCostAlertKobo ?? 800)}</div>
+                  )}
+                </div>
+              </div>
+              <div>
                 <label className="text-sm font-medium block mb-1">Contact Route (shown in every customer notice)</label>
                 {isEditingExec ? (
                   <input 

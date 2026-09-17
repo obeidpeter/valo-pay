@@ -27,6 +27,23 @@ export default function OverviewPage() {
         </p>
       </header>
 
+      {/* Alerts (NFR-OBS-02) */}
+      <section>
+        <h2 className="text-lg font-semibold mb-4">Alerts</h2>
+        {overview.alerts.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No alert conditions: the audit chain verifies, positions rebuild, nothing is stuck unallocated over the threshold, no exception is past its deadline, and the books were closed within the last 36 hours.</p>
+        ) : (
+          <ul className="space-y-2">
+            {overview.alerts.map(alert => (
+              <li key={alert.key} className={`rounded-lg border p-3 text-sm ${alert.severity === 'critical' ? 'border-destructive bg-destructive/10 text-destructive' : alert.severity === 'high' ? 'border-destructive/40 bg-destructive/5' : alert.severity === 'medium' ? 'border-amber-500/40 bg-amber-500/5' : 'border-border bg-secondary/30'}`}>
+                <div className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /><span className="font-semibold">{alert.title}</span><span className="ml-auto text-[11px] uppercase tracking-wider">{alert.severity}</span></div>
+                <p className="text-xs mt-1">{alert.detail}{alert.since ? ` Since ${formatDate(alert.since)}.` : ''}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       {/* Metrics Grid */}
       <section>
         <h2 className="text-lg font-semibold mb-4">Key Metrics</h2>

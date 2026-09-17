@@ -13,4 +13,7 @@ export interface SettingsInput {
   contactRoute?: string;
   minimumTicketKobo?: number;
   defaultOwner?: string;
+  policyChangeRequiresConsent?: boolean;
+  unallocatedAlertThreshold?: number;
+  notificationCostAlertKobo?: number;
 }

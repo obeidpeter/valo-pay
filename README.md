@@ -9,7 +9,7 @@ This repository contains a clean snapshot of the application, not the original R
 ## Project structure
 
 - `artifacts/valo-pay` — React + Vite operations console.
-- `artifacts/api-server` — Express API, scoped repository, domain logic and tests.
+- `artifacts/api-server` — Express API, scoped repository, domain logic and tests. Anonymous sandboxes expire after 30 days without a change and their creation is rate-limited per address; list endpoints page with `limit`, `offset` and `updatedSince`.
 - `artifacts/mockup-sandbox` — existing design/component preview workspace. It carries its own variant of the UI kit (different tokens and hover treatment from the console), so the two `components/ui` trees are intentionally not shared.
 - `lib` — PostgreSQL/Drizzle schema, the OpenAPI contract (`lib/api-spec/openapi.json`, written by `node scripts/create-valopay-spec.cjs`), generated API packages and `lib/valopay-schema`, the shared per-kind schema (statuses, state machines, failure-code and exception catalogues, money and policy guardrails) that the API validator and the console both import.
 - `scripts` — development checks and source synchronization utilities.

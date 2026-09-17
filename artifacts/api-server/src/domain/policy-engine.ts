@@ -42,6 +42,31 @@ export interface RetryDecision {
   noticeRequired?: NoticeRequirement;
 }
 
+/** The policy parameters as a sentence: what a consent record stores as the policy text as it stood (MAN-02, RET-07). */
+export function policySummary(policy: ValopayRecord): string {
+  const d = policy.data;
+  return `Version ${d.version ?? 1}: up to ${d.maxAttempts ?? policyGuardrails.defaultMaxAttempts} attempts counting every source; at least ${d.spacingHours ?? policyGuardrails.defaultSpacingHours} hours between attempts; first notice ${d.firstNoticeHours ?? policyGuardrails.defaultFirstNoticeHours} hours before the first attempt; failed-debit notice ${d.retryNoticeHours ?? policyGuardrails.defaultRetryNoticeHours} hours before any re-presentation; partial debits ${d.partialAllowed ? "allowed" : "not allowed"}.`;
+}
+
+/** Two policy records are versions of the same policy when their previousVersionId chains share a root, or they carry the same name. */
+export function samePolicyLineage(state: DomainState, aId: string, bId: string): boolean {
+  if (aId === bId) return true;
+  const root = (id: string): string => {
+    const seen = new Set<string>();
+    let current = id;
+    while (!seen.has(current)) {
+      seen.add(current);
+      const previous = recordsOf(state, "policies").find((item) => item.id === current)?.data.previousVersionId;
+      if (!previous) break;
+      current = String(previous);
+    }
+    return current;
+  };
+  if (root(aId) === root(bId)) return true;
+  const a = recordsOf(state, "policies").find((item) => item.id === aId), b = recordsOf(state, "policies").find((item) => item.id === bId);
+  return Boolean(a && b && a.name === b.name);
+}
+
 export function policyIdFor(state: DomainState, due: ValopayRecord): string | undefined {
   return due.data.policyId || state.records.find((r) => r.kind === "mandates" && r.id === due.data.mandateId)?.data.policyId;
 }
@@ -166,11 +191,16 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: ValopayReco
   }
   // RET-01: only an approved version by a reviewer who is not its author may plan a retry.
   if (policy.status !== "approved" || !policy.data.reviewer || policy.data.reviewer === policy.data.author) return explain("blocked", "unapproved_policy", "Independent compliance approval is required before a retry can be planned.");
+  const mandate = state.records.find((record) => record.kind === "mandates" && record.id === due.data.mandateId);
+  // RET-07: the engine applies the version the consent covers until a notice, and fresh consent where required, moves the mandate to a newer one.
+  if (mandate?.data.consentPolicyId && mandate.data.consentPolicyId !== policy.id) {
+    inputs.consentPolicyVersion = mandate.data.consentPolicyVersion;
+    return explain("blocked", "policy_version_not_consented", `Consent covers policy version ${mandate.data.consentPolicyVersion}; version ${policy.data.version ?? "?"} applies to this customer only after the notice, and the fresh consent where the merchant's terms require it, that RET-07 demands.`);
+  }
   // MAN-07: the absolute floor and the merchant minimum.
   if (due.amountKobo < ABSOLUTE_TICKET_FLOOR_KOBO) return explain("stop", "floor", "Below the absolute ₦5,000 ticket floor; refused with no override.");
   if (due.amountKobo < minimumTicketKobo(state) && !overrideRecorded(due)) return explain("blocked", "minimum_ticket", "Below the merchant minimum ticket and no merchant Admin override is recorded.");
   // MAN-08, MAN-09, MAN-14: the mandate must be active, cover the amount and carry consent.
-  const mandate = state.records.find((record) => record.kind === "mandates" && record.id === due.data.mandateId);
   if (!mandate || mandate.status !== "active") return explain("blocked", "mandate_inactive", "Mandate is not active.");
   if (due.amountKobo > mandate.amountKobo) return explain("blocked", "mandate_limit", "Due amount exceeds the mandate limit; never re-sent at a lower amount without consent coverage.");
   if (!mandate.data.consentEvidence || (Array.isArray(mandate.data.consentGaps) && mandate.data.consentGaps.length)) return explain("blocked", "consent_gap", "Consent evidence is missing or imported gaps are unresolved.");

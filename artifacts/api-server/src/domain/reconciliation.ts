@@ -47,7 +47,7 @@ export function raiseException(state: DomainState, ctx: Context, type: Exception
   const existing = recordsOf(state, "exceptions").find((item) => isOpenException(item.status) && item.data.linkedRecordId === linkedRecordId && resolveExceptionType(item.data.type) === type);
   if (existing) return existing;
   return makeRecord(state, "exceptions", {
-    name: definition.title, status: "open", customerId: options.customerId || "", amountKobo: options.amountKobo || 0,
+    name: definition.title, status: "open", customerId: options.customerId || "", amountKobo: options.amountKobo || 0, createdAt: ctx.now,
     data: { type, severity: definition.severity, owner: definition.owner, slaBusinessDays: definition.slaBusinessDays, dueBy: addBusinessDays(state, ctx.now, definition.slaBusinessDays), notes: options.notes, linkedRecordId },
   });
 }
@@ -82,7 +82,7 @@ function settlementBatch(state: DomainState, ctx: Context, observation: ValopayR
   let batch = recordsOf(state, "settlement-batches").find((item) => item.reference === batchReference);
   if (!batch) {
     batch = makeRecord(state, "settlement-batches", {
-      name: `Settlement batch ${batchReference}`, status: "pending", reference: batchReference,
+      name: `Settlement batch ${batchReference}`, status: "pending", reference: batchReference, createdAt: ctx.now,
       data: { provider, batchReference, providerConnection: payment.data.providerConnection, lineObservationIds: [], linePaymentIds: [], grossKobo: 0, feeKobo: 0, netKobo: 0, expectedFeeKobo: 0, feeSchedule: schedule },
     });
   }
@@ -168,7 +168,7 @@ export function allocatePayment(
   if (amount > remaining) throw new Error("Allocation exceeds the due item's remaining balance.");
   const allocation = makeRecord(state, "allocations", {
     name: `Allocation ${rule}`, status: confidence === "probable" ? "proposed" : "confirmed",
-    customerId: payment.customerId || due.customerId, amountKobo: amount,
+    customerId: payment.customerId || due.customerId, amountKobo: amount, createdAt: ctx.now,
     data: { paymentId: payment.id, dueItemId: due.id, rule, confidence, automatic, explanation: explanation ?? `${rule} matched this canonical payment.`, reviewed: null },
   });
   if (confidence === "probable") {
@@ -191,6 +191,7 @@ export function applyConfirmedAllocation(state: DomainState, ctx: Context, alloc
     throw new Error("Allocation exceeds remaining canonical payment amount.");
   }
   allocation.status = "confirmed";
+  allocation.data.confirmedAt ||= ctx.now;
   paymentDimensions(payment);
   payment.data.allocatedKobo = Number(payment.data.allocatedKobo || 0) + amount;
   const remaining = Math.max(0, outstanding(due) - amount);
@@ -250,7 +251,7 @@ function canonicalPayment(state: DomainState, ctx: Context, observation: Valopay
   const gross = Number(observation.data.grossAmountKobo ?? observation.amountKobo);
   const observedAt = String(observation.data.occurredAt || observation.createdAt);
   const payment = prior || makeRecord(state, "payments", {
-    name: "Canonical payment", status: "unallocated", reference: ref, customerId: observation.customerId,
+    name: "Canonical payment", status: "unallocated", reference: ref, customerId: observation.customerId, createdAt: ctx.now,
     amountKobo: gross,
     data: {
       providerReference: ref, providerConnection: observation.data.provider || state.merchant.provider, currency: "NGN", channel: channelFor(source),

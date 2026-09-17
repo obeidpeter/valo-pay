@@ -5,10 +5,13 @@
  * Valo Pay Stage 1 observation-first sandbox API. All monetary fields are integer kobo. Live lender data and all outbound provider instructions are blocked until production readiness is verified.
  * OpenAPI spec version: 1.0.0
  */
-import type { ValopayRecord } from './valopayRecord';
 
-export interface RecordList {
-  items: ValopayRecord[];
-  total: number;
-  nextOffset?: number;
+export interface Alert {
+  key: string;
+  severity: string;
+  title: string;
+  detail: string;
+  count?: number;
+  since?: string;
+  linkedRecordId?: string;
 }

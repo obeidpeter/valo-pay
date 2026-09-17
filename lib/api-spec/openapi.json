@@ -155,6 +155,33 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            },
+            "description": "Page size; omitted returns the whole filtered set (at most 500 per page)."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Rows to skip in the newest-first order."
+          },
+          {
+            "name": "updatedSince",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "ISO timestamp; only records updated at or after it (incremental sync)."
           }
         ],
         "responses": {
@@ -1021,6 +1048,38 @@
           "detail"
         ]
       },
+      "Alert": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "since": {
+            "type": "string"
+          },
+          "linkedRecordId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "severity",
+          "title",
+          "detail"
+        ]
+      },
       "Overview": {
         "type": "object",
         "properties": {
@@ -1056,6 +1115,12 @@
           },
           "lastClose": {
             "type": "string"
+          },
+          "alerts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Alert"
+            }
           }
         },
         "required": [
@@ -1065,7 +1130,8 @@
           "upcoming",
           "mode",
           "environment",
-          "lastClose"
+          "lastClose",
+          "alerts"
         ]
       },
       "RecordList": {
@@ -1078,6 +1144,9 @@
             }
           },
           "total": {
+            "type": "integer"
+          },
+          "nextOffset": {
             "type": "integer"
           }
         },
@@ -1398,6 +1467,15 @@
           },
           "defaultOwner": {
             "type": "string"
+          },
+          "policyChangeRequiresConsent": {
+            "type": "boolean"
+          },
+          "unallocatedAlertThreshold": {
+            "type": "integer"
+          },
+          "notificationCostAlertKobo": {
+            "type": "integer"
           }
         },
         "required": []

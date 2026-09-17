@@ -128,15 +128,17 @@ export default function ReportsPage() {
             <div className="bg-card border rounded-xl p-5 shadow-sm">
                <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Staff confirmation</p>
                <div className="mt-2 text-3xl font-bold font-mono">{reports.operational?.fortnightlyStaffConfirmed ? 'Yes' : 'No'}</div>
-               <p className="text-xs text-muted-foreground mt-2">Fortnightly review confirmation that the four jobs moved off spreadsheets (Test 5).</p>
+               <p className="text-xs text-muted-foreground mt-2">{reports.operational?.latestReviewAt ? `Latest confirming review ${formatDate(String(reports.operational.latestReviewAt))}; cadence ${reports.operational?.reviewCadenceMet ? 'kept' : 'broken'} since the first close.` : 'No fortnightly review by a named user has confirmed all four jobs yet (Test 5).'}</p>
             </div>
             <div className="bg-card border rounded-xl p-5 shadow-sm">
-               <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Required Audit Sample</p>
-               <div className="mt-2 text-3xl font-bold font-mono">{String(reports.operational?.requiredAuditSample || 0)}</div>
+               <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Precision audit</p>
+               <div className="mt-2 text-3xl font-bold font-mono">{String((reports.operational?.precisionAudit as any)?.reviewed ?? 0)} / {String(reports.operational?.requiredAuditSample || 0)}</div>
+               <p className="text-xs text-muted-foreground mt-2">{(() => { const audit = reports.operational?.precisionAudit as any; return audit?.falseMatchRate === null || audit?.falseMatchRate === undefined ? `Seeded sample of ${String(audit?.sampleSize ?? 0)} of ${String(audit?.population ?? 0)} automatic certain matches for ${String(audit?.month ?? 'the completed month')}; none reviewed yet.` : `False-match rate ${percent(audit.falseMatchRate)}, 95% interval ${percent(audit.interval?.low)} to ${percent(audit.interval?.high)}, on ${String(audit.reviewed)} reviewed of ${String(audit.sampleSize)} sampled.`; })()}</p>
             </div>
             <div className="bg-card border rounded-xl p-5 shadow-sm">
                <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Live Days</p>
-               <div className="mt-2 text-3xl font-bold font-mono">{String(reports.operational?.liveDays || 0)}</div>
+               <div className="mt-2 text-3xl font-bold font-mono">{String(reports.operational?.liveDays || 0)} / {String(reports.operational?.requiredLiveDays || 60)}</div>
+               <p className="text-xs text-muted-foreground mt-2">{reports.operational?.liveSince ? `Since the first daily close on ${formatDate(String(reports.operational.liveSince))}.` : 'Counts from the first daily close.'}</p>
             </div>
             <div className="bg-card border rounded-xl p-5 shadow-sm">
                <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Real Cases Used</p>
@@ -215,6 +217,17 @@ export default function ReportsPage() {
                     </tbody>
                   </table>
                   <p className="text-xs text-muted-foreground mt-2">Withheld inside the reversal window: {String(reports.billing?.withheldInsideReversalWindow ?? 0)} (billed on a later statement).</p>
+                </div>
+                <div className="mt-6">
+                  <h3 className="text-sm font-semibold mb-2">Unit economics (MEA-03)</h3>
+                  {(() => { const e = reports.billing?.unitEconomics as Record<string, any> | undefined; if (!e) return <p className="text-xs text-muted-foreground">Not available.</p>; return (
+                    <div className="text-xs font-mono space-y-1">
+                      <p>Successful collections {String(e.successfulCollections)} · usage {formatKobo(Number(e.usageFeeKobo || 0))} · licence {formatKobo(Number(e.licenceKobo || 0))} ({String(e.volumeTier)}) · recurring {formatKobo(Number(e.recurringKobo || 0))}</p>
+                      <p>Variable cost {formatKobo(Number(e.variableCostKobo || 0))}{e.estimated ? ' (estimated at the plan\'s NGN 15 per collection)' : ' (recorded)'} · per collection {e.costPerCollectionKobo === null ? 'n/a' : formatKobo(Number(e.costPerCollectionKobo))} against the plan\'s {formatKobo(Number(e.planCostPerCollectionKobo || 0))}</p>
+                      <p>Gross margin {e.grossMargin === null ? 'n/a' : percent(e.grossMargin)} against the plan\'s {percent(e.planGrossMargin?.low)} to {percent(e.planGrossMargin?.high)} · annualised recurring revenue {formatKobo(Number(e.annualisedRecurringRevenueKobo || 0))} (licence and usage only)</p>
+                      <p className="font-sans text-muted-foreground">{String(e.note || '')}</p>
+                    </div>
+                  ); })()}
                 </div>
                 <div className="mt-6">
                   <h3 className="text-sm font-semibold mb-2">Issued invoices (BIL-04)</h3>

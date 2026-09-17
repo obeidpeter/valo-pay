@@ -7,4 +7,6 @@ export * from "./reconciliation";
 export * from "./reports";
 export * from "./close";
 export * from "./billing";
+export * from "./alerts";
+export * from "./stats";
 export * from "./actions";
