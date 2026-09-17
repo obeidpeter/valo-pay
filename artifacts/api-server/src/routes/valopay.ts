@@ -9,7 +9,7 @@ import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, defaultStatus, executio
 import type { DomainState } from "../domain/types";
 import { getGates, getSettings } from "../lib/valopay-readiness";
 import { importCsv } from "../lib/valopay-import";
-import { createExportFile, customerTimeline, downloadExport } from "../lib/valopay-exports";
+import { createExportFile, customerTimeline, downloadExport, exportKinds } from "../lib/valopay-exports";
 
 const router:IRouter=Router();
 const kinds=new Set<string>(recordKinds);
@@ -140,7 +140,8 @@ router.patch("/v1/settings",async(req,res)=>{
 });
 router.post("/v1/exports",async(req,res)=>{
  const body=S.CreateExportBody.parse(req.body);
- if(!kinds.has(body.kind)&&!["gate-pack","customer-pack","billing"].includes(body.kind))fail("Unknown export kind.");
+ if(!kinds.has(body.kind)&&!(exportKinds as readonly string[]).includes(body.kind))fail("Unknown export kind.");
+ if(["customer-pack","dispute-pack"].includes(body.kind)&&!body.customerId)fail("A dispute pack needs customerId.");
   const result=await withState(req,res,(state,ctx)=>createExportFile(state,ctx,body),true,S.CreateExportResponse);
  res.json(S.CreateExportResponse.parse(result));
 });

@@ -42,6 +42,16 @@ export function providerFeeKobo(grossKobo: number, schedule: ProviderFeeSchedule
 export const SETTLEMENT_ITEM_TOLERANCE_KOBO = 0;
 export const SETTLEMENT_BATCH_TOLERANCE_KOBO = 10_000;
 
+/**
+ * BIL-01: a collection is billable when its attempt succeeded, which means a
+ * direct debit the platform observed; transfers, card receipts and statement
+ * credits are reconciled and reported but never billed as collections.
+ */
+export const billableChannels = ["direct_debit"] as const;
+export const isBillableChannel = (channel: unknown): boolean => (billableChannels as readonly string[]).includes(String(channel));
+/** Days after settlement before a collection can be billed unless the provider's own window is configured. */
+export const DEFAULT_REVERSAL_WINDOW_DAYS = 7;
+
 export function usageFeeKobo(collectedKobo: number): number {
   return Math.min(USAGE_FEE_CAP_KOBO, Math.floor((collectedKobo * USAGE_FEE_BPS) / 10_000));
 }

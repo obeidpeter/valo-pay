@@ -5,6 +5,7 @@ import {
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import { allocatePayment, applyConfirmedAllocation, reconcile, supersedeAllocation } from "./reconciliation";
 import { buildReports } from "./reports";
+import { buildCloseReport, openingSnapshot } from "./close";
 import type { ActionInput, ActionResult, Context, DomainState, ValopayRecord } from "./types";
 import { assertActionRole } from "./validation";
 import { countedAttempts, evaluateRetry, policyIdFor, preregisterSample } from "./policy-engine";
@@ -165,14 +166,17 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
   }
   if (input.action === "daily_close") {
     assertActionRole(ctx, ["Admin", "Operations", "Finance"]);
-    const openingUnallocated = recordsOf(state, "payments").filter((item) => item.status === "unallocated").length;
+    // 7.5: remember the opening position, run the close, then write the REC-07 report as immutable evidence.
+    const opening = openingSnapshot(state);
     const reconciled = reconcile(state, ctx);
+    const report = buildCloseReport(state, ctx, opening, reconciled.data);
     const reports = buildReports(state, now);
+    const summary = `${report.observations.received} observations received, ${report.allocated.count} allocations confirmed, ${report.unallocated.count} unallocated (${report.unallocated.olderThan24Hours} older than 24h), ${report.exceptions.opened.count} exceptions opened and ${report.exceptions.closed.count} closed, ${report.customerPositionsChanged.length} customer positions changed.`;
     const close = makeRecord(state, "closes", {
-      name: "Daily close", status: "completed",
-      data: { summary: reconciled.message, metrics: reports.metrics, closedAt: now, report: { openingUnallocated, ...reconciled.data, operational: reports.operational }, synthetic: true },
+      name: `Daily close ${now.slice(0, 10)}`, status: "completed",
+      data: { summary, metrics: reports.metrics, closedAt: now, period: report.period, report, operational: reports.operational, positionAlert: report.positionRebuild.alert, synthetic: true },
     });
-    return result("Daily close completed; no provider pull or LMS push occurred.", close, reconciled.data);
+    return result("Daily close completed; no provider pull or LMS push occurred.", close, { ...reconciled.data, closeId: close.id, positionAlert: report.positionRebuild.alert });
   }
   if (["confirm_allocation", "reject_allocation", "manual_allocate"].includes(input.action)) {
     assertActionRole(ctx, ["Admin", "Finance"]);

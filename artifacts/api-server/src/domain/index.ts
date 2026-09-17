@@ -5,4 +5,5 @@ export * from "./validation";
 export * from "./policy-engine";
 export * from "./reconciliation";
 export * from "./reports";
+export * from "./close";
 export * from "./actions";

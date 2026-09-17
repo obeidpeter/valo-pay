@@ -60,14 +60,23 @@ const check = (condition: unknown, message: string) => { assert.ok(condition, me
     assert.equal(decision.nextAt, expectNext, label);
     checks += 1;
   }
-  // A notice that was submitted but never accepted, or a simulated one, is not evidence.
+  // A notice that was submitted but never accepted, or a simulated one, is not evidence (6.3 row 8):
+  // the plan stands with the notice required by the deadline, and only a deadline that passes unevidenced defers the attempt.
   const { state, policy, due } = liveFixture();
   const failed = recordsOf(state, "attempts").find((item) => item.data.dueItemId === due.id)!;
   const notice = addNotice(state, due, wat("2027-06-29T06:16:00"));
   notice.data.synthetic = true;
   failed.data.noticeId = notice.id;
-  assert.equal(evaluateRetry(state, ctxAt(wat("2027-06-28T10:00:00")), due, policy).decision, "defer");
-  checks += 1;
+  const pending = evaluateRetry(state, ctxAt(wat("2027-06-28T10:00:00")), due, policy);
+  assert.equal(pending.decision, "would_schedule", "before the deadline the plan stands and the notice is scheduled");
+  assert.equal(toWat(pending.nextAt), "2027-06-30T06:16:00");
+  assert.equal(pending.noticeRequired?.evidenced, false);
+  assert.equal(toWat(pending.noticeRequired?.requiredBy ?? null), "2027-06-29T06:16:00", "the failed-debit notice is required 24 hours before the planned attempt (6.4)");
+  const lapsed = evaluateRetry(state, ctxAt(wat("2027-06-29T06:17:00")), due, policy);
+  assert.equal(lapsed.decision, "defer", "a deadline that passes without provider acceptance defers the attempt");
+  assert.equal(lapsed.rule, "notice_not_evidenced");
+  assert.equal(toWat(lapsed.nextAt), "2027-06-30T06:17:00", "deferred to the first slot a notice accepted now could satisfy");
+  checks += 7;
 }
 
 // ---------- Quiet hours (10.4): the adapter refuses a message at 21:00:01 and accepts one at 08:00:00 WAT ----------

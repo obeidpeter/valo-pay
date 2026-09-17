@@ -16,6 +16,8 @@ const steps = [
   [tsx, ["artifacts/api-server/tests/validation-golden.test.ts"]],
   [tsx, ["artifacts/api-server/tests/retry-engine-golden.test.ts"]],
   [tsx, ["artifacts/api-server/tests/reconciliation-golden.test.ts"]],
+  [tsx, ["artifacts/api-server/tests/measurement-golden.test.ts"]],
+  [tsx, ["artifacts/api-server/tests/dispute-pack.test.ts"]],
 ];
 for (const [command, args] of steps) {
   console.log(`\n▶ ${args.join(" ")}`);

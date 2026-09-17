@@ -6,7 +6,7 @@ import {
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import type { Context, DomainState, ValopayRecord } from "./types";
 import { addBusinessDays } from "./calendar";
-import { approvedPolicyFor, attemptTime, attemptsFor, evaluateRetry } from "./policy-engine";
+import { approvedPolicyFor, attemptTime, attemptsFor, enrolEligibleFailures, evaluateRetry, recordRetryDecision } from "./policy-engine";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** ING-05: a second Payment for the same payer and amount inside this window is held as a possible duplicate. */
@@ -349,13 +349,21 @@ function matchPayment(state: DomainState, ctx: Context, payment: ValopayRecord):
   if (near.length === 1) allocatePayment(state, ctx, payment, near[0]!, payment.amountKobo, "R5", "probable", false, "Amount and payer match one instalment within five days of its due date; Finance confirmation required.");
 }
 
-/** Section 6.3 give-up rows, applied by the close so unpaid items become exceptions and the LMS can be told (REC-04). */
-function applyGiveUps(state: DomainState, ctx: Context): { finalFailures: number; disputes: number } {
-  let finalFailures = 0, disputes = 0;
+/**
+ * Section 6.3, applied by the close to every open obligation under an approved
+ * policy: the arm is assigned at the first eligible failure, every decision is
+ * recorded (RET-03), give-up rows become exceptions so the LMS can be told
+ * (REC-04), and a notice not evidenced by its deadline defers the attempt.
+ */
+function applyDecisions(state: DomainState, ctx: Context): { finalFailures: number; disputes: number; decisionsRecorded: number; deferred: number } {
+  let finalFailures = 0, disputes = 0, decisionsRecorded = 0, deferred = 0;
+  enrolEligibleFailures(state, ctx);
   for (const due of recordsOf(state, "due-items").filter((item) => ["scheduled", "in_collection", "partially_paid"].includes(item.status))) {
     const policy = approvedPolicyFor(state, due);
     if (!policy) continue;
     const decision = evaluateRetry(state, ctx, due, policy);
+    if (decision.decision === "not_eligible") continue; // Nothing happened to this item; there is no decision to record.
+    if (recordRetryDecision(state, ctx, due, decision)) decisionsRecorded += 1;
     if (decision.decision === "give_up") {
       due.status = "unpaid_final"; due.data.giveUpRule = decision.rule; touch(due, ctx.now);
       const type: ExceptionType = decision.inputs.code === "MANDATE_LIMIT_EXCEEDED" ? "mandate_limit_exceeded" : "unpaid_after_final_attempt";
@@ -365,9 +373,12 @@ function applyGiveUps(state: DomainState, ctx: Context): { finalFailures: number
       due.status = "in_dispute"; touch(due, ctx.now);
       raiseException(state, ctx, "customer_dispute", { linkedRecordId: due.id, customerId: due.customerId, amountKobo: outstanding(due), notes: `${due.reference}: the customer disputed the debit.` });
       disputes += 1;
+    } else if (decision.decision === "defer") {
+      raiseException(state, ctx, "notice_not_evidenced", { linkedRecordId: due.id, customerId: due.customerId, amountKobo: outstanding(due), notes: `${due.reference}: ${decision.reason}` });
+      deferred += 1;
     }
   }
-  return { finalFailures, disputes };
+  return { finalFailures, disputes, decisionsRecorded, deferred };
 }
 
 export function reconcile(state: DomainState, ctx: Context): { message: string; data: Record<string, any> } {
@@ -381,7 +392,7 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
   const now = Date.parse(ctx.now);
   const aged = recordsOf(state, "payments").filter((item) => item.status === "unallocated" && now - paymentObservedAt(item) >= UNALLOCATED_AGE_MS);
   aged.forEach((payment) => raiseException(state, ctx, "unallocated_payment", { linkedRecordId: payment.id, customerId: payment.customerId, amountKobo: payment.amountKobo, notes: "No certain or confirmed allocation after 24 hours." }));
-  const giveUps = applyGiveUps(state, ctx);
+  const giveUps = applyDecisions(state, ctx);
   const unknownOutcomes = recordsOf(state, "attempts").filter((attempt) => attempt.status === "unknown" && now - Date.parse(attemptTime(attempt)) >= DAY_MS);
   unknownOutcomes.forEach((attempt) => raiseException(state, ctx, "unknown_outcome", { linkedRecordId: attempt.id, customerId: attempt.customerId, amountKobo: attempt.amountKobo, notes: "TIMEOUT_UNKNOWN unresolved for 24 hours; the provider must confirm the outcome by reference." }));
   const mappingNeeded = recordsOf(state, "attempts").filter((attempt) => attempt.status === "failed" && normaliseFailureCode(attempt.data.failureCode) === "UNKNOWN" && attempt.data.rawFailureCode);
@@ -399,7 +410,7 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
       proposed: recordsOf(state, "payments").filter((item) => item.status === "proposed").length,
       unallocated: recordsOf(state, "payments").filter((item) => item.status === "unallocated").length,
       possibleDuplicates: recordsOf(state, "payments").filter((item) => item.status === "possible_duplicate").length,
-      agedUnallocated: aged.length, finalAttemptExceptions: giveUps.finalFailures, disputesFrozen: giveUps.disputes, unknownOutcomes: unknownOutcomes.length,
+      agedUnallocated: aged.length, finalAttemptExceptions: giveUps.finalFailures, disputesFrozen: giveUps.disputes, noticesNotEvidenced: giveUps.deferred, retryDecisionsRecorded: giveUps.decisionsRecorded, unknownOutcomes: unknownOutcomes.length,
       exceptionsOpened: recordsOf(state, "exceptions").length - exceptionsBefore,
     },
   };

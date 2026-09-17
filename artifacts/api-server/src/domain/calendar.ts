@@ -32,3 +32,16 @@ export function addBusinessDays(state: DomainState, fromIso: string, days: numbe
   }
   return new Date(time).toISOString();
 }
+
+/** The weekend days and holidays a plan skipped between two instants, recorded on the decision (RET-03). */
+export function nonBusinessDaysBetween(state: DomainState, fromMs: number, toMs: number): { weekendDaysSkipped: string[]; holidaysApplied: string[] } {
+  const holidays = holidaySet(state);
+  const weekendDaysSkipped: string[] = [], holidaysApplied: string[] = [];
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return { weekendDaysSkipped, holidaysApplied };
+  for (let time = fromMs; time < toMs && weekendDaysSkipped.length + holidaysApplied.length < 60; time += DAY_MS) {
+    const date = watDate(time);
+    if (holidays.has(date)) holidaysApplied.push(date);
+    else if ([0, 6].includes(new Date(time + WAT_OFFSET_MS).getUTCDay())) weekendDaysSkipped.push(date);
+  }
+  return { weekendDaysSkipped, holidaysApplied };
+}

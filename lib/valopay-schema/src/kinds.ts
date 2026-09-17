@@ -37,6 +37,9 @@ export const recordStatuses = {
   cutovers: ["draft", "ready", "handed_back"],
   evidence: ["pending", "recorded"],
   notifications: ["simulated", "blocked", "accepted", "delivered", "failed"],
+  "retry-decisions": ["recorded"],
+  closes: ["completed"],
+  exports: ["ready"],
 } as const satisfies Partial<Record<RecordKind, readonly string[]>>;
 export type StatusOf<K extends keyof typeof recordStatuses> = (typeof recordStatuses)[K][number];
 export type MandateStatus = StatusOf<"mandates">;
