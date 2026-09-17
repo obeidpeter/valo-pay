@@ -5,7 +5,7 @@ export function seedMerchant(id: string, smaller = false): DomainState {
   const now = new Date();
   const date = (days: number) => new Date(now.getTime()+days*86400000).toISOString();
   const merchant: Merchant = {id,name:smaller?"Cedar Cooperative":"Meridian Credit",shortName:smaller?"CC":"MC",segment:smaller?"Smaller lender · synthetic":"Tier-2 lender · synthetic",mode:"observation",status:"active",provider:"Sandbox Rail",monthlyVolume:smaller?4000:20000,killSwitch:false,preDataReady:false,preLiveReady:false};
-  const state: DomainState = {merchant,settings:{executionStart:6,executionEnd:10,authorisationMode:"batch",contactRoute:"Contact your lender's collections team",minimumTicketKobo:1000000,defaultOwner:"lms",environment:"sandbox",reversalWindowDays:7},records:[]};
+  const state: DomainState = {merchant,settings:{executionStart:6,executionEnd:10,authorisationMode:"batch",contactRoute:"Contact your lender's collections team",minimumTicketKobo:1000000,defaultOwner:"lms",environment:"sandbox",reversalWindowDays:7,providerFeeSchedule:{"Sandbox Rail":{bps:50,capKobo:100000}},policyKillSwitches:{}},records:[]};
   function add(kind:string,name:string,status:string,data:Record<string,unknown>={},amountKobo=0,customerId="",reference=""): ValopayRecord {
     const r:ValopayRecord={id:randomUUID(),merchantId:id,kind,name,status,data,amountKobo,customerId,reference,createdAt:date(-3),updatedAt:date(-3)};
     state.records.push(r); return r;
@@ -24,6 +24,10 @@ export function seedMerchant(id: string, smaller = false): DomainState {
       if(i!==2){
         add("allocations",`${name} · certain match`,"confirmed",{paymentId:payment.id,dueItemId:due.id,rule:"R1",confidence:"certain",automatic:true,explanation:"Provider reference, currency and gross amount match.",synthetic:true},amount,c.id);
         due.status="paid"; due.data.outstandingKobo=0;
+      } else {
+        // A proposed payment always carries its proposed allocation for Finance to confirm or reject.
+        add("allocations",`${name} · probable match`,"proposed",{paymentId:payment.id,dueItemId:due.id,rule:"R5",confidence:"probable",automatic:false,explanation:"Payer name and amount suggest this instalment. Finance confirmation required.",reviewed:null,synthetic:true},amount,c.id);
+        payment.data.proposedDueItemId=due.id; payment.data.proposedAmountKobo=amount;
       }
       add("attempts",`${name} · external attempt`,"succeeded",{dueItemId:due.id,number:1,source:"external",occurredAt:date(-3),providerReference:payment.reference,synthetic:true},amount,c.id);
     }
@@ -32,11 +36,11 @@ export function seedMerchant(id: string, smaller = false): DomainState {
       due.status="in_collection";
     }
     if([2,5,7].includes(i)){
-      add("exceptions",i===7?"Imported consent needs review":i===5?"Activation awaiting consent":"Payment needs confirmation","open",{type:i===7?"imported_consent_gap":i===5?"activation_expired":"unallocated_payment",severity:i===7?"high":"medium",owner:i===2?"Finance":"Operations",dueBy:date(i===7?-1:1),linkedRecordId:i===2?due.id:mandate.id,notes:"Synthetic scenario for workflow evaluation.",synthetic:true},amount,c.id);
+      add("exceptions",i===7?"Imported consent needs review":i===5?"Activation awaiting consent":"Payment needs confirmation","open",{type:i===7?"imported_consent_gap":i===5?"activation_expired":"unallocated_payment",severity:i===7?"high":"medium",owner:i===2?"Finance":i===7?"Admin":"Operations",dueBy:date(i===7?-1:1),linkedRecordId:i===2?due.id:mandate.id,notes:"Synthetic scenario for workflow evaluation.",synthetic:true},amount,c.id);
     }
   });
-  add("payments","Unidentified transfer","unallocated",{channel:"transfer",collectionStatus:"succeeded",settlementStatus:"settled",reversalStatus:"none",refundStatus:"none",allocatedKobo:0,narration:"September payment",synthetic:true},3200000,"","SBX-UNIDENTIFIED-001");
-  add("exceptions","Transfer has no unique reference","open",{type:"unallocated_payment",severity:"medium",owner:"Finance",dueBy:date(1),notes:"Confirm the payer before allocation.",synthetic:true},3200000);
+  const unidentified=add("payments","Unidentified transfer","unallocated",{channel:"transfer",collectionStatus:"succeeded",settlementStatus:"settled",reversalStatus:"none",refundStatus:"none",allocatedKobo:0,narration:"September payment",observedAt:date(-3),synthetic:true},3200000,"","SBX-UNIDENTIFIED-001");
+  add("exceptions","Transfer has no unique reference","open",{type:"unallocated_payment",severity:"medium",owner:"Finance",dueBy:date(1),notes:"Confirm the payer before allocation.",linkedRecordId:unidentified.id,synthetic:true},3200000);
   add("cutovers","Initial lender cohort","draft",{inventory:"LMS scheduler; provider recurring plan; merchant manual collections",incumbentDisabled:false,externalAttemptsImported:true,dualRunComplete:false,accountableUser:"",fallbackOwner:"lms",confirmation:"",synthetic:true});
   add("experiments","Recovery measurement · pre-registration","draft",{baselineRate:0.4,holdoutShare:0.5,minPerArm:600,analysisDate:date(120).slice(0,10),enrolmentClose:date(90).slice(0,10),seed:"valopay-stage1-sandbox",policyId:policy.id,synthetic:true});
   add("commercial",merchant.name,"discovery",{monthlyVolume:merchant.monthlyVolume,averageTicketKobo:2500000,implementationKobo:smaller?100000000:300000000,licenceKobo:smaller?35000000:60000000,usageBps:30,usageCapKobo:15000,signed:false,signedFullPriceTerms:false,effectiveDate:"2028-01-01",startCondition:"Funding gate and agreed launch",conversationComplete:false,designPartner:true,synthetic:true});

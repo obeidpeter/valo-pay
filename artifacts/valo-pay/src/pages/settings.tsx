@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetSettings, useUpdateSettings, usePerformAction, getGetSettingsQueryKey } from '@workspace/api-client-react';
-import { Settings as SettingsIcon, Shield, PowerOff, CheckCircle, Save, XCircle } from 'lucide-react';
+import { Settings as SettingsIcon, Shield, PowerOff, AlertTriangle } from 'lucide-react';
+import { authorisationModes, executionWindow } from '@workspace/valopay-schema';
 import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
 
@@ -125,62 +126,63 @@ export default function SettingsPage() {
                 {isEditingExec ? (
                   <select 
                     className="w-full bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                    value={execSettings.authorisationMode || ''}
+                    value={execSettings.authorisationMode || authorisationModes[0]}
                     onChange={(e) => setExecSettings({...execSettings, authorisationMode: e.target.value})}
                   >
-                    <option value="Automatic">Automatic</option>
-                    <option value="Manual">Manual</option>
+                    {authorisationModes.map(mode => <option key={mode} value={mode}>{mode === 'batch' ? 'Batch approval (Finance or Admin releases the day)' : 'Standing authorisation (signed configuration)'}</option>)}
                   </select>
                 ) : (
                   <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">
-                    {String(settings.settings?.authorisationMode || 'Automatic')}
+                    {String(settings.settings?.authorisationMode || authorisationModes[0])}
                   </div>
                 )}
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">Contact Route</label>
+                <label className="text-sm font-medium block mb-1">Contact Route (shown in every customer notice)</label>
                 {isEditingExec ? (
-                  <select 
+                  <input 
+                    type="text"
                     className="w-full bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                     value={execSettings.contactRoute || ''}
                     onChange={(e) => setExecSettings({...execSettings, contactRoute: e.target.value})}
-                  >
-                    <option value="Default">Default</option>
-                    <option value="Quiet">Quiet</option>
-                  </select>
+                  />
                 ) : (
                   <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">
-                    {String(settings.settings?.contactRoute || 'Default')}
+                    {String(settings.settings?.contactRoute || 'Not set')}
                   </div>
                 )}
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">Execution Window Start (Hour)</label>
+                <label className="text-sm font-medium block mb-1">Execution Window Start (WAT hour, {executionWindow.earliestHour}–{executionWindow.latestHour})</label>
                 {isEditingExec ? (
                   <input 
                     type="number"
+                    min={executionWindow.earliestHour}
+                    max={executionWindow.latestHour - 1}
                     className="w-full bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                    value={execSettings.executionStart || ''}
+                    value={execSettings.executionStart ?? executionWindow.defaultStartHour}
                     onChange={(e) => setExecSettings({...execSettings, executionStart: Number(e.target.value)})}
                   />
                 ) : (
                   <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">
-                    {String(settings.settings?.executionStart || '8')}
+                    {String(settings.settings?.executionStart ?? executionWindow.defaultStartHour)}:00
                   </div>
                 )}
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">Execution Window End (Hour)</label>
+                <label className="text-sm font-medium block mb-1">Execution Window End (WAT hour, up to {executionWindow.latestHour})</label>
                 {isEditingExec ? (
                   <input 
                     type="number"
+                    min={executionWindow.earliestHour + 1}
+                    max={executionWindow.latestHour}
                     className="w-full bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                    value={execSettings.executionEnd || ''}
+                    value={execSettings.executionEnd ?? executionWindow.defaultEndHour}
                     onChange={(e) => setExecSettings({...execSettings, executionEnd: Number(e.target.value)})}
                   />
                 ) : (
                   <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">
-                    {String(settings.settings?.executionEnd || '18')}
+                    {String(settings.settings?.executionEnd ?? executionWindow.defaultEndHour)}:00
                   </div>
                 )}
               </div>
@@ -235,5 +237,3 @@ export default function SettingsPage() {
   );
 }
 
-// Ensure icon is available
-import { AlertTriangle } from 'lucide-react';

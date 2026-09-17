@@ -9,7 +9,8 @@
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
     "check:db-boundary": "node scripts/check-db-boundary.mjs",
     "test:security-api": "node scripts/security-valopay.mjs",
-    "test:smoke": "node scripts/smoke-valopay.mjs"
+    "test:smoke": "node scripts/smoke-valopay.mjs",
+    "test": "node scripts/run-tests.mjs"
   },
   "private": true,
   "dependencies": {

@@ -3,15 +3,16 @@ import * as S from "@workspace/api-zod";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { inWorkspace, loadState, saveState, roles, fail, appendAudit, verifyAudit, digest, canonical, listMerchants, findIdempotency, saveIdempotency, changeRole, type StoreContext } from "../lib/valopay-store";
-import { buildReports, makeRecord, validateRecord, executeAction } from "../domain";
+import { buildOverview, buildReports, makeRecord, validateRecord, executeAction } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
+import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, defaultStatus, executionWindow, handBackOwners, recordKinds } from "@workspace/valopay-schema";
 import type { DomainState } from "../domain/types";
 import { getGates, getSettings } from "../lib/valopay-readiness";
 import { importCsv } from "../lib/valopay-import";
 import { createExportFile, customerTimeline, downloadExport } from "../lib/valopay-exports";
 
 const router:IRouter=Router();
-const kinds=new Set(["customers","mandates","due-items","attempts","observations","payments","allocations","settlement-batches","exceptions","policies","templates","notifications","cutovers","audit","closes","exports","commercial","reviews","evidence","experiments","costs","calendar","integrations","members","retry-decisions"]);
+const kinds=new Set<string>(recordKinds);
 const jsonBody=(schema:z.ZodTypeAny,body:unknown)=>schema.parse(body);
 function safeKind(value:unknown):string { const kind=z.string().parse(value);if(!kinds.has(kind))fail("Unknown resource.",404);return kind; }
 async function withState<T>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>Promise<T>|T,mutating=false,responseSchema?:z.ZodTypeAny){
@@ -47,26 +48,7 @@ router.get("/v1/workspace",async(req,res)=>{
  res.json(S.GetWorkspaceResponse.parse(result));
 });
 router.get("/v1/overview",async(req,res)=>{
- const result=await withState(req,res,state=>{
-  const all=state.records,by=(kind:string)=>all.filter(r=>r.kind===kind);
-  const payments=by("payments").filter(r=>r.data.settlementStatus==="settled"&&r.status!=="possible_duplicate"&&r.data.reversalStatus==="none");
-  const outstanding=by("due-items").reduce((sum,r)=>sum+Number(r.data.outstandingKobo??r.amountKobo),0);
-  const certain=by("allocations").filter(r=>r.status==="confirmed"&&r.data.confidence==="certain");
-  const open=by("exceptions").filter(r=>!["resolved","closed"].includes(r.status));
-  const metric=(key:string,label:string,value:number,unit:string,detail:string)=>({key,label,value,unit,detail});
-  return {metrics:[
-   metric("settled","Reconciled collections",payments.reduce((s,r)=>s+Number(r.data.allocatedKobo||0),0),"kobo","Canonical settled payments, counted once · synthetic"),
-   metric("outstanding","Outstanding obligations",outstanding,"kobo","Derived from due items, not a funds balance"),
-   metric("match_rate","Certain match rate",payments.length?Math.round(certain.length/payments.length*100):0,"percent","Synthetic sample only; not Test 5 evidence"),
-   metric("exceptions","Open exceptions",open.length,"count","Items requiring an accountable owner"),
-  ],queues:[metric("activation","Awaiting activation",by("mandates").filter(r=>r.status==="pending_activation").length,"count","Provider-specific workflows"),
-   metric("review","Matches to review",by("payments").filter(r=>r.status==="proposed").length,"count","Finance confirmation required"),
-   metric("failures","Failed collections",by("attempts").filter(r=>r.status==="failed").length,"count","Observed external attempts"),
-   metric("overdue","Overdue exceptions",open.filter(r=>new Date(r.data.dueBy).getTime()<Date.now()).length,"count","Escalate to the assigned owner")],
-   activity:by("audit").sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,8),
-   upcoming:by("due-items").filter(r=>!["paid","closed","cancelled"].includes(r.status)).slice(0,6),
-   mode:state.merchant.mode,environment:"sandbox",lastClose:by("closes").at(-1)?.createdAt||"Not closed yet"};
- });
+ const result=await withState(req,res,(state,ctx)=>buildOverview(state,ctx.now));
  res.json(S.GetOverviewResponse.parse(result));
 });
 router.get("/v1/records/:kind",async(req,res)=>{
@@ -84,8 +66,7 @@ router.get("/v1/records/:kind",async(req,res)=>{
 router.post("/v1/records/:kind",async(req,res)=>{
  const kind=safeKind(req.params.kind),body=S.CreateRecordBody.parse(req.body);
  const result=await withState(req,res,(state,ctx)=>{
-  const defaults:Record<string,string>={customers:"active",mandates:"pending_activation","due-items":"scheduled",attempts:"failed",observations:"unresolved",exceptions:"open",evidence:"pending",calendar:"active",commercial:"discovery",reviews:"recorded",costs:"recorded",cutovers:"draft",experiments:"draft",policies:"draft",templates:"draft"};
-  const input={...body,status:body.status||defaults[kind]||"draft",data:{...body.data,synthetic:true} as Record<string,any>,createdAt:ctx.now,updatedAt:ctx.now};
+  const input={...body,status:body.status||defaultStatus[kind as keyof typeof defaultStatus]||"draft",data:{...body.data,synthetic:true} as Record<string,any>,createdAt:ctx.now,updatedAt:ctx.now};
   if(["policies","templates"].includes(kind)){input.data.author=ctx.actor;input.data.version=1;}
   if(kind==="due-items")input.data.outstandingKobo=body.amountKobo;
   if(kind==="attempts"){input.data.source="external";input.data.simulated=true;}
@@ -105,6 +86,8 @@ router.patch("/v1/records/:kind/:id",async(req,res)=>{
    if(input.amountKobo<allocated)fail("Due amount cannot be reduced below confirmed allocations.");
    for(const key of ["experimentId","experimentArm","firstFailureAt"])if(JSON.stringify(input.data[key])!==JSON.stringify(old.data[key]))fail("Experiment assignment is immutable.");
    input.data.outstandingKobo=input.amountKobo-allocated;
+   // RET-10: an obligation amended after its first failure leaves the experiment's eligible set.
+   if(input.amountKobo!==old.amountKobo||String(input.data.dueDate)!==String(old.data.dueDate))input.data.amendedAt=ctx.now;
   }
   validateRecord(state,ctx,kind,input,true);Object.assign(old,input);return old;
   },true,S.UpdateRecordResponse);
@@ -146,11 +129,11 @@ router.patch("/v1/settings",async(req,res)=>{
  const body=S.UpdateSettingsBody.parse(req.body);
  const result=await withState(req,res,(state,ctx)=>{
   if(ctx.role!=="Admin")fail("Only an Admin can change lender settings.",403);
-  const start=body.executionStart??state.settings.executionStart,end=body.executionEnd??state.settings.executionEnd;
-  if(start<0||end>24||start>=end)fail("Execution window must be valid WAT hours from 0 to 24.");
-  if(body.minimumTicketKobo!==undefined&&body.minimumTicketKobo<500000)fail("The ₦5,000 floor cannot be overridden.");
-  if(body.defaultOwner&&!["lms","merchant_manual","provider_auto"].includes(body.defaultOwner))fail("Valo execution ownership requires a verified production cutover.");
-  if(body.authorisationMode&&!["batch","standing"].includes(body.authorisationMode))fail("Authorisation mode must be batch or standing.");
+  const start=body.executionStart??state.settings.executionStart??executionWindow.defaultStartHour,end=body.executionEnd??state.settings.executionEnd??executionWindow.defaultEndHour;
+  if(start<executionWindow.earliestHour||end>executionWindow.latestHour||start>=end)fail(`Execution window must be WAT hours within ${executionWindow.earliestHour}:00 to ${executionWindow.latestHour}:00 with the start before the end (DEB-01).`);
+  if(body.minimumTicketKobo!==undefined&&body.minimumTicketKobo<ABSOLUTE_TICKET_FLOOR_KOBO)fail("The ₦5,000 floor cannot be overridden.");
+  if(body.defaultOwner&&!(handBackOwners as readonly string[]).includes(body.defaultOwner))fail("Valo execution ownership requires a verified production cutover.");
+  if(body.authorisationMode&&!(authorisationModes as readonly string[]).includes(body.authorisationMode))fail(`Authorisation mode must be one of: ${authorisationModes.join(", ")}.`);
   Object.assign(state.settings,body);return getSettings(state,ctx.role);
   },true,S.UpdateSettingsResponse);
  res.json(S.UpdateSettingsResponse.parse(result));

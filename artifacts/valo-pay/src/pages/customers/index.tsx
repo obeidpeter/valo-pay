@@ -6,6 +6,7 @@ import { Search, UserPlus, FileText, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Link } from 'wouter';
 import { RecordDialog } from '@/components/record-dialog';
+import { recordStatuses } from '@workspace/valopay-schema';
 
 export default function CustomersPage() {
   const { merchantId } = useWorkspace();
@@ -42,7 +43,7 @@ export default function CustomersPage() {
         fields={[
           { name: 'name', label: 'Full Name', type: 'text', required: true },
           { name: 'reference', label: 'LMS Reference', type: 'text', required: true },
-          { name: 'status', label: 'Status', type: 'select', options: [{label: 'Active', value: 'active'}, {label: 'Inactive', value: 'inactive'}], required: true },
+          { name: 'status', label: 'Status', type: 'select', options: recordStatuses.customers.map(status => ({ label: status.charAt(0).toUpperCase() + status.slice(1), value: status })), required: true },
           { name: 'bankName', label: 'Bank Name', type: 'text', isData: true },
           { name: 'accountMasked', label: 'Masked Account (e.g. ******1234)', type: 'text', isData: true },
           { name: 'phoneMasked', label: 'Masked Phone', type: 'text', isData: true },

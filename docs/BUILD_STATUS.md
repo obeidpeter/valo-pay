@@ -13,13 +13,13 @@ The Business Plan v2.1 Gate Change Note, Technical Requirements v1.1 and Roadmap
 - Mandate tracking with imported consent provenance and provider-specific activation workflow.
 - Synthetic CSV preview, validation, duplicate detection and all-or-nothing commit.
 - External attempt records, versioned policies, independent demo-persona approvals and read-only policy evaluation.
-- Absolute ticket floor, recorded low-ticket override, combined attempt ceiling, unknown-outcome block, ownership/mode checks and simulated kill/hand-back controls.
-- Observation-to-canonical-payment resolution; certain/probable matching; Finance approvals; allocation ceilings enforced by application checks inside locked PostgreSQL transactions.
-- Exception ownership, controlled resolution notes, allocation precision review and daily close snapshots.
+- Absolute ticket floor, merchant minimum ticket from settings with a recorded override, combined attempt ceiling excluding cancelled attempts, the TRD 4.4 failure-code catalogue with ACCOUNT_RESTRICTED retried once and TIMEOUT_UNKNOWN blocking until resolved, execution windows hard-bounded to 06:00–20:00 WAT with business-calendar rollover, merchant and policy-version kill switches, ownership/mode checks and simulated hand-back to the cutover's fallback owner.
+- Observation-to-canonical-payment resolution with repeated lines held as evidence; the R1 provider-reference match on the attempt's debit reference or the observation's due-item link; suspected duplicates for already-paid due items or same-payer amounts within two minutes; certain/probable matching; Finance approvals; per-provider settlement fee schedules with variance exceptions; allocation ceilings enforced by application checks inside locked PostgreSQL transactions.
+- Exception ownership, severities and business-day deadlines from the Appendix A catalogue, per-type resolution codes, allocation precision review that supersedes wrong matches, and daily close snapshots carrying the close report.
 - Application-enforced tenant scoping, transactional state changes, request idempotency, hash-chained audit digests and verification. No independent row-level security barrier.
 - Private App Storage PDF/JSON/CSV exports with downloadable SHA-256 checksums.
 - Synthetic billing counts, separate commercial evidence register, operational measurements and preregistered experiment parameters. Recovery and funding results stay unproven.
-- React console and versioned OpenAPI contract.
+- React console and versioned OpenAPI contract, with every status, enum and catalogue value imported from the shared `lib/valopay-schema` package rather than retyped.
 
 ## Explicit implementation deviations
 

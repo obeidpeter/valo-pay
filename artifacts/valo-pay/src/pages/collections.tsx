@@ -5,6 +5,7 @@ import { FileText, ArrowRightLeft, Upload, CheckCircle, AlertTriangle } from 'lu
 import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
 import { useQueryClient } from '@tanstack/react-query';
+import { failureCodeList, failureCodes } from '@workspace/valopay-schema';
 
 export default function CollectionsPage() {
   const { merchantId } = useWorkspace();
@@ -216,12 +217,7 @@ export default function CollectionsPage() {
         actionMutation={actionKind}
         fields={
           actionKind === 'simulate_failure' ? 
-            [{ name: 'failureCode', label: 'Failure Code', type: 'select', options: [
-              { label: 'Insufficient funds', value: 'INSUFFICIENT_FUNDS' },
-              { label: 'Bank unavailable', value: 'BANK_UNAVAILABLE' },
-              { label: 'Account closed', value: 'ACCOUNT_CLOSED' },
-              { label: 'Timeout unknown', value: 'TIMEOUT_UNKNOWN' }
-            ], isData: true, required: true }] :
+            [{ name: 'failureCode', label: 'Failure Code (TRD 4.4)', type: 'select', options: failureCodeList.map(code => ({ label: `${code} · ${failureCodes[code].meaning}`, value: code })), isData: true, required: true }] :
             []
         }
       />

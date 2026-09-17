@@ -11,7 +11,7 @@ This repository contains a clean snapshot of the application, not the original R
 - `artifacts/valo-pay` — React + Vite operations console.
 - `artifacts/api-server` — Express API, scoped repository, domain logic and tests.
 - `artifacts/mockup-sandbox` — existing design/component preview workspace.
-- `lib` — PostgreSQL/Drizzle schema, OpenAPI contract and generated API packages.
+- `lib` — PostgreSQL/Drizzle schema, OpenAPI contract, generated API packages and `lib/valopay-schema`, the shared per-kind schema (statuses, state machines, failure-code and exception catalogues, money and policy guardrails) that the API validator and the console both import.
 - `scripts` — development checks and source synchronization utilities.
 - `docs` — selected implementation and security documentation.
 
@@ -70,14 +70,14 @@ Each process needs its own `PORT`; the frontend also needs `BASE_PATH`. The API 
 
 ## Checks and builds
 
-These checks do not intentionally create runtime fixtures:
+These checks do not intentionally create runtime fixtures and need no database or network:
 
 ```sh
 pnpm run typecheck
-pnpm run check:db-boundary
-scripts/node_modules/.bin/tsx artifacts/api-server/tests/valopay-store-guards.test.ts
-scripts/node_modules/.bin/tsx artifacts/api-server/tests/export-download.test.ts
+pnpm test
 ```
+
+`pnpm test` runs the database-boundary check, the snapshot safeguards, the repository guards, the export collector test and the golden tests for the shared schema, the retry engine and reconciliation (`artifacts/api-server/tests/*-golden.test.ts`). The golden tests pin the TRD v1.1 acceptance behaviour in section 10.4: the three-source replay in every order, duplicate evidence, the allocation ceiling, the notice clock, quiet hours, execution windows, attempt ceilings across sources, stable assignment and kill switches. Add a golden case whenever a rule in `lib/valopay-schema` or `artifacts/api-server/src/domain` changes.
 
 Build the complete workspace with frontend configuration supplied:
 

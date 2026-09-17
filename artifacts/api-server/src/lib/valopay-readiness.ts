@@ -32,7 +32,7 @@ export function getSettings(state:DomainState,role:string){
  const allowed=(roles:string[])=>roles.includes(role);
  return {merchant:state.merchant,settings:state.settings,permissions:{
   edit:allowed(["Admin","Operations","Finance","Compliance reviewer"]),
-  approvePolicies:allowed(["Compliance reviewer"]),reconcile:allowed(["Admin","Finance"]),
+  approvePolicies:allowed(["Compliance reviewer"]),reconcile:allowed(["Admin","Operations","Finance"]),
   manageSettings:role==="Admin",instruct:false,realData:false,mfaVerified:false,
   accessNote:"Demo personas affect synthetic workflows only; no live access is granted."
  },integrations:state.records.filter(r=>r.kind==="integrations"),

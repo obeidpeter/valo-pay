@@ -5,6 +5,7 @@ import { AlertTriangle, User, Calendar, CheckSquare } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatKobo, formatDate } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
+import { exceptionSeverities, resolutionCodesFor } from '@workspace/valopay-schema';
 
 export default function ExceptionsPage() {
   const { merchantId } = useWorkspace();
@@ -130,20 +131,11 @@ export default function ExceptionsPage() {
         actionMutation={actionKind === 'resolve' ? 'resolve_exception' : undefined}
         fields={
           actionKind === 'resolve' ? [
-            { name: 'resolutionCode', label: 'Resolution Code', type: 'select', isData: true, required: true, options: [
-              {label: 'Allocated', value: 'allocated'},
-              {label: 'Duplicate Confirmed', value: 'duplicate_confirmed'},
-              {label: 'No Action Required', value: 'no_action_required'},
-              {label: 'Mandate Reissued', value: 'mandate_reissued'},
-              {label: 'Customer Contacted', value: 'customer_contacted'},
-              {label: 'Ownership Corrected', value: 'ownership_corrected'},
-              {label: 'Evidence Received', value: 'evidence_received'},
-              {label: 'Refunded Externally', value: 'refunded_externally'}
-            ]}
+            { name: 'resolutionCode', label: `Resolution code for ${String(selectedEx?.data?.type || 'this type')}`, type: 'select', isData: true, required: true, options: resolutionCodesFor(selectedEx?.data?.type).map(code => ({ label: code.replaceAll('_', ' '), value: code })) }
           ] : [
             { name: 'owner', label: 'Owner', type: 'text', isData: true },
             { name: 'notes', label: 'Notes', type: 'textarea', isData: true },
-            { name: 'severity', label: 'Severity', type: 'select', isData: true, options: [{label:'Low', value:'low'}, {label:'Medium', value:'medium'}, {label:'High', value:'high'}] }
+            { name: 'severity', label: 'Severity', type: 'select', isData: true, options: exceptionSeverities.map(severity => ({ label: severity.charAt(0).toUpperCase() + severity.slice(1), value: severity })) }
           ]
         }
       />

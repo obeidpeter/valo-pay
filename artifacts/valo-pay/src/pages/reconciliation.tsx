@@ -5,6 +5,7 @@ import { formatKobo, formatDate } from '@/lib/formatters';
 import { CheckSquare, Info, ShieldAlert, CornerUpLeft, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
+import { recordStatuses } from '@workspace/valopay-schema';
 
 export default function ReconciliationPage() {
   const { merchantId } = useWorkspace();
@@ -297,13 +298,11 @@ export default function ReconciliationPage() {
           ] :
           actionKind === 'create_batch' || actionKind === 'edit_batch' ? [
             { name: 'name', label: 'Name', type: 'text', required: true },
-            { name: 'status', label: 'Status', type: 'select', options: [{label: 'Pending', value: 'pending'}, {label: 'Settled', value: 'settled'}], required: true },
+            { name: 'reference', label: `Batch reference (status is set by reconciliation: ${recordStatuses['settlement-batches'].join(' / ')})`, type: 'text', required: true },
             { name: 'provider', label: 'Provider', type: 'text', isData: true, required: true },
-            { name: 'batchReference', label: 'Batch Reference', type: 'text', isData: true, required: true },
             { name: 'grossKobo', label: 'Gross (Kobo)', type: 'number', isData: true, required: true },
             { name: 'feeKobo', label: 'Fee (Kobo)', type: 'number', isData: true, required: true },
-            { name: 'netKobo', label: 'Net (Kobo)', type: 'number', isData: true, required: true },
-            { name: 'linePaymentIds', label: 'Line Payment IDs (comma-separated)', type: 'text', isData: true }
+            { name: 'netKobo', label: 'Net (Kobo)', type: 'number', isData: true, required: true }
           ] :
           []
         }
