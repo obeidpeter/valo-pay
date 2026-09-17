@@ -19,8 +19,14 @@ export function licenceTierFor(monthlyCollections: number) {
   return licenceTiers.find((tier) => monthlyCollections <= tier.maxMonthlyCollections) ?? licenceTiers[licenceTiers.length - 1]!;
 }
 
-/** Recovery fee, gated on the Test 2 decision (BIL-03).  Never charged in this build. */
+/** Recovery fee, gated on the Test 2 decision (BIL-03): billed only after the 30-day window closes, engine arm only. */
 export const RECOVERY_FEE_KOBO = 15_000;
+
+/** BIL-04: invoices are net of VAT with VAT shown; Nigeria's statutory rate, overridable per merchant in settings.vatBps. */
+export const DEFAULT_VAT_BPS = 750;
+export function vatKobo(netKobo: number, bps: number = DEFAULT_VAT_BPS): number {
+  return Math.floor((netKobo * bps) / 10_000);
+}
 
 /** Design partners pay half in 2027 and full public prices from 1 January 2028. */
 export const DESIGN_PARTNER_DISCOUNT_YEAR = "2027";

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { activationWorkflows, attemptSources, exceptionSeverities, executionOwners, experimentArms, handBackOwners, mandateFrequencies, mandateOrigins, observationSources, retryDecisionKinds } from "./enums";
+import { activationWorkflows, adjustmentReasons, attemptSources, exceptionSeverities, executionOwners, experimentArms, handBackOwners, mandateFrequencies, mandateOrigins, observationSources, retryDecisionKinds } from "./enums";
 
 /** ISO date (YYYY-MM-DD) or a UTC ISO timestamp with millisecond precision or less. */
 export const isoDateOrTimestamp = z.string().regex(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/, "must be an ISO date or UTC ISO timestamp").refine((value) => !Number.isNaN(Date.parse(value)), "must be a real date");
@@ -177,6 +177,21 @@ export const recordDataSchemas = {
   closes: z.object({
     closedAt: isoDateOrTimestamp,
     report: z.record(z.unknown()),
+  }).passthrough(),
+  /** BIL-04 and BIL-07: an issued invoice is immutable; later corrections are adjustment lines on the next invoice. */
+  invoices: z.object({
+    period: z.string().regex(/^\d{4}-\d{2}$/),
+    issuedAt: isoDateOrTimestamp,
+    issuedBy: z.string().min(1),
+    usageLines: z.array(z.object({ paymentId: z.string(), paymentReference: z.string(), allocatedKobo: kobo, feeKobo: kobo }).passthrough()),
+    adjustments: z.array(z.object({
+      reason: z.enum(adjustmentReasons),
+      paymentId: z.string(),
+      paymentReference: z.string(),
+      originalInvoiceId: z.string(),
+      kobo: z.number().int(),
+    }).passthrough()),
+    totals: z.object({ netKobo: kobo, vatBps: z.number().int().min(0), vatKobo: kobo, totalKobo: kobo }).passthrough(),
   }).passthrough(),
 } as const;
 

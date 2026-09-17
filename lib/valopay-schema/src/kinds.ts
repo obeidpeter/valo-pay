@@ -7,7 +7,7 @@ export const recordKinds = [
   "customers", "mandates", "due-items", "attempts", "observations", "payments", "allocations",
   "settlement-batches", "exceptions", "policies", "templates", "notifications", "cutovers", "audit",
   "closes", "exports", "commercial", "reviews", "evidence", "experiments", "costs", "calendar",
-  "integrations", "members", "retry-decisions",
+  "integrations", "members", "retry-decisions", "invoices",
 ] as const;
 export type RecordKind = (typeof recordKinds)[number];
 
@@ -40,6 +40,7 @@ export const recordStatuses = {
   "retry-decisions": ["recorded"],
   closes: ["completed"],
   exports: ["ready"],
+  invoices: ["issued"],
 } as const satisfies Partial<Record<RecordKind, readonly string[]>>;
 export type StatusOf<K extends keyof typeof recordStatuses> = (typeof recordStatuses)[K][number];
 export type MandateStatus = StatusOf<"mandates">;

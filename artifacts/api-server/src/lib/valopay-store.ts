@@ -240,7 +240,7 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
     if (present.id !== before.id || present.merchantId !== before.merchantId || present.kind !== before.kind || present.createdAt !== before.createdAt) {
       conflict("Record identity, lender, kind, and creation time are immutable.");
     }
-    if (["audit", "exports", "reviews", "closes", "retry-decisions"].includes(before.kind) && canonical(present) !== canonical(before)) conflict("Evidence records are immutable.");
+    if (["audit", "exports", "reviews", "closes", "retry-decisions", "invoices"].includes(before.kind) && canonical(present) !== canonical(before)) conflict("Evidence records are immutable.");
     if (["policies", "templates", "experiments"].includes(before.kind) && ["approved", "preregistered", "closed"].includes(before.status) && canonical(present) !== canonical(before)) {
       conflict("Approved, preregistered, and closed versions are immutable.");
     }

@@ -13,6 +13,8 @@ const billingLines = (record: Unknown): Array<Record<string, any>> => Array.isAr
 const experimentRows = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.results) ? (record!.results as Array<Record<string, any>>) : [];
 const labelOf = (key: string) => key.replace(/([A-Z])/g, ' $1').replace(/^./, first => first.toUpperCase()).trim();
 const percent = (value: unknown) => typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : 'n/a';
+const invoiceRows = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.invoices) ? (record!.invoices as Array<Record<string, any>>) : [];
+const adjustmentRows = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.pendingAdjustments) ? (record!.pendingAdjustments as Array<Record<string, any>>) : [];
 /** REC-07: the close report fields, in the order the TRD lists them. */
 function closeReportChips(report: Record<string, any>): Array<[string, string]> {
   const money = (row: any) => `${row?.count ?? 0} · ${formatKobo(Number(row?.kobo || 0))}`;
@@ -45,6 +47,7 @@ export default function ReportsPage() {
   const { merchantId } = useWorkspace();
   const [experimentDialog, setExperimentDialog] = useState<'create' | 'edit' | 'preregister' | null>(null);
   const [selectedExperiment, setSelectedExperiment] = useState<any>(null);
+  const [invoiceDialogOpen, setInvoiceDialogOpen] = useState(false);
 
   const { data: reports, isLoading, refetch } = useGetReports(
     { merchantId: merchantId! },
@@ -100,6 +103,9 @@ export default function ReportsPage() {
             disabled={createExport.isPending}
           >
             <Download className="h-4 w-4" /> Export Billing CSV
+          </Button>
+          <Button variant="outline" className="gap-2" onClick={() => setInvoiceDialogOpen(true)}>
+            <FileText className="h-4 w-4" /> Issue invoice
           </Button>
           <Button 
             className="gap-2"
@@ -210,6 +216,44 @@ export default function ReportsPage() {
                   </table>
                   <p className="text-xs text-muted-foreground mt-2">Withheld inside the reversal window: {String(reports.billing?.withheldInsideReversalWindow ?? 0)} (billed on a later statement).</p>
                 </div>
+                <div className="mt-6">
+                  <h3 className="text-sm font-semibold mb-2">Issued invoices (BIL-04)</h3>
+                  {invoiceRows(reports.billing).length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No invoice issued yet. The next one covers {String(reports.billing?.nextInvoicePeriod || 'the previous month')}; issued invoices are immutable and VAT is shown separately.</p>
+                  ) : (
+                    <table className="w-full text-xs text-left font-mono">
+                      <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Invoice</th><th className="py-1 pr-2">Period</th><th className="py-1 pr-2 text-right">Counted</th><th className="py-1 pr-2 text-right">Adjustments</th><th className="py-1 pr-2 text-right">Net</th><th className="py-1 pr-2 text-right">VAT</th><th className="py-1 pr-2 text-right">Total</th></tr></thead>
+                      <tbody className="divide-y">
+                        {invoiceRows(reports.billing).map(invoice => (
+                          <tr key={String(invoice.id)}>
+                            <td className="py-1 pr-2">{String(invoice.reference)}{invoice.creditNote ? ' (credit note)' : ''}</td>
+                            <td className="py-1 pr-2">{String(invoice.period)}</td>
+                            <td className="py-1 pr-2 text-right">{String(invoice.collectionsCounted ?? 0)}</td>
+                            <td className="py-1 pr-2 text-right">{String(invoice.adjustmentCount ?? 0)} · {formatKobo(Number(invoice.adjustmentsKobo || 0))}</td>
+                            <td className="py-1 pr-2 text-right">{formatKobo(Number(invoice.netKobo || 0))}</td>
+                            <td className="py-1 pr-2 text-right">{formatKobo(Number(invoice.vatKobo || 0))}</td>
+                            <td className="py-1 pr-2 text-right font-bold">{formatKobo(Number(invoice.totalKobo || 0))}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+                <div className="mt-6">
+                  <h3 className="text-sm font-semibold mb-2">Adjustments for the next invoice (BIL-07)</h3>
+                  <p className="text-xs text-muted-foreground mb-2">A reversal, refund, confirmed duplicate or superseded allocation on a billed collection becomes a credit or debit line here, with the invoice it corrects. Issued invoices are never edited.</p>
+                  {adjustmentRows(reports.billing).length === 0 ? (
+                    <p className="text-xs text-muted-foreground">Nothing to adjust.</p>
+                  ) : (
+                    <ul className="text-xs font-mono space-y-1">
+                      {adjustmentRows(reports.billing).map(line => (
+                        <li key={`${String(line.paymentId)}-${String(line.reason)}`} className={Number(line.kobo) < 0 ? 'text-destructive' : ''}>
+                          {String(line.paymentReference)} · {String(line.reason).replace(/_/g, ' ')} · {formatKobo(Number(line.kobo || 0))} · corrects {String(line.originalInvoiceReference)}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </div>
             </section>
 
@@ -315,6 +359,17 @@ export default function ReportsPage() {
 
         </div>
       )}
+      <RecordDialog
+        kind="invoices"
+        record={null}
+        isOpen={invoiceDialogOpen}
+        onOpenChange={(open) => { if (!open) { setInvoiceDialogOpen(false); refetch(); } }}
+        title="Issue the monthly invoice"
+        actionMutation="issue_invoice"
+        fields={[
+          { name: 'period', label: 'Period (YYYY-MM); blank issues the previous month', type: 'text', isData: true },
+        ]}
+      />
       <RecordDialog
         kind="experiments"
         record={selectedExperiment}
