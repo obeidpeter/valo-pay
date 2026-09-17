@@ -124,6 +124,6 @@ node scripts/github-sync.mjs --push
 
 The utility targets only the private `obeidpeter/valo-pay` repository. It sends reviewed source contents, never Git history or credentials, through the Replit GitHub connector. It checks common secret patterns but cannot prove arbitrary content is safe: review new files before uploading.
 
-Updates require the ignored local synchronization state from the previous successful upload. If it is missing or GitHub has changed independently, the utility stops for manual reconciliation; it never force-pushes. It also refuses remote file deletions. Authentication failures should be repaired through the GitHub connection, not by pasting tokens into code.
+Updates use ignored local synchronization state from the previous successful upload. In a workspace without that state, the utility can initialize it only when all selected local source files already match GitHub exactly; otherwise it stops for manual reconciliation. This allows a merged task's main workspace to establish its baseline safely. If GitHub has changed independently, the utility stops rather than overwriting changes; it never force-pushes and also refuses remote file deletions. Authentication failures should be repaired through the GitHub connection, not by pasting tokens into code.
 
 In a **fresh clone from GitHub**, normal Git commits/pushes are safe to use because the clone contains only the clean repository history. Reconcile changes made there before uploading another snapshot from the original Replit workspace.

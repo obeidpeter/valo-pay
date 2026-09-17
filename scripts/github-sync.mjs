@@ -29,8 +29,10 @@ if (!args.includes("--push")) {
   if (repo.full_name !== target || !repo.private || repo.archived || !repo.permissions?.push) throw new Error("Repository must match the approved private writable destination.");
   let state;
   try { state = JSON.parse(readFileSync(statePath, "utf8")); }
-  catch { throw new Error("Missing synchronization state. Stop and reconcile the GitHub branch before initializing state; do not push workspace history."); }
-  if (state.repository !== target || state.branch !== repo.default_branch) throw new Error("Synchronization target changed.");
+  catch (error) {
+    if (error.code !== "ENOENT") throw new Error("Invalid synchronization state; reconcile before uploading.");
+  }
+  if (state && (state.repository !== target || state.branch !== repo.default_branch)) throw new Error("Synchronization target changed.");
   const branch = encodeURIComponent(repo.default_branch);
   const head = (await api(`${base}/git/ref/heads/${branch}`)).object.sha;
   const remote = await api(`${base}/git/trees/${head}?recursive=1`);
@@ -47,6 +49,7 @@ if (!args.includes("--push")) {
     saveState(head);
     console.log(`Already verified: ${repo.html_url} (${files.length} files).`);
   } else {
+    if (!state) throw new Error("Missing synchronization state and source differs from GitHub. Reconcile first; do not push workspace history.");
     if (head !== state.commit) throw new Error("GitHub changed since the previous upload. Reconcile remote changes first.");
     if (remote.tree.some(f => f.type !== "tree" && !files.some(local => local.path === f.path))) throw new Error("Upload would remove remote files. Deletions require explicit review.");
     const tree = await api(`${base}/git/trees`, "POST", { tree: files.map(({ sha, ...file }) => file) });
