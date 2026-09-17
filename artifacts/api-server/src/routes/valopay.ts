@@ -1,7 +1,6 @@
 import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
 import { inWorkspace, loadState, saveState, roles, fail, appendAudit, verifyAudit, digest, canonical, listMerchants, findIdempotency, saveIdempotency, changeRole, type StoreContext } from "../lib/valopay-store";
 import { buildOverview, buildReports, makeRecord, validateRecord, executeAction } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
@@ -9,16 +8,16 @@ import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, defaultStatus, executio
 import type { DomainState } from "../domain/types";
 import { getGates, getSettings } from "../lib/valopay-readiness";
 import { importCsv } from "../lib/valopay-import";
-import { createExportFile, customerTimeline, downloadExport, exportKinds } from "../lib/valopay-exports";
+import { createExportFile, customerTimeline, exportDescriptor, exportKinds, readExport } from "../lib/valopay-exports";
 
 const router:IRouter=Router();
 const kinds=new Set<string>(recordKinds);
-const jsonBody=(schema:z.ZodTypeAny,body:unknown)=>schema.parse(body);
 function safeKind(value:unknown):string { const kind=z.string().parse(value);if(!kinds.has(kind))fail("Unknown resource.",404);return kind; }
 async function withState<T>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>Promise<T>|T,mutating=false,responseSchema?:z.ZodTypeAny){
  const {merchantId}=S.GetOverviewQueryParams.parse(req.query);
  return inWorkspace(req,res,async ctx=>{
-  const state=await loadState(ctx,merchantId);
+  // A read takes a share lock so it never queues behind other reads; a mutation takes the exclusive lock.
+  const state=await loadState(ctx,merchantId,mutating?"update":"share");
    const before=structuredClone(state);
   const key=req.header("Idempotency-Key");
   const fingerprint=digest(canonical({path:req.path,method:req.method,body:req.body,actor:ctx.actor}));
@@ -152,7 +151,10 @@ router.get("/v1/exports/:id/download",async(req,res)=>{
  req.once("aborted",abort);
  res.once("close",close);
  try{
- const result=await withState(req,res,state=>downloadExport(state,String(req.params.id),cancellation.signal));
+ // The authorised metadata is read inside the transaction; the object-storage read happens after it ends, so no merchant lock is held across the download.
+ const descriptor=await withState(req,res,state=>exportDescriptor(state,String(req.params.id)));
+ if(cancellation.signal.aborted)return;
+ const result=await readExport(descriptor,cancellation.signal);
  if(cancellation.signal.aborted)return;
  res.setHeader("Content-Type",result.contentType);
  res.setHeader("Content-Disposition",`attachment; filename="${result.filename}"`);

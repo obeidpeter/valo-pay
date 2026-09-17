@@ -10,11 +10,11 @@ The database connection is privileged. Explicit application checks **do not** pr
 
 - Identity comes from verified Clerk request context or the existing high-entropy anonymous sandbox cookie, not a caller-supplied principal/workspace identifier. An absent or malformed sandbox cookie creates a separate synthetic workspace; it never grants access to an existing workspace.
 - One repository owns runtime SQL. Workspace membership, selected merchant ownership and record predicates must be checked explicitly. Routes/domain code must not obtain raw clients or unrestricted query functions.
-- A principal transaction lock serializes workspace creation/persona changes. Merchant row locking serializes state validation, allocations, idempotency and audit sequence generation across processes, not just within one Node instance.
+- A principal transaction lock serializes workspace creation/persona changes. A mutation takes an exclusive merchant row lock (`FOR UPDATE`) that serializes state validation, allocations, idempotency and audit sequence generation across processes, not just within one Node instance. A read takes a share lock (`FOR SHARE`), so it sees one consistent merchant state, waits for an in-flight mutation to commit, and never queues behind other reads.
 - Reads, business mutations, idempotent responses and audit appends share the authorized transaction. The repository retains its own original state for mutation validation, rather than trusting a snapshot supplied by its callers.
 - The repository refuses record deletion, tenant/identity reassignment, immutable-evidence edits and changes to frozen approved/preregistered/closed versions. It validates linked records and final allocation totals before committing.
 - Ordinary database foreign keys, primary/unique indexes, safe-integer money bounds and the due-item ticket floor provide additional protections. Cross-record allocation caps and evidence immutability are application rules, not triggers.
-- Private exports are accessible only through authorized merchant metadata and checksum-verified downloads. Object storage is not part of the SQL transaction: an object uploaded before a later database failure can be orphaned, but must not become accessible through another tenant.
+- Private exports are accessible only through authorized merchant metadata and checksum-verified downloads. The metadata is resolved inside the authorized transaction and the object is read after it ends, so no merchant lock is held for the duration of a download. Object storage is not part of the SQL transaction: an object uploaded before a later database failure can be orphaned, but must not become accessible through another tenant.
 - Hash chains detect corruption relative to their stored history. They do not establish independent tamper-proof evidence against a privileged actor able to rewrite both history and hashes.
 
 ## Development setup and publishing
@@ -34,4 +34,4 @@ Removing the original role/policy dependencies addresses their specific missing-
 - Static boundary checks are a development safeguard, not a sandbox against malicious or deliberately obfuscated code.
 - Real data remains blocked pending independent security assessment, production staff provisioning/MFA, documented hosting and legal prerequisites, tested recovery, and an explicitly approved production isolation design.
 
-Development transition evidence and reproducible checks: [Security verification](SECURITY_VERIFICATION.md).
+The reproducible checks are the ones in the README under "Checks and builds": `pnpm test` (database boundary, snapshot safeguards, repository guards, export collector and the golden suites), `pnpm run test:security-api` and `pnpm run test:smoke` against a running API, and the database-backed integration suites run with `VALOPAY_RUN_INTEGRATION=1`. The development transition evidence stays in the Replit workspace and is not part of this source snapshot.

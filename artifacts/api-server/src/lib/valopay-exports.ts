@@ -77,10 +77,19 @@ export async function createExportFile(state:DomainState,ctx:Context,input:Expor
  makeRecord(state,"exports",{id,name:`${input.kind} · ${input.format.toUpperCase()}`,status:"ready",customerId:pack?String(pack.customer.id):"",createdAt:ctx.now,updatedAt:ctx.now,data:{checksum,kind:input.kind,format:input.format,usedInRealCase:false,objectName,bucket,contentType,byteLength:bytes.length,generationMs:Date.now()-started,events:pack?.timeline.length,customerReference:pack?String(pack.customer.reference):undefined}});
  return {id,downloadUrl:`/api/v1/exports/${id}/download?merchantId=${state.merchant.id}`,checksum,generatedAt:ctx.now};
 }
-export async function downloadExport(state:DomainState,id:string,signal?:AbortSignal){
+export interface ExportDescriptor{id:string;bucket:string;objectName:string;checksum:string;contentType:string;filename:string}
+/** The authorised export metadata from the lender's state; resolved inside the transaction, used after it. */
+export function exportDescriptor(state:DomainState,id:string):ExportDescriptor{
  const record=state.records.find(r=>r.kind==="exports"&&r.id===id);
  if(!record)throw Object.assign(new Error("Export not found in this lender."),{status:404});
- const bytes=await readExportBytes(objectStorageClient.bucket(record.data.bucket).file(record.data.objectName),signal);
- if(createHash("sha256").update(bytes).digest("hex")!==record.data.checksum)throw new Error("Export checksum verification failed.");
- return {bytes,contentType:record.data.contentType,filename:`valopay-${record.data.kind}-${id}.${record.data.format}`};
+ return {id,bucket:String(record.data.bucket),objectName:String(record.data.objectName),checksum:String(record.data.checksum),contentType:String(record.data.contentType),filename:`valopay-${record.data.kind}-${id}.${record.data.format}`};
+}
+/** Reads the object and verifies the immutable SHA-256 before any byte is returned; holds no database lock. */
+export async function readExport(descriptor:ExportDescriptor,signal?:AbortSignal){
+ const bytes=await readExportBytes(objectStorageClient.bucket(descriptor.bucket).file(descriptor.objectName),signal);
+ if(createHash("sha256").update(bytes).digest("hex")!==descriptor.checksum)throw new Error("Export checksum verification failed.");
+ return {bytes,contentType:descriptor.contentType,filename:descriptor.filename};
+}
+export function downloadExport(state:DomainState,id:string,signal?:AbortSignal){
+ return readExport(exportDescriptor(state,id),signal);
 }

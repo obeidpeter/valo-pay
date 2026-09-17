@@ -10,8 +10,8 @@ This repository contains a clean snapshot of the application, not the original R
 
 - `artifacts/valo-pay` — React + Vite operations console.
 - `artifacts/api-server` — Express API, scoped repository, domain logic and tests.
-- `artifacts/mockup-sandbox` — existing design/component preview workspace.
-- `lib` — PostgreSQL/Drizzle schema, OpenAPI contract, generated API packages and `lib/valopay-schema`, the shared per-kind schema (statuses, state machines, failure-code and exception catalogues, money and policy guardrails) that the API validator and the console both import.
+- `artifacts/mockup-sandbox` — existing design/component preview workspace. It carries its own variant of the UI kit (different tokens and hover treatment from the console), so the two `components/ui` trees are intentionally not shared.
+- `lib` — PostgreSQL/Drizzle schema, the OpenAPI contract (`lib/api-spec/openapi.json`, written by `node scripts/create-valopay-spec.cjs`), generated API packages and `lib/valopay-schema`, the shared per-kind schema (statuses, state machines, failure-code and exception catalogues, money and policy guardrails) that the API validator and the console both import.
 - `scripts` — development checks and source synchronization utilities.
 - `docs` — selected implementation and security documentation.
 
@@ -53,7 +53,7 @@ For a **new, disposable development database only**, after reviewing the schema:
 pnpm --filter @workspace/db run push
 ```
 
-Do not point this command at production or an existing database without a reviewed migration plan. Startup and build commands must not run database DDL. See [the database security boundary](docs/DATABASE_SECURITY.md).
+Do not point this command at production or an existing database without a reviewed migration plan. Startup and build commands must not run database DDL, and the Replit post-merge hook (`scripts/post-merge.sh`) only installs dependencies. See [the database security boundary](docs/DATABASE_SECURITY.md).
 
 ## Development
 
@@ -78,6 +78,8 @@ pnpm run check:db-boundary
 pnpm run test:pure
 pnpm run test:golden
 ```
+
+`typecheck` covers the API tests as well as its sources (`artifacts/api-server/tsconfig.tests.json`), so a test that drifts from a domain signature fails before it runs.
 
 `test:pure` explicitly runs the source-snapshot safeguards, in-memory store guards/audit checks, and download-stream tests. The store test supplies an unusable loopback database URL for module initialization; it does not connect to a database.
 
