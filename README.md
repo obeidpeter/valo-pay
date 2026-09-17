@@ -70,14 +70,23 @@ Each process needs its own `PORT`; the frontend also needs `BASE_PATH`. The API 
 
 ## Checks and builds
 
-These checks do not intentionally create runtime fixtures:
+These checks need no production credentials or running services and do not write to a runtime database:
 
 ```sh
 pnpm run typecheck
 pnpm run check:db-boundary
-scripts/node_modules/.bin/tsx artifacts/api-server/tests/valopay-store-guards.test.ts
-scripts/node_modules/.bin/tsx artifacts/api-server/tests/export-download.test.ts
+pnpm run test:pure
 ```
+
+`test:pure` explicitly runs the source-snapshot safeguards, in-memory store guards/audit checks, and download-stream tests. The store test supplies an unusable loopback database URL for module initialization; it does not connect to a database.
+
+### GitHub pull-request checks
+
+The local `.github/workflows/ci.yml` definition is configured to run on pull requests and pushes to `main`, using Ubuntu 24.04, Node.js 24 and pnpm 10.26.1. It installs with `pnpm install --frozen-lockfile`, then runs the three commands above. The job has read-only repository permissions, no application secrets or database service, and does not build, publish, deploy, migrate, or run the synthetic database/HTTP integration suites. The workflow must first be committed to GitHub through an account with workflow-write permission; source sync with `--skip-workflows` does not install or enable it.
+
+The check reports failures on the pull request. Enforcing a merge block requires a GitHub branch rule that requires **TypeScript, database boundary and pure tests**; this workflow does not change repository protection settings.
+
+### Builds and integration checks
 
 Build the complete workspace with frontend configuration supplied:
 
@@ -122,7 +131,20 @@ node scripts/github-sync.mjs
 node scripts/github-sync.mjs --push
 ```
 
-The utility targets only the private `obeidpeter/valo-pay` repository. It sends reviewed source contents, never Git history or credentials, through the Replit GitHub connector. It checks common secret patterns but cannot prove arbitrary content is safe: review new files before uploading.
+The utility targets only the public `obeidpeter/valo-pay` repository, as approved by its owner. Public means anyone can read the uploaded source. It sends reviewed source contents, never Git history or credentials, through the Replit GitHub connector. It checks common secret patterns but cannot prove arbitrary content is safe: review new files before uploading.
+
+Use this script rather than Replit's Git Sync/Push button in the original workspace. That button pushes Git history; this workspace intentionally has no direct GitHub remote. An authentication error from that button does not necessarily mean the GitHub connector used by this script is broken.
+
+Only `.github/workflows/ci.yml` is approved for workflow export. Other workflows and local GitHub actions remain excluded until individually reviewed and added to the allowlist.
+
+The current connector does not offer GitHub's separate workflow-write permission. To sync source while explicitly leaving workflow updates pending:
+
+```sh
+node scripts/github-sync.mjs --skip-workflows
+node scripts/github-sync.mjs --push --skip-workflows
+```
+
+This option preserves existing remote workflow files unchanged and reports pending local workflow changes. It never silently deletes a workflow. Commit the reviewed CI file through GitHub's website, or use a separately authorized clean clone, to enable/update it. An independently created GitHub commit still requires reconciliation before the next source upload. Unchanged workflow blobs are reused, not rewritten.
 
 Updates use ignored local synchronization state from the previous successful upload. In a workspace without that state, the utility can initialize it only when all selected local source files already match GitHub exactly; otherwise it stops for manual reconciliation. This allows a merged task's main workspace to establish its baseline safely. If GitHub has changed independently, the utility stops rather than overwriting changes; it never force-pushes and also refuses remote file deletions. Authentication failures should be repaired through the GitHub connection, not by pasting tokens into code.
 
