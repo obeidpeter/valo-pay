@@ -73,9 +73,14 @@ export default function CustomerTimelinePage() {
                 <span className="text-lg font-bold text-destructive font-mono">{formatKobo(Number(position?.outstandingKobo || 0))}</span>
               </div>
               <div className="flex justify-between items-baseline">
-                <span className="text-sm text-muted-foreground">Paid</span>
-                <span className="text-lg font-bold text-success font-mono">{formatKobo(Number(position?.paidKobo || 0))}</span>
+                <span className="text-sm text-muted-foreground">Allocated</span>
+                <span className="text-lg font-bold text-success font-mono">{formatKobo(Number(position?.allocatedKobo || 0))}</span>
               </div>
+              <div className="flex justify-between items-baseline">
+                <span className="text-sm text-muted-foreground">Unapplied credit</span>
+                <span className="text-lg font-bold font-mono">{formatKobo(Number(position?.unallocatedKobo || 0))}</span>
+              </div>
+              <p className="text-[11px] text-muted-foreground">{String(position?.note || 'Derived from obligations and payment evidence; we never hold money.')}</p>
             </div>
           </div>
         </div>

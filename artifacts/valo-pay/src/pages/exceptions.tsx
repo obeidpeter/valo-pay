@@ -12,6 +12,7 @@ export default function ExceptionsPage() {
   const [selectedEx, setSelectedEx] = useState<any>(null);
   const [actionKind, setActionKind] = useState<'update' | 'resolve' | ''>('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [filter, setFilter] = useState<'open' | 'high' | 'resolved'>('open');
 
   const { data, isLoading } = useListRecords(
     'exceptions',
@@ -27,6 +28,16 @@ export default function ExceptionsPage() {
 
   if (!merchantId) return null;
 
+  const isOpen = (status: string) => !['resolved', 'closed'].includes(status);
+  const items = (data?.items || []).filter(exception =>
+    filter === 'resolved' ? !isOpen(exception.status) : filter === 'high' ? isOpen(exception.status) && String(exception.data?.severity) === 'high' : isOpen(exception.status)
+  );
+  const filters: Array<{ key: typeof filter; label: string }> = [
+    { key: 'open', label: `All open (${(data?.items || []).filter(exception => isOpen(exception.status)).length})` },
+    { key: 'high', label: `High severity (${(data?.items || []).filter(exception => isOpen(exception.status) && String(exception.data?.severity) === 'high').length})` },
+    { key: 'resolved', label: `Resolved (${(data?.items || []).filter(exception => !isOpen(exception.status)).length})` },
+  ];
+
   return (
     <div className="space-y-6">
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -38,20 +49,22 @@ export default function ExceptionsPage() {
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
         <div className="p-4 border-b flex items-center gap-4 bg-secondary/20">
-          <div className="flex gap-2">
-            <Button variant="secondary" size="sm" className="bg-primary text-primary-foreground">All Open</Button>
-            <Button variant="ghost" size="sm">High Severity</Button>
-            <Button variant="ghost" size="sm">Resolved</Button>
+          <div className="flex gap-2" role="tablist" aria-label="Exception filter">
+            {filters.map(option => (
+              <Button key={option.key} role="tab" aria-selected={filter === option.key} variant={filter === option.key ? 'secondary' : 'ghost'} size="sm" className={filter === option.key ? 'bg-primary text-primary-foreground' : ''} onClick={() => setFilter(option.key)}>
+                {option.label}
+              </Button>
+            ))}
           </div>
         </div>
 
         {isLoading ? (
           <div className="p-12 text-center text-muted-foreground animate-pulse">Loading exceptions...</div>
-        ) : !data || data.items.length === 0 ? (
+        ) : items.length === 0 ? (
           <div className="p-16 text-center flex flex-col items-center justify-center">
             <CheckSquare className="h-12 w-12 text-muted-foreground mb-4 opacity-20" />
-            <h3 className="text-lg font-medium">All clear</h3>
-            <p className="text-muted-foreground text-sm mt-1">No exceptions require your attention.</p>
+            <h3 className="text-lg font-medium">{filter === 'resolved' ? 'Nothing resolved yet' : 'All clear'}</h3>
+            <p className="text-muted-foreground text-sm mt-1">{filter === 'resolved' ? 'Resolved and closed exceptions will appear here.' : 'No exceptions match this filter.'}</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -65,7 +78,7 @@ export default function ExceptionsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {data.items.map(exception => (
+                {items.map(exception => (
                   <tr key={exception.id} className="hover:bg-secondary/10 transition-colors">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">

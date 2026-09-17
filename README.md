@@ -19,7 +19,7 @@ Keep the workspace together: the frontend and API depend on shared packages.
 
 ## Prerequisites and installation
 
-The current supported environment is Replit's Linux workspace with **Node.js 24**, **pnpm 10**, PostgreSQL, managed Clerk authentication and private App Storage.
+The current supported environment is Replit's Linux workspace with **Node.js 24**, **pnpm 10**, PostgreSQL, managed Clerk authentication and private App Storage. `package.json` pins the pnpm release with `packageManager` and requires Node 22 or later; CI runs on Node 24.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -36,7 +36,7 @@ Provide credentials through your environment's secret manager, never through com
 | `DATABASE_URL` | PostgreSQL connection, server only |
 | `CLERK_SECRET_KEY` | Clerk server authentication/proxy |
 | `CLERK_PUBLISHABLE_KEY` | Server-side Clerk configuration |
-| `VITE_CLERK_PUBLISHABLE_KEY` | Frontend Clerk configuration, needed when building |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Frontend Clerk configuration for sign-in; on a local host without it the console runs the anonymous sandbox with sign-in hidden |
 | `PRIVATE_OBJECT_DIR` | Private App Storage location |
 | `PUBLIC_OBJECT_SEARCH_PATHS` | App Storage public search locations |
 | `PORT` | Port for each process, supplied by its managed workflow |
@@ -77,7 +77,7 @@ pnpm run typecheck
 pnpm test
 ```
 
-`pnpm test` runs the database-boundary check, the snapshot safeguards, the repository guards, the export collector test and the golden tests for the shared schema, the retry engine and reconciliation (`artifacts/api-server/tests/*-golden.test.ts`). The golden tests pin the TRD v1.1 acceptance behaviour in section 10.4: the three-source replay in every order, duplicate evidence, the allocation ceiling, the notice clock, quiet hours, execution windows, attempt ceilings across sources, stable assignment and kill switches. Add a golden case whenever a rule in `lib/valopay-schema` or `artifacts/api-server/src/domain` changes.
+GitHub Actions runs the same typecheck, offline tests and both builds on every pull request and on pushes to `main` (`.github/workflows/ci.yml`); the workflow needs no database, secrets or Replit services. `pnpm test` runs the database-boundary check, the snapshot safeguards, the repository guards, the export collector test and the golden tests for the shared schema, the retry engine and reconciliation (`artifacts/api-server/tests/*-golden.test.ts`). The golden tests pin the TRD v1.1 acceptance behaviour in section 10.4: the three-source replay in every order, duplicate evidence, the allocation ceiling, the notice clock, quiet hours, execution windows, attempt ceilings across sources, stable assignment and kill switches. Add a golden case whenever a rule in `lib/valopay-schema` or `artifacts/api-server/src/domain` changes.
 
 Build the complete workspace with frontend configuration supplied:
 

@@ -1,0 +1,47 @@
+# Offline checks only: no database, no Replit services, no real lender data.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Typecheck, offline tests and builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads the pnpm version from the packageManager field in package.json.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Offline tests (repository guards, export collector, golden suites)
+        run: pnpm test
+
+      - name: Build API bundle
+        run: pnpm --filter @workspace/api-server run build
+
+      - name: Build console
+        run: pnpm --filter @workspace/valopay run build
+        env:
+          PORT: "5173"
+          BASE_PATH: "/"

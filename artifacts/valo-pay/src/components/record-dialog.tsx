@@ -39,7 +39,8 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
       if (record) {
         const initial: any = { ...defaultValues, name: record.name, status: record.status, reference: record.reference, amountKobo: record.amountKobo, customerId: record.customerId };
         fields.forEach(f => {
-          if (f.isData && record.data) {
+          // A field the record does not carry keeps its default instead of becoming undefined.
+          if (f.isData && record.data && record.data[f.name] !== undefined) {
             initial[f.name] = record.data[f.name];
           }
         });
@@ -68,7 +69,9 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
     const payload: any = { data: {...(record&&!actionMutation?record.data:{}),...(defaultValues.data||{})} };
     fields.forEach(f => {
       let val = formData[f.name];
-      if(val===undefined || (val===''&&!f.required&&f.type!=='textarea'))return;
+      // A checkbox always submits a boolean: an untouched box is false, never a missing field.
+      if (f.type === 'checkbox') val = Boolean(val);
+      else if(val===undefined || (val===''&&!f.required&&f.type!=='textarea'))return;
       if (f.type === 'number') val = Number(val);
       if(['consentGaps','linePaymentIds','confirmedJobs'].includes(f.name)&&typeof val==='string')val=val.split(/[|,]/).map(s=>s.trim()).filter(Boolean);
       if(f.name==='correct'&&typeof val==='string')val=val==='true';

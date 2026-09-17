@@ -26,7 +26,7 @@ Kinds and data fields:
 - exports: generated download metadata; data checksum, kind, format, usedInRealCase=false.
 - commercial: name prospect; data monthlyVolume, averageTicketKobo, implementationKobo, licenceKobo, usageBps=30, usageCapKobo=15000, signed, signedFullPriceTerms, effectiveDate, startCondition, conversationComplete, designPartner. Only list-price entries qualify; synthetic evidence does NOT pass real Test3.
 - reviews: fortnightly review notes data confirmedJobs, note, reviewer, reviewedAt. Synthetic does NOT pass real Test5.
-- evidence: name=P1…P5 or F4/T1b; status pending/recorded; data reference, notes. Evidence registers are not verification.
+- evidence: status pending/recorded; data gateId (P1…P5, F1…F4, T1b, T2; what the gate register matches on), reference, notes. Evidence registers are not verification.
 - experiments: draft/preregistered/closed; data baselineRate, holdoutShare (0.1–0.5), minPerArm, analysisDate, enrolmentClose, seed, policyId.
 - costs: name infrastructure/support/notifications; amountKobo, data period.
 - calendar: name holiday, data date.
@@ -35,13 +35,13 @@ Kinds and data fields:
 ## Pages
 - `/` shows the operations overview, accessible sandbox without login, with Sign in to own workspace.
 - `/customers` and `/customers/:id` with position and complete timeline.
-- `/mandates`, `/collections` (due items/attempts), `/reconciliation` (payments/observations/proposals), `/exceptions`.
+- `/mandates`, `/collections` (due items/attempts), `/reconciliation` (payments/observations/proposals, settlement batches and the REC-09 precision audit of automatic certain allocations), `/exceptions` (filters: all open, high severity, resolved).
 - `/policies` includes versioned retry policies and notification templates.
 - `/reports` daily closes, operational measurement, recovery experiment, billing statement.
 - `/evidence` prerequisite evidence, commercial commitments, three distinct decisions and gate export.
-- `/audit` hash-chain log and verification.
+- `/audit` hash-chain log and verification; the verify result (valid, entry count, head hash) is shown on the page and as a toast, never an alert.
 - `/settings` roles, access matrix, providers (not connected), calendar, execution settings, cutover and hand-back.
-- `/sign-in/*?`, `/sign-up/*?` Clerk branded; authenticated home can redirect to `/overview` same overview.
+- `/sign-in/*?`, `/sign-up/*?` Clerk branded; authenticated home can redirect to `/overview` same overview. On a local host with no `VITE_CLERK_PUBLISHABLE_KEY` the console runs without Clerk (`lib/auth.tsx`): sign-in links are hidden, these routes redirect to `/`, and the anonymous sandbox loads. Elsewhere workspace loading waits at most five seconds for Clerk.
 
 ## Mutations
 createRecord and updateRecord for editable kinds. Business actions go to performAction:
@@ -53,7 +53,7 @@ createRecord and updateRecord for editable kinds. Business actions go to perform
 - `run_reconciliation`, `daily_close` no id. Reconciliation resolves observations to canonical payments, holds suspected duplicates (a payment for an already-paid due item, or the same payer and amount within two minutes), applies the ladder R1 to R5, checks settlement fees against the schedule, raises catalogue exceptions with business-day deadlines, and applies the 6.3 give-up rows (unpaid_final, in_dispute, unknown outcome after 24 hours).
 - `confirm_allocation`, `reject_allocation` recordId=payment ID for proposal, reason; Finance/Admin.
 - `manual_allocate` recordId=payment ID, data.dueItemId and data.amountKobo, reason.
-- `review_allocation` recordId=allocation ID, data.correct boolean, reason; Finance/Admin. `correct=false` supersedes the allocation and reopens the payment and due item (REC-09).
+- `review_allocation` recordId=allocation ID, data.correct boolean, reason; Finance/Admin. `correct=false` supersedes the allocation and reopens the payment and due item (REC-09). RecordDialog always submits checkbox fields as booleans.
 - `resolve_exception` recordId and reason, data.resolutionCode from `resolutionCodesFor(exception.data.type)` (Appendix A per type; the generic list only for legacy types); use structured appropriate action first.
 - `record_refund` recordId=payment ID data.reference external refund reference, reason. Only records external action, never moves funds.
 - `simulate_failure` recordId=due item, data.failureCode from `failureCodeList` (aliases such as ACCOUNT_CLOSED are normalised); TIMEOUT_UNKNOWN creates an attempt with status unknown, which blocks retries until resolved. Not a real debit.

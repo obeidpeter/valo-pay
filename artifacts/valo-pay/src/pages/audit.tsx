@@ -4,10 +4,13 @@ import { useListRecords, usePerformAction, getListRecordsQueryKey } from '@works
 import { HardDrive, Search, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatDate } from '@/lib/formatters';
+import { useToast } from '@/hooks/use-toast';
 
 export default function AuditPage() {
   const { merchantId } = useWorkspace();
   const [search, setSearch] = useState('');
+  const [verification, setVerification] = useState<{ valid: boolean; count: number; headHash: string } | null>(null);
+  const { toast } = useToast();
 
   const { data, isLoading } = useListRecords(
     'audit',
@@ -18,8 +21,15 @@ export default function AuditPage() {
   const verify = usePerformAction({
     mutation: {
       onSuccess: (res) => {
-        alert(res.message); // In real app use a Toast, but keeping it simple for now
-      }
+        const result = { valid: res.data?.valid === true, count: Number(res.data?.count || 0), headHash: String(res.data?.headHash || '') };
+        setVerification(result);
+        toast({
+          title: result.valid ? 'Audit chain verified' : 'Audit chain broken',
+          description: `${result.count} entries · head ${result.headHash.slice(0, 16)}`,
+          variant: result.valid ? 'default' : 'destructive',
+        });
+      },
+      onError: (error: any) => toast({ title: 'Verification failed', description: error?.data?.error || error?.message || 'The chain could not be verified.', variant: 'destructive' }),
     }
   });
 
@@ -41,6 +51,13 @@ export default function AuditPage() {
           <ShieldCheck className="h-4 w-4 text-primary" /> {verify.isPending ? 'Verifying...' : 'Verify Chain Integrity'}
         </Button>
       </header>
+
+      {verification && (
+        <div role="status" className={`rounded-xl border p-4 text-sm ${verification.valid ? 'border-success/30 bg-success/5' : 'border-destructive/30 bg-destructive/5 text-destructive'}`}>
+          <p className="font-semibold">{verification.valid ? 'Chain intact' : 'Chain broken: a sequence, previous hash or digest did not verify'}</p>
+          <p className="font-mono text-xs mt-1">{verification.count} entries · head hash {verification.headHash}</p>
+        </div>
+      )}
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
         <div className="p-4 border-b flex items-center gap-4 bg-secondary/20">

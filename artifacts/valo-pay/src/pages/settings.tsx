@@ -3,6 +3,7 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { useGetSettings, useUpdateSettings, usePerformAction, getGetSettingsQueryKey } from '@workspace/api-client-react';
 import { Settings as SettingsIcon, Shield, PowerOff, AlertTriangle } from 'lucide-react';
 import { authorisationModes, executionWindow } from '@workspace/valopay-schema';
+import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
 
@@ -14,6 +15,7 @@ export default function SettingsPage() {
   
   const [isEditingExec, setIsEditingExec] = useState(false);
   const [execSettings, setExecSettings] = useState<any>({});
+  const { toast } = useToast();
   
   const { data: settings, isLoading, refetch } = useGetSettings(
     { merchantId: merchantId! },
@@ -28,14 +30,15 @@ export default function SettingsPage() {
 
   const killSwitch = usePerformAction({
     mutation: {
-      onSuccess: () => refetch()
+      onSuccess: (data) => { refetch(); toast({ title: 'Kill switch updated', description: data.message }); },
+      onError: (err: any) => toast({ title: 'Kill switch rejected', description: err?.data?.error || err?.message || 'Operation rejected.', variant: 'destructive' })
     }
   });
 
   const requestInstruction = usePerformAction({
     mutation: {
-      onSuccess: (data) => alert(data.message),
-      onError: (err: any) => alert(err.message || 'Operation rejected.')
+      onSuccess: (data) => toast({ title: 'Instruction request', description: data.message }),
+      onError: (err: any) => toast({ title: 'Instruction blocked', description: err?.data?.error || err?.message || 'Operation rejected.', variant: 'destructive' })
     }
   });
   
@@ -44,7 +47,9 @@ export default function SettingsPage() {
       onSuccess: () => {
         setIsEditingExec(false);
         refetch();
-      }
+        toast({ title: 'Settings saved' });
+      },
+      onError: (err: any) => toast({ title: 'Settings rejected', description: err?.data?.error || err?.message || 'The change was not saved.', variant: 'destructive' })
     }
   });
 

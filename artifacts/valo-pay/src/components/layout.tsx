@@ -1,14 +1,14 @@
 import React, { ReactNode, useEffect } from 'react';
 import { Link, useLocation } from 'wouter';
 import { useWorkspace } from '@/lib/workspace-context';
-import { Show, useClerk } from '@clerk/react';
+import { AuthShow, useSignOut } from '@/lib/auth';
 import { Shield, Home, Users, FileText, ArrowRightLeft, CheckSquare, AlertTriangle, FileBarChart, HardDrive, FileCheck, Settings, Lock, LogOut } from 'lucide-react';
 import { Button } from './ui/button';
 
 export function Layout({ children }: { children: ReactNode }) {
   const { workspace, merchantId, setMerchantId } = useWorkspace();
   const [location,setLocation] = useLocation();
-  const { signOut } = useClerk();
+  const signOut = useSignOut();
 
   const navItems = [
     { href: '/', label: 'Overview', icon: Home },
@@ -41,8 +41,8 @@ export function Layout({ children }: { children: ReactNode }) {
         <select aria-label="Active lender" className="min-w-0 rounded border p-2 text-sm" value={merchantId||""} onChange={e=>setMerchantId(e.target.value)}>
           {workspace?.merchants.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
         </select>
-        <Show when="signed-out"><Link href="/sign-in" className="text-xs text-primary underline">Sign in to your workspace</Link></Show>
-        <Show when="signed-in"><button className="text-left text-xs underline" onClick={()=>signOut()}>Sign out</button></Show>
+        <AuthShow when="signed-out"><Link href="/sign-in" className="text-xs text-primary underline">Sign in to your workspace</Link></AuthShow>
+        <AuthShow when="signed-in"><button className="text-left text-xs underline" onClick={()=>signOut()}>Sign out</button></AuthShow>
       </div>
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
@@ -81,7 +81,7 @@ export function Layout({ children }: { children: ReactNode }) {
           </nav>
 
           <div className="p-4 border-t mt-auto">
-            <Show when="signed-in">
+            <AuthShow when="signed-in">
               <div className="flex items-center justify-between mb-4">
                 <Button variant="ghost" size="sm" onClick={() => signOut()} className="gap-2 text-muted-foreground">
                   <LogOut className="h-4 w-4" /> Sign Out
@@ -90,13 +90,13 @@ export function Layout({ children }: { children: ReactNode }) {
                   {workspace?.role || 'User'}
                 </div>
               </div>
-            </Show>
-            <Show when="signed-out">
+            </AuthShow>
+            <AuthShow when="signed-out">
               <Link href="/sign-in" className="flex items-center justify-center gap-2 w-full bg-primary text-primary-foreground py-2 rounded-md text-sm font-medium hover:bg-primary/90 transition-colors mb-2">
                 <Lock className="h-4 w-4" /> Sign In
               </Link>
               <p className="text-xs text-center text-muted-foreground">Sign in to your own workspace</p>
-            </Show>
+            </AuthShow>
           </div>
         </aside>
 

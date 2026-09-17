@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, usePerformAction, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { formatKobo, formatDate } from '@/lib/formatters';
-import { CheckSquare, Info, ShieldAlert, CornerUpLeft, Plus } from 'lucide-react';
+import { CheckSquare, Info, ShieldAlert, CornerUpLeft, Plus, ClipboardCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
 import { recordStatuses } from '@workspace/valopay-schema';
@@ -12,6 +12,21 @@ export default function ReconciliationPage() {
   const [selectedRecord, setSelectedRecord] = useState<any>(null);
   const [actionKind, setActionKind] = useState<string>('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [reviewCorrect, setReviewCorrect] = useState(true);
+
+  // Confirmed allocations for the precision audit (REC-09): automatic "certain" matches reviewed by Finance.
+  const { data: confirmedAllocations, isLoading: isLoadingAudit } = useListRecords(
+    'allocations',
+    { merchantId: merchantId!, status: 'confirmed' },
+    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('allocations', { merchantId: merchantId!, status: 'confirmed' }) } }
+  );
+  const auditSample = (confirmedAllocations?.items || []).filter(item => item.data?.automatic === true && item.data?.confidence === 'certain');
+  const reviewAllocation = (allocation: any, correct: boolean) => {
+    setReviewCorrect(correct);
+    setSelectedRecord(allocation);
+    setActionKind('review_allocation');
+    setIsDialogOpen(true);
+  };
   
   // Fetch unallocated payments
   const { data: payments, isLoading: isLoadingPayments } = useListRecords(
@@ -224,6 +239,54 @@ export default function ReconciliationPage() {
           </div>
         </div>
         
+        {/* Precision audit */}
+        <div className="bg-card border rounded-xl shadow-sm flex flex-col xl:col-span-2">
+          <div className="p-4 border-b bg-secondary/20 flex items-center gap-2">
+            <ClipboardCheck className="h-5 w-5 text-primary" />
+            <h2 className="font-semibold">Precision Audit</h2>
+            <span className="ml-auto text-xs text-muted-foreground">Automatic certain matches reviewed by Finance (REC-09); a wrong match is superseded and the books reopen. {auditSample.filter(item => typeof item.data?.reviewed === 'boolean').length} of {auditSample.length} reviewed.</span>
+          </div>
+          <div className="p-0 overflow-x-auto max-h-[400px]">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
+                <tr>
+                  <th className="px-4 py-2 font-medium">Rule</th>
+                  <th className="px-4 py-2 font-medium">Payment</th>
+                  <th className="px-4 py-2 font-medium">Due item</th>
+                  <th className="px-4 py-2 font-medium text-right">Amount</th>
+                  <th className="px-4 py-2 font-medium">Explanation</th>
+                  <th className="px-4 py-2 font-medium">Review</th>
+                  <th className="px-4 py-2 font-medium text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {isLoadingAudit ? (
+                  <tr><td colSpan={7} className="p-4 text-center text-muted-foreground">Loading...</td></tr>
+                ) : auditSample.length === 0 ? (
+                  <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">No automatic certain allocations to review yet.</td></tr>
+                ) : (
+                  auditSample.map(allocation => (
+                    <tr key={allocation.id} className="hover:bg-secondary/10">
+                      <td className="px-4 py-2 font-mono text-xs">{String(allocation.data?.rule || '')}</td>
+                      <td className="px-4 py-2 font-mono text-xs">{String(allocation.data?.paymentId || '')}</td>
+                      <td className="px-4 py-2 font-mono text-xs">{String(allocation.data?.dueItemId || '')}</td>
+                      <td className="px-4 py-2 text-right font-mono font-medium">{formatKobo(allocation.amountKobo)}</td>
+                      <td className="px-4 py-2 text-xs text-muted-foreground max-w-[280px]">{String(allocation.data?.explanation || '')}</td>
+                      <td className="px-4 py-2 text-xs">
+                        {allocation.data?.reviewed === true ? <span className="text-success font-medium">Correct</span> : allocation.data?.reviewed === false ? <span className="text-destructive font-medium">Wrong</span> : <span className="text-muted-foreground">Unreviewed</span>}
+                      </td>
+                      <td className="px-4 py-2 text-right space-x-2">
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => reviewAllocation(allocation, true)}>Correct</Button>
+                        <Button size="sm" variant="outline" className="h-7 text-xs text-destructive" onClick={() => reviewAllocation(allocation, false)}>Wrong</Button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         {/* Settlement Batches */}
         <div className="bg-card border rounded-xl shadow-sm flex flex-col xl:col-span-2">
           <div className="p-4 border-b bg-secondary/20 flex items-center justify-between">
@@ -285,6 +348,7 @@ export default function ReconciliationPage() {
           'Review Allocation'
         }
         actionMutation={actionKind === 'create_batch' || actionKind === 'edit_batch' ? undefined : actionKind}
+        defaultValues={actionKind === 'review_allocation' ? { correct: reviewCorrect } : {}}
         fields={
           actionKind === 'manual_allocate' ? [
             { name: 'dueItemId', label: 'Due Item ID', type: 'text', isData: true, required: true },
@@ -294,7 +358,7 @@ export default function ReconciliationPage() {
             { name: 'reference', label: 'External Refund Ref', type: 'text', isData: true, required: true }
           ] :
           actionKind === 'review_allocation' ? [
-            { name: 'correct', label: 'Correct (check if yes)', type: 'checkbox', isData: true, required: true }
+            { name: 'correct', label: 'This allocation is correct (unticked marks it wrong and supersedes it)', type: 'checkbox', isData: true }
           ] :
           actionKind === 'create_batch' || actionKind === 'edit_batch' ? [
             { name: 'name', label: 'Name', type: 'text', required: true },
