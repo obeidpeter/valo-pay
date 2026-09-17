@@ -5,6 +5,20 @@ import { formatKobo, formatDate, formatCompactDate } from '@/lib/formatters';
 import { ArrowLeft, Clock, FileText, CheckCircle, AlertTriangle, CreditCard, Download } from 'lucide-react';
 import { Link, useParams } from 'wouter';
 import { Button } from '@/components/ui/button';
+import { useToast } from '@/hooks/use-toast';
+
+const watStamp = (iso: unknown) => typeof iso === 'string' && Number.isFinite(Date.parse(iso)) ? formatDate(iso) : 'n/a';
+
+/** RET-03: the recorded decision in one sentence: why, when the next attempt is, the notice it requires, the version and the arm. */
+function decisionDetail(data: Record<string, any>): string {
+  const notice = data.noticeRequired as { purpose?: string; requiredBy?: string | null; evidenced?: boolean } | undefined;
+  return [
+    String(data.reason || ''),
+    data.nextAt ? `Next attempt ${watStamp(data.nextAt)}.` : '',
+    notice ? `Notice ${String(notice.purpose || '').replace(/_/g, ' ')}${notice.requiredBy ? ` required by ${watStamp(notice.requiredBy)}` : ''}${notice.evidenced ? ', evidenced.' : ', not evidenced.'}` : '',
+    `Policy v${String(data.policyVersion || '?')}${data.experimentArm ? ` · arm ${String(data.experimentArm)}` : ''}.`,
+  ].filter(Boolean).join(' ');
+}
 
 export default function CustomerTimelinePage() {
   const { id } = useParams();
@@ -16,13 +30,17 @@ export default function CustomerTimelinePage() {
     { query: { enabled: !!merchantId && !!id, queryKey: getGetCustomerTimelineQueryKey(id!, { merchantId: merchantId! }) } }
   );
 
+  const { toast } = useToast();
   const createExport = useCreateExport({
     mutation: {
       onSuccess: (data) => {
         window.open(data.downloadUrl, '_blank');
-      }
+        toast({ title: 'Dispute pack generated', description: `SHA-256 ${data.checksum.slice(0, 16)}… · generated ${formatDate(data.generatedAt)}` });
+      },
+      onError: (error: any) => toast({ title: 'Pack not generated', description: error?.data?.error || error?.message || 'The pack could not be generated.', variant: 'destructive' }),
     }
   });
+  const exportPack = (format: 'pdf' | 'csv' | 'json') => createExport.mutate({ data: { kind: 'dispute-pack', format, customerId: String(id) }, params: { merchantId: merchantId! } });
 
   if (!merchantId) return null;
   if (isLoading) return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading timeline...</div>;
@@ -54,15 +72,14 @@ export default function CustomerTimelinePage() {
                 </span>
               </div>
             </div>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              className="mt-4 gap-2"
-              onClick={() => createExport.mutate({ data: { kind: 'customer-pack', format: 'pdf', customerId: id }, params: { merchantId } })}
-              disabled={createExport.isPending}
-            >
-              <Download className="h-4 w-4" /> Export PDF Timeline
-            </Button>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" className="gap-2" onClick={() => exportPack('pdf')} disabled={createExport.isPending}>
+                <Download className="h-4 w-4" /> Dispute pack (PDF)
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => exportPack('csv')} disabled={createExport.isPending}>CSV</Button>
+              <Button variant="ghost" size="sm" onClick={() => exportPack('json')} disabled={createExport.isPending}>JSON</Button>
+              <span className="text-[11px] text-muted-foreground">Summary page, full timeline and the policy, template and cutover versions as they applied (AUD-02, AUD-06); SHA-256 checksum on the export record.</span>
+            </div>
           </div>
 
           <div className="bg-card border rounded-xl p-4 shadow-sm min-w-[240px]">
@@ -186,6 +203,9 @@ export default function CustomerTimelinePage() {
                       <span className="text-sm font-medium">{event.name || event.kind}</span>
                       {event.amountKobo > 0 && (
                         <span className="text-sm font-mono mt-1">{formatKobo(event.amountKobo)}</span>
+                      )}
+                      {event.kind === 'retry-decisions' && (
+                        <span className="text-xs text-muted-foreground mt-1">{decisionDetail((event.data || {}) as Record<string, any>)}</span>
                       )}
                       <span className="text-xs text-muted-foreground mt-1">{event.status}</span>
                     </div>

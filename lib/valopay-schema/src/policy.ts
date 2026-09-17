@@ -48,6 +48,8 @@ export const experimentRules = {
   effectPoints: 0.08,
   /** Two-sided 90% interval of the difference must exclude zero (one-sided 5%). */
   confidence: 0.9,
+  /** Standard normal quantile for the two-sided 90% interval (one-sided 5%). */
+  zScore: 1.6448536269514722,
   power: 0.8,
   outcomeWindowDays: 30,
   enrolmentCloseBeforeAnalysisDays: 30,

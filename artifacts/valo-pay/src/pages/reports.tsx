@@ -13,6 +13,23 @@ const billingLines = (record: Unknown): Array<Record<string, any>> => Array.isAr
 const experimentRows = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.results) ? (record!.results as Array<Record<string, any>>) : [];
 const labelOf = (key: string) => key.replace(/([A-Z])/g, ' $1').replace(/^./, first => first.toUpperCase()).trim();
 const percent = (value: unknown) => typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : 'n/a';
+/** REC-07: the close report fields, in the order the TRD lists them. */
+function closeReportChips(report: Record<string, any>): Array<[string, string]> {
+  const money = (row: any) => `${row?.count ?? 0} · ${formatKobo(Number(row?.kobo || 0))}`;
+  const bySource = Object.entries(report.observations?.bySource || {}).map(([source, row]: [string, any]) => `${source} ${row.received}→${row.paymentsResolvedTo} payments`).join(', ') || 'none';
+  const byRule = Object.entries(report.allocatedByRule || {}).map(([rule, row]: [string, any]) => `${rule} ${row.count}`).join(', ') || 'none';
+  return [
+    ['opening unallocated', money(report.openingUnallocated)],
+    ['observations received', `${report.observations?.received ?? 0} (${bySource})`],
+    ['allocated by rule', byRule],
+    ['proposed', money(report.proposed)],
+    ['unallocated at close', `${money(report.unallocated)} · ${report.unallocated?.olderThan24Hours ?? 0} older than 24h`],
+    ['variances', `${report.variances?.count ?? 0} · ${formatKobo(Number(report.variances?.feeVarianceKobo || 0))}`],
+    ['exceptions', `${report.exceptions?.opened?.count ?? 0} opened · ${report.exceptions?.closed?.count ?? 0} closed · ${report.exceptions?.openAtClose ?? 0} open`],
+    ['positions changed', String(report.customerPositionsChanged?.length ?? 0)],
+    ['retry decisions', `${report.retryDecisions?.recorded ?? 0} recorded · ${report.retryDecisions?.finalAttempts ?? 0} final · ${report.retryDecisions?.noticesNotEvidenced ?? 0} deferred`],
+  ];
+}
 function renderValue(key: string, value: unknown): string {
   if (value === null || value === undefined) return 'n/a';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
@@ -179,6 +196,20 @@ export default function ReportsPage() {
                     </table>
                   )}
                 </div>
+                <div className="mt-6">
+                  <h3 className="text-sm font-semibold mb-2">Receipts by channel (BIL-01)</h3>
+                  <p className="text-xs text-muted-foreground mb-2">Only direct-debit attempts that succeeded are billable, once settled, unreversed and past the provider's reversal window. Transfers and card receipts are reconciled and shown here, never billed.</p>
+                  <table className="w-full text-xs text-left font-mono">
+                    <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Channel</th><th className="py-1 pr-2 text-right">Receipts</th><th className="py-1 pr-2 text-right">Value</th><th className="py-1 pr-2 text-right">Billable</th></tr></thead>
+                    <tbody className="divide-y">
+                      {Object.entries((reports.billing?.channelBreakdown as Record<string, any>) || {}).map(([channel, row]) => (
+                        <tr key={channel}><td className="py-1 pr-2">{channel}</td><td className="py-1 pr-2 text-right">{String(row.count)}</td><td className="py-1 pr-2 text-right">{formatKobo(Number(row.kobo || 0))}</td><td className="py-1 pr-2 text-right">{String(row.billable)}</td></tr>
+                      ))}
+                      {Object.keys((reports.billing?.channelBreakdown as Record<string, any>) || {}).length === 0 && <tr><td colSpan={4} className="py-2 text-muted-foreground">No receipts in this period.</td></tr>}
+                    </tbody>
+                  </table>
+                  <p className="text-xs text-muted-foreground mt-2">Withheld inside the reversal window: {String(reports.billing?.withheldInsideReversalWindow ?? 0)} (billed on a later statement).</p>
+                </div>
               </div>
             </section>
 
@@ -219,11 +250,14 @@ export default function ReportsPage() {
                   ))}
                   {experimentRows(reports.experiment).map(row => (
                     <div key={String(row.experimentId)} className="border rounded-lg p-3 text-xs font-mono space-y-1">
-                      <p className="text-muted-foreground truncate">Experiment {String(row.experimentId)}</p>
-                      <p>Enrolled: engine {String(row.engine)} · holdout {String(row.holdout)} · minimum per arm {String(row.minimumPerArm)}</p>
-                      <p>Mature 30-day outcomes: engine {String(row.matureEngine)} · holdout {String(row.matureHoldout)}</p>
-                      <p>Recovery by value: engine {percent(row.engineRecoveryByValue)} · holdout {percent(row.holdoutRecoveryByValue)}</p>
-                      <p>90% interval: {row.confidenceInterval90 ? String(row.confidenceInterval90) : 'not computed'} · result <span className="text-amber-600 font-bold">{String(row.result)}</span></p>
+                      <p className="text-muted-foreground truncate">Experiment {String(row.experimentId)} · {String(row.status)} · analysis {String(row.analysisDate || 'n/a')}</p>
+                      <p>Enrolled: engine {String(row.engine?.enrolled ?? 0)} · holdout {String(row.holdout?.enrolled ?? 0)} · minimum per arm {String(row.minimumPerArm)}</p>
+                      <p>Mature 30-day outcomes: engine {String(row.engine?.mature ?? 0)} · holdout {String(row.holdout?.mature ?? 0)}</p>
+                      <p>Recovery by value (primary): engine {percent(row.engine?.recoveryByValue)} · holdout {percent(row.holdout?.recoveryByValue)} · difference {percent(row.differenceByValue)}</p>
+                      <p>Recovery by count: engine {percent(row.engine?.recoveryByCount)} · holdout {percent(row.holdout?.recoveryByCount)} · difference {percent(row.differenceByCount)}</p>
+                      <p>90% interval of the difference by value: {row.confidenceInterval90 ? `${percent(row.confidenceInterval90.low)} to ${percent(row.confidenceInterval90.high)}` : 'not computable below two mature outcomes per arm'}</p>
+                      <p>Rule checks: {Object.entries(row.checks || {}).map(([name, ok]) => `${labelOf(name).toLowerCase()} ${ok ? '✓' : '✗'}`).join(' · ')}</p>
+                      <p>Result: <span className={`font-bold ${row.result === 'proven' ? 'text-success' : 'text-amber-600'}`}>{String(row.result)}</span></p>
                       <p className="font-sans text-muted-foreground">{String(row.reason || '')}</p>
                     </div>
                   ))}
@@ -249,7 +283,7 @@ export default function ReportsPage() {
                   <tr>
                     <th className="px-6 py-4 font-medium">Date</th>
                     <th className="px-6 py-4 font-medium">Summary</th>
-                    <th className="px-6 py-4 font-medium">Metrics</th>
+                    <th className="px-6 py-4 font-medium">Close report (REC-07)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -263,12 +297,13 @@ export default function ReportsPage() {
                         <td className="px-6 py-4 font-mono text-xs">{formatDate(close.createdAt)}</td>
                         <td className="px-6 py-4 text-muted-foreground">{String(close.data?.summary || '')}</td>
                         <td className="px-6 py-4 font-mono text-xs">
-                          {Object.entries(close.data?.metrics || {}).map(([k, v]) => (
-                            <span key={k} className="inline-block mr-3 mb-1 bg-secondary/30 px-1.5 py-0.5 rounded border border-border/50">
-                              <span className="text-muted-foreground mr-1">{k.replace(/([A-Z])/g, ' $1').trim().toLowerCase()}:</span>
-                              <span className="font-medium">{typeof v === 'number' && k.toLowerCase().includes('kobo') ? formatKobo(v) : String(v)}</span>
+                          {close.data?.report ? closeReportChips(close.data.report).map(([label, value]) => (
+                            <span key={label} className="inline-block mr-3 mb-1 bg-secondary/30 px-1.5 py-0.5 rounded border border-border/50">
+                              <span className="text-muted-foreground mr-1">{label}:</span>
+                              <span className="font-medium">{value}</span>
                             </span>
-                          ))}
+                          )) : <span className="text-muted-foreground">Closed before the REC-07 report existed.</span>}
+                          {close.data?.positionAlert === true && <span className="inline-block mr-3 mb-1 px-1.5 py-0.5 rounded border border-destructive/40 text-destructive">position rebuild alert</span>}
                         </td>
                       </tr>
                     ))

@@ -2,19 +2,20 @@ import PDFDocument from "pdfkit";
 import { randomUUID, createHash } from "node:crypto";
 import { objectStorageClient, ObjectStorageService } from "./objectStorage";
 import type { Context, DomainState } from "../domain/types";
-import { buildReports, makeRecord } from "../domain";
+import { buildReports, makeRecord, positionFor } from "../domain";
 import { getGates } from "./valopay-readiness";
 import { verifyAudit } from "./valopay-store";
 import { readExportBytes } from "./export-download";
+import { buildDisputePack, disputePackCsv, renderDisputePackPdf, type DisputePack } from "./valopay-packs";
 
 export function customerTimeline(state:DomainState,id:string){
  const customer=state.records.find(r=>r.kind==="customers"&&r.id===id);
  if(!customer)throw Object.assign(new Error("Customer not found."),{status:404});
  const related=state.records.filter(r=>r.customerId===id);
  const dueItems=related.filter(r=>r.kind==="due-items"),payments=related.filter(r=>r.kind==="payments");
- const owed=dueItems.reduce((sum,r)=>sum+r.amountKobo,0);
- const applied=related.filter(r=>r.kind==="allocations"&&r.status==="confirmed").reduce((sum,r)=>sum+r.amountKobo,0);
- return {customer,position:{obligationsKobo:owed,allocatedKobo:applied,outstandingKobo:Math.max(0,owed-applied),unallocatedKobo:payments.reduce((sum,r)=>sum+Math.max(0,r.amountKobo-Number(r.data.allocatedKobo||0)),0),note:"Derived obligations and payment evidence, not funds held by Valo Pay."},
+ // REC-05: one derivation of the position, shared with the daily close and the dispute pack.
+ const {obligationsKobo,allocatedKobo,outstandingKobo,unallocatedKobo}=positionFor(state,id);
+ return {customer,position:{obligationsKobo,allocatedKobo,outstandingKobo,unallocatedKobo,note:"Derived obligations and payment evidence, not funds held by Valo Pay."},
  events:related.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)),mandates:related.filter(r=>r.kind==="mandates"),dueItems,payments};
 }
 function escapeCsv(value:unknown){
@@ -35,17 +36,36 @@ async function pdfBytes(title:string,data:unknown):Promise<Buffer>{
   document.end();
  });
 }
-export async function createExportFile(state:DomainState,ctx:Context,input:{kind:string;customerId?:string;format:"json"|"csv"|"pdf"}){
+export const packKinds=["customer-pack","dispute-pack"] as const;
+export const exportKinds=["gate-pack","billing",...packKinds] as const;
+export interface ExportInput{kind:string;customerId?:string;format:"json"|"csv"|"pdf"}
+export interface ExportBytes{bytes:Buffer;contentType:string;payload:unknown;pack?:DisputePack}
+
+/** Pure: the file for an export request.  Storage, the checksum and the audit entry happen in createExportFile. */
+export async function buildExportBytes(state:DomainState,ctx:Context,input:ExportInput,options:{compress?:boolean}={}):Promise<ExportBytes>{
  const generatedAt=ctx.now;
- const payload=input.kind==="gate-pack"?getGates(state):input.kind==="customer-pack"?customerTimeline(state,input.customerId||""):input.kind==="billing"?buildReports(state,ctx.now).billing:state.records.filter(r=>r.kind===input.kind);
+ if((packKinds as readonly string[]).includes(input.kind)){
+  // AUD-02: one-page summary followed by the timeline, as PDF, CSV or JSON of the same data.
+  const pack=buildDisputePack(state,ctx,input.customerId||"");
+  if(input.format==="pdf")return {bytes:await renderDisputePackPdf(pack,options),contentType:"application/pdf",payload:pack,pack};
+  if(input.format==="csv")return {bytes:Buffer.from(disputePackCsv(pack)),contentType:"text/csv; charset=utf-8",payload:pack,pack};
+  return {bytes:Buffer.from(JSON.stringify(pack,null,2)),contentType:"application/json",payload:pack,pack};
+ }
+ const reports=input.kind==="gate-pack"||input.kind==="billing"?buildReports(state,ctx.now):undefined;
+ // MEA-02 and RET-06: the gate pack carries the uplift report with the pre-registered rule and its result, frozen at generation.
+ const payload=input.kind==="gate-pack"?{...getGates(state),upliftReport:reports!.experiment,operational:reports!.operational,billing:reports!.billing}:input.kind==="billing"?reports!.billing:state.records.filter(r=>r.kind===input.kind);
  const snapshot={merchant:state.merchant.name,environment:"synthetic_sandbox",generatedAt,generatedBy:ctx.actor,auditVerification:verifyAudit(state),data:payload};
- let bytes:Buffer,contentType:string;
- if(input.format==="pdf"){bytes=await pdfBytes(input.kind,snapshot);contentType="application/pdf";}
- else if(input.format==="csv"){
+ if(input.format==="pdf")return {bytes:await pdfBytes(input.kind,snapshot),contentType:"application/pdf",payload:snapshot};
+ if(input.format==="csv"){
   const rows=Array.isArray(payload)?payload:[payload];
   const keys=[...new Set(rows.flatMap(r=>Object.keys(r)))];
-  bytes=Buffer.from([["environment","merchant",...keys].join(","),...rows.map(r=>["synthetic_sandbox",state.merchant.name,...keys.map(k=>r[k])].map(escapeCsv).join(","))].join("\r\n"));contentType="text/csv; charset=utf-8";
- }else{bytes=Buffer.from(JSON.stringify(snapshot,null,2));contentType="application/json";}
+  return {bytes:Buffer.from([["environment","merchant",...keys].join(","),...rows.map(r=>["synthetic_sandbox",state.merchant.name,...keys.map(k=>r[k])].map(escapeCsv).join(","))].join("\r\n")),contentType:"text/csv; charset=utf-8",payload:snapshot};
+ }
+ return {bytes:Buffer.from(JSON.stringify(snapshot,null,2)),contentType:"application/json",payload:snapshot};
+}
+export async function createExportFile(state:DomainState,ctx:Context,input:ExportInput){
+ const started=Date.now();
+ const {bytes,contentType,pack}=await buildExportBytes(state,ctx,input);
  const id=randomUUID();
  const dir=new ObjectStorageService().getPrivateObjectDir();
  const parts=dir.replace(/^\//,"").split("/");
@@ -53,8 +73,9 @@ export async function createExportFile(state:DomainState,ctx:Context,input:{kind
  const objectName=`${parts.join("/")}/exports/${state.merchant.id}/${id}.${input.format}`;
  await objectStorageClient.bucket(bucket).file(objectName).save(bytes,{resumable:false,contentType,preconditionOpts:{ifGenerationMatch:0},metadata:{cacheControl:"private, no-store"}});
  const checksum=createHash("sha256").update(bytes).digest("hex");
- makeRecord(state,"exports",{id,name:`${input.kind} · ${input.format.toUpperCase()}`,status:"ready",createdAt:ctx.now,updatedAt:ctx.now,data:{checksum,kind:input.kind,format:input.format,usedInRealCase:false,objectName,bucket,contentType,byteLength:bytes.length}});
- return {id,downloadUrl:`/api/v1/exports/${id}/download?merchantId=${state.merchant.id}`,checksum,generatedAt};
+ // AUD-02: pack generation is itself an audited event (the route appends the audit entry) and is counted for Test 5 (MEA-01).
+ makeRecord(state,"exports",{id,name:`${input.kind} · ${input.format.toUpperCase()}`,status:"ready",customerId:pack?String(pack.customer.id):"",createdAt:ctx.now,updatedAt:ctx.now,data:{checksum,kind:input.kind,format:input.format,usedInRealCase:false,objectName,bucket,contentType,byteLength:bytes.length,generationMs:Date.now()-started,events:pack?.timeline.length,customerReference:pack?String(pack.customer.reference):undefined}});
+ return {id,downloadUrl:`/api/v1/exports/${id}/download?merchantId=${state.merchant.id}`,checksum,generatedAt:ctx.now};
 }
 export async function downloadExport(state:DomainState,id:string,signal?:AbortSignal){
  const record=state.records.find(r=>r.kind==="exports"&&r.id===id);

@@ -81,7 +81,7 @@ pnpm run test:golden
 
 `test:pure` explicitly runs the source-snapshot safeguards, in-memory store guards/audit checks, and download-stream tests. The store test supplies an unusable loopback database URL for module initialization; it does not connect to a database.
 
-`test:golden` runs the golden tests for the shared schema, the retry engine and reconciliation (`artifacts/api-server/tests/*-golden.test.ts`). They pin the TRD v1.1 acceptance behaviour in section 10.4: the three-source replay in every order, duplicate evidence, the allocation ceiling, the notice clock, quiet hours, execution windows, attempt ceilings across sources, stable assignment and kill switches. Add a golden case whenever a rule in `lib/valopay-schema` or `artifacts/api-server/src/domain` changes. `pnpm test` runs every offline check above in one go.
+`test:golden` runs the golden tests for the shared schema, the retry engine, reconciliation, measurement and the dispute pack (`artifacts/api-server/tests/*-golden.test.ts` and `dispute-pack.test.ts`). They pin the TRD v1.1 acceptance behaviour in section 10.4: the three-source replay in every order, duplicate evidence, the allocation ceiling, the notice clock, quiet hours, execution windows, attempt ceilings across sources, stable assignment and kill switches; plus the recorded retry decision (RET-03), the daily close report (REC-07), the uplift report's 90% interval and pre-registered rule (RET-06), billable collections (BIL-01) and the paginated dispute pack with its CSV and JSON (AUD-02, AUD-06). Add a golden case whenever a rule in `lib/valopay-schema` or `artifacts/api-server/src/domain` changes. `pnpm test` runs every offline check above in one go.
 
 ### GitHub pull-request checks
 

@@ -39,6 +39,10 @@ export const merchantModes = ["observation", "instruction"] as const;
 export const experimentArms = ["engine", "holdout"] as const;
 export type ExperimentArm = (typeof experimentArms)[number];
 
+/** TRD 6.3 decision outcomes recorded on every retry decision (RET-03). */
+export const retryDecisionKinds = ["stop", "blocked", "give_up", "not_eligible", "holdout", "observation_only", "defer", "would_schedule"] as const;
+export type RetryDecisionKind = (typeof retryDecisionKinds)[number];
+
 export const exceptionSeverities = ["low", "medium", "high"] as const;
 export type ExceptionSeverity = (typeof exceptionSeverities)[number];
 

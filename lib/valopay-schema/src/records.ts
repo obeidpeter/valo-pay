@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { activationWorkflows, attemptSources, exceptionSeverities, executionOwners, experimentArms, handBackOwners, mandateFrequencies, mandateOrigins, observationSources } from "./enums";
+import { activationWorkflows, attemptSources, exceptionSeverities, executionOwners, experimentArms, handBackOwners, mandateFrequencies, mandateOrigins, observationSources, retryDecisionKinds } from "./enums";
 
 /** ISO date (YYYY-MM-DD) or a UTC ISO timestamp with millisecond precision or less. */
 export const isoDateOrTimestamp = z.string().regex(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/, "must be an ISO date or UTC ISO timestamp").refine((value) => !Number.isNaN(Date.parse(value)), "must be a real date");
@@ -150,6 +150,34 @@ export const recordDataSchemas = {
   }).passthrough(),
   costs: z.object({ period: z.string().optional() }).passthrough(),
   calendar: z.object({ date: isoDay }).passthrough(),
+  /** RET-03: written by the engine at every close evaluation; never created or edited through the record API. */
+  "retry-decisions": z.object({
+    dueItemId: z.string().min(1),
+    attemptId: z.string().optional(),
+    decision: z.enum(retryDecisionKinds),
+    rule: z.string().min(1),
+    reason: z.string(),
+    policyId: z.string().min(1),
+    policyVersion: z.coerce.number().int().min(1),
+    nextAt: isoDateOrTimestamp.nullable(),
+    evaluatedAt: isoDateOrTimestamp,
+    experimentArm: z.enum(experimentArms).nullable().optional(),
+    inputs: z.record(z.unknown()),
+    noticeRequired: z.object({
+      purpose: z.string(),
+      leadHours: z.number().int().min(0),
+      requiredBy: isoDateOrTimestamp.nullable(),
+      noticeId: z.string().nullable(),
+      acceptedAt: isoDateOrTimestamp.nullable(),
+      evidenced: z.boolean(),
+    }).passthrough().optional(),
+    fingerprint: z.string().min(1),
+  }).passthrough(),
+  /** REC-07: the daily close report as written by the close; immutable evidence. */
+  closes: z.object({
+    closedAt: isoDateOrTimestamp,
+    report: z.record(z.unknown()),
+  }).passthrough(),
 } as const;
 
 export type RecordDataSchemas = typeof recordDataSchemas;
