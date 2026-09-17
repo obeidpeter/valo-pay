@@ -119,7 +119,7 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     `,
     },
   });
-  await copyFile(path.resolve(artifactDir,"../../lib/api-spec/openapi.yaml"),path.join(distDir,"openapi.json"));
+  await copyFile(path.resolve(artifactDir,"../../lib/api-spec/openapi.json"),path.join(distDir,"openapi.json"));
 }
 
 buildAll().catch((err) => {

@@ -71,10 +71,12 @@ function rowToRecord(row: RecordRow): ValopayRecord {
     data: row.data, createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString(),
   };
 }
-function scopedMerchantQuery(merchantId: string, workspaceId: string, principal: string, lock = false) {
+/** Row lock a load takes on the merchant: exclusive for a mutation, shared for a read so reads never queue behind each other. */
+export type MerchantLock = "update" | "share" | "none";
+function scopedMerchantQuery(lock: MerchantLock = "none") {
   return `SELECT m.id,m.info,m.settings FROM valopay_merchants m
     JOIN valopay_workspaces w ON w.id=m.workspace_id
-    WHERE m.id=$1 AND m.workspace_id=$2 AND w.id=$2 AND w.principal_hash=$3${lock ? " FOR UPDATE OF m" : ""}`;
+    WHERE m.id=$1 AND m.workspace_id=$2 AND w.id=$2 AND w.principal_hash=$3${lock === "update" ? " FOR UPDATE OF m" : lock === "share" ? " FOR SHARE OF m" : ""}`;
 }
 
 export async function inWorkspace<T>(req: Request, res: Response, fn: (context: StoreContext) => Promise<T>): Promise<T> {
@@ -143,12 +145,16 @@ export async function listMerchants(context: StoreContext) {
 /**
  * Lock membership before loading records.  A context becomes bound to one
  * merchant, preventing a confused caller from switching tenant mid-operation.
+ * A mutation takes the exclusive row lock that serializes validation, allocations,
+ * idempotency and audit sequencing; a read takes a share lock, so it sees one
+ * consistent state, waits for an in-flight mutation to commit, and never queues
+ * behind other reads.
  */
-export async function loadState(context: StoreContext, merchantId: string): Promise<DomainState> {
+export async function loadState(context: StoreContext, merchantId: string, lock: Exclude<MerchantLock, "none"> = "update"): Promise<DomainState> {
   const session = sessionFor(context);
   if (session.lockedMerchantId && session.lockedMerchantId !== merchantId) conflict("A transaction may operate on only one lender.");
   const merchant = (await session.client.query<MerchantRow>(
-    scopedMerchantQuery(merchantId, session.workspace.id, session.principal, true),
+    scopedMerchantQuery(lock),
     [merchantId, session.workspace.id, session.principal],
   )).rows[0];
   if (!merchant) fail("Lender not found in this workspace.", 404);
@@ -179,7 +185,7 @@ export async function findIdempotency(context: StoreContext, id: string) {
 export async function saveIdempotency(context: StoreContext, id: string, requestHash: string, response: unknown) {
   const session = sessionFor(context);
   const merchantId = lockedMerchant(session);
-  const owned = await session.client.query(scopedMerchantQuery(merchantId, session.workspace.id, session.principal), [merchantId, session.workspace.id, session.principal]);
+  const owned = await session.client.query(scopedMerchantQuery(), [merchantId, session.workspace.id, session.principal]);
   if (!owned.rows[0]) fail("Lender not found in this workspace.", 404);
   try {
     const inserted = await session.client.query(
@@ -341,7 +347,7 @@ export async function saveState(context: StoreContext, state: DomainState): Prom
   const merchantId = lockedMerchant(session);
   const snapshot = session.snapshot!;
   assertFinalState(snapshot, state, merchantId);
-  const owned = await session.client.query(scopedMerchantQuery(merchantId, session.workspace.id, session.principal), [merchantId, session.workspace.id, session.principal]);
+  const owned = await session.client.query(scopedMerchantQuery(), [merchantId, session.workspace.id, session.principal]);
   if (!owned.rows[0]) fail("Lender not found in this workspace.", 404);
   const old = new Map(snapshot.records.map((record) => [record.id, canonical(record)]));
   const sorted = [...state.records].sort((a, b) => {
