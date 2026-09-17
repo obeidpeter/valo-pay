@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { activationWorkflows, adjustmentReasons, attemptSources, exceptionSeverities, executionOwners, experimentArms, handBackOwners, mandateFrequencies, mandateOrigins, observationSources, retryDecisionKinds } from "./enums";
+import { activationWorkflows, adjustmentReasons, attemptSources, closeTriggers, exceptionSeverities, executionOwners, experimentArms, handBackOwners, mandateFrequencies, mandateOrigins, observationSources, retryDecisionKinds } from "./enums";
 
 /** ISO date (YYYY-MM-DD) or a UTC ISO timestamp with millisecond precision or less. */
 export const isoDateOrTimestamp = z.string().regex(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/, "must be an ISO date or UTC ISO timestamp").refine((value) => !Number.isNaN(Date.parse(value)), "must be a real date");
@@ -182,6 +182,14 @@ export const recordDataSchemas = {
   closes: z.object({
     closedAt: isoDateOrTimestamp,
     report: z.record(z.unknown()),
+    /** REC-01: how the close was started, the scheduled instant it covered (if one was pending), its delay and the next scheduled instant. */
+    schedule: z.object({
+      trigger: z.enum(closeTriggers),
+      scheduledFor: isoDateOrTimestamp.nullable(),
+      delayMinutes: z.number().int().min(0).nullable(),
+      late: z.boolean(),
+      nextAt: isoDateOrTimestamp,
+    }).passthrough().optional(),
   }).passthrough(),
   /** BIL-04 and BIL-07: an issued invoice is immutable; later corrections are adjustment lines on the next invoice. */
   invoices: z.object({

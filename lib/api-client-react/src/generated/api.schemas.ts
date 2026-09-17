@@ -96,6 +96,8 @@ export interface Overview {
   mode: string;
   environment: string;
   lastClose: string;
+  nextClose: string;
+  closeTime: string;
   alerts: Alert[];
 }
 
@@ -192,6 +194,8 @@ export interface SettingsInput {
   policyChangeRequiresConsent?: boolean;
   unallocatedAlertThreshold?: number;
   notificationCostAlertKobo?: number;
+  closeTime?: string;
+  scheduledCloseEnabled?: boolean;
 }
 
 export type ExportInputFormat = typeof ExportInputFormat[keyof typeof ExportInputFormat];

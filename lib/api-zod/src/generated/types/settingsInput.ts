@@ -16,4 +16,6 @@ export interface SettingsInput {
   policyChangeRequiresConsent?: boolean;
   unallocatedAlertThreshold?: number;
   notificationCostAlertKobo?: number;
+  closeTime?: string;
+  scheduledCloseEnabled?: boolean;
 }

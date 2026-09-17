@@ -85,6 +85,8 @@ export const GetOverviewResponse = zod.object({
   "mode": zod.string(),
   "environment": zod.string(),
   "lastClose": zod.string(),
+  "nextClose": zod.string(),
+  "closeTime": zod.string(),
   "alerts": zod.array(zod.object({
   "key": zod.string(),
   "severity": zod.string(),
@@ -473,7 +475,9 @@ export const UpdateSettingsBody = zod.object({
   "defaultOwner": zod.string().optional(),
   "policyChangeRequiresConsent": zod.boolean().optional(),
   "unallocatedAlertThreshold": zod.number().int().optional(),
-  "notificationCostAlertKobo": zod.number().int().optional()
+  "notificationCostAlertKobo": zod.number().int().optional(),
+  "closeTime": zod.string().optional(),
+  "scheduledCloseEnabled": zod.boolean().optional()
 })
 
 export const UpdateSettingsResponse = zod.object({

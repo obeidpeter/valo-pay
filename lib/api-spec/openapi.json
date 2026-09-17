@@ -1116,6 +1116,12 @@
           "lastClose": {
             "type": "string"
           },
+          "nextClose": {
+            "type": "string"
+          },
+          "closeTime": {
+            "type": "string"
+          },
           "alerts": {
             "type": "array",
             "items": {
@@ -1131,6 +1137,8 @@
           "mode",
           "environment",
           "lastClose",
+          "nextClose",
+          "closeTime",
           "alerts"
         ]
       },
@@ -1476,6 +1484,12 @@
           },
           "notificationCostAlertKobo": {
             "type": "integer"
+          },
+          "closeTime": {
+            "type": "string"
+          },
+          "scheduledCloseEnabled": {
+            "type": "boolean"
           }
         },
         "required": []

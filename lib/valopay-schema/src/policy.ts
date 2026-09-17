@@ -77,3 +77,40 @@ export const alertRules = {
   /** Hours since the last daily close before the books count as not known complete. */
   closeOverdueHours: 36,
 } as const;
+
+/**
+ * REC-01 and 7.5: the daily close runs at a configurable WAT time, default
+ * 07:00.  A close that starts more than `lateAfterMinutes` after its time is
+ * late, and a scheduled instant that old with no close is a missed close
+ * (NFR-OBS-02).  The in-process scheduler looks for due closes every tick.
+ */
+export const closeRules = {
+  defaultTime: "07:00",
+  lateAfterMinutes: 30,
+  tickSeconds: 60,
+  /** Merchants closed per tick, so one tick stays short and a backlog drains over a few ticks. */
+  batchSize: 25,
+} as const;
+
+const closeTimePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** A WAT wall-clock time as HH:MM. */
+export function isCloseTime(value: unknown): value is string {
+  return typeof value === "string" && closeTimePattern.test(value);
+}
+/** The merchant's configured close time, or the default when unset or malformed. */
+export function closeTimeOf(settings: Record<string, unknown> | undefined): string {
+  const value = settings?.closeTime;
+  return isCloseTime(value) ? value : closeRules.defaultTime;
+}
+/** The next instant strictly after `now` whose WAT wall-clock time is `closeTime`, as a UTC ISO timestamp. */
+export function nextCloseInstant(now: string | number, closeTime: string = closeRules.defaultTime): string {
+  const nowMs = typeof now === "number" ? now : Date.parse(now);
+  if (!Number.isFinite(nowMs)) throw new Error("nextCloseInstant needs a valid instant.");
+  const [hour, minute] = (isCloseTime(closeTime) ? closeTime : closeRules.defaultTime).split(":").map(Number) as [number, number];
+  const wat = new Date(nowMs + WAT_OFFSET_MS);
+  let candidate = Date.UTC(wat.getUTCFullYear(), wat.getUTCMonth(), wat.getUTCDate(), hour, minute) - WAT_OFFSET_MS;
+  if (candidate <= nowMs) candidate += DAY_MS;
+  return new Date(candidate).toISOString();
+}

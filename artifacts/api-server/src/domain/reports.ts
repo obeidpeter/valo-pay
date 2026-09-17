@@ -5,6 +5,7 @@ import { paymentObservedAt, paymentRefunded, paymentReversed } from "./reconcili
 import { buildBillingStatement, monthOf, previousMonth } from "./billing";
 import { seededSample, wilsonInterval } from "./stats";
 import type { Alert } from "./alerts";
+import { closeSchedule } from "./close";
 export { billableCollection, reversalWindowDays } from "./billing";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -18,6 +19,7 @@ export function buildOverview(state: DomainState, now: string, alerts: Alert[] =
   const outstanding = by("due-items").reduce((sum, item) => sum + Number(item.data.outstandingKobo ?? item.amountKobo), 0);
   const certainPayments = new Set(by("allocations").filter((item) => item.status === "confirmed" && item.data.confidence === "certain").map((item) => item.data.paymentId));
   const open = by("exceptions").filter((item) => isOpenException(item.status));
+  const schedule = closeSchedule(state, now);
   return {
     metrics: [
       metric("settled", "Reconciled collections", settled.reduce((sum, item) => sum + Number(item.data.allocatedKobo || 0), 0), "kobo", "Canonical settled payments, counted once · synthetic"),
@@ -35,6 +37,8 @@ export function buildOverview(state: DomainState, now: string, alerts: Alert[] =
     activity: by("audit").sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 8),
     upcoming: by("due-items").filter((item) => !["paid", "closed", "cancelled"].includes(item.status)).slice(0, 6),
     mode: state.merchant.mode, environment: "sandbox", lastClose: by("closes").at(-1)?.createdAt || "Not closed yet",
+    // REC-01: the next scheduled close, empty when the automatic close is off.
+    nextClose: schedule.enabled ? schedule.nextAt : "", closeTime: schedule.time,
     alerts,
   };
 }
@@ -274,6 +278,7 @@ export function buildReports(state: DomainState, now: string): Report {
       packsGenerated: test5.packsGenerated, disputePacksGenerated: recordsOf(state, "exports").filter((item) => ["customer-pack", "dispute-pack"].includes(String(item.data.kind))).length,
       realCasesUsed: test5.realCasesUsed, requiredRealCases: test5.requiredRealCases,
       fortnightlyStaffConfirmed: test5.fortnightlyStaffConfirmed, latestReviewAt: test5.latestReviewAt, reviewCadenceMet: test5.reviewCadenceMet, test5, timeToClose: closeTiming, monthEndCloseDays: closeTiming?.days ?? null,
+      closeSchedule: closeSchedule(state, now),
       unallocatedOlderThan24Hours: unallocated.filter((item) => Date.parse(now) - paymentObservedAt(item) >= DAY_MS).length, proof: false, reason: "All measurements are synthetic and are not operational proof.",
     },
     closes: closeRecords,

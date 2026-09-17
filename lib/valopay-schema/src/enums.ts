@@ -73,6 +73,10 @@ export const alertSeverities = ["critical", "high", "medium", "info"] as const;
 export type AlertSeverity = (typeof alertSeverities)[number];
 export const notificationChannels = ["sms", "whatsapp", "email"] as const;
 
+/** REC-01: whether a daily close was started by the scheduler at the configured time or by a person. */
+export const closeTriggers = ["scheduled", "manual"] as const;
+export type CloseTrigger = (typeof closeTriggers)[number];
+
 /** BIL-07: why a billed collection carries a credit or debit line on a later invoice. */
 export const adjustmentReasons = ["reversal", "refund", "confirmed_duplicate", "wrong_allocation", "re_allocation"] as const;
 export type AdjustmentReason = (typeof adjustmentReasons)[number];

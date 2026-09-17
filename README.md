@@ -44,6 +44,7 @@ Provide credentials through your environment's secret manager, never through com
 | `NODE_ENV` | Development or production behavior |
 | `VITE_CLERK_PROXY_URL` | Optional frontend Clerk proxy override |
 | `LOG_LEVEL` | Optional server logging level |
+| `VALOPAY_CLOSE_SCHEDULER` | Optional; `off` stops this API process from running the scheduled daily close, so closes must be triggered by hand |
 
 The storage client obtains credentials from a **Replit sidecar**. Supplying storage paths alone will not make exports work outside Replit. External hosting requires a reviewed storage-authentication adapter, Clerk setup, PostgreSQL provisioning and same-origin routing for `/api/*` versus frontend assets; these are not implemented by this source transfer.
 
@@ -68,6 +69,10 @@ pnpm --filter @workspace/valopay run dev
 
 Each process needs its own `PORT`; the frontend also needs `BASE_PATH`. The API development command builds before starting and is not a file watcher. Outside Replit, two independent localhost ports alone do not reproduce the same-origin routing.
 
+### Scheduled daily close
+
+The API process runs each lender's daily close at its configured West Africa Time (`closeTime` in the lender settings, default 07:00, REC-01) unless `VALOPAY_CLOSE_SCHEDULER=off` or the lender's `scheduledCloseEnabled` is false. Every minute it reads the lenders whose server-owned `nextCloseAt` cursor has passed and closes each in its own transaction through the scoped repository, taking the lender row with `SKIP LOCKED` so a request in flight is never delayed and two API processes never close the same lender twice. Every close, scheduled or manual, moves the cursor to the next configured time, so a manual close after a missed time counts as the catch-up. A close that starts more than 30 minutes after its time is recorded as late, a scheduled time that old with no close raises the `close_missed` alert, and a close missed while the process was down runs at the first tick after it starts (NFR-AVA-02). Lenders created before the scheduler existed receive a cursor at their next configured time without a close. The scheduler's audit entries carry the actor `System · scheduled close` and never count as sandbox activity for the 30-day expiry sweep.
+
 ## Checks and builds
 
 These checks need no production credentials or running services and do not write to a runtime database:
@@ -83,7 +88,7 @@ pnpm run test:golden
 
 `test:pure` explicitly runs the source-snapshot safeguards, in-memory store guards/audit checks, and download-stream tests. The store test supplies an unusable loopback database URL for module initialization; it does not connect to a database.
 
-`test:golden` runs the golden tests for the shared schema, the retry engine, reconciliation, measurement and the dispute pack (`artifacts/api-server/tests/*-golden.test.ts` and `dispute-pack.test.ts`). They pin the TRD v1.1 acceptance behaviour in section 10.4: the three-source replay in every order, duplicate evidence, the allocation ceiling, the notice clock, quiet hours, execution windows, attempt ceilings across sources, stable assignment and kill switches; plus the recorded retry decision (RET-03), the daily close report (REC-07), the uplift report's 90% interval and pre-registered rule (RET-06), billable collections (BIL-01), invoices with VAT and post-invoice adjustment lines (BIL-04, BIL-07) and the paginated dispute pack with its CSV and JSON (AUD-02, AUD-06). Add a golden case whenever a rule in `lib/valopay-schema` or `artifacts/api-server/src/domain` changes. `pnpm test` runs every offline check above in one go.
+`test:golden` runs the golden tests for the shared schema, the retry engine, reconciliation, measurement, the close schedule and the dispute pack (`artifacts/api-server/tests/*-golden.test.ts` and `dispute-pack.test.ts`). They pin the TRD v1.1 acceptance behaviour in section 10.4: the three-source replay in every order, duplicate evidence, the allocation ceiling, the notice clock, quiet hours, execution windows, attempt ceilings across sources, stable assignment and kill switches; plus the recorded retry decision (RET-03), the daily close report (REC-07), the uplift report's 90% interval and pre-registered rule (RET-06), billable collections (BIL-01), invoices with VAT and post-invoice adjustment lines (BIL-04, BIL-07), the paginated dispute pack with its CSV and JSON (AUD-02, AUD-06) and the scheduled close's WAT arithmetic, cursor, lateness and missed-close alert (REC-01). Add a golden case whenever a rule in `lib/valopay-schema` or `artifacts/api-server/src/domain` changes. `pnpm test` runs every offline check above in one go.
 
 ### GitHub pull-request checks
 
@@ -108,6 +113,8 @@ pnpm run test:security-api
 pnpm run test:smoke
 NODE_ENV=development VALOPAY_RUN_INTEGRATION=1 \
   scripts/node_modules/.bin/tsx artifacts/api-server/tests/valopay-store.integration.test.ts
+NODE_ENV=development VALOPAY_RUN_INTEGRATION=1 \
+  scripts/node_modules/.bin/tsx artifacts/api-server/tests/close-scheduler.integration.test.ts
 NODE_ENV=development VALOPAY_RUN_INTEGRATION=1 \
   node --expose-gc --import ./scripts/node_modules/tsx/dist/loader.mjs \
   artifacts/api-server/tests/export-streams.integration.test.ts
