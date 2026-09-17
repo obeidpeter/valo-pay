@@ -20,7 +20,7 @@ The database connection is privileged. Explicit application checks **do not** pr
 
 ## Development setup and publishing
 
-The Drizzle schema defines the supported tables, foreign keys, checks and unique indexes. A fresh development setup uses the normal development schema push. Do not reintroduce custom security roles, policies or triggers as an undeclared setup prerequisite.
+The Drizzle schema defines the supported tables, foreign keys, checks and unique indexes. A fresh development setup uses the normal development schema push. Do not reintroduce custom security roles, policies or triggers as an undeclared setup prerequisite. The pull-request workflow creates the schema the same way inside a PostgreSQL 16 service container that exists only for its job and holds no application secret; that is a development push against a throwaway database, not a production migration path.
 
 The existing development database transitions only after replacement application enforcement exists. Retiring the old objects must use narrowly scoped, reviewed development changes, preserve data and ordinary constraints, and never cascade-delete unknown role dependencies.
 
@@ -35,4 +35,4 @@ Removing the original role/policy dependencies addresses their specific missing-
 - Static boundary checks are a development safeguard, not a sandbox against malicious or deliberately obfuscated code.
 - Real data remains blocked pending independent security assessment, production staff provisioning/MFA, documented hosting and legal prerequisites, tested recovery, and an explicitly approved production isolation design.
 
-The reproducible checks are the ones in the README under "Checks and builds": `pnpm test` (database boundary, snapshot safeguards, repository guards, export collector and the golden suites), `pnpm run test:security-api` and `pnpm run test:smoke` against a running API, and the database-backed integration suites run with `VALOPAY_RUN_INTEGRATION=1`. The development transition evidence stays in the Replit workspace and is not part of this source snapshot.
+The reproducible checks are the ones in the README under "Checks and builds": `pnpm test` (database boundary, snapshot safeguards, repository guards, export collector and the golden suites), `pnpm run test:security-api` and `pnpm run test:smoke` against a running API, and the database-backed integration suites run with `VALOPAY_RUN_INTEGRATION=1`; the repository and scheduled-close suites (`pnpm run test:integration`) also run on every pull request against the workflow's throwaway database, while the export-stream and HTTP suites remain manual. The development transition evidence stays in the Replit workspace and is not part of this source snapshot.

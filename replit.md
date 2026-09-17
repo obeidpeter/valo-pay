@@ -12,6 +12,7 @@ Observation-first collections operations for Nigerian lenders. The current appli
 - The schema source includes the ordinary foreign keys, unique indexes and money/floor checks. No custom role, policy, function or trigger setup is required. Do not run DDL at app startup, in publishing build commands or against production automatically.
 - `node scripts/smoke-valopay.mjs` — API smoke checks against a fresh synthetic workspace on the development domain; no real lender data.
 - `node scripts/check-db-boundary.mjs` — disallow raw database access outside the scoped repository.
+- `VALOPAY_RUN_INTEGRATION=1 pnpm run test:integration` — the repository and scheduled-close suites against `DATABASE_URL`, which must be a disposable development database with the schema pushed; the pull-request workflow runs them against its own PostgreSQL service container.
 - `node scripts/security-valopay.mjs` — negative and concurrent API checks using fresh synthetic development workspaces.
 - The API process runs the scheduled daily close (REC-01, default 07:00 WAT per lender) from `artifacts/api-server/src/lib/close-scheduler.ts`; set `VALOPAY_CLOSE_SCHEDULER=off` to run a process without it.
 - Required integrations: PostgreSQL, managed Clerk and private App Storage. Never display their environment secret values.
