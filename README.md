@@ -19,7 +19,7 @@ Keep the workspace together: the frontend and API depend on shared packages.
 
 ## Prerequisites and installation
 
-The current supported environment is Replit's Linux workspace with **Node.js 24**, **pnpm 10**, PostgreSQL, managed Clerk authentication and private App Storage. `package.json` pins the pnpm release with `packageManager` and requires Node 22 or later; CI runs on Node 24.
+The current supported environment is Replit's Linux workspace with **Node.js 24**, **pnpm 10**, PostgreSQL, managed Clerk authentication and private App Storage. `package.json` requires Node 22 or later; CI runs on Node 24 with pnpm 10.26.1.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -70,14 +70,26 @@ Each process needs its own `PORT`; the frontend also needs `BASE_PATH`. The API 
 
 ## Checks and builds
 
-These checks do not intentionally create runtime fixtures and need no database or network:
+These checks need no production credentials or running services and do not write to a runtime database:
 
 ```sh
 pnpm run typecheck
-pnpm test
+pnpm run check:db-boundary
+pnpm run test:pure
+pnpm run test:golden
 ```
 
-GitHub Actions runs the same typecheck, offline tests and both builds on every pull request and on pushes to `main` (`.github/workflows/ci.yml`); the workflow needs no database, secrets or Replit services. `pnpm test` runs the database-boundary check, the snapshot safeguards, the repository guards, the export collector test and the golden tests for the shared schema, the retry engine and reconciliation (`artifacts/api-server/tests/*-golden.test.ts`). The golden tests pin the TRD v1.1 acceptance behaviour in section 10.4: the three-source replay in every order, duplicate evidence, the allocation ceiling, the notice clock, quiet hours, execution windows, attempt ceilings across sources, stable assignment and kill switches. Add a golden case whenever a rule in `lib/valopay-schema` or `artifacts/api-server/src/domain` changes.
+`test:pure` explicitly runs the source-snapshot safeguards, in-memory store guards/audit checks, and download-stream tests. The store test supplies an unusable loopback database URL for module initialization; it does not connect to a database.
+
+`test:golden` runs the golden tests for the shared schema, the retry engine and reconciliation (`artifacts/api-server/tests/*-golden.test.ts`). They pin the TRD v1.1 acceptance behaviour in section 10.4: the three-source replay in every order, duplicate evidence, the allocation ceiling, the notice clock, quiet hours, execution windows, attempt ceilings across sources, stable assignment and kill switches. Add a golden case whenever a rule in `lib/valopay-schema` or `artifacts/api-server/src/domain` changes. `pnpm test` runs every offline check above in one go.
+
+### GitHub pull-request checks
+
+The local `.github/workflows/ci.yml` definition is configured to run on pull requests and pushes to `main`, using Ubuntu 24.04, Node.js 24 and pnpm 10.26.1. It installs with `pnpm install --frozen-lockfile`, runs the four commands above, then builds the API bundle and the console (the console build needs no Clerk key; see the environment table). The job has read-only repository permissions, no application secrets or database service, and does not publish, deploy, migrate, or run the synthetic database/HTTP integration suites. The workflow must first be committed to GitHub through an account with workflow-write permission; source sync with `--skip-workflows` does not install or enable it.
+
+The check reports failures on the pull request. Enforcing a merge block requires a GitHub branch rule that requires **TypeScript, database boundary and pure tests**; this workflow does not change repository protection settings.
+
+### Builds and integration checks
 
 Build the complete workspace with frontend configuration supplied:
 
@@ -122,7 +134,20 @@ node scripts/github-sync.mjs
 node scripts/github-sync.mjs --push
 ```
 
-The utility targets only the private `obeidpeter/valo-pay` repository. It sends reviewed source contents, never Git history or credentials, through the Replit GitHub connector. It checks common secret patterns but cannot prove arbitrary content is safe: review new files before uploading.
+The utility targets only the public `obeidpeter/valo-pay` repository, as approved by its owner. Public means anyone can read the uploaded source. It sends reviewed source contents, never Git history or credentials, through the Replit GitHub connector. It checks common secret patterns but cannot prove arbitrary content is safe: review new files before uploading.
+
+Use this script rather than Replit's Git Sync/Push button in the original workspace. That button pushes Git history; this workspace intentionally has no direct GitHub remote. An authentication error from that button does not necessarily mean the GitHub connector used by this script is broken.
+
+Only `.github/workflows/ci.yml` is approved for workflow export. Other workflows and local GitHub actions remain excluded until individually reviewed and added to the allowlist.
+
+The current connector does not offer GitHub's separate workflow-write permission. To sync source while explicitly leaving workflow updates pending:
+
+```sh
+node scripts/github-sync.mjs --skip-workflows
+node scripts/github-sync.mjs --push --skip-workflows
+```
+
+This option preserves existing remote workflow files unchanged and reports pending local workflow changes. It never silently deletes a workflow. Commit the reviewed CI file through GitHub's website, or use a separately authorized clean clone, to enable/update it. An independently created GitHub commit still requires reconciliation before the next source upload. Unchanged workflow blobs are reused, not rewritten.
 
 Updates use ignored local synchronization state from the previous successful upload. In a workspace without that state, the utility can initialize it only when all selected local source files already match GitHub exactly; otherwise it stops for manual reconciliation. This allows a merged task's main workspace to establish its baseline safely. If GitHub has changed independently, the utility stops rather than overwriting changes; it never force-pushes and also refuses remote file deletions. Authentication failures should be repaired through the GitHub connection, not by pasting tokens into code.
 

@@ -1,41 +1,57 @@
-# Offline checks only: no database, no Replit services, no real lender data.
-name: CI
+# Offline checks only: no database, no secrets, no Replit services, no real lender data.
+name: Source checks
 
 on:
   pull_request:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
-  group: ci-${{ github.ref }}
+  group: source-checks-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  checks:
-    name: Typecheck, offline tests and builds
-    runs-on: ubuntu-latest
+  source-checks:
+    name: TypeScript, database boundary and pure tests
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       CI: "true"
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      # Reads the pnpm version from the packageManager field in package.json.
-      - uses: pnpm/action-setup@v4
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.1
+          run_install: false
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
 
-      - name: Install
+      - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
+      - name: Check TypeScript
         run: pnpm run typecheck
 
-      - name: Offline tests (repository guards, export collector, golden suites)
-        run: pnpm test
+      - name: Check database boundary
+        run: pnpm run check:db-boundary
+
+      - name: Run pure tests
+        run: pnpm run test:pure
+
+      - name: Run golden tests (shared schema, retry engine, reconciliation)
+        run: pnpm run test:golden
 
       - name: Build API bundle
         run: pnpm --filter @workspace/api-server run build

@@ -5,13 +5,15 @@ import { resolve, sep } from "node:path";
 
 const roots = new Set([".gitignore", ".npmrc", ".replit", ".replitignore", "README.md", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.base.json", "tsconfig.json", "replit.md"]);
 const docs = new Set(["docs/BUILD_STATUS.md", "docs/DATABASE_SECURITY.md", "docs/frontend-contract.md"]);
+// Workflows execute code on GitHub. Review each file before approving its export.
+const workflows = new Set([".github/workflows/ci.yml"]);
 const sourceExtension = /\.(?:ts|tsx|js|jsx|mjs|cjs|json|yaml|yml|toml|css|html|svg|sh|md)$/;
 const excludedSegment = /^(?:\.git|\.agents|\.conversation|\.local|\.cache|\.config|node_modules|dist|coverage|attached_assets|uploads|backups|exports)$/;
 
 export function allowedPath(path) {
   if (path.split("/").some(p => excludedSegment.test(p) || p === ".." || p.startsWith(".env"))) return false;
   if (/\.(?:pem|key|p12|pfx|log|dump|sqlite3?|tsbuildinfo)$/i.test(path)) return false;
-  return roots.has(path) || docs.has(path) || (
+  return roots.has(path) || docs.has(path) || workflows.has(path) || (
     /^(?:artifacts\/(?:api-server|valo-pay|mockup-sandbox)\/|lib\/|scripts\/)/.test(path) &&
     sourceExtension.test(path)
   );
