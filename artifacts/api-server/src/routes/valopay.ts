@@ -9,6 +9,7 @@ import type { DomainState } from "../domain/types";
 import { getGates, getSettings } from "../lib/valopay-readiness";
 import { importCsv } from "../lib/valopay-import";
 import { createExportFile, customerTimeline, exportDescriptor, exportKinds, readExport } from "../lib/valopay-exports";
+import { pageRecords } from "../lib/valopay-list";
 
 const router:IRouter=Router();
 const kinds=new Set<string>(recordKinds);
@@ -53,12 +54,9 @@ router.get("/v1/overview",async(req,res)=>{
 router.get("/v1/records/:kind",async(req,res)=>{
  const kind=safeKind(req.params.kind),query=S.ListRecordsQueryParams.parse(req.query);
  const result=await withState(req,res,state=>{
-  let items=state.records.filter(r=>r.kind===kind);
-  if(query.status&&query.status!=="all")items=items.filter(r=>r.status===query.status);
-  if(query.search){const search=query.search.toLowerCase();items=items.filter(r=>`${r.name} ${r.reference} ${r.status} ${JSON.stringify(r.data)}`.toLowerCase().includes(search));}
-  items.sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  const page=pageRecords(state.records.filter(r=>r.kind===kind),query);
   // Never leak internal storage location through collection APIs.
-  return {items:items.map(r=>r.kind==="exports"?{...r,data:{...r.data,objectName:undefined,bucket:undefined}}:r),total:items.length};
+  return {...page,items:page.items.map(r=>r.kind==="exports"?{...r,data:{...r.data,objectName:undefined,bucket:undefined}}:r)};
  });
  res.json(S.ListRecordsResponse.parse(result));
 });

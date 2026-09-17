@@ -46,7 +46,7 @@ Kinds and data fields:
 - `/sign-in/*?`, `/sign-up/*?` Clerk branded; authenticated home can redirect to `/overview` same overview. On a local host with no `VITE_CLERK_PUBLISHABLE_KEY` the console runs without Clerk (`lib/auth.tsx`): sign-in links are hidden, these routes redirect to `/`, and the anonymous sandbox loads. Elsewhere workspace loading waits at most five seconds for Clerk.
 
 ## Mutations
-createRecord and updateRecord for editable kinds. Business actions go to performAction:
+`listRecords` takes status, search, and for paging `limit` (1–500; omitted returns the whole filtered set, newest first), `offset` and `updatedSince` (ISO timestamp, inclusive, for incremental sync); the response carries items, total (the filtered count) and nextOffset when more rows remain. createRecord and updateRecord for editable kinds. Business actions go to performAction:
 - `set_role` data.role (Admin / Operations / Finance / Compliance reviewer / Read-only), **demo personas ONLY**, each is a separate simulated identity; no real permission granted.
 - `kill_switch` data.enabled boolean, optional data.policyId, and reason; requires Admin. Cancels scheduled attempts under the switched scope.
 - `request_instruction` always blocks: live integration/security gates unmet.

@@ -101,10 +101,19 @@ export const ListRecordsParams = zod.object({
   "kind": zod.coerce.string()
 })
 
+export const listRecordsQueryLimitMax = 500;
+
+export const listRecordsQueryOffsetMin = 0;
+
+
+
 export const ListRecordsQueryParams = zod.object({
   "merchantId": zod.coerce.string(),
   "search": zod.coerce.string().optional(),
-  "status": zod.coerce.string().optional()
+  "status": zod.coerce.string().optional(),
+  "limit": zod.coerce.number().int().min(1).max(listRecordsQueryLimitMax).optional().describe('Page size; omitted returns the whole filtered set (at most 500 per page).'),
+  "offset": zod.coerce.number().int().min(listRecordsQueryOffsetMin).optional().describe('Rows to skip in the newest-first order.'),
+  "updatedSince": zod.coerce.string().optional().describe('ISO timestamp; only records updated at or after it (incremental sync).')
 })
 
 export const ListRecordsResponse = zod.object({
@@ -121,7 +130,8 @@ export const ListRecordsResponse = zod.object({
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown())
 })),
-  "total": zod.number().int()
+  "total": zod.number().int(),
+  "nextOffset": zod.number().int().optional()
 })
 
 

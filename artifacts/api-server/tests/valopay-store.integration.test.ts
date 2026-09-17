@@ -115,6 +115,26 @@ try {
     await assert.rejects(() => loadState(context, merchantA), (error: any) => error?.status === 404);
     await assert.rejects(() => listMerchants({ ...context } as typeof context), (error: any) => error?.status === 409);
   });
+
+  // Expiry: an anonymous sandbox older than the cookie lifetime with no change in that time is swept by the next bootstrap.
+  const staleToken = token();
+  let staleMerchant = "";
+  await inWorkspace(requestFor(staleToken), response(), async (context) => { staleMerchant = (await listMerchants(context))[0]!.id; });
+  const staleWorkspace = (await pool.query<{ workspace_id: string }>("SELECT workspace_id FROM valopay_merchants WHERE id=$1", [staleMerchant])).rows[0]!.workspace_id;
+  await pool.query("UPDATE valopay_workspaces SET created_at = now() - interval '40 days' WHERE id=$1", [staleWorkspace]);
+  await pool.query("UPDATE valopay_records SET updated_at = now() - interval '40 days' WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id=$1)", [staleWorkspace]);
+  await inWorkspace(requestFor(token()), response(), async (context) => { await listMerchants(context); });
+  assert.equal((await pool.query("SELECT 1 FROM valopay_workspaces WHERE id=$1", [staleWorkspace])).rowCount, 0, "the expired anonymous sandbox is removed");
+  assert.equal((await pool.query("SELECT 1 FROM valopay_merchants WHERE workspace_id=$1", [staleWorkspace])).rowCount, 0, "with its lenders and records");
+  assert.equal((await pool.query("SELECT 1 FROM valopay_workspaces WHERE id=(SELECT workspace_id FROM valopay_merchants WHERE id=$1)", [merchantA])).rowCount, 1, "a live sandbox stays");
+  // A sandbox that is old but recently changed stays.
+  const activeToken = token();
+  let activeMerchant = "";
+  await inWorkspace(requestFor(activeToken), response(), async (context) => { activeMerchant = (await listMerchants(context))[0]!.id; });
+  const activeWorkspace = (await pool.query<{ workspace_id: string }>("SELECT workspace_id FROM valopay_merchants WHERE id=$1", [activeMerchant])).rows[0]!.workspace_id;
+  await pool.query("UPDATE valopay_workspaces SET created_at = now() - interval '40 days' WHERE id=$1", [activeWorkspace]);
+  await inWorkspace(requestFor(token()), response(), async (context) => { await listMerchants(context); });
+  assert.equal((await pool.query("SELECT 1 FROM valopay_workspaces WHERE id=$1", [activeWorkspace])).rowCount, 1, "recent record changes keep an old sandbox alive");
   console.log("valopay repository integration tests passed");
 } finally {
   await pool.end();

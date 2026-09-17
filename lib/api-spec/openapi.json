@@ -155,6 +155,33 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            },
+            "description": "Page size; omitted returns the whole filtered set (at most 500 per page)."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Rows to skip in the newest-first order."
+          },
+          {
+            "name": "updatedSince",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "ISO timestamp; only records updated at or after it (incremental sync)."
           }
         ],
         "responses": {
@@ -1117,6 +1144,9 @@
             }
           },
           "total": {
+            "type": "integer"
+          },
+          "nextOffset": {
             "type": "integer"
           }
         },

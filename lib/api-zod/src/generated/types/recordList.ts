@@ -10,4 +10,5 @@ import type { ValopayRecord } from './valopayRecord';
 export interface RecordList {
   items: ValopayRecord[];
   total: number;
+  nextOffset?: number;
 }

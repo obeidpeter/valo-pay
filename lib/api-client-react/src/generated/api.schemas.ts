@@ -102,6 +102,7 @@ export interface Overview {
 export interface RecordList {
   items: ValopayRecord[];
   total: number;
+  nextOffset?: number;
 }
 
 export interface ActionInput {
@@ -223,6 +224,21 @@ export type ListRecordsParams = {
 merchantId: string;
 search?: string;
 status?: string;
+/**
+ * Page size; omitted returns the whole filtered set (at most 500 per page).
+ * @minimum 1
+ * @maximum 500
+ */
+limit?: number;
+/**
+ * Rows to skip in the newest-first order.
+ * @minimum 0
+ */
+offset?: number;
+/**
+ * ISO timestamp; only records updated at or after it (incremental sync).
+ */
+updatedSince?: string;
 };
 
 export type CreateRecordParams = {

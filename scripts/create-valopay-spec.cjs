@@ -14,7 +14,7 @@ const schemas = {
   Metric: obj({ key: str, label: str, value: {type:"number"}, unit: str, detail: str }),
   Alert: obj({ key: str, severity: str, title: str, detail: str, count: num, since: str, linkedRecordId: str }, ["key","severity","title","detail"]),
   Overview: obj({ metrics: arr("Metric"), queues: arr("Metric"), activity: arr("ValopayRecord"), upcoming: arr("ValopayRecord"), mode: str, environment: str, lastClose: str, alerts: arr("Alert") }),
-  RecordList: obj({ items: arr("ValopayRecord"), total: num }),
+  RecordList: obj({ items: arr("ValopayRecord"), total: num, nextOffset: num }, ["items","total"]),
   ActionInput: obj({ action: str, recordId: str, reason: str, data: ref("RecordData") }, ["action"]),
   ActionResult: obj({ message: str, record: ref("ValopayRecord"), data: ref("RecordData") }, ["message","data"]),
   ImportInput: obj({ kind: str, csv: str, syntheticOnly: bool, commit: bool, mapping: ref("RecordData") }, ["kind","csv","syntheticOnly","commit"]),
@@ -39,10 +39,13 @@ const pathParam = (name) => ({name,in:"path",required:true,schema:str});
 const merchant = {name:"merchantId",in:"query",required:true,schema:str};
 const search = {name:"search",in:"query",schema:str};
 const status = {name:"status",in:"query",schema:str};
+const limit = {name:"limit",in:"query",schema:{type:"integer",minimum:1,maximum:500},description:"Page size; omitted returns the whole filtered set (at most 500 per page)."};
+const offset = {name:"offset",in:"query",schema:{type:"integer",minimum:0},description:"Rows to skip in the newest-first order."};
+const updatedSince = {name:"updatedSince",in:"query",schema:str,description:"ISO timestamp; only records updated at or after it (incremental sync)."};
 add("/healthz","get","healthCheck","HealthStatus");
 add("/v1/workspace","get","getWorkspace","Workspace");
 add("/v1/overview","get","getOverview","Overview",null,[merchant]);
-add("/v1/records/{kind}","get","listRecords","RecordList",null,[pathParam("kind"),merchant,search,status]);
+add("/v1/records/{kind}","get","listRecords","RecordList",null,[pathParam("kind"),merchant,search,status,limit,offset,updatedSince]);
 add("/v1/records/{kind}","post","createRecord","ValopayRecord","RecordInput",[pathParam("kind"),merchant]);
 add("/v1/records/{kind}/{id}","patch","updateRecord","ValopayRecord","RecordUpdate",[pathParam("kind"),pathParam("id"),merchant]);
 add("/v1/actions","post","performAction","ActionResult","ActionInput",[merchant]);
