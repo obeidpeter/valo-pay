@@ -30,6 +30,39 @@ describe("keyboard", () => {
     expect(screen.getByRole("link", { name: /Audit Log/ }).getAttribute("aria-current")).toBe("page");
   });
 
+  it("starts the next console page at the top of its scrolling region", async () => {
+    const user = userEvent.setup();
+    renderApp("/reports");
+    await screen.findByRole("heading", { name: "Reports & Analytics" });
+    await user.click(await screen.findByText("Billing rates & rules"));
+    const main = screen.getByRole("main");
+    // jsdom has no layout, but preserves offsets on the main element that survives navigation.
+    main.scrollTop = 640;
+    main.scrollLeft = 80;
+
+    await user.click(screen.getByRole("link", { name: "Overview" }));
+    await screen.findByRole("heading", { name: "Operations Overview" });
+    expect(screen.getByRole("main")).toBe(main);
+    await waitFor(() => {
+      expect(main.scrollTop).toBe(0);
+      expect(main.scrollLeft).toBe(0);
+      expect(document.activeElement).toBe(main);
+    });
+  });
+
+  it("keeps same-page scroll and filter state when the shell rerenders", async () => {
+    const user = userEvent.setup();
+    renderApp("/exceptions");
+    await user.click(await screen.findByRole("tab", { name: "High severity (1)" }));
+    const main = screen.getByRole("main");
+    main.scrollTop = 320;
+
+    await user.click(screen.getByRole("button", { name: "Switch to dark theme" }));
+    expect(screen.getByRole("button", { name: "Switch to light theme" })).toBeTruthy();
+    expect(main.scrollTop).toBe(320);
+    expect(screen.getByRole("tab", { name: "High severity (1)" }).getAttribute("aria-selected")).toBe("true");
+  });
+
   it("moves between the exception filter tabs with the arrow keys, one tab stop for the group", async () => {
     const user = userEvent.setup();
     renderApp("/exceptions");
