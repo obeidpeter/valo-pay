@@ -13,6 +13,13 @@
     <meta name="twitter:title" content="Valo Pay" />
     <meta name="twitter:description" content="Mandates, reconciliation and audit evidence for Nigerian lenders." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Light or dark before the first paint: the same rule and key as src/lib/theme.ts, which takes over once the app runs. -->
+    <script>
+      var choice = null;
+      try { choice = localStorage.getItem('valopay-theme'); } catch (error) { /* storage blocked: the device decides */ }
+      var dark = choice === 'dark' || (choice !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.classList.toggle('dark', dark);
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">

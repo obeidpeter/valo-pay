@@ -99,7 +99,7 @@ export default function ExceptionsPage() {
                       </div>
                       <span className={`inline-block mt-1 px-2 py-0.5 text-[10px] uppercase font-bold rounded border ${
                         String(exception.data?.severity) === 'high' ? 'bg-destructive/10 text-destructive border-destructive/20' : 
-                        String(exception.data?.severity) === 'medium' ? 'bg-amber-100 text-amber-800 border-amber-200' : 
+                        String(exception.data?.severity) === 'medium' ? 'bg-warning text-warning-foreground border-warning-border' : 
                         'bg-secondary text-secondary-foreground'
                       }`}>
                         {String(exception.data?.severity || 'low')}

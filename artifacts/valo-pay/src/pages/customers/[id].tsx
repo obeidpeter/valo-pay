@@ -155,7 +155,7 @@ export default function CustomerTimelinePage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
               <div className="p-4 border-b bg-secondary/20 flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-amber-500" />
+                <AlertTriangle className="h-5 w-5 text-warning-strong" />
                 <h2 className="font-semibold">Due Items</h2>
               </div>
               <div className="divide-y">

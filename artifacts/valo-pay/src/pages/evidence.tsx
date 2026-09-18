@@ -125,7 +125,7 @@ export default function EvidencePage() {
                   <div key={gate.id} className="flex gap-3">
                     {gate.status === 'proven' ? 
                       <CheckCircle className="h-5 w-5 text-success shrink-0" /> : 
-                      <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0" />
+                      <AlertTriangle className="h-5 w-5 text-warning-strong shrink-0" />
                     }
                     <div>
                       <p className="font-medium text-sm">{gate.title}</p>
@@ -149,7 +149,7 @@ export default function EvidencePage() {
                   <div key={gate.id} className="flex gap-3">
                     {gate.status === 'proven' ? 
                       <CheckCircle className="h-5 w-5 text-success shrink-0" /> : 
-                      <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0" />
+                      <AlertTriangle className="h-5 w-5 text-warning-strong shrink-0" />
                     }
                     <div>
                       <p className="font-medium text-sm">{gate.title}</p>
@@ -215,7 +215,7 @@ export default function EvidencePage() {
                       {comm.data?.signed ? (
                         <span className="text-success text-xs font-bold flex items-center gap-1"><CheckCircle className="h-3 w-3" /> SIGNED</span>
                       ) : (
-                        <span className="text-amber-600 text-xs font-bold">NEGOTIATING</span>
+                        <span className="text-warning-strong text-xs font-bold">NEGOTIATING</span>
                       )}
                       {!!comm.data?.effectiveDate && <p className="text-[10px] text-muted-foreground mt-1">From {formatDate(String(comm.data.effectiveDate))}</p>}
                     </td>

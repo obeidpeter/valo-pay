@@ -325,7 +325,7 @@ export default function ReportsPage() {
                   {scalarEntries(reports.experiment).map(([key, value]) => (
                     <div key={key} className="bg-secondary/30 p-3 rounded-lg flex justify-between items-center">
                       <span className="text-sm font-medium capitalize text-muted-foreground">{labelOf(key)}</span>
-                      <span className={`font-mono text-sm font-bold ${String(value) === 'not_proven' ? 'text-amber-600' : ''}`}>
+                      <span className={`font-mono text-sm font-bold ${String(value) === 'not_proven' ? 'text-warning-strong' : ''}`}>
                         {renderValue(key, value)}
                       </span>
                     </div>
@@ -339,7 +339,7 @@ export default function ReportsPage() {
                       <p>Recovery by count: engine {percent(row.engine?.recoveryByCount)} · holdout {percent(row.holdout?.recoveryByCount)} · difference {percent(row.differenceByCount)}</p>
                       <p>90% interval of the difference by value: {row.confidenceInterval90 ? `${percent(row.confidenceInterval90.low)} to ${percent(row.confidenceInterval90.high)}` : 'not computable below two mature outcomes per arm'}</p>
                       <p>Rule checks: {Object.entries(row.checks || {}).map(([name, ok]) => `${labelOf(name).toLowerCase()} ${ok ? '✓' : '✗'}`).join(' · ')}</p>
-                      <p>Result: <span className={`font-bold ${row.result === 'proven' ? 'text-success' : 'text-amber-600'}`}>{String(row.result)}</span></p>
+                      <p>Result: <span className={`font-bold ${row.result === 'proven' ? 'text-success' : 'text-warning-strong'}`}>{String(row.result)}</span></p>
                       <p className="font-sans text-muted-foreground">{String(row.reason || '')}</p>
                     </div>
                   ))}
@@ -401,7 +401,7 @@ export default function ReportsPage() {
                             const trigger = triggerView(close.data?.schedule);
                             if (!trigger) return null;
                             return (
-                              <span className={`inline-block mr-3 mb-1 px-1.5 py-0.5 rounded border ${trigger.late ? 'border-amber-500/60 text-amber-700' : 'border-border/50 text-muted-foreground'}`}>
+                              <span className={`inline-block mr-3 mb-1 px-1.5 py-0.5 rounded border ${trigger.late ? 'border-warning-strong/60 text-warning-strong' : 'border-border/50 text-muted-foreground'}`}>
                                 {trigger.trigger}{trigger.late ? ` · ${trigger.delayMinutes} min late` : trigger.scheduledFor ? ' · on time' : ''}
                               </span>
                             );

@@ -45,6 +45,14 @@
 
   --color-brand: hsl(var(--brand));
   --color-brand-foreground: hsl(var(--brand-foreground));
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+  --color-warning-border: hsl(var(--warning-border));
+  --color-warning-strong: hsl(var(--warning-strong));
+  --color-info: hsl(var(--info));
+  --color-info-foreground: hsl(var(--info-foreground));
+  --color-info-border: hsl(var(--info-border));
+  --color-info-strong: hsl(var(--info-strong));
 
   --font-sans: var(--app-font-sans);
   --font-mono: var(--app-font-mono);
@@ -57,6 +65,7 @@
 
 :root {
   /* Deep Indigo and Crisp White Theme for Finance */
+  color-scheme: light;
   --background: 210 20% 98%;
   --foreground: 232 47% 16%;
   
@@ -81,7 +90,7 @@
   --secondary-border: 214 32% 85%;
   
   --muted: 210 20% 96%;
-  --muted-foreground: 215 16% 47%;
+  --muted-foreground: 215 16% 45%; /* 4.9:1 on the page background, 5.1:1 on a card */
   --muted-border: 214 32% 91%;
   
   --accent: 210 20% 96%;
@@ -92,8 +101,19 @@
   --destructive-foreground: 0 0% 100%;
   --destructive-border: 348 83% 40%;
 
-  --success: 154 61% 48%;
+  /* Status colours, each a token with a value for each theme (see .dark). Success is a colour that
+     passes as text (5.0:1 on white). Warning and info are a surface, its text, its border and a
+     strong colour for icons and words on the page; the light values are Tailwind's amber and blue. */
+  --success: 142 72% 29%;
   --success-foreground: 0 0% 100%;
+  --warning: 48 96% 89%;
+  --warning-foreground: 22 78% 26%;
+  --warning-border: 48 97% 77%;
+  --warning-strong: 26 91% 37%;
+  --info: 214 95% 93%;
+  --info-foreground: 224 64% 33%;
+  --info-border: 213 97% 87%;
+  --info-strong: 224 76% 48%;
 
   /* The brand mark's orange (favicon); decoration and the mark only, never small text: its contrast on white is below 4.5:1. */
   --brand: 14 100% 50%;
@@ -105,6 +125,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --background: 232 47% 8%;
   --foreground: 210 20% 98%;
   
@@ -136,12 +157,22 @@
   --accent-foreground: 210 20% 98%;
   --accent-border: 232 25% 18%;
   
-  --destructive: 348 83% 55%;
-  --destructive-foreground: 0 0% 100%;
+  /* Red light enough to read as text on the dark card (5.4:1); the destructive button therefore carries dark text, like success. */
+  --destructive: 348 85% 62%;
+  --destructive-foreground: 232 47% 8%;
   --destructive-border: 348 83% 45%;
 
-  --success: 154 61% 48%;
-  --success-foreground: 0 0% 100%;
+  /* Status colours on a dark page: deep surfaces with pale text (12:1), and strong colours at 7.6:1 or better on the background. */
+  --success: 142 69% 58%;
+  --success-foreground: 232 47% 8%;
+  --warning: 21 92% 14%;
+  --warning-foreground: 48 96% 89%;
+  --warning-border: 23 83% 31%;
+  --warning-strong: 43 96% 56%;
+  --info: 226 57% 21%;
+  --info-foreground: 214 95% 93%;
+  --info-border: 226 71% 40%;
+  --info-strong: 213 94% 68%;
 
   --brand: 14 100% 55%;
   --brand-foreground: 0 0% 100%;

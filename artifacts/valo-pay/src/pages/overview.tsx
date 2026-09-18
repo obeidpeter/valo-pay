@@ -39,7 +39,7 @@ export default function OverviewPage() {
         ) : (
           <ul className="space-y-2">
             {overview.alerts.map(alert => (
-              <li key={alert.key} className={`rounded-lg border p-3 text-sm ${alert.severity === 'critical' ? 'border-destructive bg-destructive/10 text-destructive' : alert.severity === 'high' ? 'border-destructive/40 bg-destructive/5' : alert.severity === 'medium' ? 'border-amber-500/40 bg-amber-500/5' : 'border-border bg-secondary/30'}`}>
+              <li key={alert.key} className={`rounded-lg border p-3 text-sm ${alert.severity === 'critical' ? 'border-destructive bg-destructive/10 text-destructive' : alert.severity === 'high' ? 'border-destructive/40 bg-destructive/5' : alert.severity === 'medium' ? 'border-warning-strong/40 bg-warning-strong/5' : 'border-border bg-secondary/30'}`}>
                 <div className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /><span className="font-semibold">{alert.title}</span><span className="ml-auto text-[11px] uppercase tracking-wider">{alert.severity}</span></div>
                 <p className="text-xs mt-1">{alert.detail}{alert.since ? ` Since ${formatDate(alert.since)}.` : ''}</p>
               </li>
@@ -71,7 +71,7 @@ export default function OverviewPage() {
         {/* Queues */}
         <section>
           <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <AlertCircle className="h-5 w-5 text-amber-500" /> Action Required
+            <AlertCircle className="h-5 w-5 text-warning-strong" /> Action Required
           </h2>
           <div className="bg-card border rounded-xl shadow-sm divide-y">
             {overview.queues.length === 0 && (
@@ -83,7 +83,7 @@ export default function OverviewPage() {
                   <p className="font-medium text-sm">{queue.label}</p>
                   <p className="text-xs text-muted-foreground">{queue.detail}</p>
                 </div>
-                <div className="flex items-center justify-center bg-amber-100 text-amber-900 rounded-full h-8 w-8 font-bold text-sm">
+                <div className="flex items-center justify-center bg-warning text-warning-foreground rounded-full h-8 w-8 font-bold text-sm">
                   {queue.value}
                 </div>
               </div>
@@ -94,7 +94,7 @@ export default function OverviewPage() {
         {/* Upcoming */}
         <section>
           <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Clock className="h-5 w-5 text-blue-500" /> Upcoming Scheduled Actions
+            <Clock className="h-5 w-5 text-info-strong" /> Upcoming Scheduled Actions
           </h2>
           <div className="bg-card border rounded-xl shadow-sm divide-y">
             {overview.upcoming.length === 0 && (
@@ -121,7 +121,7 @@ export default function OverviewPage() {
       {/* Activity Log */}
       <section>
         <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <Activity className="h-5 w-5 text-green-500" /> Recent Activity
+          <Activity className="h-5 w-5 text-success" /> Recent Activity
         </h2>
         <div className="bg-card border rounded-xl shadow-sm overflow-hidden">
           <div className="overflow-x-auto">

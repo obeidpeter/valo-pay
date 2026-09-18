@@ -41,4 +41,7 @@ queryClient.setDefaultOptions({ queries: { retry: false } });
 afterEach(() => {
   cleanup();
   queryClient.clear();
+  // A theme chosen in one test is this browser's, not the next test's.
+  localStorage.clear();
+  document.documentElement.classList.remove("dark");
 });

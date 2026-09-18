@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { keyboardShortcuts } from '@/lib/focus';
+import { themeChoices, useTheme } from '@/lib/theme';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetSettings, useUpdateSettings, usePerformAction, getGetSettingsQueryKey } from '@workspace/api-client-react';
@@ -16,6 +17,7 @@ export default function SettingsPage() {
   const [role, setRole] = useState(workspace?.role || 'Admin');
   const [killReason, setKillReason] = useState('');
   const [isHandBackOpen, setIsHandBackOpen] = useState(false);
+  const { choice: themeChoice, theme, setChoice: setThemeChoice } = useTheme();
   
   const [isEditingExec, setIsEditingExec] = useState(false);
   const [execSettings, setExecSettings] = useState<any>({});
@@ -326,6 +328,27 @@ export default function SettingsPage() {
         actionMutation="hand_back"
         fields={[]}
       />
+
+      {/* Appearance: light or dark for this browser. It follows the device unless chosen here, and it is not a
+          workspace setting, so it needs no account and no request (Nielsen 3: control; 7: personalisation). */}
+      <section className="bg-card border rounded-xl shadow-sm p-6" aria-labelledby="appearance-title">
+        <h2 id="appearance-title" className="font-semibold text-lg">Appearance</h2>
+        <p className="text-sm text-muted-foreground mt-1">Light or dark, for this browser only. It is not a workspace setting, so each person and each device keeps its own.</p>
+        <fieldset className="mt-4">
+          <legend className="text-sm font-medium">Theme</legend>
+          <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:gap-6">
+            {themeChoices.map(option => (
+              <label key={option.value} className="inline-flex items-center gap-2 text-sm">
+                <input type="radio" name="theme" value={option.value} checked={themeChoice === option.value} onChange={() => setThemeChoice(option.value)} className="h-4 w-4 accent-primary" />
+                {option.label}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <p role="status" className="mt-3 text-xs text-muted-foreground">
+          {themeChoice === 'system' ? `Following the device: ${theme} now.` : `${theme === 'dark' ? 'Dark' : 'Light'} until you change it here.`}
+        </p>
+      </section>
 
       {/* Keyboard: listed so the shortcuts can be found rather than guessed (Nielsen 7: accelerators; 10: help focused on the task). */}
       <section className="bg-card border rounded-xl shadow-sm overflow-hidden" aria-labelledby="keyboard-title">

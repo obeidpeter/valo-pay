@@ -153,7 +153,7 @@ export default function CollectionsPage() {
                 {importResult.rows && importResult.rows.length > 0 && (
                   <div className="space-y-2 max-h-40 overflow-y-auto bg-secondary/20 p-2 rounded text-xs font-mono">
                     {importResult.rows.map((r: any) => (
-                      <div key={r.row} className={r.status === 'invalid' ? 'text-destructive' : r.status === 'duplicate' ? 'text-amber-600' : 'text-success'}>
+                      <div key={r.row} className={r.status === 'invalid' ? 'text-destructive' : r.status === 'duplicate' ? 'text-warning-strong' : 'text-success'}>
                         Row {r.row}: {r.message}
                       </div>
                     ))}
