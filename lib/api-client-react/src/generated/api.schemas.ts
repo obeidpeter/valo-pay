@@ -40,6 +40,10 @@ export interface SchedulerStatus {
   /** @nullable */
   lastTickAt: string | null;
   lastRun: SchedulerRun | null;
+  /** @nullable */
+  lastSuccessAt?: string | null;
+  /** @nullable */
+  lastErrorAt?: string | null;
 }
 
 /**
@@ -193,6 +197,53 @@ export interface Alert {
   linkedRecordId?: string;
 }
 
+export type EffectiveCloseScheduleRuntimeState = typeof EffectiveCloseScheduleRuntimeState[keyof typeof EffectiveCloseScheduleRuntimeState];
+
+
+export const EffectiveCloseScheduleRuntimeState = {
+  not_started: 'not_started',
+  running: 'running',
+  off: 'off',
+  stopped: 'stopped',
+} as const;
+
+/**
+ * @nullable
+ */
+export type EffectiveCloseScheduleServiceIssue = typeof EffectiveCloseScheduleServiceIssue[keyof typeof EffectiveCloseScheduleServiceIssue] | null;
+
+
+export const EffectiveCloseScheduleServiceIssue = {
+  starting: 'starting',
+  delayed: 'delayed',
+  failed: 'failed',
+} as const;
+
+/**
+ * Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.
+ */
+export interface EffectiveCloseSchedule {
+  time: string;
+  enabled: boolean;
+  automatic: boolean;
+  /** @nullable */
+  nextAt: string | null;
+  runtimeState: EffectiveCloseScheduleRuntimeState;
+  /** @nullable */
+  serviceIssue: EffectiveCloseScheduleServiceIssue;
+  missed: boolean;
+  overdueMinutes: number;
+  lateAfterMinutes: number;
+  /** @nullable */
+  lastAt: string | null;
+  /** @nullable */
+  lastTrigger: string | null;
+  /** @nullable */
+  lastCheckedAt: string | null;
+  /** @nullable */
+  lastErrorAt: string | null;
+}
+
 /**
  * The overview: metrics, queues, recent activity, upcoming due items, the close schedule and the alerts.
  */
@@ -207,6 +258,7 @@ export interface Overview {
   nextClose: string;
   closeTime: string;
   alerts: Alert[];
+  closeSchedule?: EffectiveCloseSchedule;
 }
 
 /**
@@ -323,6 +375,7 @@ export interface Settings {
   integrations: ValopayRecord[];
   members: ValopayRecord[];
   calendar: ValopayRecord[];
+  closeSchedule?: EffectiveCloseSchedule;
 }
 
 /**

@@ -3,6 +3,7 @@ import { Link } from 'wouter';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow, EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
+import { DailyCloseStatus } from '@/components/daily-close-status';
 import { Button } from '@/components/ui/button';
 import { readableLabel } from '@/components/record-label';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -29,7 +30,7 @@ export default function OverviewPage() {
   const { merchantId } = useWorkspace();
   const { data: overview, isLoading, error, refetch } = useGetOverview(
     { merchantId: merchantId! },
-    { query: { enabled: !!merchantId, queryKey: getGetOverviewQueryKey({ merchantId: merchantId! }) } }
+    { query: { enabled: !!merchantId, refetchInterval: 60_000, queryKey: getGetOverviewQueryKey({ merchantId: merchantId! }) } }
   );
 
   if (!merchantId) return null;
@@ -53,7 +54,7 @@ export default function OverviewPage() {
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border bg-card px-4 py-3 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-2 font-medium text-foreground"><Clock aria-hidden="true" className="h-4 w-4 text-muted-foreground" /> Daily close</span>
         <p>Last close: {overview.lastClose ? formatDate(overview.lastClose) : 'Not closed yet'}</p>
-        <p>Next scheduled close: {overview.nextClose ? `${formatDate(overview.nextClose)} (daily)` : 'Automatic close is off'}</p>
+        <DailyCloseStatus value={overview.closeSchedule} />
         <span className="ml-auto rounded-md bg-secondary px-2 py-1 font-medium capitalize">{overview.environment}</span>
       </div>
 

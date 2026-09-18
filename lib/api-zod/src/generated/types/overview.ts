@@ -6,6 +6,7 @@
  * OpenAPI spec version: 1.0.0
  */
 import type { Alert } from './alert';
+import type { EffectiveCloseSchedule } from './effectiveCloseSchedule';
 import type { Metric } from './metric';
 import type { ValopayRecord } from './valopayRecord';
 
@@ -23,4 +24,5 @@ export interface Overview {
   nextClose: string;
   closeTime: string;
   alerts: Alert[];
+  closeSchedule?: EffectiveCloseSchedule;
 }

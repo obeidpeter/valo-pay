@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'wouter';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { FieldError, FormAlert, attentionTitle, focusField, invalidProps, missingMessage, serverFieldErrors } from '@/components/form-field';
 import { EmptyState } from '@/components/empty-state';
@@ -14,6 +15,11 @@ import { activationWorkflows, mandateFrequencies } from '@workspace/valopay-sche
 import { RecordLabel, StatusBadge, readableLabel } from '@/components/record-label';
 import { deadlineInstant, deadlineOrder, isDueToday, isDeadlineOverdue as isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { nairaToKobo } from '@/lib/money-input';
+import { MandateActionContext } from '@/components/mandate-action-context';
+import { recordDestination, safeCollectionReturnTo } from '@/lib/record-navigation';
+import { useHashTarget } from '@/lib/use-hash-target';
+import { useRecordPagination } from '@/lib/use-record-pagination';
+import { RecordPagination } from '@/components/record-pagination';
 
 const mandateViews = ['all', 'awaiting-activation', 'overdue', 'due-today'] as const;
 const emptyMandate = { name: '', customerId: '', amountKobo: '', reference: '', workflow: 'hosted_consent', consentEvidence: '', consentGaps: '', policyId: '', frequency: 'monthly' };
@@ -33,6 +39,10 @@ export default function MandatesPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formErrors, setFormErrors] = useState<string[]>([]);
   const { view, setView } = useQueueFilters(mandateViews, 'all');
+  const [search, setSearch] = useSearchParams();
+  const targetId = search.get('record');
+  const wrongLender = Boolean(search.get('lender') && search.get('lender') !== merchantId);
+  const returnTo = safeCollectionReturnTo(search.get('returnTo'), merchantId);
   /** The fields the form asks for, in order, with the words a missing value is named by. */
   const requiredFields: Array<{ name: keyof typeof draft; label: string; type: 'text' | 'number' | 'select' }> = [
     { name: 'name', label: 'Mandate name', type: 'text' }, { name: 'customerId', label: 'Customer', type: 'select' }, { name: 'amountKobo', label: 'Debit limit (₦)', type: 'text' },
@@ -60,6 +70,7 @@ export default function MandatesPage() {
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('customers', { merchantId: merchantId! }) } }
   );
+  useHashTarget(`record-${targetId || ''}`, !!targetId && !isLoading && !error && !wrongLender);
   const { data: policies } = useListRecords(
     'policies',
     { merchantId: merchantId! },
@@ -127,20 +138,29 @@ export default function MandatesPage() {
     });
   };
 
-  if (!merchantId) return null;
   const now = Date.now();
   const mandates = data?.items || [];
   const waiting = mandates.filter(mandate => mandate.status === 'pending_activation');
-  const shown = (view === 'all' ? mandates : waiting.filter(mandate => view === 'overdue' ? isOverdue(mandate.data?.activationDeadline, now) : view === 'due-today' ? isDueToday(mandate.data?.activationDeadline, now) : true)).slice().sort((a, b) => Number(b.status === 'pending_activation') - Number(a.status === 'pending_activation') || deadlineOrder(a.data?.activationDeadline, b.data?.activationDeadline));
+  const shown = (targetId ? mandates.filter(mandate => !wrongLender && mandate.id === targetId) : view === 'all' ? mandates : waiting.filter(mandate => view === 'overdue' ? isOverdue(mandate.data?.activationDeadline, now) : view === 'due-today' ? isDueToday(mandate.data?.activationDeadline, now) : true)).slice().sort((a, b) => Number(b.status === 'pending_activation') - Number(a.status === 'pending_activation') || deadlineOrder(a.data?.activationDeadline, b.data?.activationDeadline));
+  const pagination = useRecordPagination(`${merchantId}:${view}:${targetId}`, shown.length);
+  const pagedMandates = shown.slice(pagination.offset, pagination.offset + pagination.pageSize);
+  const replacements = targetId && !wrongLender ? mandates.filter(mandate => mandate.data?.reissuedFrom === targetId) : [];
+  const leaveSelectedRecord = () => setSearch(current => {
+    const next = new URLSearchParams(current);
+    next.delete('record'); next.delete('lender');
+    return next;
+  });
   const views: Array<{ key: typeof view; label: string; count: number }> = [
     { key: 'all', label: 'All mandates', count: mandates.length },
     { key: 'awaiting-activation', label: 'Awaiting activation', count: waiting.length },
     { key: 'overdue', label: 'Overdue activation', count: waiting.filter(mandate => isOverdue(mandate.data?.activationDeadline, now)).length },
     { key: 'due-today', label: 'Activation due today', count: waiting.filter(mandate => isDueToday(mandate.data?.activationDeadline, now)).length },
   ];
+  if (!merchantId) return null;
 
   return (
     <div className="space-y-6">
+      {returnTo && <Link href={returnTo} className="inline-flex text-sm font-medium text-primary underline underline-offset-4">Back to collections</Link>}
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Mandates</h1>
@@ -150,16 +170,20 @@ export default function MandatesPage() {
       </header>
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
-        <div className="border-b p-4">
+        {targetId ? <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4"><p className="text-sm font-medium">Selected mandate</p><Button size="sm" variant="outline" onClick={leaveSelectedRecord}>View mandate queue</Button></div> : <div className="border-b p-4">
           <div className="flex flex-wrap gap-2" role="group" aria-label="Mandate views">
             {views.map(option => <Button key={option.key} size="sm" variant={view === option.key ? 'default' : 'ghost'} aria-pressed={view === option.key} onClick={() => setView(option.key)}>{option.label} ({option.count})</Button>)}
           </div>
           <p className="mt-3 text-xs text-muted-foreground">Mandates awaiting activation appear first, with the earliest deadlines at the top. Dates use West Africa Time.</p>
-        </div>
+        </div>}
         {isLoading ? (
           <Loading what="mandates" />
         ) : error ? (
           <div role="alert" className="p-6 text-sm"><p>Mandates could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => refetch()}>Try again</Button></div>
+        ) : targetId && shown.length === 0 ? (
+          <EmptyState title={wrongLender ? 'This mandate link belongs to another lender' : 'The selected mandate is unavailable'} action={<Button size="sm" variant="outline" onClick={leaveSelectedRecord}>View mandate queue</Button>}>
+            {wrongLender ? 'Switch to the lender you were reviewing to open this record.' : 'The record could not be found for the active lender. Return to collections to check its linked mandate.'}
+          </EmptyState>
         ) : shown.length === 0 ? (
           <EmptyState title={view === 'all' ? 'No mandates yet' : 'No mandates match this view'} action={view === 'all' ? <Button size="sm" variant="outline" onClick={() => setIsCreateOpen(true)}>Create synthetic mandate</Button> : <Button size="sm" variant="outline" onClick={() => setView('all')}>View all mandates</Button>}>
             {view === 'all' ? 'Mandates appear after they are created or imported. Create a synthetic mandate to try the activation process.' : 'Choose All mandates to review other activation states.'}
@@ -179,8 +203,8 @@ export default function MandatesPage() {
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {shown.map(mandate => (
-                  <tr key={mandate.id} className="hover:bg-secondary/10">
+                {pagedMandates.map(mandate => (
+                  <tr key={mandate.id} id={`record-${mandate.id}`} tabIndex={-1} className="hover:bg-secondary/10 target:bg-primary/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
                     <td className="px-6 py-4 font-mono font-medium">{mandate.reference}</td>
                     <td className="px-6 py-4"><RecordLabel record={customerById.get(String(mandate.customerId))} id={mandate.customerId} customer /></td>
                     <td className="px-6 py-4"><StatusBadge status={mandate.status} /></td>
@@ -202,15 +226,34 @@ export default function MandatesPage() {
             </table>
           </ScrollFrame>
         )}
+        {!isLoading && !error && !targetId && <RecordPagination pagination={pagination} total={shown.length} label="mandates" />}
       </div>
+
+      {replacements.length > 0 && <section aria-label="Reissued mandates" className="rounded-xl border bg-card p-5 text-sm">
+        <h2 className="font-semibold">Mandates reissued from this record</h2>
+        <p className="mt-1 text-muted-foreground">Open the new mandate to track its activation. The original history stays on this record.</p>
+        <ul className="mt-3 space-y-2">{replacements.map(replacement => <li key={replacement.id} className="flex flex-wrap items-center gap-3">
+          <Link href={recordDestination('/mandates', replacement.id, returnTo || '', merchantId)} className="font-medium text-primary underline underline-offset-4">{replacement.reference || replacement.name}</Link>
+          <StatusBadge status={replacement.status} />
+        </li>)}</ul>
+      </section>}
 
       <RecordDialog
         kind="mandates"
-        record={selectedMandate}
+        record={selectedMandate && ['mandate_reissue', 'apply_policy_version', 'notify_policy_change'].includes(actionKind)
+          ? { ...selectedMandate, data: { ...selectedMandate.data, consentEvidence: '', policyId: '', noticeId: '' } }
+          : selectedMandate}
         isOpen={isDialogOpen}
         onOpenChange={setIsDialogOpen}
         title={mandateActionTitles[actionKind] || 'Update mandate'}
         actionMutation={actionKind}
+        context={values => selectedMandate && <MandateActionContext
+          mandate={selectedMandate}
+          customerName={customerById.get(String(selectedMandate.customerId))?.name}
+          customerReference={customerById.get(String(selectedMandate.customerId))?.reference || selectedMandate.customerId}
+          action={actionKind}
+          policyName={approvedVersionOptions.find(policy => policy.value === values.policyId)?.label}
+        />}
         fields={actionKind === 'mandate_reissue' ? [{ name: 'consentEvidence', label: 'New consent evidence reference (reissuing creates a new mandate)', type: 'text', isData: true, required: true }]
           : actionKind === 'notify_policy_change' ? [{ name: 'policyId', label: 'Approved policy version (the notice is simulated and is not proof of delivery)', type: 'select', isData: true, required: true, options: approvedVersionOptions }]
           : actionKind === 'apply_policy_version' ? [

@@ -37,7 +37,7 @@ describe("settings", () => {
     const user = userEvent.setup();
     renderApp("/settings");
     expect(await screen.findByText("07:00 WAT")).toBeTruthy();
-    expect(screen.getByText(/^On · next /)).toBeTruthy();
+    expect(screen.getByText(/^Next daily close: /)).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Edit" }));
     const input = screen.getByPlaceholderText("07:00");

@@ -1,13 +1,15 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
+import { LoadProblem } from '@/components/load-problem';
 import { useWorkspace } from '@/lib/workspace-context';
-import { useListRecords, usePerformAction, getListRecordsQueryKey } from '@workspace/api-client-react';
-import { Shield, FileText, CheckCircle, Clock } from 'lucide-react';
+import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
+import { Shield, FileText, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatDate } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { readableLabel } from '@/components/record-label';
+import { PolicyReview, TemplatePreview, TemplateReview } from '@/components/policy-review';
 
 export default function PoliciesPage() {
   const { merchantId } = useWorkspace();
@@ -15,23 +17,19 @@ export default function PoliciesPage() {
   const [actionKind, setActionKind] = useState<string>('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   
-  const { data: policies, isLoading, refetch } = useListRecords(
+  const { data: policies, isLoading, error: policyError, refetch: retryPolicies, isFetching: fetchingPolicies } = useListRecords(
     'policies',
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('policies', { merchantId: merchantId! }) } }
   );
 
-  const { data: templates, isLoading: isLoadingTemplates } = useListRecords(
+  const { data: templates, isLoading: isLoadingTemplates, error: templateError, refetch: retryTemplates, isFetching: fetchingTemplates } = useListRecords(
     'templates',
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('templates', { merchantId: merchantId! }) } }
   );
 
-  const action = usePerformAction({
-    mutation: {
-      onSuccess: () => refetch()
-    }
-  });
+  useEffect(() => { setIsDialogOpen(false); setSelectedRecord(null); }, [merchantId]);
 
   const handleAction = (record: any, kind: string) => {
     setSelectedRecord(record);
@@ -55,11 +53,13 @@ export default function PoliciesPage() {
             <Shield className="h-5 w-5 text-primary" />
             <h2 className="font-semibold text-lg">Retry policies</h2>
           </div>
-          <Button size="sm" onClick={() => handleAction(null, 'create_policy')}>Draft new version</Button>
+          <Button size="sm" onClick={() => handleAction(null, 'create_policy')}>Draft a policy</Button>
         </div>
         <div className="divide-y">
           {isLoading ? (
             <Loading what="policies" />
+          ) : policyError ? (
+            <LoadProblem what="retry policies" error={policyError} retry={() => { void retryPolicies(); }} busy={fetchingPolicies} />
           ) : !policies || policies.items.length === 0 ? (
             <EmptyState title="No retry policies yet" action={<Button size="sm" variant="outline" onClick={() => handleAction(null, 'create_policy')}>Draft a policy</Button>}>
               A policy sets retry limits, notice periods and quiet hours. Draft a version and submit it for approval by a compliance reviewer before use.
@@ -121,9 +121,12 @@ export default function PoliciesPage() {
                     </>
                   )}
                   {policy.status === 'approved' && (
+                    <>
                     <div className="flex items-center gap-2 text-success text-sm font-medium">
                       <Shield className="h-4 w-4" /> Approved version
                     </div>
+                    <Button variant="outline" size="sm" onClick={() => handleAction(policy, 'new_policy_version')}>Draft next version</Button>
+                    </>
                   )}
                 </div>
               </div>
@@ -144,6 +147,8 @@ export default function PoliciesPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
           {isLoadingTemplates ? (
             <Loading what="templates" className="col-span-2" />
+          ) : templateError ? (
+            <div className="md:col-span-2"><LoadProblem what="notification templates" error={templateError} retry={() => { void retryTemplates(); }} busy={fetchingTemplates} /></div>
           ) : !templates || templates.items.length === 0 ? (
             <EmptyState className="col-span-2" title="No notification templates yet">Templates define customer messages. A compliance reviewer must approve each version before use. Messages in this sandbox are simulated.</EmptyState>
           ) : (
@@ -155,9 +160,8 @@ export default function PoliciesPage() {
                     {readableLabel(template.status)}
                   </span>
                 </div>
-                <div className="bg-background p-3 rounded border font-mono text-xs text-muted-foreground whitespace-pre-wrap">
-                  {String(template.data?.text || 'No message written yet')}
-                </div>
+                <TemplatePreview text={template.data?.text} />
+                <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">Template placeholders</summary><p className="mt-2 font-mono whitespace-pre-wrap break-words">{String(template.data?.text || 'No message written yet')}</p></details>
                 <div className="mt-3 flex justify-between items-center text-xs text-muted-foreground">
                   <span>v{String(template.data?.version || '1')}</span>
                   {template.status === 'draft' && (
@@ -177,6 +181,7 @@ export default function PoliciesPage() {
       </section>
 
       <RecordDialog
+        key={merchantId}
         kind={actionKind.includes('policy') ? 'policies' : 'templates'}
         record={selectedRecord}
         isOpen={isDialogOpen}
@@ -187,6 +192,7 @@ export default function PoliciesPage() {
           actionKind === 'submit_policy' ? 'Submit policy for review' :
           actionKind === 'approve_policy' ? 'Approve policy' :
           actionKind === 'reject_policy' ? 'Reject policy' :
+          actionKind === 'new_policy_version' ? 'Draft next policy version' :
           actionKind === 'create_template' ? 'Draft new template' :
           actionKind === 'edit_template' ? 'Edit template' :
           actionKind === 'submit_template' ? 'Submit template for review' :
@@ -194,6 +200,13 @@ export default function PoliciesPage() {
           'Action'
         }
         actionMutation={actionKind.includes('create') || actionKind.includes('edit') ? undefined : actionKind}
+        context={actionKind === 'create_template' || actionKind === 'edit_template'
+          ? values => <TemplatePreview text={values.text} />
+          : selectedRecord && actionKind !== 'edit_policy'
+            ? actionKind.includes('policy')
+              ? <PolicyReview record={selectedRecord} records={policies?.items ?? []} />
+              : <TemplateReview record={selectedRecord} records={templates?.items ?? []} />
+            : undefined}
         fields={
           actionKind === 'create_policy' || actionKind === 'edit_policy' ? [
             { name: 'name', label: 'Policy name', type: 'text', required: true },

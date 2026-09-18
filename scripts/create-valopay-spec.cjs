@@ -32,7 +32,18 @@ const schemas = {
   SettingsInput: obj({ executionStart: num, executionEnd: num, authorisationMode: str, contactRoute: str, minimumTicketKobo:num, defaultOwner: str, policyChangeRequiresConsent: bool, unallocatedAlertThreshold: num, notificationCostAlertKobo: num, closeTime: str, scheduledCloseEnabled: bool }, []),
   ExportInput: obj({ kind: str, customerId: str, format: {type:"string", enum:["json","csv","pdf"]} }, ["kind","format"]),
   ExportResult: obj({ id:str, downloadUrl: str, checksum: str, generatedAt: str }),
+  EffectiveCloseSchedule: obj({
+    time: str, enabled: bool, automatic: bool, nextAt: { type: ["string", "null"] },
+    runtimeState: { type: "string", enum: ["not_started", "running", "off", "stopped"] },
+    serviceIssue: { type: ["string", "null"], enum: ["starting", "delayed", "failed", null] },
+    missed: bool, overdueMinutes: num, lateAfterMinutes: num,
+    lastAt: { type: ["string", "null"] }, lastTrigger: { type: ["string", "null"] },
+    lastCheckedAt: { type: ["string", "null"] }, lastErrorAt: { type: ["string", "null"] },
+  }),
 };
+// Additive metadata remains optional for clients reading an older service response.
+for (const field of ["lastSuccessAt", "lastErrorAt"]) schemas.SchedulerStatus.properties[field] = { type: ["string", "null"] };
+for (const name of ["Overview", "Settings"]) schemas[name].properties.closeSchedule = ref("EffectiveCloseSchedule");
 const paths = {};
 function add(path, method, id, response, body, params = []) {
  const op = {operationId:id, tags:["valopay"], parameters:params, responses:{"200":{description:"Success",content:{"application/json":{schema:ref(response)}}},"400":{description:"Invalid request"},"401":{description:"Authentication required"},"403":{description:"Permission or readiness gate blocked"},"409":{description:"Conflict"}}};
@@ -114,6 +125,7 @@ const schemaDescriptions = {
   SettingsInput: "The execution settings to change; every field is optional.",
   ExportInput: "What to export (a record kind, gate-pack, billing, dispute-pack or customer-pack with a customerId) and in which format.",
   ExportResult: "The export's id, its download address on this API, its SHA-256 checksum and when it was generated.",
+  EffectiveCloseSchedule: "Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.",
 };
 for (const [name, description] of Object.entries(schemaDescriptions)) schemas[name].description = description;
 fs.writeFileSync("lib/api-spec/openapi.json",JSON.stringify({openapi:"3.1.0",info:{title:"Valo Pay sandbox API",version:"1.0.0",description:"Valo Pay Stage 1 observation-first sandbox API. All monetary fields are integer kobo. Live lender data and all outbound provider instructions are blocked until production readiness is verified."},servers:[{url:"/api"}],paths,components:{schemas}},null,2));

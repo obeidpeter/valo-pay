@@ -5,13 +5,16 @@ import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
-import { formatNumber, formatCount } from '@/lib/formatters';
+import { formatNumber } from '@/lib/formatters';
 import { Search, UserPlus, ArrowRight, Users } from 'lucide-react';
 import { CustomerAvatar, StatusBadge } from '@/components/record-label';
 import { Button } from '@/components/ui/button';
 import { Link } from 'wouter';
 import { RecordDialog } from '@/components/record-dialog';
 import { recordStatuses } from '@workspace/valopay-schema';
+import { LoadProblem } from '@/components/load-problem';
+import { RecordPagination } from '@/components/record-pagination';
+import { useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
 
 export default function CustomersPage() {
   const { merchantId } = useWorkspace();
@@ -19,11 +22,14 @@ export default function CustomersPage() {
   const searchRef = useRef<HTMLInputElement>(null);
   useSearchShortcut(searchRef);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const { search: settledSearch, searchPending } = useDebouncedSearch(search, merchantId);
+  const pagination = useRecordPagination(`${merchantId}:${settledSearch}`);
+  const params = { merchantId: merchantId!, search: settledSearch || undefined, limit: pagination.pageSize, offset: pagination.offset };
   
-  const { data, isLoading, error } = useListRecords(
+  const { data, isLoading, isFetching, error, refetch } = useListRecords(
     'customers',
-    { merchantId: merchantId!, search: search || undefined },
-    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('customers', { merchantId: merchantId!, search: search || undefined }) } }
+    params,
+    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('customers', params) } }
   );
 
   if (!merchantId) return null;
@@ -84,10 +90,10 @@ export default function CustomersPage() {
           </div>
         </div>
 
-        {isLoading ? (
-          <Loading what="customers" />
+        {isLoading || searchPending ? (
+          <Loading what={searchPending ? 'search results' : 'customers'} />
         ) : error ? (
-          <div role="alert" className="p-8 text-center text-destructive">Customers could not be loaded. Reload the page to try again.</div>
+          <LoadProblem what="customers" error={error} retry={() => { void refetch(); }} busy={isFetching} />
         ) : !data || data.items.length === 0 ? (
           search.trim() ? (
             <EmptyState filtered title={`No customers match “${search.trim()}”`}>Check the spelling, or search by the reference or the masked phone number.</EmptyState>
@@ -142,11 +148,7 @@ export default function CustomersPage() {
           </ScrollFrame>
         )}
         
-        {data && data.total > data.items.length && (
-          <div className="p-4 border-t text-center text-xs text-muted-foreground">
-            Showing {formatNumber(data.items.length)} of {formatCount(data.total, 'customer')}. Narrow your search to find a specific customer.
-          </div>
-        )}
+        {data && !error && !searchPending && <RecordPagination pagination={pagination} total={data.total} busy={isFetching} label="customers" />}
       </div>
     </div>
   );

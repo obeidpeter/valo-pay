@@ -50,7 +50,15 @@ Every line is JSON with `level` (30 info, 40 warn, 50 error, 60 fatal), `time`, 
 
 **Tracing a report.** A person quotes the reference from a notice or the failure page; it is `req.id`. Every line of that request shares it: the request line, the rejection or failure line, a refusal. A scheduled close is traced by `runId`; a person's close is a request like any other, with its audit entry in the lender's log.
 
-**What to watch.** Any line at level 50 or above; `request.refused` with `reason: rate_limit` in a burst; `readiness.failed`; on `/api/healthz`, `scheduler.state` other than `running` on an instance that should schedule, or `lastTickAt` older than a few intervals; `close.run` with `failed` above zero; the distribution of `responseTime` on request lines and of `generationMs` on exports.
+**What to watch.** Any line at level 50 or above; `request.refused` with `reason: rate_limit` in a burst; `readiness.failed`; on `/api/healthz`, `scheduler.state` other than `running` on an instance that should schedule, a missing or stale `lastSuccessAt`, or a `lastErrorAt` after its latest success; `close.run` with `failed` above zero; the distribution of `responseTime` on request lines and of `generationMs` on exports. `lastTickAt` means a check started, so it must not be used alone as evidence that a check completed.
+
+## Daily-close service status
+
+The scheduler records `lastTickAt` when a pass starts, `lastSuccessAt` when its scan and loop return, and `lastErrorAt` when the pass itself fails. A later successful pass clears the service error. A returning pass can still contain individual lender failures: inspect `lastRun.failed` and the lender's log lines. A successful service check is not a successful close for every lender.
+
+The console combines this process status with the scoped lender schedule through `artifacts/api-server/src/lib/valopay-close-views.ts` and `artifacts/api-server/src/domain/effective-close-schedule.ts`. Its `closeSchedule.automatic` is true only for a requested schedule with a running service and a recent successful check. Before the first success it says starting; a failed pass or a heartbeat older than the greater of two minutes or three tick intervals removes the advertised next run. An intentionally off service also removes it. The completed-close time and trigger come only from this lender's records; another lender's identifiers, run results and failure text are not included in the console projection.
+
+Heartbeat freshness compares the API host's check timestamp with its internal `observedAt` clock. The lender's due time, overdue duration and close records continue to use the database clock. This prevents clock differences between the database and API host from being mistaken for a stale worker. Overview, Reports and Settings refresh every 60 seconds while active and show the service-check time separately from the last completed close. Saving the lender's schedule preference does not start the service, and these process-local observations are not an availability guarantee or a fleet-wide health check.
 
 ## What was left out
 
@@ -63,5 +71,6 @@ Every line is JSON with `level` (30 info, 40 warn, 50 error, 60 fatal), `time`, 
 ## How to re-run
 
 - `pnpm run test:pure` runs `artifacts/api-server/tests/observability.test.ts`: request ids kept, replaced and returned; ids in error bodies; stacks and reasons in the log; liveness with build and scheduler state; bounded readiness against an unreachable address; query strings and cookies never written.
+- `artifacts/api-server/tests/close-schedule-golden.test.ts` checks effective schedule states through the public response schemas; `artifacts/valo-pay/tests/daily-close-status.test.tsx` checks the console wording. The disposable-database `artifacts/api-server/tests/close-scheduler.integration.test.ts` exercises the running loop, including heartbeat success, a failed scan, recovery and stop. That integration test requires its explicit database opt-in and must not be pointed at a deployed database.
 - Against a running API: `curl -i /api/healthz`, `curl -i /api/readyz`, a request with `X-Request-Id: edge-0123456789` returning the same id, `kill -TERM` and the `server.stopped` line.
 - Before a change that adds an operation an operator would ask about, give it one line with an `event` and its duration, and add a row here.

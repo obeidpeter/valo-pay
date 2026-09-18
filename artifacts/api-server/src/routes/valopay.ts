@@ -2,14 +2,16 @@ import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
 import { z } from "zod";
 import { inWorkspace, loadState, saveState, roles, fail, appendAudit, verifyAudit, digest, canonical, listMerchants, findIdempotency, saveIdempotency, changeRole, type StoreContext } from "../lib/valopay-store";
-import { buildAlerts, buildOverview, buildReports, customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction } from "../domain";
+import { customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
 import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, isCloseTime, recordKinds } from "@workspace/valopay-schema";
 import type { DomainState } from "../domain/types";
-import { getGates, getSettings } from "../lib/valopay-readiness";
+import { getGates } from "../lib/valopay-readiness";
 import { importCsv } from "../lib/valopay-import";
 import { createExportFile, exportDescriptor, exportKinds, readExport } from "../lib/valopay-exports";
 import { pageRecords } from "../lib/valopay-list";
+import { schedulerStatus } from "../lib/close-scheduler";
+import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../lib/valopay-close-views";
 
 const router:IRouter=Router();
 const kinds=new Set<string>(recordKinds);
@@ -48,7 +50,7 @@ router.get("/v1/workspace",async(req,res)=>{
  res.json(S.GetWorkspaceResponse.parse(result));
 });
 router.get("/v1/overview",async(req,res)=>{
- const result=await withState(req,res,(state,ctx)=>buildOverview(state,ctx.now,buildAlerts(state,ctx.now,verifyAudit(state))));
+ const result=await withState(req,res,(state,ctx)=>buildConsoleOverview(state,ctx.now,verifyAudit(state),schedulerStatus()));
  res.json(S.GetOverviewResponse.parse(result));
 });
 router.get("/v1/records/:kind",async(req,res)=>{
@@ -114,13 +116,13 @@ router.get("/v1/customers/:id/timeline",async(req,res)=>{
  res.json(S.GetCustomerTimelineResponse.parse(await withState(req,res,state=>customerTimeline(state,id))));
 });
 router.get("/v1/reports",async(req,res)=>{
- res.json(S.GetReportsResponse.parse(await withState(req,res,(state,ctx)=>buildReports(state,ctx.now))));
+ res.json(S.GetReportsResponse.parse(await withState(req,res,(state,ctx)=>buildConsoleReports(state,ctx.now,schedulerStatus()))));
 });
 router.get("/v1/gates",async(req,res)=>{
  res.json(S.GetGatesResponse.parse(await withState(req,res,getGates)));
 });
 router.get("/v1/settings",async(req,res)=>{
- res.json(S.GetSettingsResponse.parse(await withState(req,res,(state,ctx)=>getSettings(state,ctx.role))));
+ res.json(S.GetSettingsResponse.parse(await withState(req,res,(state,ctx)=>buildConsoleSettings(state,ctx.role,ctx.now,schedulerStatus()))));
 });
 router.patch("/v1/settings",async(req,res)=>{
  const body=S.UpdateSettingsBody.parse(req.body);
@@ -137,7 +139,7 @@ router.patch("/v1/settings",async(req,res)=>{
   Object.assign(state.settings,body);
   // REC-01: a changed close time or a switched-on schedule starts from its next occurrence; an unchanged save leaves a pending close pending.
   rescheduleAfterSettings(state,previous,ctx.now);
-  return getSettings(state,ctx.role);
+  return buildConsoleSettings(state,ctx.role,ctx.now,schedulerStatus());
   },true,S.UpdateSettingsResponse);
  res.json(S.UpdateSettingsResponse.parse(result));
 });
