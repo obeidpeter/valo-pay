@@ -27,7 +27,7 @@ export function ScrollFrame({ label, className = 'overflow-x-auto', children }: 
     return () => observer.disconnect();
   }, []);
   return (
-    <div ref={ref} className={`${className} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`} tabIndex={scrolls ? 0 : undefined} role={scrolls ? 'region' : undefined} aria-label={scrolls ? label : undefined}>
+    <div ref={ref} className={`${className} relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`} tabIndex={scrolls ? 0 : undefined} role={scrolls ? 'region' : undefined} aria-label={scrolls ? label : undefined}>
       {children}
     </div>
   );

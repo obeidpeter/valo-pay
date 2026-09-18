@@ -166,8 +166,8 @@
     --accent-foreground: 21 94% 77%;
     --accent-border: 232 25% 18%;
     
-    /* Red light enough to read as text on the dark card (5.4:1); the destructive button therefore carries dark text, like success. */
-    --destructive: 348 85% 62%;
+    /* Red light enough to read as text on the dark card (5.6:1) and on its own 10% tint over it (4.9:1); the destructive button therefore carries dark text, like success. */
+    --destructive: 348 85% 67%;
     --destructive-foreground: 232 47% 8%;
     --destructive-border: 348 83% 45%;
 
@@ -250,8 +250,8 @@
   ::selection { background: hsl(var(--primary) / .18); }
 }
 .environment-strip { background: hsl(var(--accent)); color: hsl(var(--accent-foreground)); border-color: hsl(var(--primary) / .12); }
-.nav-group-label { padding: 0.5rem .75rem .35rem; font-size: 9px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
-.console-nav-link { min-height: 39px; }
+.nav-group-label { padding: .375rem .75rem .25rem; font-size: 9px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
+.console-nav-link { min-height: 34px; }
 .console-nav-link.is-active { background: hsl(var(--accent)); color: hsl(var(--accent-foreground)); font-weight: 700; box-shadow: inset 3px 0 hsl(var(--primary)); }
 .console-nav-link.is-active:hover { background: hsl(var(--primary) / .12); }
 .workspace-bar { background: hsl(var(--card) / .8); }
