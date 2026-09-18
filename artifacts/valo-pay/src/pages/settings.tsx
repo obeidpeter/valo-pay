@@ -6,7 +6,7 @@ import { Settings as SettingsIcon, Shield, PowerOff, AlertTriangle } from 'lucid
 import { authorisationModes, closeRules, executionWindow, isCloseTime } from '@workspace/valopay-schema';
 import { FieldError, FormAlert, focusField, invalidProps } from '@/components/form-field';
 import { formatDate } from '@/lib/formatters';
-import { useToast } from '@/hooks/use-toast';
+import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
 import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
 
@@ -18,7 +18,6 @@ export default function SettingsPage() {
   
   const [isEditingExec, setIsEditingExec] = useState(false);
   const [execSettings, setExecSettings] = useState<any>({});
-  const { toast } = useToast();
   
   const { data: settings, isLoading, refetch } = useGetSettings(
     { merchantId: merchantId! },
@@ -33,15 +32,15 @@ export default function SettingsPage() {
 
   const killSwitch = usePerformAction({
     mutation: {
-      onSuccess: (data) => { refetch(); toast({ title: 'Kill switch updated', description: data.message }); },
-      onError: (err: any) => toast({ title: 'Kill switch rejected', description: err?.data?.error || err?.message || 'Operation rejected.', variant: 'destructive' })
+      onSuccess: (data) => { refetch(); notifyDone('Kill switch updated', data.message); },
+      onError: (err: unknown) => notifyProblem('The kill switch was not changed', saidBy(err, 'The change was refused.'))
     }
   });
 
   const requestInstruction = usePerformAction({
     mutation: {
-      onSuccess: (data) => toast({ title: 'Instruction request', description: data.message }),
-      onError: (err: any) => toast({ title: 'Instruction blocked', description: err?.data?.error || err?.message || 'Operation rejected.', variant: 'destructive' })
+      onSuccess: (data) => notifyDone('Live instruction requested', data.message),
+      onError: (err: unknown) => notifyProblem('Live instruction refused', saidBy(err, 'The request was refused.'))
     }
   });
   
@@ -50,7 +49,7 @@ export default function SettingsPage() {
       onSuccess: () => {
         setIsEditingExec(false);
         refetch();
-        toast({ title: 'Settings saved' });
+        notifyDone('Settings saved', 'Recorded in the audit log. The next scheduled close follows the saved time.');
       },
       onError: (err: any) => rejectExec(err)
     }

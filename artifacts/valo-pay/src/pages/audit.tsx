@@ -6,13 +6,12 @@ import { useListRecords, usePerformAction, getListRecordsQueryKey } from '@works
 import { Search, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatDate } from '@/lib/formatters';
-import { useToast } from '@/hooks/use-toast';
+import { notifyProblem, saidBy } from '@/lib/notify';
 
 export default function AuditPage() {
   const { merchantId } = useWorkspace();
   const [search, setSearch] = useState('');
   const [verification, setVerification] = useState<{ valid: boolean; count: number; headHash: string } | null>(null);
-  const { toast } = useToast();
 
   const { data, isLoading } = useListRecords(
     'audit',
@@ -25,13 +24,9 @@ export default function AuditPage() {
       onSuccess: (res) => {
         const result = { valid: res.data?.valid === true, count: Number(res.data?.count || 0), headHash: String(res.data?.headHash || '') };
         setVerification(result);
-        toast({
-          title: result.valid ? 'Audit chain verified' : 'Audit chain broken',
-          description: `${result.count} entries · head ${result.headHash.slice(0, 16)}`,
-          variant: result.valid ? 'default' : 'destructive',
-        });
+
       },
-      onError: (error: any) => toast({ title: 'Verification failed', description: error?.data?.error || error?.message || 'The chain could not be verified.', variant: 'destructive' }),
+      onError: (error: unknown) => notifyProblem('The chain could not be verified', `${saidBy(error, 'The service refused the request.')} The log is unchanged.`),
     }
   });
 

@@ -7,7 +7,7 @@ import { formatKobo, formatDate, formatCompactDate } from '@/lib/formatters';
 import { ArrowLeft, Clock, FileText, CheckCircle, AlertTriangle, CreditCard, Download } from 'lucide-react';
 import { Link, useParams } from 'wouter';
 import { Button } from '@/components/ui/button';
-import { useToast } from '@/hooks/use-toast';
+import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
 import { LookedFor } from '@/components/notice';
 import { NotFoundNotice } from '@/pages/not-found';
 
@@ -45,14 +45,17 @@ export default function CustomerTimelinePage() {
     { query: { enabled: !!merchantId && !!id, queryKey: getGetCustomerTimelineQueryKey(id!, { merchantId: merchantId! }) } }
   );
 
-  const { toast } = useToast();
   const createExport = useCreateExport({
     mutation: {
       onSuccess: (data) => {
-        window.open(data.downloadUrl, '_blank');
-        toast({ title: 'Dispute pack generated', description: `SHA-256 ${data.checksum.slice(0, 16)}… · generated ${formatDate(data.generatedAt)}` });
+        const opened = window.open(data.downloadUrl, '_blank');
+        notifyDone(
+          'Dispute pack generated',
+          `${opened ? 'It opened in a new tab.' : 'Your browser kept the new tab closed; use Open.'} SHA-256 ${data.checksum.slice(0, 16)}… · generated ${formatDate(data.generatedAt)}`,
+          { label: 'Open', altText: 'Open the dispute pack in a new tab', onClick: () => { window.open(data.downloadUrl, '_blank'); } },
+        );
       },
-      onError: (error: any) => toast({ title: 'Pack not generated', description: error?.data?.error || error?.message || 'The pack could not be generated.', variant: 'destructive' }),
+      onError: (error: unknown) => notifyProblem('The dispute pack was not generated', `${saidBy(error, 'The service refused the request.')} Nothing has been changed.`),
     }
   });
   const exportPack = (format: 'pdf' | 'csv' | 'json') => createExport.mutate({ data: { kind: 'dispute-pack', format, customerId: String(id) }, params: { merchantId: merchantId! } });
