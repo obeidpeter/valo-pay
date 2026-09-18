@@ -47,6 +47,8 @@ const conflict = (message = "Operation conflicts with the current lender state."
 export const ANONYMOUS_WORKSPACE_DAYS = 30;
 /** How many expired sandboxes one bootstrap removes, so a request never pays for a large backlog. */
 const SWEEP_BATCH = 5;
+/** Automatic deletion is opt-in so importing the application cannot remove existing workspaces. */
+export const expiredWorkspaceCleanupEnabled = (value: string | undefined) => value === "on";
 /** Actor prefix for platform-initiated changes (the seed, the scheduled close); the expiry sweep does not count them as sandbox activity. */
 export const SYSTEM_ACTOR_PREFIX = "System · ";
 /** A UTC ISO instant as the platform writes it; guards the timestamptz cast on the stored close cursor. */
@@ -120,8 +122,10 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       if (!workspace) throw new Error("Workspace bootstrap could not be completed.");
       if (inserted) {
         await seedWorkspace(client, workspace, identity.principal, !identity.authenticated, now);
-        // Each new anonymous sandbox pays for a few expired ones, so the table stays bounded without a scheduler.
-        if (!identity.authenticated) await sweepExpiredWorkspaces(client, SWEEP_BATCH);
+        // When explicitly enabled, each new anonymous sandbox pays for a few expired ones without a scheduler.
+        if (!identity.authenticated && expiredWorkspaceCleanupEnabled(process.env["VALOPAY_EXPIRED_WORKSPACE_CLEANUP"])) {
+          await sweepExpiredWorkspaces(client, SWEEP_BATCH);
+        }
       }
     }
     context = Object.freeze({

@@ -68,3 +68,16 @@ Thumbs.db
 attached_assets/
 uploads/
 backups/
+exports/
+
+# Original business attachments and local verification reports stay in Replit.
+/docs/source/
+/docs/*_VERIFICATION.md
+
+# Historical local scaffold files are retained on disk, not in the source snapshot.
+/main.py
+/pyproject.toml
+/uv.lock
+/artifacts/api-server/src/lib/.gitkeep
+/artifacts/api-server/src/middlewares/.gitkeep
+/artifacts/valo-pay/public/robots.txt

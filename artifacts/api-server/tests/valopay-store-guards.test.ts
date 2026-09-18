@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 // The pure guard does not connect, but the repository module verifies that a
 // database URL exists while it is loaded.
 process.env.DATABASE_URL ||= "postgres://unused:unused@127.0.0.1:1/unused";
-const { assertFinalState, canonical, appendAudit, verifyAudit } = await import("../src/lib/valopay-store.js");
+const { assertFinalState, canonical, appendAudit, expiredWorkspaceCleanupEnabled, verifyAudit } = await import("../src/lib/valopay-store.js");
 const { seedMerchant } = await import("../src/lib/valopay-seed.js");
 
 const seed = () => seedMerchant("merchant-a");
@@ -11,6 +11,9 @@ const expectConflict = (run: () => void) => assert.throws(run, (error: any) => e
 
 assert.equal(canonical({ b: 2, a: 1 }), '{"a":1,"b":2}', "Historical canonical bytes must not change.");
 assert.equal(canonical({ b: 2, a: 1 }), canonical({ a: 1, b: 2 }), "JSONB key reordering must not affect digests.");
+assert.equal(expiredWorkspaceCleanupEnabled(undefined), false, "Automatic workspace cleanup must default off.");
+assert.equal(expiredWorkspaceCleanupEnabled("off"), false, "Only the explicit opt-in may enable cleanup.");
+assert.equal(expiredWorkspaceCleanupEnabled("on"), true, "The documented opt-in must enable cleanup.");
 {
   const state = seed();
   appendAudit(state, { actor: "System", role: "Admin", now: "2026-01-01T00:00:00.000Z" }, "test", "workspace", "Synthetic test");

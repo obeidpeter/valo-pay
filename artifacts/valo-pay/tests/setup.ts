@@ -1,8 +1,19 @@
 // Runs before every console test file: browser APIs jsdom lacks, and a clean
 // query cache and DOM between tests so one page's data never leaks into the next.
-import { afterEach } from "vitest";
+import { afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { queryClient } from "@/App";
+
+// Replit injects managed Clerk configuration into Vitest too. Keep these
+// offline localhost tests on the anonymous adapter they are specified for,
+// without changing or contacting the managed Clerk runtime.
+vi.mock("@/lib/auth", () => ({
+  authEnabled: false,
+  clerkPublishableKey: undefined,
+  useSessionUser: () => ({ userId: null, isLoaded: true }),
+  useSignOut: () => () => {},
+  AuthShow: () => null,
+}));
 
 class ResizeObserverStub {
   observe(): void { /* layout is not measured in tests */ }

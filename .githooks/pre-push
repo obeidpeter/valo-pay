@@ -1,0 +1,42 @@
+#!/usr/bin/env node
+// Protect GitHub pushes without interfering with Replit's internal backups.
+const { execFileSync } = require("node:child_process");
+const { readFileSync } = require("node:fs");
+const { pathToFileURL } = require("node:url");
+const { join } = require("node:path");
+
+async function main() {
+  const [remote, url = ""] = process.argv.slice(2);
+  if (remote !== "origin" && !/github\.com[:/]obeidpeter\/valo-pay(?:\.git)?\/?$/.test(url)) return;
+  const git = (...args) => execFileSync("git", args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).trim();
+  const root = git("rev-parse", "--show-toplevel");
+  const anchor = git("config", "--get", "valopay.cleanGitAnchor");
+  if (!/^[a-f0-9]{40}$/.test(anchor)) throw new Error("Missing clean-history anchor.");
+  const { allowedPath, assertSafeText } = await import(pathToFileURL(join(root, "scripts/github-snapshot.mjs")).href);
+  const checked = new Set();
+  for (const line of readFileSync(0, "utf8").trim().split("\n").filter(Boolean)) {
+    const [localRef, sha] = line.split(/\s+/);
+    if (/^0+$/.test(sha)) continue;
+    if (localRef.startsWith("refs/heads/replit-history-")) throw new Error("Private history branches must never be pushed to GitHub.");
+    try { git("merge-base", "--is-ancestor", anchor, sha); }
+    catch { throw new Error("This branch does not descend from the approved clean GitHub history."); }
+    for (const commit of git("rev-list", sha, "--not", anchor).split("\n").filter(Boolean)) {
+      for (const entry of git("ls-tree", "-r", "-z", commit).split("\0").filter(Boolean)) {
+        const [metadata, path] = entry.split("\t");
+        const [mode, type, blob] = metadata.split(" ");
+        if (!allowedPath(path) || type !== "blob" || !["100644", "100755"].includes(mode)) {
+          throw new Error(`Unreviewed file in outgoing history: ${path}`);
+        }
+        if (checked.has(blob)) continue;
+        const bytes = execFileSync("git", ["cat-file", "blob", blob], { maxBuffer: 2 * 1024 * 1024 });
+        if (bytes.includes(0)) throw new Error(`Binary file needs review: ${path}`);
+        assertSafeText(path, new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+        checked.add(blob);
+      }
+    }
+  }
+}
+main().catch(error => {
+  console.error("GitHub push stopped: " + error.message);
+  process.exitCode = 1;
+});

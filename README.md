@@ -9,7 +9,7 @@ This repository contains a clean snapshot of the application, not the original R
 ## Project structure
 
 - `artifacts/valo-pay` — React + Vite operations console. Its landing page (`/`) and sign-in pages are designed against Nielsen's usability heuristics and the interaction-design principles recorded in `docs/design/landing-and-login.md`; the console's overview is at `/overview`.
-- `artifacts/api-server` — Express API, scoped repository, domain logic and tests. Anonymous sandboxes expire after 30 days without a change and their creation is rate-limited per address; list endpoints page with `limit`, `offset` and `updatedSince`.
+- `artifacts/api-server` — Express API, scoped repository, domain logic and tests. When explicitly enabled, cleanup removes anonymous sandboxes after 30 days without a change; their creation is rate-limited per address, and list endpoints page with `limit`, `offset` and `updatedSince`.
 - `artifacts/mockup-sandbox` — existing design/component preview workspace. It carries its own variant of the UI kit (different tokens and hover treatment from the console), so the two `components/ui` trees are intentionally not shared.
 - `lib` — PostgreSQL/Drizzle schema, the OpenAPI contract (`lib/api-spec/openapi.json`, written by `node scripts/create-valopay-spec.cjs`), generated API packages and `lib/valopay-schema`, the shared per-kind schema (statuses, state machines, failure-code and exception catalogues, money and policy guardrails) that the API validator and the console both import.
 - `scripts` — development checks and source synchronization utilities.
@@ -45,6 +45,7 @@ Provide credentials through your environment's secret manager, never through com
 | `VITE_CLERK_PROXY_URL` | Optional frontend Clerk proxy override |
 | `LOG_LEVEL` | Optional server logging level |
 | `VALOPAY_CLOSE_SCHEDULER` | Optional; `off` stops this API process from running the scheduled daily close, so closes must be triggered by hand |
+| `VALOPAY_EXPIRED_WORKSPACE_CLEANUP` | Optional; `on` allows new anonymous workspace bootstrap to delete a small batch of expired anonymous workspaces; unset or any other value keeps automatic cleanup off |
 
 The storage client obtains credentials from a **Replit sidecar**. Supplying storage paths alone will not make exports work outside Replit. External hosting requires a reviewed storage-authentication adapter, Clerk setup, PostgreSQL provisioning and same-origin routing for `/api/*` versus frontend assets; these are not implemented by this source transfer.
 
@@ -68,6 +69,8 @@ pnpm --filter @workspace/valopay run dev
 ```
 
 Each process needs its own `PORT`; the frontend also needs `BASE_PATH`. The API development command builds before starting and is not a file watcher. Outside Replit, two independent localhost ports alone do not reproduce the same-origin routing.
+
+The Replit development environment sets `VALOPAY_CLOSE_SCHEDULER=off` to prevent automatic closes while existing data is imported. Automatic expired-workspace cleanup is also off by default; enable `VALOPAY_EXPIRED_WORKSPACE_CLEANUP=on` only after confirming that eligible anonymous workspace data may be deleted.
 
 ### Scheduled daily close
 
@@ -134,9 +137,29 @@ Regenerate shared clients and validators after API contract changes:
 pnpm --filter @workspace/api-spec run codegen
 ```
 
-## Updating GitHub from the original Replit workspace
+## GitHub syncing
 
-**Do not push the original Replit Git branch directly.** Its history contains local-only material. Use the connected GitHub account and the source-only synchronization utility instead:
+This Replit workspace uses a clean `main` branch linked to `origin/main` at
+`https://github.com/obeidpeter/valo-pay`. In the Git panel, use **main** and
+**origin** for normal commits, pulls and pushes.
+
+The original Replit checkpoint history is preserved separately on the local
+`replit-history-local` branch. **Never push that branch, all branches, or a
+mirror of this repository.** It contains local-only material. Internal Replit
+remotes are not GitHub sync destinations. Business attachments, agent notes
+and local verification reports remain on disk but are excluded from the clean
+branch. Review staged files before committing: this is a public repository.
+
+A local Git pre-push guard checks outgoing commit ancestry and source files.
+Do not disable it or bypass it with `--no-verify`. The guard does not replace
+reviewing content for private information.
+
+### Legacy source-only upload utility
+
+The source-only utility remains available for workspaces with the original
+private checkpoint history. It is not needed for the linked clean `main`
+branch. Do not alternate it with normal Git pushes without reconciling the
+local branch and its separate synchronization state first.
 
 ```sh
 # Track any newly added source files explicitly first:
@@ -151,7 +174,10 @@ node scripts/github-sync.mjs --push
 
 The utility targets only the public `obeidpeter/valo-pay` repository, as approved by its owner. Public means anyone can read the uploaded source. It sends reviewed source contents, never Git history or credentials, through the Replit GitHub connector. It checks common secret patterns but cannot prove arbitrary content is safe: review new files before uploading.
 
-Use this script rather than Replit's Git Sync/Push button in the original workspace. That button pushes Git history; this workspace intentionally has no direct GitHub remote. An authentication error from that button does not necessarily mean the GitHub connector used by this script is broken.
+The Git panel and this script use different authentication paths. A working
+GitHub connector does not by itself verify Git panel authentication. Check
+that the panel targets `origin` and the clean `main` branch before attempting
+to reconnect an account.
 
 Only `.github/workflows/ci.yml` is approved for workflow export. Other workflows and local GitHub actions remain excluded until individually reviewed and added to the allowlist.
 
