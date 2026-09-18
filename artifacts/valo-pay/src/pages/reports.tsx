@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { EmptyRow, EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetReports, usePerformAction, getGetReportsQueryKey, useCreateExport, useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
@@ -194,7 +195,7 @@ export default function ReportsPage() {
                     </div>
                   ))}
                   {scalarEntries(reports.billing).length === 0 && (
-                    <p className="text-muted-foreground text-center py-4">No billing data available.</p>
+                    <EmptyState title="No billing data for this period" className="px-0 py-4">Billable collections are counted from succeeded direct-debit attempts once the provider's reversal window has passed (BIL-01).</EmptyState>
                   )}
                 </div>
                 <div className="mt-6">
@@ -336,7 +337,7 @@ export default function ReportsPage() {
                     </div>
                   ))}
                   {scalarEntries(reports.experiment).length === 0 && experimentRows(reports.experiment).length === 0 && (
-                    <p className="text-muted-foreground text-center py-4">No active experiments.</p>
+                    <EmptyState title="No active experiment" className="px-0 py-4">The recovery test (RET-06) starts when an approved policy version carries an experiment arm; its uplift and 90% interval are reported here.</EmptyState>
                   )}
                 </div>
               </div>
@@ -375,9 +376,7 @@ export default function ReportsPage() {
                 </thead>
                 <tbody className="divide-y">
                   {reports.closes.length === 0 ? (
-                    <tr>
-                      <td colSpan={3} className="px-6 py-8 text-center text-muted-foreground">No close snapshots available.</td>
-                    </tr>
+                    <EmptyRow colSpan={3} title="No daily close yet">Trigger the daily close above, or wait for the scheduled one; every close leaves a snapshot here with its REC-07 report.</EmptyRow>
                   ) : (
                     reports.closes.map(close => (
                       <tr key={close.id} className="hover:bg-secondary/10">

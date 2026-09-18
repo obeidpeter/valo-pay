@@ -1,4 +1,5 @@
 import React from 'react';
+import { EmptyRow, EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetOverview, getGetOverviewQueryKey } from '@workspace/api-client-react';
@@ -74,7 +75,7 @@ export default function OverviewPage() {
           </h2>
           <div className="bg-card border rounded-xl shadow-sm divide-y">
             {overview.queues.length === 0 && (
-              <div className="p-6 text-center text-muted-foreground text-sm">No items in queue.</div>
+              <EmptyState title="Nothing in the queue">Items that need a decision, such as a proposed match or an exception past its deadline, appear here.</EmptyState>
             )}
             {overview.queues.map(queue => (
               <div key={queue.key} className="p-4 flex items-center justify-between hover:bg-secondary/50 transition-colors">
@@ -97,7 +98,7 @@ export default function OverviewPage() {
           </h2>
           <div className="bg-card border rounded-xl shadow-sm divide-y">
             {overview.upcoming.length === 0 && (
-              <div className="p-6 text-center text-muted-foreground text-sm">No scheduled actions.</div>
+              <EmptyState title="No scheduled actions">Retries scheduled under an approved policy appear here with the notice each one requires.</EmptyState>
             )}
             {overview.upcoming.map(record => (
               <div key={record.id} className="p-4 flex items-center justify-between">
@@ -135,9 +136,7 @@ export default function OverviewPage() {
               </thead>
               <tbody className="divide-y">
                 {overview.activity.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="px-4 py-8 text-center text-muted-foreground">No recent activity</td>
-                  </tr>
+                  <EmptyRow colSpan={4} title="No activity yet">Every action in this lender's workspace is listed here and recorded in the audit log.</EmptyRow>
                 )}
                 {overview.activity.map(record => (
                   <tr key={record.id} className="hover:bg-secondary/20">

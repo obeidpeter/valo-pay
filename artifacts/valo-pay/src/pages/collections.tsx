@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { EmptyRow } from '@/components/empty-state';
 import { LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, useImportRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
@@ -186,7 +187,7 @@ export default function CollectionsPage() {
                   {isLoadingDue ? (
                     <LoadingRow colSpan={4} what="due items" />
                   ) : !dueItems || dueItems.items.length === 0 ? (
-                    <tr><td colSpan={4} className="p-12 text-center text-muted-foreground">No due items currently active.</td></tr>
+                    <EmptyRow colSpan={4} title="No due items">Instalments due appear here from your loan software, or from a CSV import above.</EmptyRow>
                   ) : (
                     dueItems.items.map(item => (
                       <tr key={item.id} className="hover:bg-secondary/10">

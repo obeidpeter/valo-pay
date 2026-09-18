@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetCustomerTimeline, getGetCustomerTimelineQueryKey, useCreateExport } from '@workspace/api-client-react';
@@ -130,7 +131,7 @@ export default function CustomerTimelinePage() {
             </div>
             <div className="divide-y">
               {mandates.length === 0 ? (
-                <div className="p-6 text-center text-muted-foreground text-sm">No mandates found.</div>
+                <EmptyState title="No mandates for this customer">A mandate appears here once your loan software or a CSV import links one to this customer.</EmptyState>
               ) : (
                 mandates.map(mandate => (
                   <div key={mandate.id} className="p-4">
@@ -156,7 +157,7 @@ export default function CustomerTimelinePage() {
               </div>
               <div className="divide-y">
                 {dueItems.length === 0 ? (
-                  <div className="p-6 text-center text-muted-foreground text-sm">No due items.</div>
+                  <EmptyState title="No instalments due">Instalments due appear here from your loan software, with each attempt against them.</EmptyState>
                 ) : (
                   dueItems.map(item => (
                     <div key={item.id} className="p-4">
@@ -181,7 +182,7 @@ export default function CustomerTimelinePage() {
               </div>
               <div className="divide-y">
                 {payments.length === 0 ? (
-                  <div className="p-6 text-center text-muted-foreground text-sm">No payments.</div>
+                  <EmptyState title="No payments received">Payments matched to this customer's instalments appear here with the rule that matched them.</EmptyState>
                 ) : (
                   payments.map(payment => (
                     <div key={payment.id} className="p-4">
@@ -209,7 +210,7 @@ export default function CustomerTimelinePage() {
           </div>
           <div className="p-4 overflow-y-auto flex-1 space-y-4">
             {events.length === 0 ? (
-              <p className="text-center text-muted-foreground text-sm mt-8">No events recorded.</p>
+              <EmptyState title="No events recorded yet" className="px-0">Consent, mandate changes, attempts, notices and payments are recorded here as they happen.</EmptyState>
             ) : (
               <div className="relative border-l-2 border-border ml-3 space-y-6">
                 {events.map((event, i) => (

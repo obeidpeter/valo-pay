@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
+import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, usePerformAction, getListRecordsQueryKey } from '@workspace/api-client-react';
-import { HardDrive, Search, ShieldCheck } from 'lucide-react';
+import { Search, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatDate } from '@/lib/formatters';
 import { useToast } from '@/hooks/use-toast';
@@ -78,11 +79,11 @@ export default function AuditPage() {
         {isLoading ? (
           <Loading what="the audit log" />
         ) : !data || data.items.length === 0 ? (
-          <div className="p-16 text-center flex flex-col items-center justify-center">
-            <HardDrive className="h-12 w-12 text-muted-foreground mb-4 opacity-20" />
-            <h3 className="text-lg font-medium">Log empty</h3>
-            <p className="text-muted-foreground text-sm mt-1">No actions have been recorded yet.</p>
-          </div>
+          search.trim() ? (
+            <EmptyState filtered title={`No entries match “${search.trim()}”`}>The search covers the action, the actor and the summary of each entry. Try a shorter term.</EmptyState>
+          ) : (
+            <EmptyState title="No actions recorded yet">Every change in this workspace is recorded here in a hash chain, oldest first, and can be verified above.</EmptyState>
+          )
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left font-mono">

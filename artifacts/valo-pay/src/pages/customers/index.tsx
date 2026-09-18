@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
@@ -72,11 +73,13 @@ export default function CustomersPage() {
         ) : error ? (
           <div className="p-8 text-center text-destructive">Failed to load customers.</div>
         ) : !data || data.items.length === 0 ? (
-          <div className="p-16 text-center flex flex-col items-center justify-center">
-            <UserPlus className="h-12 w-12 text-muted-foreground mb-4 opacity-20" />
-            <h3 className="text-lg font-medium">No customers found</h3>
-            <p className="text-muted-foreground text-sm mt-1">Try a different search or add a new customer.</p>
-          </div>
+          search.trim() ? (
+            <EmptyState filtered title={`No customers match “${search.trim()}”`}>Check the spelling, or search by the reference or the masked phone number.</EmptyState>
+          ) : (
+            <EmptyState title="No customers yet" action={<Button size="sm" variant="outline" onClick={() => setIsDialogOpen(true)}>Add a customer</Button>}>
+              Customers arrive from your loan software by API or a CSV import on the Collections page. In the sandbox you can add one here.
+            </EmptyState>
+          )
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left">

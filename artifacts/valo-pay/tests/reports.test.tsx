@@ -10,7 +10,7 @@ describe("reports", () => {
   it("runs a daily close from the page and shows the REC-07 chips, the trigger and the schedule", async () => {
     const user = userEvent.setup();
     renderApp("/reports");
-    expect(await screen.findByText("No close snapshots available.")).toBeTruthy();
+    expect(await screen.findByText("No daily close yet")).toBeTruthy();
     expect(screen.getByText(/^Next scheduled close .+ \(07:00 WAT daily\)\.$/)).toBeTruthy();
     expect(screen.getByText("Counts from the first daily close.")).toBeTruthy();
 
@@ -26,7 +26,7 @@ describe("reports", () => {
     for (const label of ["opening unallocated:", "observations received:", "exceptions:", "retry decisions:"]) expect(screen.getByText(label)).toBeTruthy();
     expect(screen.getByText(String(closes[0]!.data.summary))).toBeTruthy();
     expect(screen.getByText(/Since the first daily close on/)).toBeTruthy();
-    expect(screen.queryByText("No close snapshots available.")).toBeNull();
+    expect(screen.queryByText("No daily close yet")).toBeNull();
   });
 
   it("says when the automatic close is off", async () => {

@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
+import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey, useCreateRecord } from '@workspace/api-client-react';
-import { FileText, MoreHorizontal } from 'lucide-react';
+import { MoreHorizontal } from 'lucide-react';
 import { formatKobo } from '@/lib/formatters';
 import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
@@ -102,11 +103,9 @@ export default function MandatesPage() {
         {isLoading ? (
           <Loading what="mandates" />
         ) : !data || data.items.length === 0 ? (
-          <div className="p-16 text-center flex flex-col items-center justify-center">
-            <FileText className="h-12 w-12 text-muted-foreground mb-4 opacity-20" />
-            <h3 className="text-lg font-medium">No mandates</h3>
-            <p className="text-muted-foreground text-sm mt-1">No authorizations found for this workspace.</p>
-          </div>
+          <EmptyState title="No mandates yet" action={<Button size="sm" variant="outline" onClick={() => setIsCreateOpen(true)}>Create synthetic mandate</Button>}>
+            Mandates arrive from your loan software by API or CSV. In the sandbox you can create a synthetic one to see the activation workflow.
+          </EmptyState>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left">
