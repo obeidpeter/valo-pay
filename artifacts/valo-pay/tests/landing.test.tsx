@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
-import { renderApp, screen, userEvent } from "./harness";
+import { renderApp, screen, userEvent, waitFor } from "./harness";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -12,7 +12,7 @@ describe("landing page", () => {
   it("says what Valo Pay is and is not, with every way in a real link, and creates no sandbox", async () => {
     renderApp("/");
     expect(await screen.findByRole("heading", { level: 1, name: "Every naira matched to the bill it was for, by the next morning." })).toBeTruthy();
-    expect(document.title).toBe("Valo Pay · Collections operations layer");
+    await waitFor(() => expect(document.title).toBe("Valo Pay · Collections operations layer"));
     // The descriptor, the promise and "we never hold money" are the first three lines (marketing strategy 3.1).
     const lines = Array.from(screen.getByRole("main").querySelectorAll("p, h1")).slice(0, 3).map((node) => node.textContent ?? "");
     expect(lines[0]).toMatch(/^A collections operations layer for lenders/);
@@ -39,6 +39,6 @@ describe("landing page", () => {
     await user.click(screen.getAllByRole("link", { name: /Open the sandbox/ })[0]!);
     expect(await screen.findByRole("heading", { name: "Operations Overview" })).toBeTruthy();
     expect(api.calls.some((call) => call.path === "/v1/workspace")).toBe(true);
-    expect(document.title).toBe("Overview · Valo Pay");
+    await waitFor(() => expect(document.title).toBe("Overview · Valo Pay"));
   });
 });

@@ -19,7 +19,7 @@ describe("layout", () => {
     // The lender selector exists twice in the document (phone bar and sidebar); the browser shows one. Either changes the lender for both.
     await user.selectOptions(screen.getAllByLabelText("Active lender")[0]!, second);
     await waitFor(() => expect(api.calls.some((call) => call.path === "/v1/overview" && call.query.merchantId === second)).toBe(true));
-    expect(document.title).toBe("Overview · Valo Pay");
+    await waitFor(() => expect(document.title).toBe("Overview · Valo Pay"));
   });
 
   it("navigates between pages from the sidebar", async () => {
@@ -28,7 +28,7 @@ describe("layout", () => {
     await screen.findByRole("heading", { name: "Operations Overview" });
     await user.click(screen.getByRole("link", { name: /Audit Log/ }));
     expect(await screen.findByRole("button", { name: /Verify Chain Integrity/ })).toBeTruthy();
-    expect(document.title).toBe("Audit Log · Valo Pay");
+    await waitFor(() => expect(document.title).toBe("Audit Log · Valo Pay"));
     // The brand in the sidebar and in the phone bar leads back to the landing page, the same lockup as on it.
     const brands = screen.getAllByRole("link", { name: /Go to the start/ });
     expect(brands).toHaveLength(2);

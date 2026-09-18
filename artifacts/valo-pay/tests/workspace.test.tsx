@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
-import { renderApp, screen, userEvent, within } from "./harness";
+import { renderApp, screen, userEvent, within, waitFor } from "./harness";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -27,12 +27,12 @@ describe("workspace", () => {
     // The console is not shown without a workspace; the frame offers the start, twice, and the page says so in its title.
     expect(screen.queryByRole("link", { name: /Audit Log/ })).toBeNull();
     expect(screen.getAllByRole("link", { name: "Back to the start" }).map((link) => link.getAttribute("href"))).toEqual(["/", "/"]);
-    expect(document.title).toBe("Workspace not loaded · Valo Pay");
+    await waitFor(() => expect(document.title).toBe("Workspace not loaded · Valo Pay"));
 
     await user.click(within(alert).getByRole("button", { name: "Try again" }));
     expect(await screen.findByRole("heading", { name: "Operations Overview" })).toBeTruthy();
     expect(api.calls.filter((call) => call.path === "/v1/workspace").map((call) => call.status)).toEqual([429, 200]);
-    expect(document.title).toBe("Overview · Valo Pay");
+    await waitFor(() => expect(document.title).toBe("Overview · Valo Pay"));
   });
 
   it("says when the service could not be reached at all", async () => {

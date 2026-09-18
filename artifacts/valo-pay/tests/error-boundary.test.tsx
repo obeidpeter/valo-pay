@@ -52,13 +52,13 @@ describe("error boundary", () => {
     expect(details.open).toBe(false);
     expect(within(alert).getByText("Technical details (development only)")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Back to the start" }).getAttribute("href")).toBe("/");
-    expect(document.title).toBe("Page error · Valo Pay");
+    await waitFor(() => expect(document.title).toBe("Page error · Valo Pay"));
 
     await user.click(screen.getByRole("button", { name: "Repair" }));
     await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText("The page is back.")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(document.title).toBe("Reports · Valo Pay");
+    await waitFor(() => expect(document.title).toBe("Reports · Valo Pay"));
   });
 
   it("keeps the sidebar and the lender selector around a page that stopped working", async () => {

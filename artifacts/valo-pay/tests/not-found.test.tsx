@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
-import { renderApp, screen, userEvent } from "./harness";
+import { renderApp, screen, userEvent, waitFor } from "./harness";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -12,7 +12,7 @@ describe("not found", () => {
     renderApp("/reportz");
     expect(await screen.findByRole("heading", { level: 1, name: "There is no page at this address" })).toBeTruthy();
     expect(screen.getByText("/reportz")).toBeTruthy();
-    expect(document.title).toBe("Page not found · Valo Pay");
+    await waitFor(() => expect(document.title).toBe("Page not found · Valo Pay"));
     expect(screen.getByRole("link", { name: "Go to the overview" }).getAttribute("href")).toBe("/overview");
     expect(screen.getAllByRole("link", { name: "Back to the start" }).map((link) => link.getAttribute("href"))).toEqual(["/", "/"]);
     // No sidebar and no workspace request: the console was never mounted.
