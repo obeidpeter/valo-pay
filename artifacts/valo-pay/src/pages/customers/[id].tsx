@@ -13,7 +13,7 @@ import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
 import { LookedFor } from '@/components/notice';
 import { NotFoundNotice } from '@/pages/not-found';
 
-const watStamp = (iso: unknown) => typeof iso === 'string' && Number.isFinite(Date.parse(iso)) ? formatDate(iso) : 'n/a';
+const watStamp = (iso: unknown) => typeof iso === 'string' && Number.isFinite(Date.parse(iso)) ? formatDate(iso) : 'not recorded';
 
 /** RET-03: the recorded decision in one sentence: why, when the next attempt is, the notice it requires, the version and the arm. */
 function decisionDetail(data: Record<string, any>): string {
@@ -21,8 +21,8 @@ function decisionDetail(data: Record<string, any>): string {
   return [
     String(data.reason || ''),
     data.nextAt ? `Next attempt ${watStamp(data.nextAt)}.` : '',
-    notice ? `Notice ${String(notice.purpose || '').replace(/_/g, ' ')}${notice.requiredBy ? ` required by ${watStamp(notice.requiredBy)}` : ''}${notice.evidenced ? ', evidenced.' : ', not evidenced.'}` : '',
-    `Policy v${String(data.policyVersion || '?')}${data.experimentArm ? ` · arm ${String(data.experimentArm)}` : ''}.`,
+    notice ? `Customer notice: ${readableLabel(notice.purpose)}${notice.requiredBy ? `, due by ${watStamp(notice.requiredBy)}` : ''}${notice.evidenced ? '. Provider acceptance recorded.' : '. Provider acceptance not recorded.'}` : '',
+    `Policy version: ${String(data.policyVersion || 'not recorded')}${data.experimentArm ? ` · experiment group: ${readableLabel(data.experimentArm)}` : ''}.`,
   ].filter(Boolean).join(' ');
 }
 
@@ -30,9 +30,9 @@ function decisionDetail(data: Record<string, any>): string {
 function MissingCustomer({ id }: { id: string }) {
   useEffect(() => { document.title = 'Customer not found · Valo Pay'; }, []);
   return (
-    <NotFoundNotice title="No customer with this reference" primary={{ href: '/customers', label: 'Back to customers' }} secondary={{ href: '/overview', label: 'Go to the overview' }}>
-      <p>The current lender has no customer with the reference <LookedFor>{id}</LookedFor>. It may belong to another lender in this workspace, which the lender selector switches to, or the address may be mistyped.</p>
-      <p>Nothing has been changed.</p>
+    <NotFoundNotice title="Customer not found" primary={{ href: '/customers', label: 'Back to customers' }} secondary={{ href: '/overview', label: 'Go to overview' }}>
+      <p>No customer was found with ID <LookedFor>{id}</LookedFor> for the selected lender. Check the address or choose another lender.</p>
+      <p>No records have changed.</p>
     </NotFoundNotice>
   );
 }
@@ -52,12 +52,12 @@ export default function CustomerTimelinePage() {
       onSuccess: (data) => {
         const opened = window.open(data.downloadUrl, '_blank');
         notifyDone(
-          'Dispute pack generated',
-          `${opened ? 'It opened in a new tab.' : 'Your browser kept the new tab closed; use Open.'} SHA-256 ${data.checksum.slice(0, 16)}… · generated ${formatDate(data.generatedAt)}`,
+          'Dispute pack ready',
+          `${opened ? 'The file opened in a new tab.' : 'Your browser blocked the new tab. Select Open to view the file.'} SHA-256 checksum: ${data.checksum.slice(0, 16)}… · created ${formatDate(data.generatedAt)}`,
           { label: 'Open', altText: 'Open the dispute pack in a new tab', onClick: () => { window.open(data.downloadUrl, '_blank'); } },
         );
       },
-      onError: (error: unknown) => notifyProblem('The dispute pack was not generated', `${saidBy(error, 'The service refused the request.')} Nothing has been changed.`),
+      onError: (error: unknown) => notifyProblem('Dispute pack could not be created', `${saidBy(error, 'The service could not create the file.')} Try the export again.`),
     }
   });
   const exportPack = (format: 'pdf' | 'csv' | 'json') => createExport.mutate({ data: { kind: 'dispute-pack', format, customerId: String(id) }, params: { merchantId: merchantId! } });
@@ -65,9 +65,9 @@ export default function CustomerTimelinePage() {
   const generating = (format: 'pdf' | 'csv' | 'json') => createExport.isPending && createExport.variables?.data.format === format;
 
   if (!merchantId) return null;
-  if (isLoading) return <Loading what="the timeline" />;
+  if (isLoading) return <Loading what="the customer history" />;
   if ((error as { status?: number } | null)?.status === 404) return <MissingCustomer id={String(id)} />;
-  if (error || !timeline) return <div role="alert" className="p-8 text-center text-destructive">Failed to load customer timeline. Please refresh to try again.</div>;
+  if (error || !timeline) return <div role="alert" className="p-8 text-center text-destructive">Customer history could not be loaded. Reload the page to try again.</div>;
 
   const { customer, position, events, mandates, dueItems, payments } = timeline;
 
@@ -75,7 +75,7 @@ export default function CustomerTimelinePage() {
     <div className="space-y-6">
       <div>
         <Link href="/customers" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4 print:hidden">
-          <ArrowLeft className="h-4 w-4" /> Back to Customers
+          <ArrowLeft className="h-4 w-4" /> Back to customers
         </Link>
         <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-6">
           <div className="min-w-0 flex-1">
@@ -88,10 +88,10 @@ export default function CustomerTimelinePage() {
             </div>
             <div className="mt-4 flex flex-wrap gap-4 text-sm">
               <div>
-                <span className="text-muted-foreground">Bank:</span> <span className="font-medium">{String(customer.data?.bankName || 'N/A')}</span>
+                <span className="text-muted-foreground">Bank:</span> <span className="font-medium">{String(customer.data?.bankName || 'Not provided')}</span>
               </div>
               <div>
-                <span className="text-muted-foreground">Account:</span> <span className="font-mono font-medium">{String(customer.data?.accountMasked || 'N/A')}</span>
+                <span className="text-muted-foreground">Account:</span> <span className="font-mono font-medium">{String(customer.data?.accountMasked || 'Not provided')}</span>
               </div>
               <div>
                 <span className="text-muted-foreground">Status:</span> 
@@ -99,17 +99,17 @@ export default function CustomerTimelinePage() {
               </div>
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-2">
-              <Button variant="outline" size="sm" className="gap-2" onClick={() => exportPack('pdf')} disabled={createExport.isPending} busy={generating('pdf')} busyLabel="Generating…">
-                <Download className="h-4 w-4" /> Dispute pack (PDF)
+              <Button variant="outline" size="sm" className="gap-2" onClick={() => exportPack('pdf')} disabled={createExport.isPending} busy={generating('pdf')} busyLabel="Preparing PDF…">
+                <Download className="h-4 w-4" /> Export dispute pack (PDF)
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => exportPack('csv')} disabled={createExport.isPending} busy={generating('csv')} busyLabel="Generating…">CSV</Button>
-              <Button variant="ghost" size="sm" onClick={() => exportPack('json')} disabled={createExport.isPending} busy={generating('json')} busyLabel="Generating…">JSON</Button>
+              <Button variant="ghost" size="sm" onClick={() => exportPack('csv')} disabled={createExport.isPending} busy={generating('csv')} busyLabel="Preparing CSV…">CSV</Button>
+              <Button variant="ghost" size="sm" onClick={() => exportPack('json')} disabled={createExport.isPending} busy={generating('json')} busyLabel="Preparing JSON…">JSON</Button>
             </div>
-            <p className="mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">Export the full timeline and the policy, template and cutover versions in effect at each event. Includes a SHA-256 checksum (AUD-02, AUD-06).</p>
+            <p className="mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">Create a file for reviewing a dispute: a summary, full customer history, and the policy, message template and handover versions used at each event. Includes a checksum to verify the file.</p>
           </div>
 
           <div className="bg-card border rounded-xl p-5 shadow-sm w-full xl:w-80 shrink-0">
-            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Current Position</h2>
+            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Customer position</h2>
             <div className="space-y-3">
               <div className="flex justify-between items-baseline">
                 <span className="text-sm text-muted-foreground">Outstanding</span>
@@ -123,7 +123,7 @@ export default function CustomerTimelinePage() {
                 <span className="text-sm text-muted-foreground">Unapplied credit</span>
                 <span className="text-lg font-bold font-mono">{formatKobo(Number(position?.unallocatedKobo || 0))}</span>
               </div>
-              <p className="text-[11px] text-muted-foreground">{String(position?.note || 'Derived from obligations and payment evidence; we never hold money.')}</p>
+              <p className="text-[11px] text-muted-foreground">{String(position?.note || 'Calculated from instalments and recorded payments. We never hold money.')}</p>
             </div>
           </div>
         </div>
@@ -139,14 +139,14 @@ export default function CustomerTimelinePage() {
             </div>
             <div className="divide-y">
               {mandates.length === 0 ? (
-                <EmptyState title="No mandates for this customer">A mandate appears here once your loan software or a CSV import links one to this customer.</EmptyState>
+                <EmptyState title="No mandates for this customer">A mandate is a customer's permission to collect by direct debit. Linked mandates appear here after they are created or imported.</EmptyState>
               ) : (
                 mandates.map(mandate => (
                   <div key={mandate.id} className="p-4">
                     <div className="flex justify-between items-start mb-2">
                       <div>
                         <p className="font-medium font-mono text-sm" title={mandate.id}>{mandate.reference}</p>
-                        <p className="text-xs text-muted-foreground">Limit: {formatKobo(mandate.amountKobo)}</p>
+                        <p className="text-xs text-muted-foreground">Debit limit: {formatKobo(mandate.amountKobo)}</p>
                       </div>
                       <StatusBadge status={mandate.status} />
                     </div>
@@ -161,11 +161,11 @@ export default function CustomerTimelinePage() {
             <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
               <div className="p-4 border-b bg-secondary/20 flex items-center gap-2">
                 <AlertTriangle className="h-5 w-5 text-warning-strong" />
-                <h2 className="font-semibold">Due Items</h2>
+                <h2 className="font-semibold">Instalments</h2>
               </div>
               <div className="divide-y">
                 {dueItems.length === 0 ? (
-                  <EmptyState title="No instalments due">Instalments due appear here from your loan software, with each attempt against them.</EmptyState>
+                  <EmptyState title="No instalments recorded">Import this customer's instalments from the Collections page to see their amounts and due dates here.</EmptyState>
                 ) : (
                   dueItems.map(item => (
                     <div key={item.id} className="p-4">
@@ -190,7 +190,7 @@ export default function CustomerTimelinePage() {
               </div>
               <div className="divide-y">
                 {payments.length === 0 ? (
-                  <EmptyState title="No payments received">Payments matched to this customer's instalments appear here with the rule that matched them.</EmptyState>
+                  <EmptyState title="No payments recorded">Payment records appear here when they are linked to this customer.</EmptyState>
                 ) : (
                   payments.map(payment => (
                     <div key={payment.id} className="p-4">
@@ -215,11 +215,11 @@ export default function CustomerTimelinePage() {
           <div className="p-5 border-b flex items-center gap-3 shrink-0">
             <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-secondary"><Clock className="h-4 w-4 text-primary" /></span>
             <div>
-              <h2 className="font-semibold">Timeline Events</h2>
+              <h2 className="font-semibold">Customer history</h2>
               <p className="mt-0.5 text-xs text-muted-foreground">The complete record · {formatCount(events.length, 'event')}</p>
             </div>
           </div>
-          <ScrollFrame label="Timeline events" className="p-5 sm:p-6 overflow-y-auto max-h-[720px] space-y-4">
+          <ScrollFrame label="Customer history" className="p-5 sm:p-6 overflow-y-auto max-h-[720px] space-y-4">
             {events.length === 0 ? (
               <EmptyState title="No events recorded yet" className="px-0">Consent, mandate changes, attempts, notices and payments are recorded here as they happen.</EmptyState>
             ) : (

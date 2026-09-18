@@ -44,11 +44,11 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
       if(input.kind==="attempts"){record.data.source="external";record.data.simulated=true;}
       if(input.kind==="mandates"){record.data.origin="imported";record.data.consentGaps ||= [];}
       if(record.reference&&working.records.some(r=>r.kind===input.kind&&r.reference===record.reference&&(input.kind!=="observations"||r.data.source===record.data.source))){
-        rows.push({row:index+2,status:"duplicate",message:"Reference already exists for this source; skipped without creating another record."});continue;
+        rows.push({row:index+2,status:"duplicate",message:"Skipped: this source already has a record with the same reference."});continue;
       }
       validateRecord(working,ctx,input.kind,record);
       makeRecord(working,input.kind,{...record,createdAt:ctx.now,updatedAt:ctx.now});
-      valid++;rows.push({row:index+2,status:"valid",message:input.commit?"Imported synthetic record.":"Validated; ready to import."});
+      valid++;rows.push({row:index+2,status:"valid",message:input.commit?"Sample record imported.":"Checked and ready to import."});
     }catch(error){invalid++;rows.push({row:index+2,status:"invalid",message:error instanceof Error?error.message:"Invalid record."});}
   }
   // All-or-nothing: review every error before committing.

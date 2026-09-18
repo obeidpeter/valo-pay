@@ -21,19 +21,19 @@ async function violations(): Promise<string[]> {
 
 describe("accessibility", () => {
   it.each([
-    ["/", "Every naira matched to the bill it was for, by the next morning."],
+    ["/", "Know what was paid, what is due, and what needs attention."],
     ["/sign-in", "Sign in to your workspace"],
-    ["/no-such-page", "There is no page at this address"],
-    ["/overview", "Operations Overview"],
+    ["/no-such-page", "Page not found"],
+    ["/overview", "Operations overview"],
     ["/customers", "Customers"],
     ["/mandates", "Mandates"],
     ["/reconciliation", "Reconciliation"],
     ["/exceptions", "Exceptions"],
-    ["/policies", "Policies & Templates"],
-    ["/reports", "Reports & Analytics"],
-    ["/evidence", "Evidence & Readiness"],
-    ["/audit", "Audit Log"],
-    ["/settings", "Settings & Administration"],
+    ["/policies", "Policies & templates"],
+    ["/reports", "Reports & analytics"],
+    ["/evidence", "Evidence & readiness"],
+    ["/audit", "Audit log"],
+    ["/settings", "Settings & administration"],
   ])("finds no violation on %s", async (path, heading) => {
     renderApp(path);
     await screen.findByRole("heading", { name: heading });
@@ -51,7 +51,7 @@ describe("accessibility", () => {
     const user = userEvent.setup();
     renderApp("/customers");
     await screen.findByText("Ada Okonkwo");
-    await user.click(screen.getByRole("button", { name: /Add Customer/ }));
+    await user.click(screen.getByRole("button", { name: /Add customer/ }));
     await screen.findByRole("dialog");
     expect(await violations()).toEqual([]);
   });

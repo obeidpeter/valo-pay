@@ -56,8 +56,8 @@ function useClerkAppearance() {
 }
 
 const whatChanges = [
-  'Your lenders, mandates, reconciliation and settings are kept between visits.',
-  'A signed-in workspace is never removed. An anonymous sandbox is removed after 30 days without a change.',
+  'Keep your lenders, mandates, payment matches and settings between visits.',
+  'Signed-in workspaces are not removed for inactivity. Anonymous sandboxes can be removed after 30 days without changes.',
   'We never hold money. Nothing in this console moves funds, signed in or not.',
 ];
 
@@ -67,20 +67,20 @@ function Shell({ title, children }: { title: string; children: ReactNode }) {
     <PublicFrame>
       <main id="main" tabIndex={-1} className="public-container public-auth focus:outline-none">
         <aside aria-labelledby="context-title" className="auth-context">
-          <p className="public-eyebrow mb-5">EVERY PAYMENT. ONE CLEAR PICTURE.</p>
+          <p className="public-eyebrow mb-5">Every payment. One clear picture.</p>
           <h1 id="context-title">{title}</h1>
           <p className="auth-intro">A collections operations layer for lenders that collect by direct debit. We never hold money.</p>
-          <h2 className="public-eyebrow mt-10">What signing in changes</h2>
+          <h2 className="public-eyebrow mt-10">Why sign in?</h2>
           <ul className="auth-benefits" role="list">
             {whatChanges.map((line) => (
               <li key={line}><CheckCircle2 aria-hidden="true" /><span>{line}</span></li>
             ))}
           </ul>
           <p className="hero-stage" role="status">
-            <span className="h-2 w-2 rounded-full bg-success" aria-hidden="true" /> Stage 1 · synthetic sandbox
+            <span className="h-2 w-2 rounded-full bg-success" aria-hidden="true" /> Sandbox · Sample data only
           </p>
         </aside>
-        <div className="auth-form-area">{children}<p className="auth-footnote"><ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" /> Synthetic data. No live operations.</p></div>
+        <div className="auth-form-area">{children}<p className="auth-footnote"><ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" /> Sample data only. No live collections.</p></div>
       </main>
     </PublicFrame>
   );
@@ -92,11 +92,11 @@ function Unavailable({ action }: { action: 'sign in' | 'create an account' }) {
     <section aria-labelledby="unavailable-title" className="auth-unavailable">
       <span className="auth-unavailable-icon"><LockKeyhole className="h-5 w-5" aria-hidden="true" /></span>
       <h2 id="unavailable-title">Sign-in is unavailable here</h2>
-      <p>Accounts aren't enabled for this version, so you cannot {action} here. You can still explore Valo Pay without an account.</p>
-      <p className="auth-sandbox-note"><strong>Your workspace preview is ready</strong>Everything in the synthetic sandbox still works without an account. Try the customer timeline, review matches and run a daily close.</p>
+      <p>You cannot {action} at this address. You can explore the sandbox without an account.</p>
+      <p className="auth-sandbox-note"><strong>Explore with sample data</strong>Try customer timelines, review payment matches and run the daily close to check payment records.</p>
       <div className="auth-unavailable-actions">
         <Button asChild className="gap-2"><Link href="/overview">Continue to the sandbox <ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button>
-        <Button asChild variant="ghost"><Link href="/">Back to the start</Link></Button>
+        <Button asChild variant="ghost"><Link href="/">Back to home</Link></Button>
       </div>
     </section>
   );
@@ -110,7 +110,7 @@ export function SignInPage() {
       {authEnabled ? (
         <>
           <SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} fallbackRedirectUrl={`${basePath}/overview`} appearance={clerkAppearance} />
-          <p className="mt-4 text-sm text-muted-foreground">Just looking? <Link href="/overview" className="font-medium text-primary underline-offset-4 hover:underline">Open the sandbox without an account</Link>.</p>
+          <p className="mt-4 text-sm text-muted-foreground">Want to try it first? <Link href="/overview" className="font-medium text-primary underline-offset-4 hover:underline">Open the sandbox without an account</Link>.</p>
         </>
       ) : <Unavailable action="sign in" />}
     </Shell>
@@ -125,7 +125,7 @@ export function SignUpPage() {
       {authEnabled ? (
         <>
           <SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} fallbackRedirectUrl={`${basePath}/overview`} appearance={clerkAppearance} />
-          <p className="mt-4 text-sm text-muted-foreground">Just looking? <Link href="/overview" className="font-medium text-primary underline-offset-4 hover:underline">Open the sandbox without an account</Link>.</p>
+          <p className="mt-4 text-sm text-muted-foreground">Want to try it first? <Link href="/overview" className="font-medium text-primary underline-offset-4 hover:underline">Open the sandbox without an account</Link>.</p>
         </>
       ) : <Unavailable action="create an account" />}
     </Shell>

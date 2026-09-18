@@ -67,14 +67,14 @@ export function ErrorNotice({ error, resetError }: ErrorFallbackProps) {
   return (
     <Notice
       role="alert"
-      title="This page stopped working"
+      title="We could not display this page"
       actions={<>
         <Button onClick={resetError}>Try again</Button>
-        <Button asChild variant="outline"><a href={`${basePath}/overview`}>Go to the overview</a></Button>
+        <Button asChild variant="outline"><a href={`${basePath}/overview`}>Go to overview</a></Button>
       </>}
     >
-      <p>The page hit an error it could not recover from. An error on a page does not change any record; if you had just confirmed an action, its result is in the <a href={`${basePath}/audit`} className="font-medium text-primary underline-offset-4 hover:underline">audit log</a>.</p>
-      <p>If it happens again, tell us the time and the address: <LookedFor>{formatDate(at)}</LookedFor>, <LookedFor>{where}</LookedFor>.</p>
+      <p>Try loading the page again. If you had just submitted an action, check the <a href={`${basePath}/audit`} className="font-medium text-primary underline-offset-4 hover:underline">audit log</a> before repeating it.</p>
+      <p>When reporting the problem, include this time and page address: <LookedFor>{formatDate(at)}</LookedFor>, <LookedFor>{where}</LookedFor>.</p>
       {import.meta.env.DEV ? (
         <details className="text-xs">
           <summary className="cursor-pointer">Technical details (development only)</summary>

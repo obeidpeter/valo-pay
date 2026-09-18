@@ -11,7 +11,7 @@ describe("empty states", () => {
     const user = userEvent.setup();
     renderApp("/customers");
     expect(await screen.findByText("Ada Okonkwo")).toBeTruthy();
-    const search = screen.getByPlaceholderText("Search by name, reference, or phone...");
+    const search = screen.getByPlaceholderText("Search by name, reference or phone…");
     await user.type(search, "zzzz");
     const status = await screen.findByRole("status");
     expect(within(status).getByText("No customers match “zzzz”")).toBeTruthy();
@@ -25,7 +25,7 @@ describe("empty states", () => {
     const user = userEvent.setup();
     renderApp("/audit");
     await screen.findByRole("table");
-    await user.type(screen.getByPlaceholderText("Search audit trail..."), "nothing-like-this");
+    await user.type(screen.getByPlaceholderText("Search by action, person or summary…"), "nothing-like-this");
     const status = await screen.findByRole("status");
     expect(within(status).getByText("No entries match “nothing-like-this”")).toBeTruthy();
   });
@@ -33,9 +33,9 @@ describe("empty states", () => {
   it("says what would be in an empty table and where it comes from", async () => {
     api.mutate((state) => { state.records.splice(0, state.records.length, ...state.records.filter((record) => record.kind !== "due-items")); });
     renderApp("/collections");
-    const title = await screen.findByText("No due items");
+    const title = await screen.findByText("No instalments recorded");
     expect(title.closest("tr")).toBeTruthy();
-    expect(screen.getByText(/Instalments due appear here from your loan software/)).toBeTruthy();
+    expect(screen.getByText(/Import synthetic instalments using the sample CSV/)).toBeTruthy();
   });
 
   it("offers the next step when a lender has none of something", async () => {

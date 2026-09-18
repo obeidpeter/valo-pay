@@ -11,7 +11,7 @@ import '@/landing.css';
 /** Static, explicitly synthetic illustration. Reading this page never creates a workspace. */
 function CollectionsIllustration() {
   return (
-    <figure className="lp-illustration" aria-label="Illustration of a synthetic daily close">
+    <figure className="lp-illustration" aria-label="Daily close example using sample data">
       <div className="lp-artwork">
         <div className="lp-art-glow" aria-hidden="true" />
         <div className="lp-orbit lp-orbit-outer" aria-hidden="true" />
@@ -31,12 +31,12 @@ function CollectionsIllustration() {
         <div className="lp-float-card lp-float-matched">
           <span className="lp-art-number">1,240</span>
           <span className="lp-art-label">Payments matched</span>
-          <span className="lp-art-success"><Check aria-hidden="true" /> Books complete</span>
+          <span className="lp-art-success"><Check aria-hidden="true" /> Close complete</span>
         </div>
         <div className="lp-float-card lp-float-reconciled">
           <ShieldCheck className="lp-art-icon" aria-hidden="true" />
-          <span className="lp-art-title">Cleaner<br />reconciliation</span>
-          <span className="lp-art-label">Every payment in the right place.</span>
+          <span className="lp-art-title">Clear payment<br />matching</span>
+          <span className="lp-art-label">See which instalment each payment covers.</span>
         </div>
         <div className="lp-float-card lp-float-decisions">
           <ChartNoAxesColumnIncreasing className="lp-art-icon" aria-hidden="true" />
@@ -50,7 +50,7 @@ function CollectionsIllustration() {
         </div>
       </div>
       <span className="lp-hero-note" aria-hidden="true">A clearer close.<br />A brighter morning.</span>
-      <figcaption>Illustration with synthetic figures. Nothing here is live evidence.</figcaption>
+      <figcaption>Illustration with synthetic figures. These are sample records, not live results.</figcaption>
     </figure>
   );
 }
@@ -90,19 +90,19 @@ export default function LandingPage() {
             <div className="lp-hero-copy">
               {/* Descriptor, promise and custody boundary are the first three content lines. */}
               <p className="lp-eyebrow">A collections operations layer for lenders that collect by direct debit</p>
-              <h1 id="hero-title">Every naira matched to the bill it was for, <span>by the next morning.</span></h1>
-              <p className="lp-hero-description">We never hold money. Valo Pay plugs into the aggregator and loan software you already use, gets mandates activated, retries within the rules, reconciles every payment and keeps one clean record per customer.</p>
+              <h1 id="hero-title">Know what was paid, what is due, <span>and what needs attention.</span></h1>
+              <p className="lp-hero-description">We never hold money. Valo Pay connects to your payment provider and loan software. Track mandate activation, review retries, match payments to instalments and keep one clear record for each customer.</p>
               <div className="lp-hero-actions">
                 <Button asChild size="lg" className="lp-primary"><Link href="/overview">Open the sandbox <ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button>
                 <Button asChild size="lg" variant="outline"><a href="#how">See how it works</a></Button>
               </div>
-              <p className="lp-sandbox-hint">No sign-in needed. Synthetic data only; nothing leaves the platform.</p>
+              <p className="lp-sandbox-hint">No sign-in needed. Explore with sample data; no live collection instructions are sent.</p>
               <ul className="lp-hero-benefits" aria-label="Built for your workflow">
                 <li><Link2 aria-hidden="true" /><span>Works with your<br /> existing systems</span></li>
-                <li><ShieldCheck aria-hidden="true" /><span>Built for lenders,<br /> with control</span></li>
+                <li><ShieldCheck aria-hidden="true" /><span>Retry rules<br /> you control</span></li>
                 <li><Waypoints aria-hidden="true" /><span>One clear<br /> customer record</span></li>
               </ul>
-              <p className="lp-stage"><span aria-hidden="true" /> Stage 1 · observation mode · no live instructions</p>
+              <p className="lp-stage"><span aria-hidden="true" /> Sandbox · Sample data only · No live collections</p>
             </div>
             <CollectionsIllustration />
           </div>

@@ -84,18 +84,18 @@ const check = (condition: unknown, message: string) => { assert.ok(condition, me
   const { state, mandate } = liveFixture();
   mandate.status = "pending_activation"; mandate.data.workflow = "transfer_to_activate"; mandate.data.reminderCount = 0;
   const remind = (now: string) => executeAction(state, ctxAt(now, "Operations"), { action: "activation_reminder", recordId: mandate.id, reason: "test" });
-  assert.throws(() => remind(wat("2027-06-28T21:00:01")), /Quiet hours/);
-  assert.throws(() => remind(wat("2027-06-29T07:59:59")), /Quiet hours/);
+  assert.throws(() => remind(wat("2027-06-28T21:00:01")), /quiet hours, from 21:00 to 08:00 WAT/);
+  assert.throws(() => remind(wat("2027-06-29T07:59:59")), /quiet hours, from 21:00 to 08:00 WAT/);
   assert.doesNotThrow(() => remind(wat("2027-06-29T08:00:00")));
   assert.doesNotThrow(() => remind(wat("2027-06-29T20:59:59")));
   assert.equal(recordsOf(state, "notifications").filter((item) => item.data.mandateId === mandate.id).length, 2, "every send is logged");
   remind(wat("2027-06-30T09:00:00")); remind(wat("2027-07-01T09:00:00"));
-  assert.throws(() => remind(wat("2027-07-02T09:00:00")), /cap of 4/, "MAN-05: at most four reminders on a transfer-to-activate flow");
+  assert.throws(() => remind(wat("2027-07-02T09:00:00")), /limit of 4 activation reminders/, "MAN-05: at most four reminders on a transfer-to-activate flow");
   mandate.data.workflow = "hosted_consent"; mandate.data.reminderCount = 0;
   remind(wat("2027-07-02T09:00:00")); remind(wat("2027-07-03T09:00:00"));
-  assert.throws(() => remind(wat("2027-07-04T09:00:00")), /cap of 2/, "MAN-05: at most two reminders on a hosted-consent flow");
+  assert.throws(() => remind(wat("2027-07-04T09:00:00")), /limit of 2 activation reminders/, "MAN-05: at most two reminders on a hosted-consent flow");
   mandate.data.reminderCount = 0; mandate.data.consentGiven = true;
-  assert.throws(() => remind(wat("2027-07-04T09:00:00")), /Consent is already given/, "none once the provider reports consent given");
+  assert.throws(() => remind(wat("2027-07-04T09:00:00")), /customer has already given consent/, "none once the provider reports consent given");
   mandate.status = "active";
   assert.throws(() => remind(wat("2027-07-04T09:00:00")), /awaiting activation/);
   checks += 9;
@@ -204,9 +204,9 @@ const check = (condition: unknown, message: string) => { assert.ok(condition, me
   assert.equal(minimumTicketKobo(state), 500_000);
   const input = (amountKobo: number, overrideReason?: string) => ({ name: "d", status: "scheduled", customerId: due.customerId, amountKobo, data: { dueDate: "2027-08-01", owner: "lms", overrideReason } });
   state.settings.minimumTicketKobo = 2_000_000;
-  assert.throws(() => validateRecord(state, ctx, "due-items", input(1_500_000)), /merchant minimum of ₦20,000/);
+  assert.throws(() => validateRecord(state, ctx, "due-items", input(1_500_000)), /lender minimum of ₦20,000/);
   assert.doesNotThrow(() => validateRecord(state, ctx, "due-items", input(1_500_000, "recorded")));
-  assert.throws(() => validateRecord(state, ctx, "due-items", input(499_999, "recorded")), /no override/);
+  assert.throws(() => validateRecord(state, ctx, "due-items", input(499_999, "recorded")), /Amounts below this cannot be approved/);
   checks += 6;
 }
 
@@ -251,7 +251,7 @@ const check = (condition: unknown, message: string) => { assert.ok(condition, me
   assert.deepEqual(preregisterSample(0.4, 0.5), { holdoutMinimum: 473, engineMinimum: 473, confidence: 0.9, power: 0.8, effect: 0.08 });
   const twenty = preregisterSample(0.4, 0.2);
   assert.equal(twenty.holdoutMinimum, 293); assert.equal(twenty.engineMinimum, 1172);
-  assert.throws(() => preregisterSample(0.4, 0.05), /10–50% holdout/);
+  assert.throws(() => preregisterSample(0.4, 0.05), /comparison group share from 10% to 50%/);
   checks += 3;
 }
 

@@ -43,7 +43,7 @@ describe("settings", () => {
     await user.type(again, "10:00");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Settings not saved")).toBeTruthy();
-    expect(screen.getByText("closeTime must be a WAT time as HH:MM, for example 07:00 (REC-01).")).toBeTruthy();
+    expect(screen.getByText("Enter the close time as HH:MM in West Africa Time, for example 07:00.")).toBeTruthy();
     expect(again.getAttribute("aria-describedby")).toBe("settings-closeTime-error");
     expect(api.state().settings.closeTime).toBe("09:30");
     expect(api.calls.filter((call) => call.method === "PATCH" && call.path === "/v1/settings").at(-1)?.status).toBe(400);

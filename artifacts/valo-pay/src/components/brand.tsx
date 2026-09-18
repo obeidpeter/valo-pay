@@ -24,7 +24,7 @@ export function BrandMark({ className = 'h-8 w-8' }: { className?: string }) {
  */
 export function BrandLockup({ href = '/', descriptor = true, compact = false, className = '' }: { href?: string; descriptor?: boolean; compact?: boolean; className?: string }) {
   return (
-    <Link href={href} className={`inline-flex items-center gap-3 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${className}`} aria-label="Valo Pay, collections operations layer. Go to the start">
+    <Link href={href} className={`inline-flex items-center gap-3 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${className}`} aria-label="Valo Pay, collections operations layer. Go to home page">
       <BrandMark />
       <span className={compact ? 'hidden leading-tight sm:block' : 'leading-tight'}>
         <span className="block text-lg font-bold tracking-tight text-foreground">Valo Pay</span>

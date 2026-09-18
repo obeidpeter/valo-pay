@@ -17,7 +17,7 @@ export function PublicFrame({ children }: { children: ReactNode }) {
       <header className="public-header">
         <div className="public-container flex items-center justify-between gap-4 py-5">
           <BrandLockup />
-          <Link href="/" className="public-back inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4 shrink-0" aria-hidden="true" /> Back to the start</Link>
+          <Link href="/" className="public-back inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4 shrink-0" aria-hidden="true" /> Back to home</Link>
         </div>
       </header>
       {children}

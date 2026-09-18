@@ -52,5 +52,5 @@ export function saidBy(error: unknown, fallback: string): string {
   const words = typeof said === 'string' && said.trim() ? said.trim() : fallback;
   const status = (error as { status?: unknown } | null)?.status;
   const reference = typeof status === 'number' && status >= 500 ? referenceOf(error) : undefined;
-  return reference ? `${words} Reference ${reference}.` : words;
+  return reference ? `${words} Support reference: ${reference}.` : words;
 }

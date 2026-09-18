@@ -50,21 +50,21 @@ const reviewer = (now: string) => ctxAt(now, "Compliance reviewer");
 
   // A direct edit cannot move the mandate to the new version, nor rewrite the consented version.
   const moved = { ...mandate, data: { ...mandate.data, policyId: draft.id }, updatedAt: wat("2027-06-03T09:00:00") };
-  assert.throws(() => validateRecord(state, admin(wat("2027-06-03T09:00:00")), "mandates", moved, true), /apply_policy_version/);
+  assert.throws(() => validateRecord(state, admin(wat("2027-06-03T09:00:00")), "mandates", moved, true), /Use Apply policy version/);
   const rewritten = { ...mandate, data: { ...mandate.data, consentPolicyVersion: 2 }, updatedAt: wat("2027-06-03T09:00:00") };
-  assert.throws(() => validateRecord(state, admin(wat("2027-06-03T09:00:00")), "mandates", rewritten, true), /server-owned/);
+  assert.throws(() => validateRecord(state, admin(wat("2027-06-03T09:00:00")), "mandates", rewritten, true), /Use Apply policy version to update the version covered by consent/);
   checks += 2;
 
   // Applying the version needs a provider-accepted policy-change notice; a simulated notice is not evidence.
   const apply = (now: string, data: Record<string, unknown>) => executeAction(state, admin(now), { action: "apply_policy_version", recordId: mandate.id, reason: "customer informed", data: { policyId: draft.id, ...data } });
-  assert.throws(() => apply(wat("2027-06-04T09:00:00"), {}), /provider acceptance evidence/);
+  assert.throws(() => apply(wat("2027-06-04T09:00:00"), {}), /evidence that the provider accepted the policy-change notice/);
   const simulated = executeAction(state, ctxAt(wat("2027-06-04T09:00:00"), "Operations"), { action: "notify_policy_change", recordId: mandate.id, reason: "inform", data: { policyId: draft.id } }).record!;
   assert.equal(simulated.data.purpose, "policy_change"); assert.equal(simulated.data.synthetic, true);
-  assert.throws(() => apply(wat("2027-06-04T10:00:00"), { noticeId: simulated.id }), /provider acceptance evidence/, "a simulated notice is not evidence");
+  assert.throws(() => apply(wat("2027-06-04T10:00:00"), { noticeId: simulated.id }), /evidence that the provider accepted the policy-change notice/, "a simulated notice is not evidence");
   const accepted = makeRecord(state, "notifications", { name: "policy change", status: "accepted", customerId: mandate.customerId, createdAt: wat("2027-06-05T09:00:00"), data: { purpose: "policy_change", channel: "sms", class: "required", mandateId: mandate.id, policyId: draft.id, acceptedAt: wat("2027-06-05T09:00:05"), deliveredAt: wat("2027-06-05T09:00:20") } });
   accepted.data.synthetic = false;
   state.settings.policyChangeRequiresConsent = true;
-  assert.throws(() => apply(wat("2027-06-06T09:00:00"), {}), /fresh consent/, "the merchant's terms require fresh consent");
+  assert.throws(() => apply(wat("2027-06-06T09:00:00"), {}), /new consent for a policy change/, "the merchant's terms require fresh consent");
   const applied = apply(wat("2027-06-06T09:00:00"), { consentEvidence: "CONSENT-9-V2" });
   assert.equal(applied.record?.data.policyId, draft.id);
   assert.equal(mandate.data.consentPolicyId, draft.id); assert.equal(mandate.data.consentPolicyVersion, 2);
@@ -120,7 +120,7 @@ const reviewer = (now: string) => ctxAt(now, "Compliance reviewer");
   assert.equal(buildAlerts(fresh, `${month}-10T09:00:00.000Z`).some((item) => item.key === "notification_cost"), false, "the merchant ceiling applies");
   const overdueAlert = buildAlerts(fresh, new Date(Date.now() + 3 * DAY).toISOString()).find((item) => item.key === "exceptions_overdue");
   assert.ok(overdueAlert, "the seeded exceptions pass their deadline");
-  assert.match(overdueAlert.detail, /^\d+ open exceptions? (is|are) past the business-day deadline/, "the count carries its noun and verb");
+  assert.match(overdueAlert.detail, /^\d+ open exceptions? (is|are) overdue/, "the count carries its noun and verb");
   assert.equal(counted(1, "open exception is", "open exceptions are"), "1 open exception is");
   // The overview carries the alerts and the close freezes them.
   const overview = buildOverview(state, later, critical);

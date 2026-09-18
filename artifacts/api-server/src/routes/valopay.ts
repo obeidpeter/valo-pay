@@ -96,9 +96,9 @@ router.post("/v1/actions",async(req,res)=>{
   if(body.action==="set_role"){
    const role=String(body.data?.role);if(!roles.includes(role))fail("Unknown sandbox persona.");
     await changeRole(ctx,role);
-   return {message:`Now using ${role} demo persona. No real-world permissions were changed.`,data:{role}};
+   return {message:`Demo role changed to ${role}. This only affects the sample workspace.`,data:{role}};
   }
-  if(body.action==="verify_audit")return {message:"Audit-chain verification completed.",data:verifyAudit(state)};
+  if(body.action==="verify_audit")return {message:"Audit log check complete.",data:verifyAudit(state)};
   if(body.action==="mark_pack_used")fail("Synthetic packs cannot be recorded as evidence used in a real case.",403);
   return executeAction(state,ctx,body);
   },true,S.PerformActionResponse);
@@ -127,12 +127,12 @@ router.patch("/v1/settings",async(req,res)=>{
  const result=await withState(req,res,(state,ctx)=>{
   if(ctx.role!=="Admin")fail("Only an Admin can change lender settings.",403);
   const start=body.executionStart??state.settings.executionStart??executionWindow.defaultStartHour,end=body.executionEnd??state.settings.executionEnd??executionWindow.defaultEndHour;
-  if(start<executionWindow.earliestHour||end>executionWindow.latestHour||start>=end)fail(`Execution window must be WAT hours within ${executionWindow.earliestHour}:00 to ${executionWindow.latestHour}:00 with the start before the end (DEB-01).`);
-  if(body.minimumTicketKobo!==undefined&&body.minimumTicketKobo<ABSOLUTE_TICKET_FLOOR_KOBO)fail("The ₦5,000 floor cannot be overridden.");
-  if(body.defaultOwner&&!(handBackOwners as readonly string[]).includes(body.defaultOwner))fail("Valo execution ownership requires a verified production cutover.");
+  if(start<executionWindow.earliestHour||end>executionWindow.latestHour||start>=end)fail(`Set the collection window between ${executionWindow.earliestHour}:00 and ${executionWindow.latestHour}:00 West Africa Time, with the start before the end.`);
+  if(body.minimumTicketKobo!==undefined&&body.minimumTicketKobo<ABSOLUTE_TICKET_FLOOR_KOBO)fail("The minimum debit is ₦5,000. This limit cannot be overridden.");
+  if(body.defaultOwner&&!(handBackOwners as readonly string[]).includes(body.defaultOwner))fail("Valo Pay can take collection ownership only after a verified handover for live operations.");
   if(body.authorisationMode&&!(authorisationModes as readonly string[]).includes(body.authorisationMode))fail(`Authorisation mode must be one of: ${authorisationModes.join(", ")}.`);
-  for(const key of ["unallocatedAlertThreshold","notificationCostAlertKobo"] as const)if(body[key]!==undefined&&(!Number.isInteger(body[key])||Number(body[key])<0))fail(`${key} must be a non-negative integer.`);
-  if(body.closeTime!==undefined&&!isCloseTime(body.closeTime))fail("closeTime must be a WAT time as HH:MM, for example 07:00 (REC-01).");
+  for(const key of ["unallocatedAlertThreshold","notificationCostAlertKobo"] as const)if(body[key]!==undefined&&(!Number.isInteger(body[key])||Number(body[key])<0))fail(`${key} must be a whole number of zero or more.`);
+  if(body.closeTime!==undefined&&!isCloseTime(body.closeTime))fail("closeTime must use HH:MM in West Africa Time, for example 07:00.");
   const previous={time:closeTimeOf(state.settings),enabled:state.settings.scheduledCloseEnabled!==false};
   Object.assign(state.settings,body);
   // REC-01: a changed close time or a switched-on schedule starts from its next occurrence; an unchanged save leaves a pending close pending.

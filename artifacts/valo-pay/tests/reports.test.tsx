@@ -11,10 +11,10 @@ describe("reports", () => {
     const user = userEvent.setup();
     renderApp("/reports");
     expect(await screen.findByText("No daily close yet")).toBeTruthy();
-    expect(screen.getByText(/^Next scheduled close .+ WAT, then daily at the same time\.$/)).toBeTruthy();
+    expect(screen.getByText(/^Next daily close: .+ WAT, then every day at this time\.$/)).toBeTruthy();
     expect(screen.getByText("Counts from the first daily close.")).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "Trigger Daily Close" }));
+    await user.click(screen.getByRole("button", { name: "Run daily close" }));
     // The close is written by the real domain and read back through the reports contract.
     expect(await screen.findByText(/^manual$/)).toBeTruthy();
     const action = api.calls.find((call) => call.method === "POST" && call.path === "/v1/actions");
@@ -23,7 +23,7 @@ describe("reports", () => {
     const closes = api.state().records.filter((record) => record.kind === "closes");
     expect(closes).toHaveLength(1);
     expect(closes[0]!.data.schedule.trigger).toBe("manual");
-    for (const label of ["opening unallocated:", "observations received:", "exceptions:", "retry decisions:"]) expect(screen.getByText(label)).toBeTruthy();
+    for (const label of ["Unmatched at start:", "Payment records received:", "Exceptions:", "Retry decisions:"]) expect(screen.getByText(label)).toBeTruthy();
     expect(screen.getByText(String(closes[0]!.data.summary))).toBeTruthy();
     expect(screen.getByText(/Since the first daily close on/)).toBeTruthy();
     expect(screen.queryByText("No daily close yet")).toBeNull();
@@ -32,6 +32,6 @@ describe("reports", () => {
   it("says when the automatic close is off", async () => {
     api.mutate((state) => { state.settings.scheduledCloseEnabled = false; });
     renderApp("/reports");
-    expect(await screen.findByText("Automatic close off: closes are triggered by hand.")).toBeTruthy();
+    expect(await screen.findByText("Automatic daily close is off. Run closes manually.")).toBeTruthy();
   });
 });

@@ -8,7 +8,6 @@ import { formatKobo, formatDate, formatCount } from '@/lib/formatters';
 import { CheckSquare, Info, ShieldAlert, CornerUpLeft, Plus, ClipboardCheck, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
-import { recordStatuses } from '@workspace/valopay-schema';
 import { RecordLabel, StatusBadge, readableLabel } from '@/components/record-label';
 
 export default function ReconciliationPage() {
@@ -97,16 +96,16 @@ export default function ReconciliationPage() {
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Reconciliation</h1>
-          <p className="text-muted-foreground mt-1">Review matches, allocate payments and keep the books aligned.</p>
+          <p className="text-muted-foreground mt-1">Reconciliation matches provider records to payments and instalments. Review proposed matches and assign unallocated payments here.</p>
         </div>
         <div className="flex items-center gap-3">
           <Button 
             onClick={() => runRecon.mutate({ data: { action: 'run_reconciliation' }, params: { merchantId } })}
             busy={runRecon.isPending}
-            busyLabel="Running the engine…"
+            busyLabel="Reconciling payments…"
             className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground"
           >
-            <RefreshCw className="h-4 w-4" /> Run Engine
+            <RefreshCw className="h-4 w-4" /> Run reconciliation
           </Button>
         </div>
       </header>
@@ -116,13 +115,13 @@ export default function ReconciliationPage() {
         <div className="bg-card border rounded-xl shadow-sm flex flex-col xl:col-span-2">
           <div className="p-5 border-b flex flex-wrap items-center gap-2">
             <CheckSquare className="h-5 w-5 text-warning-strong" />
-            <h2 className="font-semibold">Proposals Awaiting Confirmation</h2>
+            <h2 className="font-semibold">Proposed matches</h2>
             <span className="ml-auto bg-warning text-warning-foreground text-xs font-bold px-2 py-1 rounded-full">
               {proposals?.items.length || 0} pending
             </span>
           </div>
           
-          <ScrollFrame label="Proposals awaiting confirmation" className="p-0 overflow-x-auto">
+          <ScrollFrame label="Proposed matches" className="p-0 overflow-x-auto">
             <table className="min-w-[780px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground">
                 <tr>
@@ -136,11 +135,11 @@ export default function ReconciliationPage() {
               </thead>
               <tbody className="divide-y">
                 {isLoadingProposals ? (
-                  <LoadingRow colSpan={6} what="proposals" />
+                  <LoadingRow colSpan={6} what="proposed matches" />
                 ) : proposalsError ? (
-                  <tr><td colSpan={6} className="p-5"><p role="alert" className="text-sm text-destructive">Proposals could not be loaded. Please refresh to try again.</p></td></tr>
+                  <tr><td colSpan={6} className="p-5"><p role="alert" className="text-sm text-destructive">Proposed matches could not be loaded. Reload the page to try again.</p></td></tr>
                 ) : !proposals || proposals.items.length === 0 ? (
-                  <EmptyRow colSpan={6} title="No proposals waiting for review">The engine proposes a match when a payment fits an instalment by amount, reference or timing but not with certainty. Run the engine to look for new ones.</EmptyRow>
+                  <EmptyRow colSpan={6} title="No proposed matches to review">Possible payment matches appear here when they need Finance to confirm them. Run reconciliation to check for new matches.</EmptyRow>
                 ) : (
                   proposals.items.map(prop => (
                     <tr key={prop.id} className="hover:bg-secondary/10">
@@ -177,7 +176,7 @@ export default function ReconciliationPage() {
         <div className="bg-card border rounded-xl shadow-sm flex flex-col">
           <div className="p-4 border-b bg-secondary/20 flex items-center gap-2">
             <Info className="h-5 w-5 text-info-strong" />
-            <h2 className="font-semibold">Unallocated Payments</h2>
+            <h2 className="font-semibold">Unallocated payments</h2>
             <span className="ml-auto bg-info text-info-foreground text-xs font-bold px-2 py-1 rounded-full">
               {formatCount(payments?.items.length || 0, 'item')}
             </span>
@@ -186,7 +185,7 @@ export default function ReconciliationPage() {
             <table className="min-w-[460px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
-                  <th className="px-4 py-2 font-medium">Ref</th>
+                  <th className="px-4 py-2 font-medium">Reference</th>
                   <th className="px-4 py-2 font-medium text-right">Amount</th>
                   <th className="px-4 py-2 font-medium text-right">Action</th>
                 </tr>
@@ -195,9 +194,9 @@ export default function ReconciliationPage() {
                 {isLoadingPayments ? (
                   <LoadingRow colSpan={3} what="unallocated payments" />
                 ) : paymentsError ? (
-                  <tr><td colSpan={3} className="p-5"><p role="alert" className="text-sm text-destructive">Unallocated payments could not be loaded. Please refresh to try again.</p></td></tr>
+                  <tr><td colSpan={3} className="p-5"><p role="alert" className="text-sm text-destructive">Unallocated payments could not be loaded. Reload the page to try again.</p></td></tr>
                 ) : !payments || payments.items.length === 0 ? (
-                  <EmptyRow colSpan={3} title="No unallocated payments">Every payment received is matched to an instalment. One that cannot be matched appears here with an owner and a deadline.</EmptyRow>
+                  <EmptyRow colSpan={3} title="No unallocated payments">Unallocated payments have not yet been assigned to an instalment. There are none waiting in this list.</EmptyRow>
                 ) : (
                   payments.items.map(pay => (
                     <tr key={pay.id} className="hover:bg-secondary/10">
@@ -208,7 +207,7 @@ export default function ReconciliationPage() {
                       <td className="px-4 py-2 text-right font-mono font-medium">{formatKobo(pay.amountKobo)}</td>
                       <td className="px-4 py-2 text-right space-x-2 flex justify-end items-center">
                         <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(pay, 'manual_allocate')}>Allocate</Button>
-                        <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => handleAction(pay, 'record_refund')} title="Record Refund" aria-label={`Record Refund for ${pay.reference}`}>
+                        <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => handleAction(pay, 'record_refund')} title="Record external refund" aria-label={`Record external refund for ${pay.reference}`}>
                           <CornerUpLeft className="h-3 w-3" />
                         </Button>
                       </td>
@@ -224,27 +223,27 @@ export default function ReconciliationPage() {
         <div className="bg-card border rounded-xl shadow-sm flex flex-col">
           <div className="p-4 border-b bg-secondary/20 flex items-center gap-2">
             <ShieldAlert className="h-5 w-5 text-destructive" />
-            <h2 className="font-semibold">Unresolved Observations</h2>
+            <h2 className="font-semibold">Unresolved payment evidence</h2>
             <span className="ml-auto bg-destructive/10 text-destructive text-xs font-bold px-2 py-1 rounded-full">
               {formatCount(observations?.items.length || 0, 'item')}
             </span>
           </div>
-          <ScrollFrame label="Unresolved observations" className="p-0 overflow-auto max-h-[400px]">
+          <ScrollFrame label="Unresolved payment evidence" className="p-0 overflow-auto max-h-[400px]">
              <table className="min-w-[440px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
                   <th className="px-4 py-2 font-medium">Source</th>
-                  <th className="px-4 py-2 font-medium">Ref</th>
+                  <th className="px-4 py-2 font-medium">Reference</th>
                   <th className="px-4 py-2 font-medium text-right">Amount</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
                 {isLoadingObs ? (
-                  <LoadingRow colSpan={3} what="unresolved observations" />
+                  <LoadingRow colSpan={3} what="unresolved payment evidence" />
                 ) : observationsError ? (
-                  <tr><td colSpan={3} className="p-5"><p role="alert" className="text-sm text-destructive">Observations could not be loaded. Please refresh to try again.</p></td></tr>
+                  <tr><td colSpan={3} className="p-5"><p role="alert" className="text-sm text-destructive">Payment evidence could not be loaded. Reload the page to try again.</p></td></tr>
                 ) : !observations || observations.items.length === 0 ? (
-                  <EmptyRow colSpan={3} title="No unresolved observations">Every webhook, settlement line and statement line has been resolved to a payment. Anything the engine cannot resolve waits here as evidence.</EmptyRow>
+                  <EmptyRow colSpan={3} title="No unresolved payment evidence">Provider records and bank statement entries appear here when they cannot be linked to a payment or settlement batch.</EmptyRow>
                 ) : (
                   observations.items.map(obs => (
                     <tr key={obs.id} className="hover:bg-secondary/10">
@@ -265,17 +264,17 @@ export default function ReconciliationPage() {
         <div className="bg-card border rounded-xl shadow-sm flex flex-col xl:col-span-2">
           <div className="p-5 border-b flex flex-wrap items-start gap-2">
             <ClipboardCheck className="h-5 w-5 text-primary" />
-            <h2 className="font-semibold">Precision Audit</h2>
-            <p className="w-full text-xs leading-relaxed text-muted-foreground">Finance reviews the completed month's sampled automatic matches (REC-09). Marking a match wrong reopens the books.</p>
-            <p className="text-xs font-medium">{auditSample.filter(item => typeof item.data?.reviewed === 'boolean').length} of {auditSample.length} sampled reviewed{precision?.falseMatchRate !== null && precision?.falseMatchRate !== undefined ? ` · false-match rate ${(Number(precision.falseMatchRate) * 100).toFixed(1)}% (95% interval ${(Number(precision.interval?.low) * 100).toFixed(1)}% to ${(Number(precision.interval?.high) * 100).toFixed(1)}%)` : ''}.</p>
+            <h2 className="font-semibold">Match accuracy review</h2>
+            <p className="w-full text-xs leading-relaxed text-muted-foreground">Finance checks a sample of automatic matches from the last completed month. Marking a match incorrect stops counting that allocation and reopens the payment and instalment.</p>
+            <p className="text-xs font-medium">{auditSample.filter(item => typeof item.data?.reviewed === 'boolean').length} of {auditSample.length} sampled matches reviewed{precision?.falseMatchRate !== null && precision?.falseMatchRate !== undefined ? ` · incorrect match rate ${(Number(precision.falseMatchRate) * 100).toFixed(1)}% (95% confidence interval: ${(Number(precision.interval?.low) * 100).toFixed(1)}% to ${(Number(precision.interval?.high) * 100).toFixed(1)}%)` : ''}.</p>
           </div>
-          <ScrollFrame label="Precision audit" className="p-0 overflow-x-auto max-h-[400px]">
+          <ScrollFrame label="Match accuracy review" className="p-0 overflow-x-auto max-h-[400px]">
             <table className="min-w-[780px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
                   <th className="px-4 py-2 font-medium">Rule</th>
                   <th className="px-4 py-2 font-medium">Payment</th>
-                  <th className="px-4 py-2 font-medium">Due item</th>
+                  <th className="px-4 py-2 font-medium">Instalment</th>
                   <th className="px-4 py-2 font-medium text-right">Amount</th>
                   <th className="px-4 py-2 font-medium">Explanation</th>
                   <th className="px-4 py-2 font-medium">Review</th>
@@ -284,11 +283,11 @@ export default function ReconciliationPage() {
               </thead>
               <tbody className="divide-y">
                 {isLoadingAudit ? (
-                  <LoadingRow colSpan={7} what="the precision sample" />
+                  <LoadingRow colSpan={7} what="the match review sample" />
                 ) : auditError ? (
-                  <tr><td colSpan={7} className="p-5"><p role="alert" className="text-sm text-destructive">The precision sample could not be loaded. Please refresh to try again.</p></td></tr>
+                  <tr><td colSpan={7} className="p-5"><p role="alert" className="text-sm text-destructive">The match review sample could not be loaded. Reload the page to try again.</p></td></tr>
                 ) : auditSample.length === 0 ? (
-                  <EmptyRow colSpan={7} title="No automatic certain matches to review yet">The sample is drawn from the completed month's automatic certain allocations at the daily close, for Finance to confirm or reject (REC-09).</EmptyRow>
+                  <EmptyRow colSpan={7} title="No automatic matches to review yet">A daily close selects a sample from the last completed month's automatic matches rated certain. Finance can then check whether those matches are correct.</EmptyRow>
                 ) : (
                   auditSample.map(allocation => (
                     <tr key={allocation.id} className="hover:bg-secondary/10">
@@ -298,11 +297,11 @@ export default function ReconciliationPage() {
                       <td className="px-4 py-2 text-right font-mono font-medium">{formatKobo(allocation.amountKobo)}</td>
                       <td className="px-4 py-2 text-xs text-muted-foreground max-w-[280px]">{String(allocation.data?.explanation || '')}</td>
                       <td className="px-4 py-2 text-xs">
-                        {allocation.data?.reviewed === true ? <span className="text-success font-medium">Correct</span> : allocation.data?.reviewed === false ? <span className="text-destructive font-medium">Wrong</span> : <span className="text-muted-foreground">Unreviewed</span>}
+                        {allocation.data?.reviewed === true ? <span className="text-success font-medium">Correct</span> : allocation.data?.reviewed === false ? <span className="text-destructive font-medium">Incorrect</span> : <span className="text-muted-foreground">Not reviewed</span>}
                       </td>
                       <td className="px-4 py-2 text-right space-x-2">
-                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => reviewAllocation(allocation, true)}>Correct</Button>
-                        <Button size="sm" variant="outline" className="h-7 text-xs text-destructive" onClick={() => reviewAllocation(allocation, false)}>Wrong</Button>
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => reviewAllocation(allocation, true)}>Mark correct</Button>
+                        <Button size="sm" variant="outline" className="h-7 text-xs text-destructive" onClick={() => reviewAllocation(allocation, false)}>Mark incorrect</Button>
                       </td>
                     </tr>
                   ))
@@ -315,18 +314,18 @@ export default function ReconciliationPage() {
         {/* Settlement Batches */}
         <div className="bg-card border rounded-xl shadow-sm flex flex-col xl:col-span-2">
           <div className="p-4 border-b bg-secondary/20 flex items-center justify-between">
-            <h2 className="font-semibold flex items-center gap-2"><Info className="h-5 w-5 text-primary" /> Settlement Batches</h2>
-            <Button size="sm" onClick={handleCreateBatch}><Plus className="h-4 w-4 mr-2" /> Add Batch</Button>
+            <h2 className="font-semibold flex items-center gap-2"><Info className="h-5 w-5 text-primary" /> Settlement batches</h2>
+            <Button size="sm" onClick={handleCreateBatch}><Plus className="h-4 w-4 mr-2" /> Add batch</Button>
           </div>
           <ScrollFrame label="Settlement batches" className="p-0 overflow-x-auto max-h-[400px]">
              <table className="min-w-[650px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
                   <th className="px-4 py-2 font-medium">Provider</th>
-                  <th className="px-4 py-2 font-medium">Batch Ref</th>
-                  <th className="px-4 py-2 font-medium text-right">Gross</th>
+                  <th className="px-4 py-2 font-medium">Batch reference</th>
+                  <th className="px-4 py-2 font-medium text-right">Before fees</th>
                   <th className="px-4 py-2 font-medium text-right">Fee</th>
-                  <th className="px-4 py-2 font-medium text-right">Net</th>
+                  <th className="px-4 py-2 font-medium text-right">After fees</th>
                   <th className="px-4 py-2 font-medium text-right">Status</th>
                 </tr>
               </thead>
@@ -334,9 +333,9 @@ export default function ReconciliationPage() {
                 {isLoadingBatches ? (
                   <LoadingRow colSpan={6} what="settlement batches" />
                 ) : batchesError ? (
-                  <tr><td colSpan={6} className="p-5"><p role="alert" className="text-sm text-destructive">Settlement batches could not be loaded. Please refresh to try again.</p></td></tr>
+                  <tr><td colSpan={6} className="p-5"><p role="alert" className="text-sm text-destructive">Settlement batches could not be loaded. Reload the page to try again.</p></td></tr>
                 ) : !batches || batches.items.length === 0 ? (
-                  <EmptyRow colSpan={6} title="No settlement batches">A batch appears when a settlement report arrives from the aggregator or is imported as a CSV.</EmptyRow>
+                  <EmptyRow colSpan={6} title="No settlement batches">A batch groups payments in one provider settlement report. Add a synthetic batch or import a settlement report to see it here.</EmptyRow>
                 ) : (
                   batches.items.map(b => (
                     <tr key={b.id} className="hover:bg-secondary/10">
@@ -366,34 +365,34 @@ export default function ReconciliationPage() {
         isOpen={isDialogOpen}
         onOpenChange={setIsDialogOpen}
         title={
-          actionKind === 'confirm_allocation' ? 'Confirm Allocation' : 
-          actionKind === 'reject_allocation' ? 'Reject Allocation' : 
-          actionKind === 'manual_allocate' ? 'Manual Allocation' : 
-          actionKind === 'record_refund' ? 'Record Refund' :
-          actionKind === 'create_batch' ? 'Add Settlement Batch' :
-          actionKind === 'edit_batch' ? 'Edit Settlement Batch' :
-          'Review Allocation'
+          actionKind === 'confirm_allocation' ? 'Confirm payment allocation' :
+          actionKind === 'reject_allocation' ? 'Reject proposed match' :
+          actionKind === 'manual_allocate' ? 'Allocate payment' :
+          actionKind === 'record_refund' ? 'Record external refund' :
+          actionKind === 'create_batch' ? 'Add settlement batch' :
+          actionKind === 'edit_batch' ? 'Edit settlement batch' :
+          'Review payment allocation'
         }
         actionMutation={actionKind === 'create_batch' || actionKind === 'edit_batch' ? undefined : actionKind}
         defaultValues={actionKind === 'review_allocation' ? { correct: reviewCorrect } : {}}
         fields={
           actionKind === 'manual_allocate' ? [
-            dueItems?.items.length ? { name: 'dueItemId', label: 'Instalment', type: 'select', isData: true, required: true, options: dueItems.items.map(item => ({ value: item.id, label: `${customerById.get(String(item.customerId))?.name || item.name} · ${item.reference} · ${formatKobo(item.amountKobo)}` })) } : { name: 'dueItemId', label: 'Due Item ID', type: 'text', isData: true, required: true },
-            { name: 'amountKobo', label: 'Amount (Kobo)', type: 'number', isData: true, required: true }
+            dueItems?.items.length ? { name: 'dueItemId', label: 'Instalment', type: 'select', isData: true, required: true, options: dueItems.items.map(item => ({ value: item.id, label: `${customerById.get(String(item.customerId))?.name || item.name} · ${item.reference} · ${formatKobo(item.amountKobo)}` })) } : { name: 'dueItemId', label: 'Instalment ID', type: 'text', isData: true, required: true },
+            { name: 'amountKobo', label: 'Amount to allocate (kobo)', type: 'number', isData: true, required: true }
           ] : 
           actionKind === 'record_refund' ? [
-            { name: 'reference', label: 'External Refund Ref', type: 'text', isData: true, required: true }
+            { name: 'reference', label: 'External refund reference', type: 'text', isData: true, required: true }
           ] :
           actionKind === 'review_allocation' ? [
-            { name: 'correct', label: 'This allocation is correct (unticked marks it wrong and supersedes it)', type: 'checkbox', isData: true }
+            { name: 'correct', label: 'This match is correct. Untick to mark it incorrect and reopen the payment and instalment.', type: 'checkbox', isData: true }
           ] :
           actionKind === 'create_batch' || actionKind === 'edit_batch' ? [
             { name: 'name', label: 'Name', type: 'text', required: true },
-            { name: 'reference', label: `Batch reference (status is set by reconciliation: ${recordStatuses['settlement-batches'].join(' / ')})`, type: 'text', required: true },
+            { name: 'reference', label: 'Batch reference (reconciliation sets the status)', type: 'text', required: true },
             { name: 'provider', label: 'Provider', type: 'text', isData: true, required: true },
-            { name: 'grossKobo', label: 'Gross (Kobo)', type: 'number', isData: true, required: true },
-            { name: 'feeKobo', label: 'Fee (Kobo)', type: 'number', isData: true, required: true },
-            { name: 'netKobo', label: 'Net (Kobo)', type: 'number', isData: true, required: true }
+            { name: 'grossKobo', label: 'Amount before fees (kobo)', type: 'number', isData: true, required: true },
+            { name: 'feeKobo', label: 'Fee (kobo)', type: 'number', isData: true, required: true },
+            { name: 'netKobo', label: 'Amount after fees (kobo)', type: 'number', isData: true, required: true }
           ] :
           []
         }

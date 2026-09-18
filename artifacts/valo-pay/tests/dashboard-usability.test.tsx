@@ -31,14 +31,14 @@ describe('dashboard usability', () => {
     expect(details.open).toBe(true);
     expect(within(details).getByText('0.3%')).toBeTruthy();
     expect(within(details).getByText('7.5%')).toBeTruthy();
-    expect(within(details).getByText(/BIL-01: a collection is billable/)).toBeTruthy();
+    expect(within(details).getByText(/A collection can be billed when the direct debit succeeded/)).toBeTruthy();
   });
 
   it('includes collapsed evidence when printing and restores the chosen disclosures afterwards', async () => {
     const user = userEvent.setup();
     renderApp('/reports');
     const rates = (await screen.findByText('Billing rates & rules')).closest('details')!;
-    const receipts = screen.getByText('Receipts by channel (BIL-01)').closest('details')!;
+    const receipts = screen.getByText('Receipts by payment method').closest('details')!;
     await user.click(receipts.querySelector('summary')!);
     expect(rates.open).toBe(false);
     expect(receipts.open).toBe(true);

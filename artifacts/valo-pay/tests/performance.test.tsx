@@ -51,7 +51,7 @@ describe("performance", () => {
     try {
       const view = render(<ErrorBoundary><LazyPage load={load} /></ErrorBoundary>);
       expect(await view.findByRole("alert")).toBeTruthy();
-      expect(view.getByRole("alert").textContent).toContain("stopped working");
+      expect(view.getByRole("alert").textContent).toContain("We could not display this page");
     } finally {
       spy.mockRestore();
     }

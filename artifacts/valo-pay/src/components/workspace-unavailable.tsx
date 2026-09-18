@@ -29,16 +29,16 @@ export function explainWorkspaceError(error: unknown): WorkspaceExplanation {
   const status = (error as { status?: unknown } | null)?.status;
   const said = (error as { data?: { error?: unknown } } | null)?.data?.error;
   const message = typeof said === 'string' && said.trim() ? said.trim() : '';
-  if (typeof status !== 'number') return { title: 'The console could not reach the service', lines: ['Check your connection and try again.'] };
-  if (status === 429) return { title: 'The service asked you to wait', lines: [message || 'Too many requests from this address. Try again shortly.'] };
-  if (status >= 500) return { title: 'The service hit an error', lines: ['It did not finish loading your workspace. Try again in a moment.'], reportTime: true, reference: referenceOf(error) };
-  return { title: 'Could not load your workspace', lines: [message || 'The service refused the request.'] };
+  if (typeof status !== 'number') return { title: 'Could not connect to Valo Pay', lines: ['Check your connection and try again.'] };
+  if (status === 429) return { title: 'Please wait before trying again', lines: [message || 'Too many requests were sent from your connection. Try again shortly.'] };
+  if (status >= 500) return { title: 'Your workspace is temporarily unavailable', lines: ['We could not load your workspace. Try again in a moment.'], reportTime: true, reference: referenceOf(error) };
+  return { title: 'Could not load your workspace', lines: [message || 'We could not open your workspace. Try again.'] };
 }
 
 export function WorkspaceUnavailable({ error, retry, busy }: { error: unknown; retry: () => void; busy: boolean }) {
   const [at] = useState(() => new Date().toISOString());
   const { title, lines, reportTime, reference } = explainWorkspaceError(error);
-  useEffect(() => { document.title = 'Workspace not loaded · Valo Pay'; }, []);
+  useEffect(() => { document.title = 'Workspace unavailable · Valo Pay'; }, []);
   return (
     <PublicFrame>
       <main id="main" tabIndex={-1} className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16 focus:outline-none">
@@ -48,13 +48,13 @@ export function WorkspaceUnavailable({ error, retry, busy }: { error: unknown; r
           actions={<>
             <Button onClick={retry} busy={busy} busyLabel="Trying again…">Try again</Button>
             <AuthShow when="signed-out"><Button asChild variant="outline"><Link href="/sign-in">Sign in</Link></Button></AuthShow>
-            <Button asChild variant="outline"><Link href="/">Back to the start</Link></Button>
+            <Button asChild variant="outline"><Link href="/">Back to home</Link></Button>
           </>}
         >
           {lines.map((line) => <p key={line}>{line}</p>)}
           {reportTime && (reference
-            ? <p>If it continues, tell us the time and the reference: <LookedFor>{formatDate(at)}</LookedFor>, <LookedFor>{reference}</LookedFor>.</p>
-            : <p>If it continues, tell us the time: <LookedFor>{formatDate(at)}</LookedFor>.</p>)}
+            ? <p>When reporting the problem, include this time and support reference: <LookedFor>{formatDate(at)}</LookedFor>, <LookedFor>{reference}</LookedFor>.</p>
+            : <p>When reporting the problem, include this time: <LookedFor>{formatDate(at)}</LookedFor>.</p>)}
           <p>No lender data has been changed.</p>
         </Notice>
       </main>

@@ -60,7 +60,7 @@ checks += 3;
   assert.equal(invoice.data.adjustments.length, 0);
   assert.equal(invoice.data.recoveryFee.enabled, false, "BIL-03: the recovery fee is gated off");
   assert.match(invoice.data.recoveryFee.note, /recorded as proven/);
-  assert.throws(() => invoiceFor(state, "2027-06", wat("2027-07-02T09:00:00")), /already issued/, "one invoice per period; corrections are adjustment lines");
+  assert.throws(() => invoiceFor(state, "2027-06", wat("2027-07-02T09:00:00")), /already been issued/, "one invoice per period; corrections are adjustment lines");
   assert.throws(() => invoiceFor(state, "2027-05", wat("2027-07-02T09:00:00")), /period order/);
   assert.throws(() => issueInvoice(state, finance(wat("2027-07-02T09:00:00")), { period: "2027-08" }), /future period/);
   assert.throws(() => issueInvoice(state, finance(wat("2027-07-02T09:00:00")), { period: "June" }), /YYYY-MM/);

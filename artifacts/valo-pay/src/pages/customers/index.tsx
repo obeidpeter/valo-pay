@@ -33,11 +33,11 @@ export default function CustomersPage() {
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Customers</h1>
-          <p className="text-muted-foreground mt-1">Every borrower, payment and consent record in one place.</p>
+          <p className="text-muted-foreground mt-1">Every customer, payment and consent record in one place.</p>
         </div>
         <div className="flex items-center gap-3">
           <Button className="gap-2" onClick={() => setIsDialogOpen(true)}>
-            <UserPlus className="h-4 w-4" /> Add Customer
+            <UserPlus className="h-4 w-4" /> Add customer
           </Button>
         </div>
       </header>
@@ -46,15 +46,15 @@ export default function CustomersPage() {
         kind="customers"
         isOpen={isDialogOpen}
         onOpenChange={setIsDialogOpen}
-        title="Add Customer"
+        title="Add customer"
         fields={[
-          { name: 'name', label: 'Full Name', type: 'text', required: true },
-          { name: 'reference', label: 'LMS Reference', type: 'text', required: true },
+          { name: 'name', label: 'Full name', type: 'text', required: true },
+          { name: 'reference', label: 'Loan software reference', type: 'text', required: true },
           { name: 'status', label: 'Status', type: 'select', options: recordStatuses.customers.map(status => ({ label: status.charAt(0).toUpperCase() + status.slice(1), value: status })), required: true },
-          { name: 'bankName', label: 'Bank Name', type: 'text', isData: true },
-          { name: 'accountMasked', label: 'Masked Account (e.g. ******1234)', type: 'text', isData: true },
-          { name: 'phoneMasked', label: 'Masked Phone', type: 'text', isData: true },
-          { name: 'consentProvenance', label: 'Consent Provenance', type: 'text', isData: true },
+          { name: 'bankName', label: 'Bank name', type: 'text', isData: true },
+          { name: 'accountMasked', label: 'Masked account number (e.g. ******1234)', type: 'text', isData: true },
+          { name: 'phoneMasked', label: 'Masked phone number', type: 'text', isData: true },
+          { name: 'consentProvenance', label: 'Consent source or reference', type: 'text', isData: true },
         ]}
         defaultValues={{ status: 'active' }}
       />
@@ -71,7 +71,7 @@ export default function CustomersPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <input 
               type="text" 
-              placeholder="Search by name, reference, or phone..."
+              placeholder="Search by name, reference or phone…"
               aria-label="Search customers"
               ref={searchRef}
               aria-keyshortcuts="/"
@@ -87,13 +87,13 @@ export default function CustomersPage() {
         {isLoading ? (
           <Loading what="customers" />
         ) : error ? (
-          <div role="alert" className="p-8 text-center text-destructive">Failed to load customers. Please refresh to try again.</div>
+          <div role="alert" className="p-8 text-center text-destructive">Customers could not be loaded. Reload the page to try again.</div>
         ) : !data || data.items.length === 0 ? (
           search.trim() ? (
             <EmptyState filtered title={`No customers match “${search.trim()}”`}>Check the spelling, or search by the reference or the masked phone number.</EmptyState>
           ) : (
             <EmptyState title="No customers yet" action={<Button size="sm" variant="outline" onClick={() => setIsDialogOpen(true)}>Add a customer</Button>}>
-              Customers arrive from your loan software by API or a CSV import on the Collections page. In the sandbox you can add one here.
+              Customer records appear here after an import or when you add one. Add a synthetic customer here, or import sample records on the Collections page.
             </EmptyState>
           )
         ) : (
@@ -103,7 +103,7 @@ export default function CustomersPage() {
                 <tr>
                   <th className="px-6 py-4 font-medium">Customer</th>
                   <th className="px-6 py-4 font-medium">Contact</th>
-                  <th className="px-6 py-4 font-medium">Bank Details</th>
+                  <th className="px-6 py-4 font-medium">Bank details</th>
                   <th className="px-6 py-4 font-medium">Status</th>
                   <th className="px-6 py-4 font-medium text-right">Actions</th>
                 </tr>
@@ -121,18 +121,18 @@ export default function CustomersPage() {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <p className="text-muted-foreground">{String(customer.data?.phoneMasked || 'N/A')}</p>
+                      <p className="text-muted-foreground">{String(customer.data?.phoneMasked || 'Not provided')}</p>
                     </td>
                     <td className="px-6 py-4">
-                      <p className="font-medium">{String(customer.data?.bankName || 'N/A')}</p>
-                      <p className="text-xs font-mono text-muted-foreground">{String(customer.data?.accountMasked || 'N/A')}</p>
+                      <p className="font-medium">{String(customer.data?.bankName || 'Not provided')}</p>
+                      <p className="text-xs font-mono text-muted-foreground">{String(customer.data?.accountMasked || 'Not provided')}</p>
                     </td>
                     <td className="px-6 py-4">
                       <StatusBadge status={customer.status} />
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <Link href={`/customers/${customer.id}`} aria-label={`View Timeline for ${customer.name}`} className="inline-flex min-h-9 items-center gap-2 rounded-lg px-2 text-primary hover:bg-secondary text-xs font-medium">
-                        View Timeline <ArrowRight className="h-3 w-3" />
+                      <Link href={`/customers/${customer.id}`} aria-label={`View history for ${customer.name}`} className="inline-flex min-h-9 items-center gap-2 rounded-lg px-2 text-primary hover:bg-secondary text-xs font-medium">
+                        View history <ArrowRight className="h-3 w-3" />
                       </Link>
                     </td>
                   </tr>
@@ -144,7 +144,7 @@ export default function CustomersPage() {
         
         {data && data.total > data.items.length && (
           <div className="p-4 border-t text-center text-xs text-muted-foreground">
-            Showing {formatNumber(data.items.length)} of {formatCount(data.total, 'record')}. Refine search to see more.
+            Showing {formatNumber(data.items.length)} of {formatCount(data.total, 'customer')}. Narrow your search to find a specific customer.
           </div>
         )}
       </div>

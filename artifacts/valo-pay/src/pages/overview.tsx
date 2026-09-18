@@ -4,6 +4,7 @@ import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow, EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { Button } from '@/components/ui/button';
+import { readableLabel } from '@/components/record-label';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetOverview, getGetOverviewQueryKey } from '@workspace/api-client-react';
 import { formatKobo, formatDate, formatCompactDate, formatNumber, formatCount } from '@/lib/formatters';
@@ -43,8 +44,8 @@ export default function OverviewPage() {
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Your workspace at a glance</p>
-          <h1 className="text-3xl font-bold tracking-tight">Operations Overview</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Collections, outstanding obligations and the work that needs your attention.</p>
+          <h1 className="text-3xl font-bold tracking-tight">Operations overview</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Track collections, unpaid instalments and work that needs your attention.</p>
         </div>
         <Button asChild variant="outline" className="gap-2"><Link href="/reports"><FileBarChart2 aria-hidden="true" className="h-4 w-4" /> View reports</Link></Button>
       </header>
@@ -52,12 +53,12 @@ export default function OverviewPage() {
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border bg-card px-4 py-3 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-2 font-medium text-foreground"><Clock aria-hidden="true" className="h-4 w-4 text-muted-foreground" /> Daily close</span>
         <p>Last close: {overview.lastClose ? formatDate(overview.lastClose) : 'Not closed yet'}</p>
-        <p>Next scheduled close: {overview.nextClose ? `${formatDate(overview.nextClose)} (daily)` : 'automatic close off'}</p>
+        <p>Next scheduled close: {overview.nextClose ? `${formatDate(overview.nextClose)} (daily)` : 'Automatic close is off'}</p>
         <span className="ml-auto rounded-md bg-secondary px-2 py-1 font-medium capitalize">{overview.environment}</span>
       </div>
 
       <section aria-labelledby="overview-metrics-title">
-        <h2 id="overview-metrics-title" className="sr-only">Key Metrics</h2>
+        <h2 id="overview-metrics-title" className="sr-only">Key metrics</h2>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 print:grid-cols-4">
           {overview.metrics.map((metric, index) => {
             const Icon = metricIcons[index % metricIcons.length];
@@ -86,7 +87,7 @@ export default function OverviewPage() {
         {overview.alerts.length === 0 ? (
           <div className="flex items-start gap-3 rounded-xl border border-success/20 bg-success/5 p-4">
             <ShieldCheck aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-success" />
-            <p className="text-sm text-muted-foreground">No alert conditions: the audit chain verifies, positions rebuild, nothing is stuck unallocated over the threshold, no exception is past its deadline, the books were closed within the last 36 hours and no scheduled close was missed.</p>
+            <p className="text-sm text-muted-foreground">No alerts need attention. Current checks found no problems with the audit log, customer balances, overdue work or daily closes.</p>
           </div>
         ) : (
           <ul className="grid gap-3 lg:grid-cols-2">
@@ -112,11 +113,11 @@ export default function OverviewPage() {
       <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2 print:grid-cols-2">
         <section className="overflow-hidden rounded-xl border bg-card shadow-sm" aria-labelledby="overview-queues-title">
           <div className="flex items-center justify-between gap-3 border-b px-5 py-4">
-            <div><h2 id="overview-queues-title" className="font-semibold">Action Required</h2><p className="mt-1 text-xs text-muted-foreground">Choose a queue to keep work moving.</p></div>
+            <div><h2 id="overview-queues-title" className="font-semibold">Action required</h2><p className="mt-1 text-xs text-muted-foreground">Open a list to review its items.</p></div>
             <AlertCircle aria-hidden="true" className="h-5 w-5 text-muted-foreground" />
           </div>
           <div className="divide-y">
-            {overview.queues.length === 0 && <EmptyState title="Nothing in the queue">Items that need a decision, such as a proposed match or an exception past its deadline, appear here.</EmptyState>}
+            {overview.queues.length === 0 && <EmptyState title="No items need attention">Proposed payment matches and overdue exceptions appear here when they need a decision.</EmptyState>}
             {overview.queues.map(queue => (
               <Link key={queue.key} href={queueDestinations[queue.key] || '/exceptions'} className="group flex min-h-16 items-center gap-3 px-5 py-3.5 transition-colors hover:bg-secondary/40">
                 <div className="min-w-0 flex-1"><p className="text-sm font-medium">{queue.label}</p><p className="mt-0.5 text-xs text-muted-foreground">{queue.detail}</p></div>
@@ -129,15 +130,15 @@ export default function OverviewPage() {
 
         <section className="overflow-hidden rounded-xl border bg-card shadow-sm" aria-labelledby="overview-upcoming-title">
           <div className="flex items-center justify-between gap-3 border-b px-5 py-4">
-            <div><h2 id="overview-upcoming-title" className="font-semibold">Upcoming Scheduled Actions</h2><p className="mt-1 text-xs text-muted-foreground">Open obligations, ordered by due date.</p></div>
+            <div><h2 id="overview-upcoming-title" className="font-semibold">Instalments to collect</h2><p className="mt-1 text-xs text-muted-foreground">Unpaid instalments, earliest due date first.</p></div>
             <Link href="/collections" className="inline-flex min-h-8 shrink-0 items-center gap-1 text-xs font-semibold hover:underline">View all<ArrowRight aria-hidden="true" className="h-3.5 w-3.5" /></Link>
           </div>
           <div className="divide-y">
-            {upcoming.length === 0 && <EmptyState title="No scheduled actions">Retries scheduled under an approved policy appear here with the notice each one requires.</EmptyState>}
+            {upcoming.length === 0 && <EmptyState title="No instalments to collect">Instalments that are scheduled or in collection appear here with their due dates.</EmptyState>}
             {upcoming.map(record => (
               <Link key={record.id} href={record.customerId ? `/customers/${record.customerId}` : '/collections'} className="flex items-center justify-between gap-3 px-5 py-3.5 transition-colors hover:bg-secondary/40">
                 <div className="min-w-0"><p className="text-sm font-medium">{record.name}</p><p className="mt-1 break-all text-xs text-muted-foreground">{record.reference || record.id}</p></div>
-                <div className="shrink-0 text-right"><span className="inline-block rounded-md bg-secondary/70 px-2 py-0.5 text-xs font-medium capitalize text-secondary-foreground">{record.status.replace(/_/g, ' ')}</span><p className="mt-1 text-xs text-muted-foreground">Due {formatCompactDate(String(record.data.dueDate || ''))}</p></div>
+                <div className="shrink-0 text-right"><span className="inline-block rounded-md bg-secondary/70 px-2 py-0.5 text-xs font-medium capitalize text-secondary-foreground">{readableLabel(record.status)}</span><p className="mt-1 text-xs text-muted-foreground">Due {formatCompactDate(String(record.data.dueDate || ''))}</p></div>
               </Link>
             ))}
           </div>
@@ -146,19 +147,19 @@ export default function OverviewPage() {
 
       <section className="overflow-hidden rounded-xl border bg-card shadow-sm" aria-labelledby="overview-activity-title">
         <div className="flex items-center justify-between gap-3 border-b px-5 py-4">
-          <h2 id="overview-activity-title" className="flex items-center gap-2 font-semibold"><Activity aria-hidden="true" className="h-4 w-4 text-muted-foreground" /> Recent Activity</h2>
+          <h2 id="overview-activity-title" className="flex items-center gap-2 font-semibold"><Activity aria-hidden="true" className="h-4 w-4 text-muted-foreground" /> Recent activity</h2>
           <Link href="/audit" className="inline-flex min-h-8 items-center gap-1 text-xs font-semibold hover:underline">Open audit log<ArrowRight aria-hidden="true" className="h-3.5 w-3.5" /></Link>
         </div>
         <ScrollFrame label="Recent activity table" className="overflow-x-auto">
           <table className="w-full text-left text-sm">
-            <thead className="border-b bg-secondary/25 text-xs text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Time</th><th className="px-5 py-3 font-medium">Record</th><th className="px-5 py-3 font-medium">Action/Status</th><th className="px-5 py-3 text-right font-medium">Value</th></tr></thead>
+            <thead className="border-b bg-secondary/25 text-xs text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Time</th><th className="px-5 py-3 font-medium">Record</th><th className="px-5 py-3 font-medium">Status</th><th className="px-5 py-3 text-right font-medium">Amount</th></tr></thead>
             <tbody className="divide-y">
               {overview.activity.length === 0 && <EmptyRow colSpan={4} title="No activity yet">Every action in this lender's workspace is listed here and recorded in the audit log.</EmptyRow>}
               {overview.activity.map(record => (
                 <tr key={record.id} className="hover:bg-secondary/20">
                   <td className="whitespace-nowrap px-5 py-3 text-xs text-muted-foreground">{formatDate(record.updatedAt)}</td>
-                  <td className="px-5 py-3 font-medium"><span className="capitalize">{(record.name || record.kind).replace(/_/g, ' ')}</span><span className="mt-0.5 block text-xs font-normal text-muted-foreground">{record.reference || record.id}</span></td>
-                  <td className="px-5 py-3"><span className="inline-block rounded-md bg-secondary/70 px-2 py-0.5 text-xs capitalize text-secondary-foreground">{record.status.replace(/_/g, ' ')}</span></td>
+                  <td className="px-5 py-3 font-medium"><span className="capitalize">{readableLabel(record.name || record.kind)}</span><span className="mt-0.5 block text-xs font-normal text-muted-foreground">{record.reference || record.id}</span></td>
+                  <td className="px-5 py-3"><span className="inline-block rounded-md bg-secondary/70 px-2 py-0.5 text-xs capitalize text-secondary-foreground">{readableLabel(record.status)}</span></td>
                   <td className="px-5 py-3 text-right font-medium tabular-nums">{record.amountKobo ? formatKobo(record.amountKobo) : '—'}</td>
                 </tr>
               ))}

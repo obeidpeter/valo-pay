@@ -6,11 +6,11 @@ import {
 import type { RecordKind } from "./kinds";
 
 /** ISO date (YYYY-MM-DD) or a UTC ISO timestamp with millisecond precision or less. */
-export const isoDateOrTimestamp = z.string().regex(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/, "must be an ISO date or UTC ISO timestamp").refine((value) => !Number.isNaN(Date.parse(value)), "must be a real date");
+export const isoDateOrTimestamp = z.string().regex(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/, "Use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z.").refine((value) => !Number.isNaN(Date.parse(value)), "Enter a valid date.");
 /** A day as YYYY-MM-DD. */
-export const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").refine((value) => !Number.isNaN(Date.parse(value)), "must be a real date");
+export const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD, for example 2026-09-18.").refine((value) => !Number.isNaN(Date.parse(value)), "Enter a valid date.");
 /** An amount in kobo: a non-negative safe integer. */
-export const kobo = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+export const kobo = z.number({ invalid_type_error: 'Enter an amount as a number.' }).int('Enter a whole number in kobo (100 kobo = ₦1).').min(0, 'The amount cannot be negative.').max(Number.MAX_SAFE_INTEGER, 'The amount is too large.');
 const versionNumber = z.coerce.number().int().min(1);
 /** Every record the platform writes is marked synthetic; a provider-accepted notice clears it (NOT-10). */
 const common = { synthetic: z.boolean().optional() };

@@ -8,20 +8,34 @@ import { BarChart3, Download, FileText, CheckSquare, RefreshCcw, ChevronDown } f
 import { Button } from '@/components/ui/button';
 import { formatKobo, formatDate, formatCount, formatNumber } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
+import { readableLabel } from '@/components/record-label';
 
 type Unknown = Record<string, unknown> | undefined;
 const isScalar = (value: unknown) => value === null || ['string', 'number', 'boolean'].includes(typeof value);
 const scalarEntries = (record: Unknown): Array<[string, unknown]> => Object.entries(record || {}).filter(([, value]) => isScalar(value));
 const billingLines = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.lines) ? (record!.lines as Array<Record<string, any>>) : [];
 const experimentRows = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.results) ? (record!.results as Array<Record<string, any>>) : [];
-const labelOf = (key: string) => key.replace(/([A-Z])/g, ' $1').replace(/^./, first => first.toUpperCase()).trim();
-const percent = (value: unknown) => typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : 'n/a';
+const labelOf = (key: string) => key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim().toLowerCase().replace(/^./, first => first.toUpperCase());
+const percent = (value: unknown) => typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : 'Not available';
+const percentagePoints = (value: unknown) => typeof value === 'number' ? `${(value * 100).toFixed(1)} percentage points` : 'Not available';
 const invoiceRows = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.invoices) ? (record!.invoices as Array<Record<string, any>>) : [];
 const adjustmentRows = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.pendingAdjustments) ? (record!.pendingAdjustments as Array<Record<string, any>>) : [];
 const billingSummaryKeys = new Set(['period', 'volumeTier', 'totalKobo', 'usageFeeKobo', 'successfulCollections', 'nextInvoicePeriod', 'pendingAdjustmentsKobo']);
 const billingLabels: Record<string, string> = {
-  usageRateBps: 'Usage rate', usageCapKobo: 'Usage cap', vatBps: 'VAT rate', totalKobo: 'Statement total',
-  usageFeeKobo: 'Usage fees', eligibleAllocatedKobo: 'Eligible allocated value', pendingAdjustmentsKobo: 'Pending adjustments',
+  period: 'Billing month', volumeTier: 'Licence plan', totalKobo: 'Statement total',
+  usageRateBps: 'Usage fee rate', usageCapKobo: 'Maximum usage fee per collection', vatBps: 'VAT rate',
+  reversalWindowDays: 'Provider reversal period (days)', billableRule: 'When a collection can be billed',
+  eligibleAllocatedKobo: 'Matched value eligible for billing', successfulCollections: 'Billable collections',
+  usageFeeKobo: 'Usage fees', nextInvoicePeriod: 'Next invoice month',
+  withheldInsideReversalWindow: 'Collections still within the reversal period',
+  pendingAdjustmentsKobo: 'Pending adjustments', adjustmentRule: 'How invoice corrections work',
+  recoveryFee: 'Recovery fee conditions', implementationExcludedFromRecurring: 'Setup fees excluded from recurring revenue',
+  synthetic: 'Uses sample data',
+};
+const experimentLabels: Record<string, string> = { result: 'Result', note: 'What the result means', synthetic: 'Uses sample data' };
+const checkLabels: Record<string, string> = {
+  effectAtLeastEightPoints: 'Improvement of at least 8 percentage points', intervalExcludesZero: 'Confidence interval shows improvement',
+  sampleMet: 'Required sample reached', analysisDateReached: 'Analysis date reached',
 };
 
 /** Long evidence stays available on demand and expands for a complete printed report. */
@@ -45,22 +59,22 @@ function ReportDisclosure({ title, children }: { title: string; children: ReactN
 /** REC-07: the close report fields, in the order the TRD lists them. */
 function closeReportChips(report: Record<string, any>): Array<[string, string]> {
   const money = (row: any) => `${row?.count ?? 0} · ${formatKobo(Number(row?.kobo || 0))}`;
-  const bySource = Object.entries(report.observations?.bySource || {}).map(([source, row]: [string, any]) => `${source} ${row.received}→${formatCount(row.paymentsResolvedTo, 'payment')}`).join(', ') || 'none';
+  const bySource = Object.entries(report.observations?.bySource || {}).map(([source, row]: [string, any]) => `${labelOf(source)}: ${row.received} records linked to ${formatCount(row.paymentsResolvedTo, 'payment')}`).join(', ') || 'none';
   const byRule = Object.entries(report.allocatedByRule || {}).map(([rule, row]: [string, any]) => `${rule} ${row.count}`).join(', ') || 'none';
   return [
-    ['opening unallocated', money(report.openingUnallocated)],
-    ['observations received', `${report.observations?.received ?? 0} (${bySource})`],
-    ['allocated by rule', byRule],
-    ['proposed', money(report.proposed)],
-    ['unallocated at close', `${money(report.unallocated)} · ${report.unallocated?.olderThan24Hours ?? 0} older than 24h`],
-    ['variances', `${report.variances?.count ?? 0} · ${formatKobo(Number(report.variances?.feeVarianceKobo || 0))}`],
-    ['exceptions', `${report.exceptions?.opened?.count ?? 0} opened · ${report.exceptions?.closed?.count ?? 0} closed · ${report.exceptions?.openAtClose ?? 0} open`],
-    ['positions changed', String(report.customerPositionsChanged?.length ?? 0)],
-    ['retry decisions', `${report.retryDecisions?.recorded ?? 0} recorded · ${report.retryDecisions?.finalAttempts ?? 0} final · ${report.retryDecisions?.noticesNotEvidenced ?? 0} deferred`],
+    ['Unmatched at start', money(report.openingUnallocated)],
+    ['Payment records received', `${report.observations?.received ?? 0} (${bySource})`],
+    ['Matches by rule', byRule],
+    ['Proposed matches', money(report.proposed)],
+    ['Unmatched at close', `${money(report.unallocated)} · ${report.unallocated?.olderThan24Hours ?? 0} older than 24 hours`],
+    ['Settlement differences', `${report.variances?.count ?? 0} · ${formatKobo(Number(report.variances?.feeVarianceKobo || 0))}`],
+    ['Exceptions', `${report.exceptions?.opened?.count ?? 0} opened · ${report.exceptions?.closed?.count ?? 0} closed · ${report.exceptions?.openAtClose ?? 0} open`],
+    ['Customer totals changed', String(report.customerPositionsChanged?.length ?? 0)],
+    ['Retry decisions', `${report.retryDecisions?.recorded ?? 0} recorded · ${report.retryDecisions?.finalAttempts ?? 0} final attempts · ${report.retryDecisions?.noticesNotEvidenced ?? 0} deferred for missing notice evidence`],
   ];
 }
 function renderValue(key: string, value: unknown): string {
-  if (value === null || value === undefined) return 'n/a';
+  if (value === null || value === undefined) return 'Not available';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if (typeof value === 'number') {
     if (/kobo$/i.test(key)) return formatKobo(value);
@@ -135,8 +149,8 @@ export default function ReportsPage() {
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Insights & evidence</p>
-          <h1 className="text-3xl font-bold tracking-tight">Reports & Analytics</h1>
-          <p className="text-sm text-muted-foreground mt-2">Daily closes, billing, and operational measurement.</p>
+          <h1 className="text-3xl font-bold tracking-tight">Reports & analytics</h1>
+          <p className="text-sm text-muted-foreground mt-2">Review daily close records, billing and operational results.</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <Button 
@@ -146,7 +160,7 @@ export default function ReportsPage() {
             busy={createExport.isPending}
             busyLabel="Generating…"
           >
-            <Download className="h-4 w-4" /> Export Billing CSV
+            <Download className="h-4 w-4" /> Export billing CSV
           </Button>
           <Button variant="outline" className="gap-2" onClick={() => setInvoiceDialogOpen(true)}>
             <FileText className="h-4 w-4" /> Issue invoice
@@ -157,7 +171,7 @@ export default function ReportsPage() {
             busy={dailyClose.isPending}
             busyLabel="Closing the day…"
           >
-            <RefreshCcw className="h-4 w-4" /> Trigger Daily Close
+            <RefreshCcw className="h-4 w-4" /> Run daily close
           </Button>
         </div>
       </header>
@@ -184,30 +198,30 @@ export default function ReportsPage() {
           <section className="rounded-xl border bg-card" aria-labelledby="measurement-title">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b px-5 py-4">
               <h2 id="measurement-title" className="text-sm font-semibold">Operational evidence</h2>
-              <span className="rounded-md bg-secondary/60 px-2 py-1 text-xs text-muted-foreground">Synthetic data · no live evidence</span>
+              <span className="rounded-md bg-secondary/60 px-2 py-1 text-xs text-muted-foreground">Sample data · not live evidence</span>
             </div>
             <div className="grid grid-cols-1 gap-5 p-5 sm:grid-cols-2 xl:grid-cols-4">
             <div className="min-w-0">
-               <p className="text-xs font-medium text-muted-foreground">Staff confirmation</p>
+               <p className="text-xs font-medium text-muted-foreground">Staff review confirmed</p>
                <div className="mt-2 text-xl font-semibold tracking-tight tabular-nums">{reports.operational?.fortnightlyStaffConfirmed ? 'Yes' : 'No'}</div>
-               <p className="text-xs text-muted-foreground mt-2">{reports.operational?.latestReviewAt ? `Latest confirming review ${formatDate(String(reports.operational.latestReviewAt))}; cadence ${reports.operational?.reviewCadenceMet ? 'kept' : 'broken'} since the first close.` : 'No fortnightly review by a named user has confirmed all four jobs yet (Test 5).'}</p>
+               <p className="text-xs text-muted-foreground mt-2">{reports.operational?.latestReviewAt ? `Last confirmed on ${formatDate(String(reports.operational.latestReviewAt))}. ${reports.operational?.reviewCadenceMet ? 'Reviews have met the two-week schedule' : 'The two-week review schedule has gaps'} since the first close.` : 'No named reviewer has confirmed all four tasks in a fortnightly review yet.'}</p>
             </div>
             <div className="min-w-0">
-               <p className="text-xs font-medium text-muted-foreground">Precision audit</p>
+               <p className="text-xs font-medium text-muted-foreground">Payment match accuracy</p>
                <div className="mt-2 text-xl font-semibold tracking-tight tabular-nums">{String((reports.operational?.precisionAudit as any)?.reviewed ?? 0)} <span className="text-sm font-normal text-muted-foreground">/ {String(reports.operational?.requiredAuditSample || 0)} reviewed</span></div>
-               <p className="text-xs text-muted-foreground mt-2">{(() => { const audit = reports.operational?.precisionAudit as any; return audit?.falseMatchRate === null || audit?.falseMatchRate === undefined ? `Seeded sample of ${String(audit?.sampleSize ?? 0)} of ${String(audit?.population ?? 0)} automatic certain matches for ${String(audit?.month ?? 'the completed month')}; none reviewed yet.` : `False-match rate ${percent(audit.falseMatchRate)}, 95% interval ${percent(audit.interval?.low)} to ${percent(audit.interval?.high)}, on ${String(audit.reviewed)} reviewed of ${String(audit.sampleSize)} sampled.`; })()}</p>
+               <p className="text-xs text-muted-foreground mt-2">{(() => { const audit = reports.operational?.precisionAudit as any; return audit?.falseMatchRate === null || audit?.falseMatchRate === undefined ? `Sample of ${String(audit?.sampleSize ?? 0)} of ${String(audit?.population ?? 0)} automatic high-confidence matches for ${String(audit?.month ?? 'the completed month')}. None reviewed yet.` : `Incorrect matches: ${percent(audit.falseMatchRate)}. The 95% confidence interval is ${percent(audit.interval?.low)} to ${percent(audit.interval?.high)}, based on ${String(audit.reviewed)} reviewed matches from a sample of ${String(audit.sampleSize)}.`; })()}</p>
             </div>
             <div className="min-w-0">
-               <p className="text-xs font-medium text-muted-foreground">Live Days</p>
+               <p className="text-xs font-medium text-muted-foreground">Days since first close</p>
                <div className="mt-2 text-xl font-semibold tracking-tight tabular-nums">{String(reports.operational?.liveDays || 0)} <span className="text-sm font-normal text-muted-foreground">/ {String(reports.operational?.requiredLiveDays || 60)} days</span></div>
                <p className="text-xs text-muted-foreground mt-2">{reports.operational?.liveSince ? `Since the first daily close on ${formatDate(String(reports.operational.liveSince))}.` : 'Counts from the first daily close.'}</p>
             </div>
             <div className="min-w-0">
-               <p className="text-xs font-medium text-muted-foreground">Real Cases Used</p>
+               <p className="text-xs font-medium text-muted-foreground">Real cases used</p>
                <div className="mt-2 text-xl font-semibold tracking-tight tabular-nums">
                  {String(reports.operational?.realCasesUsed || 0)} <span className="text-sm font-normal text-muted-foreground">/ {String(reports.operational?.requiredRealCases || 5)} cases</span>
                </div>
-               <p className="mt-2 text-xs text-muted-foreground">Synthetic exports do not count as real cases.</p>
+               <p className="mt-2 text-xs text-muted-foreground">Exports from sample data do not count as real cases.</p>
             </div>
             </div>
           </section>
@@ -217,7 +231,7 @@ export default function ReportsPage() {
             <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
               <div className="p-5 border-b flex items-center gap-2">
                 <FileText aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
-                <h2 className="font-semibold">Billing Statement (Current Period)</h2>
+                <h2 className="font-semibold">Billing statement · current period</h2>
               </div>
               <div className="space-y-4 p-5">
                 <div className="flex flex-wrap items-end justify-between gap-4 rounded-xl bg-secondary/35 p-4">
@@ -232,7 +246,7 @@ export default function ReportsPage() {
                     </div>
                   ))}
                   {scalarEntries(reports.billing).length === 0 && (
-                    <EmptyState title="No billing data for this period" className="px-0 py-4">Billable collections are counted from succeeded direct-debit attempts once the provider's reversal window has passed (BIL-01).</EmptyState>
+                    <EmptyState title="No billing data for this period" className="px-0 py-4">A collection can be billed only after the direct debit succeeds, settles and remains unreversed beyond the provider's reversal period.</EmptyState>
                   )}
                 </div>
                 <ReportDisclosure title="Billing rates & rules">
@@ -247,18 +261,18 @@ export default function ReportsPage() {
                 </ReportDisclosure>
                 <ReportDisclosure title={`Statement lines · ${billingLines(reports.billing).length}`}>
                   {billingLines(reports.billing).length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No signed design-partner terms for this period; nothing is billable.</p>
+                    <p className="text-xs text-muted-foreground">No signed partner terms apply to this period, so there are no billable statement lines.</p>
                   ) : (
                     <ScrollFrame label="Statement lines" className="overflow-x-auto">
                       <table className="w-full text-xs text-left tabular-nums">
                         <thead className="text-muted-foreground border-b">
-                          <tr><th className="py-1 pr-2">Prospect</th><th className="py-1 pr-2">Tier</th><th className="py-1 pr-2 text-right">Licence</th><th className="py-1 pr-2 text-right">Usage</th><th className="py-1 pr-2 text-right">Total</th><th className="py-1">Note</th></tr>
+                          <tr><th className="py-1 pr-2">Lender</th><th className="py-1 pr-2">Plan</th><th className="py-1 pr-2 text-right">Licence</th><th className="py-1 pr-2 text-right">Usage fees</th><th className="py-1 pr-2 text-right">Total</th><th className="py-1">Note</th></tr>
                         </thead>
                         <tbody className="divide-y">
                           {billingLines(reports.billing).map(line => (
                             <tr key={String(line.commercialId)}>
                               <td className="py-1 pr-2 font-sans">{String(line.prospect)}</td>
-                              <td className="py-1 pr-2">{String(line.volumeTier)}{line.tierMismatch ? ' (contract differs)' : ''}</td>
+                              <td className="py-1 pr-2">{String(line.volumeTier)}{line.tierMismatch ? ' (differs from contract)' : ''}</td>
                               <td className="py-1 pr-2 text-right">{formatKobo(Number(line.licenceKobo || 0))}</td>
                               <td className="py-1 pr-2 text-right">{formatKobo(Number(line.usageKobo || 0))}</td>
                               <td className="py-1 pr-2 text-right font-bold">{formatKobo(Number(line.totalKobo || 0))}</td>
@@ -270,38 +284,38 @@ export default function ReportsPage() {
                     </ScrollFrame>
                   )}
                 </ReportDisclosure>
-                <ReportDisclosure title="Receipts by channel (BIL-01)">
-                  <p className="text-xs text-muted-foreground mb-2">Only direct-debit attempts that succeeded are billable, once settled, unreversed and past the provider's reversal window. Transfers and card receipts are reconciled and shown here, never billed.</p>
-                  <ScrollFrame label="Receipts by channel" className="overflow-x-auto">
+                <ReportDisclosure title="Receipts by payment method">
+                  <p className="text-xs text-muted-foreground mb-2">Only successful direct debits are billed, after settlement and the reversal period. Transfers and card payments are matched to records but never billed.</p>
+                  <ScrollFrame label="Receipts by payment method" className="overflow-x-auto">
                     <table className="w-full text-xs text-left tabular-nums">
-                      <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Channel</th><th className="py-1 pr-2 text-right">Receipts</th><th className="py-1 pr-2 text-right">Value</th><th className="py-1 pr-2 text-right">Billable</th></tr></thead>
+                      <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Payment method</th><th className="py-1 pr-2 text-right">Receipts</th><th className="py-1 pr-2 text-right">Value</th><th className="py-1 pr-2 text-right">Billable</th></tr></thead>
                       <tbody className="divide-y">
                         {Object.entries((reports.billing?.channelBreakdown as Record<string, any>) || {}).map(([channel, row]) => (
-                          <tr key={channel}><td className="py-1 pr-2">{channel}</td><td className="py-1 pr-2 text-right">{String(row.count)}</td><td className="py-1 pr-2 text-right">{formatKobo(Number(row.kobo || 0))}</td><td className="py-1 pr-2 text-right">{String(row.billable)}</td></tr>
+                          <tr key={channel}><td className="py-1 pr-2">{labelOf(channel)}</td><td className="py-1 pr-2 text-right">{String(row.count)}</td><td className="py-1 pr-2 text-right">{formatKobo(Number(row.kobo || 0))}</td><td className="py-1 pr-2 text-right">{String(row.billable)}</td></tr>
                         ))}
                         {Object.keys((reports.billing?.channelBreakdown as Record<string, any>) || {}).length === 0 && <tr><td colSpan={4} className="py-2 text-muted-foreground">No receipts in this period.</td></tr>}
                       </tbody>
                     </table>
                   </ScrollFrame>
-                  <p className="text-xs text-muted-foreground mt-2">Withheld inside the reversal window: {String(reports.billing?.withheldInsideReversalWindow ?? 0)} (billed on a later statement).</p>
+                  <p className="text-xs text-muted-foreground mt-2">Collections awaiting the end of the reversal period: {String(reports.billing?.withheldInsideReversalWindow ?? 0)} (eligible for a later statement).</p>
                 </ReportDisclosure>
-                <ReportDisclosure title="Unit economics (MEA-03)">
+                <ReportDisclosure title="Revenue and costs">
                   {(() => { const e = reports.billing?.unitEconomics as Record<string, any> | undefined; if (!e) return <p className="text-xs text-muted-foreground">Not available.</p>; return (
                     <div className="text-xs tabular-nums space-y-1">
-                      <p>Successful collections {String(e.successfulCollections)} · usage {formatKobo(Number(e.usageFeeKobo || 0))} · licence {formatKobo(Number(e.licenceKobo || 0))} ({String(e.volumeTier)}) · recurring {formatKobo(Number(e.recurringKobo || 0))}</p>
-                      <p>Variable cost {formatKobo(Number(e.variableCostKobo || 0))}{e.estimated ? ' (estimated at the plan\'s NGN 15 per collection)' : ' (recorded)'} · per collection {e.costPerCollectionKobo === null ? 'n/a' : formatKobo(Number(e.costPerCollectionKobo))} against the plan\'s {formatKobo(Number(e.planCostPerCollectionKobo || 0))}</p>
-                      <p>Gross margin {e.grossMargin === null ? 'n/a' : percent(e.grossMargin)} against the plan\'s {percent(e.planGrossMargin?.low)} to {percent(e.planGrossMargin?.high)} · annualised recurring revenue {formatKobo(Number(e.annualisedRecurringRevenueKobo || 0))} (licence and usage only)</p>
+                      <p>Successful collections: {String(e.successfulCollections)}. Usage fees: {formatKobo(Number(e.usageFeeKobo || 0))}. Licence fees: {formatKobo(Number(e.licenceKobo || 0))} ({String(e.volumeTier)} plan). Recurring revenue: {formatKobo(Number(e.recurringKobo || 0))}.</p>
+                      <p>Collection costs: {formatKobo(Number(e.variableCostKobo || 0))}{e.estimated ? ' (estimated at ₦15 per collection)' : ' (recorded)'}. Cost per collection: {e.costPerCollectionKobo === null ? 'not available' : formatKobo(Number(e.costPerCollectionKobo))}. Plan target: {formatKobo(Number(e.planCostPerCollectionKobo || 0))}.</p>
+                      <p>Gross margin (share of revenue left after collection costs): {e.grossMargin === null ? 'not available' : percent(e.grossMargin)}. Plan target: {percent(e.planGrossMargin?.low)} to {percent(e.planGrossMargin?.high)}. Recurring revenue at an annual rate: {formatKobo(Number(e.annualisedRecurringRevenueKobo || 0))}, from licence and usage fees only.</p>
                       <p className="font-sans text-muted-foreground">{String(e.note || '')}</p>
                     </div>
                   ); })()}
                 </ReportDisclosure>
-                <ReportDisclosure title={`Issued invoices (BIL-04) · ${invoiceRows(reports.billing).length}`}>
+                <ReportDisclosure title={`Issued invoices · ${invoiceRows(reports.billing).length}`}>
                   {invoiceRows(reports.billing).length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No invoice issued yet. The next one covers {String(reports.billing?.nextInvoicePeriod || 'the previous month')}; issued invoices are immutable and VAT is shown separately.</p>
+                    <p className="text-xs text-muted-foreground">No invoice has been issued. The next covers {String(reports.billing?.nextInvoicePeriod || 'the previous month')}. Issued invoices cannot be changed. VAT is listed separately.</p>
                   ) : (
                     <ScrollFrame label="Issued invoices" className="overflow-x-auto">
                       <table className="w-full text-xs text-left tabular-nums">
-                        <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Invoice</th><th className="py-1 pr-2">Period</th><th className="py-1 pr-2 text-right">Counted</th><th className="py-1 pr-2 text-right">Adjustments</th><th className="py-1 pr-2 text-right">Net</th><th className="py-1 pr-2 text-right">VAT</th><th className="py-1 pr-2 text-right">Total</th></tr></thead>
+                        <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Invoice</th><th className="py-1 pr-2">Period</th><th className="py-1 pr-2 text-right">Collections billed</th><th className="py-1 pr-2 text-right">Adjustments</th><th className="py-1 pr-2 text-right">Before VAT</th><th className="py-1 pr-2 text-right">VAT</th><th className="py-1 pr-2 text-right">Total</th></tr></thead>
                         <tbody className="divide-y">
                           {invoiceRows(reports.billing).map(invoice => (
                             <tr key={String(invoice.id)}>
@@ -319,8 +333,8 @@ export default function ReportsPage() {
                     </ScrollFrame>
                   )}
                 </ReportDisclosure>
-                <ReportDisclosure title={`Next invoice adjustments (BIL-07) · ${adjustmentRows(reports.billing).length}`}>
-                  <p className="text-xs text-muted-foreground mb-2">A reversal, refund, confirmed duplicate or superseded allocation on a billed collection becomes a credit or debit line here, with the invoice it corrects. Issued invoices are never edited.</p>
+                <ReportDisclosure title={`Next invoice adjustments · ${adjustmentRows(reports.billing).length}`}>
+                  <p className="text-xs text-muted-foreground mb-2">If a billed collection is reversed, refunded, confirmed as a duplicate or has an allocation invalidated, the next invoice records a credit or debit. Each adjustment identifies the invoice it corrects. Issued invoices cannot be changed.</p>
                   {adjustmentRows(reports.billing).length === 0 ? (
                     <p className="text-xs text-muted-foreground">Nothing to adjust.</p>
                   ) : (
@@ -341,7 +355,7 @@ export default function ReportsPage() {
               <div className="p-5 border-b flex flex-wrap gap-3 items-center justify-between">
                 <div className="flex items-center gap-2">
                   <BarChart3 aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
-                  <h2 className="font-semibold">Recovery Experiment</h2>
+                  <h2 className="font-semibold">Recovery experiment</h2>
                 </div>
                 <Button size="sm" onClick={() => openExperimentDialog('create')}>New experiment</Button>
               </div>
@@ -352,12 +366,12 @@ export default function ReportsPage() {
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <p className="text-sm font-medium">{experiment.name}</p>
-                          <p className="mt-1 text-xs capitalize text-muted-foreground">{experiment.status} · {percent(experiment.data?.holdoutShare)} holdout</p>
+                          <p className="mt-1 text-xs capitalize text-muted-foreground">{readableLabel(experiment.status)} · {percent(experiment.data?.holdoutShare)} in comparison group</p>
                         </div>
                         {experiment.status === 'draft' && (
                           <div className="flex gap-2">
                             <Button size="sm" variant="outline" onClick={() => openExperimentDialog('edit', experiment)}>Edit</Button>
-                            <Button size="sm" onClick={() => openExperimentDialog('preregister', experiment)}>Preregister</Button>
+                            <Button size="sm" onClick={() => openExperimentDialog('preregister', experiment)}>Register plan</Button>
                           </div>
                         )}
                       </div>
@@ -365,27 +379,27 @@ export default function ReportsPage() {
                   ))}
                   {scalarEntries(reports.experiment).map(([key, value]) => (
                     <div key={key} className={`rounded-lg bg-secondary/30 p-3 ${String(value).length > 70 ? 'space-y-2' : 'flex items-center justify-between gap-3'}`}>
-                      <span className="text-xs font-medium text-muted-foreground">{labelOf(key)}</span>
+                      <span className="text-xs font-medium text-muted-foreground">{experimentLabels[key] || labelOf(key)}</span>
                       <span className={`block text-sm leading-relaxed [overflow-wrap:anywhere] ${String(value) === 'not_proven' ? 'font-medium text-warning-strong' : ''}`}>
-                        {key === 'result' ? renderValue(key, value).replace(/_/g, ' ') : renderValue(key, value)}
+                        {key === 'result' ? readableLabel(renderValue(key, value)) : renderValue(key, value)}
                       </span>
                     </div>
                   ))}
                   {experimentRows(reports.experiment).map(row => (
                     <div key={String(row.experimentId)} className="border rounded-lg p-3 text-xs tabular-nums space-y-2">
-                      <p className="text-muted-foreground truncate">Experiment {String(row.experimentId)} · {String(row.status)} · analysis {String(row.analysisDate || 'n/a')}</p>
-                      <p>Enrolled: engine {String(row.engine?.enrolled ?? 0)} · holdout {String(row.holdout?.enrolled ?? 0)} · minimum per arm {String(row.minimumPerArm)}</p>
-                      <p>Mature 30-day outcomes: engine {String(row.engine?.mature ?? 0)} · holdout {String(row.holdout?.mature ?? 0)}</p>
-                      <p>Recovery by value (primary): engine {percent(row.engine?.recoveryByValue)} · holdout {percent(row.holdout?.recoveryByValue)} · difference {percent(row.differenceByValue)}</p>
-                      <p>Recovery by count: engine {percent(row.engine?.recoveryByCount)} · holdout {percent(row.holdout?.recoveryByCount)} · difference {percent(row.differenceByCount)}</p>
-                      <p>90% interval of the difference by value: {row.confidenceInterval90 ? `${percent(row.confidenceInterval90.low)} to ${percent(row.confidenceInterval90.high)}` : 'not computable below two mature outcomes per arm'}</p>
-                      <p>Rule checks: {Object.entries(row.checks || {}).map(([name, ok]) => `${labelOf(name).toLowerCase()} ${ok ? '✓' : '✗'}`).join(' · ')}</p>
-                      <p>Result: <span className={`font-bold ${row.result === 'proven' ? 'text-success' : 'text-warning-strong'}`}>{String(row.result)}</span></p>
+                      <p className="text-muted-foreground truncate">Experiment {String(row.experimentId)} · {readableLabel(row.status)} · analysis date {String(row.analysisDate || 'not set')}</p>
+                      <p>Enrolled instalments: retry group {String(row.engine?.enrolled ?? 0)} · comparison group {String(row.holdout?.enrolled ?? 0)} · minimum per group {String(row.minimumPerArm)}</p>
+                      <p>Completed 30-day outcomes: retry group {String(row.engine?.mature ?? 0)} · comparison group {String(row.holdout?.mature ?? 0)}</p>
+                      <p>Amount recovered (primary measure): retry group {percent(row.engine?.recoveryByValue)} · comparison group {percent(row.holdout?.recoveryByValue)} · difference {percentagePoints(row.differenceByValue)}</p>
+                      <p>Instalments settled in full: retry group {percent(row.engine?.recoveryByCount)} · comparison group {percent(row.holdout?.recoveryByCount)} · difference {percentagePoints(row.differenceByCount)}</p>
+                      <p>90% confidence interval for the difference in amount recovered: {row.confidenceInterval90 ? `${percentagePoints(row.confidenceInterval90.low)} to ${percentagePoints(row.confidenceInterval90.high)}` : 'needs at least two completed 30-day outcomes in each group'}</p>
+                      <p>Result checks: {Object.entries(row.checks || {}).map(([name, ok]) => `${checkLabels[name] || labelOf(name)}: ${ok ? 'met' : 'not met'}`).join(' · ')}</p>
+                      <p>Result: <span className={`font-bold ${row.result === 'proven' ? 'text-success' : 'text-warning-strong'}`}>{readableLabel(row.result)}</span></p>
                       <p className="font-sans text-muted-foreground">{String(row.reason || '')}</p>
                     </div>
                   ))}
                   {scalarEntries(reports.experiment).length === 0 && experimentRows(reports.experiment).length === 0 && (
-                    <EmptyState title="No active experiment" className="px-0 py-4">The recovery test (RET-06) starts when an approved policy version carries an experiment arm; its uplift and 90% interval are reported here.</EmptyState>
+                    <EmptyState title="No active experiment" className="px-0 py-4">Assign an experiment to an approved policy to compare its retry group with a comparison group. Results and confidence intervals will appear here.</EmptyState>
                   )}
                 </div>
               </div>
@@ -397,7 +411,7 @@ export default function ReportsPage() {
             <div className="p-5 border-b flex flex-wrap gap-3 items-center justify-between">
               <div className="flex items-center gap-2">
                 <CheckSquare aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
-                <h2 className="font-semibold">Daily Close Snapshots</h2>
+                <h2 className="font-semibold">Daily close records</h2>
               </div>
               {(() => {
                 const schedule = scheduleView(reports.operational?.closeSchedule);
@@ -405,26 +419,26 @@ export default function ReportsPage() {
                 return (
                   <p className={`text-xs ${schedule.missed ? 'text-destructive font-medium' : 'text-muted-foreground'}`}>
                     {!schedule.enabled
-                      ? 'Automatic close off: closes are triggered by hand.'
+                      ? 'Automatic daily close is off. Run closes manually.'
                       : schedule.missed
                         ? `Scheduled close at ${schedule.time} WAT missed: ${formatCount(schedule.overdueMinutes, 'minute')} past its time.`
-                        : `Next scheduled close ${formatDate(schedule.nextAt)}, then daily at the same time.`}
+                        : `Next daily close: ${formatDate(schedule.nextAt)}, then every day at this time.`}
                   </p>
                 );
               })()}
             </div>
-            <ScrollFrame label="Daily close snapshots" className="overflow-x-auto max-h-[400px]">
+            <ScrollFrame label="Daily close records" className="overflow-x-auto max-h-[400px]">
               <table className="w-full text-sm text-left">
                 <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                   <tr>
                     <th className="px-6 py-4 font-medium">Date</th>
                     <th className="px-6 py-4 font-medium">Summary</th>
-                    <th className="px-6 py-4 font-medium">Close report (REC-07)</th>
+                    <th className="px-6 py-4 font-medium">Close details</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
                   {reports.closes.length === 0 ? (
-                    <EmptyRow colSpan={3} title="No daily close yet">Trigger the daily close above, or wait for the scheduled one; every close leaves a snapshot here with its REC-07 report.</EmptyRow>
+                    <EmptyRow colSpan={3} title="No daily close yet">Run a daily close above or wait for the scheduled time. Each close creates a record with its results here.</EmptyRow>
                   ) : (
                     reports.closes.map(close => (
                       <tr key={close.id} className="hover:bg-secondary/10">
@@ -436,8 +450,8 @@ export default function ReportsPage() {
                               <span className="text-muted-foreground mr-1">{label}:</span>
                               <span className="font-medium">{value}</span>
                             </span>
-                          )) : <span className="text-muted-foreground">Closed before the REC-07 report existed.</span>}
-                          {close.data?.positionAlert === true && <span className="inline-block mr-3 mb-1 px-1.5 py-0.5 rounded border border-destructive/40 text-destructive">position rebuild alert</span>}
+                          )) : <span className="text-muted-foreground">Detailed reports were not available when this close ran.</span>}
+                          {close.data?.positionAlert === true && <span className="inline-block mr-3 mb-1 px-1.5 py-0.5 rounded border border-destructive/40 text-destructive">Customer totals need review</span>}
                           {(() => {
                             const trigger = triggerView(close.data?.schedule);
                             if (!trigger) return null;
@@ -466,7 +480,7 @@ export default function ReportsPage() {
         title="Issue the monthly invoice"
         actionMutation="issue_invoice"
         fields={[
-          { name: 'period', label: 'Period (YYYY-MM); blank issues the previous month', type: 'text', isData: true },
+          { name: 'period', label: 'Invoice month (YYYY-MM; leave blank for the previous month)', type: 'text', isData: true },
         ]}
       />
       <RecordDialog
@@ -474,17 +488,17 @@ export default function ReportsPage() {
         record={selectedExperiment}
         isOpen={experimentDialog !== null}
         onOpenChange={(open) => { if (!open) setExperimentDialog(null); }}
-        title={experimentDialog === 'preregister' ? 'Preregister experiment' : experimentDialog === 'edit' ? 'Edit experiment draft' : 'Create experiment draft'}
+        title={experimentDialog === 'preregister' ? 'Register experiment plan' : experimentDialog === 'edit' ? 'Edit experiment draft' : 'Create experiment draft'}
         actionMutation={experimentDialog === 'preregister' ? 'preregister_experiment' : undefined}
         fields={experimentDialog === 'preregister' ? [] : [
           { name: 'name', label: 'Experiment name', type: 'text', required: true },
           { name: 'status', label: 'Status', type: 'select', options: [{ label: 'Draft', value: 'draft' }], required: true },
-          { name: 'baselineRate', label: 'Baseline rate', type: 'number', isData: true, required: true },
-          { name: 'holdoutShare', label: 'Holdout share (0.1–0.5)', type: 'number', isData: true, required: true },
-          { name: 'minPerArm', label: 'Minimum per arm', type: 'number', isData: true, required: true },
+          { name: 'baselineRate', label: 'Baseline recovery rate (greater than 0, below 0.92)', type: 'number', isData: true, required: true },
+          { name: 'holdoutShare', label: 'Comparison group share (0.1–0.5)', type: 'number', isData: true, required: true },
+          { name: 'minPerArm', label: 'Minimum instalments per group', type: 'number', isData: true, required: true },
           { name: 'analysisDate', label: 'Analysis date (YYYY-MM-DD)', type: 'text', isData: true, required: true },
-          { name: 'enrolmentClose', label: 'Enrolment close (YYYY-MM-DD)', type: 'text', isData: true, required: true },
-          { name: 'seed', label: 'Assignment seed', type: 'text', isData: true, required: true },
+          { name: 'enrolmentClose', label: 'Enrolment closes (YYYY-MM-DD)', type: 'text', isData: true, required: true },
+          { name: 'seed', label: 'Random assignment key', type: 'text', isData: true, required: true },
           { name: 'policyId', label: 'Approved policy', type: 'select', options: approvedPolicyOptions, isData: true, required: true }
         ]}
         defaultValues={{ status: 'draft' }}

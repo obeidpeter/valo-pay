@@ -7,6 +7,7 @@ import { Shield, FileText, CheckCircle, Clock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatDate } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
+import { readableLabel } from '@/components/record-label';
 
 export default function PoliciesPage() {
   const { merchantId } = useWorkspace();
@@ -43,8 +44,8 @@ export default function PoliciesPage() {
   return (
     <div className="space-y-8">
       <header>
-        <h1 className="text-3xl font-bold tracking-tight">Policies & Templates</h1>
-        <p className="text-muted-foreground mt-1">Configure and approve retry rules and notification copy.</p>
+        <h1 className="text-3xl font-bold tracking-tight">Policies & templates</h1>
+        <p className="text-muted-foreground mt-1">Set retry rules and review the messages customers receive.</p>
       </header>
 
       {/* Policies */}
@@ -52,16 +53,16 @@ export default function PoliciesPage() {
         <div className="p-4 border-b bg-secondary/20 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Shield className="h-5 w-5 text-primary" />
-            <h2 className="font-semibold text-lg">Retry Policies</h2>
+            <h2 className="font-semibold text-lg">Retry policies</h2>
           </div>
-          <Button size="sm" onClick={() => handleAction(null, 'create_policy')}>Draft New Version</Button>
+          <Button size="sm" onClick={() => handleAction(null, 'create_policy')}>Draft new version</Button>
         </div>
         <div className="divide-y">
           {isLoading ? (
             <Loading what="policies" />
           ) : !policies || policies.items.length === 0 ? (
             <EmptyState title="No retry policies yet" action={<Button size="sm" variant="outline" onClick={() => handleAction(null, 'create_policy')}>Draft a policy</Button>}>
-              A policy sets the retry rules: notice in advance, caps, quiet hours and the kill switch. Draft a version, submit it, and a compliance reviewer approves it before it applies.
+              A policy sets retry limits, notice periods and quiet hours. Draft a version and submit it for approval by a compliance reviewer before use.
             </EmptyState>
           ) : (
             policies.items.map(policy => (
@@ -74,14 +75,14 @@ export default function PoliciesPage() {
                       policy.status === 'submitted' ? 'bg-warning text-warning-foreground border-warning-border' :
                       'bg-secondary text-secondary-foreground'
                     }`}>
-                      {policy.status.toUpperCase()}
+                      {readableLabel(policy.status)}
                     </span>
                   </div>
                   <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-                    <div>Max Attempts: <span className="font-medium text-foreground">{String(policy.data?.maxAttempts || 0)}</span></div>
-                    <div>Spacing: <span className="font-medium text-foreground">{String(policy.data?.spacingHours || 0)}h</span></div>
-                    <div>First Notice: <span className="font-medium text-foreground">{String(policy.data?.firstNoticeHours || 0)}h</span></div>
-                    <div>Partial Allowed: <span className="font-medium text-foreground">{policy.data?.partialAllowed ? 'Yes' : 'No'}</span></div>
+                    <div>Maximum attempts: <span className="font-medium text-foreground">{String(policy.data?.maxAttempts || 0)}</span></div>
+                    <div>Time between attempts: <span className="font-medium text-foreground">{String(policy.data?.spacingHours || 0)} hours</span></div>
+                    <div>Notice before first attempt: <span className="font-medium text-foreground">{String(policy.data?.firstNoticeHours || 0)} hours</span></div>
+                    <div>Partial collections allowed: <span className="font-medium text-foreground">{policy.data?.partialAllowed ? 'Yes' : 'No'}</span></div>
                   </div>
                   <div className="text-xs text-muted-foreground">
                     Author: {String(policy.data?.author || 'Unknown')} • Last updated: {formatDate(policy.updatedAt)}
@@ -91,13 +92,13 @@ export default function PoliciesPage() {
                 <div className="flex flex-col gap-2 shrink-0">
                   {policy.status === 'draft' && (
                     <>
-                      <Button variant="outline" size="sm" onClick={() => handleAction(policy, 'edit_policy')}>Edit Draft</Button>
+                      <Button variant="outline" size="sm" onClick={() => handleAction(policy, 'edit_policy')}>Edit draft</Button>
                       <Button 
                         variant="outline" 
                         size="sm"
                         onClick={() => handleAction(policy, 'submit_policy')}
                       >
-                        Submit for Review
+                        Submit for review
                       </Button>
                     </>
                   )}
@@ -121,7 +122,7 @@ export default function PoliciesPage() {
                   )}
                   {policy.status === 'approved' && (
                     <div className="flex items-center gap-2 text-success text-sm font-medium">
-                      <Shield className="h-4 w-4" /> Active Policy
+                      <Shield className="h-4 w-4" /> Approved version
                     </div>
                   )}
                 </div>
@@ -136,33 +137,33 @@ export default function PoliciesPage() {
         <div className="p-4 border-b bg-secondary/20 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <FileText className="h-5 w-5 text-primary" />
-            <h2 className="font-semibold text-lg">Notification Templates</h2>
+            <h2 className="font-semibold text-lg">Notification templates</h2>
           </div>
-          <Button size="sm" onClick={() => handleAction(null, 'create_template')}>Create Template</Button>
+          <Button size="sm" onClick={() => handleAction(null, 'create_template')}>Create template</Button>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
           {isLoadingTemplates ? (
             <Loading what="templates" className="col-span-2" />
           ) : !templates || templates.items.length === 0 ? (
-            <EmptyState className="col-span-2" title="No notification templates yet">A template carries the notice a customer receives before a retry; a compliance reviewer approves each version before it is used.</EmptyState>
+            <EmptyState className="col-span-2" title="No notification templates yet">Templates define customer messages. A compliance reviewer must approve each version before use. Messages in this sandbox are simulated.</EmptyState>
           ) : (
             templates.items.map(template => (
               <div key={template.id} className="border rounded-lg p-4 bg-secondary/5 relative">
                 <div className="flex justify-between items-start mb-3">
-                  <h3 className="font-medium">{String(template.data?.purpose || template.name)}</h3>
+                  <h3 className="font-medium">{template.data?.purpose ? readableLabel(template.data.purpose) : template.name}</h3>
                   <span className="px-2 py-0.5 text-[10px] uppercase tracking-wider font-bold rounded-full bg-secondary border">
-                    {template.status}
+                    {readableLabel(template.status)}
                   </span>
                 </div>
                 <div className="bg-background p-3 rounded border font-mono text-xs text-muted-foreground whitespace-pre-wrap">
-                  {String(template.data?.text || 'No text content')}
+                  {String(template.data?.text || 'No message written yet')}
                 </div>
                 <div className="mt-3 flex justify-between items-center text-xs text-muted-foreground">
                   <span>v{String(template.data?.version || '1')}</span>
                   {template.status === 'draft' && (
                     <div className="flex gap-2">
                       <Button variant="link" size="sm" className="h-auto min-h-6 p-0" onClick={() => handleAction(template, 'edit_template')}>Edit</Button>
-                      <Button variant="link" size="sm" className="h-auto min-h-6 p-0" onClick={() => handleAction(template, 'submit_template')}>Submit</Button>
+                      <Button variant="link" size="sm" className="h-auto min-h-6 p-0" onClick={() => handleAction(template, 'submit_template')}>Submit for review</Button>
                     </div>
                   )}
                   {template.status === 'submitted' && (
@@ -181,35 +182,35 @@ export default function PoliciesPage() {
         isOpen={isDialogOpen}
         onOpenChange={setIsDialogOpen}
         title={
-          actionKind === 'create_policy' ? 'Draft New Policy' :
-          actionKind === 'edit_policy' ? 'Edit Draft Policy' :
-          actionKind === 'submit_policy' ? 'Submit Policy for Review' :
-          actionKind === 'approve_policy' ? 'Approve Policy' :
-          actionKind === 'reject_policy' ? 'Reject Policy' :
-          actionKind === 'create_template' ? 'Draft New Template' :
-          actionKind === 'edit_template' ? 'Edit Template' :
-          actionKind === 'submit_template' ? 'Submit Template' :
-          actionKind === 'approve_template' ? 'Approve Template' :
+          actionKind === 'create_policy' ? 'Draft new policy' :
+          actionKind === 'edit_policy' ? 'Edit policy draft' :
+          actionKind === 'submit_policy' ? 'Submit policy for review' :
+          actionKind === 'approve_policy' ? 'Approve policy' :
+          actionKind === 'reject_policy' ? 'Reject policy' :
+          actionKind === 'create_template' ? 'Draft new template' :
+          actionKind === 'edit_template' ? 'Edit template' :
+          actionKind === 'submit_template' ? 'Submit template for review' :
+          actionKind === 'approve_template' ? 'Approve template' :
           'Action'
         }
         actionMutation={actionKind.includes('create') || actionKind.includes('edit') ? undefined : actionKind}
         fields={
           actionKind === 'create_policy' || actionKind === 'edit_policy' ? [
-            { name: 'name', label: 'Policy Name', type: 'text', required: true },
+            { name: 'name', label: 'Policy name', type: 'text', required: true },
             { name: 'status', label: 'Status', type: 'select', options: [{label: 'Draft', value: 'draft'}], required: true },
             { name: 'version', label: 'Version', type: 'number', isData: true, required: true },
-            { name: 'maxAttempts', label: 'Max Attempts', type: 'number', isData: true, required: true },
-            { name: 'spacingHours', label: 'Spacing Hours', type: 'number', isData: true, required: true },
-            { name: 'firstNoticeHours', label: 'First Notice Hours', type: 'number', isData: true, required: true },
-            { name: 'retryNoticeHours', label: 'Retry Notice Hours', type: 'number', isData: true, required: true },
-             { name: 'partialAllowed', label: 'Partial Allowed', type: 'checkbox', isData: true },
-             { name: 'complianceMapping', label: 'Compliance mapping', type: 'textarea', isData: true, required: true }
+            { name: 'maxAttempts', label: 'Maximum attempts', type: 'number', isData: true, required: true },
+            { name: 'spacingHours', label: 'Time between attempts (hours)', type: 'number', isData: true, required: true },
+            { name: 'firstNoticeHours', label: 'Notice before first attempt (hours)', type: 'number', isData: true, required: true },
+            { name: 'retryNoticeHours', label: 'Notice before each retry (hours)', type: 'number', isData: true, required: true },
+             { name: 'partialAllowed', label: 'Allow partial collections', type: 'checkbox', isData: true },
+             { name: 'complianceMapping', label: 'How the policy meets each required rule', type: 'textarea', isData: true, required: true }
           ] :
           actionKind === 'create_template' || actionKind === 'edit_template' ? [
-            { name: 'name', label: 'Template Name', type: 'text', required: true },
+            { name: 'name', label: 'Template name', type: 'text', required: true },
             { name: 'status', label: 'Status', type: 'select', options: [{label: 'Draft', value: 'draft'}], required: true },
             { name: 'purpose', label: 'Purpose', type: 'text', isData: true, required: true },
-            { name: 'text', label: 'Text (Use {{amount}}, {{date}})', type: 'textarea', isData: true, required: true },
+            { name: 'text', label: 'Message (include {{amount}}, {{date}}, {{merchant}} and {{contact}})', type: 'textarea', isData: true, required: true },
             { name: 'version', label: 'Version', type: 'number', isData: true, required: true }
           ] :
           []

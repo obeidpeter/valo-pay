@@ -14,6 +14,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { activationWorkflows, mandateFrequencies } from '@workspace/valopay-schema';
 import { RecordLabel, StatusBadge, readableLabel } from '@/components/record-label';
 
+const mandateActionTitles: Record<string, string> = {
+  mandate_suspend: 'Suspend mandate', mandate_reinstate: 'Resume mandate', mandate_cancel: 'Cancel mandate',
+  mandate_reissue: 'Reissue mandate', activation_reminder: 'Record activation reminder',
+  notify_policy_change: 'Record policy change notice', apply_policy_version: 'Apply policy version',
+};
+
 export default function MandatesPage() {
   const { merchantId } = useWorkspace();
   const [selectedMandate, setSelectedMandate] = useState<any>(null);
@@ -24,8 +30,8 @@ export default function MandatesPage() {
   const [formErrors, setFormErrors] = useState<string[]>([]);
   /** The fields the form asks for, in order, with the words a missing value is named by. */
   const requiredFields: Array<{ name: keyof typeof draft; label: string; type: 'text' | 'number' | 'select' }> = [
-    { name: 'name', label: 'Mandate name', type: 'text' }, { name: 'customerId', label: 'Customer', type: 'select' }, { name: 'amountKobo', label: 'Limit (kobo)', type: 'number' },
-    { name: 'reference', label: 'Provider reference', type: 'text' }, { name: 'workflow', label: 'Activation workflow', type: 'select' }, { name: 'consentEvidence', label: 'Consent evidence reference', type: 'text' },
+    { name: 'name', label: 'Mandate name', type: 'text' }, { name: 'customerId', label: 'Customer', type: 'select' }, { name: 'amountKobo', label: 'Debit limit (kobo)', type: 'number' },
+    { name: 'reference', label: 'Provider reference', type: 'text' }, { name: 'workflow', label: 'Activation method', type: 'select' }, { name: 'consentEvidence', label: 'Consent evidence reference', type: 'text' },
     { name: 'policyId', label: 'Policy', type: 'select' }, { name: 'frequency', label: 'Frequency', type: 'select' },
   ];
   const change = (name: keyof typeof draft, value: string) => {
@@ -122,7 +128,7 @@ export default function MandatesPage() {
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Mandates</h1>
-          <p className="text-muted-foreground mt-1">Direct debit authorizations and workflow states.</p>
+          <p className="text-muted-foreground mt-1">A mandate is a customer's permission to collect by direct debit. Track each mandate and its activation status here.</p>
         </div>
         <Button onClick={() => setIsCreateOpen(true)}>Create synthetic mandate</Button>
       </header>
@@ -132,7 +138,7 @@ export default function MandatesPage() {
           <Loading what="mandates" />
         ) : !data || data.items.length === 0 ? (
           <EmptyState title="No mandates yet" action={<Button size="sm" variant="outline" onClick={() => setIsCreateOpen(true)}>Create synthetic mandate</Button>}>
-            Mandates arrive from your loan software by API or CSV. In the sandbox you can create a synthetic one to see the activation workflow.
+            Mandates appear after they are created or imported. Create a synthetic mandate to try the activation process.
           </EmptyState>
         ) : (
           <ScrollFrame label="Mandates" className="overflow-x-auto">
@@ -142,8 +148,8 @@ export default function MandatesPage() {
                   <th className="px-6 py-4 font-medium">Reference</th>
                   <th className="px-6 py-4 font-medium">Customer</th>
                   <th className="px-6 py-4 font-medium">Status</th>
-                  <th className="px-6 py-4 font-medium">Limit</th>
-                  <th className="px-6 py-4 font-medium">Workflow</th>
+                  <th className="px-6 py-4 font-medium">Debit limit</th>
+                  <th className="px-6 py-4 font-medium">Activation method</th>
                   <th className="px-6 py-4 font-medium text-right">Actions</th>
                 </tr>
               </thead>
@@ -154,14 +160,14 @@ export default function MandatesPage() {
                     <td className="px-6 py-4"><RecordLabel record={customerById.get(String(mandate.customerId))} id={mandate.customerId} customer /></td>
                     <td className="px-6 py-4"><StatusBadge status={mandate.status} /></td>
                     <td className="px-6 py-4 font-mono">{formatKobo(mandate.amountKobo)}</td>
-                    <td className="px-6 py-4 text-xs text-muted-foreground" title={String(mandate.data?.workflow || '')}>{readableLabel(mandate.data?.workflow || 'standard')}</td>
+                    <td className="px-6 py-4 text-xs text-muted-foreground" title={readableLabel(mandate.data?.workflow || 'standard')}>{readableLabel(mandate.data?.workflow || 'standard')}</td>
                     <td className="px-6 py-4 text-right space-x-2">
                       {mandate.status === 'active' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_suspend')}>Suspend</Button>}
-                      {mandate.status === 'suspended' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_reinstate')}>Reinstate</Button>}
+                      {mandate.status === 'suspended' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_reinstate')}>Resume</Button>}
                       {['draft', 'submitted', 'pending_activation', 'active', 'suspended'].includes(mandate.status) && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_cancel')}>Cancel</Button>}
                       {['pending_activation', 'expired', 'cancelled', 'failed'].includes(mandate.status) && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_reissue')}>Reissue</Button>}
-                      {mandate.status === 'pending_activation' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'activation_reminder')}>Remind</Button>}
-                      {['active', 'suspended', 'pending_activation'].includes(mandate.status) && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => handleAction(mandate, 'notify_policy_change')}>Notify policy change</Button>}
+                      {mandate.status === 'pending_activation' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'activation_reminder')}>Record reminder</Button>}
+                      {['active', 'suspended', 'pending_activation'].includes(mandate.status) && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => handleAction(mandate, 'notify_policy_change')}>Record change notice</Button>}
                       {['active', 'suspended', 'pending_activation'].includes(mandate.status) && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => handleAction(mandate, 'apply_policy_version')}>Apply policy version</Button>}
                     </td>
                   </tr>
@@ -177,14 +183,14 @@ export default function MandatesPage() {
         record={selectedMandate}
         isOpen={isDialogOpen}
         onOpenChange={setIsDialogOpen}
-        title={`Mandate Action: ${actionKind.replace('_', ' ')}`}
+        title={mandateActionTitles[actionKind] || 'Update mandate'}
         actionMutation={actionKind}
-        fields={actionKind === 'mandate_reissue' ? [{ name: 'consentEvidence', label: 'New consent evidence reference (MAN-06: a re-issue is a new mandate with a new consent record)', type: 'text', isData: true, required: true }]
-          : actionKind === 'notify_policy_change' ? [{ name: 'policyId', label: 'Approved policy version to notify (RET-07; the sandbox records a simulated notice, not evidence)', type: 'select', isData: true, required: true, options: approvedVersionOptions }]
+        fields={actionKind === 'mandate_reissue' ? [{ name: 'consentEvidence', label: 'New consent evidence reference (reissuing creates a new mandate)', type: 'text', isData: true, required: true }]
+          : actionKind === 'notify_policy_change' ? [{ name: 'policyId', label: 'Approved policy version (the notice is simulated and is not proof of delivery)', type: 'select', isData: true, required: true, options: approvedVersionOptions }]
           : actionKind === 'apply_policy_version' ? [
             { name: 'policyId', label: 'Approved policy version to apply', type: 'select', isData: true, required: true, options: approvedVersionOptions },
-            { name: 'noticeId', label: 'Provider-accepted policy-change notice id (optional; the latest accepted notice for this version is used when blank)', type: 'text', isData: true },
-            { name: 'consentEvidence', label: 'Fresh consent evidence (required when the merchant terms require consent for a policy change)', type: 'text', isData: true },
+            { name: 'noticeId', label: 'Accepted policy change notice ID (leave blank to use the latest accepted notice for this version)', type: 'text', isData: true },
+            { name: 'consentEvidence', label: 'New consent evidence (required if the lender requires consent for policy changes)', type: 'text', isData: true },
           ] : []}
       />
       <Dialog.Root open={isCreateOpen} onOpenChange={setIsCreateOpen}>
@@ -192,24 +198,24 @@ export default function MandatesPage() {
           <Dialog.Overlay className="fixed inset-0 z-50 bg-black/50" />
           <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-full max-w-lg max-h-[90vh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border bg-background p-6 shadow-lg">
             <Dialog.Title className="text-lg font-semibold">Create synthetic mandate</Dialog.Title>
-            <p className="mt-1 text-sm text-muted-foreground">This records a sandbox mandate only; no bank instruction is sent.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Use synthetic details only. This records a mandate in the sandbox; it sends no instruction to a bank.</p>
             <form noValidate className="mt-5 space-y-4" onSubmit={submitCreate}>
               {(formErrors.length > 0 || Object.keys(fieldErrors).length > 0) && (
                 <FormAlert title={formErrors[0] ?? attentionTitle(Object.keys(fieldErrors).length)}>{formErrors.slice(1).map(message => <p key={message}>{message}</p>)}</FormAlert>
               )}
               <MandateField label="Mandate name" value={draft.name} id="mandate-name" error={fieldErrors.name} onChange={value => change('name', value)} required />
               <MandateSelect label="Customer" value={draft.customerId} id="mandate-customerId" error={fieldErrors.customerId} onChange={value => change('customerId', value)} required options={(customers?.items || []).map(customer => ({ value: customer.id, label: `${customer.name} · ${customer.reference}` }))} />
-              <MandateField label="Limit (kobo)" type="number" value={draft.amountKobo} id="mandate-amountKobo" error={fieldErrors.amountKobo} onChange={value => change('amountKobo', value)} required />
+              <MandateField label="Debit limit (kobo)" type="number" value={draft.amountKobo} id="mandate-amountKobo" error={fieldErrors.amountKobo} onChange={value => change('amountKobo', value)} required />
               <MandateField label="Provider reference" value={draft.reference} id="mandate-reference" error={fieldErrors.reference} onChange={value => change('reference', value)} required />
-              <MandateSelect label="Activation workflow" value={draft.workflow} id="mandate-workflow" error={fieldErrors.workflow} onChange={value => change('workflow', value)} required options={activationWorkflows.map(workflow => ({ value: workflow, label: workflow.replaceAll('_', ' ') }))} />
+              <MandateSelect label="Activation method" value={draft.workflow} id="mandate-workflow" error={fieldErrors.workflow} onChange={value => change('workflow', value)} required options={activationWorkflows.map(workflow => ({ value: workflow, label: readableLabel(workflow) }))} />
               <MandateField label="Consent evidence reference" value={draft.consentEvidence} id="mandate-consentEvidence" error={fieldErrors.consentEvidence} onChange={value => change('consentEvidence', value)} required />
-              <label className="block text-sm font-medium">Consent gaps (one per line)</label>
+              <label className="block text-sm font-medium">Missing consent details (one per line)</label>
               <textarea className="mt-1 min-h-[72px] w-full rounded-md border bg-transparent px-3 py-2 text-sm" value={draft.consentGaps} onChange={event => setDraft({ ...draft, consentGaps: event.target.value })} />
-              <MandateSelect label="Policy" value={draft.policyId} id="mandate-policyId" error={fieldErrors.policyId} onChange={value => change('policyId', value)} required options={(policies?.items || []).map(policy => ({ value: policy.id, label: `${policy.name} · ${policy.status}` }))} />
+              <MandateSelect label="Policy" value={draft.policyId} id="mandate-policyId" error={fieldErrors.policyId} onChange={value => change('policyId', value)} required options={(policies?.items || []).map(policy => ({ value: policy.id, label: `${policy.name} · ${readableLabel(policy.status)}` }))} />
               <MandateSelect label="Frequency" value={draft.frequency} id="mandate-frequency" error={fieldErrors.frequency} onChange={value => change('frequency', value)} required options={mandateFrequencies.map(frequency => ({ value: frequency, label: frequency.charAt(0).toUpperCase() + frequency.slice(1) }))} />
               <div className="flex justify-end gap-2 border-t pt-4">
                 <Button type="button" variant="outline" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
-                <Button type="submit" busy={createMandate.isPending} busyLabel="Saving…">Create mandate</Button>
+                <Button type="submit" busy={createMandate.isPending} busyLabel="Creating mandate…">Create mandate</Button>
               </div>
             </form>
           </Dialog.Content>

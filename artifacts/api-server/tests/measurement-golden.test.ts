@@ -190,7 +190,7 @@ function settle(state: DomainState, due: ValopayRecord, amountKobo: number, sett
   assert.ok(Math.abs(report.confidenceInterval90ByCount!.low - -0.29402) < 1e-4, `count lower bound ${report.confidenceInterval90ByCount!.low}`);
   assert.deepEqual(report.checks, { effectAtLeastEightPoints: true, intervalExcludesZero: false, sampleMet: true, analysisDateReached: true });
   assert.equal(report.result, "not_proven", "an interval that includes zero is not proven, however large the point estimate");
-  assert.match(report.reason, /interval does not exclude zero/);
+  assert.match(report.reason, /90% confidence interval does not show a positive improvement/);
   assert.equal(report.minimumPerArm, 3);
   assert.equal(report.passRule, "rule");
   checks += 19;

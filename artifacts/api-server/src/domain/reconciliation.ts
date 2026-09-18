@@ -158,14 +158,14 @@ export function allocatePayment(
   explanation?: string,
 ): TypedRecord<"allocations"> {
   if (!Number.isInteger(amount) || amount <= 0 || amount > payment.amountKobo - Number(payment.data.allocatedKobo || 0)) {
-    throw new Error("Allocation exceeds the remaining canonical payment amount.");
+    throw new Error("Enter a positive whole number in kobo, no more than the payment has left to allocate.");
   }
   const remaining = outstanding(due);
-  if (amount > remaining) throw new Error("Allocation exceeds the due item's remaining balance.");
+  if (amount > remaining) throw new Error("This allocation exceeds the outstanding instalment balance. Enter a lower amount.");
   const allocation = makeRecord(state, "allocations", {
     name: `Allocation ${rule}`, status: confidence === "probable" ? "proposed" : "confirmed",
     customerId: payment.customerId || due.customerId, amountKobo: amount, createdAt: ctx.now,
-    data: { paymentId: payment.id, dueItemId: due.id, rule, confidence, automatic, explanation: explanation ?? `${rule} matched this canonical payment.`, reviewed: null },
+    data: { paymentId: payment.id, dueItemId: due.id, rule, confidence, automatic, explanation: explanation ?? `Matching rule ${rule} linked this payment to the instalment.`, reviewed: null },
   });
   if (confidence === "probable") {
     payment.status = "proposed";
@@ -181,10 +181,10 @@ export function allocatePayment(
 export function applyConfirmedAllocation(state: DomainState, ctx: Context, allocation: TypedRecord<"allocations">): void {
   const payment = findRecord(state, String(allocation.data.paymentId), "payments");
   const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
-  if (allocation.status === "superseded") throw new Error("A superseded allocation cannot be confirmed.");
+  if (allocation.status === "superseded") throw new Error("This allocation is no longer applied and cannot be confirmed. Review the payment to create a new match.");
   const amount = allocation.amountKobo;
   if (allocation.status !== "confirmed" && amount > payment.amountKobo - Number(payment.data.allocatedKobo || 0)) {
-    throw new Error("Allocation exceeds remaining canonical payment amount.");
+    throw new Error("This allocation is more than the payment has left to allocate. Refresh the payment and review the proposed amount.");
   }
   allocation.status = "confirmed";
   allocation.data.confirmedAt ||= ctx.now;
@@ -400,7 +400,7 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
   const observationsBySource: Record<string, number> = {};
   for (const observation of observations.filter((item) => item.status === "resolved")) observationsBySource[String(observation.data.source)] = (observationsBySource[String(observation.data.source)] || 0) + 1;
   return {
-    message: "Observations resolved to canonical payments and matched; no external settlement or instruction was performed.",
+    message: "Reconciliation complete. Payment evidence has been checked for matches. No money was moved and no collection instruction was sent.",
     data: {
       observationsResolved: observations.filter((item) => item.status === "resolved").length, observationsBySource, canonicalPayments: resolved.length,
       settlementStatementsMatched: statementBatchesMatched, settlementVariances: feeVariances, allocationsByRule,

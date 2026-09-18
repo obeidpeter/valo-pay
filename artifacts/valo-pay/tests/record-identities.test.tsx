@@ -30,11 +30,11 @@ describe('recognisable operational records', () => {
     const instalment = await screen.findByLabelText(/Instalment/);
     await waitFor(() => expect(within(instalment).getByRole('option', { name: new RegExp(dueItem.reference) })).toBeTruthy());
     await user.selectOptions(instalment, dueItem.id);
-    const amount = screen.getByLabelText(/Amount \(Kobo\)/);
+    const amount = screen.getByLabelText(/Amount to allocate \(kobo\)/);
     await user.clear(amount);
     await user.type(amount, '100000');
     await user.type(screen.getByLabelText(/Reason/), 'Matched the synthetic payment evidence to this instalment.');
-    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await user.click(screen.getByRole('button', { name: 'Allocate payment' }));
     await waitFor(() => expect(api.calls.some(call => {
       const body = call.body as { action?: string; data?: { dueItemId?: string; amountKobo?: number } };
       return body?.action === 'manual_allocate' && body.data?.dueItemId === dueItem.id && body.data.amountKobo === 100000;
@@ -45,21 +45,22 @@ describe('recognisable operational records', () => {
   it('names the customer and reads the status on the mandates and collections tables', async () => {
     const mandate = api.state().records.find(record => record.kind === 'mandates' && record.status === 'pending_activation')!;
     const customer = api.state().records.find(record => record.id === mandate.customerId)!;
-    renderApp('/mandates');
+    const mandatesPage = renderApp('/mandates');
     const link = (await screen.findAllByRole('link', { name: customer.name }))[0];
     expect(link.getAttribute('href')).toBe(`/customers/${customer.id}`);
     const row = link.closest('tr')!;
-    expect(within(row).getByText('Pending activation')).toBeTruthy();
-    const workflow = String(mandate.data.workflow).replace(/_/g, ' ');
-    expect(within(row).getByText(workflow.charAt(0).toUpperCase() + workflow.slice(1))).toBeTruthy();
+    expect(within(row).getByText('Awaiting activation')).toBeTruthy();
+    const workflowLabels: Record<string, string> = { transfer_to_activate: 'Activate with a bank transfer', hosted_consent: 'Consent through the provider', paper_mandate: 'Paper mandate' };
+    expect(within(row).getByText(workflowLabels[String(mandate.data.workflow)]!)).toBeTruthy();
     expect(row.textContent).toContain(customer.id);
     expect(screen.queryByText('pending_activation')).toBeNull();
 
     const due = api.state().records.find(record => record.kind === 'due-items' && record.status === 'in_collection')!;
     const payer = api.state().records.find(record => record.id === due.customerId)!;
+    mandatesPage.unmount();
     renderApp('/collections');
     const dueRow = (await screen.findByText(due.reference)).closest('tr')!;
     expect(within(dueRow).getByRole('link', { name: payer.name }).getAttribute('href')).toBe(`/customers/${payer.id}`);
-    expect(within(dueRow).getByText('In collection')).toBeTruthy();
+    expect(within(dueRow).getByText('Collection in progress')).toBeTruthy();
   });
 });

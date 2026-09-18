@@ -42,15 +42,25 @@ export function focusField(id: string): void {
 
 /** The words for a value that is missing, in the field's own label. */
 export function missingMessage(label: string, type: string): string {
-  return type === 'select' ? `Choose the ${label}.` : `Enter the ${label}.`;
+  return `${label} is required.${type === 'select' ? ' Choose an option.' : ''}`;
 }
 
 /** How many fields need attention, as the alert's title when the server had nothing more specific to say. */
 export function attentionTitle(count: number): string {
-  return count === 1 ? 'One field needs attention before this can be saved.' : `${count} fields need attention before this can be saved.`;
+  return count === 1 ? 'Check the highlighted field before saving.' : `Check the ${count} highlighted fields before saving.`;
 }
 
 type Detail = { field?: unknown; message?: unknown };
+
+/** Use the form's visible labels in general validation messages; API and CSV field keys stay unchanged. */
+export function formErrorMessage(message: string, fields: Array<{ name: string; label: string }>): string {
+  let text = message.replace(/^Invalid [a-z-]+ data:\s*/, 'Check these values: ');
+  for (const field of fields) {
+    const key = field.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    text = text.replace(new RegExp(`(^|[\\s;])(?:data\\.)?${key}:`, 'g'), (_, prefix: string) => `${prefix}${field.label}:`);
+  }
+  return text;
+}
 
 /**
  * Sorts what the server said into messages for the fields it names and the
@@ -64,7 +74,7 @@ export function serverFieldErrors(error: unknown, resolve: (path: string) => str
   const fields: Record<string, string> = {};
   const general: string[] = [];
   for (const detail of details) {
-    const path = String(detail.field ?? ''), message = String(detail.message ?? 'This value was refused.');
+    const path = String(detail.field ?? ''), message = String(detail.message ?? 'Check this value and try again.');
     const name = resolve(path);
     if (name && !fields[name]) fields[name] = message;
     else general.push(path ? `${path}: ${message}` : message);

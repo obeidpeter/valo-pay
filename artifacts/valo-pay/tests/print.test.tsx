@@ -13,21 +13,21 @@ afterEach(() => { api.uninstall(); vi.useRealTimers(); });
 describe("print", () => {
   it("marks the chrome to leave the page and carries the lender and the sandbox notice instead", async () => {
     renderApp("/overview");
-    await screen.findByRole("heading", { name: "Operations Overview" });
-    const banner = screen.getByText(/^Sandbox · Synthetic data\. We never hold money\./).parentElement!;
+    await screen.findByRole("heading", { name: "Operations overview" });
+    const banner = screen.getByText(/^Sandbox · Sample data\. We never hold money\./).parentElement!;
     expect(banner.className).toContain("print:hidden");
     expect(screen.getByRole("complementary").className).toContain("print:hidden");
     expect(screen.getByRole("button", { name: "Menu" }).closest(".sticky")!.className).toContain("print:hidden");
-    const provenance = screen.getByText("Valo Pay · synthetic sandbox").closest("div.print\\:block")!;
+    const provenance = screen.getByText("Valo Pay · Sample data sandbox").closest("div.print\\:block")!;
     expect(provenance.textContent).toMatch(/Meridian Credit|Cedar Cooperative/);
-    expect(provenance.textContent).toContain("Synthetic data. We never hold money. Nothing on this page is live evidence");
+    expect(provenance.textContent).toContain("Sample data only. We never hold money. This is not a live payment record");
   });
 
   it("says when and from where the page was printed, taking the time again as printing starts", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date("2026-09-18T09:05:00Z"));
     renderApp("/overview");
-    await screen.findByRole("heading", { name: "Operations Overview" });
+    await screen.findByRole("heading", { name: "Operations overview" });
     const footer = screen.getByText(/^Printed /);
     expect(footer.textContent).toMatch(/ from the Valo Pay sandbox · Overview · (Meridian Credit|Cedar Cooperative)\.$/);
     const before = footer.textContent!;

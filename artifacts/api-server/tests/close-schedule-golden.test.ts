@@ -65,7 +65,7 @@ const quietDeadlines = (state: ReturnType<typeof seedMerchant>) => { for (const 
   const onTime = runDailyClose(state, ctxAt(wat("2027-06-28T07:00:30"), "Operations"), "scheduled");
   assert.equal(onTime.record!.name, "Daily close 2027-06-28 · scheduled");
   assert.deepEqual(onTime.record!.data.schedule, { trigger: "scheduled", scheduledFor: wat("2027-06-28T07:00:00"), delayMinutes: 0, late: false, nextAt: wat("2027-06-29T07:00:00") });
-  assert.equal(onTime.message, "Scheduled daily close completed; no provider pull or LMS push occurred.");
+  assert.equal(onTime.message, "Scheduled daily close completed. No data was fetched from the provider or sent to the loan management system.");
   assert.deepEqual(onTime.data.schedule, onTime.record!.data.schedule, "the action result carries the schedule block");
   assert.equal(state.settings.nextCloseAt, wat("2027-06-29T07:00:00"), "the cursor moved to the next 07:00");
   assert.equal(scheduledCloseDue(state, wat("2027-06-28T07:01:00")), false, "not due again until tomorrow");
@@ -88,7 +88,7 @@ const quietDeadlines = (state: ReturnType<typeof seedMerchant>) => { for (const 
   state.settings.nextCloseAt = wat("2027-06-28T07:00:00");
   const late = runDailyClose(state, ctxAt(wat("2027-06-28T15:10:00"), "Operations"), "scheduled");
   assert.equal(late.record!.data.schedule.delayMinutes, 490); assert.equal(late.record!.data.schedule.late, true);
-  assert.equal(late.message, "Scheduled daily close completed 490 minutes after its 07:00 WAT time; no provider pull or LMS push occurred.");
+  assert.equal(late.message, "Scheduled daily close completed 490 minutes after its 07:00 WAT time. No data was fetched from the provider or sent to the loan management system.");
   assert.equal(late.record!.data.report.alerts.some((alert: { key: string }) => alert.key === "close_missed"), true, "the report freezes the missed-close alert as it stood when the late close started");
   assert.equal(state.settings.nextCloseAt, wat("2027-06-29T07:00:00"), "the cursor moves to the next day, not to another close today");
   checks += 5;
@@ -110,7 +110,7 @@ const quietDeadlines = (state: ReturnType<typeof seedMerchant>) => { for (const 
   assert.deepEqual(keys(wat("2027-06-28T07:30:00")), ["close_overdue"], "30 minutes past its time is not yet missed");
   assert.deepEqual(keys(wat("2027-06-28T07:31:00")), ["close_missed", "close_overdue"], "31 minutes past: missed, high before medium");
   const alert = buildAlerts(state, wat("2027-06-28T09:00:00")).find((item) => item.key === "close_missed")!;
-  assert.equal(alert.severity, "high"); assert.equal(alert.since, wat("2027-06-28T07:00:00")); assert.match(alert.detail, /07:00 WAT is 120 minutes past its time/);
+  assert.equal(alert.severity, "high"); assert.equal(alert.since, wat("2027-06-28T07:00:00")); assert.match(alert.detail, /07:00 WAT is 120 minutes late/);
   checks += 5;
   state.settings.scheduledCloseEnabled = false;
   assert.deepEqual(keys(wat("2027-06-28T09:00:00")), ["close_overdue"], "no missed-close alert when the automatic close is off");

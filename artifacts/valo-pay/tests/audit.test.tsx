@@ -10,10 +10,10 @@ describe("audit", () => {
   it("verifies the chain and shows the result on the page", async () => {
     const user = userEvent.setup();
     renderApp("/audit");
-    await user.click(await screen.findByRole("button", { name: /Verify Chain Integrity/ }));
+    await user.click(await screen.findByRole("button", { name: /Check audit log/ }));
     // The toast is a live region too, so the result box is found by its text.
-    const status = (await screen.findByText("Chain intact")).closest('[role="status"]')!;
-    expect(status.textContent).toMatch(/1 entry · head hash [0-9a-f]{64}/);
+    const status = (await screen.findByText("Audit log verified: all entries are intact")).closest('[role="status"]')!;
+    expect(status.textContent).toMatch(/1 verified entry · Latest verified hash: [0-9a-f]{64}/);
     expect(api.calls.find((call) => call.path === "/v1/actions")?.body).toMatchObject({ action: "verify_audit" });
   });
 });
