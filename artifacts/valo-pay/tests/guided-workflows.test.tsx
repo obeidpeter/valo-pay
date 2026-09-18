@@ -4,6 +4,7 @@ import { renderApp, screen, userEvent, waitFor, within } from './harness';
 import { importErrorCsv, safeCsvCell } from '@/components/import-wizard';
 import { formatKobo } from '@/lib/formatters';
 import axe from 'axe-core';
+import { queryClient } from '@/App';
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); vi.spyOn(window, 'confirm').mockReturnValue(true); });
@@ -22,6 +23,8 @@ describe('template review lifecycle', () => {
     await waitFor(() => expect(api.state().records.find(record => record.id === id)?.status).toBe('rejected'));
     expect(await screen.findByText(/Make the collection date easier to understand/)).toBeTruthy();
     api.role = 'Admin';
+    await queryClient.invalidateQueries({ queryKey: ['workspace'] });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit' }).hasAttribute('disabled')).toBe(false));
     await user.click(screen.getByRole('button', { name: 'Edit' }));
     dialog = await screen.findByRole('dialog', { name: 'Edit template' });
     const message = within(dialog).getByLabelText(/Message \(include/);
@@ -35,6 +38,8 @@ describe('template review lifecycle', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Submit for review' }));
     await waitFor(() => expect(api.state().records.find(record => record.id === id)?.status).toBe('submitted'));
     api.role = 'Compliance reviewer';
+    await queryClient.invalidateQueries({ queryKey: ['workspace'] });
+    await waitFor(() => expect(within(templates).getByRole('button', { name: 'Approve' }).hasAttribute('disabled')).toBe(false));
     await user.click(within(templates).getByRole('button', { name: 'Approve' }));
     dialog = await screen.findByRole('dialog', { name: 'Approve template' });
     await user.type(within(dialog).getByLabelText('Reason *'), 'Checked the corrected wording.');

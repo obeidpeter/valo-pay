@@ -43,4 +43,16 @@ for (const outcome of ["error", "close", "abort", "http-error"] as const) {
   controller.abort();
   await assert.rejects(readExportBytes({ requestStream() { throw new Error("must not start"); } } as any, controller.signal), { name: "AbortError" });
 }
-console.log("Export collector checks passed: binary bytes, repeated cleanup, errors, premature close, HTTP denial and cancellation.");
+{
+ const {stream,signal,clean}=fixture();
+ const pending=collectExportBytes(stream,signal.signal,4);
+ stream.write('12345');
+ await assert.rejects(pending,/supported file size/);clean();
+}
+{
+ const {stream,signal,clean}=fixture();
+ let aborted=false;(stream as any).abort=()=>{aborted=true;};
+ await assert.rejects(collectExportBytes(stream,signal.signal,100,5),/timed out/);
+ assert.equal(aborted,true);clean();
+}
+console.log("Export collector checks passed: binary bytes, repeated cleanup, errors, premature close, HTTP denial, cancellation, size and stalled-request deadlines.");

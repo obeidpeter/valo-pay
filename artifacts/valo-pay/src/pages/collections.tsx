@@ -1,3 +1,4 @@
+import { QueueFreshness } from '@/components/queue-freshness';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'wouter';
 import { useLocationProperty } from 'wouter/use-browser-location';
@@ -7,7 +8,7 @@ import { LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { FileText, Upload } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { PermissionButton as Button } from '@/components/permission-button';
 import { RecordDialog } from '@/components/record-dialog';
 import { ImportWizard } from '@/components/import-wizard';
 import { confirmUnsavedChanges } from '@/lib/unsaved-changes';
@@ -37,25 +38,30 @@ export default function CollectionsPage() {
 
 
 
-  const { data: dueItems, isLoading: isLoadingDue, error: dueError, refetch: refetchDue } = useListRecords(
+  const dueItemsQuery = useListRecords(
     'due-items',
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('due-items', { merchantId: merchantId! }) } }
   );
-  const { data: attempts, isLoading: isLoadingAttempts, error: attemptsError, refetch: refetchAttempts } = useListRecords('attempts', { merchantId: merchantId! }, { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('attempts', { merchantId: merchantId! }) } });
+  const { data: dueItems, isLoading: isLoadingDue, error: dueError, refetch: refetchDue } = dueItemsQuery;
+  const attemptsQuery = useListRecords('attempts', { merchantId: merchantId! }, { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('attempts', { merchantId: merchantId! }) } });
+  const { data: attempts, isLoading: isLoadingAttempts, error: attemptsError, refetch: refetchAttempts } = attemptsQuery;
   // Names for the customer column; the full ID stays available for tracing.
-  const { data: customers } = useListRecords('customers', { merchantId: merchantId! }, { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('customers', { merchantId: merchantId! }) } });
+  const customersQuery = useListRecords('customers', { merchantId: merchantId! }, { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('customers', { merchantId: merchantId! }) } });
+  const { data: customers } = customersQuery;
   const customerById = new Map(customers?.items.map(customer => [customer.id, customer]));
-  const { data: mandates } = useListRecords(
+  const mandatesQuery = useListRecords(
     'mandates',
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('mandates', { merchantId: merchantId! }) } }
   );
-  const { data: policies } = useListRecords(
+  const { data: mandates } = mandatesQuery;
+  const policiesQuery = useListRecords(
     'policies',
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('policies', { merchantId: merchantId! }) } }
   );
+  const { data: policies } = policiesQuery;
   const rowTargets = useMemo(() => [...(dueItems?.items || []), ...(attempts?.items || [])].map(item => `record-${item.id}`), [dueItems, attempts]);
 
   useEffect(() => { setActionError(''); setIsDialogOpen(false); setSelectedItem(null); }, [merchantId]);
@@ -134,8 +140,10 @@ export default function CollectionsPage() {
           <h1 className="text-3xl font-bold tracking-tight">Collections</h1>
           <p className="text-muted-foreground mt-1">Track instalments and try collection scenarios with synthetic data.</p>
         </div>
-        <Button variant="outline" className="gap-2" aria-expanded={importOpen} aria-controls="collection-import" onClick={() => { if (importOpen && !confirmUnsavedChanges()) return; setImportOpen(open => !open); }}><Upload className="h-4 w-4" aria-hidden="true" />{importOpen ? 'Hide import' : 'Import sample data'}</Button>
+        <Button action={importOpen ? undefined : "import_records"} variant="outline" className="gap-2" aria-expanded={importOpen} aria-controls="collection-import" onClick={() => { if (importOpen && !confirmUnsavedChanges()) return; setImportOpen(open => !open); }}><Upload className="h-4 w-4" aria-hidden="true" />{importOpen ? 'Hide import' : 'Import sample data'}</Button>
       </header>
+
+      <QueueFreshness key={merchantId} queries={[dueItemsQuery, attemptsQuery, customersQuery, mandatesQuery, policiesQuery]} />
 
       {actionError && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm">{actionError}</p>}
       <div className="flex flex-col gap-6">
@@ -179,7 +187,7 @@ export default function CollectionsPage() {
                 <tbody className="divide-y">
                   {isLoadingDue || isLoadingAttempts ? (
                     <LoadingRow colSpan={7} what="collections" />
-                  ) : dueError || attemptsError ? (
+                  ) : (dueError && !dueItems) || (attemptsError && !attempts) ? (
                     <tr><td colSpan={7} className="p-6"><div role="alert"><p>Collections could not be loaded completely.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => { refetchDue(); refetchAttempts(); }}>Try again</Button></div></td></tr>
                   ) : displayed.length === 0 ? (
                     <EmptyRow colSpan={7} title={view === 'all' && !owner ? 'No instalments recorded' : 'No collections match these filters'}>{view === 'all' && !owner ? 'Open Import sample data to add synthetic instalments using a sample CSV.' : 'Choose All instalments and All owners to see the full list.'}</EmptyRow>
@@ -193,8 +201,8 @@ export default function CollectionsPage() {
                         <td className="px-4 py-3"><StatusBadge status={attempt?.status || item?.status} /><p className="mt-1 text-xs text-muted-foreground">{readableLabel(ownerOf(item))}</p>{attempt && <p className="mt-1 text-xs">{readableLabel(attempt.data?.failureCode)}</p>}</td>
                         <td className="max-w-56 px-4 py-3 text-xs leading-relaxed">{nextAction(item, attempt)}</td>
                         <td className="px-4 py-3 text-right">
-                          {item && <div className="flex flex-col items-end gap-2"><Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(item, 'backtest_policy')}>Test policy</Button>
-                          {isUnpaid(item.status) && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => handleAction(item, 'simulate_failure')}>Simulate failure</Button>}</div>}
+                          {item && <div className="flex flex-col items-end gap-2"><Button size="sm" variant="outline" className="h-7 text-xs" action="backtest_policy" record={item} onClick={() => handleAction(item, 'backtest_policy')}>Test policy</Button>
+                          {isUnpaid(item.status) && <Button size="sm" variant="ghost" className="h-7 text-xs" action="simulate_failure" record={item} onClick={() => handleAction(item, 'simulate_failure')}>Simulate failure</Button>}</div>}
                         </td>
                       </tr>
                     ))

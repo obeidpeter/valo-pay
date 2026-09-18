@@ -61,6 +61,11 @@ jobs:
       - name: Run golden tests (shared schema, retry engine, reconciliation)
         run: pnpm run test:golden
 
+      - name: Measure complete synthetic workflows and assert aggregate correctness
+        run: |
+          scripts/node_modules/.bin/tsx artifacts/api-server/tests/workflow-performance.test.ts
+          scripts/node_modules/.bin/tsx artifacts/api-server/tests/export-jobs.test.ts
+
       - name: Run console tests (pages in jsdom against the in-memory API)
         run: pnpm --filter @workspace/valopay run test
 

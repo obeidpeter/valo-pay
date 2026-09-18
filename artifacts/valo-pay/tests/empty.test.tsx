@@ -18,7 +18,8 @@ describe("empty states", () => {
     expect(within(status).getByText(/Check the spelling/)).toBeTruthy();
     await user.clear(search);
     expect(await screen.findByText("Ada Okonkwo")).toBeTruthy();
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("No customers match “zzzz”")).toBeNull();
+    expect(screen.queryByText("Loading search results…")).toBeNull();
   });
 
   it("says the same for the audit log's search", async () => {

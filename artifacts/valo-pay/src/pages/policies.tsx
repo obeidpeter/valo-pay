@@ -5,7 +5,7 @@ import { LoadProblem } from '@/components/load-problem';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { Shield, FileText, CheckCircle } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { PermissionButton as Button } from '@/components/permission-button';
 import { formatDate } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { readableLabel } from '@/components/record-label';
@@ -53,7 +53,7 @@ export default function PoliciesPage() {
             <Shield className="h-5 w-5 text-primary" />
             <h2 className="font-semibold text-lg">Retry policies</h2>
           </div>
-          <Button size="sm" onClick={() => handleAction(null, 'create_policy')}>Draft a policy</Button>
+          <Button size="sm" action="create_policy" record={null} onClick={() => handleAction(null, 'create_policy')}>Draft a policy</Button>
         </div>
         <div className="divide-y">
           {isLoading ? (
@@ -61,7 +61,7 @@ export default function PoliciesPage() {
           ) : policyError ? (
             <LoadProblem what="retry policies" error={policyError} retry={() => { void retryPolicies(); }} busy={fetchingPolicies} />
           ) : !policies || policies.items.length === 0 ? (
-            <EmptyState title="No retry policies yet" action={<Button size="sm" variant="outline" onClick={() => handleAction(null, 'create_policy')}>Draft a policy</Button>}>
+            <EmptyState title="No retry policies yet" action={<Button size="sm" variant="outline" action="create_policy" record={null} onClick={() => handleAction(null, 'create_policy')}>Draft a policy</Button>}>
               A policy sets retry limits, notice periods and quiet hours. Draft a version and submit it for approval by a compliance reviewer before use.
             </EmptyState>
           ) : (
@@ -92,11 +92,11 @@ export default function PoliciesPage() {
                 <div className="flex flex-col gap-2 shrink-0">
                   {policy.status === 'draft' && (
                     <>
-                      <Button variant="outline" size="sm" onClick={() => handleAction(policy, 'edit_policy')}>Edit draft</Button>
+                      <Button variant="outline" size="sm" action="edit_policy" record={policy} onClick={() => handleAction(policy, 'edit_policy')}>Edit draft</Button>
                       <Button 
                         variant="outline" 
                         size="sm"
-                        onClick={() => handleAction(policy, 'submit_policy')}
+                        action="submit_policy" record={policy} onClick={() => handleAction(policy, 'submit_policy')}
                       >
                         Submit for review
                       </Button>
@@ -107,14 +107,14 @@ export default function PoliciesPage() {
                       <Button 
                         className="bg-success hover:bg-success/90 text-success-foreground"
                         size="sm"
-                        onClick={() => handleAction(policy, 'approve_policy')}
+                        action="approve_policy" record={policy} onClick={() => handleAction(policy, 'approve_policy')}
                       >
                         <CheckCircle className="mr-2 h-4 w-4" /> Approve
                       </Button>
                       <Button 
                         variant="destructive"
                         size="sm"
-                        onClick={() => handleAction(policy, 'reject_policy')}
+                        action="reject_policy" record={policy} onClick={() => handleAction(policy, 'reject_policy')}
                       >
                         Reject
                       </Button>
@@ -125,7 +125,7 @@ export default function PoliciesPage() {
                     <div className="flex items-center gap-2 text-success text-sm font-medium">
                       <Shield className="h-4 w-4" /> Approved version
                     </div>
-                    <Button variant="outline" size="sm" onClick={() => handleAction(policy, 'new_policy_version')}>Draft next version</Button>
+                    <Button variant="outline" size="sm" action="new_policy_version" record={policy} onClick={() => handleAction(policy, 'new_policy_version')}>Draft next version</Button>
                     </>
                   )}
                 </div>
@@ -142,7 +142,7 @@ export default function PoliciesPage() {
             <FileText className="h-5 w-5 text-primary" />
             <h2 className="font-semibold text-lg">Notification templates</h2>
           </div>
-          <Button size="sm" onClick={() => handleAction(null, 'create_template')}>Create template</Button>
+          <Button size="sm" action="create_template" record={null} onClick={() => handleAction(null, 'create_template')}>Create template</Button>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
           {isLoadingTemplates ? (
@@ -167,14 +167,14 @@ export default function PoliciesPage() {
                   <span>v{String(template.data?.version || '1')}</span>
                   {['draft', 'rejected'].includes(template.status) && (
                     <div className="flex gap-2">
-                      <Button variant="link" size="sm" className="h-auto min-h-6 p-0" onClick={() => handleAction(template, 'edit_template')}>Edit</Button>
-                      <Button variant="link" size="sm" className="h-auto min-h-6 p-0" onClick={() => handleAction(template, 'submit_template')}>Submit for review</Button>
+                      <Button variant="link" size="sm" className="h-auto min-h-6 p-0" action="edit_template" record={template} onClick={() => handleAction(template, 'edit_template')}>Edit</Button>
+                      <Button variant="link" size="sm" className="h-auto min-h-6 p-0" action="submit_template" record={template} onClick={() => handleAction(template, 'submit_template')}>Submit for review</Button>
                     </div>
                   )}
                   {template.status === 'submitted' && (
-                    <div className="flex gap-3"><Button variant="link" size="sm" className="h-auto min-h-6 p-0 text-success" onClick={() => handleAction(template, 'approve_template')}>Approve</Button><Button variant="link" size="sm" className="h-auto min-h-6 p-0 text-destructive" onClick={() => handleAction(template, 'reject_template')}>Request changes</Button></div>
+                    <div className="flex gap-3"><Button variant="link" size="sm" className="h-auto min-h-6 p-0 text-success" action="approve_template" record={template} onClick={() => handleAction(template, 'approve_template')}>Approve</Button><Button variant="link" size="sm" className="h-auto min-h-6 p-0 text-destructive" action="reject_template" record={template} onClick={() => handleAction(template, 'reject_template')}>Request changes</Button></div>
                   )}
-                  {template.status === 'approved' && <Button variant="link" size="sm" className="h-auto min-h-6 p-0" onClick={() => handleAction(template, 'new_template_version')}>Draft next version</Button>}
+                  {template.status === 'approved' && <Button variant="link" size="sm" className="h-auto min-h-6 p-0" action="new_template_version" record={template} onClick={() => handleAction(template, 'new_template_version')}>Draft next version</Button>}
                 </div>
               </div>
             ))

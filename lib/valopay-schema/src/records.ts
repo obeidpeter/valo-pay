@@ -405,6 +405,14 @@ export const recordDataSchemas = {
     customerReference: z.string().optional(),
     objectName: z.string().optional(),
     bucket: z.string().optional(),
+    requestedBy: z.string().optional(),
+    requestedRole: z.string().optional(),
+    attempts: z.number().int().min(0).optional(),
+    leaseToken: z.string().optional(),
+    leaseExpiresAt: z.string().optional(),
+    startedAt: z.string().optional(),
+    generatedAt: z.string().optional(),
+    lastError: z.string().optional(),
   }).passthrough(),
   /** RET-03: written by the engine at every close evaluation; never created or edited through the record API. */
   "retry-decisions": z.object({

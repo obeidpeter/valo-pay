@@ -19,6 +19,7 @@ import { seedMerchant } from "../../api-server/src/lib/valopay-seed";
 import { getGates } from "../../api-server/src/lib/valopay-readiness";
 import { pageRecords } from "../../api-server/src/lib/valopay-list";
 import { importCsv } from "../../api-server/src/lib/valopay-import";
+import { exportJobView, publicExportRecord, queueExport, retryExport } from '../../api-server/src/lib/export-jobs';
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../../api-server/src/lib/valopay-close-views";
 import type { CloseRuntime } from "../../api-server/src/domain/effective-close-schedule";
 
@@ -84,7 +85,7 @@ function toHttpError(error: unknown): { status: number; body: unknown } {
 
 type Handler = (params: Record<string, string>, query: Record<string, string>, body: any) => unknown;
 
-export function installFakeApi(options: { now?: string; role?: string } = {}): FakeApi {
+export function installFakeApi(options: { now?: string; role?: string; queuedExports?: boolean } = {}): FakeApi {
   const states = new Map<string, DomainState>();
   const failures: Array<{ pattern: RegExp; method?: string; failure: { status: number; error: string; details?: Array<{ field: string; message: string }> } | "offline" }> = [];
   const holds: Array<{ pattern: RegExp; promise: Promise<void> }> = [];
@@ -141,7 +142,7 @@ export function installFakeApi(options: { now?: string; role?: string } = {}): F
       const parsed = S.ListRecordsQueryParams.parse(query);
       return S.ListRecordsResponse.parse(withState(parsed.merchantId, (state) => {
         const page = pageRecords(state.records.filter((record) => record.kind === params.kind), parsed);
-        return { ...page, items: page.items.map((record) => record.kind === "exports" ? { ...record, data: { ...record.data, objectName: undefined, bucket: undefined } } : record) };
+        return { ...page, items: page.items.map((record) => record.kind === "exports" ? publicExportRecord(record) : record) };
       }));
     }],
     ["POST", /^\/v1\/records\/(?<kind>[^/]+)$/, (params, query, raw) => {
@@ -221,12 +222,19 @@ export function installFakeApi(options: { now?: string; role?: string } = {}): F
       if (packKinds.includes(body.kind) && !body.customerId) fail("customerId is required for a pack.");
       const merchantId = merchantOf(query);
       return S.CreateExportResponse.parse(withState(merchantId, (state, ctx) => {
+        if(options.queuedExports)return queueExport(state,ctx,body,'/private/test');
         if (body.customerId && !state.records.some((record) => record.kind === "customers" && record.id === body.customerId)) fail("Customer not found.", 404);
         const checksum = digest(canonical({ kind: body.kind, format: body.format, customerId: body.customerId ?? null, at: ctx.now, records: state.records.length }));
         const record = makeRecord(state, "exports", { name: `${body.kind} ${body.format}`, status: "ready", customerId: body.customerId ?? "", createdAt: ctx.now, data: { kind: body.kind, format: body.format, checksum, usedInRealCase: false, byteLength: 0, generationMs: 0, synthetic: true } });
         return { id: record.id, downloadUrl: `/api/v1/exports/${record.id}/download?merchantId=${merchantId}`, checksum, generatedAt: ctx.now };
       }, { action: "post.exports", objectId: "workspace", summary: "Synthetic workspace operation" }));
     }],
+    ["GET", /^\/v1\/exports\/(?<id>[^/]+)$/, ({id}, query) => {
+      const record=states.get(merchantOf(query))!.records.find(record=>record.kind==='exports'&&record.id===id);
+      if(!record)fail('Export not found in this lender.',404);
+      return S.GetExportJobResponse.parse(exportJobView(record));
+    }],
+    ["POST", /^\/v1\/exports\/(?<id>[^/]+)\/retry$/, ({id}, query) => S.RetryExportJobResponse.parse(withState(merchantOf(query),(state,ctx)=>retryExport(state,ctx,id),{action:'export.retry',objectId:id,summary:'Retry saved export'}))],
     ["GET", /^\/v1\/openapi\.json$/, () => ({ openapi: "3.1.0", info: { title: "Api", version: "1.0.0" }, paths: {} })],
   ];
 

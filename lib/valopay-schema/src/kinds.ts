@@ -42,7 +42,7 @@ export const recordStatuses = {
   notifications: ["simulated", "blocked", "accepted", "delivered", "failed"],
   "retry-decisions": ["recorded"],
   closes: ["completed"],
-  exports: ["ready"],
+  exports: ["queued", "running", "ready", "failed"],
   invoices: ["issued"],
 } as const satisfies Partial<Record<RecordKind, readonly string[]>>;
 /** The status union of a kind with a controlled vocabulary. */

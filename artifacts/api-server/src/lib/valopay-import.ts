@@ -1,7 +1,7 @@
 import { parse } from "csv-parse/sync";
 import { makeRecord, validateRecord } from "../domain";
 import type { Context, DomainState } from "../domain/types";
-import { defaultStatus, importBooleanFields, importKinds as sharedImportKinds, importNumericFields } from "@workspace/valopay-schema";
+import { csvAmountToKobo, defaultStatus, importBooleanFields, importKinds as sharedImportKinds, importNumericFields } from "@workspace/valopay-schema";
 
 const importKinds:readonly string[]=sharedImportKinds;
 const topFields=new Set(["name","status","reference","amountKobo","customerId"]);
@@ -9,9 +9,11 @@ const numeric=importNumericFields;
 const boolean=importBooleanFields;
 function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
 const unsafeKey = (key: string) => ["__proto__", "constructor", "prototype"].includes(key);
-export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:string;syntheticOnly:boolean;commit:boolean;mapping?:Record<string,unknown>}){
+export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:string;syntheticOnly:boolean;commit:boolean;mapping?:Record<string,unknown>;amountUnit?:'naira'|'kobo'}){
   if(!input.syntheticOnly)fail("Pre-data gate is closed. Only synthetic sample records are accepted.",403);
   if(!importKinds.includes(input.kind))fail("This resource does not support CSV import.");
+  const amountUnit = input.amountUnit ?? 'kobo';
+  if (!['naira', 'kobo'].includes(amountUnit)) fail('Choose Naira or Kobo for the source amounts.');
   if(new TextEncoder().encode(input.csv).length>1500000)fail("Import is limited to 1.5 MB and 500 rows.");
   let parsed:Record<string,string>[];
   let columns: string[] = [];
@@ -27,19 +29,27 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
   catch{fail(headerProblem || "CSV could not be parsed. Use a header row, the same number of columns on every row, and quoted fields for commas.");}
   if(parsed.length>500||!parsed.length)fail("Provide between 1 and 500 CSV records.");
   if (input.mapping && (Array.isArray(input.mapping) || Object.entries(input.mapping).some(([key, target]) => !columns.includes(key) || unsafeKey(key) || typeof target !== 'string' || unsafeKey(target)))) fail('Choose a valid destination or Skip column for each CSV column.');
-  const targets = columns.map(key => input.mapping && Object.hasOwn(input.mapping, key) ? String(input.mapping[key]).trim() : key);
+  const destination = (key: string) => {
+    const chosen = input.mapping && Object.hasOwn(input.mapping, key) ? String(input.mapping[key]).trim() : key;
+    return chosen === 'amount' ? 'amountKobo' : chosen;
+  };
+  const targets = columns.map(destination);
   if (new Set(targets.filter(Boolean)).size !== targets.filter(Boolean).length) fail('Map each destination field only once. Choose Skip column for unused columns.');
   const working=structuredClone(state), rows:{row:number;status:string;message:string}[]=[];
+  const amounts = new Map<number, number>();
   let valid=0,invalid=0,imported=0;
   for(const [index,raw] of parsed.entries()){
     try{
       const record:Record<string,any>={data:{synthetic:true}};
       for(const [key,value] of Object.entries(raw)){
-        const target=input.mapping && Object.hasOwn(input.mapping,key) ? String(input.mapping[key]).trim() : key;
+        const target=destination(key);
         if (!target) continue;
         if (unsafeKey(target)) throw new Error('Reserved object names are not allowed as import fields.');
         let decoded:unknown=value;
-        if(numeric.has(target))decoded=Number(value);
+        if (numeric.has(target) && target.endsWith('Kobo')) {
+          decoded = csvAmountToKobo(value, amountUnit);
+          if (target === 'amountKobo') amounts.set(index + 2, decoded as number);
+        } else if(numeric.has(target))decoded=Number(value);
         if(boolean.has(target)) { if (!['true', 'false', ''].includes(value)) throw new Error(`${target} must be true or false.`); decoded=value==="true"; }
         if(target==="consentGaps")decoded=value?value.split("|"):[];
         if(topFields.has(target))record[target]=decoded;else record.data[target]=decoded;
@@ -69,5 +79,5 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
   // All-or-nothing: review every error before committing.
   if(input.commit&&invalid===0){state.records=working.records;imported=valid;}
   else if(input.commit&&invalid>0)rows.forEach(r=>{if(r.status==="valid")r.message="Not imported: resolve all row errors first.";});
-  return {valid,invalid,imported,skipped:rows.filter(row=>row.status==='duplicate').length,rows,columns,preview:parsed.slice(0,10).map((values,index)=>({row:index+2,values}))};
+  return {valid,invalid,imported,skipped:rows.filter(row=>row.status==='duplicate').length,rows,columns,preview:parsed.slice(0,10).map((values,index)=>({row:index+2,values,...(amounts.has(index+2)?{amountKobo:amounts.get(index+2)}:{})}))};
 }

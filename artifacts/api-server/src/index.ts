@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { BUILD } from "./lib/build-info";
 import { markSchedulerOff, startCloseScheduler, type CloseScheduler } from "./lib/close-scheduler";
 import { closeDatabase, watchDatabase } from "./lib/valopay-store";
+import { startExportWorker } from './lib/export-worker';
 
 const rawPort = process.env["PORT"];
 
@@ -22,6 +23,7 @@ if (Number.isNaN(port) || port <= 0) {
 watchDatabase(logger);
 
 let scheduler: CloseScheduler | undefined;
+let exportWorker: ReturnType<typeof startExportWorker> | undefined;
 const server = app.listen(port, (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
@@ -29,6 +31,7 @@ const server = app.listen(port, (err) => {
   }
 
   logger.info({ event: "server.started", port, build: BUILD, node: process.version }, "Server listening");
+  exportWorker = startExportWorker({ log: logger });
   // REC-01: the daily close runs at each lender's configured time unless this process is told not to schedule it.
   if (process.env["VALOPAY_CLOSE_SCHEDULER"] === "off") {
     markSchedulerOff();
@@ -53,8 +56,10 @@ async function shutdown(signal: string): Promise<void> {
   const deadline = setTimeout(() => { logger.error({ event: "server.stop_timeout" }, "Shutdown deadline passed; exiting"); process.exit(1); }, 10_000);
   deadline.unref();
   scheduler?.stop();
+  exportWorker?.stop();
   await new Promise<void>((resolve) => { server.close(() => resolve()); server.closeIdleConnections(); });
   await scheduler?.settle();
+  await exportWorker?.settle();
   await closeDatabase();
   logger.info({ event: "server.stopped" }, "Shutdown complete");
   process.exit(0);

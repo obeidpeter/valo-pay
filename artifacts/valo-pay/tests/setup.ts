@@ -1,8 +1,13 @@
 // Runs before every console test file: browser APIs jsdom lacks, and a clean
 // query cache and DOM between tests so one page's data never leaks into the next.
 import { afterEach, vi } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { queryClient } from "@/App";
+
+// Cold lazy-page transforms can exceed Testing Library's 1s default when the
+// whole jsdom suite runs together. Wait for the asserted state, never a sleep;
+// keep this bounded well below the 20s per-test timeout.
+configure({ asyncUtilTimeout: 5_000 });
 
 // Replit injects managed Clerk configuration into Vitest too. Keep these
 // offline localhost tests on the anonymous adapter they are specified for,

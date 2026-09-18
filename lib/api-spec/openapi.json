@@ -822,8 +822,116 @@
             }
           }
         },
-        "summary": "Generate a private export",
-        "description": "A record kind, the gate pack, the billing statement or a customer's dispute pack, as JSON, CSV or PDF; stored privately with a SHA-256 checksum and recorded as an export."
+        "summary": "Queue a private export",
+        "description": "Durably saves a queued export job and returns immediately. Poll its status before downloading. Rendering and private storage run outside the database transaction; retries use the same immutable object key. A record kind, gate pack, billing statement or customer dispute pack supports JSON, CSV or PDF."
+      }
+    },
+    "/v1/exports/{id}": {
+      "get": {
+        "operationId": "getExportJob",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The record's id."
+          },
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        },
+        "summary": "Check a saved export",
+        "description": "Tenant-authorised status, safe failure reason and checksum/download details once ready. Older immediate export records remain downloadable."
+      }
+    },
+    "/v1/exports/{id}/retry": {
+      "post": {
+        "operationId": "retryExportJob",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The record's id."
+          },
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        },
+        "summary": "Retry a saved export",
+        "description": "Requeues a failed or expired job while preserving its identity and private object key. Running and ready jobs are returned unchanged; retries cannot overwrite a completed file."
       }
     },
     "/v1/exports/{id}/download": {
@@ -1524,6 +1632,14 @@
           },
           "mapping": {
             "$ref": "#/components/schemas/RecordData"
+          },
+          "amountUnit": {
+            "type": "string",
+            "enum": [
+              "naira",
+              "kobo"
+            ],
+            "description": "Unit used by source amount values; defaults to kobo for existing API clients. The console requires an explicit choice."
           }
         },
         "required": [
@@ -1588,6 +1704,9 @@
                 },
                 "values": {
                   "$ref": "#/components/schemas/RecordData"
+                },
+                "amountKobo": {
+                  "type": "integer"
                 }
               },
               "required": [
@@ -1878,20 +1997,51 @@
           "downloadUrl": {
             "type": "string"
           },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "ready",
+              "failed"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          },
+          "customerId": {
+            "type": "string"
+          },
+          "requestedAt": {
+            "type": "string"
+          },
+          "attempts": {
+            "type": "integer"
+          },
           "checksum": {
             "type": "string"
           },
           "generatedAt": {
             "type": "string"
+          },
+          "byteLength": {
+            "type": "integer"
+          },
+          "generationMs": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
           }
         },
         "required": [
           "id",
-          "downloadUrl",
-          "checksum",
-          "generatedAt"
+          "downloadUrl"
         ],
-        "description": "The export's id, its download address on this API, its SHA-256 checksum and when it was generated."
+        "description": "Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses."
       },
       "EffectiveCloseSchedule": {
         "type": "object",

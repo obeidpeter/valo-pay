@@ -5,6 +5,7 @@
  * Valo Pay Stage 1 observation-first sandbox API. All monetary fields are integer kobo. Live lender data and all outbound provider instructions are blocked until production readiness is verified.
  * OpenAPI spec version: 1.0.0
  */
+import type { ImportInputAmountUnit } from './importInputAmountUnit';
 import type { RecordData } from './recordData';
 
 /**
@@ -16,4 +17,6 @@ export interface ImportInput {
   syntheticOnly: boolean;
   commit: boolean;
   mapping?: RecordData;
+  /** Unit used by source amount values; defaults to kobo for existing API clients. The console requires an explicit choice. */
+  amountUnit?: ImportInputAmountUnit;
 }

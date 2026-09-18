@@ -1,18 +1,17 @@
-import { useSafeCreateExport as useCreateExport } from '@/lib/safe-mutations';
+import { ExportJobControl } from '@/components/export-job-control';
 import React, { useEffect, useState } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow } from '@/components/empty-state';
 import { Loading, LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetGates, useListRecords, getGetGatesQueryKey, getListRecordsQueryKey } from '@workspace/api-client-react';
-import { ShieldCheck, Download, AlertTriangle, FileCheck, CheckCircle, Search } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { ShieldCheck, AlertTriangle, FileCheck, CheckCircle, Search } from 'lucide-react';
+import { PermissionButton as Button } from '@/components/permission-button';
 import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { readableLabel } from '@/components/record-label';
 import { LoadProblem } from '@/components/load-problem';
 import { ReviewDialog, reviewJobs } from '@/components/review-dialog';
-import { notifyProblem, saidBy } from '@/lib/notify';
 
 /** The prerequisite and decision ids the gate register matches evidence on (data.gateId). */
 const gateOptions = [
@@ -37,7 +36,6 @@ export default function EvidencePage() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [gateFilter, setGateFilter] = useState('all');
-  const [download, setDownload] = useState<{ merchantId: string; url: string } | null>(null);
   useEffect(() => { setSearch(''); setGateFilter('all'); setIsDialogOpen(false); setReviewOpen(false); }, [merchantId]);
 
   const { data: gates, isLoading: isLoadingGates, error: gatesError, refetch: retryGates, isFetching: fetchingGates } = useGetGates(
@@ -63,15 +61,6 @@ export default function EvidencePage() {
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('reviews', { merchantId: merchantId! }) } }
   );
 
-  const createExport = useCreateExport({
-    mutation: {
-      onSuccess: (data, variables) => {
-        setDownload({ merchantId: variables.params!.merchantId, url: data.downloadUrl });
-        window.open(data.downloadUrl, '_blank');
-      },
-      onError: (error: unknown) => notifyProblem('Evidence pack not generated', saidBy(error, 'Check your connection and try generating the pack again.')),
-    }
-  }, merchantId);
 
   const handleCreate = (kind: 'evidence' | 'commercial') => {
     setSelectedRecord(null);
@@ -100,19 +89,8 @@ export default function EvidencePage() {
           <h1 className="text-3xl font-bold tracking-tight">Evidence & readiness</h1>
           <p className="text-muted-foreground mt-1">Track requirements, commercial terms and evidence for readiness decisions. Sample data cannot establish live readiness.</p>
         </div>
-        <Button 
-          onClick={() => createExport.mutate({ data: { kind: 'gate-pack', format: 'pdf' }, params: { merchantId } })}
-          busy={createExport.isPending}
-          busyLabel="Generating…"
-          className="gap-2 bg-primary text-primary-foreground"
-        >
-          <Download className="h-4 w-4" /> Export evidence pack
-        </Button>
+        <ExportJobControl kind="gate-pack" formats={['pdf']} label="Export evidence pack" />
       </header>
-      {download?.merchantId === merchantId && <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card px-5 py-4 text-sm">
-        <p>Evidence pack ready. It contains sample data only.</p>
-        <Button asChild variant="outline" size="sm"><a href={download.url} target="_blank" rel="noopener noreferrer">Open evidence pack</a></Button>
-      </div>}
 
       {/* Gates */}
       <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
@@ -195,7 +173,7 @@ export default function EvidencePage() {
       <section id="evidence-register" aria-labelledby="evidence-register-title" className="scroll-mt-6 rounded-xl border bg-card shadow-sm overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b p-5">
           <div><h2 id="evidence-register-title" className="text-lg font-semibold">Evidence register</h2><p className="mt-1 text-sm text-muted-foreground">Every prerequisite and decision, including funding, recovery and provider choice. Recording evidence does not verify a live requirement.</p></div>
-          <Button size="sm" onClick={() => handleCreate('evidence')}>Add evidence</Button>
+          <Button size="sm" kind="evidence" onClick={() => handleCreate('evidence')}>Add evidence</Button>
         </div>
         <div className="flex flex-col gap-3 border-b p-5 sm:flex-row print:hidden">
           <div className="relative flex-1"><Search aria-hidden="true" className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" /><input aria-label="Search evidence" placeholder="Search by title, owner or reference…" value={search} onChange={event => setSearch(event.target.value)} className="w-full rounded-md border bg-background py-2.5 pl-9 pr-3 text-sm" /></div>
@@ -216,7 +194,7 @@ export default function EvidencePage() {
                   <td className="px-5 py-4">{String(item.data?.owner || 'Not assigned')}</td>
                   <td className="whitespace-nowrap px-5 py-4 text-xs text-muted-foreground">{formatDate(String(item.data?.evidenceDate || item.createdAt))}{!item.data?.evidenceDate && <span className="mt-1 block">Date added</span>}</td>
                   <td className="px-5 py-4"><span className="rounded-md bg-secondary/50 px-2 py-1 text-xs">{readableLabel(item.status)}</span></td>
-                  <td className="px-5 py-4"><Button size="sm" variant="outline" aria-label={`Edit evidence: ${item.name}`} onClick={() => handleEdit(item, 'evidence')}>Edit</Button></td>
+                  <td className="px-5 py-4"><Button size="sm" variant="outline" aria-label={`Edit evidence: ${item.name}`} kind="evidence" record={item} onClick={() => handleEdit(item, 'evidence')}>Edit</Button></td>
                 </tr>;
               })}
             </tbody>
@@ -231,7 +209,7 @@ export default function EvidencePage() {
             <FileCheck className="h-5 w-5 text-primary" />
             <h2 className="font-semibold text-lg">Commercial commitments</h2>
           </div>
-          <Button size="sm" onClick={() => handleCreate('commercial')}>Add terms</Button>
+          <Button size="sm" kind="commercial" onClick={() => handleCreate('commercial')}>Add terms</Button>
         </div>
         <ScrollFrame label="Commercial commitments" className="overflow-x-auto">
           <table className="w-full text-sm text-left">
@@ -272,7 +250,7 @@ export default function EvidencePage() {
                       {!!comm.data?.effectiveDate && <p className="text-[10px] text-muted-foreground mt-1">From {formatDate(String(comm.data.effectiveDate))}</p>}
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <Button size="sm" variant="outline" onClick={() => handleEdit(comm, 'commercial')}>Edit</Button>
+                      <Button size="sm" variant="outline" kind="commercial" record={comm} onClick={() => handleEdit(comm, 'commercial')}>Edit</Button>
                     </td>
                   </tr>
                 ))
@@ -289,7 +267,7 @@ export default function EvidencePage() {
             <FileCheck className="h-5 w-5 text-primary" />
             <h2 className="font-semibold text-lg">Fortnightly reviews</h2>
           </div>
-          <Button size="sm" onClick={() => setReviewOpen(true)}>Log review</Button>
+          <Button size="sm" kind="reviews" onClick={() => setReviewOpen(true)}>Log review</Button>
         </div>
         <ScrollFrame label="Fortnightly reviews" className="overflow-x-auto">
           <table className="w-full text-sm text-left">

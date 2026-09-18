@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { useSearchShortcut } from '@/lib/focus';
 import { EmptyState } from '@/components/empty-state';
@@ -8,31 +8,41 @@ import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-re
 import { formatNumber } from '@/lib/formatters';
 import { Search, UserPlus, ArrowRight, Users } from 'lucide-react';
 import { CustomerAvatar, StatusBadge } from '@/components/record-label';
-import { Button } from '@/components/ui/button';
+import { PermissionButton as Button } from '@/components/permission-button';
 import { Link } from 'wouter';
 import { RecordDialog } from '@/components/record-dialog';
 import { recordStatuses } from '@workspace/valopay-schema';
 import { LoadProblem } from '@/components/load-problem';
 import { RecordPagination } from '@/components/record-pagination';
-import { useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
+import { useDebouncedSearch } from '@/lib/use-record-pagination';
+import { useCustomerDirectory } from '@/lib/use-customer-directory';
+import { customerReturnTo } from '@/lib/record-navigation';
+import { useHashTarget } from '@/lib/use-hash-target';
+import { QueueFreshness } from '@/components/queue-freshness';
 
 export default function CustomersPage() {
-  const { merchantId } = useWorkspace();
-  const [search, setSearch] = useState('');
+  const { merchantId, workspace } = useWorkspace();
+  const { params: directoryParams, search, setSearch, sameLender, pagination } = useCustomerDirectory(merchantId);
   const searchRef = useRef<HTMLInputElement>(null);
   useSearchShortcut(searchRef);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const { search: settledSearch, searchPending } = useDebouncedSearch(search, merchantId);
-  const pagination = useRecordPagination(`${merchantId}:${settledSearch}`);
   const params = { merchantId: merchantId!, search: settledSearch || undefined, limit: pagination.pageSize, offset: pagination.offset };
   
-  const { data, isLoading, isFetching, error, refetch } = useListRecords(
+  const customersQuery = useListRecords(
     'customers',
     params,
-    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('customers', params) } }
+    { query: { enabled: !!merchantId && sameLender && !searchPending, queryKey: getListRecordsQueryKey('customers', params) } }
   );
+  const { data, isLoading, isFetching, error, refetch } = customersQuery;
+  const rowTargets = useMemo(() => data?.items.map(customer => `record-${customer.id}`) || [], [data]);
+  useHashTarget(rowTargets, !!data && !searchPending && sameLender);
+  useEffect(() => {
+    if (data && !isFetching && pagination.page > 0 && pagination.offset >= data.total) pagination.setPage(Math.max(0, Math.ceil(data.total / pagination.pageSize) - 1));
+  }, [data, isFetching, pagination.page, pagination.pageSize]);
 
   if (!merchantId) return null;
+  if (!sameLender) return <div className="space-y-3"><h1 className="text-2xl font-bold">Choose the linked lender</h1><p>This customer directory belongs to {workspace?.merchants.find(merchant => merchant.id === directoryParams.get('lender'))?.name || 'another lender'}. Select that lender using the lender menu to restore this search.</p><Button variant="outline" onClick={() => setSearch('')}>Open this lender’s customers</Button></div>;
 
   return (
     <div className="space-y-6">
@@ -42,11 +52,13 @@ export default function CustomersPage() {
           <p className="text-muted-foreground mt-1">Every customer, payment and consent record in one place.</p>
         </div>
         <div className="flex items-center gap-3">
-          <Button className="gap-2" onClick={() => setIsDialogOpen(true)}>
+          <Button kind="customers" className="gap-2" onClick={() => setIsDialogOpen(true)}>
             <UserPlus className="h-4 w-4" /> Add customer
           </Button>
         </div>
       </header>
+
+      <QueueFreshness key={merchantId} queries={[customersQuery]} />
 
       <RecordDialog
         kind="customers"
@@ -60,7 +72,7 @@ export default function CustomersPage() {
           { name: 'bankName', label: 'Bank name', type: 'text', isData: true },
           { name: 'accountMasked', label: 'Masked account number (e.g. ******1234)', type: 'text', isData: true },
           { name: 'phoneMasked', label: 'Masked phone number', type: 'text', isData: true },
-          { name: 'consentProvenance', label: 'Consent source or reference', type: 'text', isData: true },
+          { name: 'consentProvenance', label: 'Consent source or reference', type: 'text', isData: true, required: true, help: 'For example: signed form CONSENT-001 or a consent link reference. Use sample details only.' },
         ]}
         defaultValues={{ status: 'active' }}
       />
@@ -92,13 +104,13 @@ export default function CustomersPage() {
 
         {isLoading || searchPending ? (
           <Loading what={searchPending ? 'search results' : 'customers'} />
-        ) : error ? (
+        ) : error && !data ? (
           <LoadProblem what="customers" error={error} retry={() => { void refetch(); }} busy={isFetching} />
         ) : !data || data.items.length === 0 ? (
           search.trim() ? (
             <EmptyState filtered title={`No customers match “${search.trim()}”`}>Check the spelling, or search by the reference or the masked phone number.</EmptyState>
           ) : (
-            <EmptyState title="No customers yet" action={<Button size="sm" variant="outline" onClick={() => setIsDialogOpen(true)}>Add a customer</Button>}>
+            <EmptyState title="No customers yet" action={<Button kind="customers" size="sm" variant="outline" onClick={() => setIsDialogOpen(true)}>Add a customer</Button>}>
               Customer records appear here after an import or when you add one. Add a synthetic customer here, or import sample records on the Collections page.
             </EmptyState>
           )
@@ -116,7 +128,7 @@ export default function CustomersPage() {
               </thead>
               <tbody className="divide-y">
                 {data.items.map(customer => (
-                  <tr key={customer.id} className="hover:bg-secondary/10 transition-colors">
+                  <tr key={customer.id} id={`record-${customer.id}`} tabIndex={-1} className="scroll-mt-24 hover:bg-secondary/10 transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
                         <CustomerAvatar name={customer.name} />
@@ -137,7 +149,7 @@ export default function CustomersPage() {
                       <StatusBadge status={customer.status} />
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <Link href={`/customers/${customer.id}`} aria-label={`View history for ${customer.name}`} className="inline-flex min-h-9 items-center gap-2 rounded-lg px-2 text-primary hover:bg-secondary text-xs font-medium">
+                      <Link href={`/customers/${customer.id}?${new URLSearchParams({ lender: merchantId, returnTo: customerReturnTo(directoryParams, merchantId, customer.id) })}`} aria-label={`View history for ${customer.name}`} className="inline-flex min-h-9 items-center gap-2 rounded-lg px-2 text-primary hover:bg-secondary text-xs font-medium">
                         View history <ArrowRight className="h-3 w-3" />
                       </Link>
                     </td>

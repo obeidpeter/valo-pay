@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useUnsavedChanges } from '@/lib/unsaved-changes';
 import { useQueryClient } from '@tanstack/react-query';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
+import { PermissionButton as Button } from '@/components/permission-button';
+import { permissionReason } from '@/lib/permissions';
 import { FieldError, FormAlert, focusField, invalidProps } from '@/components/form-field';
 import { useWorkspace } from '@/lib/workspace-context';
 import { notifyDone, saidBy } from '@/lib/notify';
@@ -44,6 +45,8 @@ export function ReviewDialog({ onClose }: { onClose: () => void }) {
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     if (create.isPending) return;
+    const blocked = permissionReason(workspace, { kind: 'reviews' });
+    if (blocked) { setFailure(blocked); return; }
     const next: Record<string, string> = {};
     if (!reviewer.trim()) next.reviewer = 'Enter the reviewer’s name.';
     if (!/^\d{4}-\d{2}-\d{2}$/.test(reviewedAt) || Number.isNaN(Date.parse(reviewedAt)) || new Date(reviewedAt).toISOString().slice(0, 10) !== reviewedAt) next.reviewedAt = 'Choose the date the review took place.';
@@ -94,7 +97,7 @@ export function ReviewDialog({ onClose }: { onClose: () => void }) {
           </fieldset>
           <DialogFooter>
             <Button type="button" variant="outline" disabled={create.isPending} onClick={close}>Cancel</Button>
-            <Button type="submit" busy={create.isPending} busyLabel="Saving review…">Save review</Button>
+            <Button kind="reviews" type="submit" busy={create.isPending} busyLabel="Saving review…">Save review</Button>
           </DialogFooter>
         </form>
       </DialogContent>

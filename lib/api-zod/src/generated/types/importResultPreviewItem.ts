@@ -10,4 +10,5 @@ import type { RecordData } from './recordData';
 export type ImportResultPreviewItem = {
   row: number;
   values: RecordData;
+  amountKobo?: number;
 };

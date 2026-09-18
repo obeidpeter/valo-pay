@@ -69,6 +69,28 @@ export interface CustomerPosition {
   unallocatedKobo: number;
 }
 
+/** Rebuild once per state snapshot. Values are copied totals, never a cache
+ * across mutations: a close takes separate opening and closing snapshots. */
+function positionIndex(state: DomainState) {
+  const positions = new Map<string, CustomerPosition>();
+  const appliedByDue = new Map<string, number>();
+  for (const record of state.records) {
+    if (record.kind === "customers") positions.set(record.id, { customerId: record.id, obligationsKobo: 0, allocatedKobo: 0, outstandingKobo: 0, unallocatedKobo: 0 });
+  }
+  for (const record of state.records) {
+    const position = positions.get(record.customerId);
+    if (record.kind === "due-items" && record.status !== "cancelled" && position) position.obligationsKobo += record.amountKobo;
+    if (record.kind === "allocations" && record.status === "confirmed") {
+      if (position) position.allocatedKobo += record.amountKobo;
+      const dueId = record.data.dueItemId;
+      if (typeof dueId === "string") appliedByDue.set(dueId, (appliedByDue.get(dueId) ?? 0) + record.amountKobo);
+    }
+    if (record.kind === "payments" && position) position.unallocatedKobo += Math.max(0, record.amountKobo - Number(record.data.allocatedKobo || 0));
+  }
+  for (const position of positions.values()) position.outstandingKobo = Math.max(0, position.obligationsKobo - position.allocatedKobo);
+  return { positions, appliedByDue };
+}
+
 export function positionFor(state: DomainState, customerId: string): CustomerPosition {
   const related = state.records.filter((record) => record.customerId === customerId);
   const obligationsKobo = related.filter((record) => record.kind === "due-items" && record.status !== "cancelled").reduce((sum, record) => sum + record.amountKobo, 0);
@@ -78,17 +100,17 @@ export function positionFor(state: DomainState, customerId: string): CustomerPos
 }
 
 /** REC-05: rebuild each due item's outstanding balance from confirmed allocations and compare it with the stored view. */
-export function positionMismatches(state: DomainState): Array<{ dueItemId: string; reference: string; customerId: string; storedOutstandingKobo: number; rebuiltOutstandingKobo: number }> {
+export function positionMismatches(state: DomainState, appliedByDue = positionIndex(state).appliedByDue): Array<{ dueItemId: string; reference: string; customerId: string; storedOutstandingKobo: number; rebuiltOutstandingKobo: number }> {
   return recordsOf(state, "due-items").flatMap((due) => {
     if (due.data.outstandingKobo === undefined || due.status === "cancelled") return [];
-    const applied = recordsOf(state, "allocations").filter((item) => item.status === "confirmed" && item.data.dueItemId === due.id).reduce((sum, item) => sum + item.amountKobo, 0);
+    const applied = appliedByDue.get(due.id) ?? 0;
     const rebuilt = Math.max(0, due.amountKobo - applied);
     return rebuilt === Number(due.data.outstandingKobo) ? [] : [{ dueItemId: due.id, reference: due.reference, customerId: due.customerId, storedOutstandingKobo: Number(due.data.outstandingKobo), rebuiltOutstandingKobo: rebuilt }];
   });
 }
 
 export function positionSnapshot(state: DomainState): Map<string, CustomerPosition> {
-  return new Map(recordsOf(state, "customers").map((customer) => [customer.id, positionFor(state, customer.id)]));
+  return positionIndex(state).positions;
 }
 
 const sumOf = (items: ValopayRecord[]) => ({ count: items.length, kobo: items.reduce((sum, item) => sum + item.amountKobo, 0) });
@@ -149,14 +171,14 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
   const closed = exceptions.filter((item) => !isOpenException(item.status) && inPeriod(String(item.data.resolvedAt || item.updatedAt), from, to));
   const byType = (items: TypedRecord<"exceptions">[]) => items.reduce<Record<string, number>>((acc, item) => { acc[String(item.data.type)] = (acc[String(item.data.type)] || 0) + 1; return acc; }, {});
 
-  const after = positionSnapshot(state);
+  const { positions: after, appliedByDue } = positionIndex(state);
   const customers = new Map(recordsOf(state, "customers").map((customer) => [customer.id, customer.name]));
   const positionsChanged = [...after.entries()].flatMap(([customerId, position]) => {
     const before = opening.positions.get(customerId);
     const changed = !before || (["obligationsKobo", "allocatedKobo", "outstandingKobo", "unallocatedKobo"] as const).some((key) => before[key] !== position[key]);
     return changed ? [{ customerId, customerName: customers.get(customerId) ?? "", before: before ?? null, after: position }] : [];
   });
-  const mismatches = positionMismatches(state);
+  const mismatches = positionMismatches(state, appliedByDue);
 
   return {
     period: { from, to },

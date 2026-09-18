@@ -292,6 +292,17 @@ export interface ActionResult {
 }
 
 /**
+ * Unit used by source amount values; defaults to kobo for existing API clients. The console requires an explicit choice.
+ */
+export type ImportInputAmountUnit = typeof ImportInputAmountUnit[keyof typeof ImportInputAmountUnit];
+
+
+export const ImportInputAmountUnit = {
+  naira: 'naira',
+  kobo: 'kobo',
+} as const;
+
+/**
  * A synthetic CSV to preview or commit for one kind, with an optional column mapping.
  */
 export interface ImportInput {
@@ -300,6 +311,8 @@ export interface ImportInput {
   syntheticOnly: boolean;
   commit: boolean;
   mapping?: RecordData;
+  /** Unit used by source amount values; defaults to kobo for existing API clients. The console requires an explicit choice. */
+  amountUnit?: ImportInputAmountUnit;
 }
 
 /**
@@ -314,6 +327,7 @@ export interface ImportRow {
 export type ImportResultPreviewItem = {
   row: number;
   values: RecordData;
+  amountKobo?: number;
 };
 
 /**
@@ -425,14 +439,33 @@ export interface ExportInput {
   format: ExportInputFormat;
 }
 
+export type ExportResultStatus = typeof ExportResultStatus[keyof typeof ExportResultStatus];
+
+
+export const ExportResultStatus = {
+  queued: 'queued',
+  running: 'running',
+  ready: 'ready',
+  failed: 'failed',
+} as const;
+
 /**
- * The export's id, its download address on this API, its SHA-256 checksum and when it was generated.
+ * Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.
  */
 export interface ExportResult {
   id: string;
   downloadUrl: string;
-  checksum: string;
-  generatedAt: string;
+  status?: ExportResultStatus;
+  kind?: string;
+  format?: string;
+  customerId?: string;
+  requestedAt?: string;
+  attempts?: number;
+  checksum?: string;
+  generatedAt?: string;
+  byteLength?: number;
+  generationMs?: number;
+  error?: string;
 }
 
 export type GetOverviewParams = {
@@ -544,6 +577,20 @@ merchantId: string;
 };
 
 export type CreateExportParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type GetExportJobParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type RetryExportJobParams = {
 /**
  * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
  */

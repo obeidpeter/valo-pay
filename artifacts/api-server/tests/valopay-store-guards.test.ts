@@ -98,3 +98,24 @@ for (const key of ["policyId", "experimentId", "proposedDueItemId", "noticeId", 
   expectConflict(() => assertFinalState(before, after, "merchant-a"));
 }
 console.log("valopay repository pure guards passed");
+
+{
+  const { queueExport, retryExport } = await import("../src/lib/export-jobs");
+  const context = { actor: "Sandbox Finance", role: "Finance", now: "2028-01-01T10:00:00.000Z" };
+  for (const status of ["failed", "running"] as const) {
+    const before = seed();
+    const job = queueExport(before, context, { kind: "customers", format: "csv" }, "/private/synthetic");
+    const record = before.records.find(row => row.id === job.id)!;
+    record.status = status; Object.assign(record.data, { lastError: "Synthetic failure", leaseToken: "old-lease", leaseExpiresAt: "2028-01-01T09:59:59.000Z" });
+    const after = structuredClone(before); retryExport(after, context, job.id);
+    assert.doesNotThrow(() => assertFinalState(before, after, "merchant-a", context.now));
+    for (const key of ["bucket", "objectName", "kind", "format", "requestedBy", "checksum", "attempts"]) {
+      const forged = structuredClone(after); forged.records.find(row => row.id === job.id)!.data[key] = "rewritten";
+      expectConflict(() => assertFinalState(before, forged, "merchant-a", context.now));
+    }
+    if (status === "running") expectConflict(() => assertFinalState(before, after, "merchant-a", "2028-01-01T09:00:00.000Z"));
+    const ready = structuredClone(before); ready.records.find(row => row.id === job.id)!.status = "ready";
+    expectConflict(() => assertFinalState(ready, after, "merchant-a", context.now));
+  }
+  console.log("Export retry guards passed: failed/expired only, unchanged request and object identity, immutable ready evidence.");
+}

@@ -8,7 +8,8 @@ import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultSta
 import type { DomainState } from "../domain/types";
 import { getGates } from "../lib/valopay-readiness";
 import { importCsv } from "../lib/valopay-import";
-import { createExportFile, exportDescriptor, exportKinds, readExport } from "../lib/valopay-exports";
+import { exportDescriptorForRecord, exportKinds, readExport } from "../lib/valopay-exports";
+import { exportJobView, publicExportRecord, queueExport, retryExport } from '../lib/export-jobs';
 import { advanceRecordVersions, assertRecordVersion, assertSettingsVersion } from "../lib/edit-versions";
 import { schedulerStatus } from "../lib/close-scheduler";
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../lib/valopay-close-views";
@@ -43,13 +44,13 @@ async function withState<T>(req:Request,res:Response,operation:(state:DomainStat
     if(idempotencyKey)await saveIdempotency(ctx,idempotencyKey,fingerprint,result);
   }
   return result;
- });
+ },!mutating?"read":req.path==="/v1/actions"&&req.body?.action==="set_role"?"persona":"write");
 }
 router.get("/v1/workspace",async(req,res)=>{
  const result=await inWorkspace(req,res,async ctx=>({
   name:"Valo Pay",environment:"sandbox",actor:ctx.actor,role:ctx.role,authenticated:ctx.authenticated,
    merchants:await listMerchants(ctx),roles,productionEnabled:false
- }));
+ }),"read");
  res.json(S.GetWorkspaceResponse.parse(result));
 });
 router.get("/v1/overview",async(req,res)=>{
@@ -61,8 +62,8 @@ router.get("/v1/records/:kind",async(req,res)=>{
  const result=await inWorkspace(req,res,async ctx=>{
   const page=await listRecords(ctx,query.merchantId,kind,query);
   // Never leak internal storage location through collection APIs.
-  return {...page,items:page.items.map(r=>r.kind==="exports"?{...r,data:{...r.data,objectName:undefined,bucket:undefined}}:r)};
- });
+  return {...page,items:page.items.map(r=>r.kind==="exports"?publicExportRecord(r):r)};
+ },"read");
  res.json(S.ListRecordsResponse.parse(result));
 });
 router.post("/v1/records/:kind",async(req,res)=>{
@@ -123,7 +124,10 @@ router.post("/v1/imports",async(req,res)=>{
 router.get("/v1/customers/:id/timeline",async(req,res)=>{
  const {id}=S.GetCustomerTimelineParams.parse(req.params);
  const {merchantId}=S.GetOverviewQueryParams.parse(req.query);
- res.json(S.GetCustomerTimelineResponse.parse(await inWorkspace(req,res,async ctx=>customerTimeline(await loadCustomerView(ctx,merchantId,id),id))));
+ res.json(S.GetCustomerTimelineResponse.parse(await inWorkspace(req,res,async ctx=>{
+  const timeline=customerTimeline(await loadCustomerView(ctx,merchantId,id),id);
+  return {...timeline,events:timeline.events.map(record=>record.kind==='exports'?publicExportRecord(record):record)};
+ },"read")));
 });
 router.get("/v1/reports",async(req,res)=>{
  res.json(S.GetReportsResponse.parse(await withState(req,res,(state,ctx)=>buildConsoleReports(state,ctx.now,schedulerStatus()))));
@@ -133,7 +137,7 @@ router.get("/v1/gates",async(req,res)=>{
 });
 router.get("/v1/settings",async(req,res)=>{
  const {merchantId}=S.GetOverviewQueryParams.parse(req.query);
- res.json(S.GetSettingsResponse.parse(await inWorkspace(req,res,async ctx=>buildConsoleSettings(await loadSettingsView(ctx,merchantId),ctx.role,ctx.now,schedulerStatus()))));
+ res.json(S.GetSettingsResponse.parse(await inWorkspace(req,res,async ctx=>buildConsoleSettings(await loadSettingsView(ctx,merchantId),ctx.role,ctx.now,schedulerStatus()),"read")));
 });
 router.patch("/v1/settings",async(req,res)=>{
  const body=S.UpdateSettingsBody.parse(req.body);
@@ -160,9 +164,26 @@ router.post("/v1/exports",async(req,res)=>{
  const body=S.CreateExportBody.parse(req.body);
  if(!kinds.has(body.kind)&&!(exportKinds as readonly string[]).includes(body.kind))fail("Unknown export kind.");
  if(["customer-pack","dispute-pack"].includes(body.kind)&&!body.customerId)fail("A dispute pack needs customerId.");
-  const result=await withState(req,res,(state,ctx)=>createExportFile(state,ctx,body),true,S.CreateExportResponse);
- req.log.info({event:"export.generated",kind:body.kind,format:body.format,byteLength:result.byteLength,generationMs:result.generationMs},"Export generated");
+  const result=await withState(req,res,(state,ctx)=>queueExport(state,ctx,body,process.env.PRIVATE_OBJECT_DIR||''),true,S.CreateExportResponse);
+ req.log.info({event:"export.queued",kind:body.kind,format:body.format,exportId:result.id},"Export queued durably");
  res.json(S.CreateExportResponse.parse(result));
+});
+async function authorisedExport(req:Request,res:Response){
+ const {merchantId}=S.GetOverviewQueryParams.parse(req.query);
+ return inWorkspace(req,res,async ctx=>{
+  const page=await listRecords(ctx,merchantId,'exports',{id:String(req.params.id),limit:1});
+  if(!page.items[0])fail('Export not found in this lender.',404);
+  return page.items[0];
+ },'read');
+}
+router.get('/v1/exports/:id',async(req,res)=>{
+ res.setHeader('Cache-Control','private, no-store');
+ res.json(S.GetExportJobResponse.parse(exportJobView(await authorisedExport(req,res))));
+});
+router.post('/v1/exports/:id/retry',async(req,res)=>{
+ req.body={};
+ const result=await withState(req,res,(state,ctx)=>retryExport(state,ctx,String(req.params.id)),true,S.RetryExportJobResponse);
+ res.json(S.RetryExportJobResponse.parse(result));
 });
 router.get("/v1/exports/:id/download",async(req,res)=>{
  const cancellation=new AbortController();
@@ -172,7 +193,7 @@ router.get("/v1/exports/:id/download",async(req,res)=>{
  res.once("close",close);
  try{
  // The authorised metadata is read inside the transaction; the object-storage read happens after it ends, so no merchant lock is held across the download.
- const descriptor=await withState(req,res,state=>exportDescriptor(state,String(req.params.id)));
+ const descriptor=exportDescriptorForRecord(await authorisedExport(req,res));
  if(cancellation.signal.aborted)return;
  const result=await readExport(descriptor,cancellation.signal);
  if(cancellation.signal.aborted)return;
