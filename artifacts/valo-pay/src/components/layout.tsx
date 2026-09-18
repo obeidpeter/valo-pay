@@ -108,10 +108,10 @@ export function Layout({ children }: { children: ReactNode }) {
       {/* The first tab stop skips the banner, the lender selector and eleven links (universal design: low physical effort). */}
       <a href="#main" onClick={focusMain} className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground">Skip to page content</a>
       {/* Sandbox banner: on a phone it keeps the sentence that matters and drops the restatement, so it stays one line. */}
-      <div className="bg-amber-100 text-amber-900 px-4 py-2 text-sm font-medium flex items-center justify-center gap-2 border-b border-amber-200 z-50">
+      <div className="bg-warning text-warning-foreground px-4 py-2 text-sm font-medium flex items-center justify-center gap-2 border-b border-warning-border z-50">
         <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
         <span>Sandbox · Synthetic data. We never hold money.<span className="hidden sm:inline"> No live operations permitted.</span></span>
-        {workspace?.environment && <span className="ml-2 hidden sm:inline-block font-mono text-xs bg-amber-200 px-2 py-0.5 rounded">MODE: {workspace.environment}</span>}
+        {workspace?.environment && <span className="ml-2 hidden sm:inline-block font-mono text-xs bg-warning-border px-2 py-0.5 rounded">MODE: {workspace.environment}</span>}
       </div>
 
       {/* Phone bar: the brand, the lender being worked on, and the drawer with the same pages as the sidebar. */}

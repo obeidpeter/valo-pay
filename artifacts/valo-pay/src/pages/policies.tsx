@@ -71,7 +71,7 @@ export default function PoliciesPage() {
                     <span className="text-lg font-bold">Version {String(policy.data?.version || '1')}</span>
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${
                       policy.status === 'approved' ? 'bg-success/10 text-success border-success/20' : 
-                      policy.status === 'submitted' ? 'bg-amber-100 text-amber-800 border-amber-200' :
+                      policy.status === 'submitted' ? 'bg-warning text-warning-foreground border-warning-border' :
                       'bg-secondary text-secondary-foreground'
                     }`}>
                       {policy.status.toUpperCase()}

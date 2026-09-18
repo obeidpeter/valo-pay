@@ -1,6 +1,8 @@
 import { useEffect, type ReactNode } from 'react';
 import { Link } from 'wouter';
 import { SignIn, SignUp } from '@clerk/react';
+import { dark } from '@clerk/themes';
+import { useTheme } from '@/lib/theme';
 import { ArrowRight, Info } from 'lucide-react';
 import { PublicFrame } from '@/components/public-frame';
 import { Button } from '@/components/ui/button';
@@ -37,6 +39,28 @@ const appearance = {
     card: 'shadow-none border border-border rounded-xl',
   },
 } as const;
+
+/** The same form on a dark console: Clerk's dark base theme with the console's dark tokens, so the door matches the room. */
+const darkAppearance = {
+  ...appearance,
+  baseTheme: dark,
+  variables: {
+    ...appearance.variables,
+    colorPrimary: 'hsl(210 20% 98%)',
+    colorTextOnPrimaryBackground: 'hsl(232 47% 8%)',
+    colorText: 'hsl(210 20% 98%)',
+    colorTextSecondary: 'hsl(215 16% 65%)',
+    colorBackground: 'hsl(232 47% 10%)',
+    colorInputBackground: 'hsl(232 47% 8%)',
+    colorInputText: 'hsl(210 20% 98%)',
+    colorDanger: 'hsl(348 83% 55%)',
+  },
+};
+
+function useClerkAppearance() {
+  const { theme } = useTheme();
+  return theme === 'dark' ? darkAppearance : appearance;
+}
 
 const whatChanges = [
   'Your lenders, mandates, reconciliation and settings are kept between visits.',
@@ -84,11 +108,12 @@ function Unavailable({ action }: { action: 'sign in' | 'create an account' }) {
 }
 
 export function SignInPage() {
+  const clerkAppearance = useClerkAppearance();
   return (
     <Shell title="Sign in to your workspace">
       {authEnabled ? (
         <>
-          <SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} fallbackRedirectUrl={`${basePath}/overview`} appearance={appearance} />
+          <SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} fallbackRedirectUrl={`${basePath}/overview`} appearance={clerkAppearance} />
           <p className="mt-4 text-sm text-muted-foreground">Just looking? <Link href="/overview" className="font-medium text-primary underline-offset-4 hover:underline">Open the sandbox without an account</Link>.</p>
         </>
       ) : <Unavailable action="sign in" />}
@@ -97,11 +122,12 @@ export function SignInPage() {
 }
 
 export function SignUpPage() {
+  const clerkAppearance = useClerkAppearance();
   return (
     <Shell title="Create your workspace">
       {authEnabled ? (
         <>
-          <SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} fallbackRedirectUrl={`${basePath}/overview`} appearance={appearance} />
+          <SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} fallbackRedirectUrl={`${basePath}/overview`} appearance={clerkAppearance} />
           <p className="mt-4 text-sm text-muted-foreground">Just looking? <Link href="/overview" className="font-medium text-primary underline-offset-4 hover:underline">Open the sandbox without an account</Link>.</p>
         </>
       ) : <Unavailable action="create an account" />}

@@ -106,9 +106,9 @@ export default function ReconciliationPage() {
         {/* Allocations requiring review */}
         <div className="bg-card border rounded-xl shadow-sm flex flex-col xl:col-span-2">
           <div className="p-4 border-b bg-secondary/20 flex items-center gap-2">
-            <CheckSquare className="h-5 w-5 text-amber-600" />
+            <CheckSquare className="h-5 w-5 text-warning-strong" />
             <h2 className="font-semibold">Proposals Awaiting Confirmation</h2>
-            <span className="ml-auto bg-amber-100 text-amber-900 text-xs font-bold px-2 py-1 rounded-full">
+            <span className="ml-auto bg-warning text-warning-foreground text-xs font-bold px-2 py-1 rounded-full">
               {proposals?.items.length || 0} pending
             </span>
           </div>
@@ -138,7 +138,7 @@ export default function ReconciliationPage() {
                       <td className="px-4 py-3 font-mono text-xs">{String(prop.data?.dueItemId || '')}</td>
                       <td className="px-4 py-3 text-right font-mono font-medium">{formatKobo(prop.amountKobo)}</td>
                       <td className="px-4 py-3">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 border border-blue-200">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-info text-info-foreground border border-info-border">
                           {String(prop.data?.confidence || 'medium')}
                         </span>
                       </td>
@@ -165,9 +165,9 @@ export default function ReconciliationPage() {
         {/* Unallocated Payments */}
         <div className="bg-card border rounded-xl shadow-sm flex flex-col">
           <div className="p-4 border-b bg-secondary/20 flex items-center gap-2">
-            <Info className="h-5 w-5 text-blue-500" />
+            <Info className="h-5 w-5 text-info-strong" />
             <h2 className="font-semibold">Unallocated Payments</h2>
-            <span className="ml-auto bg-blue-100 text-blue-900 text-xs font-bold px-2 py-1 rounded-full">
+            <span className="ml-auto bg-info text-info-foreground text-xs font-bold px-2 py-1 rounded-full">
               {payments?.items.length || 0} items
             </span>
           </div>
@@ -212,7 +212,7 @@ export default function ReconciliationPage() {
           <div className="p-4 border-b bg-secondary/20 flex items-center gap-2">
             <ShieldAlert className="h-5 w-5 text-destructive" />
             <h2 className="font-semibold">Unresolved Observations</h2>
-            <span className="ml-auto bg-red-100 text-red-900 text-xs font-bold px-2 py-1 rounded-full">
+            <span className="ml-auto bg-destructive/10 text-destructive text-xs font-bold px-2 py-1 rounded-full">
               {observations?.items.length || 0} items
             </span>
           </div>
