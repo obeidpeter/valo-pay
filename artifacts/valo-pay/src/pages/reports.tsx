@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetReports, usePerformAction, getGetReportsQueryKey, useCreateExport, useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { BarChart3, Download, FileText, CheckSquare, RefreshCcw } from 'lucide-react';
@@ -114,7 +115,8 @@ export default function ReportsPage() {
             variant="outline" 
             className="gap-2"
             onClick={() => createExport.mutate({ data: { kind: 'billing', format: 'csv' }, params: { merchantId } })}
-            disabled={createExport.isPending}
+            busy={createExport.isPending}
+            busyLabel="Generating…"
           >
             <Download className="h-4 w-4" /> Export Billing CSV
           </Button>
@@ -124,7 +126,8 @@ export default function ReportsPage() {
           <Button 
             className="gap-2"
             onClick={() => dailyClose.mutate({ data: { action: 'daily_close' }, params: { merchantId } })}
-            disabled={dailyClose.isPending}
+            busy={dailyClose.isPending}
+            busyLabel="Closing the day…"
           >
             <RefreshCcw className="h-4 w-4" /> Trigger Daily Close
           </Button>
@@ -132,7 +135,7 @@ export default function ReportsPage() {
       </header>
 
       {isLoading ? (
-        <div className="p-12 text-center text-muted-foreground animate-pulse">Generating reports...</div>
+        <Loading what="reports" />
       ) : !reports ? (
         <div className="p-12 text-center text-destructive">Failed to generate reports.</div>
       ) : (

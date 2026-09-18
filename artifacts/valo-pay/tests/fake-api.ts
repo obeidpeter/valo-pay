@@ -35,6 +35,8 @@ export interface FakeApi {
   setNow(iso: string): void;
   /** Makes the next request whose path matches fail: with an API-style error body and status, or as a network failure ("offline"). */
   failNext(pattern: RegExp, failure: { status: number; error: string } | "offline"): void;
+  /** Holds every request whose path matches until the returned function is called, so a loading or busy state can be seen. */
+  hold(pattern: RegExp): () => void;
   uninstall(): void;
 }
 
@@ -81,12 +83,19 @@ type Handler = (params: Record<string, string>, query: Record<string, string>, b
 export function installFakeApi(options: { now?: string; role?: string } = {}): FakeApi {
   const states = new Map<string, DomainState>();
   const failures: Array<{ pattern: RegExp; failure: { status: number; error: string } | "offline" }> = [];
+  const holds: Array<{ pattern: RegExp; promise: Promise<void> }> = [];
   const api: FakeApi = {
     merchantIds: [], role: options.role ?? "Admin", now: options.now ?? new Date().toISOString(), calls: [],
     state(merchantId) { const id = merchantId ?? api.merchantIds[0]!; return states.get(id) ?? fail("Lender not found in this workspace.", 404); },
     mutate(fn, merchantId) { return withState(merchantId ?? api.merchantIds[0]!, fn, { action: "test.mutation", objectId: "workspace", summary: "Arranged by a console test" }); },
     setNow(iso) { api.now = iso; },
     failNext(pattern, failure) { failures.push({ pattern, failure }); },
+    hold(pattern) {
+      let release = (): void => { /* replaced by the promise's resolver */ };
+      const entry = { pattern, promise: new Promise<void>((resolve) => { release = resolve; }) };
+      holds.push(entry);
+      return () => { holds.splice(holds.indexOf(entry), 1); release(); };
+    },
     uninstall() { globalThis.fetch = originalFetch; },
   };
   const context = (): Context => ({ actor: `Sandbox ${api.role}`, role: api.role, now: api.now });
@@ -220,6 +229,7 @@ export function installFakeApi(options: { now?: string; role?: string } = {}): F
     const query = Object.fromEntries(url.searchParams.entries());
     const body = typeof init?.body === "string" && init.body ? JSON.parse(init.body) : undefined;
     const path = url.pathname.startsWith("/api") ? url.pathname.slice(4) : url.pathname;
+    for (const entry of holds.filter((held) => held.pattern.test(path))) await entry.promise;
     // A planned failure stands in for the server refusing or the network dropping the request.
     const planned = failures.findIndex((entry) => entry.pattern.test(path));
     if (planned >= 0) {

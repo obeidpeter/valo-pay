@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { AlertTriangle, User, Calendar, CheckSquare } from 'lucide-react';
@@ -59,7 +60,7 @@ export default function ExceptionsPage() {
         </div>
 
         {isLoading ? (
-          <div className="p-12 text-center text-muted-foreground animate-pulse">Loading exceptions...</div>
+          <Loading what="exceptions" />
         ) : items.length === 0 ? (
           <div className="p-16 text-center flex flex-col items-center justify-center">
             <CheckSquare className="h-12 w-12 text-muted-foreground mb-4 opacity-20" />

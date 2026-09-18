@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, usePerformAction, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { HardDrive, Search, ShieldCheck } from 'lucide-react';
@@ -45,10 +46,11 @@ export default function AuditPage() {
         <Button 
           variant="outline"
           onClick={() => verify.mutate({ data: { action: 'verify_audit' }, params: { merchantId } })}
-          disabled={verify.isPending}
+          busy={verify.isPending}
+          busyLabel="Verifying…"
           className="gap-2"
         >
-          <ShieldCheck className="h-4 w-4 text-primary" /> {verify.isPending ? 'Verifying...' : 'Verify Chain Integrity'}
+          <ShieldCheck className="h-4 w-4 text-primary" /> Verify Chain Integrity
         </Button>
       </header>
 
@@ -74,7 +76,7 @@ export default function AuditPage() {
         </div>
 
         {isLoading ? (
-          <div className="p-12 text-center text-muted-foreground animate-pulse">Loading audit logs...</div>
+          <Loading what="the audit log" />
         ) : !data || data.items.length === 0 ? (
           <div className="p-16 text-center flex flex-col items-center justify-center">
             <HardDrive className="h-12 w-12 text-muted-foreground mb-4 opacity-20" />

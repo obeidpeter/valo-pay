@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { formatKobo, formatDate } from '@/lib/formatters';
@@ -67,7 +68,7 @@ export default function CustomersPage() {
         </div>
 
         {isLoading ? (
-          <div className="p-8 text-center text-muted-foreground animate-pulse">Loading customers...</div>
+          <Loading what="customers" />
         ) : error ? (
           <div className="p-8 text-center text-destructive">Failed to load customers.</div>
         ) : !data || data.items.length === 0 ? (

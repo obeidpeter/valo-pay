@@ -1,4 +1,5 @@
 import React from 'react';
+import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetOverview, getGetOverviewQueryKey } from '@workspace/api-client-react';
 import { formatKobo, formatDate, formatCompactDate } from '@/lib/formatters';
@@ -11,8 +12,8 @@ export default function OverviewPage() {
     { query: { enabled: !!merchantId, queryKey: getGetOverviewQueryKey({ merchantId: merchantId! }) } }
   );
 
-  if (!merchantId) return <div className="p-8 text-center text-muted-foreground">Waiting for workspace...</div>;
-  if (isLoading) return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading overview...</div>;
+  if (!merchantId) return null;
+  if (isLoading) return <Loading what="the overview" />;
   if (error) return <div className="p-8 text-center text-destructive">Failed to load overview data.</div>;
   if (!overview) return null;
 

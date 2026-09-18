@@ -185,7 +185,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
             </section>}
             <div className="flex justify-end gap-2 mt-4 pt-4 border-t">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-              <Button type="submit" disabled={isPending}>{isPending ? 'Saving...' : 'Save'}</Button>
+              <Button type="submit" busy={isPending} busyLabel="Saving…">Save</Button>
             </div>
           </form>
 

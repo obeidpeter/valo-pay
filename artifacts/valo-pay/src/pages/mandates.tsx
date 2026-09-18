@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Loading } from '@/components/loading';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey, useCreateRecord } from '@workspace/api-client-react';
@@ -99,7 +100,7 @@ export default function MandatesPage() {
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
         {isLoading ? (
-          <div className="p-12 text-center text-muted-foreground animate-pulse">Loading mandates...</div>
+          <Loading what="mandates" />
         ) : !data || data.items.length === 0 ? (
           <div className="p-16 text-center flex flex-col items-center justify-center">
             <FileText className="h-12 w-12 text-muted-foreground mb-4 opacity-20" />
@@ -185,7 +186,7 @@ export default function MandatesPage() {
               {createError && <p className="text-sm text-destructive">{createError}</p>}
               <div className="flex justify-end gap-2 border-t pt-4">
                 <Button type="button" variant="outline" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
-                <Button type="submit" disabled={createMandate.isPending}>{createMandate.isPending ? 'Saving...' : 'Create mandate'}</Button>
+                <Button type="submit" busy={createMandate.isPending} busyLabel="Saving…">Create mandate</Button>
               </div>
             </form>
           </Dialog.Content>

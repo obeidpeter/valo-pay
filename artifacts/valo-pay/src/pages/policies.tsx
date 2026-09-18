@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, usePerformAction, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { Shield, FileText, CheckCircle, Clock } from 'lucide-react';
@@ -56,7 +57,7 @@ export default function PoliciesPage() {
         </div>
         <div className="divide-y">
           {isLoading ? (
-            <div className="p-8 text-center text-muted-foreground animate-pulse">Loading policies...</div>
+            <Loading what="policies" />
           ) : !policies || policies.items.length === 0 ? (
             <div className="p-12 text-center text-muted-foreground">No policies defined.</div>
           ) : (
@@ -138,7 +139,7 @@ export default function PoliciesPage() {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4">
           {isLoadingTemplates ? (
-            <div className="col-span-2 p-8 text-center text-muted-foreground animate-pulse">Loading templates...</div>
+            <Loading what="templates" className="col-span-2" />
           ) : !templates || templates.items.length === 0 ? (
             <div className="col-span-2 p-8 text-center text-muted-foreground border-2 border-dashed rounded-xl">No templates defined.</div>
           ) : (
