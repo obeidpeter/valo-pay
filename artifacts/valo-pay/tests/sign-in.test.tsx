@@ -11,7 +11,7 @@ describe("sign-in pages without Clerk", () => {
   it("says sign-in is unavailable on this host and offers the sandbox instead of a form", async () => {
     renderApp("/sign-in");
     expect(await screen.findByRole("heading", { level: 1, name: "Sign in to your workspace" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Sign-in isn't available on this host" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Sign-in is unavailable here" })).toBeTruthy();
     expect(screen.getByText(/so you cannot sign in here/)).toBeTruthy();
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.getByRole("link", { name: /Continue to the sandbox/ }).getAttribute("href")).toBe("/overview");

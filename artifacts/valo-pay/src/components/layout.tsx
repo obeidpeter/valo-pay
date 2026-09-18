@@ -2,13 +2,14 @@ import React, { ReactNode, useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { useWorkspace } from '@/lib/workspace-context';
 import { AuthShow, useSignOut } from '@/lib/auth';
-import { Shield, Home, Users, FileText, ArrowRightLeft, CheckSquare, AlertTriangle, FileBarChart, HardDrive, FileCheck, Settings, Lock, LogOut, Menu } from 'lucide-react';
+import { Shield, Home, Users, FileText, ArrowRightLeft, CheckSquare, AlertTriangle, FileBarChart, HardDrive, FileCheck, Settings, Lock, LogOut, Menu, Sun, Moon, ChevronRight, Layers } from 'lucide-react';
 import { Button } from './ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from './ui/sheet';
 import { BrandLockup } from './brand';
 import { ErrorBoundary, ErrorNotice } from './error-boundary';
 import { focusMain } from '@/lib/focus';
 import { formatDate } from '@/lib/formatters';
+import { useTheme } from '@/lib/theme';
 
 /** The console's pages, in the one order they are listed: the sidebar, the phone drawer and the page title. */
 const navItems = [
@@ -36,13 +37,16 @@ const SIDEBAR_QUERY = '(min-width: 768px)';
 function NavLinks({ location, spacious = false, onNavigate }: { location: string; spacious?: boolean; onNavigate?: () => void }) {
   return (
     <>
-      {navItems.map(item => {
+      {navItems.map((item, index) => {
         const active = location === item.href || location.startsWith(`${item.href}/`);
         return (
-          <Link key={item.href} href={item.href} aria-current={active ? 'page' : undefined} onClick={onNavigate} className={`flex items-center gap-3 px-3 rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${spacious ? 'py-3' : 'py-2'} ${active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}>
+          <React.Fragment key={item.href}>
+          {[0, 6, 10].includes(index) && <p className={`nav-group-label ${index > 0 ? 'mt-6' : 'mt-1'}`}>{index === 0 ? 'Operations' : index === 6 ? 'Oversight' : 'Workspace'}</p>}
+          <Link href={item.href} aria-current={active ? 'page' : undefined} onClick={onNavigate} className={`console-nav-link flex items-center gap-3 px-3 rounded-lg text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${spacious ? 'py-3' : 'py-2.5'} ${active ? 'is-active' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}>
             <item.icon className="h-4 w-4" aria-hidden="true" />
             {item.label}
           </Link>
+          </React.Fragment>
         );
       })}
     </>
@@ -77,6 +81,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const { workspace, merchantId, setMerchantId, isLoading } = useWorkspace();
   const [location] = useLocation();
   const signOut = useSignOut();
+  const { theme, setChoice } = useTheme();
 
   // The title names the page, or says the page stopped working while the boundary below shows its notice.
   const [pageError,setPageError]=useState<Error|null>(null);
@@ -115,16 +120,16 @@ export function Layout({ children }: { children: ReactNode }) {
   );
 
   return (
-    <div className="min-h-screen flex flex-col bg-background print:block print:min-h-0">
+    <div className="console-shell h-dvh min-h-0 flex flex-col bg-background print:block print:h-auto print:min-h-0">
       {/* The first tab stop skips the banner, the lender selector and eleven links (universal design: low physical effort). */}
       <a href="#main" onClick={focusMain} className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground">Skip to page content</a>
       {/* The banner and the phone bar are the page's header landmark, so no content sits outside a landmark. */}
       <header>
       {/* Sandbox banner: on a phone it keeps the sentence that matters and drops the restatement, so it stays one line. */}
-      <div className="bg-warning text-warning-foreground px-4 py-2 text-sm font-medium flex items-center justify-center gap-2 border-b border-warning-border z-50 print:hidden">
+      <div className="environment-strip px-4 py-2 text-[11px] font-medium flex items-center justify-center gap-2 border-b z-50 print:hidden">
         <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
         <span>Sandbox · Synthetic data. We never hold money.<span className="hidden sm:inline"> No live operations permitted.</span></span>
-        {workspace?.environment && <span className="ml-2 hidden sm:inline-block font-mono text-xs bg-warning-border px-2 py-0.5 rounded">MODE: {workspace.environment}</span>}
+        {workspace?.environment && <span className="ml-2 hidden sm:inline-block text-[10px] uppercase tracking-wider rounded border px-2 py-0.5">MODE: {workspace.environment}</span>}
       </div>
 
       {/* Phone bar: the brand, the lender being worked on, and the drawer with the same pages as the sidebar. */}
@@ -156,32 +161,43 @@ export function Layout({ children }: { children: ReactNode }) {
       </header>
       <div className="flex flex-1 overflow-hidden print:block print:overflow-visible">
         {/* Sidebar */}
-        <aside className="w-64 border-r bg-card flex flex-col hidden md:flex shrink-0 print:hidden">
-          <div className="p-4 border-b h-16 flex items-center justify-between">
+        <aside className="console-sidebar w-60 border-r bg-card flex flex-col hidden md:flex shrink-0 print:hidden">
+          <div className="px-5 py-5 flex items-center justify-between">
             <BrandLockup descriptor={false} />
-            <span className="text-xs text-muted-foreground font-mono">STAGE 1</span>
+            <span className="text-[9px] tracking-widest uppercase text-muted-foreground border rounded px-1.5 py-1">Console</span>
           </div>
 
           {/* Lender selector */}
           {workspace && workspace.merchants.length > 0 && (
-            <div className="p-4 border-b">
-              <label htmlFor="lender-sidebar" className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">Active lender</label>
-              {lenderSelect('lender-sidebar', 'w-full bg-secondary text-secondary-foreground rounded-md text-sm p-2 border-none ring-1 ring-border')}
+            <div className="mx-4 mb-2 rounded-xl border bg-background p-3">
+              <label htmlFor="lender-sidebar" className="text-[10px] font-semibold tracking-widest text-muted-foreground uppercase mb-2 block">Active lender</label>
+              {lenderSelect('lender-sidebar', 'w-full bg-transparent text-foreground rounded text-xs font-semibold py-1 border-none focus-visible:outline-2 focus-visible:outline-ring')}
             </div>
           )}
 
-          <nav aria-label="Pages" className="flex-1 overflow-y-auto p-4 space-y-1">
+          <nav aria-label="Pages" className="flex-1 overflow-y-auto px-3 py-3 space-y-1">
             <NavLinks location={location} />
           </nav>
 
           <div className="p-4 border-t mt-auto">
+            <div className="flex items-center gap-3 mb-3">
+              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-secondary"><Layers className="h-4 w-4 text-muted-foreground" aria-hidden="true" /></span>
+              <div className="min-w-0 flex-1"><p className="text-xs font-semibold">Sandbox workspace</p><p className="text-[10px] text-muted-foreground mt-1">Synthetic data only</p></div>
+              <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setChoice(theme === 'dark' ? 'light' : 'dark')}>
+                {theme === 'dark' ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
+              </Button>
+            </div>
             <AuthBlock role={workspace?.role} signOut={signOut} />
           </div>
         </aside>
 
         {/* Main Content */}
-        <main id="main" tabIndex={-1} className="flex-1 overflow-auto bg-background focus:outline-none print:overflow-visible">
-          <div className="p-4 sm:p-6 md:p-8 max-w-7xl mx-auto print:max-w-none print:p-0" aria-busy={isLoading && !workspace}>
+        <main id="main" tabIndex={-1} className="min-w-0 flex-1 overflow-auto bg-background focus:outline-none print:overflow-visible">
+          <div className="workspace-bar hidden md:flex items-center justify-between gap-4 border-b px-8 py-3.5 print:hidden">
+            <div className="flex items-center gap-2 text-xs"><span className="text-muted-foreground">Workspace</span><ChevronRight className="h-3 w-3 text-muted-foreground" aria-hidden="true" /><span className="font-medium">{pageTitle}</span></div>
+            <span className="text-[11px] text-muted-foreground flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-brand" />Observation mode</span>
+          </div>
+          <div className="console-content p-4 sm:p-6 md:p-8 max-w-[1440px] mx-auto print:max-w-none print:p-0" aria-busy={isLoading && !workspace}>
             {/* Print only: the provenance the screen's banner and sidebar carried. */}
             <div className="hidden print:block mb-6 border-b pb-3">
               <div className="flex items-baseline justify-between gap-4 text-sm">

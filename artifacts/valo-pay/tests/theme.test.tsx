@@ -30,6 +30,16 @@ afterEach(() => { api.uninstall(); window.matchMedia = originalMatchMedia; });
 const deviceChanged = () => device.listeners.forEach((listener) => listener());
 
 describe("theme", () => {
+  it("switches the theme from the sidebar and keeps the saved choice", async () => {
+    const user = userEvent.setup();
+    renderApp("/overview");
+    await screen.findByRole("heading", { name: "Operations Overview" });
+    await user.click(screen.getByRole("button", { name: "Switch to dark theme" }));
+    expect(html()).toBe(true);
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
+    await user.click(screen.getByRole("button", { name: "Switch to light theme" }));
+    expect(html()).toBe(false);
+  });
   it("follows the device when nothing has been chosen, and changes with it", () => {
     device.dark = true;
     initTheme();

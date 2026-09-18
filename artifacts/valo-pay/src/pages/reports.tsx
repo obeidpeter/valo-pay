@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow, EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetReports, usePerformAction, getGetReportsQueryKey, useCreateExport, useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
-import { BarChart3, Download, FileText, CheckSquare, RefreshCcw } from 'lucide-react';
+import { BarChart3, Download, FileText, CheckSquare, RefreshCcw, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { formatKobo, formatDate, formatCount } from '@/lib/formatters';
+import { formatKobo, formatDate, formatCount, formatNumber } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 
 type Unknown = Record<string, unknown> | undefined;
@@ -18,6 +18,30 @@ const labelOf = (key: string) => key.replace(/([A-Z])/g, ' $1').replace(/^./, fi
 const percent = (value: unknown) => typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : 'n/a';
 const invoiceRows = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.invoices) ? (record!.invoices as Array<Record<string, any>>) : [];
 const adjustmentRows = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.pendingAdjustments) ? (record!.pendingAdjustments as Array<Record<string, any>>) : [];
+const billingSummaryKeys = new Set(['period', 'volumeTier', 'totalKobo', 'usageFeeKobo', 'successfulCollections', 'nextInvoicePeriod', 'pendingAdjustmentsKobo']);
+const billingLabels: Record<string, string> = {
+  usageRateBps: 'Usage rate', usageCapKobo: 'Usage cap', vatBps: 'VAT rate', totalKobo: 'Statement total',
+  usageFeeKobo: 'Usage fees', eligibleAllocatedKobo: 'Eligible allocated value', pendingAdjustmentsKobo: 'Pending adjustments',
+};
+
+/** Long evidence stays available on demand and expands for a complete printed report. */
+function ReportDisclosure({ title, children }: { title: string; children: ReactNode }) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    let wasOpen: boolean | undefined;
+    const before = () => { if (ref.current) { wasOpen ??= ref.current.open; ref.current.open = true; } };
+    const after = () => { if (ref.current && wasOpen !== undefined) { ref.current.open = wasOpen; wasOpen = undefined; } };
+    window.addEventListener('beforeprint', before);
+    window.addEventListener('afterprint', after);
+    return () => { window.removeEventListener('beforeprint', before); window.removeEventListener('afterprint', after); };
+  }, []);
+  return <details ref={ref} className="group rounded-lg border bg-card">
+    <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-4 py-3 text-sm font-medium transition-colors hover:bg-secondary/30 [&::-webkit-details-marker]:hidden">
+      {title}<ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180 motion-reduce:transition-none" />
+    </summary>
+    <div className="border-t px-4 py-4">{children}</div>
+  </details>;
+}
 /** REC-07: the close report fields, in the order the TRD lists them. */
 function closeReportChips(report: Record<string, any>): Array<[string, string]> {
   const money = (row: any) => `${row?.count ?? 0} · ${formatKobo(Number(row?.kobo || 0))}`;
@@ -40,6 +64,7 @@ function renderValue(key: string, value: unknown): string {
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if (typeof value === 'number') {
     if (/kobo$/i.test(key)) return formatKobo(value);
+    if (/bps$/i.test(key)) return `${value / 100}%`;
     if (/rate$|precision$|share$/i.test(key)) return percent(value);
     return String(value);
   }
@@ -106,11 +131,12 @@ export default function ReportsPage() {
   };
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Insights & evidence</p>
           <h1 className="text-3xl font-bold tracking-tight">Reports & Analytics</h1>
-          <p className="text-muted-foreground mt-1">Daily closes, billing, and operational measurement.</p>
+          <p className="text-sm text-muted-foreground mt-2">Daily closes, billing, and operational measurement.</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <Button 
@@ -139,74 +165,92 @@ export default function ReportsPage() {
       {isLoading ? (
         <Loading what="reports" />
       ) : !reports ? (
-        <div className="p-12 text-center text-destructive">Failed to generate reports.</div>
+        <div role="alert" className="rounded-xl border bg-card p-6"><p className="font-semibold">Unable to load reports</p><p className="mt-1 text-sm text-muted-foreground">Your records are unchanged. Try loading the reports again.</p><Button variant="outline" className="mt-4" onClick={() => refetch()}>Try again</Button></div>
       ) : (
-        <div className="space-y-8">
-          {/* Top Metrics */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <div className="bg-card border rounded-xl p-5 shadow-sm">
-               <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Staff confirmation</p>
-               <div className="mt-2 text-3xl font-bold font-mono">{reports.operational?.fortnightlyStaffConfirmed ? 'Yes' : 'No'}</div>
-               <p className="text-xs text-muted-foreground mt-2">{reports.operational?.latestReviewAt ? `Latest confirming review ${formatDate(String(reports.operational.latestReviewAt))}; cadence ${reports.operational?.reviewCadenceMet ? 'kept' : 'broken'} since the first close.` : 'No fortnightly review by a named user has confirmed all four jobs yet (Test 5).'}</p>
-            </div>
-            <div className="bg-card border rounded-xl p-5 shadow-sm">
-               <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Precision audit</p>
-               <div className="mt-2 text-3xl font-bold font-mono">{String((reports.operational?.precisionAudit as any)?.reviewed ?? 0)} / {String(reports.operational?.requiredAuditSample || 0)}</div>
-               <p className="text-xs text-muted-foreground mt-2">{(() => { const audit = reports.operational?.precisionAudit as any; return audit?.falseMatchRate === null || audit?.falseMatchRate === undefined ? `Seeded sample of ${String(audit?.sampleSize ?? 0)} of ${String(audit?.population ?? 0)} automatic certain matches for ${String(audit?.month ?? 'the completed month')}; none reviewed yet.` : `False-match rate ${percent(audit.falseMatchRate)}, 95% interval ${percent(audit.interval?.low)} to ${percent(audit.interval?.high)}, on ${String(audit.reviewed)} reviewed of ${String(audit.sampleSize)} sampled.`; })()}</p>
-            </div>
-            <div className="bg-card border rounded-xl p-5 shadow-sm">
-               <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Live Days</p>
-               <div className="mt-2 text-3xl font-bold font-mono">{String(reports.operational?.liveDays || 0)} / {String(reports.operational?.requiredLiveDays || 60)}</div>
-               <p className="text-xs text-muted-foreground mt-2">{reports.operational?.liveSince ? `Since the first daily close on ${formatDate(String(reports.operational.liveSince))}.` : 'Counts from the first daily close.'}</p>
-            </div>
-            <div className="bg-card border rounded-xl p-5 shadow-sm">
-               <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Real Cases Used</p>
-               <div className="mt-2 text-3xl font-bold font-mono">
-                 {String(reports.operational?.realCasesUsed || 0)} / {String(reports.operational?.requiredRealCases || 5)}
-               </div>
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="space-y-6">
+          <section aria-label="Operational metrics" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {reports.metrics.map(metric => (
-              <div key={metric.key} className="bg-card border rounded-xl p-5 shadow-sm">
-                <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">{metric.label}</p>
-                <div className="mt-2 text-3xl font-bold font-mono">
-                  {metric.unit === 'kobo' ? formatKobo(metric.value) : metric.value}
-                  {metric.unit !== 'kobo' && <span className="text-sm text-muted-foreground ml-1">{metric.unit}</span>}
+              <div key={metric.key} className="min-w-0 rounded-xl border bg-card p-5 shadow-sm">
+                <p className="text-xs font-medium text-muted-foreground">{metric.label}</p>
+                <div className="mt-4 break-words text-[1.75rem] font-semibold leading-none tracking-tight tabular-nums">
+                  {metric.unit === 'kobo' ? formatKobo(metric.value) : metric.unit === 'ratio' ? percent(metric.value) : `${formatNumber(metric.value)}${metric.unit === 'percent' ? '%' : ''}`}
+                  {!['kobo', 'ratio', 'percent', 'count'].includes(metric.unit) && <span className="ml-1 text-sm text-muted-foreground">{metric.unit}</span>}
                 </div>
-                {metric.detail && <p className="text-xs text-muted-foreground mt-2">{metric.detail}</p>}
+                {metric.detail && <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{metric.detail}</p>}
               </div>
             ))}
-          </div>
+          </section>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <section className="rounded-xl border bg-card" aria-labelledby="measurement-title">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b px-5 py-4">
+              <h2 id="measurement-title" className="text-sm font-semibold">Operational evidence</h2>
+              <span className="rounded-md bg-secondary/60 px-2 py-1 text-xs text-muted-foreground">Synthetic data · no live evidence</span>
+            </div>
+            <div className="grid grid-cols-1 gap-5 p-5 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="min-w-0">
+               <p className="text-xs font-medium text-muted-foreground">Staff confirmation</p>
+               <div className="mt-2 text-xl font-semibold tracking-tight tabular-nums">{reports.operational?.fortnightlyStaffConfirmed ? 'Yes' : 'No'}</div>
+               <p className="text-xs text-muted-foreground mt-2">{reports.operational?.latestReviewAt ? `Latest confirming review ${formatDate(String(reports.operational.latestReviewAt))}; cadence ${reports.operational?.reviewCadenceMet ? 'kept' : 'broken'} since the first close.` : 'No fortnightly review by a named user has confirmed all four jobs yet (Test 5).'}</p>
+            </div>
+            <div className="min-w-0">
+               <p className="text-xs font-medium text-muted-foreground">Precision audit</p>
+               <div className="mt-2 text-xl font-semibold tracking-tight tabular-nums">{String((reports.operational?.precisionAudit as any)?.reviewed ?? 0)} <span className="text-sm font-normal text-muted-foreground">/ {String(reports.operational?.requiredAuditSample || 0)} reviewed</span></div>
+               <p className="text-xs text-muted-foreground mt-2">{(() => { const audit = reports.operational?.precisionAudit as any; return audit?.falseMatchRate === null || audit?.falseMatchRate === undefined ? `Seeded sample of ${String(audit?.sampleSize ?? 0)} of ${String(audit?.population ?? 0)} automatic certain matches for ${String(audit?.month ?? 'the completed month')}; none reviewed yet.` : `False-match rate ${percent(audit.falseMatchRate)}, 95% interval ${percent(audit.interval?.low)} to ${percent(audit.interval?.high)}, on ${String(audit.reviewed)} reviewed of ${String(audit.sampleSize)} sampled.`; })()}</p>
+            </div>
+            <div className="min-w-0">
+               <p className="text-xs font-medium text-muted-foreground">Live Days</p>
+               <div className="mt-2 text-xl font-semibold tracking-tight tabular-nums">{String(reports.operational?.liveDays || 0)} <span className="text-sm font-normal text-muted-foreground">/ {String(reports.operational?.requiredLiveDays || 60)} days</span></div>
+               <p className="text-xs text-muted-foreground mt-2">{reports.operational?.liveSince ? `Since the first daily close on ${formatDate(String(reports.operational.liveSince))}.` : 'Counts from the first daily close.'}</p>
+            </div>
+            <div className="min-w-0">
+               <p className="text-xs font-medium text-muted-foreground">Real Cases Used</p>
+               <div className="mt-2 text-xl font-semibold tracking-tight tabular-nums">
+                 {String(reports.operational?.realCasesUsed || 0)} <span className="text-sm font-normal text-muted-foreground">/ {String(reports.operational?.requiredRealCases || 5)} cases</span>
+               </div>
+               <p className="mt-2 text-xs text-muted-foreground">Synthetic exports do not count as real cases.</p>
+            </div>
+            </div>
+          </section>
+
+          <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
             {/* Billing Statement Preview */}
             <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
-              <div className="p-4 border-b bg-secondary/20 flex items-center gap-2">
-                <FileText className="h-5 w-5 text-primary" />
+              <div className="p-5 border-b flex items-center gap-2">
+                <FileText aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
                 <h2 className="font-semibold">Billing Statement (Current Period)</h2>
               </div>
-              <div className="p-6">
-                <div className="space-y-4 font-mono text-sm">
-                  {scalarEntries(reports.billing).map(([key, value]) => (
-                    <div key={key} className="flex justify-between items-baseline gap-4 border-b border-dashed border-border pb-2">
-                      <span className="capitalize">{labelOf(key)}</span>
-                      {/* A rule's text can carry one long token (a settings key); it breaks rather than pushing past a phone's edge. */}
-                      <span className="min-w-0 font-bold [overflow-wrap:anywhere]">{renderValue(key, value)}</span>
+              <div className="space-y-4 p-5">
+                <div className="flex flex-wrap items-end justify-between gap-4 rounded-xl bg-secondary/35 p-4">
+                  <div><p className="text-xs text-muted-foreground">Current statement total</p><p className="mt-2 text-3xl font-semibold tracking-tight tabular-nums">{typeof reports.billing?.totalKobo === 'number' ? formatKobo(reports.billing.totalKobo) : 'Not available'}</p></div>
+                  <div className="text-xs text-muted-foreground"><p>Period {String(reports.billing?.period || 'not available')}</p><p className="mt-1">We never hold money.</p></div>
+                </div>
+                <div className="grid grid-cols-1 gap-x-5 gap-y-3 text-sm sm:grid-cols-2">
+                  {scalarEntries(reports.billing).filter(([key]) => billingSummaryKeys.has(key) && key !== 'totalKobo' && key !== 'period').map(([key, value]) => (
+                    <div key={key} className="flex justify-between items-baseline gap-3 border-b border-border/70 pb-2">
+                      <span className="text-xs text-muted-foreground">{billingLabels[key] || labelOf(key)}</span>
+                      <span className="min-w-0 text-xs font-medium tabular-nums [overflow-wrap:anywhere]">{renderValue(key, value)}</span>
                     </div>
                   ))}
                   {scalarEntries(reports.billing).length === 0 && (
                     <EmptyState title="No billing data for this period" className="px-0 py-4">Billable collections are counted from succeeded direct-debit attempts once the provider's reversal window has passed (BIL-01).</EmptyState>
                   )}
                 </div>
-                <div className="mt-6">
-                  <h3 className="text-sm font-semibold mb-2">Statement lines</h3>
+                <ReportDisclosure title="Billing rates & rules">
+                  <dl className="space-y-3 text-xs">
+                    {scalarEntries(reports.billing).filter(([key]) => !billingSummaryKeys.has(key)).map(([key, value]) => (
+                      <div key={key} className="grid gap-1 border-b border-border/60 pb-3 last:border-0 last:pb-0">
+                        <dt className="font-medium">{billingLabels[key] || labelOf(key)}</dt>
+                        <dd className="leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">{renderValue(key, value)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </ReportDisclosure>
+                <ReportDisclosure title={`Statement lines · ${billingLines(reports.billing).length}`}>
                   {billingLines(reports.billing).length === 0 ? (
                     <p className="text-xs text-muted-foreground">No signed design-partner terms for this period; nothing is billable.</p>
                   ) : (
                     <ScrollFrame label="Statement lines" className="overflow-x-auto">
-                      <table className="w-full text-xs text-left font-mono">
+                      <table className="w-full text-xs text-left tabular-nums">
                         <thead className="text-muted-foreground border-b">
                           <tr><th className="py-1 pr-2">Prospect</th><th className="py-1 pr-2">Tier</th><th className="py-1 pr-2 text-right">Licence</th><th className="py-1 pr-2 text-right">Usage</th><th className="py-1 pr-2 text-right">Total</th><th className="py-1">Note</th></tr>
                         </thead>
@@ -225,12 +269,11 @@ export default function ReportsPage() {
                       </table>
                     </ScrollFrame>
                   )}
-                </div>
-                <div className="mt-6">
-                  <h3 className="text-sm font-semibold mb-2">Receipts by channel (BIL-01)</h3>
+                </ReportDisclosure>
+                <ReportDisclosure title="Receipts by channel (BIL-01)">
                   <p className="text-xs text-muted-foreground mb-2">Only direct-debit attempts that succeeded are billable, once settled, unreversed and past the provider's reversal window. Transfers and card receipts are reconciled and shown here, never billed.</p>
                   <ScrollFrame label="Receipts by channel" className="overflow-x-auto">
-                    <table className="w-full text-xs text-left font-mono">
+                    <table className="w-full text-xs text-left tabular-nums">
                       <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Channel</th><th className="py-1 pr-2 text-right">Receipts</th><th className="py-1 pr-2 text-right">Value</th><th className="py-1 pr-2 text-right">Billable</th></tr></thead>
                       <tbody className="divide-y">
                         {Object.entries((reports.billing?.channelBreakdown as Record<string, any>) || {}).map(([channel, row]) => (
@@ -241,25 +284,23 @@ export default function ReportsPage() {
                     </table>
                   </ScrollFrame>
                   <p className="text-xs text-muted-foreground mt-2">Withheld inside the reversal window: {String(reports.billing?.withheldInsideReversalWindow ?? 0)} (billed on a later statement).</p>
-                </div>
-                <div className="mt-6">
-                  <h3 className="text-sm font-semibold mb-2">Unit economics (MEA-03)</h3>
+                </ReportDisclosure>
+                <ReportDisclosure title="Unit economics (MEA-03)">
                   {(() => { const e = reports.billing?.unitEconomics as Record<string, any> | undefined; if (!e) return <p className="text-xs text-muted-foreground">Not available.</p>; return (
-                    <div className="text-xs font-mono space-y-1">
+                    <div className="text-xs tabular-nums space-y-1">
                       <p>Successful collections {String(e.successfulCollections)} · usage {formatKobo(Number(e.usageFeeKobo || 0))} · licence {formatKobo(Number(e.licenceKobo || 0))} ({String(e.volumeTier)}) · recurring {formatKobo(Number(e.recurringKobo || 0))}</p>
                       <p>Variable cost {formatKobo(Number(e.variableCostKobo || 0))}{e.estimated ? ' (estimated at the plan\'s NGN 15 per collection)' : ' (recorded)'} · per collection {e.costPerCollectionKobo === null ? 'n/a' : formatKobo(Number(e.costPerCollectionKobo))} against the plan\'s {formatKobo(Number(e.planCostPerCollectionKobo || 0))}</p>
                       <p>Gross margin {e.grossMargin === null ? 'n/a' : percent(e.grossMargin)} against the plan\'s {percent(e.planGrossMargin?.low)} to {percent(e.planGrossMargin?.high)} · annualised recurring revenue {formatKobo(Number(e.annualisedRecurringRevenueKobo || 0))} (licence and usage only)</p>
                       <p className="font-sans text-muted-foreground">{String(e.note || '')}</p>
                     </div>
                   ); })()}
-                </div>
-                <div className="mt-6">
-                  <h3 className="text-sm font-semibold mb-2">Issued invoices (BIL-04)</h3>
+                </ReportDisclosure>
+                <ReportDisclosure title={`Issued invoices (BIL-04) · ${invoiceRows(reports.billing).length}`}>
                   {invoiceRows(reports.billing).length === 0 ? (
                     <p className="text-xs text-muted-foreground">No invoice issued yet. The next one covers {String(reports.billing?.nextInvoicePeriod || 'the previous month')}; issued invoices are immutable and VAT is shown separately.</p>
                   ) : (
                     <ScrollFrame label="Issued invoices" className="overflow-x-auto">
-                      <table className="w-full text-xs text-left font-mono">
+                      <table className="w-full text-xs text-left tabular-nums">
                         <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Invoice</th><th className="py-1 pr-2">Period</th><th className="py-1 pr-2 text-right">Counted</th><th className="py-1 pr-2 text-right">Adjustments</th><th className="py-1 pr-2 text-right">Net</th><th className="py-1 pr-2 text-right">VAT</th><th className="py-1 pr-2 text-right">Total</th></tr></thead>
                         <tbody className="divide-y">
                           {invoiceRows(reports.billing).map(invoice => (
@@ -277,14 +318,13 @@ export default function ReportsPage() {
                       </table>
                     </ScrollFrame>
                   )}
-                </div>
-                <div className="mt-6">
-                  <h3 className="text-sm font-semibold mb-2">Adjustments for the next invoice (BIL-07)</h3>
+                </ReportDisclosure>
+                <ReportDisclosure title={`Next invoice adjustments (BIL-07) · ${adjustmentRows(reports.billing).length}`}>
                   <p className="text-xs text-muted-foreground mb-2">A reversal, refund, confirmed duplicate or superseded allocation on a billed collection becomes a credit or debit line here, with the invoice it corrects. Issued invoices are never edited.</p>
                   {adjustmentRows(reports.billing).length === 0 ? (
                     <p className="text-xs text-muted-foreground">Nothing to adjust.</p>
                   ) : (
-                    <ul className="text-xs font-mono space-y-1">
+                    <ul className="text-xs tabular-nums space-y-1">
                       {adjustmentRows(reports.billing).map(line => (
                         <li key={`${String(line.paymentId)}-${String(line.reason)}`} className={Number(line.kobo) < 0 ? 'text-destructive' : ''}>
                           {String(line.paymentReference)} · {String(line.reason).replace(/_/g, ' ')} · {formatKobo(Number(line.kobo || 0))} · corrects {String(line.originalInvoiceReference)}
@@ -292,27 +332,27 @@ export default function ReportsPage() {
                       ))}
                     </ul>
                   )}
-                </div>
+                </ReportDisclosure>
               </div>
             </section>
 
             {/* Experiment Results */}
-            <section className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
-              <div className="p-4 border-b bg-secondary/20 flex items-center justify-between">
+            <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
+              <div className="p-5 border-b flex flex-wrap gap-3 items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <BarChart3 className="h-5 w-5 text-primary" />
+                  <BarChart3 aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
                   <h2 className="font-semibold">Recovery Experiment</h2>
                 </div>
                 <Button size="sm" onClick={() => openExperimentDialog('create')}>New experiment</Button>
               </div>
-              <div className="p-6 flex-1 overflow-auto">
+              <div className="p-5">
                 <div className="space-y-4">
                   {(experiments?.items || []).map(experiment => (
                     <div key={experiment.id} className="border rounded-lg p-3">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <p className="text-sm font-medium">{experiment.name}</p>
-                          <p className="text-xs text-muted-foreground">{experiment.status} · holdout {String(experiment.data?.holdoutShare ?? '')}</p>
+                          <p className="mt-1 text-xs capitalize text-muted-foreground">{experiment.status} · {percent(experiment.data?.holdoutShare)} holdout</p>
                         </div>
                         {experiment.status === 'draft' && (
                           <div className="flex gap-2">
@@ -324,15 +364,15 @@ export default function ReportsPage() {
                     </div>
                   ))}
                   {scalarEntries(reports.experiment).map(([key, value]) => (
-                    <div key={key} className="bg-secondary/30 p-3 rounded-lg flex justify-between items-center">
-                      <span className="text-sm font-medium capitalize text-muted-foreground">{labelOf(key)}</span>
-                      <span className={`font-mono text-sm font-bold ${String(value) === 'not_proven' ? 'text-warning-strong' : ''}`}>
-                        {renderValue(key, value)}
+                    <div key={key} className={`rounded-lg bg-secondary/30 p-3 ${String(value).length > 70 ? 'space-y-2' : 'flex items-center justify-between gap-3'}`}>
+                      <span className="text-xs font-medium text-muted-foreground">{labelOf(key)}</span>
+                      <span className={`block text-sm leading-relaxed [overflow-wrap:anywhere] ${String(value) === 'not_proven' ? 'font-medium text-warning-strong' : ''}`}>
+                        {key === 'result' ? renderValue(key, value).replace(/_/g, ' ') : renderValue(key, value)}
                       </span>
                     </div>
                   ))}
                   {experimentRows(reports.experiment).map(row => (
-                    <div key={String(row.experimentId)} className="border rounded-lg p-3 text-xs font-mono space-y-1">
+                    <div key={String(row.experimentId)} className="border rounded-lg p-3 text-xs tabular-nums space-y-2">
                       <p className="text-muted-foreground truncate">Experiment {String(row.experimentId)} · {String(row.status)} · analysis {String(row.analysisDate || 'n/a')}</p>
                       <p>Enrolled: engine {String(row.engine?.enrolled ?? 0)} · holdout {String(row.holdout?.enrolled ?? 0)} · minimum per arm {String(row.minimumPerArm)}</p>
                       <p>Mature 30-day outcomes: engine {String(row.engine?.mature ?? 0)} · holdout {String(row.holdout?.mature ?? 0)}</p>
@@ -354,9 +394,9 @@ export default function ReportsPage() {
 
           {/* Daily Closes */}
           <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
-            <div className="p-4 border-b bg-secondary/20 flex items-center justify-between">
+            <div className="p-5 border-b flex flex-wrap gap-3 items-center justify-between">
               <div className="flex items-center gap-2">
-                <CheckSquare className="h-5 w-5 text-primary" />
+                <CheckSquare aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
                 <h2 className="font-semibold">Daily Close Snapshots</h2>
               </div>
               {(() => {
@@ -388,9 +428,9 @@ export default function ReportsPage() {
                   ) : (
                     reports.closes.map(close => (
                       <tr key={close.id} className="hover:bg-secondary/10">
-                        <td className="px-6 py-4 font-mono text-xs">{formatDate(close.createdAt)}</td>
+                        <td className="px-6 py-4 tabular-nums text-xs">{formatDate(close.createdAt)}</td>
                         <td className="px-6 py-4 text-muted-foreground">{String(close.data?.summary || '')}</td>
-                        <td className="px-6 py-4 font-mono text-xs">
+                        <td className="px-6 py-4 tabular-nums text-xs">
                           {close.data?.report ? closeReportChips(close.data.report).map(([label, value]) => (
                             <span key={label} className="inline-block mr-3 mb-1 bg-secondary/30 px-1.5 py-0.5 rounded border border-border/50">
                               <span className="text-muted-foreground mr-1">{label}:</span>

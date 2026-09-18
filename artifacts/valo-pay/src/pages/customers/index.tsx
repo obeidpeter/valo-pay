@@ -5,8 +5,9 @@ import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
-import { formatKobo, formatDate, formatNumber, formatCount } from '@/lib/formatters';
-import { Search, UserPlus, FileText, ArrowRight } from 'lucide-react';
+import { formatNumber, formatCount } from '@/lib/formatters';
+import { Search, UserPlus, ArrowRight, Users } from 'lucide-react';
+import { CustomerAvatar, StatusBadge } from '@/components/record-label';
 import { Button } from '@/components/ui/button';
 import { Link } from 'wouter';
 import { RecordDialog } from '@/components/record-dialog';
@@ -32,7 +33,7 @@ export default function CustomersPage() {
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Customers</h1>
-          <p className="text-muted-foreground mt-1">Manage borrower profiles and consent.</p>
+          <p className="text-muted-foreground mt-1">Every borrower, payment and consent record in one place.</p>
         </div>
         <div className="flex items-center gap-3">
           <Button className="gap-2" onClick={() => setIsDialogOpen(true)}>
@@ -60,7 +61,12 @@ export default function CustomersPage() {
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
         {search.trim() && <p className="hidden print:block p-4 border-b text-sm">Search: “{search.trim()}”</p>}
-        <div className="p-4 border-b flex items-center gap-4 bg-secondary/20 print:hidden">
+        <div className="p-5 border-b flex flex-wrap items-center justify-between gap-4 print:hidden">
+          <div className="flex items-center gap-2.5">
+            <Users className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">Customer directory</h2>
+            {data && <span className="rounded-full border bg-secondary/60 px-2 py-0.5 text-xs tabular-nums text-muted-foreground">{formatNumber(data.total)}</span>}
+          </div>
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <input 
@@ -72,7 +78,7 @@ export default function CustomersPage() {
               onKeyDown={event => { if (event.key === 'Escape') { setSearch(''); } }} 
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 bg-background border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              className="w-full min-w-52 pl-9 pr-9 py-2.5 bg-background border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             />
             <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border bg-secondary px-1.5 font-mono text-[11px] text-muted-foreground" aria-hidden="true">/</kbd>
           </div>
@@ -81,7 +87,7 @@ export default function CustomersPage() {
         {isLoading ? (
           <Loading what="customers" />
         ) : error ? (
-          <div className="p-8 text-center text-destructive">Failed to load customers.</div>
+          <div role="alert" className="p-8 text-center text-destructive">Failed to load customers. Please refresh to try again.</div>
         ) : !data || data.items.length === 0 ? (
           search.trim() ? (
             <EmptyState filtered title={`No customers match “${search.trim()}”`}>Check the spelling, or search by the reference or the masked phone number.</EmptyState>
@@ -92,7 +98,7 @@ export default function CustomersPage() {
           )
         ) : (
           <ScrollFrame label="Customers" className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
+            <table className="w-full min-w-[700px] text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground">
                 <tr>
                   <th className="px-6 py-4 font-medium">Customer</th>
@@ -106,8 +112,13 @@ export default function CustomersPage() {
                 {data.items.map(customer => (
                   <tr key={customer.id} className="hover:bg-secondary/10 transition-colors">
                     <td className="px-6 py-4">
-                      <p className="font-medium text-foreground">{customer.name}</p>
-                      <p className="text-xs font-mono text-muted-foreground">{customer.reference}</p>
+                      <div className="flex items-center gap-3">
+                        <CustomerAvatar name={customer.name} />
+                        <div>
+                          <p className="font-semibold text-foreground">{customer.name}</p>
+                          <p className="mt-0.5 text-[11px] font-mono text-muted-foreground">{customer.reference}</p>
+                        </div>
+                      </div>
                     </td>
                     <td className="px-6 py-4">
                       <p className="text-muted-foreground">{String(customer.data?.phoneMasked || 'N/A')}</p>
@@ -117,12 +128,10 @@ export default function CustomersPage() {
                       <p className="text-xs font-mono text-muted-foreground">{String(customer.data?.accountMasked || 'N/A')}</p>
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${customer.status === 'active' ? 'bg-success/10 text-success border border-success/20' : 'bg-secondary text-secondary-foreground border'}`}>
-                        {customer.status}
-                      </span>
+                      <StatusBadge status={customer.status} />
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <Link href={`/customers/${customer.id}`} className="inline-flex items-center gap-1 text-primary hover:underline text-sm font-medium">
+                      <Link href={`/customers/${customer.id}`} aria-label={`View Timeline for ${customer.name}`} className="inline-flex min-h-9 items-center gap-2 rounded-lg px-2 text-primary hover:bg-secondary text-xs font-medium">
                         View Timeline <ArrowRight className="h-3 w-3" />
                       </Link>
                     </td>

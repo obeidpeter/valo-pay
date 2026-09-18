@@ -1,20 +1,17 @@
 import { useEffect } from 'react';
 import { Link } from 'wouter';
-import { ArrowRight, CheckCircle2, FileCheck, FileText, RefreshCcw, ShieldCheck } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Check, CheckCircle2, CircleDot, FileCheck, FileText, LayoutDashboard, RefreshCcw, ShieldCheck, Users } from 'lucide-react';
 import { BrandLockup } from '@/components/brand';
 import { Button } from '@/components/ui/button';
 import { authEnabled, useSessionUser } from '@/lib/auth';
+import '@/public-pages.css';
 
 /**
  * The landing page: what Valo Pay is, what it is not, and two ways in.
  *
- * Design rationale (docs/design/console.md): one primary action per
- * screen, the descriptor and "we never hold money" inside the first three
- * lines, four equal cards for the four jobs (Gestalt proximity, small
- * multiples), white space as the grouping element, a left-aligned
- * typographic hierarchy, indigo for actions and the brand orange for the mark
- * only, plain words in the lender's own language, and no claim the product
- * cannot show.  This page never creates a sandbox: the workspace bootstrap
+ * The descriptor, promise and custody boundary remain the first three
+ * lines. The preview is explicitly synthetic and the four jobs have equal
+ * emphasis. Reading this page never creates a sandbox: workspace bootstrap
  * happens only when someone chooses to open it.
  */
 
@@ -40,33 +37,46 @@ const boundaries = [
 
 /** A static picture of the console's own daily close, so a visitor recognises the product rather than imagining it. */
 function ClosePreview() {
-  const rows: Array<[string, string, string]> = [
-    ['Payments matched', '1,240', 'R1 certain 96% · R5 proposed 3%'],
-    ['Unallocated older than 24h', '3', 'each with an owner and a deadline'],
-    ['Retry decisions recorded', '18', '2 deferred for missing notice evidence'],
-    ['Dispute packs generated', '5', 'SHA-256 checksum on every export'],
-  ];
   return (
-    <figure className="rounded-xl border bg-card shadow-sm" aria-labelledby="preview-title">
-      <div className="flex items-center justify-between gap-3 border-b bg-secondary/30 px-5 py-3">
-        <div>
-          <p id="preview-title" className="text-sm font-semibold">Daily close · Meridian Credit</p>
-          <p className="text-xs text-muted-foreground">Scheduled 07:00 WAT · ran on time</p>
+    <div className="close-preview-stage">
+      <div className="preview-orbit preview-orbit-one" aria-hidden="true" />
+      <div className="preview-orbit preview-orbit-two" aria-hidden="true" />
+      <figure className="close-preview" aria-labelledby="preview-title">
+        <div className="preview-toolbar">
+          <span className="inline-flex items-center gap-2 font-semibold"><span className="preview-brand-dot" aria-hidden="true">V</span> Valo Pay</span>
+          <span className="preview-environment">Sandbox preview</span>
         </div>
-        <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2.5 py-1 text-xs font-medium text-success" role="status">
-          <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" /> Books complete
-        </span>
-      </div>
-      <dl className="divide-y">
-        {rows.map(([label, value, note]) => (
-          <div key={label} className="grid grid-cols-[1fr_auto] items-baseline gap-x-4 px-5 py-3">
-            <dt className="text-sm text-foreground">{label}<span className="block text-xs text-muted-foreground">{note}</span></dt>
-            <dd className="font-mono text-lg font-semibold tabular-nums">{value}</dd>
+        <div className="preview-workspace">
+          <div className="preview-rail" aria-hidden="true">
+            <LayoutDashboard className="preview-rail-active" />
+            <Users />
+            <FileText />
+            <RefreshCcw />
+            <ShieldCheck />
           </div>
-        ))}
-      </dl>
-      <figcaption className="border-t px-5 py-2 text-xs text-muted-foreground">Illustration with synthetic figures. Nothing here is live evidence.</figcaption>
-    </figure>
+          <div className="preview-content">
+            <div className="preview-heading">
+              <div><p className="preview-eyebrow">MERIDIAN CREDIT</p><h2 id="preview-title">A clearer close.</h2></div>
+              <span className="preview-check"><CheckCircle2 aria-hidden="true" /></span>
+            </div>
+            <p className="text-xs text-muted-foreground">Daily close · Scheduled 07:00 WAT</p>
+            <div className="preview-total">
+              <span className="text-sm text-muted-foreground">Payments matched</span>
+              <strong>1,240<span className="preview-complete"><Check className="h-3 w-3" aria-hidden="true" /> Books complete</span></strong>
+              <div className="preview-match-bar" aria-hidden="true"><span /><span /><span /></div>
+              <p className="text-xs text-muted-foreground">R1 certain 96% · R5 proposed 3%</p>
+            </div>
+            <dl className="preview-records">
+              <div><dt><span className="preview-record-icon"><CircleDot aria-hidden="true" /></span><span>Unallocated older than 24h<small>Each with an owner and a deadline</small></span></dt><dd>3</dd></div>
+              <div><dt><span className="preview-record-icon"><RefreshCcw aria-hidden="true" /></span><span>Retry decisions recorded<small>2 deferred for missing notice evidence</small></span></dt><dd>18</dd></div>
+              <div><dt><span className="preview-record-icon"><FileCheck aria-hidden="true" /></span><span>Dispute packs generated<small>SHA-256 checksum on every export</small></span></dt><dd>5</dd></div>
+            </dl>
+          </div>
+        </div>
+        <figcaption>Illustration with synthetic figures. Nothing here is live evidence.</figcaption>
+      </figure>
+      <div className="preview-footnote"><span className="h-1.5 w-1.5 rounded-full bg-success" aria-hidden="true" /> One record. Every payment accounted for.</div>
+    </div>
   );
 }
 
@@ -76,16 +86,16 @@ export default function LandingPage() {
   const signedIn = authEnabled && Boolean(userId);
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="public-site min-h-screen bg-background text-foreground">
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground">Skip to main content</a>
 
-      <header className="border-b bg-card">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
+      <header className="public-header">
+        <div className="public-container flex items-center justify-between gap-4 py-5">
           <BrandLockup />
-          <nav aria-label="Sections" className="hidden items-center gap-6 text-sm font-medium text-muted-foreground md:flex">
+          <nav aria-label="Sections" className="hidden items-center gap-6 text-sm font-medium text-muted-foreground lg:flex">
             <a href="#what" className="hover:text-foreground">What it does</a>
             <a href="#how" className="hover:text-foreground">How it works</a>
-            <a href="#boundaries" className="hover:text-foreground">What we are not</a>
+            <a href="#boundaries" className="hover:text-foreground">Our boundaries</a>
           </nav>
           <div className="flex items-center gap-2">
             {/* Below the sm breakpoint the lockup and two buttons do not fit one row; the hero's own button is in the first screen. */}
@@ -99,17 +109,17 @@ export default function LandingPage() {
 
       <main id="main" tabIndex={-1} className="focus:outline-none">
         {/* Hero: the descriptor is line one, the promise line two, "we never hold money" line three. */}
-        <section className="mx-auto grid max-w-6xl gap-10 px-4 py-14 sm:px-6 lg:grid-cols-[3fr_2fr] lg:items-center lg:py-20" aria-labelledby="hero-title">
-          <div className="max-w-2xl">
-            <p className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">A collections operations layer for lenders that collect by direct debit</p>
-            <h1 id="hero-title" className="mt-4 text-4xl font-bold leading-tight tracking-tight sm:text-5xl">Every naira matched to the bill it was for, by the next morning.</h1>
-            <p className="mt-5 text-lg text-muted-foreground">We never hold money. Valo Pay plugs into the aggregator and loan software you already use, gets mandates activated, retries within the rules, reconciles every payment and keeps one clean record per customer.</p>
+        <section className="public-container landing-hero" aria-labelledby="hero-title">
+          <div className="hero-copy">
+            <p className="public-eyebrow">A collections operations layer for lenders that collect by direct debit</p>
+            <h1 id="hero-title">Every naira matched to the bill it was for, <span>by the next morning.</span></h1>
+            <p className="hero-description">We never hold money. Valo Pay plugs into the aggregator and loan software you already use, gets mandates activated, retries within the rules, reconciles every payment and keeps one clean record per customer.</p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
-              <Button asChild size="lg" className="gap-2"><Link href="/overview">Open the sandbox <ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button>
+              <Button asChild size="lg" className="public-primary gap-2"><Link href="/overview">Open the sandbox <ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button>
               <Button asChild size="lg" variant="outline"><a href="#how">See how it works</a></Button>
             </div>
-            <p className="mt-3 text-sm text-muted-foreground">The sandbox needs no sign-in. Synthetic data only; nothing leaves the platform.</p>
-            <p className="mt-6 inline-flex items-center gap-2 rounded-full border bg-secondary/40 px-3 py-1 font-mono text-xs text-muted-foreground" role="status">
+            <p className="mt-4 max-w-sm text-xs leading-relaxed text-muted-foreground">The sandbox needs no sign-in. Synthetic data only; nothing leaves the platform.</p>
+            <p className="hero-stage" role="status">
               <span className="h-2 w-2 rounded-full bg-success" aria-hidden="true" /> Stage 1 · observation mode · no live instructions
             </p>
           </div>
@@ -117,16 +127,15 @@ export default function LandingPage() {
         </section>
 
         {/* The four jobs: four equal cards so the differences are the content, not the shape. */}
-        <section id="what" className="border-t bg-card" aria-labelledby="what-title">
-          <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
-            <h2 id="what-title" className="text-2xl font-bold tracking-tight sm:text-3xl">The four jobs that today live in spreadsheets and call centres</h2>
-            <p className="mt-2 max-w-2xl text-muted-foreground">Your loan software creates mandates and debits on the due date, and we pull that from it. The rest is what Valo Pay does.</p>
-            <ul className="mt-8 grid gap-4 sm:grid-cols-2" role="list">
-              {jobs.map((job) => (
-                <li key={job.title} className="rounded-xl border bg-background p-6">
-                  <job.icon className="h-6 w-6 text-primary" aria-hidden="true" />
-                  <h3 className="mt-4 text-lg font-semibold">{job.title}</h3>
-                  <p className="mt-2 text-sm text-muted-foreground">{job.text}</p>
+        <section id="what" className="public-section border-y bg-card" aria-labelledby="what-title">
+          <div className="public-container">
+            <div className="public-section-heading"><div><p className="public-eyebrow">LESS CHASING. MORE CLARITY.</p><h2 id="what-title">The four jobs that today live in spreadsheets and call centres</h2></div><p>Your loan software creates mandates and debits on the due date, and we pull that from it. The rest is what Valo Pay does.</p></div>
+            <ul className="jobs-grid" role="list">
+              {jobs.map((job, index) => (
+                <li key={job.title} className="job-card">
+                  <div className="flex items-center justify-between"><span className="job-icon"><job.icon className="h-5 w-5" aria-hidden="true" /></span><span className="font-mono text-xs text-muted-foreground" aria-hidden="true">0{index + 1}</span></div>
+                  <h3 className="mt-7 text-lg font-semibold">{job.title}</h3>
+                  <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{job.text}</p>
                 </li>
               ))}
             </ul>
@@ -134,15 +143,15 @@ export default function LandingPage() {
         </section>
 
         {/* How it works: three numbered steps with a beginning, middle and end. */}
-        <section id="how" className="border-t" aria-labelledby="how-title">
-          <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
-            <h2 id="how-title" className="text-2xl font-bold tracking-tight sm:text-3xl">How it works</h2>
-            <ol className="mt-8 grid gap-6 md:grid-cols-3">
+        <section id="how" className="public-section" aria-labelledby="how-title">
+          <div className="public-container">
+            <div className="public-section-heading"><div><p className="public-eyebrow">FITS THE WAY YOU WORK</p><h2 id="how-title">How it works</h2></div><p>Start with visibility. Move to instructions only when the right agreements and controls are in place.</p></div>
+            <ol className="steps-grid">
               {steps.map((step, index) => (
-                <li key={step.title} className="relative rounded-xl border bg-card p-6">
-                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-primary font-mono text-sm font-semibold text-primary-foreground" aria-hidden="true">{index + 1}</span>
-                  <h3 className="mt-4 text-lg font-semibold"><span className="sr-only">Step {index + 1}: </span>{step.title}</h3>
-                  <p className="mt-2 text-sm text-muted-foreground">{step.text}</p>
+                <li key={step.title} className="step-item">
+                  <div className="step-track"><span aria-hidden="true">0{index + 1}</span>{index < 2 && <ArrowRight aria-hidden="true" />}</div>
+                  <h3 className="mt-6 text-lg font-semibold"><span className="sr-only">Step {index + 1}: </span>{step.title}</h3>
+                  <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{step.text}</p>
                 </li>
               ))}
             </ol>
@@ -150,20 +159,21 @@ export default function LandingPage() {
         </section>
 
         {/* What we are and are not: the honest column, stated before anyone has to ask. */}
-        <section id="boundaries" className="border-t bg-card" aria-labelledby="boundaries-title">
-          <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6">
+        <section id="boundaries" className="public-section border-y bg-card" aria-labelledby="boundaries-title">
+          <div className="public-container boundary-layout">
             <div className="flex items-start gap-3">
               <ShieldCheck className="mt-1 h-6 w-6 shrink-0 text-primary" aria-hidden="true" />
               <div>
-                <h2 id="boundaries-title" className="text-2xl font-bold tracking-tight sm:text-3xl">What we are, and what we are not</h2>
-                <p className="mt-2 max-w-2xl text-muted-foreground">Every number carries its basis. Nothing on this page is a promise the product cannot show you in its own records.</p>
+                <p className="public-eyebrow">TRUST STARTS WITH CLARITY</p>
+                <h2 id="boundaries-title" className="mt-4 text-3xl font-semibold leading-tight tracking-tight">What we are, and what we are not</h2>
+                <p className="mt-4 text-sm leading-relaxed text-muted-foreground">Every number carries its basis. Nothing on this page is a promise the product cannot show you in its own records.</p>
               </div>
             </div>
-            <dl className="mt-8 grid gap-6 md:grid-cols-2">
+            <dl className="boundaries-list">
               {boundaries.map((item) => (
-                <div key={item.title} className="rounded-xl border bg-background p-6">
+                <div key={item.title}>
                   <dt className="font-semibold">{item.title}</dt>
-                  <dd className="mt-2 text-sm text-muted-foreground">{item.text}</dd>
+                  <dd className="mt-2 text-sm leading-relaxed text-muted-foreground">{item.text}</dd>
                 </div>
               ))}
             </dl>
@@ -171,22 +181,23 @@ export default function LandingPage() {
         </section>
 
         {/* One last way in, then help. */}
-        <section className="border-t" aria-labelledby="cta-title">
-          <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-14 sm:px-6 md:flex-row md:items-center md:justify-between">
+        <section className="public-section" aria-labelledby="cta-title">
+          <div className="public-container"><div className="public-cta">
             <div>
-              <h2 id="cta-title" className="text-2xl font-bold tracking-tight">See it on synthetic data first</h2>
-              <p className="mt-2 max-w-xl text-muted-foreground">Two sample lenders, every queue and report, and a daily close you can run yourself. Sign in when you want a workspace that keeps your changes.</p>
+              <p className="public-eyebrow">YOUR NEXT MORNING, REIMAGINED</p>
+              <h2 id="cta-title" className="mt-4 text-3xl font-semibold tracking-tight">See it on synthetic data first</h2>
+              <p className="mt-4 max-w-xl text-sm leading-relaxed opacity-75">Two sample lenders, every queue and report, and a daily close you can run yourself. Sign in when you want a workspace that keeps your changes.</p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row">
-              <Button asChild size="lg" className="gap-2"><Link href="/overview">Open the sandbox <ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button>
-              {!signedIn && <Button asChild size="lg" variant="outline"><Link href="/sign-in">Sign in</Link></Button>}
+              <Button asChild size="lg" className="cta-primary gap-2"><Link href="/overview">Open the sandbox <ArrowUpRight className="h-4 w-4" aria-hidden="true" /></Link></Button>
+              {!signedIn && <Button asChild size="lg" variant="ghost" className="cta-secondary"><Link href="/sign-in">Sign in <ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button>}
             </div>
-          </div>
+          </div></div>
         </section>
       </main>
 
       <footer className="border-t bg-card">
-        <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-8 text-sm text-muted-foreground sm:px-6 md:flex-row md:items-center md:justify-between">
+        <div className="public-container flex flex-col gap-4 py-8 text-xs text-muted-foreground md:flex-row md:items-center md:justify-between">
           <p>Valo Pay · Collections operations layer · We never hold money.</p>
           <nav aria-label="Help and documentation" className="flex flex-wrap gap-x-6 gap-y-2">
             <a href="https://github.com/obeidpeter/valo-pay#readme" className="hover:text-foreground">How the sandbox works</a>
