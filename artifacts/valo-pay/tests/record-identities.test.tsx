@@ -30,9 +30,9 @@ describe('recognisable operational records', () => {
     const instalment = await screen.findByLabelText(/Instalment/);
     await waitFor(() => expect(within(instalment).getByRole('option', { name: new RegExp(dueItem.reference) })).toBeTruthy());
     await user.selectOptions(instalment, dueItem.id);
-    const amount = screen.getByLabelText(/Amount to allocate \(kobo\)/);
+    const amount = screen.getByLabelText(/Amount to allocate \(₦\)/);
     await user.clear(amount);
-    await user.type(amount, '100000');
+    await user.type(amount, '1000.00');
     await user.type(screen.getByLabelText(/Reason/), 'Matched the synthetic payment evidence to this instalment.');
     await user.click(screen.getByRole('button', { name: 'Allocate payment' }));
     await waitFor(() => expect(api.calls.some(call => {

@@ -5,8 +5,11 @@ import { BrandLockup, BrandMark } from '@/components/brand';
 import { LandingFooter, LandingSections } from '@/components/landing-sections';
 import { Button } from '@/components/ui/button';
 import { authEnabled, useSessionUser } from '@/lib/auth';
+import { useHashTarget } from '@/lib/use-hash-target';
 import '@/public-pages.css';
 import '@/landing.css';
+
+const landingTargets = ['main', 'what', 'how', 'boundaries', 'pricing', 'pilot', 'product-tour'];
 
 /** Static, explicitly synthetic illustration. Reading this page never creates a workspace. */
 function CollectionsIllustration() {
@@ -57,6 +60,7 @@ function CollectionsIllustration() {
 
 export default function LandingPage() {
   const { userId } = useSessionUser();
+  useHashTarget(landingTargets, true);
   useEffect(() => { document.title = 'Valo Pay · Collections operations layer'; }, []);
   const signedIn = authEnabled && Boolean(userId);
 
@@ -71,6 +75,7 @@ export default function LandingPage() {
             <a href="#how">How it works</a>
             <a href="#boundaries">Our boundaries</a>
             <a href="#pricing">Pricing</a>
+            <a href="#pilot">Discuss a pilot</a>
           </nav>
           <div className="lp-header-actions">
             <Button asChild variant="outline" size="sm" className="lp-header-sandbox"><Link href="/overview">Open the sandbox</Link></Button>

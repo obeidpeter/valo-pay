@@ -35,6 +35,14 @@ The Business Plan v2.1 Gate Change Note, Technical Requirements v1.1 and Roadmap
 - An operator can see it run: every request is named on its answer and in its log lines, failures are logged with their stacks and refusals as events, `/api/healthz` reports the build and the scheduler and `/api/readyz` the database, the process drains on a stop signal, and the console quotes the request's reference in a failure notice (`docs/observability.md`).
 - The documentation was audited against the code and kept true by a check in the test suite: every path, command and environment variable a document names exists, the contract describes every operation, the shared schema's exports are documented, and the spelling is British (`docs/documentation-review.md`).
 
+## Workflow improvements and pilot preparation
+
+The console now connects overview tasks to filtered queues, fixes proposed-match decisions, previews allocation impact, accepts naira in money forms and offers recoverable action/query feedback. All evidence remains searchable across gates with owner and evidence date. Reports distinguish missing measurements from measured zero, and staff reviews name all four tasks. The optional sandbox guide records personal progress only. The landing page includes an explicit, user-started console preview and the approved pilot contact.
+
+Pilot security work is isolated from the running sandbox: access/MFA preflight and tenant-bound encryption helpers, a guarded staging RLS migration and disposable-database tests. These are implementation foundations, not activated production controls. Runtime identity provisioning, encryption migration, key management, scoped database connections and scheduler/service access still need integration and validation before real data can be accepted. See `docs/pilot-security.md` and `docs/pilot-database.md`.
+
+The Paystack test adapter supports read-only connection/transaction checks, authenticated webhook parsing and timeout recovery fixtures. It has no public webhook route or charging method. No test key was available for this release, so no external Paystack verification or Direct Debit capability claim is made. See `docs/paystack.md`.
+
 ## Explicit implementation deviations
 
 | Requirement | Current implementation | Consequence |

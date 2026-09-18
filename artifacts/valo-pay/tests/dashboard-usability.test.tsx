@@ -11,12 +11,16 @@ describe('dashboard usability', () => {
     const user = userEvent.setup();
     renderApp('/overview');
     const activation = await screen.findByRole('link', { name: /Awaiting activation/ });
-    expect(activation.getAttribute('href')).toBe('/mandates');
-    expect(screen.getByRole('link', { name: /Matches to review/ }).getAttribute('href')).toBe('/reconciliation');
-    expect(screen.getByRole('link', { name: /Overdue exceptions/ }).getAttribute('href')).toBe('/exceptions');
+    expect(activation.getAttribute('href')).toBe('/mandates?view=awaiting-activation');
+    expect(screen.getByRole('link', { name: /Matches to review/ }).getAttribute('href')).toBe('/reconciliation?view=review');
+    expect(screen.getByRole('link', { name: /Possible duplicates/ }).getAttribute('href')).toBe('/reconciliation?view=duplicates');
+    expect(screen.getByRole('link', { name: /Failed collections/ }).getAttribute('href')).toBe('/collections?view=failed');
+    expect(screen.getByRole('link', { name: /Overdue exceptions/ }).getAttribute('href')).toBe('/exceptions?view=overdue');
     expect(screen.getByRole('link', { name: 'View daily closes' }).getAttribute('href')).toBe('/reports');
     await user.click(activation);
     expect(await screen.findByRole('heading', { name: 'Mandates' })).toBeTruthy();
+    expect((await screen.findByRole('button', { name: 'Awaiting activation (2)' })).getAttribute('aria-pressed')).toBe('true');
+    expect(within(screen.getByRole('table')).getAllByRole('row')).toHaveLength(3);
   });
 
   it('shows proportions as percentages and reveals the complete billing rules on demand', async () => {

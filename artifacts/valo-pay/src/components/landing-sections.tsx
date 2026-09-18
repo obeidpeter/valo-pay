@@ -3,6 +3,7 @@ import { ArrowRight, ArrowUpRight, BadgeCheck, Banknote, Building2, CheckCircle2
 import { BrandLockup } from '@/components/brand';
 import { Button } from '@/components/ui/button';
 import '@/landing-sections.css';
+import { PilotEnquiry, ProductWalkthrough } from './product-walkthrough';
 
 const jobs = [
   { icon: FileText, title: 'Manage mandates', text: "Track each provider's direct debit permissions (mandates) in one place. Follow up on activation before the deadline. Keep consent linked to the policy the customer accepted." },
@@ -35,6 +36,7 @@ const audiences = [
 export function LandingSections({ signedIn }: { signedIn: boolean }) {
   return (
     <>
+      <ProductWalkthrough />
       <section id="what" className="lp-section lp-jobs-section" aria-labelledby="what-title">
         <div className="public-container">
           <div className="lp-section-intro lp-split-intro">
@@ -110,6 +112,7 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
         </div>
       </section>
 
+      <PilotEnquiry />
       <section className="lp-cta-section" aria-labelledby="cta-title">
         <div className="public-container">
           <div className="lp-final-cta">

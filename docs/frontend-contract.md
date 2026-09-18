@@ -2,6 +2,18 @@
 
 All data is a persistent, isolated **synthetic sandbox**. No payment or SMS is actually sent. No live data upload is permitted. Use British spelling, NGN (kobo / 100) and Africa/Lagos dates. Always say “We never hold money”. Keep a visible “Sandbox · synthetic data” label and current Observation mode. No claims of compliance, live success, or gate passes from seed data.
 
+## Workflow guidance and task queues
+
+The landing page offers a user-started preview of the actual console and a pilot enquiry email link. Loading the landing page alone still creates no workspace. Selecting Load interactive preview creates or resumes the same sample workspace used by the full console; the caption explains that its changes persist there. The preview omits the personal guide with `embedded=1`.
+
+The console guide has five optional steps: inspect a customer, review a match, follow up an overdue exception, run daily close and export a dispute pack. Progress is stored per lender in the browser and is explicitly self-reported, not operational evidence. It can be dismissed, reopened and restarted.
+
+Overview queues link to the relevant view: `/mandates?view=awaiting-activation`, `/reconciliation?view=review`, `/reconciliation?view=duplicates`, `/collections?view=failed` and `/exceptions?view=overdue`. URL parameters preserve task filters through navigation; exceptions also support due-today, owner and type filters. Urgent records sort first. Collection rows show amount, outstanding amount, due date, owner and next action; CSV import remains available in a secondary disclosure.
+
+Money forms accept naira with at most two decimal places and submit exact integer kobo. Manual allocation previews remaining payment credit and instalment balance. Proposed-match decisions show both records and the allocation impact before submission; confirm and reject submit the payment ID required by the action contract. Reconciliation refreshes related records and dashboard reports after a change.
+
+Evidence retains a searchable register across all gates, with owner, evidence date, status and edit controls. Reports distinguish no reviewed matches from a measured zero and identify the reporting period. Query failures offer retry; actions and exports show useful success or failure feedback. Staff reviews confirm four named tasks individually. Settings label the prepared Paystack adapter as not connected: external verification and direct-debit capability confirmation remain necessary.
+
 ## Records
 API `ValopayRecord`: id, merchantId, kind, name, status, reference, amountKobo, customerId, createdAt, updatedAt, data (metadata).
 

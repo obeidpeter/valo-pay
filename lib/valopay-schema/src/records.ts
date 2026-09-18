@@ -367,6 +367,8 @@ export const recordDataSchemas = {
   }).passthrough(),
   evidence: z.object({
     ...common,
+    owner: z.string().optional(),
+    evidenceDate: isoDateOrTimestamp.optional(),
     gateId: z.string().optional(),
     reference: z.string().optional(),
     notes: z.string().optional(),

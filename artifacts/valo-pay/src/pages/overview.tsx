@@ -11,13 +11,13 @@ import { formatKobo, formatDate, formatCompactDate, formatNumber, formatCount } 
 import { ArrowDownLeft, ArrowUpRight, ArrowRight, AlertCircle, CheckCheck, Clock, Activity, FileBarChart2, ShieldCheck } from 'lucide-react';
 
 const queueDestinations: Record<string, string> = {
-  activation: '/mandates', review: '/reconciliation', duplicates: '/reconciliation', failures: '/collections', overdue: '/exceptions',
+  activation: '/mandates?view=awaiting-activation', review: '/reconciliation?view=review', duplicates: '/reconciliation?view=duplicates', failures: '/collections?view=failed', overdue: '/exceptions?view=overdue',
 };
 
 function alertDestination(key: string): { href: string; label: string } {
   if (key.includes('close')) return { href: '/reports', label: 'View daily closes' };
   if (key.includes('audit')) return { href: '/audit', label: 'Review audit log' };
-  if (key.includes('exception')) return { href: '/exceptions', label: 'Review exceptions' };
+  if (key.includes('exception')) return { href: '/exceptions?view=overdue', label: 'Review exceptions' };
   if (key.includes('unallocated') || key.includes('position')) return { href: '/reconciliation', label: 'Review reconciliation' };
   if (key.includes('attempt')) return { href: '/collections', label: 'Review collections' };
   return { href: '/settings', label: 'Review settings' };

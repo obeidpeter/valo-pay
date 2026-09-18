@@ -20,6 +20,8 @@ The database connection is privileged. Explicit application checks **do not** pr
 
 ## Development setup and publishing
 
+The optional pilot isolation rehearsal is documented in `docs/pilot-database.md`. It applies a guarded RLS migration only in a disposable test schema; it is not part of the runtime schema push or deployment. Access/MFA and field-encryption foundations are documented in `docs/pilot-security.md`. They do not change the current boundary or authorise real data. Runtime provisioning, scoped connections, encryption migration and managed-host recovery testing remain separate work.
+
 The Drizzle schema defines the supported tables, foreign keys, checks and unique indexes. A fresh development setup uses the normal development schema push. Do not reintroduce custom security roles, policies or triggers as an undeclared setup prerequisite. The pull-request workflow creates the schema the same way inside a PostgreSQL 16 service container that exists only for its job and holds no application secret; that is a development push against a throwaway database, not a production migration path.
 
 The existing development database transitions only after replacement application enforcement exists. Retiring the old objects must use narrowly scoped, reviewed development changes, preserve data and ordinary constraints, and never cascade-delete unknown role dependencies.

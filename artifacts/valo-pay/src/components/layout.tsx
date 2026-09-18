@@ -1,5 +1,5 @@
 import React, { ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Link, useLocation } from 'wouter';
+import { Link, useLocation, useSearch } from 'wouter';
 import { useWorkspace } from '@/lib/workspace-context';
 import { AuthShow, useSignOut } from '@/lib/auth';
 import { Shield, Home, Users, FileText, ArrowRightLeft, CheckSquare, AlertTriangle, FileBarChart, HardDrive, FileCheck, Settings, Lock, LogOut, Menu, Sun, Moon, ChevronRight, Layers } from 'lucide-react';
@@ -10,6 +10,7 @@ import { ErrorBoundary, ErrorNotice } from './error-boundary';
 import { focusMain } from '@/lib/focus';
 import { formatDate } from '@/lib/formatters';
 import { useTheme } from '@/lib/theme';
+import { SandboxGuide } from './sandbox-guide';
 
 /** The console's pages, in the one order they are listed: the sidebar, the phone drawer and the page title. */
 const navItems = [
@@ -78,6 +79,7 @@ function AuthBlock({ role, signOut }: { role: string | undefined; signOut: () =>
 }
 
 export function Layout({ children }: { children: ReactNode }) {
+  const embedded = new URLSearchParams(useSearch()).get('embedded') === '1';
   const { workspace, merchantId, setMerchantId, isLoading } = useWorkspace();
   const [location] = useLocation();
   const signOut = useSignOut();
@@ -220,7 +222,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 A page that stops working keeps the sidebar and the lender selector as the way out. */}
             {isLoading && !workspace
               ? <p role="status" className="text-sm text-muted-foreground">Loading your workspace…</p>
-              : <ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{children}</ErrorBoundary>}
+              : <ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{!embedded && <SandboxGuide />}{children}</ErrorBoundary>}
             <p className="hidden print:block mt-8 border-t pt-3 text-xs text-muted-foreground">Printed {printedAt} from the Valo Pay sandbox · {pageTitle}{lenderName ? ` · ${lenderName}` : ''}.</p>
           </div>
         </main>

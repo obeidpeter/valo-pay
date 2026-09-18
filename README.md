@@ -114,6 +114,12 @@ The API process runs each lender's daily close at its configured West Africa Tim
 
 ## Checks and builds
 
+### Pilot preparation
+
+`docs/paystack.md` describes the prepared Paystack test adapter and the connection check to run once a test key is available. `PAYSTACK_TEST_SECRET_KEY` is read only by the opt-in command, never by the running sandbox. There is no charging method or public webhook ingestion route. Direct Debit availability in test mode must be confirmed separately.
+
+`docs/pilot-security.md` covers the isolated access/MFA preflight and tenant-bound field-encryption helpers. `docs/pilot-database.md` covers the guarded staging RLS migration and disposable-database tests. These foundations are not wired into production: the sandbox remains closed to real customer data and live instructions.
+
 These checks need no production credentials or running services and do not write to a runtime database:
 
 ```sh

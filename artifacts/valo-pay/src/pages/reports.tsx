@@ -9,6 +9,11 @@ import { Button } from '@/components/ui/button';
 import { formatKobo, formatDate, formatCount, formatNumber } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { readableLabel } from '@/components/record-label';
+import { Link } from 'wouter';
+import { useQueryClient } from '@tanstack/react-query';
+import { LoadProblem } from '@/components/load-problem';
+import { notifyProblem, saidBy } from '@/lib/notify';
+import { useHashTarget } from '@/lib/use-hash-target';
 
 type Unknown = Record<string, unknown> | undefined;
 const isScalar = (value: unknown) => value === null || ['string', 'number', 'boolean'].includes(typeof value);
@@ -104,24 +109,34 @@ export default function ReportsPage() {
   const [experimentDialog, setExperimentDialog] = useState<'create' | 'edit' | 'preregister' | null>(null);
   const [selectedExperiment, setSelectedExperiment] = useState<any>(null);
   const [invoiceDialogOpen, setInvoiceDialogOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const [download, setDownload] = useState<{ merchantId: string; url: string } | null>(null);
+  const [closeResult, setCloseResult] = useState<{ merchantId: string; message: string; failed: boolean } | null>(null);
+  useEffect(() => { setExperimentDialog(null); setInvoiceDialogOpen(false); }, [merchantId]);
 
-  const { data: reports, isLoading, refetch } = useGetReports(
+  const { data: reports, isLoading, error: reportsError, isFetching: fetchingReports, refetch } = useGetReports(
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getGetReportsQueryKey({ merchantId: merchantId! }) } }
   );
+  useHashTarget('daily-closes', !!merchantId && !!reports && !isLoading && !reportsError);
 
   const dailyClose = usePerformAction({
     mutation: {
-      onSuccess: () => refetch()
+      onMutate: () => setCloseResult(null),
+      onSuccess: (data, variables) => {
+        setCloseResult({ merchantId: variables.params!.merchantId, message: data.message, failed: false });
+        void queryClient.invalidateQueries();
+      },
+      onError: (error, variables) => setCloseResult({ merchantId: variables.params!.merchantId, message: saidBy(error, 'The service could not confirm the result. Refresh the reports to check for a close record before trying again.'), failed: true }),
     }
   });
 
-  const { data: experiments } = useListRecords(
+  const { data: experiments, error: experimentsError, isLoading: loadingExperiments, isFetching: fetchingExperiments, refetch: retryExperiments } = useListRecords(
     'experiments',
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('experiments', { merchantId: merchantId! }) } }
   );
-  const { data: policies } = useListRecords(
+  const { data: policies, error: policiesError, isFetching: fetchingPolicies, refetch: retryPolicies } = useListRecords(
     'policies',
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('policies', { merchantId: merchantId! }) } }
@@ -129,9 +144,11 @@ export default function ReportsPage() {
 
   const createExport = useCreateExport({
     mutation: {
-      onSuccess: (data) => {
+      onSuccess: (data, variables) => {
+        setDownload({ merchantId: variables.params!.merchantId, url: data.downloadUrl });
         window.open(data.downloadUrl, '_blank');
-      }
+      },
+      onError: (error: unknown) => notifyProblem('Billing export not generated', saidBy(error, 'Check your connection and try generating the billing export again.')),
     }
   });
 
@@ -175,22 +192,30 @@ export default function ReportsPage() {
           </Button>
         </div>
       </header>
+      {download?.merchantId === merchantId && <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card px-5 py-4 text-sm"><p>Billing CSV ready. It contains sample data only.</p><Button asChild variant="outline" size="sm"><a href={download.url} target="_blank" rel="noopener noreferrer">Open billing CSV</a></Button></div>}
+      {closeResult?.merchantId === merchantId && <div role={closeResult.failed ? 'alert' : 'status'} className={`rounded-lg border p-5 text-sm ${closeResult.failed ? 'border-destructive/30 bg-destructive/5' : 'bg-card'}`}>
+        <p className="font-semibold">{closeResult.failed ? 'Daily close could not be confirmed' : 'Daily close completed'}</p>
+        <p className="mt-2 text-muted-foreground">{closeResult.message}</p>
+        {closeResult.failed ? <Button variant="outline" size="sm" className="mt-3" onClick={() => { void refetch(); }} busy={fetchingReports} busyLabel="Refreshing…">Refresh close records</Button> : <a href="#daily-closes" className="mt-3 inline-flex min-h-6 items-center font-medium text-primary underline">View close record</a>}
+      </div>}
 
       {isLoading ? (
         <Loading what="reports" />
-      ) : !reports ? (
-        <div role="alert" className="rounded-xl border bg-card p-6"><p className="font-semibold">Unable to load reports</p><p className="mt-1 text-sm text-muted-foreground">Your records are unchanged. Try loading the reports again.</p><Button variant="outline" className="mt-4" onClick={() => refetch()}>Try again</Button></div>
+      ) : reportsError || !reports ? (
+        <LoadProblem what="reports" error={reportsError} retry={() => { void refetch(); }} busy={fetchingReports} />
       ) : (
         <div className="space-y-6">
+          <p className="text-xs text-muted-foreground">Current workspace totals{reports.operational?.asOf ? ` as at ${formatDate(String(reports.operational.asOf))}` : ''}. Billing period: {String(reports.billing?.period || 'not available')}. Accuracy sample: {String((reports.operational?.precisionAudit as any)?.month || 'completed month')}. All figures use sample data.</p>
           <section aria-label="Operational metrics" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {reports.metrics.map(metric => (
               <div key={metric.key} className="min-w-0 rounded-xl border bg-card p-5 shadow-sm">
                 <p className="text-xs font-medium text-muted-foreground">{metric.label}</p>
                 <div className="mt-4 break-words text-[1.75rem] font-semibold leading-none tracking-tight tabular-nums">
-                  {metric.unit === 'kobo' ? formatKobo(metric.value) : metric.unit === 'ratio' ? percent(metric.value) : `${formatNumber(metric.value)}${metric.unit === 'percent' ? '%' : ''}`}
+                  {metric.key === 'allocation_precision' && Number(reports.operational?.reviewedCount || 0) === 0 ? <span className="text-xl">Not measured yet</span> : metric.unit === 'kobo' ? formatKobo(metric.value) : metric.unit === 'ratio' ? percent(metric.value) : `${formatNumber(metric.value)}${metric.unit === 'percent' ? '%' : ''}`}
                   {!['kobo', 'ratio', 'percent', 'count'].includes(metric.unit) && <span className="ml-1 text-sm text-muted-foreground">{metric.unit}</span>}
                 </div>
                 {metric.detail && <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{metric.detail}</p>}
+                {metric.key === 'allocation_precision' && <Link href="/reconciliation#precision-audit" className="mt-3 inline-flex min-h-6 items-center text-xs font-medium text-primary underline">Review matches</Link>}
               </div>
             ))}
           </section>
@@ -357,9 +382,12 @@ export default function ReportsPage() {
                   <BarChart3 aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
                   <h2 className="font-semibold">Recovery experiment</h2>
                 </div>
-                <Button size="sm" onClick={() => openExperimentDialog('create')}>New experiment</Button>
+                <Button size="sm" disabled={!policies || !!policiesError} onClick={() => openExperimentDialog('create')}>New experiment</Button>
               </div>
               <div className="p-5">
+                {policiesError && <LoadProblem what="approved policies" error={policiesError} retry={() => { void retryPolicies(); }} busy={fetchingPolicies} />}
+                {experimentsError && <LoadProblem what="experiment drafts" error={experimentsError} retry={() => { void retryExperiments(); }} busy={fetchingExperiments} />}
+                {loadingExperiments && <Loading what="experiment drafts" />}
                 <div className="space-y-4">
                   {(experiments?.items || []).map(experiment => (
                     <div key={experiment.id} className="border rounded-lg p-3">
@@ -407,7 +435,7 @@ export default function ReportsPage() {
           </div>
 
           {/* Daily Closes */}
-          <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
+          <section id="daily-closes" tabIndex={-1} aria-label="Daily close records" className="scroll-mt-6 bg-card border rounded-xl shadow-sm overflow-hidden">
             <div className="p-5 border-b flex flex-wrap gap-3 items-center justify-between">
               <div className="flex items-center gap-2">
                 <CheckSquare aria-hidden="true" className="h-4 w-4 text-muted-foreground" />

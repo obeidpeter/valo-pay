@@ -122,3 +122,8 @@ jobs:
 
       - name: Run the repository and scheduled-close suites
         run: pnpm run test:integration
+
+      - name: Rehearse pilot row-level isolation in an isolated schema
+        run: scripts/node_modules/.bin/tsx artifacts/api-server/tests/pilot-rls.integration.test.ts
+        env:
+          VALOPAY_RUN_PILOT_RLS: "1"

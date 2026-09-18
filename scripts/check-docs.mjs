@@ -18,7 +18,7 @@ function walk(dir, keep) {
   const out = [];
   for (const entry of readdirSync(join(root, dir))) {
     if (["node_modules", "dist", ".git", "generated"].includes(entry)) continue;
-    const path = join(dir, entry);
+    const path = join(dir, entry).replaceAll('\\', '/');
     if (statSync(join(root, path)).isDirectory()) out.push(...walk(path, keep));
     else if (keep(path)) out.push(path);
   }

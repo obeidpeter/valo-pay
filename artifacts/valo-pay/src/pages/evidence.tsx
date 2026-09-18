@@ -1,14 +1,17 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow } from '@/components/empty-state';
 import { Loading, LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetGates, useListRecords, useCreateExport, getGetGatesQueryKey, getListRecordsQueryKey } from '@workspace/api-client-react';
-import { ShieldCheck, Download, AlertTriangle, FileCheck, CheckCircle } from 'lucide-react';
+import { ShieldCheck, Download, AlertTriangle, FileCheck, CheckCircle, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { readableLabel } from '@/components/record-label';
+import { LoadProblem } from '@/components/load-problem';
+import { ReviewDialog, reviewJobs } from '@/components/review-dialog';
+import { notifyProblem, saidBy } from '@/lib/notify';
 
 /** The prerequisite and decision ids the gate register matches evidence on (data.gateId). */
 const gateOptions = [
@@ -28,27 +31,32 @@ const gateOptions = [
 export default function EvidencePage() {
   const { merchantId } = useWorkspace();
   const [selectedRecord, setSelectedRecord] = useState<any>(null);
-  const [actionKind, setActionKind] = useState<'evidence' | 'commercial' | 'reviews' | ''>('');
+  const [actionKind, setActionKind] = useState<'evidence' | 'commercial' | ''>('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const [gateFilter, setGateFilter] = useState('all');
+  const [download, setDownload] = useState<{ merchantId: string; url: string } | null>(null);
+  useEffect(() => { setSearch(''); setGateFilter('all'); setIsDialogOpen(false); setReviewOpen(false); }, [merchantId]);
 
-  const { data: gates, isLoading: isLoadingGates } = useGetGates(
+  const { data: gates, isLoading: isLoadingGates, error: gatesError, refetch: retryGates, isFetching: fetchingGates } = useGetGates(
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getGetGatesQueryKey({ merchantId: merchantId! }) } }
   );
 
-  const { data: commercial, isLoading: isLoadingComm } = useListRecords(
+  const { data: commercial, isLoading: isLoadingComm, error: commercialError, refetch: retryCommercial, isFetching: fetchingCommercial } = useListRecords(
     'commercial',
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('commercial', { merchantId: merchantId! }) } }
   );
 
-  const { data: evidence, isLoading: isLoadingEvidence } = useListRecords(
+  const { data: evidence, isLoading: isLoadingEvidence, error: evidenceError, refetch: retryEvidence, isFetching: fetchingEvidence } = useListRecords(
     'evidence',
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('evidence', { merchantId: merchantId! }) } }
   );
 
-  const { data: reviews, isLoading: isLoadingReviews } = useListRecords(
+  const { data: reviews, isLoading: isLoadingReviews, error: reviewsError, refetch: retryReviews, isFetching: fetchingReviews } = useListRecords(
     'reviews',
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('reviews', { merchantId: merchantId! }) } }
@@ -56,25 +64,33 @@ export default function EvidencePage() {
 
   const createExport = useCreateExport({
     mutation: {
-      onSuccess: (data) => {
+      onSuccess: (data, variables) => {
+        setDownload({ merchantId: variables.params!.merchantId, url: data.downloadUrl });
         window.open(data.downloadUrl, '_blank');
-      }
+      },
+      onError: (error: unknown) => notifyProblem('Evidence pack not generated', saidBy(error, 'Check your connection and try generating the pack again.')),
     }
   });
 
-  const handleCreate = (kind: 'evidence' | 'commercial' | 'reviews') => {
+  const handleCreate = (kind: 'evidence' | 'commercial') => {
     setSelectedRecord(null);
     setActionKind(kind);
     setIsDialogOpen(true);
   };
 
-  const handleEdit = (record: any, kind: 'evidence' | 'commercial' | 'reviews') => {
+  const handleEdit = (record: any, kind: 'evidence' | 'commercial') => {
     setSelectedRecord(record);
     setActionKind(kind);
     setIsDialogOpen(true);
   };
 
   if (!merchantId) return null;
+  const fold = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const evidenceRows = (evidence?.items || []).filter(item => {
+    const gate = String(item.data?.gateId || item.reference);
+    const label = gateOptions.find(option => option.value === gate)?.label || gate;
+    return (gateFilter === 'all' || gate === gateFilter) && fold(`${item.name} ${label} ${item.status} ${JSON.stringify(item.data)}`).includes(fold(search.trim()));
+  });
 
   return (
     <div className="space-y-8">
@@ -92,6 +108,10 @@ export default function EvidencePage() {
           <Download className="h-4 w-4" /> Export evidence pack
         </Button>
       </header>
+      {download?.merchantId === merchantId && <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card px-5 py-4 text-sm">
+        <p>Evidence pack ready. It contains sample data only.</p>
+        <Button asChild variant="outline" size="sm"><a href={download.url} target="_blank" rel="noopener noreferrer">Open evidence pack</a></Button>
+      </div>}
 
       {/* Gates */}
       <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
@@ -113,14 +133,14 @@ export default function EvidencePage() {
         
         {isLoadingGates ? (
           <Loading what="readiness checks" />
-        ) : !gates ? (
-          <div className="p-12 text-center text-destructive">Unable to load readiness checks. Refresh the page to try again.</div>
+        ) : gatesError || !gates ? (
+          <LoadProblem what="readiness checks" error={gatesError} retry={() => { void retryGates(); }} busy={fetchingGates} />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-0 divide-y md:divide-y-0 md:divide-x">
             <div className="p-6">
               <h3 className="font-medium text-muted-foreground uppercase text-xs tracking-wider mb-4 flex justify-between">
                 Prerequisites
-                <Button variant="link" size="sm" className="h-auto min-h-6 p-0" onClick={() => handleCreate('evidence')}>Add evidence</Button>
+                <a href="#evidence-register" className="normal-case text-primary underline">View evidence register</a>
               </h3>
               <div className="space-y-4">
                 {gates.prerequisites.map(gate => (
@@ -133,11 +153,6 @@ export default function EvidencePage() {
                       <p className="font-medium text-sm">{gate.title}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">{gate.description}</p>
                       <p className="text-xs font-mono text-muted-foreground mt-1 bg-secondary/50 inline-block px-1.5 py-0.5 rounded">Evidence: {gate.evidence}</p>
-                      {(evidence?.items || []).filter(item => String(item.data?.gateId || item.reference) === gate.id).map(item => (
-                        <button key={item.id} type="button" className="block min-h-6 text-xs text-primary underline mt-1" onClick={() => handleEdit(item, 'evidence')}>
-                          {item.name} · {readableLabel(item.status)}
-                        </button>
-                      ))}
                     </div>
                   </div>
                 ))}
@@ -176,6 +191,38 @@ export default function EvidencePage() {
         )}
       </section>
 
+      <section id="evidence-register" aria-labelledby="evidence-register-title" className="scroll-mt-6 rounded-xl border bg-card shadow-sm overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b p-5">
+          <div><h2 id="evidence-register-title" className="text-lg font-semibold">Evidence register</h2><p className="mt-1 text-sm text-muted-foreground">Every prerequisite and decision, including funding, recovery and provider choice. Recording evidence does not verify a live requirement.</p></div>
+          <Button size="sm" onClick={() => handleCreate('evidence')}>Add evidence</Button>
+        </div>
+        <div className="flex flex-col gap-3 border-b p-5 sm:flex-row print:hidden">
+          <div className="relative flex-1"><Search aria-hidden="true" className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" /><input aria-label="Search evidence" placeholder="Search by title, owner or reference…" value={search} onChange={event => setSearch(event.target.value)} className="w-full rounded-md border bg-background py-2.5 pl-9 pr-3 text-sm" /></div>
+          <select aria-label="Filter evidence by requirement" value={gateFilter} onChange={event => setGateFilter(event.target.value)} className="min-w-0 rounded-md border bg-background px-3 py-2 text-sm sm:max-w-xs">
+            <option value="all">All requirements and decisions</option>
+            {gateOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </div>
+        {evidenceError ? <LoadProblem what="evidence" error={evidenceError} retry={() => { void retryEvidence(); }} busy={fetchingEvidence} /> : <ScrollFrame label="Evidence register" className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b bg-secondary/30 text-muted-foreground"><tr>{['Evidence', 'Requirement or decision', 'Owner', 'Date', 'Status', 'Action'].map(label => <th key={label} scope="col" className="px-5 py-3 font-medium">{label}</th>)}</tr></thead>
+            <tbody className="divide-y">
+              {isLoadingEvidence ? <LoadingRow colSpan={6} what="evidence" /> : evidenceRows.length === 0 ? <EmptyRow colSpan={6} title={search || gateFilter !== 'all' ? 'No evidence matches these filters' : 'No evidence recorded'}>{search || gateFilter !== 'all' ? <Button variant="link" onClick={() => { setSearch(''); setGateFilter('all'); }}>Clear filters</Button> : 'Add an evidence reference, an owner and the date it was recorded.'}</EmptyRow> : evidenceRows.map(item => {
+                const gate = String(item.data?.gateId || item.reference);
+                return <tr key={item.id} className="hover:bg-secondary/10">
+                  <td className="max-w-sm px-5 py-4"><p className="font-medium">{item.name}</p><p className="mt-1 break-all text-xs text-muted-foreground">{String(item.data?.reference || item.reference || 'No reference')}</p></td>
+                  <td className="px-5 py-4 text-xs">{gateOptions.find(option => option.value === gate)?.label || gate || 'Not assigned'}</td>
+                  <td className="px-5 py-4">{String(item.data?.owner || 'Not assigned')}</td>
+                  <td className="whitespace-nowrap px-5 py-4 text-xs text-muted-foreground">{formatDate(String(item.data?.evidenceDate || item.createdAt))}{!item.data?.evidenceDate && <span className="mt-1 block">Date added</span>}</td>
+                  <td className="px-5 py-4"><span className="rounded-md bg-secondary/50 px-2 py-1 text-xs">{readableLabel(item.status)}</span></td>
+                  <td className="px-5 py-4"><Button size="sm" variant="outline" aria-label={`Edit evidence: ${item.name}`} onClick={() => handleEdit(item, 'evidence')}>Edit</Button></td>
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </ScrollFrame>}
+      </section>
+
       {/* Commercial commitments */}
       <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
         <div className="p-4 border-b bg-secondary/20 flex items-center justify-between">
@@ -201,6 +248,8 @@ export default function EvidencePage() {
             <tbody className="divide-y">
               {isLoadingComm ? (
                 <LoadingRow colSpan={7} what="commercial commitments" />
+              ) : commercialError ? (
+                <tr><td colSpan={7}><LoadProblem what="commercial commitments" error={commercialError} retry={() => { void retryCommercial(); }} busy={fetchingCommercial} /></td></tr>
               ) : !commercial || commercial.items.length === 0 ? (
                 <EmptyRow colSpan={7} title="No commercial commitments">Record signed terms, licence plans and pricing commitments here. They support commercial readiness checks.</EmptyRow>
               ) : (
@@ -239,7 +288,7 @@ export default function EvidencePage() {
             <FileCheck className="h-5 w-5 text-primary" />
             <h2 className="font-semibold text-lg">Fortnightly reviews</h2>
           </div>
-          <Button size="sm" onClick={() => handleCreate('reviews')}>Log review</Button>
+          <Button size="sm" onClick={() => setReviewOpen(true)}>Log review</Button>
         </div>
         <ScrollFrame label="Fortnightly reviews" className="overflow-x-auto">
           <table className="w-full text-sm text-left">
@@ -254,6 +303,8 @@ export default function EvidencePage() {
             <tbody className="divide-y">
               {isLoadingReviews ? (
                 <LoadingRow colSpan={4} what="reviews" />
+              ) : reviewsError ? (
+                <tr><td colSpan={4}><LoadProblem what="reviews" error={reviewsError} retry={() => { void retryReviews(); }} busy={fetchingReviews} /></td></tr>
               ) : !reviews || reviews.items.length === 0 ? (
                 <EmptyRow colSpan={4} title="No reviews logged">Every two weeks, name the reviewer and record which tasks they confirmed: mandates, retries, payment matching and audit/dispute records.</EmptyRow>
               ) : (
@@ -261,7 +312,7 @@ export default function EvidencePage() {
                   <tr key={rev.id} className="hover:bg-secondary/10">
                     <td className="px-6 py-4 font-mono text-xs">{formatDate(String(rev.data?.reviewedAt || rev.createdAt))}</td>
                     <td className="px-6 py-4 font-medium">{String(rev.data?.reviewer || 'Unknown')}</td>
-                    <td className="px-6 py-4 font-mono text-xs">{Array.isArray(rev.data?.confirmedJobs) ? rev.data.confirmedJobs.length : String(rev.data?.confirmedJobs || 0)}</td>
+                    <td className="px-6 py-4 text-xs">{Array.isArray(rev.data?.confirmedJobs) ? reviewJobs.filter(job => (rev.data!.confirmedJobs as string[]).includes(job.value)).map(job => job.label).join(', ') || 'No tasks confirmed' : `${String(rev.data?.confirmedJobs || 0)} tasks · legacy count`}</td>
                     <td className="px-6 py-4 text-xs text-muted-foreground">{String(rev.data?.note || '-')}</td>
                   </tr>
                 ))
@@ -270,19 +321,22 @@ export default function EvidencePage() {
           </table>
         </ScrollFrame>
       </section>
+      {reviewOpen && <ReviewDialog onClose={() => setReviewOpen(false)} />}
 
       <RecordDialog
         kind={actionKind || 'evidence'}
         record={selectedRecord}
         isOpen={isDialogOpen}
         onOpenChange={setIsDialogOpen}
-        title={`${selectedRecord ? 'Edit' : 'Add'} ${actionKind === 'commercial' ? 'commercial terms' : actionKind === 'reviews' ? 'review' : 'evidence'}`}
+        title={`${selectedRecord ? 'Edit' : 'Add'} ${actionKind === 'commercial' ? 'commercial terms' : 'evidence'}`}
         fields={
           actionKind === 'evidence' ? [
             { name: 'name', label: 'Evidence title', type: 'text', required: true },
             { name: 'gateId', label: 'Requirement or decision supported', type: 'select', isData: true, required: true, options: gateOptions },
             { name: 'status', label: 'Status', type: 'select', options: [{label: 'Pending', value: 'pending'}, {label: 'Recorded', value: 'recorded'}], required: true },
             { name: 'reference', label: 'Evidence link or reference', type: 'text', isData: true, required: true },
+            { name: 'owner', label: 'Evidence owner', type: 'text', isData: true, required: true },
+            { name: 'evidenceDate', label: 'Evidence date', type: 'date', isData: true, required: true },
             { name: 'notes', label: 'Notes', type: 'textarea', isData: true }
           ] : actionKind === 'commercial' ? [
             { name: 'name', label: 'Lender name', type: 'text', required: true },
@@ -292,11 +346,6 @@ export default function EvidencePage() {
             { name: 'usageBps', label: 'Usage rate (basis points; 100 = 1%)', type: 'number', isData: true, required: true },
             { name: 'usageCapKobo', label: 'Usage fee cap per collection (kobo)', type: 'number', isData: true, required: true },
             { name: 'signed', label: 'Signed', type: 'checkbox', isData: true }
-          ] : actionKind === 'reviews' ? [
-            { name: 'name', label: 'Review title', type: 'text', required: true },
-            { name: 'reviewer', label: 'Reviewer name', type: 'text', isData: true, required: true },
-            { name: 'confirmedJobs', label: 'Number of tasks confirmed (mandates, retries, payment matching and audit/dispute records)', type: 'number', isData: true, required: true },
-            { name: 'note', label: 'Notes', type: 'textarea', isData: true, required: true }
           ] : []
         }
       />
