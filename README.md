@@ -84,7 +84,7 @@ pnpm run test:pure
 pnpm run test:golden
 ```
 
-`typecheck` covers the API tests and the console tests as well as their sources (`artifacts/api-server/tsconfig.tests.json`, `artifacts/valo-pay/tsconfig.tests.json`), so a test that drifts from a domain signature or a contract type fails before it runs.
+`typecheck` covers the API tests and the console tests as well as their sources (`artifacts/api-server/tsconfig.tests.json`, `artifacts/valo-pay/tsconfig.tests.json`), so a test that drifts from a domain signature or a contract type fails before it runs. Record data is typed per kind: `lib/valopay-schema/src/records.ts` declares every kind's fields, the ones a caller may supply and the ones the platform sets, and the API's `recordsOf`, `findRecord` and `makeRecord` return `TypedRecord<K>` views of that type for a kind given as a literal, so a misspelt or mistyped field is a compile error rather than an `any`. Declare a field there before reading or writing it.
 
 `test:pure` explicitly runs the source-snapshot safeguards, in-memory store guards/audit checks, and download-stream tests. The store test supplies an unusable loopback database URL for module initialization; it does not connect to a database.
 

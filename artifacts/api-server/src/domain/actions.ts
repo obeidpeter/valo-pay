@@ -1,5 +1,5 @@
 import {
-  DEFAULT_ACTIVATION_WINDOW_DAYS, PLATFORM_OWNER, activationReminderCaps, closeRules, failureCodeList, isKnownFailureCode,
+  DEFAULT_ACTIVATION_WINDOW_DAYS, PLATFORM_OWNER, activationReminderCaps, closeRules, failureCodeList, isHandBackOwner, isKnownFailureCode,
   nextCloseInstant, normaliseFailureCode, normaliseOwner, passRuleText, resolutionCodesFor, resolveExceptionType, withinQuietHours,
   type CloseTrigger,
 } from "@workspace/valopay-schema";
@@ -8,7 +8,7 @@ import { allocatePayment, applyConfirmedAllocation, reconcile, supersedeAllocati
 import { buildReports } from "./reports";
 import { buildCloseReport, closeSchedule, openingSnapshot, storedCloseCursor } from "./close";
 import { issueInvoice } from "./billing";
-import type { ActionInput, ActionResult, Context, DomainState, ValopayRecord } from "./types";
+import type { ActionInput, ActionResult, Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { assertActionRole } from "./validation";
 import { countedAttempts, evaluateRetry, policyIdFor, policySummary, preregisterSample, samePolicyLineage } from "./policy-engine";
 import { buildAlerts } from "./alerts";
@@ -32,7 +32,7 @@ function result(message: string, record?: ValopayRecord, data: Record<string, an
 }
 
 /** MAN-08 and DEB-06: scheduled attempts are cancelled and logged; in-flight ones complete and are recorded. */
-function cancelScheduledAttempts(state: DomainState, now: string, cancellationReason: string, matches: (attempt: ValopayRecord) => boolean): string[] {
+function cancelScheduledAttempts(state: DomainState, now: string, cancellationReason: string, matches: (attempt: TypedRecord<"attempts">) => boolean): string[] {
   return recordsOf(state, "attempts").filter((attempt) => attempt.status === "scheduled" && matches(attempt)).map((attempt) => {
     attempt.status = "cancelled";
     attempt.data.cancellationReason = cancellationReason;
@@ -288,8 +288,9 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     if (!policy) throw new Error("A preregistered experiment requires an approved policy.");
     const analysis = Date.parse(experiment.data.analysisDate), close = Date.parse(experiment.data.enrolmentClose);
     if (!Number.isFinite(analysis) || !Number.isFinite(close) || close > analysis - 30 * DAY_MS || close <= Date.parse(now)) throw new Error("Enrolment must close in the future and at least 30 days before analysis.");
-    experiment.data.sampleCalculation = preregisterSample(Number(experiment.data.baselineRate), Number(experiment.data.holdoutShare));
-    experiment.data.minPerArm = Math.max(Number(experiment.data.minPerArm || 0), experiment.data.sampleCalculation.holdoutMinimum);
+    const sample = preregisterSample(Number(experiment.data.baselineRate), Number(experiment.data.holdoutShare));
+    experiment.data.sampleCalculation = sample;
+    experiment.data.minPerArm = Math.max(Number(experiment.data.minPerArm || 0), sample.holdoutMinimum);
     experiment.data.passRule = passRuleText;
     experiment.status = "preregistered"; experiment.data.preregisteredAt = now; experiment.data.parametersFrozen = true; experiment.data.preregisteredBy = ctx.actor;
     touch(experiment, now);
@@ -299,8 +300,9 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     assertActionRole(ctx, ["Admin", "Operations"]);
     // DEB-12: ownership reverts to the owner named in the cutover contract; every future instruction is cancelled.
     const contract = recordsOf(state, "cutovers").filter((item) => item.status !== "handed_back").at(-1);
-    const fallbackOwner = normaliseOwner(contract?.data.fallbackOwner) ?? "lms";
-    const reverted = recordsOf(state, "due-items").filter((item) => item.data.owner === PLATFORM_OWNER).map((item) => { item.data.owner = fallbackOwner === PLATFORM_OWNER ? "lms" : fallbackOwner; item.data.handBackAt = now; touch(item, now); return item.id; });
+    const contractOwner = normaliseOwner(contract?.data.fallbackOwner);
+    const fallbackOwner = isHandBackOwner(contractOwner) ? contractOwner : "lms";
+    const reverted = recordsOf(state, "due-items").filter((item) => item.data.owner === PLATFORM_OWNER).map((item) => { item.data.owner = fallbackOwner; item.data.handBackAt = now; touch(item, now); return item.id; });
     const cancelled = cancelScheduledAttempts(state, now, "Hand-back: no future instruction is held.", () => true);
     state.merchant.killSwitch = true;
     const checklist = [`Ownership of ${reverted.length} obligations reverted to ${fallbackOwner}`, `${cancelled.length} scheduled attempts cancelled with notices`, "Incumbent schedules re-enabled by the merchant against this checklist", "Full export delivered", "No future instructions are held for this merchant"];

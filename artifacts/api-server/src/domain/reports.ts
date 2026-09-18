@@ -1,6 +1,6 @@
-import { PLAN_GROSS_MARGIN, VARIABLE_COST_PER_COLLECTION_KOBO, experimentRules, isOpenException, measurementRules } from "@workspace/valopay-schema";
+import { PLAN_GROSS_MARGIN, VARIABLE_COST_PER_COLLECTION_KOBO, experimentRules, isOpenException, measurementRules, type RecordKind } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
-import type { DomainState, Metric, Report, ValopayRecord } from "./types";
+import type { DomainState, Metric, Report, TypedRecord, ValopayRecord } from "./types";
 import { paymentObservedAt, paymentRefunded, paymentReversed } from "./reconciliation";
 import { buildBillingStatement, monthOf, previousMonth } from "./billing";
 import { seededSample, wilsonInterval } from "./stats";
@@ -14,7 +14,7 @@ const round = (value: number, places = 6) => Number(value.toFixed(places));
 
 /** Queue counts and headline metrics for the console overview; dashboards beyond this are stage 2 (UI-01). */
 export function buildOverview(state: DomainState, now: string, alerts: Alert[] = []) {
-  const by = (kind: string) => recordsOf(state, kind);
+  const by = <K extends RecordKind>(kind: K) => recordsOf(state, kind);
   const settled = by("payments").filter((item) => item.data.settlementStatus === "settled" && item.status !== "possible_duplicate" && !paymentReversed(item));
   const outstanding = by("due-items").reduce((sum, item) => sum + Number(item.data.outstandingKobo ?? item.amountKobo), 0);
   const certainPayments = new Set(by("allocations").filter((item) => item.status === "confirmed" && item.data.confidence === "certain").map((item) => item.data.paymentId));
@@ -45,7 +45,7 @@ export function buildOverview(state: DomainState, now: string, alerts: Alert[] =
 
 // ---------- RET-06: the uplift report ----------
 
-interface ArmOutcome { due: ValopayRecord; recoveredKobo: number; settledInFull: boolean }
+interface ArmOutcome { due: TypedRecord<"due-items">; recoveredKobo: number; settledInFull: boolean }
 export interface ArmStatistics {
   enrolled: number;
   mature: number;
@@ -60,7 +60,7 @@ export interface ArmStatistics {
 }
 
 /** 6.6: settlement of the due item by any channel within 30 days of the first failure, by value (partials count) and by count. */
-function outcomeWithinWindow(state: DomainState, due: ValopayRecord): ArmOutcome {
+function outcomeWithinWindow(state: DomainState, due: TypedRecord<"due-items">): ArmOutcome {
   const start = Date.parse(String(due.data.firstFailureAt || due.createdAt)), end = start + experimentRules.outcomeWindowDays * DAY_MS;
   const payments = recordsOf(state, "payments");
   const recovered = recordsOf(state, "allocations").filter((a) => a.status === "confirmed" && a.data.dueItemId === due.id).reduce((total, allocation) => {
@@ -73,7 +73,7 @@ function outcomeWithinWindow(state: DomainState, due: ValopayRecord): ArmOutcome
   return { due, recoveredKobo, settledInFull: recoveredKobo >= due.amountKobo };
 }
 
-export function armStatistics(state: DomainState, items: ValopayRecord[], now: string): ArmStatistics {
+export function armStatistics(state: DomainState, items: TypedRecord<"due-items">[], now: string): ArmStatistics {
   const matured = items.filter((due) => Date.parse(now) >= Date.parse(String(due.data.firstFailureAt || due.createdAt)) + experimentRules.outcomeWindowDays * DAY_MS);
   const outcomes = matured.map((due) => outcomeWithinWindow(state, due));
   const n = outcomes.length;
@@ -100,7 +100,7 @@ function interval(difference: number, varianceA: number | null, varianceB: numbe
 }
 
 /** RET-06 and RET-11: the uplift report per lender with the pre-registered rule evaluated exactly as written. */
-export function upliftReport(state: DomainState, experiment: ValopayRecord, now: string) {
+export function upliftReport(state: DomainState, experiment: TypedRecord<"experiments">, now: string) {
   const enrolled = recordsOf(state, "due-items").filter((due) => due.data.experimentId === experiment.id);
   const engine = armStatistics(state, enrolled.filter((due) => due.data.experimentArm === "engine"), now);
   const holdout = armStatistics(state, enrolled.filter((due) => due.data.experimentArm === "holdout"), now);
@@ -168,7 +168,7 @@ export function precisionAudit(state: DomainState, now: string) {
 }
 
 /** A fortnightly review counts when a named reviewer confirmed all four jobs (MEA-05). */
-function confirmingReviews(state: DomainState): ValopayRecord[] {
+function confirmingReviews(state: DomainState): TypedRecord<"reviews">[] {
   return recordsOf(state, "reviews").filter((item) => {
     const jobs = item.data.confirmedJobs;
     const confirmed = Array.isArray(jobs) ? jobs.length >= measurementRules.jobsToConfirm : Number(jobs) >= measurementRules.jobsToConfirm;
@@ -183,7 +183,7 @@ export function test5Report(state: DomainState, now: string) {
   const firstClose = closes[0] ? String(closes[0].data.closedAt || closes[0].createdAt) : null;
   const liveDays = firstClose ? Math.max(0, Math.floor((nowMs - Date.parse(firstClose)) / DAY_MS)) : 0;
   const reviews = confirmingReviews(state);
-  const reviewAt = (item: ValopayRecord) => Date.parse(String(item.data.reviewedAt || item.createdAt));
+  const reviewAt = (item: TypedRecord<"reviews">) => Date.parse(String(item.data.reviewedAt || item.createdAt));
   const latest = reviews.at(-1);
   const fortnightMs = measurementRules.fortnightDays * DAY_MS;
   const fortnightlyStaffConfirmed = Boolean(latest) && nowMs - reviewAt(latest!) <= fortnightMs;
@@ -193,7 +193,7 @@ export function test5Report(state: DomainState, now: string) {
     let previous = Date.parse(firstClose!);
     for (const review of reviews) { if (reviewAt(review) - previous > fortnightMs) { cadenceMet = false; break; } previous = reviewAt(review); }
   }
-  const monthEnds = new Map<string, ValopayRecord>();
+  const monthEnds = new Map<string, TypedRecord<"closes">>();
   for (const close of closes) monthEnds.set(monthOf(String(close.data.closedAt || close.createdAt)), close); // the last close of each month wins
   const overdueShareAtMonthEnds = [...monthEnds.entries()].filter(([month]) => month < monthOf(now)).map(([month, close]) => {
     const open = Number(close.data.report?.exceptions?.openAtClose ?? NaN), overdue = Number(close.data.report?.exceptions?.overdueAtClose ?? NaN);

@@ -1,10 +1,6 @@
-import {
-  DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_TOLERANCE_KOBO, exceptionCatalogue, isKobo,
-  isOpenException, normaliseFailureCode, normaliseRefundStatus, normaliseReversalStatus, providerFeeKobo, resolveExceptionType,
-  type ExceptionType, type ProviderFeeSchedule,
-} from "@workspace/valopay-schema";
+import { DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_TOLERANCE_KOBO, exceptionCatalogue, isKobo, isOpenException, normaliseFailureCode, normaliseRefundStatus, normaliseReversalStatus, providerFeeKobo, resolveExceptionType, type ExceptionType, type ProviderFeeSchedule, type PaymentChannel } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
-import type { Context, DomainState, ValopayRecord } from "./types";
+import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { addBusinessDays } from "./calendar";
 import { approvedPolicyFor, attemptTime, attemptsFor, enrolEligibleFailures, evaluateRetry, recordRetryDecision } from "./policy-engine";
 
@@ -14,12 +10,12 @@ export const DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
 /** REC-04: unallocated Payments older than this become exceptions. */
 export const UNALLOCATED_AGE_MS = DAY_MS;
 
-export const paymentReversed = (payment: ValopayRecord): boolean => normaliseReversalStatus(payment.data.reversalStatus) === "reversed";
-export const paymentRefunded = (payment: ValopayRecord): boolean => normaliseRefundStatus(payment.data.refundStatus) === "refunded";
-export const paymentObservedAt = (payment: ValopayRecord): number => Date.parse(String(payment.data.observedAt || payment.createdAt));
+export const paymentReversed = (payment: TypedRecord<"payments">): boolean => normaliseReversalStatus(payment.data.reversalStatus) === "reversed";
+export const paymentRefunded = (payment: TypedRecord<"payments">): boolean => normaliseRefundStatus(payment.data.refundStatus) === "refunded";
+export const paymentObservedAt = (payment: TypedRecord<"payments">): number => Date.parse(String(payment.data.observedAt || payment.createdAt));
 
 /** The four independent status dimensions of a Payment (TRD 4.2), written in one vocabulary; legacy spellings are normalised. */
-export function paymentDimensions(payment: ValopayRecord): void {
+export function paymentDimensions(payment: TypedRecord<"payments">): void {
   payment.data.collectionStatus ||= "received";
   payment.data.settlementStatus ||= "unsettled";
   payment.data.reversalStatus = normaliseReversalStatus(payment.data.reversalStatus);
@@ -41,7 +37,7 @@ export function feeScheduleFor(state: DomainState, provider: unknown): ProviderF
 }
 
 /** Appendix A: one open exception per (type, linked record), with the catalogue's owner, severity and business-day SLA. */
-export function raiseException(state: DomainState, ctx: Context, type: ExceptionType, options: { linkedRecordId?: string; customerId?: string; amountKobo?: number; notes: string }): ValopayRecord {
+export function raiseException(state: DomainState, ctx: Context, type: ExceptionType, options: { linkedRecordId?: string; customerId?: string; amountKobo?: number; notes: string }): TypedRecord<"exceptions"> {
   const definition = exceptionCatalogue[type];
   const linkedRecordId = options.linkedRecordId || "";
   const existing = recordsOf(state, "exceptions").find((item) => isOpenException(item.status) && item.data.linkedRecordId === linkedRecordId && resolveExceptionType(item.data.type) === type);
@@ -52,11 +48,11 @@ export function raiseException(state: DomainState, ctx: Context, type: Exception
   });
 }
 
-function outstanding(due: ValopayRecord): number {
+function outstanding(due: TypedRecord<"due-items">): number {
   return Number.isInteger(due.data.outstandingKobo) ? Number(due.data.outstandingKobo) : due.amountKobo;
 }
 
-function channelFor(source: unknown): string {
+function channelFor(source: unknown): PaymentChannel {
   switch (source) {
     case "webhook": case "settlement": return "direct_debit";
     case "transfer": return "transfer";
@@ -74,7 +70,7 @@ function cancelUnsentAttempts(state: DomainState, dueItemId: string, now: string
   });
 }
 
-function settlementBatch(state: DomainState, ctx: Context, observation: ValopayRecord, payment: ValopayRecord): void {
+function settlementBatch(state: DomainState, ctx: Context, observation: TypedRecord<"observations">, payment: TypedRecord<"payments">): void {
   const batchReference = String(observation.data.batchReference || "");
   if (!batchReference) return;
   const provider = String(observation.data.provider || payment.data.providerConnection || state.merchant.provider);
@@ -153,14 +149,14 @@ function matchSettlementStatements(state: DomainState, ctx: Context): number {
 export function allocatePayment(
   state: DomainState,
   ctx: Context,
-  payment: ValopayRecord,
-  due: ValopayRecord,
+  payment: TypedRecord<"payments">,
+  due: TypedRecord<"due-items">,
   amount: number,
   rule: string,
   confidence: "certain" | "probable" | "manual",
   automatic: boolean,
   explanation?: string,
-): ValopayRecord {
+): TypedRecord<"allocations"> {
   if (!Number.isInteger(amount) || amount <= 0 || amount > payment.amountKobo - Number(payment.data.allocatedKobo || 0)) {
     throw new Error("Allocation exceeds the remaining canonical payment amount.");
   }
@@ -182,7 +178,7 @@ export function allocatePayment(
   return allocation;
 }
 
-export function applyConfirmedAllocation(state: DomainState, ctx: Context, allocation: ValopayRecord): void {
+export function applyConfirmedAllocation(state: DomainState, ctx: Context, allocation: TypedRecord<"allocations">): void {
   const payment = findRecord(state, String(allocation.data.paymentId), "payments");
   const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
   if (allocation.status === "superseded") throw new Error("A superseded allocation cannot be confirmed.");
@@ -210,7 +206,7 @@ export function applyConfirmedAllocation(state: DomainState, ctx: Context, alloc
 }
 
 /** REC-09: a wrong automatic allocation is superseded and the due item and payment are reopened. */
-export function supersedeAllocation(state: DomainState, ctx: Context, allocation: ValopayRecord, reason: string): void {
+export function supersedeAllocation(state: DomainState, ctx: Context, allocation: TypedRecord<"allocations">, reason: string): void {
   if (allocation.status !== "confirmed") { allocation.status = "superseded"; touch(allocation, ctx.now); return; }
   const payment = findRecord(state, String(allocation.data.paymentId), "payments");
   const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
@@ -224,7 +220,7 @@ export function supersedeAllocation(state: DomainState, ctx: Context, allocation
   touch(allocation, ctx.now); touch(payment, ctx.now); touch(due, ctx.now);
 }
 
-function reversePayment(state: DomainState, ctx: Context, payment: ValopayRecord): void {
+function reversePayment(state: DomainState, ctx: Context, payment: TypedRecord<"payments">): void {
   if (payment.data.reversalApplied) return;
   payment.data.reversalStatus = "reversed";
   payment.data.reversedAt = ctx.now;
@@ -243,7 +239,7 @@ function reversePayment(state: DomainState, ctx: Context, payment: ValopayRecord
 }
 
 /** ING-03: every observation resolves to one canonical Payment by its strong keys; the batch leg of a statement never becomes a customer Payment. */
-function canonicalPayment(state: DomainState, ctx: Context, observation: ValopayRecord): ValopayRecord | undefined {
+function canonicalPayment(state: DomainState, ctx: Context, observation: TypedRecord<"observations">): TypedRecord<"payments"> | undefined {
   const source = String(observation.data.source);
   const ref = observation.reference;
   if (source === "statement" && (observation.data.batchReference || observation.data.resolutionKey === "batch")) return undefined;
@@ -282,19 +278,19 @@ function canonicalPayment(state: DomainState, ctx: Context, observation: Valopay
 }
 
 /** The due item a Payment was collected for, by its strong keys: the attempt's provider debit reference, then the observation's explicit link. */
-export function intendedDueItem(state: DomainState, payment: ValopayRecord): { due: ValopayRecord; key: string } | undefined {
+export function intendedDueItem(state: DomainState, payment: TypedRecord<"payments">): { due: TypedRecord<"due-items">; key: string } | undefined {
   const byAttempt = recordsOf(state, "attempts").find((attempt) => attempt.data.providerReference ? attempt.data.providerReference === payment.reference : Boolean(attempt.reference) && attempt.reference === payment.reference);
   const candidate = byAttempt
     ? { id: String(byAttempt.data.dueItemId), key: byAttempt.data.providerReference ? "attempt_provider_reference" : "attempt_reference" }
     : payment.data.dueItemId ? { id: String(payment.data.dueItemId), key: "observation_due_item" } : undefined;
   if (!candidate) return undefined;
-  const due = state.records.find((record) => record.kind === "due-items" && record.id === candidate.id);
+  const due = recordsOf(state, "due-items").find((record) => record.id === candidate.id);
   if (!due || (payment.customerId && due.customerId !== payment.customerId)) return undefined;
   return { due, key: candidate.key };
 }
 
 /** Section 7.2 rule ladder, applied to canonical Payments, never to observations. */
-function matchPayment(state: DomainState, ctx: Context, payment: ValopayRecord): void {
+function matchPayment(state: DomainState, ctx: Context, payment: TypedRecord<"payments">): void {
   if (payment.status !== "unallocated" || paymentReversed(payment)) return;
   const sameConnection = String(payment.data.providerConnection || state.merchant.provider) === String(state.merchant.provider) || Boolean(payment.data.providerConnection);
   const currencyOk = String(payment.data.currency || "NGN") === "NGN";
@@ -307,7 +303,7 @@ function matchPayment(state: DomainState, ctx: Context, payment: ValopayRecord):
     return;
   }
   // ING-05 (a): the later of two near-identical Payments from the same payer inside two minutes is held, never allocated.
-  const observedBefore = (item: ValopayRecord) => {
+  const observedBefore = (item: TypedRecord<"payments">) => {
     const delta = paymentObservedAt(item) - paymentObservedAt(payment);
     return delta < 0 || (delta === 0 && `${item.createdAt}${item.id}` < `${payment.createdAt}${payment.id}`);
   };
@@ -385,7 +381,7 @@ function applyDecisions(state: DomainState, ctx: Context): { finalFailures: numb
 export function reconcile(state: DomainState, ctx: Context): { message: string; data: Record<string, any> } {
   const observations = recordsOf(state, "observations").filter((item) => item.status === "unresolved");
   const exceptionsBefore = recordsOf(state, "exceptions").length;
-  const resolved = observations.map((item) => canonicalPayment(state, ctx, item)).filter(Boolean) as ValopayRecord[];
+  const resolved = observations.map((item) => canonicalPayment(state, ctx, item)).filter(Boolean) as TypedRecord<"payments">[];
   const statementBatchesMatched = matchSettlementStatements(state, ctx);
   const feeVariances = checkBatchFees(state, ctx);
   const allocationsBefore = new Set(recordsOf(state, "allocations").map((item) => item.id));

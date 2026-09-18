@@ -147,7 +147,7 @@ checks += 3;
   assert.equal(gated.data.recoveryFee.enabled, false);
   assert.equal(gated.data.subtotals.recoveryKobo, 0);
   state.settings.recoveryFeeEnabled = true;
-  assert.equal(issueInvoice(structuredClone(state), finance(wat("2027-08-01T09:00:00")), { period: "2027-07" }).data.recoveryFee.enabled, false, "the flag alone does not open the gate");
+  assert.equal(issueInvoice(structuredClone(state), finance(wat("2027-08-01T09:00:00")), { period: "2027-07" }).data.recoveryFee!.enabled, false, "the flag alone does not open the gate");
   state.settings.recoveryFeeDecision = "proven";
   const july = invoiceFor(state, "2027-07", wat("2027-08-01T09:00:00"));
   assert.equal(july.data.recoveryFee.enabled, true);

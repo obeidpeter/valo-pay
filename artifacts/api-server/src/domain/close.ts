@@ -1,6 +1,6 @@
-import { closeRules, closeTimeOf, isOpenException, nextCloseInstant } from "@workspace/valopay-schema";
+import { closeRules, closeTimeOf, isOpenException, nextCloseInstant, type CloseReport } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
-import type { Context, DomainState, ValopayRecord } from "./types";
+import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { paymentObservedAt } from "./reconciliation";
 
 const DAY_MS = 24 * 60 * 60 * 1000, MINUTE_MS = 60 * 1000;
@@ -112,7 +112,7 @@ export function openingSnapshot(state: DomainState): OpeningSnapshot {
  * unallocated, variances, exceptions opened and closed, and the customer
  * positions that changed, plus the REC-05 position rebuild check.
  */
-export function buildCloseReport(state: DomainState, ctx: Context, opening: OpeningSnapshot, reconciled: Record<string, any>): Record<string, any> {
+export function buildCloseReport(state: DomainState, ctx: Context, opening: OpeningSnapshot, reconciled: Record<string, any>): CloseReport {
   const to = ctx.now, from = opening.since;
   const payments = recordsOf(state, "payments"), dueItems = recordsOf(state, "due-items");
 
@@ -147,7 +147,7 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
   const exceptions = recordsOf(state, "exceptions");
   const opened = exceptions.filter((item) => inPeriod(item.createdAt, from, to));
   const closed = exceptions.filter((item) => !isOpenException(item.status) && inPeriod(String(item.data.resolvedAt || item.updatedAt), from, to));
-  const byType = (items: ValopayRecord[]) => items.reduce<Record<string, number>>((acc, item) => { acc[String(item.data.type)] = (acc[String(item.data.type)] || 0) + 1; return acc; }, {});
+  const byType = (items: TypedRecord<"exceptions">[]) => items.reduce<Record<string, number>>((acc, item) => { acc[String(item.data.type)] = (acc[String(item.data.type)] || 0) + 1; return acc; }, {});
 
   const after = positionSnapshot(state);
   const customers = new Map(recordsOf(state, "customers").map((customer) => [customer.id, customer.name]));

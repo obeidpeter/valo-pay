@@ -1,25 +1,86 @@
 import { z } from "zod";
-import { activationWorkflows, adjustmentReasons, attemptSources, closeTriggers, exceptionSeverities, executionOwners, experimentArms, handBackOwners, mandateFrequencies, mandateOrigins, observationSources, retryDecisionKinds } from "./enums";
+import {
+  activationWorkflows, adjustmentReasons, alertSeverities, attemptSources, closeTriggers, collectionStatuses, exceptionSeverities, executionOwners, experimentArms,
+  handBackOwners, mandateFrequencies, mandateOrigins, notificationChannels, observationSources, paymentChannels, refundStatuses, retryDecisionKinds, reversalStatuses, settlementStatuses,
+} from "./enums";
+import type { RecordKind } from "./kinds";
 
 /** ISO date (YYYY-MM-DD) or a UTC ISO timestamp with millisecond precision or less. */
 export const isoDateOrTimestamp = z.string().regex(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/, "must be an ISO date or UTC ISO timestamp").refine((value) => !Number.isNaN(Date.parse(value)), "must be a real date");
 export const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").refine((value) => !Number.isNaN(Date.parse(value)), "must be a real date");
 export const kobo = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const versionNumber = z.coerce.number().int().min(1);
+/** Every record the platform writes is marked synthetic; a provider-accepted notice clears it (NOT-10). */
+const common = { synthetic: z.boolean().optional() };
+const money = z.object({ count: z.number().int().min(0), kobo: z.number().int() });
+
+/** A headline metric as the overview and the reports return it, and as each close freezes it. */
+export const metricSchema = z.object({ key: z.string(), label: z.string(), value: z.number(), unit: z.string(), detail: z.string() });
+/** NFR-OBS-02 alert as the overview returns it and each close freezes it. */
+export const alertSchema = z.object({
+  key: z.string(), severity: z.enum(alertSeverities), title: z.string(), detail: z.string(),
+  count: z.number().int().optional(), since: z.string().optional(), linkedRecordId: z.string().optional(),
+});
+/** REC-05: a customer position derived from due items, confirmed allocations and payments. */
+export const positionSchema = z.object({ customerId: z.string(), obligationsKobo: z.number().int(), allocatedKobo: z.number().int(), outstandingKobo: z.number().int(), unallocatedKobo: z.number().int() });
+/** REC-07: the daily close report, in the order the TRD lists its parts. */
+export const closeReportSchema = z.object({
+  period: z.object({ from: isoDateOrTimestamp.nullable(), to: isoDateOrTimestamp }),
+  openingUnallocated: money,
+  observations: z.object({
+    received: z.number().int().min(0),
+    bySource: z.record(z.object({ received: z.number().int(), resolved: z.number().int(), unresolved: z.number().int(), paymentsResolvedTo: z.number().int(), batchesResolvedTo: z.number().int() })),
+    paymentsResolvedTo: z.number().int().min(0),
+    canonicalPaymentsCreated: z.number().int().min(0),
+  }),
+  allocatedByRule: z.record(z.object({ count: z.number().int(), kobo: z.number().int(), automatic: z.number().int() })),
+  allocated: money,
+  proposed: money,
+  unallocated: money.extend({ olderThan24Hours: z.number().int().min(0) }),
+  possibleDuplicates: money,
+  variances: z.object({
+    count: z.number().int().min(0), feeVarianceKobo: z.number().int(),
+    batches: z.array(z.object({ batchId: z.string(), reference: z.string(), feeVarianceKobo: z.number().int(), netKobo: z.number().int(), statementNetKobo: z.number().int().nullable(), explanation: z.string().nullable() })),
+  }),
+  exceptions: z.object({
+    opened: z.object({ count: z.number().int(), byType: z.record(z.number().int()) }),
+    closed: z.object({ count: z.number().int(), byType: z.record(z.number().int()) }),
+    openAtClose: z.number().int().min(0),
+    overdueAtClose: z.number().int().min(0),
+  }),
+  retryDecisions: z.object({ recorded: z.number().int(), finalAttempts: z.number().int(), disputesFrozen: z.number().int(), noticesNotEvidenced: z.number().int() }),
+  customerPositionsChanged: z.array(z.object({ customerId: z.string(), customerName: z.string(), before: positionSchema.nullable(), after: positionSchema })),
+  positionRebuild: z.object({
+    customersChecked: z.number().int(), dueItemsChecked: z.number().int(),
+    mismatches: z.array(z.object({ dueItemId: z.string(), reference: z.string(), customerId: z.string(), storedOutstandingKobo: z.number().int(), rebuiltOutstandingKobo: z.number().int() })),
+    alert: z.boolean(),
+  }),
+  reconciliation: z.record(z.unknown()),
+  alerts: z.array(alertSchema).optional(),
+}).passthrough();
+export type CloseReport = z.infer<typeof closeReportSchema>;
+export type MetricData = z.infer<typeof metricSchema>;
+export type AlertData = z.infer<typeof alertSchema>;
+export type CustomerPositionData = z.infer<typeof positionSchema>;
 
 /**
- * Per-kind data schemas.  Known fields are typed; unknown fields pass through so
- * connectors and imports can attach provider-specific detail beside the record.
+ * Per-kind data schemas, one for every record kind: the fields a caller may
+ * supply and the fields the platform sets, typed.  Unknown fields pass through
+ * so connectors and imports can attach provider-specific detail beside the
+ * record; the API and the console read known fields through these types.
  */
 export const recordDataSchemas = {
   customers: z.object({
+    ...common,
     bankName: z.string().optional(),
     accountMasked: z.string().optional(),
     phoneMasked: z.string().optional(),
     consentProvenance: z.string().min(1),
     payDay: z.number().int().min(1).max(31).optional(),
+    consentCapturedAt: isoDateOrTimestamp.optional(),
   }).passthrough(),
   mandates: z.object({
+    ...common,
     workflow: z.enum(activationWorkflows),
     frequency: z.enum(mandateFrequencies).optional(),
     activationDeadline: isoDateOrTimestamp.optional(),
@@ -36,8 +97,18 @@ export const recordDataSchemas = {
     reminderCount: z.number().int().min(0).optional(),
     reissuedFrom: z.string().optional(),
     providerReference: z.string().optional(),
+    consentCapturedAt: isoDateOrTimestamp.optional(),
+    lastReminderAt: isoDateOrTimestamp.optional(),
+    lastActionReason: z.string().optional(),
+    suspendedAt: isoDateOrTimestamp.optional(),
+    reinstatedAt: isoDateOrTimestamp.optional(),
+    cancelledAt: isoDateOrTimestamp.optional(),
+    cancellationReason: z.string().optional(),
+    cancelledScheduledAttemptIds: z.array(z.string()).optional(),
+    handBackAt: isoDateOrTimestamp.optional(),
   }).passthrough(),
   "due-items": z.object({
+    ...common,
     dueDate: isoDateOrTimestamp,
     mandateId: z.string().optional(),
     owner: z.enum(executionOwners),
@@ -50,8 +121,13 @@ export const recordDataSchemas = {
     experimentArm: z.enum(experimentArms).optional(),
     firstFailureAt: isoDateOrTimestamp.optional(),
     amendedAt: isoDateOrTimestamp.optional(),
+    assignmentAt: isoDateOrTimestamp.optional(),
+    giveUpRule: z.string().optional(),
+    lastActionReason: z.string().optional(),
+    handedBackAt: isoDateOrTimestamp.optional(),
   }).passthrough(),
   attempts: z.object({
+    ...common,
     dueItemId: z.string().min(1),
     number: z.number().int().min(1).optional(),
     source: z.enum(attemptSources),
@@ -60,8 +136,16 @@ export const recordDataSchemas = {
     providerReference: z.string().optional(),
     noticeId: z.string().optional(),
     simulated: z.boolean().optional(),
+    rawFailureCode: z.string().optional(),
+    actualInstruction: z.boolean().optional(),
+    cancellationReason: z.string().optional(),
+    settledAt: isoDateOrTimestamp.optional(),
+    reversed: z.boolean().optional(),
+    reversedAt: isoDateOrTimestamp.optional(),
+    paymentId: z.string().optional(),
   }).passthrough(),
   observations: z.object({
+    ...common,
     source: z.enum(observationSources),
     dueItemId: z.string().optional(),
     provider: z.string().optional(),
@@ -73,16 +157,113 @@ export const recordDataSchemas = {
     occurredAt: isoDateOrTimestamp.optional(),
     reversed: z.boolean().optional(),
     virtualAccountCustomerId: z.string().optional(),
+    providerConnection: z.string().optional(),
+    currency: z.string().optional(),
+    settlementStatus: z.enum(settlementStatuses).optional(),
+    paymentId: z.string().optional(),
+    resolvedTo: z.string().optional(),
+    resolutionKey: z.string().optional(),
+    resolvedAt: isoDateOrTimestamp.optional(),
+    duplicateSettlementLine: z.boolean().optional(),
+    reversalApplied: z.boolean().optional(),
+    statementNetKobo: z.number().int().optional(),
+    linePaymentIds: z.array(z.string()).optional(),
+    settlementBatchId: z.string().optional(),
+  }).passthrough(),
+  /** Canonical payments (TRD 4.2): four independent status dimensions and the allocation running total; written by reconciliation only. */
+  payments: z.object({
+    ...common,
+    channel: z.enum(paymentChannels).optional(),
+    collectionStatus: z.enum(collectionStatuses).optional(),
+    settlementStatus: z.enum(settlementStatuses).optional(),
+    reversalStatus: z.enum(reversalStatuses).optional(),
+    refundStatus: z.enum(refundStatuses).optional(),
+    dueItemId: z.string().optional(),
+    attemptId: z.string().optional(),
+    allocatedKobo: kobo.optional(),
+    observedAt: isoDateOrTimestamp.optional(),
+    settledAt: isoDateOrTimestamp.optional(),
+    reversedAt: isoDateOrTimestamp.optional(),
+    proposedDueItemId: z.string().optional(),
+    proposedAmountKobo: kobo.optional(),
+    provider: z.string().optional(),
+    providerConnection: z.string().optional(),
+    currency: z.string().optional(),
+    narration: z.string().optional(),
+    rule: z.string().optional(),
+    confidence: z.string().optional(),
+    explanation: z.string().optional(),
+    refundReference: z.string().optional(),
+    refundRecordedAt: isoDateOrTimestamp.optional(),
+    refundRecordedExternally: z.boolean().optional(),
+    duplicateSettlementLine: z.boolean().optional(),
+    statementObservationId: z.string().optional(),
+    settlementBatchId: z.string().optional(),
+    observationIds: z.array(z.string()).optional(),
+    resolvedTo: z.string().optional(),
+    grossAmountKobo: kobo.optional(),
+    feeKobo: kobo.optional(),
+  }).passthrough(),
+  /** Allocations (REC-02 to REC-04): the rule, confidence and explanation, Finance's review and what superseded it. */
+  allocations: z.object({
+    ...common,
+    paymentId: z.string().min(1),
+    dueItemId: z.string().min(1),
+    rule: z.string().optional(),
+    confidence: z.string().optional(),
+    automatic: z.boolean().optional(),
+    explanation: z.string().optional(),
+    tolerance: z.string().optional(),
+    reviewed: z.boolean().nullable().optional(),
+    reviewReason: z.string().optional(),
+    reviewedBy: z.string().optional(),
+    reviewedAt: isoDateOrTimestamp.optional(),
+    confirmedBy: z.string().optional(),
+    confirmedAt: isoDateOrTimestamp.optional(),
+    supersededReason: z.string().optional(),
+    supersededBy: z.string().optional(),
+  }).passthrough(),
+  /** Customer messages (NOT-01 to NOT-10): purpose, class, the provider's acceptance and delivery evidence and the cost. */
+  notifications: z.object({
+    ...common,
+    purpose: z.string().optional(),
+    channel: z.enum(notificationChannels).optional(),
+    class: z.string().optional(),
+    renderedText: z.string().optional(),
+    templateVersion: z.number().int().optional(),
+    submittedAt: isoDateOrTimestamp.optional(),
+    acceptedAt: isoDateOrTimestamp.nullable().optional(),
+    deliveredAt: isoDateOrTimestamp.nullable().optional(),
+    costKobo: kobo.optional(),
+    dueItemId: z.string().optional(),
+    mandateId: z.string().optional(),
+    policyId: z.string().optional(),
+    policyVersion: z.number().int().optional(),
+    attemptId: z.string().optional(),
+    sequence: z.number().int().optional(),
+    cap: z.number().int().optional(),
+    reason: z.string().optional(),
+    simulated: z.boolean().optional(),
   }).passthrough(),
   "settlement-batches": z.object({
+    ...common,
     provider: z.string().optional(),
     batchReference: z.string().min(1),
     grossKobo: kobo,
     feeKobo: kobo,
     netKobo: kobo,
     lineObservationIds: z.array(z.string()).optional(),
+    linePaymentIds: z.array(z.string()).optional(),
+    expectedFeeKobo: z.number().int().optional(),
+    assumedFeeKobo: z.number().int().optional(),
+    feeVarianceKobo: z.number().int().optional(),
+    statementNetKobo: z.number().int().nullable().optional(),
+    statementObservationId: z.string().optional(),
+    explanation: z.string().nullable().optional(),
+    reconciledAt: isoDateOrTimestamp.optional(),
   }).passthrough(),
   exceptions: z.object({
+    ...common,
     type: z.string().min(1),
     severity: z.enum(exceptionSeverities).optional(),
     owner: z.string().optional(),
@@ -90,8 +271,13 @@ export const recordDataSchemas = {
     resolutionCode: z.string().optional(),
     notes: z.string().optional(),
     linkedRecordId: z.string().optional(),
+    reason: z.string().optional(),
+    resolvedBy: z.string().optional(),
+    resolvedAt: isoDateOrTimestamp.optional(),
+    legacyType: z.boolean().optional(),
   }).passthrough(),
   policies: z.object({
+    ...common,
     version: versionNumber.optional(),
     maxAttempts: z.number().int().optional(),
     spacingHours: z.number().int().optional(),
@@ -102,15 +288,25 @@ export const recordDataSchemas = {
     reviewer: z.string().optional(),
     approvedAt: isoDateOrTimestamp.optional(),
     complianceMapping: z.string().optional(),
+    previousVersionId: z.string().optional(),
+    submittedAt: isoDateOrTimestamp.optional(),
+    rejectedAt: isoDateOrTimestamp.optional(),
+    rejectionReason: z.string().optional(),
   }).passthrough(),
   templates: z.object({
+    ...common,
     purpose: z.string().optional(),
     text: z.string().min(1),
     version: versionNumber.optional(),
     author: z.string().optional(),
     reviewer: z.string().optional(),
+    approvedAt: isoDateOrTimestamp.optional(),
+    submittedAt: isoDateOrTimestamp.optional(),
+    rejectedAt: isoDateOrTimestamp.optional(),
+    previousVersionId: z.string().optional(),
   }).passthrough(),
   experiments: z.object({
+    ...common,
     baselineRate: z.number().min(0).max(1),
     holdoutShare: z.number(),
     minPerArm: z.number().int().min(0),
@@ -118,8 +314,16 @@ export const recordDataSchemas = {
     enrolmentClose: isoDateOrTimestamp,
     seed: z.string().min(1),
     policyId: z.string().min(1),
+    preregisteredAt: isoDateOrTimestamp.optional(),
+    preregisteredBy: z.string().optional(),
+    passRule: z.string().optional(),
+    sampleCalculation: z.object({ holdoutMinimum: z.number().int(), engineMinimum: z.number().int(), confidence: z.number(), power: z.number(), effect: z.number() }).passthrough().optional(),
+    parametersFrozen: z.boolean().optional(),
+    upliftReport: z.record(z.unknown()).optional(),
+    closedAt: isoDateOrTimestamp.optional(),
   }).passthrough(),
   cutovers: z.object({
+    ...common,
     inventory: z.string().optional(),
     incumbentDisabled: z.boolean().optional(),
     externalAttemptsImported: z.boolean().optional(),
@@ -127,8 +331,14 @@ export const recordDataSchemas = {
     accountableUser: z.string().optional(),
     fallbackOwner: z.enum(handBackOwners).optional(),
     confirmation: z.string().optional(),
+    handedBackAt: isoDateOrTimestamp.optional(),
+    handBackReason: z.string().optional(),
+    checklist: z.array(z.string()).optional(),
+    revertedDueItemIds: z.array(z.string()).optional(),
+    cancelledAttemptIds: z.array(z.string()).optional(),
   }).passthrough(),
   commercial: z.object({
+    ...common,
     monthlyVolume: z.number().int().min(0).optional(),
     averageTicketKobo: kobo.optional(),
     implementationKobo: kobo.optional(),
@@ -143,22 +353,56 @@ export const recordDataSchemas = {
     designPartner: z.boolean().optional(),
   }).passthrough(),
   reviews: z.object({
+    ...common,
     reviewer: z.string().optional(),
     reviewedAt: isoDateOrTimestamp.optional(),
     confirmedJobs: z.union([z.number().int().min(0), z.array(z.string())]).optional(),
     note: z.string().optional(),
   }).passthrough(),
   evidence: z.object({
+    ...common,
     gateId: z.string().optional(),
     reference: z.string().optional(),
     notes: z.string().optional(),
   }).passthrough(),
-  costs: z.object({ period: z.string().optional() }).passthrough(),
-  calendar: z.object({ date: isoDay }).passthrough(),
+  costs: z.object({ ...common, period: z.string().optional(), category: z.string().optional(), costKobo: kobo.optional(), note: z.string().optional() }).passthrough(),
+  calendar: z.object({ ...common, date: isoDay, note: z.string().optional() }).passthrough(),
+  /** Integrations are descriptive: no production adapter is connected in this sandbox. */
+  integrations: z.object({ ...common, type: z.string().optional(), description: z.string().optional(), capabilities: z.array(z.string()).optional() }).passthrough(),
+  /** Demo personas, not production staff provisioning. */
+  members: z.object({ ...common, role: z.string().optional(), mfaEnrolled: z.boolean().optional() }).passthrough(),
+  /** AUD-04: one hash-chained entry per transaction, written by the repository. */
+  audit: z.object({
+    sequence: z.number().int().min(1),
+    actor: z.string(),
+    action: z.string(),
+    objectId: z.string(),
+    summary: z.string(),
+    changeDigest: z.string(),
+    previousHash: z.string(),
+    timestamp: isoDateOrTimestamp,
+    hash: z.string(),
+  }).passthrough(),
+  /** Export metadata (AUD-02, AUD-06): the file's checksum and provenance; storage location is never listed. */
+  exports: z.object({
+    ...common,
+    kind: z.string(),
+    format: z.string(),
+    checksum: z.string().optional(),
+    usedInRealCase: z.boolean().optional(),
+    byteLength: z.number().int().min(0).optional(),
+    generationMs: z.number().int().min(0).optional(),
+    contentType: z.string().optional(),
+    events: z.number().int().min(0).optional(),
+    customerReference: z.string().optional(),
+    objectName: z.string().optional(),
+    bucket: z.string().optional(),
+  }).passthrough(),
   /** RET-03: written by the engine at every close evaluation; never created or edited through the record API. */
   "retry-decisions": z.object({
+    ...common,
     dueItemId: z.string().min(1),
-    attemptId: z.string().optional(),
+    attemptId: z.string().nullable().optional(),
     decision: z.enum(retryDecisionKinds),
     rule: z.string().min(1),
     reason: z.string(),
@@ -175,13 +419,20 @@ export const recordDataSchemas = {
       noticeId: z.string().nullable(),
       acceptedAt: isoDateOrTimestamp.nullable(),
       evidenced: z.boolean(),
-    }).passthrough().optional(),
+    }).optional(),
     fingerprint: z.string().min(1),
+    previousDecisionId: z.string().nullable().optional(),
   }).passthrough(),
   /** REC-07: the daily close report as written by the close; immutable evidence. */
   closes: z.object({
+    ...common,
     closedAt: isoDateOrTimestamp,
-    report: z.record(z.unknown()),
+    report: closeReportSchema,
+    summary: z.string().optional(),
+    period: z.object({ from: isoDateOrTimestamp.nullable(), to: isoDateOrTimestamp }).passthrough().optional(),
+    metrics: z.array(metricSchema).optional(),
+    operational: z.record(z.unknown()).optional(),
+    positionAlert: z.boolean().optional(),
     /** REC-01: how the close was started, the scheduled instant it covered (if one was pending), its delay and the next scheduled instant. */
     schedule: z.object({
       trigger: z.enum(closeTriggers),
@@ -193,23 +444,42 @@ export const recordDataSchemas = {
   }).passthrough(),
   /** BIL-04 and BIL-07: an issued invoice is immutable; later corrections are adjustment lines on the next invoice. */
   invoices: z.object({
+    ...common,
     period: z.string().regex(/^\d{4}-\d{2}$/),
+    periodEnd: isoDateOrTimestamp.optional(),
     issuedAt: isoDateOrTimestamp,
     issuedBy: z.string().min(1),
-    usageLines: z.array(z.object({ paymentId: z.string(), paymentReference: z.string(), allocatedKobo: kobo, feeKobo: kobo }).passthrough()),
+    sequence: z.number().int().min(1).optional(),
+    terms: z.object({ commercialId: z.string(), prospect: z.string(), contractedLicenceKobo: z.number().int(), designPartner: z.boolean(), effectiveDate: z.string().nullable() }).nullable().optional(),
+    issueReason: z.string().optional(),
+    collectionsCounted: z.number().int().min(0).optional(),
+    licence: z.object({ kobo: z.number().int(), volumeTier: z.string().optional(), volumeTierLicenceKobo: z.number().int().optional(), tierMismatch: z.boolean().optional(), note: z.string().optional() }).optional(),
+    designPartnerDiscount: z.object({ rate: z.number(), kobo: z.number().int(), note: z.string().optional() }).optional(),
+    recoveryFee: z.object({ enabled: z.boolean(), lines: z.array(z.object({ dueItemId: z.string(), reference: z.string(), attemptId: z.string(), firstFailureAt: isoDateOrTimestamp.optional(), windowClosedAt: isoDateOrTimestamp, feeKobo: z.number().int() })), kobo: z.number().int(), note: z.string().optional() }).optional(),
+    subtotals: z.record(z.number()).optional(),
+    usageLines: z.array(z.object({ paymentId: z.string(), paymentReference: z.string(), allocatedKobo: kobo, feeKobo: kobo, allocationIds: z.array(z.string()).optional() })),
     adjustments: z.array(z.object({
       reason: z.enum(adjustmentReasons),
       paymentId: z.string(),
       paymentReference: z.string(),
       originalInvoiceId: z.string(),
+      originalInvoiceReference: z.string().optional(),
       kobo: z.number().int(),
-    }).passthrough()),
-    totals: z.object({ netKobo: kobo, vatBps: z.number().int().min(0), vatKobo: kobo, totalKobo: kobo }).passthrough(),
+      billedFeeKobo: z.number().int().optional(),
+      currentFeeKobo: z.number().int().optional(),
+      billedAllocatedKobo: z.number().int().optional(),
+      currentAllocatedKobo: z.number().int().optional(),
+      allocationIds: z.array(z.string()).optional(),
+      explanation: z.string().optional(),
+    })),
+    totals: z.object({ netKobo: z.number().int(), vatBps: z.number().int().min(0), vatKobo: z.number().int(), totalKobo: z.number().int(), creditNote: z.boolean().optional() }),
   }).passthrough(),
-} as const;
+} as const satisfies Record<RecordKind, z.ZodTypeAny>;
 
 export type RecordDataSchemas = typeof recordDataSchemas;
 export type DataOf<K extends keyof RecordDataSchemas> = z.infer<RecordDataSchemas[K]>;
+/** The typed data of a record of kind K: the declared fields with their types, and anything else as unknown. */
+export type RecordDataOf<K extends RecordKind> = z.infer<RecordDataSchemas[K]>;
 
 /** Human-readable zod failure for API error bodies and import row reports. */
 export function describeIssues(error: z.ZodError): string {

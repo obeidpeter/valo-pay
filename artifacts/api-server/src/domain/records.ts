@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DomainState, ValopayRecord } from "./types";
+import type { DomainState, RecordInput, RecordOf, ValopayRecord } from "./types";
 
 /** Keys that name a raw financial identifier, matched on snake_case word boundaries so "accountableUser" is not an account number. */
 const forbiddenBankKey = /(^|_)(account_?(number|no|num)|bank_?account|nuban|iban|bvn|card_?(number|no|num)|pan)(_|$)/;
@@ -29,14 +29,16 @@ export function assertNoRealBankDetails(value: unknown, key = ""): void {
   }
 }
 
-export function findRecord(state: DomainState, id: string, kind?: string): ValopayRecord {
+/** A record by id, typed when the kind is a known literal; a kind given as a string yields the stored shape. */
+export function findRecord<K extends string = string>(state: DomainState, id: string, kind?: K): RecordOf<K> {
   const record = state.records.find((item) => item.id === id && (!kind || item.kind === kind));
   if (!record) throw new Error(`Record ${id} was not found.`);
-  return record;
+  return record as RecordOf<K>;
 }
 
-export function recordsOf(state: DomainState, kind: string): ValopayRecord[] {
-  return state.records.filter((item) => item.kind === kind);
+/** Every record of a kind, typed when the kind is a known literal. */
+export function recordsOf<K extends string>(state: DomainState, kind: K): RecordOf<K>[] {
+  return state.records.filter((item) => item.kind === kind) as RecordOf<K>[];
 }
 
 export function touch(record: ValopayRecord, now: string): ValopayRecord {
@@ -44,11 +46,8 @@ export function touch(record: ValopayRecord, now: string): ValopayRecord {
   return record;
 }
 
-export function makeRecord(
-  state: DomainState,
-  kind: string,
-  input: Partial<ValopayRecord> & { data?: Record<string, any> },
-): ValopayRecord {
+/** Creates and stores a record; for a known kind the data literal is checked against that kind's schema types and the result is typed. */
+export function makeRecord<K extends string>(state: DomainState, kind: K, input: RecordInput<K>): RecordOf<K> {
   assertNoRealBankDetails(input);
   const timestamp = input.createdAt || new Date().toISOString();
   const record: ValopayRecord = {
@@ -66,7 +65,7 @@ export function makeRecord(
   };
   if (record.amountKobo < 0) throw new Error("Amounts must be integer kobo greater than or equal to zero.");
   state.records.push(record);
-  return record;
+  return record as RecordOf<K>;
 }
 
 export function masked(value: unknown): boolean {

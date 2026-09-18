@@ -2,7 +2,8 @@
 // and pure: no database, no network, fixed instants in West Africa Time.
 process.env.DATABASE_URL ||= "postgres://unused:unused@127.0.0.1:1/unused";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
-import type { Context, DomainState, ValopayRecord } from "../src/domain/types.js";
+import type { AttemptSource, ObservationSource } from "@workspace/valopay-schema";
+import type { Context, DomainState, TypedRecord, ValopayRecord } from "../src/domain/types.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
 
 export const HOUR = 60 * 60 * 1000;
@@ -16,14 +17,14 @@ export const ctxAt = (now: string, role = "Admin"): Context => ({ actor: `Sandbo
 
 export interface Fixture {
   state: DomainState;
-  policy: ValopayRecord;
-  customer: ValopayRecord;
-  mandate: ValopayRecord;
-  due: ValopayRecord;
-  cutover: ValopayRecord;
+  policy: TypedRecord<"policies">;
+  customer: TypedRecord<"customers">;
+  mandate: TypedRecord<"mandates">;
+  due: TypedRecord<"due-items">;
+  cutover: TypedRecord<"cutovers">;
 }
 
-export function approvePolicy(policy: ValopayRecord): ValopayRecord {
+export function approvePolicy(policy: TypedRecord<"policies">): TypedRecord<"policies"> {
   policy.status = "approved";
   policy.data.author = "Sandbox Admin";
   policy.data.reviewer = "Sandbox Compliance reviewer";
@@ -31,7 +32,7 @@ export function approvePolicy(policy: ValopayRecord): ValopayRecord {
   return policy;
 }
 
-export function completeCutover(state: DomainState): ValopayRecord {
+export function completeCutover(state: DomainState): TypedRecord<"cutovers"> {
   return makeRecord(state, "cutovers", {
     name: "Cohort 1 cutover", status: "ready",
     data: { inventory: "LMS scheduler; provider recurring plan", incumbentDisabled: true, externalAttemptsImported: true, dualRunComplete: true, accountableUser: "Ops lead", fallbackOwner: "lms", confirmation: "Signed by the merchant Admin" },
@@ -59,7 +60,7 @@ export function liveFixture(options: { dueIndex?: number; merchantId?: string; f
   return { state, policy, customer, mandate, due, cutover };
 }
 
-export function addAttempt(state: DomainState, due: ValopayRecord, input: { status: string; failureCode?: string; occurredAt: string; source?: string; providerReference?: string; noticeId?: string }): ValopayRecord {
+export function addAttempt(state: DomainState, due: TypedRecord<"due-items">, input: { status: string; failureCode?: string; occurredAt: string; source?: AttemptSource; providerReference?: string; noticeId?: string }): TypedRecord<"attempts"> {
   const number = recordsOf(state, "attempts").filter((item) => item.data.dueItemId === due.id).length + 1;
   return makeRecord(state, "attempts", {
     name: `attempt ${number}`, status: input.status, customerId: due.customerId, amountKobo: due.amountKobo,
@@ -68,13 +69,13 @@ export function addAttempt(state: DomainState, due: ValopayRecord, input: { stat
 }
 
 /** A required notice with real provider acceptance evidence (NOT-10); makeRecord marks records synthetic, so it is cleared here. */
-export function addNotice(state: DomainState, due: ValopayRecord, acceptedAt: string, purpose = "failed_debit"): ValopayRecord {
+export function addNotice(state: DomainState, due: TypedRecord<"due-items">, acceptedAt: string, purpose = "failed_debit"): TypedRecord<"notifications"> {
   const notice = makeRecord(state, "notifications", { name: purpose, status: "accepted", customerId: due.customerId, data: { purpose, channel: "sms", class: "required", acceptedAt, deliveredAt: acceptedAt } });
   notice.data.synthetic = false;
   return notice;
 }
 
-export function addObservation(state: DomainState, input: { reference: string; amountKobo: number; source: string; customerId?: string; dueItemId?: string; eventId: string; occurredAt?: string; batchReference?: string; feeKobo?: number; grossAmountKobo?: number; narration?: string; reversed?: boolean; virtualAccountCustomerId?: string; createdAt?: string }): ValopayRecord {
+export function addObservation(state: DomainState, input: { reference: string; amountKobo: number; source: ObservationSource; customerId?: string; dueItemId?: string; eventId: string; occurredAt?: string; batchReference?: string; feeKobo?: number; grossAmountKobo?: number; narration?: string; reversed?: boolean; virtualAccountCustomerId?: string; createdAt?: string }): TypedRecord<"observations"> {
   const { reference, amountKobo, customerId, createdAt, ...data } = input;
   return makeRecord(state, "observations", { name: `${data.source} ${reference}`, status: "unresolved", reference, amountKobo, customerId: customerId ?? "", createdAt, data: { provider: "Sandbox Rail", ...data } });
 }

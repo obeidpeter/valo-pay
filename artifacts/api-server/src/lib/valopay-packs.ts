@@ -129,7 +129,7 @@ function describe(record: ValopayRecord): { event: string; detail: string } {
 
 /** One customer's complete evidence, sorted oldest first, with the governing versions resolved per event. */
 export function buildDisputePack(state: DomainState, ctx: Context, customerId: string): DisputePack {
-  const customer = state.records.find((record) => record.kind === "customers" && record.id === customerId);
+  const customer = recordsOf(state, "customers").find((record) => record.id === customerId);
   if (!customer) throw Object.assign(new Error("Customer not found."), { status: 404 });
   const related = [customer, ...state.records.filter((record) => record.customerId === customerId && record.id !== customerId)];
   const relatedIds = new Set(related.map((record) => record.id));
