@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow } from '@/components/empty-state';
 import { Loading, LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -118,7 +119,7 @@ export default function EvidencePage() {
             <div className="p-6">
               <h3 className="font-medium text-muted-foreground uppercase text-xs tracking-wider mb-4 flex justify-between">
                 Prerequisites
-                <Button variant="link" size="sm" className="h-auto p-0" onClick={() => handleCreate('evidence')}>Add Evidence</Button>
+                <Button variant="link" size="sm" className="h-auto min-h-6 p-0" onClick={() => handleCreate('evidence')}>Add Evidence</Button>
               </h3>
               <div className="space-y-4">
                 {gates.prerequisites.map(gate => (
@@ -132,7 +133,7 @@ export default function EvidencePage() {
                       <p className="text-xs text-muted-foreground mt-0.5">{gate.description}</p>
                       <p className="text-xs font-mono text-muted-foreground mt-1 bg-secondary/50 inline-block px-1.5 py-0.5 rounded">Evidence: {gate.evidence}</p>
                       {(evidence?.items || []).filter(item => String(item.data?.gateId || item.reference) === gate.id).map(item => (
-                        <button key={item.id} type="button" className="block text-xs text-primary underline mt-1" onClick={() => handleEdit(item, 'evidence')}>
+                        <button key={item.id} type="button" className="block min-h-6 text-xs text-primary underline mt-1" onClick={() => handleEdit(item, 'evidence')}>
                           {item.name} · {item.status}
                         </button>
                       ))}
@@ -164,7 +165,7 @@ export default function EvidencePage() {
                   <h4 className="text-sm font-bold text-destructive flex items-center gap-2 mb-2">
                     <AlertTriangle className="h-4 w-4" /> Missing Requirements
                   </h4>
-                  <ul className="list-disc list-inside text-xs text-destructive/80 ml-4 space-y-1">
+                  <ul className="list-disc list-inside text-xs text-destructive ml-4 space-y-1">
                     {gates.limitations.map((lim, i) => <li key={i}>{lim}</li>)}
                   </ul>
                 </div>
@@ -183,7 +184,7 @@ export default function EvidencePage() {
           </div>
           <Button size="sm" onClick={() => handleCreate('commercial')}>Add Terms</Button>
         </div>
-        <div className="overflow-x-auto">
+        <ScrollFrame label="Commercial commitments" className="overflow-x-auto">
           <table className="w-full text-sm text-left">
             <thead className="bg-secondary/30 border-b text-muted-foreground">
               <tr>
@@ -227,7 +228,7 @@ export default function EvidencePage() {
               )}
             </tbody>
           </table>
-        </div>
+        </ScrollFrame>
       </section>
 
       {/* Fortnightly Reviews */}
@@ -239,7 +240,7 @@ export default function EvidencePage() {
           </div>
           <Button size="sm" onClick={() => handleCreate('reviews')}>Log Review</Button>
         </div>
-        <div className="overflow-x-auto">
+        <ScrollFrame label="Fortnightly reviews" className="overflow-x-auto">
           <table className="w-full text-sm text-left">
             <thead className="bg-secondary/30 border-b text-muted-foreground">
               <tr>
@@ -266,7 +267,7 @@ export default function EvidencePage() {
               )}
             </tbody>
           </table>
-        </div>
+        </ScrollFrame>
       </section>
 
       <RecordDialog

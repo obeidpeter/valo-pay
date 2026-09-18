@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { ScrollFrame } from '@/components/scroll-frame';
 import { useSearchShortcut } from '@/lib/focus';
 import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
@@ -68,6 +69,7 @@ export default function AuditPage() {
             <input 
               type="text" 
               placeholder="Search audit trail..."
+              aria-label="Search the audit log"
               ref={searchRef}
               aria-keyshortcuts="/"
               onKeyDown={event => { if (event.key === 'Escape') { setSearch(''); } }} 
@@ -88,7 +90,7 @@ export default function AuditPage() {
             <EmptyState title="No actions recorded yet">Every change in this workspace is recorded here in a hash chain, oldest first, and can be verified above.</EmptyState>
           )
         ) : (
-          <div className="overflow-x-auto">
+          <ScrollFrame label="Audit log" className="overflow-x-auto">
             <table className="w-full text-sm text-left font-mono">
               <thead className="bg-secondary/30 border-b text-muted-foreground text-xs uppercase tracking-wider">
                 <tr>
@@ -115,7 +117,7 @@ export default function AuditPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollFrame>
         )}
       </div>
     </div>

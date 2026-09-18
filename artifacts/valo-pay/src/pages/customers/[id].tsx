@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -104,7 +105,7 @@ export default function CustomerTimelinePage() {
           </div>
 
           <div className="bg-card border rounded-xl p-4 shadow-sm min-w-[240px]">
-            <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Current Position</h3>
+            <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Current Position</h2>
             <div className="space-y-3">
               <div className="flex justify-between items-baseline">
                 <span className="text-sm text-muted-foreground">Outstanding</span>
@@ -211,7 +212,7 @@ export default function CustomerTimelinePage() {
             <Clock className="h-5 w-5 text-primary" />
             <h2 className="font-semibold">Timeline Events</h2>
           </div>
-          <div className="p-4 overflow-y-auto flex-1 space-y-4">
+          <ScrollFrame label="Timeline events" className="p-4 overflow-y-auto flex-1 space-y-4">
             {events.length === 0 ? (
               <EmptyState title="No events recorded yet" className="px-0">Consent, mandate changes, attempts, notices and payments are recorded here as they happen.</EmptyState>
             ) : (
@@ -234,7 +235,7 @@ export default function CustomerTimelinePage() {
                 ))}
               </div>
             )}
-          </div>
+          </ScrollFrame>
         </div>
       </div>
     </div>

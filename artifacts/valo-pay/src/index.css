@@ -102,14 +102,16 @@
   --accent-foreground: 232 47% 16%;
   --accent-border: 214 32% 91%;
   
-  --destructive: 348 83% 47%;
+  /* Dark enough to read on its own 10% tint (5.1:1) as well as on white (6.0:1). */
+  --destructive: 348 83% 42%;
   --destructive-foreground: 0 0% 100%;
   --destructive-border: 348 83% 40%;
 
   /* Status colours, each a token with a value for each theme (see .dark). Success is a colour that
-     passes as text (5.0:1 on white). Warning and info are a surface, its text, its border and a
-     strong colour for icons and words on the page; the light values are Tailwind's amber and blue. */
-  --success: 142 72% 29%;
+     passes as text on white (7.2:1) and on its own 10% tint (6.1:1). Warning and info are a surface,
+     its text, its border and a strong colour for icons and words on the page; the light values are
+     Tailwind's amber and blue. */
+  --success: 143 64% 24%;
   --success-foreground: 0 0% 100%;
   --warning: 48 96% 89%;
   --warning-foreground: 22 78% 26%;
@@ -192,6 +194,18 @@
   }
   body {
     @apply font-sans antialiased bg-background text-foreground;
+  }
+}
+
+/* Nothing moves for someone who has asked for less motion: every animation and transition completes
+   at once. The near-zero duration, rather than none, keeps the end-of-animation events that the
+   dialogs and notices wait for before they unmount. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

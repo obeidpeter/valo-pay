@@ -108,7 +108,9 @@ export default function SettingsPage() {
           Switch roles to test permissions and approval workflows. This is a synthetic sandbox feature only.
         </p>
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
+          <label htmlFor="persona" className="sr-only">Persona</label>
           <select 
+            id="persona"
             className="w-full sm:min-w-48 sm:max-w-xs sm:flex-1 bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             value={role}
             onChange={(e) => setRole(e.target.value)}
@@ -163,9 +165,10 @@ export default function SettingsPage() {
           <div className="p-6 space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 gap-6">
               <div>
-                <label className="text-sm font-medium block mb-1">Authorisation Mode</label>
+                <label htmlFor="settings-authorisationMode" className="text-sm font-medium block mb-1">Authorisation Mode</label>
                 {isEditingExec ? (
                   <select 
+                    id="settings-authorisationMode"
                     className="w-full bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                     value={execSettings.authorisationMode || authorisationModes[0]}
                     onChange={(e) => setExecSettings({...execSettings, authorisationMode: e.target.value})}
@@ -188,7 +191,7 @@ export default function SettingsPage() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 xl:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-sm font-medium block mb-1">Unallocated alert threshold (Payments older than 24h)</label>
+                  <label htmlFor="settings-unallocatedAlertThreshold" className="text-sm font-medium block mb-1">Unallocated alert threshold (Payments older than 24h)</label>
                   {isEditingExec ? (
                     <><input id="settings-unallocatedAlertThreshold" {...invalidProps('settings-unallocatedAlertThreshold', execErrors.unallocatedAlertThreshold)} type="number" min={0} className="w-full bg-background border rounded-md px-3 py-2 text-sm" value={execSettings.unallocatedAlertThreshold ?? 10} onChange={(e) => setExecSettings({...execSettings, unallocatedAlertThreshold: Number(e.target.value)})} />
                     <FieldError id="settings-unallocatedAlertThreshold" message={execErrors.unallocatedAlertThreshold} /></>
@@ -197,7 +200,7 @@ export default function SettingsPage() {
                   )}
                 </div>
                 <div>
-                  <label className="text-sm font-medium block mb-1">Notification cost alert (kobo per collection)</label>
+                  <label htmlFor="settings-notificationCostAlertKobo" className="text-sm font-medium block mb-1">Notification cost alert (kobo per collection)</label>
                   {isEditingExec ? (
                     <><input id="settings-notificationCostAlertKobo" {...invalidProps('settings-notificationCostAlertKobo', execErrors.notificationCostAlertKobo)} type="number" min={0} className="w-full bg-background border rounded-md px-3 py-2 text-sm" value={execSettings.notificationCostAlertKobo ?? 800} onChange={(e) => setExecSettings({...execSettings, notificationCostAlertKobo: Number(e.target.value)})} />
                     <FieldError id="settings-notificationCostAlertKobo" message={execErrors.notificationCostAlertKobo} /></>
@@ -208,7 +211,7 @@ export default function SettingsPage() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 xl:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-sm font-medium block mb-1">Daily close time (WAT, HH:MM, REC-01)</label>
+                  <label htmlFor="settings-closeTime" className="text-sm font-medium block mb-1">Daily close time (WAT, HH:MM, REC-01)</label>
                   {isEditingExec ? (
                     <><input id="settings-closeTime" {...invalidProps('settings-closeTime', execErrors.closeTime)} type="text" inputMode="numeric" placeholder={closeRules.defaultTime} className="w-full bg-background border rounded-md px-3 py-2 text-sm font-mono" value={execSettings.closeTime ?? closeRules.defaultTime} onChange={(e) => setExecSettings({...execSettings, closeTime: e.target.value})} />
                     <FieldError id="settings-closeTime" message={execErrors.closeTime} /></>
@@ -226,9 +229,10 @@ export default function SettingsPage() {
                 </div>
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">Contact Route (shown in every customer notice)</label>
+                <label htmlFor="settings-contactRoute" className="text-sm font-medium block mb-1">Contact Route (shown in every customer notice)</label>
                 {isEditingExec ? (
                   <input 
+                    id="settings-contactRoute"
                     type="text"
                     className="w-full bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                     value={execSettings.contactRoute || ''}
@@ -241,9 +245,10 @@ export default function SettingsPage() {
                 )}
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">Execution Window Start (WAT hour, {executionWindow.earliestHour}–{executionWindow.latestHour})</label>
+                <label htmlFor="settings-executionWindowStart" className="text-sm font-medium block mb-1">Execution Window Start (WAT hour, {executionWindow.earliestHour}–{executionWindow.latestHour})</label>
                 {isEditingExec ? (
                   <input 
+                    id="settings-executionWindowStart"
                     type="number"
                     min={executionWindow.earliestHour}
                     max={executionWindow.latestHour - 1}
@@ -258,9 +263,10 @@ export default function SettingsPage() {
                 )}
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">Execution Window End (WAT hour, up to {executionWindow.latestHour})</label>
+                <label htmlFor="settings-executionWindowEnd" className="text-sm font-medium block mb-1">Execution Window End (WAT hour, up to {executionWindow.latestHour})</label>
                 {isEditingExec ? (
                   <input 
+                    id="settings-executionWindowEnd"
                     type="number"
                     min={executionWindow.earliestHour + 1}
                     max={executionWindow.latestHour}
@@ -282,7 +288,9 @@ export default function SettingsPage() {
               </h3>
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
                 <div className="min-w-0 flex-1">
+                  <label htmlFor="kill-reason" className="text-sm font-medium block mb-1">Reason for the switch</label>
                   <input 
+                    id="kill-reason"
                     type="text" 
                     placeholder="Reason for toggle..."
                     aria-describedby="kill-reason-help"

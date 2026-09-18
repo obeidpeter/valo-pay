@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow } from '@/components/empty-state';
 import { LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -113,7 +114,7 @@ export default function ReconciliationPage() {
             </span>
           </div>
           
-          <div className="p-0 overflow-x-auto">
+          <ScrollFrame label="Proposals awaiting confirmation" className="p-0 overflow-x-auto">
             <table className="w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground">
                 <tr>
@@ -159,7 +160,7 @@ export default function ReconciliationPage() {
                 )}
               </tbody>
             </table>
-          </div>
+          </ScrollFrame>
         </div>
 
         {/* Unallocated Payments */}
@@ -171,7 +172,7 @@ export default function ReconciliationPage() {
               {payments?.items.length || 0} items
             </span>
           </div>
-          <div className="p-0 overflow-auto max-h-[400px]">
+          <ScrollFrame label="Unallocated payments" className="p-0 overflow-auto max-h-[400px]">
             <table className="w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
@@ -204,7 +205,7 @@ export default function ReconciliationPage() {
                 )}
               </tbody>
             </table>
-          </div>
+          </ScrollFrame>
         </div>
 
         {/* Unresolved Observations */}
@@ -216,7 +217,7 @@ export default function ReconciliationPage() {
               {observations?.items.length || 0} items
             </span>
           </div>
-          <div className="p-0 overflow-auto max-h-[400px]">
+          <ScrollFrame label="Unresolved observations" className="p-0 overflow-auto max-h-[400px]">
              <table className="w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
@@ -243,7 +244,7 @@ export default function ReconciliationPage() {
                 )}
               </tbody>
             </table>
-          </div>
+          </ScrollFrame>
         </div>
         
         {/* Precision audit */}
@@ -253,7 +254,7 @@ export default function ReconciliationPage() {
             <h2 className="font-semibold">Precision Audit</h2>
             <span className="ml-auto text-xs text-muted-foreground">Seeded sample of the completed month's automatic certain matches reviewed by Finance (REC-09); a wrong match is superseded and the books reopen. {auditSample.filter(item => typeof item.data?.reviewed === 'boolean').length} of {auditSample.length} sampled reviewed{precision?.falseMatchRate !== null && precision?.falseMatchRate !== undefined ? ` · false-match rate ${(Number(precision.falseMatchRate) * 100).toFixed(1)}% (95% interval ${(Number(precision.interval?.low) * 100).toFixed(1)}% to ${(Number(precision.interval?.high) * 100).toFixed(1)}%)` : ''}.</span>
           </div>
-          <div className="p-0 overflow-x-auto max-h-[400px]">
+          <ScrollFrame label="Precision audit" className="p-0 overflow-x-auto max-h-[400px]">
             <table className="w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
@@ -291,7 +292,7 @@ export default function ReconciliationPage() {
                 )}
               </tbody>
             </table>
-          </div>
+          </ScrollFrame>
         </div>
 
         {/* Settlement Batches */}
@@ -300,7 +301,7 @@ export default function ReconciliationPage() {
             <h2 className="font-semibold flex items-center gap-2"><Info className="h-5 w-5 text-primary" /> Settlement Batches</h2>
             <Button size="sm" onClick={handleCreateBatch}><Plus className="h-4 w-4 mr-2" /> Add Batch</Button>
           </div>
-          <div className="p-0 overflow-x-auto max-h-[400px]">
+          <ScrollFrame label="Settlement batches" className="p-0 overflow-x-auto max-h-[400px]">
              <table className="w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
@@ -331,7 +332,7 @@ export default function ReconciliationPage() {
                 )}
               </tbody>
             </table>
-          </div>
+          </ScrollFrame>
         </div>
 
       </div>

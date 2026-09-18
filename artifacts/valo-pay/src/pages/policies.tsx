@@ -161,12 +161,12 @@ export default function PoliciesPage() {
                   <span>v{String(template.data?.version || '1')}</span>
                   {template.status === 'draft' && (
                     <div className="flex gap-2">
-                      <Button variant="link" size="sm" className="h-auto p-0" onClick={() => handleAction(template, 'edit_template')}>Edit</Button>
-                      <Button variant="link" size="sm" className="h-auto p-0" onClick={() => handleAction(template, 'submit_template')}>Submit</Button>
+                      <Button variant="link" size="sm" className="h-auto min-h-6 p-0" onClick={() => handleAction(template, 'edit_template')}>Edit</Button>
+                      <Button variant="link" size="sm" className="h-auto min-h-6 p-0" onClick={() => handleAction(template, 'submit_template')}>Submit</Button>
                     </div>
                   )}
                   {template.status === 'submitted' && (
-                     <Button variant="link" size="sm" className="h-auto p-0 text-success" onClick={() => handleAction(template, 'approve_template')}>Approve</Button>
+                     <Button variant="link" size="sm" className="h-auto min-h-6 p-0 text-success" onClick={() => handleAction(template, 'approve_template')}>Approve</Button>
                   )}
                 </div>
               </div>
