@@ -3,7 +3,7 @@ import { Link } from 'wouter';
 import { SignIn, SignUp } from '@clerk/react';
 import { dark } from '@clerk/themes';
 import { useTheme } from '@/lib/theme';
-import { ArrowRight, Info } from 'lucide-react';
+import { ArrowRight, CheckCircle2, LockKeyhole, ShieldCheck } from 'lucide-react';
 import { PublicFrame } from '@/components/public-frame';
 import { Button } from '@/components/ui/button';
 import { authEnabled } from '@/lib/auth';
@@ -23,14 +23,14 @@ const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 /** Clerk's form in the console's colours, type and radius. */
 const appearance = {
   variables: {
-    colorPrimary: 'hsl(232 47% 16%)',
-    colorText: 'hsl(232 47% 16%)',
-    colorTextSecondary: 'hsl(215 16% 47%)',
-    colorBackground: 'hsl(0 0% 100%)',
-    colorInputBackground: 'hsl(0 0% 100%)',
-    colorInputText: 'hsl(232 47% 16%)',
-    colorDanger: 'hsl(348 83% 47%)',
-    borderRadius: '0.5rem',
+    colorPrimary: 'hsl(var(--primary))',
+    colorText: 'hsl(var(--foreground))',
+    colorTextSecondary: 'hsl(var(--muted-foreground))',
+    colorBackground: 'hsl(var(--card))',
+    colorInputBackground: 'hsl(var(--background))',
+    colorInputText: 'hsl(var(--foreground))',
+    colorDanger: 'hsl(var(--destructive))',
+    borderRadius: '0.75rem',
     fontFamily: "'Plus Jakarta Sans', sans-serif",
   },
   elements: {
@@ -46,14 +46,7 @@ const darkAppearance = {
   baseTheme: dark,
   variables: {
     ...appearance.variables,
-    colorPrimary: 'hsl(210 20% 98%)',
-    colorTextOnPrimaryBackground: 'hsl(232 47% 8%)',
-    colorText: 'hsl(210 20% 98%)',
-    colorTextSecondary: 'hsl(215 16% 65%)',
-    colorBackground: 'hsl(232 47% 10%)',
-    colorInputBackground: 'hsl(232 47% 8%)',
-    colorInputText: 'hsl(210 20% 98%)',
-    colorDanger: 'hsl(348 83% 55%)',
+    colorTextOnPrimaryBackground: 'hsl(var(--primary-foreground))',
   },
 };
 
@@ -72,21 +65,22 @@ function Shell({ title, children }: { title: string; children: ReactNode }) {
   useEffect(() => { document.title = `${title} · Valo Pay`; }, [title]);
   return (
     <PublicFrame>
-      <main id="main" tabIndex={-1} className="mx-auto grid max-w-6xl gap-10 px-4 py-12 sm:px-6 lg:grid-cols-[2fr_3fr] lg:items-start lg:py-16 focus:outline-none">
-        <aside aria-labelledby="context-title" className="lg:pt-6">
-          <h1 id="context-title" className="text-3xl font-bold tracking-tight">{title}</h1>
-          <p className="mt-3 text-muted-foreground">A collections operations layer for lenders that collect by direct debit. We never hold money.</p>
-          <h2 className="mt-8 text-sm font-semibold uppercase tracking-wider text-muted-foreground">What signing in changes</h2>
-          <ul className="mt-3 space-y-3 text-sm" role="list">
+      <main id="main" tabIndex={-1} className="public-container public-auth focus:outline-none">
+        <aside aria-labelledby="context-title" className="auth-context">
+          <p className="public-eyebrow mb-5">EVERY PAYMENT. ONE CLEAR PICTURE.</p>
+          <h1 id="context-title">{title}</h1>
+          <p className="auth-intro">A collections operations layer for lenders that collect by direct debit. We never hold money.</p>
+          <h2 className="public-eyebrow mt-10">What signing in changes</h2>
+          <ul className="auth-benefits" role="list">
             {whatChanges.map((line) => (
-              <li key={line} className="flex gap-3"><Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" /><span>{line}</span></li>
+              <li key={line}><CheckCircle2 aria-hidden="true" /><span>{line}</span></li>
             ))}
           </ul>
-          <p className="mt-8 inline-flex items-center gap-2 rounded-full border bg-secondary/40 px-3 py-1 font-mono text-xs text-muted-foreground" role="status">
+          <p className="hero-stage" role="status">
             <span className="h-2 w-2 rounded-full bg-success" aria-hidden="true" /> Stage 1 · synthetic sandbox
           </p>
         </aside>
-        <div className="w-full max-w-md lg:justify-self-end">{children}</div>
+        <div className="auth-form-area">{children}<p className="auth-footnote"><ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" /> Synthetic data. No live operations.</p></div>
       </main>
     </PublicFrame>
   );
@@ -95,13 +89,14 @@ function Shell({ title, children }: { title: string; children: ReactNode }) {
 /** When this host has no Clerk key there is no account to sign into: say so, say why, and offer the sandbox. */
 function Unavailable({ action }: { action: 'sign in' | 'create an account' }) {
   return (
-    <section aria-labelledby="unavailable-title" className="rounded-xl border bg-card p-6 shadow-sm">
-      <h2 id="unavailable-title" className="text-xl font-semibold">Sign-in isn't available on this host</h2>
-      <p className="mt-3 text-sm text-muted-foreground">Sign-in runs on Clerk, and this host has no Clerk key, so you cannot {action} here. On the deployed address the form appears in this place.</p>
-      <p className="mt-3 text-sm text-muted-foreground">Everything in the synthetic sandbox still works without an account.</p>
-      <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+    <section aria-labelledby="unavailable-title" className="auth-unavailable">
+      <span className="auth-unavailable-icon"><LockKeyhole className="h-5 w-5" aria-hidden="true" /></span>
+      <h2 id="unavailable-title">Sign-in is unavailable here</h2>
+      <p>Accounts aren't enabled for this version, so you cannot {action} here. You can still explore Valo Pay without an account.</p>
+      <p className="auth-sandbox-note"><strong>Your workspace preview is ready</strong>Everything in the synthetic sandbox still works without an account. Try the customer timeline, review matches and run a daily close.</p>
+      <div className="auth-unavailable-actions">
         <Button asChild className="gap-2"><Link href="/overview">Continue to the sandbox <ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button>
-        <Button asChild variant="outline"><Link href="/">Back to the start</Link></Button>
+        <Button asChild variant="ghost"><Link href="/">Back to the start</Link></Button>
       </div>
     </section>
   );

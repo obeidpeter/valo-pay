@@ -54,7 +54,7 @@ describe("print", () => {
     expect(print).toContain("tr, li, figure, dt, dd { break-inside: avoid; }");
     expect(print).toContain(".truncate { overflow: visible !important; white-space: normal !important;");
     // The dark tokens and the dark variant are scoped to screens, so paper is always the light theme.
-    expect(css).toMatch(/@media screen \{\n\s+\.dark \{/);
-    expect(css).toMatch(/@custom-variant dark \{\n\s+@media screen \{/);
+    expect(css).toMatch(/@media screen \{\r?\n\s+\.dark \{/);
+    expect(css).toMatch(/@custom-variant dark \{\r?\n\s+@media screen \{/);
   });
 });

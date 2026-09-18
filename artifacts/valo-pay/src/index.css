@@ -69,37 +69,37 @@
 }
 
 :root {
-  /* Deep Indigo and Crisp White Theme for Finance */
+  /* Warm neutral surfaces, ink typography and an accessible burnt-orange action colour. */
   color-scheme: light;
-  --background: 210 20% 98%;
-  --foreground: 232 47% 16%;
+  --background: 40 20% 97%;
+  --foreground: 220 28% 17%;
   
-  --border: 214 32% 91%;
-  --input: 214 32% 91%;
-  --ring: 232 47% 16%;
+  --border: 220 14% 89%;
+  --input: 220 14% 82%;
+  --ring: 16 80% 38%;
   
   --card: 0 0% 100%;
-  --card-foreground: 232 47% 16%;
-  --card-border: 214 32% 91%;
+  --card-foreground: 220 28% 17%;
+  --card-border: 220 14% 89%;
   
   --popover: 0 0% 100%;
-  --popover-foreground: 232 47% 16%;
-  --popover-border: 214 32% 91%;
+  --popover-foreground: 220 28% 17%;
+  --popover-border: 220 14% 89%;
   
-  --primary: 232 47% 16%;
+  --primary: 16 80% 38%;
   --primary-foreground: 0 0% 100%;
-  --primary-border: 232 47% 12%;
+  --primary-border: 16 80% 32%;
   
-  --secondary: 214 32% 91%;
-  --secondary-foreground: 232 47% 16%;
+  --secondary: 220 14% 95%;
+  --secondary-foreground: 220 28% 24%;
   --secondary-border: 214 32% 85%;
   
-  --muted: 210 20% 96%;
-  --muted-foreground: 215 16% 45%; /* 4.9:1 on the page background, 5.1:1 on a card */
+  --muted: 40 12% 95%;
+  --muted-foreground: 220 10% 43%;
   --muted-border: 214 32% 91%;
   
-  --accent: 210 20% 96%;
-  --accent-foreground: 232 47% 16%;
+  --accent: 22 75% 95%;
+  --accent-foreground: 16 80% 32%;
   --accent-border: 214 32% 91%;
   
   /* Dark enough to read on its own 10% tint (5.1:1) as well as on white (6.0:1). */
@@ -128,42 +128,42 @@
   
   --app-font-sans: 'Plus Jakarta Sans', sans-serif;
   --app-font-mono: 'Spline Sans Mono', monospace;
-  --radius: 0.5rem;
+  --radius: 0.625rem;
 }
 
 /* The dark values apply on screens only; a printout is always the light theme's ink on white. */
 @media screen {
   .dark {
     color-scheme: dark;
-    --background: 232 47% 8%;
+    --background: 222 25% 9%;
     --foreground: 210 20% 98%;
     
-    --border: 232 25% 18%;
-    --input: 232 25% 18%;
+    --border: 220 18% 22%;
+    --input: 220 18% 32%;
     --ring: 214 32% 91%;
     
-    --card: 232 47% 10%;
+    --card: 222 22% 12%;
     --card-foreground: 210 20% 98%;
-    --card-border: 232 25% 18%;
+    --card-border: 220 18% 22%;
     
-    --popover: 232 47% 10%;
+    --popover: 222 22% 12%;
     --popover-foreground: 210 20% 98%;
     --popover-border: 232 25% 18%;
     
-    --primary: 210 20% 98%;
-    --primary-foreground: 232 47% 8%;
+    --primary: 21 94% 70%;
+    --primary-foreground: 222 25% 9%;
     --primary-border: 210 20% 90%;
     
-    --secondary: 232 25% 18%;
+    --secondary: 222 18% 18%;
     --secondary-foreground: 210 20% 98%;
     --secondary-border: 232 25% 25%;
     
-    --muted: 232 25% 15%;
-    --muted-foreground: 215 16% 65%;
+    --muted: 222 18% 16%;
+    --muted-foreground: 220 12% 68%;
     --muted-border: 232 25% 18%;
     
-    --accent: 232 25% 15%;
-    --accent-foreground: 210 20% 98%;
+    --accent: 20 32% 19%;
+    --accent-foreground: 21 94% 77%;
     --accent-border: 232 25% 18%;
     
     /* Red light enough to read as text on the dark card (5.4:1); the destructive button therefore carries dark text, like success. */
@@ -229,7 +229,7 @@
   a { color: inherit; text-decoration: none; }
   .overflow-auto, .overflow-x-auto, .overflow-y-auto, .overflow-hidden { overflow: visible !important; }
   [class*="max-h-"] { max-height: none !important; }
-  table { width: 100%; }
+  table { width: 100%; min-width: 0 !important; }
   thead { display: table-header-group; }
   tr, li, figure, dt, dd { break-inside: avoid; }
   /* Long identifiers wrap so a table fits the paper; headings, amounts and status pills stay whole. */
@@ -238,4 +238,46 @@
   td.text-right, td .rounded-full { white-space: nowrap; }
   .truncate { overflow: visible !important; white-space: normal !important; text-overflow: clip !important; }
   h1, h2, h3 { break-after: avoid; }
+}
+
+/* The console shares one quiet, compact visual rhythm across every operations page. */
+@layer base {
+  body { font-feature-settings: "ss01" on; }
+  h1, h2, h3 { text-wrap: balance; }
+  button, a, input, select, textarea, summary { -webkit-tap-highlight-color: transparent; }
+  button:not(:disabled), summary, select { cursor: pointer; }
+  :focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 3px; }
+  ::selection { background: hsl(var(--primary) / .18); }
+}
+.environment-strip { background: hsl(var(--accent)); color: hsl(var(--accent-foreground)); border-color: hsl(var(--primary) / .12); }
+.nav-group-label { padding: 0.5rem .75rem .35rem; font-size: 9px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
+.console-nav-link { min-height: 39px; }
+.console-nav-link.is-active { background: hsl(var(--accent)); color: hsl(var(--accent-foreground)); font-weight: 700; box-shadow: inset 3px 0 hsl(var(--primary)); }
+.console-nav-link.is-active:hover { background: hsl(var(--primary) / .12); }
+.workspace-bar { background: hsl(var(--card) / .8); }
+.console-content { padding-bottom: 3rem; }
+.console-content h1 { font-size: clamp(1.6rem, 2.3vw, 2rem); line-height: 1.2; letter-spacing: -.045em; }
+.console-content h2 { letter-spacing: -.025em; }
+.console-content > div > header > p { font-size: .8125rem; line-height: 1.6; }
+.console-content .shadow-sm { box-shadow: 0 2px 5px hsl(var(--foreground) / .025); }
+.console-content table { font-size: .8125rem; }
+.console-content th { font-size: .6875rem; letter-spacing: .025em; font-weight: 600; color: hsl(var(--muted-foreground)); }
+.console-content th, .console-content td { vertical-align: middle; }
+.console-content td.text-right { font-variant-numeric: tabular-nums; }
+.console-content tbody tr { transition: background-color 120ms ease; }
+.console-content tbody tr:hover { background-color: hsl(var(--muted) / .75); }
+.console-content input:not([type=checkbox]):not([type=radio]), .console-content textarea { background-color: hsl(var(--card)); }
+.console-content details > summary { border-radius: .5rem; }
+.console-content details[open] > summary { margin-bottom: .75rem; }
+@media screen {
+  html:has(.console-shell) { overflow: hidden; }
+}
+@media (max-width: 767px) {
+  .environment-strip { font-size: 10px; line-height: 1.5; text-align: center; }
+  .console-content h1 { font-size: 1.625rem; }
+}
+@media print {
+  .console-shell { height: auto !important; }
+  .console-content { padding: 0; }
+  .console-content details > * { display: block !important; }
 }

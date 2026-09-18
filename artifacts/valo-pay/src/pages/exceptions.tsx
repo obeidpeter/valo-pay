@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { formatKobo, formatDate } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { exceptionSeverities, resolutionCodesFor } from '@workspace/valopay-schema';
+import { readableLabel, RecordLabel, StatusBadge } from '@/components/record-label';
 
 export default function ExceptionsPage() {
   const { merchantId } = useWorkspace();
@@ -27,11 +28,13 @@ export default function ExceptionsPage() {
     tabRefs.current[next]?.focus();
   };
 
-  const { data, isLoading } = useListRecords(
+  const { data, isLoading, error } = useListRecords(
     'exceptions',
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('exceptions', { merchantId: merchantId! }) } }
   );
+  const { data: customers } = useListRecords('customers', { merchantId: merchantId! }, { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('customers', { merchantId: merchantId! }) } });
+  const customerById = new Map(customers?.items.map(customer => [customer.id, customer]));
 
   const handleAction = (ex: any, kind: 'update' | 'resolve') => {
     setSelectedEx(ex);
@@ -56,12 +59,12 @@ export default function ExceptionsPage() {
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Exceptions</h1>
-          <p className="text-muted-foreground mt-1">Manual intervention required for these items.</p>
+          <p className="text-muted-foreground mt-1">A clear owner and next step for every item that needs attention.</p>
         </div>
       </header>
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
-        <div className="p-4 border-b flex items-center gap-4 bg-secondary/20">
+        <div className="p-5 border-b flex items-center gap-4">
           <p className="hidden print:block text-sm">Showing: {filters.find(option => option.key === filter)?.label}</p>
           <div className="flex flex-wrap gap-2" role="tablist" aria-label="Exception filter">
             {filters.map((option, index) => (
@@ -74,6 +77,8 @@ export default function ExceptionsPage() {
 
         {isLoading ? (
           <Loading what="exceptions" />
+        ) : error ? (
+          <p role="alert" className="p-6 text-sm text-destructive">Exceptions could not be loaded. Please refresh to try again.</p>
         ) : items.length === 0 ? (
           <EmptyState filtered title={filter === 'resolved' ? 'Nothing resolved yet' : filter === 'high' ? 'No high-severity exceptions open' : 'All clear: no open exceptions'}>
             {filter === 'resolved'
@@ -82,7 +87,7 @@ export default function ExceptionsPage() {
           </EmptyState>
         ) : (
           <ScrollFrame label="Exceptions" className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
+            <table className="w-full min-w-[760px] text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground">
                 <tr>
                   <th className="px-6 py-4 font-medium">Type & Severity</th>
@@ -97,7 +102,7 @@ export default function ExceptionsPage() {
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
                         {String(exception.data?.severity) === 'high' && <AlertTriangle className="h-4 w-4 text-destructive" />}
-                        <span className="font-medium text-foreground">{String(exception.data?.type || 'Unknown')}</span>
+                        <span title={String(exception.data?.type || '')} className="font-semibold text-foreground">{readableLabel(exception.data?.type)}</span>
                       </div>
                       <span className={`inline-block mt-1 px-2 py-0.5 text-[10px] uppercase font-bold rounded border ${
                         String(exception.data?.severity) === 'high' ? 'bg-destructive/10 text-destructive border-destructive/20' : 
@@ -108,13 +113,13 @@ export default function ExceptionsPage() {
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      <p className="font-mono text-xs">{exception.customerId}</p>
+                      <RecordLabel record={customerById.get(String(exception.customerId))} id={exception.customerId} customer />
                       {exception.amountKobo > 0 && (
                          <p className="font-mono font-medium mt-1">{formatKobo(exception.amountKobo)}</p>
                       )}
                     </td>
                     <td className="px-6 py-4">
-                      <p className="font-medium capitalize">{exception.status.replace('_', ' ')}</p>
+                      <StatusBadge status={exception.status} />
                       <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
                         <User className="h-3 w-3" /> {String(exception.data?.owner || 'Unassigned')}
                       </div>
@@ -124,21 +129,21 @@ export default function ExceptionsPage() {
                         </div>
                       )}
                       {!!exception.data?.notes && (
-                        <p className="text-xs text-muted-foreground mt-2 bg-secondary/30 p-1.5 rounded">{String(exception.data.notes)}</p>
+                        <p className="max-w-sm text-xs leading-relaxed text-muted-foreground mt-2">{String(exception.data.notes)}</p>
                       )}
                     </td>
                     <td className="px-6 py-4 text-right space-x-2">
                       {exception.status !== 'resolved' && exception.status !== 'closed' ? (
-                        <>
-                          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(exception, 'update')}>
+                        <div className="flex justify-end gap-2">
+                          <Button size="sm" variant="ghost" className="text-xs" onClick={() => handleAction(exception, 'update')}>
                             Edit
                           </Button>
-                          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(exception, 'resolve')}>
+                          <Button size="sm" variant="outline" className="text-xs" onClick={() => handleAction(exception, 'resolve')}>
                             Resolve
                           </Button>
-                        </>
+                        </div>
                       ) : (
-                        <span className="text-muted-foreground text-xs">Resolved: {String(exception.data?.resolutionCode)}</span>
+                        <span className="text-muted-foreground text-xs">Resolved: {readableLabel(exception.data?.resolutionCode)}</span>
                       )}
                     </td>
                   </tr>
@@ -158,7 +163,7 @@ export default function ExceptionsPage() {
         actionMutation={actionKind === 'resolve' ? 'resolve_exception' : undefined}
         fields={
           actionKind === 'resolve' ? [
-            { name: 'resolutionCode', label: `Resolution code for ${String(selectedEx?.data?.type || 'this type')}`, type: 'select', isData: true, required: true, options: resolutionCodesFor(selectedEx?.data?.type).map(code => ({ label: code.replaceAll('_', ' '), value: code })) }
+            { name: 'resolutionCode', label: `Resolution code for ${readableLabel(selectedEx?.data?.type || 'this type').toLowerCase()}`, type: 'select', isData: true, required: true, options: resolutionCodesFor(selectedEx?.data?.type).map(code => ({ label: readableLabel(code), value: code })) }
           ] : [
             { name: 'owner', label: 'Owner', type: 'text', isData: true },
             { name: 'notes', label: 'Notes', type: 'textarea', isData: true },

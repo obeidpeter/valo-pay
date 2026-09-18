@@ -95,3 +95,10 @@ Every kind's data fields, including the ones the platform sets, are declared wit
 Use every provided hook, loading/error states and query invalidation. Main agent builds API concurrently; no hardcoded operational data in client.
 
 Console tests live in `artifacts/valo-pay/tests` (`pnpm --filter @workspace/valopay run test`): the real pages rendered in jsdom against `tests/fake-api.ts`, an in-memory API that serves these routes from seeded lender state with the API's domain code and validates every response against the generated zod contract. Add a test there when a page's behaviour changes.
+## UI presentation refresh
+
+The September 2026 presentation uses grouped desktop navigation (Operations, Oversight, Workspace), a compact sandbox strip and a viewport-height shell with independent main scrolling. The sidebar is 240 px wide; the same mobile drawer and page order remain. A sidebar theme button persists through the existing theme store, with all three appearance choices still available in Settings.
+
+Overview metrics precede the alerts. Queue rows and alerts navigate to the relevant existing pages. Upcoming obligations are sorted by due date. Customers, reconciliation and exceptions show readable status labels and available customer/record references, retaining record IDs as accessible secondary information. Manual allocation offers existing due items with readable labels and still submits their canonical IDs.
+
+Reports format ratios and basis points as percentages. Billing evidence is available in native details/summary disclosures; a beforeprint handler opens every report disclosure and afterprint restores the user's selection. Print tables remove their screen minimum widths, and settlement-batch references remain visible when edit buttons are hidden. No API, mutation permissions or financial rules change.

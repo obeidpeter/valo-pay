@@ -4,8 +4,9 @@ import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetCustomerTimeline, getGetCustomerTimelineQueryKey, useCreateExport } from '@workspace/api-client-react';
-import { formatKobo, formatDate, formatCompactDate } from '@/lib/formatters';
-import { ArrowLeft, Clock, FileText, CheckCircle, AlertTriangle, CreditCard, Download } from 'lucide-react';
+import { formatKobo, formatDate, formatCompactDate, formatCount } from '@/lib/formatters';
+import { ArrowLeft, Clock, FileText, CheckCircle, AlertTriangle, Download } from 'lucide-react';
+import { CustomerAvatar, StatusBadge, readableLabel } from '@/components/record-label';
 import { Link, useParams } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
@@ -66,7 +67,7 @@ export default function CustomerTimelinePage() {
   if (!merchantId) return null;
   if (isLoading) return <Loading what="the timeline" />;
   if ((error as { status?: number } | null)?.status === 404) return <MissingCustomer id={String(id)} />;
-  if (error || !timeline) return <div className="p-8 text-center text-destructive">Failed to load customer timeline.</div>;
+  if (error || !timeline) return <div role="alert" className="p-8 text-center text-destructive">Failed to load customer timeline. Please refresh to try again.</div>;
 
   const { customer, position, events, mandates, dueItems, payments } = timeline;
 
@@ -76,10 +77,15 @@ export default function CustomerTimelinePage() {
         <Link href="/customers" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4 print:hidden">
           <ArrowLeft className="h-4 w-4" /> Back to Customers
         </Link>
-        <div className="flex flex-col md:flex-row md:items-start justify-between gap-6">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">{customer.name}</h1>
-            <p className="text-muted-foreground mt-1 font-mono text-sm">{customer.reference}</p>
+        <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-6">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-4">
+              <CustomerAvatar name={customer.name} large />
+              <div>
+                <h1 className="text-3xl font-bold tracking-tight">{customer.name}</h1>
+                <p className="text-muted-foreground mt-1 font-mono text-xs" title={customer.id}>{customer.reference}</p>
+              </div>
+            </div>
             <div className="mt-4 flex flex-wrap gap-4 text-sm">
               <div>
                 <span className="text-muted-foreground">Bank:</span> <span className="font-medium">{String(customer.data?.bankName || 'N/A')}</span>
@@ -89,9 +95,7 @@ export default function CustomerTimelinePage() {
               </div>
               <div>
                 <span className="text-muted-foreground">Status:</span> 
-                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-success/10 text-success border border-success/20">
-                  {customer.status}
-                </span>
+                <span className="ml-2"><StatusBadge status={customer.status} /></span>
               </div>
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -100,11 +104,11 @@ export default function CustomerTimelinePage() {
               </Button>
               <Button variant="ghost" size="sm" onClick={() => exportPack('csv')} disabled={createExport.isPending} busy={generating('csv')} busyLabel="Generating…">CSV</Button>
               <Button variant="ghost" size="sm" onClick={() => exportPack('json')} disabled={createExport.isPending} busy={generating('json')} busyLabel="Generating…">JSON</Button>
-              <span className="text-[11px] text-muted-foreground">Summary page, full timeline and the policy, template and cutover versions as they applied (AUD-02, AUD-06); SHA-256 checksum on the export record.</span>
             </div>
+            <p className="mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">Export the full timeline and the policy, template and cutover versions in effect at each event. Includes a SHA-256 checksum (AUD-02, AUD-06).</p>
           </div>
 
-          <div className="bg-card border rounded-xl p-4 shadow-sm min-w-[240px]">
+          <div className="bg-card border rounded-xl p-5 shadow-sm w-full xl:w-80 shrink-0">
             <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Current Position</h2>
             <div className="space-y-3">
               <div className="flex justify-between items-baseline">
@@ -125,8 +129,8 @@ export default function CustomerTimelinePage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
+      <div className="grid grid-cols-1 xl:grid-cols-5 gap-6 items-start">
+        <div className="xl:col-span-2 space-y-6">
           {/* Active Mandates */}
           <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
             <div className="p-4 border-b bg-secondary/20 flex items-center gap-2">
@@ -141,10 +145,10 @@ export default function CustomerTimelinePage() {
                   <div key={mandate.id} className="p-4">
                     <div className="flex justify-between items-start mb-2">
                       <div>
-                        <p className="font-medium font-mono text-sm">{mandate.reference}</p>
+                        <p className="font-medium font-mono text-sm" title={mandate.id}>{mandate.reference}</p>
                         <p className="text-xs text-muted-foreground">Limit: {formatKobo(mandate.amountKobo)}</p>
                       </div>
-                      <span className="px-2 py-1 bg-secondary text-xs rounded-md font-medium border">{mandate.status}</span>
+                      <StatusBadge status={mandate.status} />
                     </div>
                   </div>
                 ))
@@ -153,7 +157,7 @@ export default function CustomerTimelinePage() {
           </section>
 
           {/* Due Items & Payments */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-1 gap-6">
             <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
               <div className="p-4 border-b bg-secondary/20 flex items-center gap-2">
                 <AlertTriangle className="h-5 w-5 text-warning-strong" />
@@ -171,7 +175,7 @@ export default function CustomerTimelinePage() {
                       </div>
                       <div className="flex justify-between items-center mt-2">
                         <span className="text-xs text-muted-foreground">Due: {formatCompactDate(String(item.data?.dueDate || item.createdAt))}</span>
-                        <span className="text-xs font-medium px-2 py-0.5 rounded bg-secondary">{item.status}</span>
+                        <StatusBadge status={item.status} />
                       </div>
                     </div>
                   ))
@@ -196,7 +200,7 @@ export default function CustomerTimelinePage() {
                       </div>
                       <div className="flex justify-between items-center mt-2">
                         <span className="text-xs text-muted-foreground">{formatCompactDate(payment.createdAt)}</span>
-                        <span className="text-xs font-medium px-2 py-0.5 rounded bg-secondary">{payment.status}</span>
+                        <StatusBadge status={payment.status} />
                       </div>
                     </div>
                   ))
@@ -207,33 +211,36 @@ export default function CustomerTimelinePage() {
         </div>
 
         {/* Timeline Log */}
-        <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col h-[600px]">
-          <div className="p-4 border-b bg-secondary/20 flex items-center gap-2 shrink-0">
-            <Clock className="h-5 w-5 text-primary" />
-            <h2 className="font-semibold">Timeline Events</h2>
+        <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col xl:col-span-3">
+          <div className="p-5 border-b flex items-center gap-3 shrink-0">
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-secondary"><Clock className="h-4 w-4 text-primary" /></span>
+            <div>
+              <h2 className="font-semibold">Timeline Events</h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">The complete record · {formatCount(events.length, 'event')}</p>
+            </div>
           </div>
-          <ScrollFrame label="Timeline events" className="p-4 overflow-y-auto flex-1 space-y-4">
+          <ScrollFrame label="Timeline events" className="p-5 sm:p-6 overflow-y-auto max-h-[720px] space-y-4">
             {events.length === 0 ? (
               <EmptyState title="No events recorded yet" className="px-0">Consent, mandate changes, attempts, notices and payments are recorded here as they happen.</EmptyState>
             ) : (
-              <div className="relative border-l-2 border-border ml-3 space-y-6">
-                {events.map((event, i) => (
-                  <div key={event.id} className="relative pl-6">
-                    <div className="absolute -left-[9px] top-1 h-4 w-4 rounded-full bg-background border-2 border-primary"></div>
-                    <div className="flex flex-col">
-                      <span className="text-xs text-muted-foreground font-mono mb-1">{formatDate(event.createdAt)}</span>
-                      <span className="text-sm font-medium">{event.name || event.kind}</span>
+              <ol className="relative border-l border-border ml-2 space-y-7">
+                {events.map(event => (
+                  <li key={event.id} className="relative pl-6">
+                    <span aria-hidden="true" className="absolute -left-[5px] top-1 h-2.5 w-2.5 rounded-full bg-brand ring-4 ring-card" />
+                    <div className="flex flex-col items-start">
+                      <time dateTime={event.createdAt} className="text-[11px] text-muted-foreground mb-1.5">{formatDate(event.createdAt)}</time>
+                      <span className="text-sm font-semibold" title={event.id}>{event.name || readableLabel(event.kind)}</span>
                       {event.amountKobo > 0 && (
                         <span className="text-sm font-mono mt-1">{formatKobo(event.amountKobo)}</span>
                       )}
                       {event.kind === 'retry-decisions' && (
-                        <span className="text-xs text-muted-foreground mt-1">{decisionDetail((event.data || {}) as Record<string, any>)}</span>
+                        <span className="text-xs leading-relaxed text-muted-foreground mt-2">{decisionDetail((event.data || {}) as Record<string, any>)}</span>
                       )}
-                      <span className="text-xs text-muted-foreground mt-1">{event.status}</span>
+                      <span className="mt-2"><StatusBadge status={event.status} /></span>
                     </div>
-                  </div>
+                  </li>
                 ))}
-              </div>
+              </ol>
             )}
           </ScrollFrame>
         </div>

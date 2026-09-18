@@ -1,165 +1,171 @@
 import React from 'react';
+import { Link } from 'wouter';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow, EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
+import { Button } from '@/components/ui/button';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetOverview, getGetOverviewQueryKey } from '@workspace/api-client-react';
-import { formatKobo, formatDate, formatCompactDate } from '@/lib/formatters';
-import { BarChart3, TrendingUp, AlertCircle, Clock, ShieldCheck, Activity } from 'lucide-react';
+import { formatKobo, formatDate, formatCompactDate, formatNumber, formatCount } from '@/lib/formatters';
+import { ArrowDownLeft, ArrowUpRight, ArrowRight, AlertCircle, CheckCheck, Clock, Activity, FileBarChart2, ShieldCheck } from 'lucide-react';
+
+const queueDestinations: Record<string, string> = {
+  activation: '/mandates', review: '/reconciliation', duplicates: '/reconciliation', failures: '/collections', overdue: '/exceptions',
+};
+
+function alertDestination(key: string): { href: string; label: string } {
+  if (key.includes('close')) return { href: '/reports', label: 'View daily closes' };
+  if (key.includes('audit')) return { href: '/audit', label: 'Review audit log' };
+  if (key.includes('exception')) return { href: '/exceptions', label: 'Review exceptions' };
+  if (key.includes('unallocated') || key.includes('position')) return { href: '/reconciliation', label: 'Review reconciliation' };
+  if (key.includes('attempt')) return { href: '/collections', label: 'Review collections' };
+  return { href: '/settings', label: 'Review settings' };
+}
+
+const metricIcons = [ArrowDownLeft, ArrowUpRight, CheckCheck, AlertCircle];
 
 export default function OverviewPage() {
   const { merchantId } = useWorkspace();
-  const { data: overview, isLoading, error } = useGetOverview(
-    { merchantId: merchantId! }, 
+  const { data: overview, isLoading, error, refetch } = useGetOverview(
+    { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getGetOverviewQueryKey({ merchantId: merchantId! }) } }
   );
 
   if (!merchantId) return null;
   if (isLoading) return <Loading what="the overview" />;
-  if (error) return <div className="p-8 text-center text-destructive">Failed to load overview data.</div>;
+  if (error) return <div role="alert" className="rounded-xl border bg-card p-6"><p className="font-semibold">Unable to load the overview</p><p className="mt-1 text-sm text-muted-foreground">Your records are unchanged. Try loading this page again.</p><Button variant="outline" className="mt-4" onClick={() => refetch()}>Try again</Button></div>;
   if (!overview) return null;
 
+  const upcoming = [...overview.upcoming].sort((a, b) => String(a.data.dueDate || '').localeCompare(String(b.data.dueDate || '')));
+
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
-      <header>
-        <h1 className="text-3xl font-bold tracking-tight">Operations Overview</h1>
-        <p className="text-muted-foreground mt-2">
-          Environment: <span className="font-mono font-medium text-foreground">{overview.environment}</span> 
-          <span className="mx-2">·</span> 
-          Last close: {overview.lastClose ? formatDate(overview.lastClose) : 'Never'}
-          <span className="mx-2">·</span>
-          Next scheduled close: {overview.nextClose ? `${formatDate(overview.nextClose)} (daily)` : 'automatic close off'}
-        </p>
+    <div className="space-y-6 animate-in fade-in duration-500 motion-reduce:animate-none">
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Your workspace at a glance</p>
+          <h1 className="text-3xl font-bold tracking-tight">Operations Overview</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Collections, outstanding obligations and the work that needs your attention.</p>
+        </div>
+        <Button asChild variant="outline" className="gap-2"><Link href="/reports"><FileBarChart2 aria-hidden="true" className="h-4 w-4" /> View reports</Link></Button>
       </header>
 
-      {/* Alerts (NFR-OBS-02) */}
-      <section>
-        <h2 className="text-lg font-semibold mb-4">Alerts</h2>
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border bg-card px-4 py-3 text-xs text-muted-foreground">
+        <span className="inline-flex items-center gap-2 font-medium text-foreground"><Clock aria-hidden="true" className="h-4 w-4 text-muted-foreground" /> Daily close</span>
+        <p>Last close: {overview.lastClose ? formatDate(overview.lastClose) : 'Not closed yet'}</p>
+        <p>Next scheduled close: {overview.nextClose ? `${formatDate(overview.nextClose)} (daily)` : 'automatic close off'}</p>
+        <span className="ml-auto rounded-md bg-secondary px-2 py-1 font-medium capitalize">{overview.environment}</span>
+      </div>
+
+      <section aria-labelledby="overview-metrics-title">
+        <h2 id="overview-metrics-title" className="sr-only">Key Metrics</h2>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4 print:grid-cols-4">
+          {overview.metrics.map((metric, index) => {
+            const Icon = metricIcons[index % metricIcons.length];
+            return (
+              <div key={metric.key} className="relative min-w-0 rounded-xl border bg-card p-5 shadow-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs font-medium text-muted-foreground">{metric.label}</p>
+                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${metric.key === 'settled' ? 'bg-success/10 text-success' : metric.key === 'exceptions' ? 'bg-warning text-warning-foreground' : 'bg-secondary/60 text-muted-foreground'}`}><Icon aria-hidden="true" className="h-4 w-4" /></span>
+                </div>
+                <p className="mt-4 break-words text-[1.75rem] font-semibold leading-none tracking-tight tabular-nums">
+                  {metric.unit === 'kobo' ? formatKobo(metric.value) : formatNumber(metric.value)}{metric.unit === 'percent' ? '%' : ''}
+                  {metric.unit !== 'kobo' && metric.unit !== 'percent' && metric.unit !== 'count' && <span className="ml-1 text-sm font-normal text-muted-foreground">{metric.unit}</span>}
+                </p>
+                {metric.detail && <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{metric.detail}</p>}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <section aria-labelledby="overview-alerts-title">
+        <div className="mb-3 flex items-center gap-2">
+          <h2 id="overview-alerts-title" className="text-sm font-semibold">Alerts</h2>
+          {overview.alerts.length > 0 && <span className="rounded-full bg-warning px-2 py-0.5 text-xs font-medium text-warning-foreground">{overview.alerts.length}</span>}
+        </div>
         {overview.alerts.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No alert conditions: the audit chain verifies, positions rebuild, nothing is stuck unallocated over the threshold, no exception is past its deadline, the books were closed within the last 36 hours and no scheduled close was missed.</p>
+          <div className="flex items-start gap-3 rounded-xl border border-success/20 bg-success/5 p-4">
+            <ShieldCheck aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-success" />
+            <p className="text-sm text-muted-foreground">No alert conditions: the audit chain verifies, positions rebuild, nothing is stuck unallocated over the threshold, no exception is past its deadline, the books were closed within the last 36 hours and no scheduled close was missed.</p>
+          </div>
         ) : (
-          <ul className="space-y-2">
-            {overview.alerts.map(alert => (
-              <li key={alert.key} className={`rounded-lg border p-3 text-sm ${alert.severity === 'critical' ? 'border-destructive bg-destructive/10 text-destructive' : alert.severity === 'high' ? 'border-destructive/40 bg-destructive/5' : alert.severity === 'medium' ? 'border-warning-strong/40 bg-warning-strong/5' : 'border-border bg-secondary/30'}`}>
-                <div className="flex items-center gap-2"><AlertCircle className="h-4 w-4" /><span className="font-semibold">{alert.title}</span><span className="ml-auto text-[11px] uppercase tracking-wider">{alert.severity}</span></div>
-                <p className="text-xs mt-1">{alert.detail}{alert.since ? ` Since ${formatDate(alert.since)}.` : ''}</p>
-              </li>
-            ))}
+          <ul className="grid gap-3 lg:grid-cols-2">
+            {overview.alerts.map(alert => {
+              const destination = alertDestination(alert.key);
+              return (
+                <li key={alert.key} className={`rounded-xl border p-4 ${alert.severity === 'critical' || alert.severity === 'high' ? 'border-destructive/25 bg-destructive/5' : alert.severity === 'medium' ? 'border-warning-strong/20 bg-warning-strong/5' : 'border-border bg-card'}`}>
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle aria-hidden="true" className={`mt-0.5 h-4 w-4 shrink-0 ${alert.severity === 'critical' || alert.severity === 'high' ? 'text-destructive' : 'text-warning-strong'}`} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-baseline justify-between gap-2"><h3 className="text-sm font-semibold">{alert.title}</h3><span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{alert.severity}</span></div>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{alert.detail}{alert.since ? ` Since ${formatDate(alert.since)}.` : ''}</p>
+                      <Link href={destination.href} className="mt-2 inline-flex min-h-7 items-center gap-1 text-xs font-semibold underline-offset-4 hover:underline">{destination.label}<ArrowRight aria-hidden="true" className="h-3.5 w-3.5" /></Link>
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>
 
-      {/* Metrics Grid */}
-      <section>
-        <h2 className="text-lg font-semibold mb-4">Key Metrics</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 print:grid-cols-4 gap-4">
-          {overview.metrics.map(metric => (
-            <div key={metric.key} className="bg-card border rounded-xl p-5 shadow-sm">
-              <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">{metric.label}</p>
-              <div className="mt-2 flex items-baseline gap-2">
-                <span className="text-3xl font-bold font-mono">
-                  {metric.unit === 'kobo' ? formatKobo(metric.value) : metric.value}
-                </span>
-                {metric.unit !== 'kobo' && <span className="text-sm text-muted-foreground">{metric.unit}</span>}
-              </div>
-              {metric.detail && <p className="text-xs text-muted-foreground mt-2">{metric.detail}</p>}
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 print:grid-cols-2 gap-8">
-        {/* Queues */}
-        <section>
-          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <AlertCircle className="h-5 w-5 text-warning-strong" /> Action Required
-          </h2>
-          <div className="bg-card border rounded-xl shadow-sm divide-y">
-            {overview.queues.length === 0 && (
-              <EmptyState title="Nothing in the queue">Items that need a decision, such as a proposed match or an exception past its deadline, appear here.</EmptyState>
-            )}
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-2 print:grid-cols-2">
+        <section className="overflow-hidden rounded-xl border bg-card shadow-sm" aria-labelledby="overview-queues-title">
+          <div className="flex items-center justify-between gap-3 border-b px-5 py-4">
+            <div><h2 id="overview-queues-title" className="font-semibold">Action Required</h2><p className="mt-1 text-xs text-muted-foreground">Choose a queue to keep work moving.</p></div>
+            <AlertCircle aria-hidden="true" className="h-5 w-5 text-muted-foreground" />
+          </div>
+          <div className="divide-y">
+            {overview.queues.length === 0 && <EmptyState title="Nothing in the queue">Items that need a decision, such as a proposed match or an exception past its deadline, appear here.</EmptyState>}
             {overview.queues.map(queue => (
-              <div key={queue.key} className="p-4 flex items-center justify-between hover:bg-secondary/50 transition-colors">
-                <div>
-                  <p className="font-medium text-sm">{queue.label}</p>
-                  <p className="text-xs text-muted-foreground">{queue.detail}</p>
-                </div>
-                <div className="flex items-center justify-center bg-warning text-warning-foreground rounded-full h-8 w-8 font-bold text-sm">
-                  {queue.value}
-                </div>
-              </div>
+              <Link key={queue.key} href={queueDestinations[queue.key] || '/exceptions'} className="group flex min-h-16 items-center gap-3 px-5 py-3.5 transition-colors hover:bg-secondary/40">
+                <div className="min-w-0 flex-1"><p className="text-sm font-medium">{queue.label}</p><p className="mt-0.5 text-xs text-muted-foreground">{queue.detail}</p></div>
+                <span className={`flex h-7 min-w-7 items-center justify-center rounded-md px-1.5 text-xs font-semibold tabular-nums ${queue.value > 0 ? 'bg-warning text-warning-foreground' : 'bg-secondary/60 text-muted-foreground'}`}>{queue.value}</span>
+                <ArrowRight aria-hidden="true" className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 motion-reduce:transform-none" />
+              </Link>
             ))}
           </div>
         </section>
 
-        {/* Upcoming */}
-        <section>
-          <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Clock className="h-5 w-5 text-info-strong" /> Upcoming Scheduled Actions
-          </h2>
-          <div className="bg-card border rounded-xl shadow-sm divide-y">
-            {overview.upcoming.length === 0 && (
-              <EmptyState title="No scheduled actions">Retries scheduled under an approved policy appear here with the notice each one requires.</EmptyState>
-            )}
-            {overview.upcoming.map(record => (
-              <div key={record.id} className="p-4 flex items-center justify-between">
-                <div>
-                  <p className="font-medium text-sm">{record.name}</p>
-                  <p className="text-xs font-mono text-muted-foreground">{record.reference || record.id}</p>
-                </div>
-                <div className="text-right">
-                  <span className="inline-block px-2 py-1 bg-secondary text-secondary-foreground text-xs font-medium rounded">
-                    {record.status.replace('_', ' ')}
-                  </span>
-                  <p className="text-xs text-muted-foreground mt-1">Due {formatCompactDate(String(record.data.dueDate||""))}</p>
-                </div>
-              </div>
+        <section className="overflow-hidden rounded-xl border bg-card shadow-sm" aria-labelledby="overview-upcoming-title">
+          <div className="flex items-center justify-between gap-3 border-b px-5 py-4">
+            <div><h2 id="overview-upcoming-title" className="font-semibold">Upcoming Scheduled Actions</h2><p className="mt-1 text-xs text-muted-foreground">Open obligations, ordered by due date.</p></div>
+            <Link href="/collections" className="inline-flex min-h-8 shrink-0 items-center gap-1 text-xs font-semibold hover:underline">View all<ArrowRight aria-hidden="true" className="h-3.5 w-3.5" /></Link>
+          </div>
+          <div className="divide-y">
+            {upcoming.length === 0 && <EmptyState title="No scheduled actions">Retries scheduled under an approved policy appear here with the notice each one requires.</EmptyState>}
+            {upcoming.map(record => (
+              <Link key={record.id} href={record.customerId ? `/customers/${record.customerId}` : '/collections'} className="flex items-center justify-between gap-3 px-5 py-3.5 transition-colors hover:bg-secondary/40">
+                <div className="min-w-0"><p className="text-sm font-medium">{record.name}</p><p className="mt-1 break-all text-xs text-muted-foreground">{record.reference || record.id}</p></div>
+                <div className="shrink-0 text-right"><span className="inline-block rounded-md bg-secondary/70 px-2 py-0.5 text-xs font-medium capitalize text-secondary-foreground">{record.status.replace(/_/g, ' ')}</span><p className="mt-1 text-xs text-muted-foreground">Due {formatCompactDate(String(record.data.dueDate || ''))}</p></div>
+              </Link>
             ))}
           </div>
         </section>
       </div>
 
-      {/* Activity Log */}
-      <section>
-        <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-          <Activity className="h-5 w-5 text-success" /> Recent Activity
-        </h2>
-        <div className="bg-card border rounded-xl shadow-sm overflow-hidden">
-          <ScrollFrame label="Recent activity" className="overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-secondary/50 border-b text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-3 font-medium">Time</th>
-                  <th className="px-4 py-3 font-medium">Record</th>
-                  <th className="px-4 py-3 font-medium">Action/Status</th>
-                  <th className="px-4 py-3 font-medium text-right">Value</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {overview.activity.length === 0 && (
-                  <EmptyRow colSpan={4} title="No activity yet">Every action in this lender's workspace is listed here and recorded in the audit log.</EmptyRow>
-                )}
-                {overview.activity.map(record => (
-                  <tr key={record.id} className="hover:bg-secondary/20">
-                    <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">{formatDate(record.updatedAt)}</td>
-                    <td className="px-4 py-3 font-medium">
-                      {record.kind}
-                      <span className="block text-xs font-mono text-muted-foreground font-normal">{record.reference || record.id}</span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="inline-block px-2 py-0.5 bg-secondary text-secondary-foreground text-xs rounded-full">
-                        {record.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono font-medium">
-                      {record.amountKobo ? formatKobo(record.amountKobo) : '-'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </ScrollFrame>
+      <section className="overflow-hidden rounded-xl border bg-card shadow-sm" aria-labelledby="overview-activity-title">
+        <div className="flex items-center justify-between gap-3 border-b px-5 py-4">
+          <h2 id="overview-activity-title" className="flex items-center gap-2 font-semibold"><Activity aria-hidden="true" className="h-4 w-4 text-muted-foreground" /> Recent Activity</h2>
+          <Link href="/audit" className="inline-flex min-h-8 items-center gap-1 text-xs font-semibold hover:underline">Open audit log<ArrowRight aria-hidden="true" className="h-3.5 w-3.5" /></Link>
         </div>
+        <ScrollFrame label="Recent activity" className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b bg-secondary/25 text-xs text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Time</th><th className="px-5 py-3 font-medium">Record</th><th className="px-5 py-3 font-medium">Action/Status</th><th className="px-5 py-3 text-right font-medium">Value</th></tr></thead>
+            <tbody className="divide-y">
+              {overview.activity.length === 0 && <EmptyRow colSpan={4} title="No activity yet">Every action in this lender's workspace is listed here and recorded in the audit log.</EmptyRow>}
+              {overview.activity.map(record => (
+                <tr key={record.id} className="hover:bg-secondary/20">
+                  <td className="whitespace-nowrap px-5 py-3 text-xs text-muted-foreground">{formatDate(record.updatedAt)}</td>
+                  <td className="px-5 py-3 font-medium"><span className="capitalize">{(record.name || record.kind).replace(/_/g, ' ')}</span><span className="mt-0.5 block text-xs font-normal text-muted-foreground">{record.reference || record.id}</span></td>
+                  <td className="px-5 py-3"><span className="inline-block rounded-md bg-secondary/70 px-2 py-0.5 text-xs capitalize text-secondary-foreground">{record.status.replace(/_/g, ' ')}</span></td>
+                  <td className="px-5 py-3 text-right font-medium tabular-nums">{record.amountKobo ? formatKobo(record.amountKobo) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </ScrollFrame>
+        <div className="border-t px-5 py-2.5 text-xs text-muted-foreground">{formatCount(overview.activity.length, 'recent record')} · Every change is recorded in the audit log.</div>
       </section>
     </div>
   );
