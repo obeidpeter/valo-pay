@@ -43,6 +43,9 @@
   --color-success: hsl(var(--success));
   --color-success-foreground: hsl(var(--success-foreground));
 
+  --color-brand: hsl(var(--brand));
+  --color-brand-foreground: hsl(var(--brand-foreground));
+
   --font-sans: var(--app-font-sans);
   --font-mono: var(--app-font-mono);
 
@@ -91,6 +94,10 @@
 
   --success: 154 61% 48%;
   --success-foreground: 0 0% 100%;
+
+  /* The brand mark's orange (favicon); decoration and the mark only, never small text: its contrast on white is below 4.5:1. */
+  --brand: 14 100% 50%;
+  --brand-foreground: 0 0% 100%;
   
   --app-font-sans: 'Plus Jakarta Sans', sans-serif;
   --app-font-mono: 'Spline Sans Mono', monospace;
@@ -135,6 +142,9 @@
 
   --success: 154 61% 48%;
   --success-foreground: 0 0% 100%;
+
+  --brand: 14 100% 55%;
+  --brand-foreground: 0 0% 100%;
 }
 
 @layer base {

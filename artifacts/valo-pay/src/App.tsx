@@ -8,16 +8,19 @@ import {
   Route,
   Switch,
   useLocation,
-  Router as WouterRouter,
-  Redirect
+  Router as WouterRouter
 } from 'wouter';
-import { ClerkProvider, SignIn, SignUp } from '@clerk/react';
+import { ClerkProvider } from '@clerk/react';
 import { authEnabled, clerkPublishableKey } from '@/lib/auth';
 
 import { WorkspaceProvider } from '@/lib/workspace-context';
 import { Layout } from '@/components/layout';
 
-// Pages
+// Public pages: no workspace, no sandbox
+import LandingPage from '@/pages/landing';
+import { SignInPage, SignUpPage } from '@/pages/sign-in';
+
+// Console pages
 import OverviewPage from '@/pages/overview';
 import CustomersPage from '@/pages/customers/index';
 import CustomerTimelinePage from '@/pages/customers/[id]';
@@ -44,22 +47,6 @@ function stripBase(path: string): string {
     : path;
 }
 
-function SignInPage() {
-  return (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-background px-4">
-      <SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} />
-    </div>
-  );
-}
-
-function SignUpPage() {
-  return (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-background px-4">
-      <SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} />
-    </div>
-  );
-}
-
 function RoutedErrorBoundary({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>;
@@ -70,22 +57,25 @@ function ClerkProviderWithRoutes() {
 
   const routes = (
       <QueryClientProvider client={queryClient}>
-        <WorkspaceProvider>
-          <TooltipProvider>
-            <RoutedErrorBoundary>
-              <Switch>
-                <Route path="/sign-in/*?">{authEnabled ? <SignInPage /> : <Redirect to="/" />}</Route>
-                <Route path="/sign-up/*?">{authEnabled ? <SignUpPage /> : <Redirect to="/" />}</Route>
-                <Route>
+        <TooltipProvider>
+          <RoutedErrorBoundary>
+            <Switch>
+              {/* The public pages sit outside the workspace provider: reading about the product or
+                  signing in never creates a sandbox. The workspace request happens only once someone
+                  opens the console (frontend contract, Pages). */}
+              <Route path="/" component={LandingPage} />
+              <Route path="/sign-in/*?" component={SignInPage} />
+              <Route path="/sign-up/*?" component={SignUpPage} />
+              <Route>
+                <WorkspaceProvider>
                   <Layout>
                     <Switch>
-                      <Route path="/" component={OverviewPage} />
+                      <Route path="/overview" component={OverviewPage} />
                       <Route path="/customers" component={CustomersPage} />
                       <Route path="/customers/:id" component={CustomerTimelinePage} />
                       <Route path="/reconciliation" component={ReconciliationPage} />
                       <Route path="/exceptions" component={ExceptionsPage} />
                       <Route path="/policies" component={PoliciesPage} />
-                      {/* Placeholders for others */}
                       <Route path="/mandates" component={MandatesPage} />
                       <Route path="/collections" component={CollectionsPage} />
                       <Route path="/reports" component={ReportsPage} />
@@ -95,12 +85,12 @@ function ClerkProviderWithRoutes() {
                       <Route component={NotFound} />
                     </Switch>
                   </Layout>
-                </Route>
-              </Switch>
-            </RoutedErrorBoundary>
-            <Toaster />
-          </TooltipProvider>
-        </WorkspaceProvider>
+                </WorkspaceProvider>
+              </Route>
+            </Switch>
+          </RoutedErrorBoundary>
+          <Toaster />
+        </TooltipProvider>
       </QueryClientProvider>
   );
 
