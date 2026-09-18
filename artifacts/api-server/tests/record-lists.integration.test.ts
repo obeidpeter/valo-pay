@@ -1,0 +1,158 @@
+// Synthetic fixtures only, in the disposable PostgreSQL used by CI. Never
+// point VALOPAY_RUN_INTEGRATION at the deployed database.
+import assert from "node:assert/strict";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
+import type { Server } from "node:http";
+import type { DomainState } from "../src/domain/types.js";
+import { pageRecords, type ListQuery } from "../src/lib/valopay-list.js";
+
+if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
+  console.log("Set VALOPAY_RUN_INTEGRATION=1 to run record list and stale-edit integration tests.");
+  process.exit(0);
+}
+const { pool } = await import("@workspace/db");
+const { inWorkspace, listMerchants, loadState, saveState, listRecords, loadCustomerView, loadSettingsView } = await import("../src/lib/valopay-store.js");
+const { customerTimeline } = await import("../src/domain/timeline.js");
+const { buildConsoleSettings } = await import("../src/lib/valopay-close-views.js");
+const { default: express } = await import("express");
+const { default: router } = await import("../src/routes/valopay.js");
+const auth = () => Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true });
+const token = randomBytes(32).toString("hex"), otherToken = randomBytes(32).toString("hex"), editingToken = randomBytes(32).toString("hex");
+const request = (value = token) => ({ headers: { cookie: `valopay_sandbox=${value}` }, secure: false, auth: auth() }) as any;
+const response = () => ({ cookie() {} }) as any;
+let server: Server | undefined;
+try {
+  const merchants = await inWorkspace(request(), response(), listMerchants);
+  const merchantId = merchants[0]!.id, siblingId = merchants[1]!.id;
+  const prefix = randomUUID();
+  // 10,000 customer records and 20,000 unrelated records are intentionally in
+  // the same lender, so a full-state read cannot look fast by missing the load.
+  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data,created_at,updated_at)
+    SELECT $1 || '-' || lpad(i::text,5,'0'), $2, 'customers',
+      CASE WHEN i%997=0 THEN 'Dami Adéyẹmí ' ELSE 'Sample customer ' END || i,
+      CASE WHEN i%3=0 THEN 'inactive' ELSE 'active' END, 'PAGE-' || i, '',
+      jsonb_build_object('synthetic',true,'phone','+234 800 ' || i,'note','literal % _ : spaces  stay','sequence',i,'tiny',1e-8::numeric),
+      '2027-01-01'::timestamptz + (i/3)*interval '1 millisecond', '2027-02-01'::timestamptz + i*interval '1 millisecond'
+    FROM generate_series(1,10000) i`, [prefix, merchantId]);
+  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,data)
+    SELECT $1 || '-event-' || i, $2, 'observations', 'Unrelated evidence ' || i, 'received', '',
+      jsonb_build_object('synthetic',true,'detail',repeat('x',400)) FROM generate_series(1,20000) i`, [prefix, merchantId]);
+  await pool.query("ANALYZE valopay_records");
+  let baseline!: DomainState;
+  const baselineStart = performance.now();
+  await inWorkspace(request(), response(), async context => { baseline = await loadState(context, merchantId, "share"); });
+  const baselineMs = performance.now() - baselineStart;
+  const customers = baseline.records.filter(row => row.kind === "customers");
+  assert.equal(customers.length, 10008);
+  const queries: ListQuery[] = [
+    { limit: 25 }, { limit: 25, offset: 25 }, { limit: 100, offset: 9900 }, { limit: 25, offset: 10007 }, { limit: 25, offset: 20000 },
+    { status: "inactive", limit: 25, offset: 50 }, { updatedSince: "2027-02-01T00:00:09.990Z", limit: 4 },
+    { search: "ADEYEMI", limit: 3, offset: 2 }, { search: "adéyẹmí", limit: 25 },
+    { search: '"sequence":997', limit: 25 }, { search: "spaces  stay", limit: 25 },
+    { search: "literal % _", limit: 25 }, { search: "1e-8", limit: 25 }, { search: "no such customer", limit: 25 },
+    { search: "active", status: "inactive", limit: 25, offset: 40 },
+    { id: customers[9000]!.id, limit: 25 }, { id: "missing", limit: 25 },
+  ];
+  for (const query of queries) {
+    const actual = await inWorkspace(request(), response(), context => listRecords(context, merchantId, "customers", query));
+    assert.deepEqual(actual, pageRecords(customers, query), `DB page preserves search/filter/total contract: ${JSON.stringify(query)}`);
+  }
+  const timing: number[] = [];
+  for (let i = 0; i < 5; i++) {
+    const start = performance.now();
+    const page = await inWorkspace(request(), response(), context => listRecords(context, merchantId, "customers", { limit: 50, offset: i * 50 }));
+    timing.push(performance.now() - start);
+    assert.equal(page.items.length, 50);
+    assert.equal(page.total, 10008);
+  }
+  // Inspect the actual parameterized query plan in this disposable schema.
+  const plan = await pool.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT id FROM valopay_records
+    WHERE merchant_id=$1 AND kind='customers' ORDER BY created_at DESC,id DESC LIMIT 50`, [merchantId]);
+  assert.match(JSON.stringify(plan.rows), /Index (?:Only )?Scan/, "the schema's paging index supports the limited kind read");
+  const sortedTimings = [...timing].sort((a,b) => a-b);
+  console.log(JSON.stringify({ benchmark: "synthetic-record-pages", customerRows: 10008, unrelatedRows: 20000,
+    fullStateMs: Math.round(baselineMs), databasePage50MedianMs: Math.round(sortedTimings[2]!), databasePage50MaxMs: Math.round(sortedTimings[4]!),
+    explanation: "Local CI measurements, not a production latency guarantee; exact JSON/accent search uses bounded candidate scans." }));
+
+  await assert.rejects(() => inWorkspace(request(otherToken), response(), context => listRecords(context, merchantId, "customers", { limit: 25 })), (error: any) => error.status === 404);
+  const foreignExact = await inWorkspace(request(), response(), context => listRecords(context, siblingId, "customers", { id: customers[0]!.id }));
+  assert.equal(foreignExact.total, 0, "ID filters never cross the lender boundary");
+  await assert.rejects(() => inWorkspace(request(), response(), context => listRecords(context, merchantId, "customers", { updatedSince: "invalid" })), (error: any) => error.status === 400);
+  await assert.rejects(() => inWorkspace(request(), response(), async context => {
+    await listRecords(context, merchantId, "customers", { limit: 1 });
+    await listRecords(context, siblingId, "customers", { limit: 1 });
+  }), (error: any) => error.status === 409);
+  const realCustomer = customers.find(row => row.reference.startsWith("DEMO-"))!;
+  await inWorkspace(request(), response(), async context => {
+    const view = await loadCustomerView(context, merchantId, realCustomer.id);
+    assert.deepEqual(customerTimeline(view, realCustomer.id), customerTimeline(baseline, realCustomer.id), "customer balances and complete events survive scoped reads");
+    assert.ok(view.records.length < 100);
+    await assert.rejects(() => saveState(context, view), (error: any) => error.status === 409, "a partial read cannot become a mutation snapshot");
+  });
+  await inWorkspace(request(), response(), async context => {
+    const view = await loadSettingsView(context, merchantId);
+    const runtime = { state: "off" as const, intervalMs: null, lastTickAt: null };
+    assert.deepEqual(buildConsoleSettings(view, context.role, context.now, runtime), buildConsoleSettings(baseline, context.role, context.now, runtime));
+    assert.ok(view.records.every(row => ["integrations", "calendar", "closes"].includes(row.kind)));
+  });
+
+  // HTTP behavior on a separate small synthetic workspace: two editors cannot
+  // silently overwrite one another; a committed retry still replays first.
+  const editMerchants = await inWorkspace(request(editingToken), response(), listMerchants);
+  const editingMerchant = editMerchants[0]!.id;
+  const editState = await inWorkspace(request(editingToken), response(), context => loadState(context, editingMerchant, "share"));
+  const customer = editState.records.find(row => row.kind === "customers")!;
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => { (req as any).auth = auth(); next(); });
+  app.use("/api", router);
+  app.use((error: any, _req: any, res: any, _next: any) => res.status(error.status || 500).json({ error: error.message }));
+  server = await new Promise<Server>(resolve => { const running = app.listen(0, "127.0.0.1", () => resolve(running)); });
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const base = `http://127.0.0.1:${address.port}/api/v1`;
+  const api = async (path: string, method = "GET", body?: unknown, key?: string) => {
+    const result = await fetch(`${base}${path}?merchantId=${editingMerchant}`, { method,
+      headers: { Cookie: `valopay_sandbox=${editingToken}`, "Content-Type": "application/json", ...(key ? { "Idempotency-Key": key } : {}) },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    return { status: result.status, body: await result.json() as any };
+  };
+  const edit = { name: "Reviewed customer name", expectedUpdatedAt: customer.updatedAt };
+  const first = await api(`/records/customers/${customer.id}`, "PATCH", edit, "edit-customer-once");
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.notEqual(first.body.updatedAt, customer.updatedAt);
+  const stale = await api(`/records/customers/${customer.id}`, "PATCH", { ...edit, name: "Outdated second edit" }, "another-edit");
+  assert.equal(stale.status, 409); assert.match(stale.body.error, /changed after you opened/);
+  assert.deepEqual(await api(`/records/customers/${customer.id}`, "PATCH", edit, "edit-customer-once"), first, "a lost successful response replays before its now-stale timestamp check");
+  assert.equal((await api(`/records/customers/${customer.id}`, "PATCH", { ...edit, name: "Different payload" }, "edit-customer-once")).status, 409);
+  const settings = await api("/settings"); assert.match(settings.body.revision, /^[a-f0-9]{64}$/);
+  const settingsEdit = { contactRoute: "Sample support route", expectedRevision: settings.body.revision };
+  const savedSettings = await api("/settings", "PATCH", settingsEdit, "settings-once");
+  assert.equal(savedSettings.status, 200, JSON.stringify(savedSettings.body));
+  assert.notEqual(savedSettings.body.revision, settings.body.revision);
+  assert.equal((await api("/settings", "PATCH", { contactRoute: "Outdated contact", expectedRevision: settings.body.revision })).status, 409);
+  assert.deepEqual(await api("/settings", "PATCH", settingsEdit, "settings-once"), savedSettings);
+  const mandate = editState.records.find(row => row.kind === "mandates" && row.status === "active")!;
+  const suspend = { action: "mandate_suspend", recordId: mandate.id, reason: "Synthetic stale editor test", expectedUpdatedAt: mandate.updatedAt };
+  const suspended = await api("/actions", "POST", suspend, "suspend-once");
+  assert.equal(suspended.status, 200, JSON.stringify(suspended.body));
+  assert.equal((await api("/actions", "POST", { ...suspend, action: "mandate_cancel" }, "cancel-stale")).status, 409);
+  assert.deepEqual(await api("/actions", "POST", suspend, "suspend-once"), suspended);
+  const roleChange = { action: "set_role", data: { role: "Operations" } };
+  const roleChanged = await api("/actions", "POST", roleChange, "role-switch-once");
+  assert.equal(roleChanged.status, 200);
+  assert.deepEqual(await api("/actions", "POST", roleChange, "role-switch-once"), roleChanged, "a role switch can replay after changing its own actor");
+  assert.equal((await api("/actions", "POST", { action: "set_role", data: { role: "Admin" } }, "role-switch-once")).status, 409);
+  console.log("Record list integration passed: 10k rows, scoped paging/counts, exact search, history totals, tenant isolation, stale edits and successful replay.");
+} finally {
+  if (server) await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve()));
+  // Leave other suites' fixtures untouched, and do not make scheduler tests
+  // pay for this volume fixture after the benchmark has finished.
+  const principals = [token, otherToken, editingToken].map(value => createHash("sha256").update(`demo:${value}`).digest("hex"));
+  const ownMerchants = "SELECT id FROM valopay_merchants WHERE workspace_id IN (SELECT id FROM valopay_workspaces WHERE principal_hash=ANY($1::text[]))";
+  await pool.query(`DELETE FROM valopay_idempotency WHERE merchant_id IN (${ownMerchants})`, [principals]);
+  await pool.query(`DELETE FROM valopay_records WHERE merchant_id IN (${ownMerchants})`, [principals]);
+  await pool.query("DELETE FROM valopay_merchants WHERE workspace_id IN (SELECT id FROM valopay_workspaces WHERE principal_hash=ANY($1::text[]))", [principals]);
+  await pool.query("DELETE FROM valopay_workspaces WHERE principal_hash=ANY($1::text[])", [principals]);
+  await pool.end();
+}

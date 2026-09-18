@@ -7,6 +7,8 @@ import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { recordsOf } from "../domain/records";
 import { seedMerchant } from "./valopay-seed";
 import { createCreationLimiter } from "./creation-limit";
+import { foldForSearch, LIST_PAGE_CEILING, type ListQuery } from "./valopay-list";
+import { advanceRecordVersions } from "./edit-versions";
 
 /** The demo persona roles, the same list as the shared schema's. */
 export const roles = ["Admin", "Operations", "Finance", "Compliance reviewer", "Read-only"];
@@ -177,7 +179,7 @@ export async function listMerchants(context: StoreContext) {
  * consistent state, waits for an in-flight mutation to commit, and never queues
  * behind other reads.
  */
-export async function loadState(context: StoreContext, merchantId: string, lock: Exclude<MerchantLock, "none"> = "update"): Promise<DomainState> {
+async function readMerchant(context: StoreContext, merchantId: string, lock: Exclude<MerchantLock, "none"> = "share"): Promise<MerchantRow> {
   const session = sessionFor(context);
   if (session.lockedMerchantId && session.lockedMerchantId !== merchantId) conflict("A transaction may operate on only one lender.");
   const merchant = (await session.client.query<MerchantRow>(
@@ -186,6 +188,13 @@ export async function loadState(context: StoreContext, merchantId: string, lock:
   )).rows[0];
   if (!merchant) fail("Lender not found in this workspace.", 404);
   session.lockedMerchantId = merchantId;
+  if (merchant.info.id !== merchantId) conflict("Lender identity does not match its stored scope.");
+  return merchant;
+}
+
+export async function loadState(context: StoreContext, merchantId: string, lock: Exclude<MerchantLock, "none"> = "update"): Promise<DomainState> {
+  const session = sessionFor(context);
+  const merchant = await readMerchant(context, merchantId, lock);
   const records = (await session.client.query<RecordRow>(
     `SELECT r.id,r.merchant_id,r.kind,r.name,r.status,r.reference,r.amount_kobo,r.customer_id,r.data,r.created_at,r.updated_at
      FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id
@@ -197,6 +206,83 @@ export async function loadState(context: StoreContext, merchantId: string, lock:
   if (state.merchant.id !== merchantId) conflict("Lender identity does not match its stored scope.");
   session.snapshot = structuredClone(state);
   return state;
+}
+
+const recordColumns = "r.id,r.merchant_id,r.kind,r.name,r.status,r.reference,r.amount_kobo,r.customer_id,r.data,r.created_at,r.updated_at";
+const scopedRecordsFrom = `FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id
+  JOIN valopay_workspaces w ON w.id=m.workspace_id`;
+const scopedRecordsWhere = "r.merchant_id=$1 AND m.workspace_id=$2 AND w.id=$2 AND w.principal_hash=$3";
+
+/** A list never loads unrelated kinds or constructs a writable DomainState.
+ * No search: PostgreSQL calculates the count and returns only the page.
+ * Search: preserve the exact JavaScript Unicode/JSON search contract by
+ * scanning bounded batches of this kind; only the requested page is retained.
+ * This path deliberately does not pretend jsonb::text is JSON.stringify: its
+ * whitespace and number spelling differ. Search indexing is a separate change.
+ */
+export async function listRecords(context: StoreContext, merchantId: string, kind: string, query: ListQuery) {
+  const session = sessionFor(context);
+  await readMerchant(context, merchantId);
+  const params: unknown[] = [merchantId, session.workspace.id, session.principal, kind];
+  let where = `${scopedRecordsWhere} AND r.kind=$4`;
+  const filter = (column: string, value: unknown) => { params.push(value); where += ` AND ${column}=$${params.length}`; };
+  if (query.status && query.status !== "all") filter("r.status", query.status);
+  if (query.customerId) filter("r.customer_id", query.customerId);
+  if (query.id) filter("r.id", query.id);
+  if (query.updatedSince) {
+    const since = Date.parse(query.updatedSince);
+    if (!Number.isFinite(since)) fail("updatedSince must be an ISO timestamp.");
+    params.push(new Date(since).toISOString()); where += ` AND r.updated_at >= $${params.length}::timestamptz`;
+  }
+  const offset = Number.isInteger(query.offset) && Number(query.offset) > 0 ? Number(query.offset) : 0;
+  const limit = Number.isInteger(query.limit) && Number(query.limit) > 0 ? Math.min(Number(query.limit), LIST_PAGE_CEILING) : undefined;
+  let items: ValopayRecord[] = [], total: number;
+  if (!query.search) {
+    // Merchant share lock keeps the separate total and page coherent with writes.
+    total = Number((await session.client.query<{ total: string }>(`SELECT count(*) AS total ${scopedRecordsFrom} WHERE ${where}`, params)).rows[0]!.total);
+    const values = [...params, offset];
+    let paging = ` OFFSET $${values.length}`;
+    if (limit !== undefined) { values.push(limit); paging += ` LIMIT $${values.length}`; }
+    if (offset < total) items = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${where} ORDER BY r.created_at DESC,r.id DESC${paging}`, values)).rows.map(rowToRecord);
+  } else {
+    const search = foldForSearch(query.search);
+    total = 0;
+    let cursor: { at: string; id: string } | undefined;
+    while (true) {
+      const values = [...params];
+      let after = "";
+      if (cursor) { values.push(cursor.at, cursor.id); after = ` AND (r.created_at,r.id) < ($${values.length - 1}::timestamptz,$${values.length}::text)`; }
+      const batch = (await session.client.query<RecordRow & { cursor_at: string }>(`SELECT ${recordColumns},r.created_at::text AS cursor_at ${scopedRecordsFrom} WHERE ${where}${after} ORDER BY r.created_at DESC,r.id DESC LIMIT ${LIST_PAGE_CEILING}`, values)).rows;
+      for (const row of batch) {
+        if (!foldForSearch(`${row.name} ${row.reference} ${row.status} ${JSON.stringify(row.data)}`).includes(search)) continue;
+        if (total >= offset && (limit === undefined || items.length < limit)) items.push(rowToRecord(row));
+        total++;
+      }
+      if (batch.length < LIST_PAGE_CEILING) break;
+      const last = batch.at(-1)!; cursor = { at: last.cursor_at, id: last.id };
+    }
+  }
+  const nextOffset = offset + items.length < total ? offset + items.length : undefined;
+  return nextOffset === undefined ? { items, total } : { items, total, nextOffset };
+}
+
+/** Complete customer history and balances without every other customer's data.
+ * This read has no mutable snapshot: passing it to saveState is rejected. */
+export async function loadCustomerView(context: StoreContext, merchantId: string, customerId: string): Promise<DomainState> {
+  const session = sessionFor(context), merchant = await readMerchant(context, merchantId);
+  const records = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom}
+    WHERE ${scopedRecordsWhere} AND ((r.kind='customers' AND r.id=$4) OR r.customer_id=$4) ORDER BY r.created_at,r.id`,
+    [merchantId, session.workspace.id, session.principal, customerId])).rows.map(rowToRecord);
+  return { merchant: merchant.info, settings: merchant.settings, records };
+}
+
+/** Settings only need integrations, the calendar and close history. */
+export async function loadSettingsView(context: StoreContext, merchantId: string): Promise<DomainState> {
+  const session = sessionFor(context), merchant = await readMerchant(context, merchantId);
+  const records = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom}
+    WHERE ${scopedRecordsWhere} AND r.kind IN ('integrations','calendar','closes') ORDER BY r.created_at,r.id`,
+    [merchantId, session.workspace.id, session.principal])).rows.map(rowToRecord);
+  return { merchant: merchant.info, settings: merchant.settings, records };
 }
 
 /** The stored answer for an idempotency key, when the request was already made. */
@@ -376,6 +462,7 @@ export async function saveState(context: StoreContext, state: DomainState): Prom
   const session = sessionFor(context);
   const merchantId = lockedMerchant(session);
   const snapshot = session.snapshot!;
+  advanceRecordVersions(snapshot, state, context.now);
   assertFinalState(snapshot, state, merchantId);
   const owned = await session.client.query(scopedMerchantQuery(), [merchantId, session.workspace.id, session.principal]);
   if (!owned.rows[0]) fail("Lender not found in this workspace.", 404);

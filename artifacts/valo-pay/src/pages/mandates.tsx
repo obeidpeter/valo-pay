@@ -1,4 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import { useSafeCreateRecord as useCreateRecord } from '@/lib/safe-mutations';
+import React, { useEffect, useRef, useState } from 'react';
+import { useUnsavedChanges } from '@/lib/unsaved-changes';
 import { Link, useSearchParams } from 'wouter';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { FieldError, FormAlert, attentionTitle, focusField, invalidProps, missingMessage, serverFieldErrors } from '@/components/form-field';
@@ -6,7 +8,7 @@ import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useWorkspace } from '@/lib/workspace-context';
-import { useListRecords, getListRecordsQueryKey, useCreateRecord } from '@workspace/api-client-react';
+import { useListRecords, getListRecordsQueryKey, } from '@workspace/api-client-react';
 import { formatKobo, formatDate } from '@/lib/formatters';
 import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
@@ -38,6 +40,7 @@ export default function MandatesPage() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formErrors, setFormErrors] = useState<string[]>([]);
+  const pendingErrorFocus = useRef<string | null>(null);
   const { view, setView } = useQueueFilters(mandateViews, 'all');
   const [search, setSearch] = useSearchParams();
   const targetId = search.get('record');
@@ -54,6 +57,12 @@ export default function MandatesPage() {
     setFieldErrors(prev => { if (!prev[name]) return prev; const next = { ...prev }; delete next[name]; return next; });
   };
   const [draft, setDraft] = useState(emptyMandate);
+  const draftScope = `${merchantId}:${isCreateOpen}`;
+  const createSession = useRef({ scope: draftScope });
+  if (createSession.current.scope !== draftScope) createSession.current = { scope: draftScope };
+  const { confirmDiscard } = useUnsavedChanges(isCreateOpen && JSON.stringify(draft) !== JSON.stringify(emptyMandate));
+  const changeCreateOpen = (open: boolean) => { if (open || confirmDiscard()) { if (!open) setDraft(emptyMandate); setIsCreateOpen(open); } };
+  useEffect(() => () => { createSession.current = { scope: 'unmounted' }; }, []);
   useEffect(() => {
     setSelectedMandate(null); setIsDialogOpen(false); setIsCreateOpen(false);
     setFieldErrors({}); setFormErrors([]); setDraft(emptyMandate);
@@ -80,19 +89,24 @@ export default function MandatesPage() {
   const approvedVersionOptions = (policies?.items || []).filter(policy => policy.status === 'approved').map(policy => ({ value: policy.id, label: `${policy.name} · v${String(policy.data?.version || 1)}` }));
   const createMandate = useCreateRecord({
     mutation: {
-      onSuccess: () => {
+      onMutate: () => createSession.current,
+      onSuccess: (_data, _variables, submitted) => {
         queryClient.invalidateQueries();
+        if (submitted !== createSession.current) return;
         setIsCreateOpen(false);
+        setDraft(emptyMandate);
         setFieldErrors({}); setFormErrors([]);
       },
-      onError: (error: unknown) => {
+      onError: (error: unknown, _variables, submitted) => {
+        if (submitted !== createSession.current) return;
         const { fields, general } = serverFieldErrors(error, path => { const name = path.replace(/^data\./, ''); return requiredFields.some(field => field.name === name) ? name : null; });
         setFieldErrors(fields); setFormErrors(general);
         const first = requiredFields.find(field => fields[field.name]);
-        if (first) focusField(`mandate-${first.name}`);
+        if (first) pendingErrorFocus.current = first.name;
       }
     }
-  });
+  }, draftScope);
+  useEffect(() => { if (!createMandate.isPending && pendingErrorFocus.current) { focusField(`mandate-${pendingErrorFocus.current}`); pendingErrorFocus.current = null; } }, [createMandate.isPending, fieldErrors]);
 
   const handleAction = (mandate: any, action: string) => {
     setSelectedMandate(mandate);
@@ -262,13 +276,14 @@ export default function MandatesPage() {
             { name: 'consentEvidence', label: 'New consent evidence (required if the lender requires consent for policy changes)', type: 'text', isData: true },
           ] : []}
       />
-      <Dialog.Root open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+      <Dialog.Root open={isCreateOpen} onOpenChange={changeCreateOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-50 bg-black/50" />
           <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-full max-w-lg max-h-[90vh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border bg-background p-6 shadow-lg">
             <Dialog.Title className="text-lg font-semibold">Create synthetic mandate</Dialog.Title>
             <Dialog.Description className="mt-1 text-sm text-muted-foreground">Use synthetic details only. This records a mandate in the sandbox; it sends no instruction to a bank.</Dialog.Description>
             <form noValidate className="mt-5 space-y-4" onSubmit={submitCreate}>
+              <fieldset disabled={createMandate.isPending} className="contents">
               {(formErrors.length > 0 || Object.keys(fieldErrors).length > 0) && (
                 <FormAlert title={formErrors[0] ?? attentionTitle(Object.keys(fieldErrors).length)}>{formErrors.slice(1).map(message => <p key={message}>{message}</p>)}</FormAlert>
               )}
@@ -282,8 +297,9 @@ export default function MandatesPage() {
               <textarea id="mandate-consent-gaps" className="mt-1 min-h-[72px] w-full rounded-md border bg-transparent px-3 py-2 text-sm" value={draft.consentGaps} onChange={event => setDraft({ ...draft, consentGaps: event.target.value })} />
               <MandateSelect label="Policy" value={draft.policyId} id="mandate-policyId" error={fieldErrors.policyId} onChange={value => change('policyId', value)} required options={(policies?.items || []).map(policy => ({ value: policy.id, label: `${policy.name} · ${readableLabel(policy.status)}` }))} />
               <MandateSelect label="Frequency" value={draft.frequency} id="mandate-frequency" error={fieldErrors.frequency} onChange={value => change('frequency', value)} required options={mandateFrequencies.map(frequency => ({ value: frequency, label: frequency.charAt(0).toUpperCase() + frequency.slice(1) }))} />
+              </fieldset>
               <div className="flex justify-end gap-2 border-t pt-4">
-                <Button type="button" variant="outline" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
+                <Button type="button" variant="outline" onClick={() => changeCreateOpen(false)}>Cancel</Button>
                 <Button type="submit" busy={createMandate.isPending} busyLabel="Creating mandate…">Create mandate</Button>
               </div>
             </form>

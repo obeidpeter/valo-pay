@@ -15,4 +15,5 @@ export interface ActionInput {
   recordId?: string;
   reason?: string;
   data?: RecordData;
+  expectedUpdatedAt?: string;
 }

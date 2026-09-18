@@ -2,6 +2,11 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { PoolClient } from '@workspace/db';
+import express from 'express';
+import { once } from 'node:events';
+import { randomBytes } from 'node:crypto';
+import { createPilotStagingStore } from '../src/lib/pilot-staging-store';
+import { createPilotStagingRouter } from '../src/routes/pilot-staging';
 
 // Separate from the runtime repository suites: this creates and destroys its
 // own schema and a temporary NOLOGIN role in a disposable PostgreSQL instance.
@@ -11,7 +16,7 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== '1' || process.env.VALOPAY_RUN_PILOT
   process.exit(0);
 }
 
-const { pool } = await import('@workspace/db');
+const { pool, Pool } = await import('@workspace/db');
 const client = await pool.connect();
 const schema = `valopay_pilot_test_${randomUUID().replaceAll('-', '')}`;
 assert.match(schema, /^valopay_pilot_test_[a-f0-9]{32}$/);
@@ -19,6 +24,9 @@ const quote = (identifier: string) => `"${identifier.replaceAll('"', '""')}"`;
 const tables = ['valopay_workspaces', 'valopay_merchants', 'valopay_records', 'valopay_idempotency'];
 const principalA = 'a'.repeat(64), principalB = 'b'.repeat(64);
 let createdSchema = false, createdRole = false;
+const restrictedLogin = `valopay_rehearsal_${randomUUID().replaceAll('-', '')}`;
+let createdLogin = false;
+let restrictedPool: InstanceType<typeof Pool> | undefined;
 const denied = (error: unknown) => (error as { code?: string }).code === '42501';
 
 async function scoped<T>(workspace: string | undefined, principal: string | undefined, run: (connection: PoolClient) => Promise<T>): Promise<T> {
@@ -158,12 +166,76 @@ try {
     assert.deepEqual((await connection.query('SELECT id FROM valopay_records')).rows, [{ id: 'record-b' }]);
     assert.equal((await connection.query("SELECT 1 FROM valopay_records WHERE id='record-a-new'")).rowCount, 0);
   });
+  // Complete HTTP requests through access + MFA + fresh provisioning + a
+  // genuinely restricted login + RLS + encrypted persistence. Only the test
+  // injects verified-session fixtures; deployed staging uses Clerk middleware.
+  assert.match(restrictedLogin, /^valopay_rehearsal_[a-f0-9]{32}$/);
+  const testPassword = randomBytes(24).toString('hex');
+  await client.query(`CREATE ROLE ${quote(restrictedLogin)} LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '${testPassword}'`);
+  createdLogin = true;
+  await client.query(`GRANT valopay_pilot_app TO ${quote(restrictedLogin)}`);
+  const restrictedUrl = new URL(process.env.DATABASE_URL!);
+  restrictedUrl.username = restrictedLogin; restrictedUrl.password = testPassword;
+  restrictedPool = new Pool({ connectionString: restrictedUrl.toString(), max: 1 });
+  const encryptionKey = randomBytes(32);
+  const ring = { activeKeyId: 'staging-test-v1', keys: new Map([['staging-test-v1', encryptionKey]]) };
+  const store = createPilotStagingStore(restrictedPool, schema, async () => ring);
+  const now = Math.floor(Date.now() / 1000);
+  const auth = { userId: 'fixture-user', sessionId: 'fixture-session', orgId: 'fixture-org', tokenType: 'session_token', sessionStatus: 'active', factorVerificationAge: [0, 0] as [number, number], sessionClaims: { sub: 'fixture-user', sid: 'fixture-session', iss: 'https://staging-identity.example.com', azp: 'https://staging.example.com', iat: now, exp: now + 3600 } };
+  let provisioned = true;
+  const membership = { id: 'fixture-membership', userId: auth.userId, organizationId: auth.orgId, tenantId: 'merchant-a', role: 'Operations', status: 'active' as const, validFrom: new Date((now - 60) * 1000).toISOString(), expiresAt: new Date((now + 3600) * 1000).toISOString() };
+  const app = express(); app.use(express.json());
+  app.use('/staging', createPilotStagingRouter({ store, policy: { enabled: true, environment: 'staging', issuer: auth.sessionClaims.iss, authorisedParties: [auth.sessionClaims.azp], maxFactorAgeMinutes: 30, maxSensitiveFactorAgeMinutes: 5 }, loadProvisioning: async (user, org, tenant) => provisioned && user === auth.userId && org === auth.orgId && tenant === membership.tenantId ? { membership, workspaceId: 'workspace-a', principalHash: principalA } : null }, request => request.get('Authorization') === 'Bearer synthetic-session' ? auth : null));
+  const server = app.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/staging/lenders`;
+  const headers = { Authorization: 'Bearer synthetic-session', Origin: auth.sessionClaims.azp, 'Content-Type': 'application/json', 'Idempotency-Key': 'synthetic-rehearsal-request-001' };
+  try {
+    assert.equal((await fetch(`${base}/merchant-a/records/record-a`)).status, 401);
+    const initialResponse = await fetch(`${base}/merchant-a/records/record-a`, { headers });
+    assert.equal(initialResponse.status, 200);
+    const initial = await initialResponse.json() as { updatedAt: string };
+    const body = JSON.stringify({ syntheticOnly: true, note: 'SYNTHETIC: private rehearsal note', expectedUpdatedAt: initial.updatedAt });
+    const write = () => fetch(`${base}/merchant-a/records/record-a`, { method: 'PATCH', headers, body });
+    const savedResponse = await write(); assert.equal(savedResponse.status, 200);
+    const saved = await savedResponse.json() as { hasProtectedNote: boolean; liveOperationsAllowed: boolean };
+    assert.equal(saved.hasProtectedNote, true); assert.equal(saved.liveOperationsAllowed, false);
+    assert.ok(!JSON.stringify(saved).includes('private rehearsal note'));
+    const raw = (await client.query("SELECT data FROM valopay_records WHERE id='record-a'")).rows[0].data;
+    assert.ok(!JSON.stringify(raw).includes('private rehearsal note')); assert.equal(raw.protectedStagingNote.algorithm, 'A256GCM');
+    assert.deepEqual(await (await write()).json(), saved, 'replay returns the first committed answer despite changed updatedAt');
+    assert.equal(Number((await client.query("SELECT count(*) AS n FROM valopay_records WHERE kind='audit' AND name='staging.protected_note'")).rows[0].n), 1);
+    const stale = await fetch(`${base}/merchant-a/records/record-a`, { method: 'PATCH', headers: { ...headers, 'Idempotency-Key': 'synthetic-rehearsal-request-002' }, body });
+    assert.equal(stale.status, 409);
+    auth.factorVerificationAge = [0, 20]; assert.equal((await write()).status, 403, 'replay still requires fresh authorisation'); auth.factorVerificationAge = [0, 0];
+    provisioned = false; assert.equal((await fetch(`${base}/merchant-a/records/record-a`, { headers })).status, 403); provisioned = true;
+    assert.equal((await fetch(`${base}/merchant-b/records/record-b`, { headers })).status, 403);
+    assert.equal((await fetch(`${base}/merchant-a/records/record-b`, { headers })).status, 404);
+    assert.equal((await fetch(`${base}/merchant-a/records/record-a`, { method: 'PATCH', headers: { ...headers, Origin: 'https://wrong.example.com' }, body })).status, 403);
+    const nextClient = await restrictedPool.connect();
+    try {
+      const cleared = (await nextClient.query("SELECT current_setting('valopay.workspace_id',true) AS workspace,current_setting('valopay.principal_hash',true) AS principal,current_user AS role")).rows[0];
+      assert.ok(!cleared.workspace); assert.ok(!cleared.principal); assert.equal(cleared.role, restrictedLogin);
+    } finally { nextClient.release(); }
+    await assert.rejects(() => createPilotStagingStore(pool, schema, async () => ring).read({ workspaceId: 'workspace-a', principalHash: principalA, tenantId: 'merchant-a', actor: 'fixture-user' }, 'record-a'), /restricted login/);
+    // A non-superuser login that owns a table can later remove FORCE RLS.
+    // Refuse it even though the role we SET LOCAL to does not own that table.
+    const originalOwner = relationFlags[0].owner;
+    await client.query(`ALTER TABLE ${quote(schema)}.valopay_records OWNER TO ${quote(restrictedLogin)}`);
+    try {
+      await assert.rejects(() => store.read({ workspaceId: 'workspace-a', principalHash: principalA, tenantId: 'merchant-a', actor: 'fixture-user' }, 'record-a'), /owned outside the application login and role/);
+    } finally {
+      await client.query(`ALTER TABLE ${quote(schema)}.valopay_records OWNER TO ${quote(originalOwner)}`);
+    }
+    console.log('Staging HTTP rehearsal passed: fresh membership, MFA, restricted login, forced RLS, encrypted persistence, masked reads, atomic audit and replay, stale edit refusal, connection reuse. JWT verification uses the dedicated Clerk deployment when configured; fixtures do not certify that deployment.');
+  } finally { encryptionKey.fill(0); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   assert.deepEqual(await flagsForSchema(sourceSchema), originalFlags, 'the completed rehearsal leaves original application RLS flags unchanged');
   console.log('Pilot RLS isolation rehearsal passed: explicit opt-in; four forced policies; missing/mismatched scopes; cross-workspace reads/writes; immutable scope columns; restricted role; transaction cleanup; rollback and persistence.');
 } finally {
   await client.query('ROLLBACK');
   await client.query('RESET ROLE');
   await client.query('RESET search_path');
+  await restrictedPool?.end();
+  if (createdLogin) await client.query(`DROP ROLE ${quote(restrictedLogin)}`);
   if (createdSchema) await client.query(`DROP SCHEMA ${quote(schema)} CASCADE`);
   if (createdRole) await client.query('DROP ROLE valopay_pilot_app');
   client.release();

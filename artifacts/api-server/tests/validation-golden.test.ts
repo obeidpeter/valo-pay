@@ -6,6 +6,7 @@ import { executeAction } from "../src/domain/actions.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
 import { exceptionCatalogue, recordStatuses } from "@workspace/valopay-schema";
+import { importCsv } from "../src/lib/valopay-import.js";
 
 let checks = 0;
 const admin = ctxAt(wat("2027-07-01T09:00:00"), "Admin");
@@ -109,4 +110,79 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   checks += 11;
 }
 
-console.log(`Validation golden tests passed (${checks} checks): state machines, exception codes, cutover contract, failure-code normalisation, batch and status vocabularies.`);
+// Template review is a complete lifecycle; malformed placeholders never reach approval.
+{
+  const state = seedMerchant('template-review');
+  const template = recordsOf(state, 'templates')[0]!;
+  const reviewer = ctxAt(admin.now, 'Compliance reviewer');
+  const act = (action: string, ctx = admin, recordId = template.id, reason = 'Synthetic review evidence') => executeAction(state, ctx, { action, recordId, reason });
+  const originalText = template.data.text;
+  for (const suffix of [' {{unknown}}', ' {{amount}', ' {amount}', ' {{}}', ' {{{amount}}}']) {
+    assert.throws(() => validateRecord(state, admin, 'templates', patch(template, { data: { text: originalText + suffix } }), true), /placeholder|braces/);
+    checks++;
+  }
+  assert.doesNotThrow(() => validateRecord(state, admin, 'templates', patch(template, { data: { text: '{{ merchant }} {{ amount }} {{ date }} {{ contact }}' } }), true));
+  act('submit_template');
+  assert.throws(() => validateRecord(state, admin, 'templates', patch(template, { data: { text: originalText + ' Changed.' } }), true), /submitted template cannot be edited/);
+  assert.throws(() => act('reject_template', { ...reviewer, actor: admin.actor }), /other than its author/);
+  assert.throws(() => act('reject_template', reviewer, template.id, '  '), /Enter a reason/);
+  act('reject_template', reviewer, template.id, 'Explain the date more clearly.');
+  assert.equal(template.status, 'rejected');
+  assert.equal(template.data.rejectionReason, 'Explain the date more clearly.');
+  assert.equal((template.data.reviewHistory as unknown[]).length, 1);
+  assert.doesNotThrow(() => validateRecord(state, admin, 'templates', patch(template, { data: { text: originalText + ' Thank you.' } }), true));
+  assert.throws(() => validateRecord(state, admin, 'templates', patch(template, { data: { rejectionReason: 'No changes requested' } }), true), /cannot be changed here/);
+  assert.throws(() => validateRecord(state, admin, 'templates', patch(template, { data: { version: 99 } }), true), /assigned/);
+  act('submit_template'); act('approve_template', reviewer);
+  assert.equal(template.status, 'approved');
+  assert.equal((template.data.reviewHistory as unknown[]).length, 2);
+  const approved = structuredClone(template);
+  const second = act('new_template_version').record!;
+  const third = act('new_template_version').record!;
+  assert.equal(second.data.version, 2); assert.equal(third.data.version, 3);
+  assert.equal(second.data.previousVersionId, template.id);
+  assert.equal(second.data.reviewer, undefined); assert.equal(second.data.rejectionReason, undefined);
+  assert.deepEqual(template, approved);
+  assert.throws(() => validateRecord(state, admin, 'templates', patch(template, { name: 'Overwrite approved' }), true), /Approved versions cannot be edited/);
+  assert.throws(() => act('new_template_version', reviewer), /not permitted/);
+  assert.throws(() => act('new_template_version', admin, second.id), /approved template/);
+  second.status = 'submitted'; second.data.text = originalText + ' {{injected}}';
+  assert.throws(() => act('approve_template', reviewer, second.id), /Unknown placeholder/);
+  second.data.text = originalText; delete second.data.author;
+  assert.throws(() => act('approve_template', reviewer, second.id), /other than its author/);
+  checks += 23;
+}
+
+// CSV mapping, quoted previews and all-or-nothing commits share the production parser.
+{
+  const state = seedMerchant('guided-import');
+  const before = structuredClone(state);
+  const input = { kind: 'customers', syntheticOnly: true, commit: false, csv: 'Full name,External ref,Consent,Unused\n"Sample, Person",SAMPLE-CSV-1,"Synthetic\nconsent",ignore', mapping: { 'Full name': 'name', 'External ref': 'reference', Consent: 'consentProvenance', Unused: '' } };
+  const preview = importCsv(state, admin, input);
+  assert.equal(preview.valid, 1); assert.equal(preview.imported, 0); assert.equal(preview.skipped, 0);
+  assert.deepEqual(preview.columns, ['Full name', 'External ref', 'Consent', 'Unused']);
+  assert.equal(preview.preview[0]?.values['Full name'], 'Sample, Person');
+  assert.equal(preview.preview[0]?.values.Consent, 'Synthetic\nconsent');
+  assert.deepEqual(state, before);
+  const committed = importCsv(state, admin, { ...input, commit: true });
+  assert.equal(committed.imported, 1);
+  const again = importCsv(state, admin, { ...input, commit: true });
+  assert.equal(again.imported, 0); assert.equal(again.skipped, 1);
+  assert.equal(state.records.find(record => record.reference === 'SAMPLE-CSV-1')?.data.Unused, undefined);
+  const stableCount = state.records.length;
+  const invalid = importCsv(state, admin, { ...input, csv: 'name,reference,consentProvenance\nValid,SAMPLE-CSV-2,Synthetic\nInvalid,SAMPLE-CSV-3,', mapping: undefined, commit: true });
+  assert.equal(invalid.valid, 1); assert.equal(invalid.invalid, 1); assert.equal(invalid.imported, 0); assert.equal(state.records.length, stableCount);
+  assert.match(invalid.rows[0]!.message, /Not imported/);
+  assert.throws(() => importCsv(state, admin, { ...input, syntheticOnly: false }), /Only synthetic/);
+  assert.throws(() => importCsv(state, admin, { ...input, mapping: { 'Full name': 'name', 'External ref': 'name' } }), /only once/);
+  assert.throws(() => importCsv(state, admin, { ...input, mapping: { Consent: '__proto__' } }), /valid destination/);
+  assert.throws(() => importCsv(state, admin, { ...input, mapping: { Unknown: 'name' } }), /valid destination/);
+  assert.throws(() => importCsv(state, admin, { ...input, csv: 'name,name\nOne,Two' }), /different, non-empty header/);
+  assert.throws(() => importCsv(state, admin, { ...input, csv: '__proto__,name\nobject,Name' }), /Reserved object names/);
+  assert.throws(() => importCsv(state, admin, { ...input, csv: 'name\n' + 'é'.repeat(750001) }), /1.5 MB/);
+  assert.throws(() => importCsv(state, admin, { ...input, csv: 'name\n' + Array.from({ length: 501 }, () => 'Sample').join('\n') }), /between 1 and 500/);
+  assert.throws(() => importCsv(state, admin, { ...input, csv: 'name\n"Unclosed' }), /CSV could not be parsed/);
+  checks += 25;
+}
+
+console.log(`Validation golden tests passed (${checks} checks): state machines, exception codes, cutover contract, failure-code normalisation, batch/status vocabularies, template lifecycle and guided CSV imports.`);

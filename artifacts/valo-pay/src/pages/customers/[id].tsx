@@ -1,9 +1,10 @@
+import { useSafeCreateExport as useCreateExport } from '@/lib/safe-mutations';
 import React, { useEffect } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
-import { useGetCustomerTimeline, getGetCustomerTimelineQueryKey, useCreateExport } from '@workspace/api-client-react';
+import { useGetCustomerTimeline, getGetCustomerTimelineQueryKey, } from '@workspace/api-client-react';
 import { formatKobo, formatDate, formatCompactDate, formatCount } from '@/lib/formatters';
 import { ArrowLeft, Clock, FileText, CheckCircle, AlertTriangle, Download } from 'lucide-react';
 import { CustomerAvatar, StatusBadge, readableLabel } from '@/components/record-label';
@@ -75,7 +76,7 @@ export default function CustomerTimelinePage() {
       },
       onError: (error: unknown) => notifyProblem('Dispute pack could not be created', `${saidBy(error, 'The service could not create the file.')} Try the export again.`),
     }
-  });
+  }, `${merchantId}:${id}`);
   const exportPack = (format: 'pdf' | 'csv' | 'json') => createExport.mutate({ data: { kind: 'dispute-pack', format, customerId: String(id) }, params: { merchantId: merchantId! } });
   /** Only the export that was asked for says it is being generated; the others wait, disabled. */
   const generating = (format: 'pdf' | 'csv' | 'json') => createExport.isPending && createExport.variables?.data.format === format;

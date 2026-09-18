@@ -18,4 +18,5 @@ export interface RecordUpdate {
   amountKobo?: number;
   customerId?: string;
   data?: RecordData;
+  expectedUpdatedAt?: string;
 }

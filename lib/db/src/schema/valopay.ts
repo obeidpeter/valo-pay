@@ -1,4 +1,4 @@
-import { pgTable, text, jsonb, timestamp, bigint, uniqueIndex, check } from "drizzle-orm/pg-core";
+import { pgTable, text, jsonb, timestamp, bigint, uniqueIndex, index, check } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 
@@ -27,6 +27,10 @@ export const records = pgTable("valopay_records", {
   createdAt: timestamp("created_at",{withTimezone:true}).notNull().defaultNow(),
   updatedAt: timestamp("updated_at",{withTimezone:true}).notNull().defaultNow(),
 }, t => [
+  index("valopay_records_lender_kind_page").on(t.merchantId, t.kind, t.createdAt, t.id),
+  index("valopay_records_lender_kind_status_page").on(t.merchantId, t.kind, t.status, t.createdAt, t.id),
+  index("valopay_records_lender_customer").on(t.merchantId, t.customerId, t.createdAt, t.id),
+  index("valopay_records_lender_kind_updated").on(t.merchantId, t.kind, t.updatedAt),
   uniqueIndex("valopay_unique_due_reference")
     .on(t.merchantId, t.reference)
     .where(sql`${t.kind} = 'due-items' AND ${t.reference} <> ''`),

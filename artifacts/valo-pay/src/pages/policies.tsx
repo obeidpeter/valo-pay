@@ -161,18 +161,20 @@ export default function PoliciesPage() {
                   </span>
                 </div>
                 <TemplatePreview text={template.data?.text} />
+                {template.status === 'rejected' && <p className="mt-3 rounded-md border border-warning-border bg-warning/20 p-3 text-sm"><strong>Changes requested:</strong> {String(template.data?.rejectionReason || 'Review the rejection in the audit log.')} Edit this version and submit it again.</p>}
                 <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">Template placeholders</summary><p className="mt-2 font-mono whitespace-pre-wrap break-words">{String(template.data?.text || 'No message written yet')}</p></details>
                 <div className="mt-3 flex justify-between items-center text-xs text-muted-foreground">
                   <span>v{String(template.data?.version || '1')}</span>
-                  {template.status === 'draft' && (
+                  {['draft', 'rejected'].includes(template.status) && (
                     <div className="flex gap-2">
                       <Button variant="link" size="sm" className="h-auto min-h-6 p-0" onClick={() => handleAction(template, 'edit_template')}>Edit</Button>
                       <Button variant="link" size="sm" className="h-auto min-h-6 p-0" onClick={() => handleAction(template, 'submit_template')}>Submit for review</Button>
                     </div>
                   )}
                   {template.status === 'submitted' && (
-                     <Button variant="link" size="sm" className="h-auto min-h-6 p-0 text-success" onClick={() => handleAction(template, 'approve_template')}>Approve</Button>
+                    <div className="flex gap-3"><Button variant="link" size="sm" className="h-auto min-h-6 p-0 text-success" onClick={() => handleAction(template, 'approve_template')}>Approve</Button><Button variant="link" size="sm" className="h-auto min-h-6 p-0 text-destructive" onClick={() => handleAction(template, 'reject_template')}>Request changes</Button></div>
                   )}
+                  {template.status === 'approved' && <Button variant="link" size="sm" className="h-auto min-h-6 p-0" onClick={() => handleAction(template, 'new_template_version')}>Draft next version</Button>}
                 </div>
               </div>
             ))
@@ -197,6 +199,8 @@ export default function PoliciesPage() {
           actionKind === 'edit_template' ? 'Edit template' :
           actionKind === 'submit_template' ? 'Submit template for review' :
           actionKind === 'approve_template' ? 'Approve template' :
+          actionKind === 'reject_template' ? 'Request template changes' :
+          actionKind === 'new_template_version' ? 'Draft next template version' :
           'Action'
         }
         actionMutation={actionKind.includes('create') || actionKind.includes('edit') ? undefined : actionKind}
@@ -221,10 +225,8 @@ export default function PoliciesPage() {
           ] :
           actionKind === 'create_template' || actionKind === 'edit_template' ? [
             { name: 'name', label: 'Template name', type: 'text', required: true },
-            { name: 'status', label: 'Status', type: 'select', options: [{label: 'Draft', value: 'draft'}], required: true },
             { name: 'purpose', label: 'Purpose', type: 'text', isData: true, required: true },
-            { name: 'text', label: 'Message (include {{amount}}, {{date}}, {{merchant}} and {{contact}})', type: 'textarea', isData: true, required: true },
-            { name: 'version', label: 'Version', type: 'number', isData: true, required: true }
+            { name: 'text', label: 'Message (include {{amount}}, {{date}}, {{merchant}} and {{contact}})', type: 'textarea', isData: true, required: true }
           ] :
           []
         }

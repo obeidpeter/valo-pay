@@ -53,6 +53,11 @@ jobs:
       - name: Run pure tests
         run: pnpm run test:pure
 
+      - name: Rehearse operational incident and recovery delivery locally
+        run: |
+          node scripts/monitor-valopay.test.mjs
+          scripts/node_modules/.bin/tsx artifacts/api-server/tests/edit-versions.test.ts
+
       - name: Run golden tests (shared schema, retry engine, reconciliation)
         run: pnpm run test:golden
 
@@ -127,3 +132,16 @@ jobs:
         run: scripts/node_modules/.bin/tsx artifacts/api-server/tests/pilot-rls.integration.test.ts
         env:
           VALOPAY_RUN_PILOT_RLS: "1"
+
+      - name: Rehearse a measured synthetic backup and restore
+        run: scripts/node_modules/.bin/tsx artifacts/api-server/tests/recovery-rehearsal.integration.test.ts
+        env:
+          VALOPAY_RUN_RECOVERY: "1"
+          VALOPAY_REHEARSAL_REPORT: recovery-evidence.json
+
+      - name: Preserve synthetic recovery measurements
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-recovery-evidence
+          path: recovery-evidence.json
+          retention-days: 14

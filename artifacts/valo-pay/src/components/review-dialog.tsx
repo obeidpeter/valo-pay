@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useSafeCreateRecord as useCreateRecord } from '@/lib/safe-mutations';
+import { useEffect, useRef, useState } from 'react';
+import { useUnsavedChanges } from '@/lib/unsaved-changes';
 import { useQueryClient } from '@tanstack/react-query';
-import { useCreateRecord } from '@workspace/api-client-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { FieldError, FormAlert, focusField, invalidProps } from '@/components/form-field';
@@ -24,17 +25,25 @@ export function ReviewDialog({ onClose }: { onClose: () => void }) {
   const [note, setNote] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState('');
+  const visit = useRef({ merchantId });
+  if (visit.current.merchantId !== merchantId) visit.current = { merchantId };
+  useEffect(() => () => { visit.current = { merchantId: null }; }, []);
+  const { confirmDiscard } = useUnsavedChanges(Boolean(reviewedAt || confirmedJobs.length || note || reviewer !== (workspace?.actor || '')));
+  const close = () => { if (confirmDiscard()) onClose(); };
   const todayInWAT = new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 10);
   const create = useCreateRecord({ mutation: {
-    onSuccess: () => {
+    onMutate: () => visit.current,
+    onSuccess: (_data, _variables, submitted) => {
       void queryClient.invalidateQueries();
+      if (submitted !== visit.current) return;
       notifyDone('Review recorded', `${confirmedJobs.length} of 4 tasks confirmed. Sample reviews do not establish live readiness.`);
       onClose();
     },
-    onError: (error: unknown) => setFailure(saidBy(error, 'The review was not saved. Try again.')),
-  } });
+    onError: (error: unknown, _variables, submitted) => { if (submitted === visit.current) setFailure(saidBy(error, 'The review was not saved. Try again.')); },
+  } }, merchantId);
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
+    if (create.isPending) return;
     const next: Record<string, string> = {};
     if (!reviewer.trim()) next.reviewer = 'Enter the reviewer’s name.';
     if (!/^\d{4}-\d{2}-\d{2}$/.test(reviewedAt) || Number.isNaN(Date.parse(reviewedAt)) || new Date(reviewedAt).toISOString().slice(0, 10) !== reviewedAt) next.reviewedAt = 'Choose the date the review took place.';
@@ -50,13 +59,14 @@ export function ReviewDialog({ onClose }: { onClose: () => void }) {
     } });
   };
   return (
-    <Dialog open onOpenChange={open => { if (!open && !create.isPending) onClose(); }}>
+    <Dialog open onOpenChange={open => { if (!open && !create.isPending) close(); }}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Log fortnightly review</DialogTitle>
           <DialogDescription>Record what was checked with sample data. Only a review confirming all four tasks counts towards the review schedule.</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} noValidate className="space-y-5">
+          <fieldset disabled={create.isPending} className="contents">
           {(failure || Object.keys(errors).length > 0) && <FormAlert title="Review not saved">{failure || 'Check the highlighted fields.'}</FormAlert>}
           <div className="space-y-1.5">
             <label htmlFor="review-reviewer" className="text-sm font-medium">Reviewer name</label>
@@ -81,8 +91,9 @@ export function ReviewDialog({ onClose }: { onClose: () => void }) {
             <textarea id="review-note" required {...invalidProps('review-note', errors.note)} value={note} onChange={event => setNote(event.target.value)} rows={3} className="w-full rounded-md border bg-background px-3 py-2 text-sm" />
             <FieldError id="review-note" message={errors.note} />
           </div>
+          </fieldset>
           <DialogFooter>
-            <Button type="button" variant="outline" disabled={create.isPending} onClick={onClose}>Cancel</Button>
+            <Button type="button" variant="outline" disabled={create.isPending} onClick={close}>Cancel</Button>
             <Button type="submit" busy={create.isPending} busyLabel="Saving review…">Save review</Button>
           </DialogFooter>
         </form>

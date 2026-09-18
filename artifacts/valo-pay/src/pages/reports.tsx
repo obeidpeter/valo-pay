@@ -1,10 +1,11 @@
+import { useSafePerformAction as usePerformAction, useSafeCreateExport as useCreateExport } from '@/lib/safe-mutations';
 import React, { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow, EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { DailyCloseStatus } from '@/components/daily-close-status';
 import { useWorkspace } from '@/lib/workspace-context';
-import { useGetReports, usePerformAction, getGetReportsQueryKey, useCreateExport, useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
+import { useGetReports, getGetReportsQueryKey, useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { BarChart3, Download, FileText, CheckSquare, RefreshCcw, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatKobo, formatDate, formatCount, formatNumber } from '@/lib/formatters';
@@ -124,7 +125,7 @@ export default function ReportsPage() {
       },
       onError: (error, variables) => setCloseResult({ merchantId: variables.params!.merchantId, message: saidBy(error, 'The service could not confirm the result. Refresh the reports to check for a close record before trying again.'), failed: true }),
     }
-  });
+  }, merchantId);
 
   const { data: experiments, error: experimentsError, isLoading: loadingExperiments, isFetching: fetchingExperiments, refetch: retryExperiments } = useListRecords(
     'experiments',
@@ -145,7 +146,7 @@ export default function ReportsPage() {
       },
       onError: (error: unknown) => notifyProblem('Billing export not generated', saidBy(error, 'Check your connection and try generating the billing export again.')),
     }
-  });
+  }, merchantId);
 
   if (!merchantId) return null;
   const approvedPolicyOptions = (policies?.items || [])

@@ -1,9 +1,10 @@
+import { useSafeCreateExport as useCreateExport } from '@/lib/safe-mutations';
 import React, { useEffect, useState } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow } from '@/components/empty-state';
 import { Loading, LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
-import { useGetGates, useListRecords, useCreateExport, getGetGatesQueryKey, getListRecordsQueryKey } from '@workspace/api-client-react';
+import { useGetGates, useListRecords, getGetGatesQueryKey, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { ShieldCheck, Download, AlertTriangle, FileCheck, CheckCircle, Search } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
@@ -70,7 +71,7 @@ export default function EvidencePage() {
       },
       onError: (error: unknown) => notifyProblem('Evidence pack not generated', saidBy(error, 'Check your connection and try generating the pack again.')),
     }
-  });
+  }, merchantId);
 
   const handleCreate = (kind: 'evidence' | 'commercial') => {
     setSelectedRecord(null);

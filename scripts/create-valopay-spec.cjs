@@ -12,14 +12,14 @@ const schemas = {
   RecordData: { type: "object", additionalProperties: {} },
   ValopayRecord: obj({ id: str, merchantId: str, kind: str, name: str, status: str, reference: str, amountKobo: num, customerId: str, createdAt: str, updatedAt: str, data: ref("RecordData") }),
   RecordInput: obj({ name: str, status: str, reference: str, amountKobo: {type:"integer", minimum:0}, customerId: str, data: ref("RecordData") }, ["name"]),
-  RecordUpdate: obj({ name: str, status: str, reference: str, amountKobo: {type:"integer", minimum:0}, customerId: str, data: ref("RecordData") }, []),
+  RecordUpdate: obj({ name: str, status: str, reference: str, amountKobo: {type:"integer", minimum:0}, customerId: str, data: ref("RecordData"), expectedUpdatedAt: str }, []),
   Merchant: obj({ id: str, name: str, shortName: str, segment: str, mode: str, status: str, provider: str, monthlyVolume: num, killSwitch: bool, preDataReady: bool, preLiveReady: bool }),
   Workspace: obj({ name: str, environment: str, actor: str, role: str, authenticated: bool, merchants: arr("Merchant"), roles: {type:"array",items:str}, productionEnabled: bool }),
   Metric: obj({ key: str, label: str, value: {type:"number"}, unit: str, detail: str }),
   Alert: obj({ key: str, severity: str, title: str, detail: str, count: num, since: str, linkedRecordId: str }, ["key","severity","title","detail"]),
   Overview: obj({ metrics: arr("Metric"), queues: arr("Metric"), activity: arr("ValopayRecord"), upcoming: arr("ValopayRecord"), mode: str, environment: str, lastClose: str, nextClose: str, closeTime: str, alerts: arr("Alert") }),
   RecordList: obj({ items: arr("ValopayRecord"), total: num, nextOffset: num }, ["items","total"]),
-  ActionInput: obj({ action: str, recordId: str, reason: str, data: ref("RecordData") }, ["action"]),
+  ActionInput: obj({ action: str, recordId: str, reason: str, data: ref("RecordData"), expectedUpdatedAt: str }, ["action"]),
   ActionResult: obj({ message: str, record: ref("ValopayRecord"), data: ref("RecordData") }, ["message","data"]),
   ImportInput: obj({ kind: str, csv: str, syntheticOnly: bool, commit: bool, mapping: ref("RecordData") }, ["kind","csv","syntheticOnly","commit"]),
   ImportRow: obj({ row: num, status: str, message: str }),
@@ -45,6 +45,11 @@ const schemas = {
 for (const field of ["lastSuccessAt", "lastErrorAt"]) schemas.SchedulerStatus.properties[field] = { type: ["string", "null"] };
 for (const name of ["Overview", "Settings"]) schemas[name].properties.closeSchedule = ref("EffectiveCloseSchedule");
 const paths = {};
+schemas.Settings.properties.revision = str;
+schemas.SettingsInput.properties.expectedRevision = str;
+schemas.ImportResult.properties.columns = { type: "array", items: str };
+schemas.ImportResult.properties.preview = { type: "array", items: obj({ row: num, values: ref("RecordData") }) };
+schemas.ImportResult.properties.skipped = num;
 function add(path, method, id, response, body, params = []) {
  const op = {operationId:id, tags:["valopay"], parameters:params, responses:{"200":{description:"Success",content:{"application/json":{schema:ref(response)}}},"400":{description:"Invalid request"},"401":{description:"Authentication required"},"403":{description:"Permission or readiness gate blocked"},"409":{description:"Conflict"}}};
  if(body)op.requestBody={required:true,content:{"application/json":{schema:ref(body)}}};
@@ -55,16 +60,18 @@ const pathParam = (name) => ({name,in:"path",required:true,schema:str,descriptio
 const merchant = {name:"merchantId",in:"query",required:true,schema:str,description:"The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."};
 const search = {name:"search",in:"query",schema:str,description:"Text matched, ignoring case and accents, against the name, reference, status and data."};
 const status = {name:"status",in:"query",schema:str,description:"Only records in this status; omitted or \"all\" for every status."};
-const limit = {name:"limit",in:"query",schema:{type:"integer",minimum:1,maximum:500},description:"Page size; omitted returns the whole filtered set (at most 500 per page)."};
+const limit = {name:"limit",in:"query",schema:{type:"integer",minimum:1,maximum:500},description:"Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views."};
 const offset = {name:"offset",in:"query",schema:{type:"integer",minimum:0},description:"Rows to skip in the newest-first order."};
 const updatedSince = {name:"updatedSince",in:"query",schema:str,description:"ISO timestamp; only records updated at or after it (incremental sync)."};
+const customerId = {name:"customerId",in:"query",schema:str,description:"Only records directly linked to this customer, in the selected lender."};
+const recordId = {name:"id",in:"query",schema:str,description:"Only this exact record ID, in the selected kind and lender."};
 add("/healthz","get","healthCheck","HealthStatus");
 add("/readyz","get","readinessCheck","ReadinessStatus");
 const describe = (path, method, summary, description) => Object.assign(paths[path][method], { summary, description });
 paths["/readyz"].get.responses["503"]={description:"Not ready: the database cannot be reached within the check's time limit",content:{"application/json":{schema:ref("ReadinessStatus")}}};
 add("/v1/workspace","get","getWorkspace","Workspace");
 add("/v1/overview","get","getOverview","Overview",null,[merchant]);
-add("/v1/records/{kind}","get","listRecords","RecordList",null,[pathParam("kind"),merchant,search,status,limit,offset,updatedSince]);
+add("/v1/records/{kind}","get","listRecords","RecordList",null,[pathParam("kind"),merchant,search,status,limit,offset,updatedSince,customerId,recordId]);
 add("/v1/records/{kind}","post","createRecord","ValopayRecord","RecordInput",[pathParam("kind"),merchant]);
 add("/v1/records/{kind}/{id}","patch","updateRecord","ValopayRecord","RecordUpdate",[pathParam("kind"),pathParam("id"),merchant]);
 add("/v1/actions","post","performAction","ActionResult","ActionInput",[merchant]);
@@ -84,14 +91,14 @@ describe("/v1/workspace","get","The caller's workspace: its lenders, roles and a
 describe("/v1/overview","get","The operations overview for one lender","Metrics, queues, recent activity, upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02).");
 describe("/v1/records/{kind}","get","Records of one kind for one lender, newest first","Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync.");
 describe("/v1/records/{kind}","post","Create a record of an editable kind","Validated against the kind's data schema; a status only a domain action may set is refused.");
-describe("/v1/records/{kind}/{id}","patch","Update a record","Editable kinds only; an approved, preregistered or closed version is immutable, and deletion does not exist.");
+describe("/v1/records/{kind}/{id}","patch","Update a record","Editable kinds only; an approved, preregistered or closed version is immutable. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version.");
 describe("/v1/actions","post","Run a domain action on the lender's state","Every action is audited, most require a reason, and the persona's role applies; the catalogue of actions is in docs/frontend-contract.md.");
 describe("/v1/imports","post","Preview or commit a synthetic CSV import","commit=false validates every row and reports each; commit=true persists all rows or none. syntheticOnly must be true: no real lender data.");
 describe("/v1/customers/{id}/timeline","get","A customer's position and complete timeline","Every event, mandate, due item and payment, with each retry decision as it was recorded.");
 describe("/v1/reports","get","Reports for one lender","Metrics, the billing statement and invoices, the recovery experiment, operational measurement (Test 5) and the daily closes with their REC-07 reports.");
 describe("/v1/gates","get","Production readiness gates","Prerequisites and decisions, always unproven on synthetic data, and the limitations the sandbox cannot remove.");
 describe("/v1/settings","get","A lender's settings, permissions, integrations, members and calendar","Permissions are those of the caller's current persona.");
-describe("/v1/settings","patch","Change a lender's execution settings","The execution window, authorisation mode, contact route, thresholds, the daily close time (WAT) and whether closes are scheduled; Admin only.");
+describe("/v1/settings","patch","Change a lender's execution settings","Admin only. Send expectedRevision from the settings originally opened; 409 leaves outdated edits unapplied. The revision covers editable preferences and is unaffected by scheduler cursor changes. An identical successful Idempotency-Key replay returns its original result before checking the version.");
 describe("/v1/exports","post","Generate a private export","A record kind, the gate pack, the billing statement or a customer's dispute pack, as JSON, CSV or PDF; stored privately with a SHA-256 checksum and recorded as an export.");
 describe("/v1/exports/{id}/download","get","Download an export","The bytes are read from private storage and checked against the recorded SHA-256 before any are sent.");
 describe("/v1/openapi.json","get","This specification","The versioned public contract the console and the generated clients are built from.");

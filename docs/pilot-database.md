@@ -41,6 +41,8 @@ The SQL also refuses to proceed without `valopay.pilot_migration=staging-only`, 
 
 ## Work required before enabling the role
 
+The synthetic-note staging repository and HTTP route described in `docs/operational-rehearsals.md` now demonstrate the transaction, access and encryption integration below. The remaining list applies to full pilot workflows and commissioning, not to missing rehearsal code. The deployed sandbox still uses its original repository and credentials.
+
 1. Replace sandbox personas with verified user membership and permission checks. Decide how team membership maps to the current one-principal-per-workspace model.
 2. Implement a separate pilot repository adapter that starts a transaction, establishes server-derived workspace and principal settings using `set_config(..., true)`, and then performs scoped reads and writes. The final boolean makes the values local to that transaction. Never use a session-level tenant setting on a pool.
 3. Keep application queries under the restricted login/role. Never give that login table ownership, schema creation, migration-role membership, superuser or `BYPASSRLS` privileges.

@@ -1,3 +1,4 @@
+import { useSafePerformAction as usePerformAction } from '@/lib/safe-mutations';
 import React, { useEffect, useRef, useState } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { useSearchShortcut } from '@/lib/focus';
@@ -7,7 +8,7 @@ import { LoadProblem } from '@/components/load-problem';
 import { RecordPagination } from '@/components/record-pagination';
 import { useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
 import { useWorkspace } from '@/lib/workspace-context';
-import { useListRecords, usePerformAction, getListRecordsQueryKey } from '@workspace/api-client-react';
+import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { Search, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatDate, formatCount } from '@/lib/formatters';
@@ -32,7 +33,7 @@ export default function AuditPage() {
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('audit', listParams) } }
   );
 
-  const verify = usePerformAction();
+  const verify = usePerformAction(undefined, merchantId);
   useEffect(() => {
     // A result belongs to one visit to one lender, including a switch away and back.
     verificationRequest.current += 1;

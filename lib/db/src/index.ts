@@ -3,6 +3,8 @@ import pg from "pg";
 import * as schema from "./schema";
 
 const { Pool } = pg;
+/** Separate pools are used only by explicitly configured staging adapters and disposable rehearsals. */
+export { Pool };
 
 if (!process.env.DATABASE_URL) {
   throw new Error(

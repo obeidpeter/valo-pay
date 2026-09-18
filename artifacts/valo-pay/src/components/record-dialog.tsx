@@ -3,7 +3,8 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { Button } from './ui/button';
 import { FieldError, FormAlert, attentionTitle, focusField, formErrorMessage, invalidProps, missingMessage, serverFieldErrors } from './form-field';
-import { useCreateRecord, useUpdateRecord, usePerformAction } from '@workspace/api-client-react';
+import { useSafeCreateRecord as useCreateRecord, useSafeUpdateRecord as useUpdateRecord, useSafePerformAction as usePerformAction, submissionFingerprint } from '@/lib/safe-mutations';
+import { useUnsavedChanges } from '@/lib/unsaved-changes';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkspace } from '@/lib/workspace-context';
 import { readableLabel } from './record-label';
@@ -16,6 +17,7 @@ const actionLabels: Record<string, string> = {
   notify_policy_change: 'Record policy change notice', apply_policy_version: 'Apply policy version',
   submit_policy: 'Submit for review', approve_policy: 'Approve policy', reject_policy: 'Reject policy',
   new_policy_version: 'Create draft version', submit_template: 'Submit for review', approve_template: 'Approve template',
+  reject_template: 'Reject template', new_template_version: 'Create draft version',
   confirm_allocation: 'Confirm allocation', reject_allocation: 'Reject allocation', manual_allocate: 'Allocate payment',
   review_allocation: 'Record review', resolve_exception: 'Resolve exception', record_refund: 'Record external refund',
   simulate_failure: 'Simulate failure', backtest_policy: 'Run policy simulation',
@@ -54,11 +56,18 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
   const [result,setResult]=useState<any>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formErrors, setFormErrors] = useState<string[]>([]);
+  const [conflict, setConflict] = useState(false);
+  const [refreshingLatest, setRefreshingLatest] = useState(false);
   const session = useRef(0);
   const request = useRef(0);
   const currentScope = useRef('');
+  const originalRecord = useRef(record);
+  const pendingErrorFocus = useRef<string | null>(null);
+  const [initialForm, setInitialForm] = useState('');
   const scope = JSON.stringify([merchantId, kind, record?.id, actionMutation, actionRecordId, isOpen]);
   currentScope.current = scope;
+  const { confirmDiscard } = useUnsavedChanges(isOpen && initialForm !== '' && submissionFingerprint(formData) !== initialForm);
+  const changeOpen = (open: boolean) => { if (open || confirmDiscard()) onOpenChange(open); };
   const fieldId = (name: string) => `record-${name}`;
   /** The server names a field by its path in the body; a data field arrives as data.<name>. */
   const resolveField = (path: string): string | null => {
@@ -67,16 +76,18 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
   };
   const firstNamed = (errors: Record<string, string>) => fields.find(f => errors[f.name])?.name ?? (errors.reason ? 'reason' : undefined);
   const applyServerError = (error: unknown) => {
+    setConflict((error as { status?: number })?.status === 409);
     const { fields: named, general } = serverFieldErrors(error, resolveField);
     setFieldErrors(named); setFormErrors(general.map(message => formErrorMessage(message, fields)));
     const first = firstNamed(named);
-    if (first) focusField(fieldId(first));
+    if (first) pendingErrorFocus.current = first;
   };
   
   useEffect(() => {
     session.current += 1;
     if (isOpen) {
-      setResult(null); setFieldErrors({}); setFormErrors([]);
+      originalRecord.current = record;
+      setResult(null); setFieldErrors({}); setFormErrors([]); setConflict(false); setRefreshingLatest(false);
       create.reset();update.reset();perform.reset();
       const initial: any = record ? { name: record.name, status: record.status, reference: record.reference, amountKobo: record.amountKobo, customerId: record.customerId, ...defaultValues } : { ...defaultValues };
       if (record) {
@@ -91,6 +102,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
         if (isMoney(field) && initial[field.name] !== undefined && initial[field.name] !== '') initial[field.name] = koboToNaira(Number(initial[field.name]));
       });
       setFormData(initial);
+      setInitialForm(submissionFingerprint(initial));
     }
     // Closing, changing records/lenders, or unmounting ends this form session.
     return () => { session.current += 1; };
@@ -100,11 +112,28 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
   // A completed write still refreshes data even when its original form is gone.
   // Form feedback below is scoped separately, so it cannot affect a newer dialog.
   const invalidateChangedData = () => { void queryClient.invalidateQueries(); };
-  const create = useCreateRecord({ mutation: { onSuccess: invalidateChangedData } });
-  const update = useUpdateRecord({ mutation: { onSuccess: invalidateChangedData } });
-  const perform = usePerformAction({ mutation: { onSuccess: invalidateChangedData } });
+  const create = useCreateRecord({ mutation: { onSuccess: invalidateChangedData } }, scope);
+  const update = useUpdateRecord({ mutation: { onSuccess: invalidateChangedData } }, scope);
+  const perform = usePerformAction({ mutation: { onSuccess: invalidateChangedData } }, scope);
 
-  const isPending = create.isPending || update.isPending || perform.isPending;
+  const isPending = create.isPending || update.isPending || perform.isPending || refreshingLatest;
+  useEffect(() => {
+    if (!isPending && pendingErrorFocus.current) { focusField(fieldId(pendingErrorFocus.current)); pendingErrorFocus.current = null; }
+  }, [isPending, fieldErrors]);
+
+  const refreshLatest = async () => {
+    if (!confirmDiscard() || refreshingLatest) return;
+    const submittedSession = session.current;
+    setRefreshingLatest(true);
+    try {
+      await queryClient.invalidateQueries(undefined, { throwOnError: true });
+      if (submittedSession === session.current && currentScope.current === scope) onOpenChange(false);
+    } catch (error) {
+      if (submittedSession === session.current && currentScope.current === scope) setFormErrors(['Latest records could not be loaded. Your draft is still here. Try refreshing again.']);
+    } finally {
+      if (submittedSession === session.current && currentScope.current === scope) setRefreshingLatest(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -126,7 +155,8 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
     const first = firstNamed(errors);
     if (first) { focusField(fieldId(first)); return; }
 
-    const payload: any = { data: {...(record&&!actionMutation?record.data:{}),...(defaultValues.data||{})} };
+    const payload: any = { data: {...(record&&!actionMutation?originalRecord.current?.data:{}),...(defaultValues.data||{})} };
+    if (record && !actionMutation) payload.expectedUpdatedAt = originalRecord.current?.updatedAt;
     fields.forEach(f => {
       let val = formData[f.name];
       // A checkbox always submits a boolean: an untouched box is false, never a missing field.
@@ -149,7 +179,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
     try {
       if (actionMutation) {
         const response = await perform.mutateAsync({
-          data: { action: actionMutation, recordId: actionRecordId ?? record?.id, data: payload.data, reason: formData.reason },
+          data: { action: actionMutation, recordId: actionRecordId ?? record?.id, data: payload.data, reason: formData.reason, ...(originalRecord.current?.updatedAt && (!actionRecordId || actionRecordId === record?.id) ? { expectedUpdatedAt: originalRecord.current.updatedAt } : {}) },
           params: { merchantId }
         });
         if (!isCurrent()) return;
@@ -172,7 +202,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
   };
 
   return (
-    <Dialog.Root open={isOpen} onOpenChange={onOpenChange}>
+    <Dialog.Root open={isOpen} onOpenChange={changeOpen}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 z-50" />
         <Dialog.Content className="fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] -translate-y-[50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg max-h-[90vh] overflow-y-auto">
@@ -182,10 +212,12 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
           </div>
           
           <form noValidate onSubmit={handleSubmit} className="space-y-4 py-4">
+            <fieldset disabled={isPending} className="contents">
             {typeof context === 'function' ? context(formData) : context}
             {(formErrors.length > 0 || Object.keys(fieldErrors).length > 0) && (
               <FormAlert title={formErrors[0] ?? attentionTitle(Object.keys(fieldErrors).length)}>
                 {formErrors.slice(1).map(message => <p key={message}>{message}</p>)}
+                {conflict && <><p className="mt-2">Your draft is still here. Refresh to review the latest record before editing again.</p><Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => { void refreshLatest(); }} busy={refreshingLatest} busyLabel="Refreshing…">Discard draft and refresh</Button></>}
               </FormAlert>
             )}
             {fields.map(f => (
@@ -253,8 +285,9 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
               {result.data?.decisions?.length===0&&<p>No instalments use this policy yet.</p>}
               {result.data?.decisions?.map((decision:any)=><div key={decision.dueItemId} className="border-t pt-2 text-sm"><span className="font-mono text-xs">{decision.dueItemId}</span><p className="font-semibold">{readableLabel(decision.decision)}</p><p>{decision.reason}</p>{decision.nextAt&&<p>Next possible attempt: {formatDate(decision.nextAt)}</p>}</div>)}
             </section>}
+            </fieldset>
             <div className="flex justify-end gap-2 mt-4 pt-4 border-t">
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+              <Button type="button" variant="outline" onClick={() => changeOpen(false)}>Cancel</Button>
               <Button type="submit" busy={isPending} busyLabel={actionMutation ? 'Working…' : 'Saving…'}>{actionMutation ? actionLabels[actionMutation] || 'Confirm action' : 'Save'}</Button>
             </div>
           </form>
