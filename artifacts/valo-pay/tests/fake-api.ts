@@ -221,6 +221,7 @@ export function installFakeApi(options: { now?: string; role?: string } = {}): F
     ["GET", /^\/v1\/openapi\.json$/, () => ({ openapi: "3.1.0", info: { title: "Api", version: "1.0.0" }, paths: {} })],
   ];
 
+  let failureCount = 0;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -236,7 +237,9 @@ export function installFakeApi(options: { now?: string; role?: string } = {}): F
       const { failure } = failures.splice(planned, 1)[0]!;
       if (failure === "offline") { api.calls.push({ method, path, query, body, status: 0 }); throw new TypeError("Failed to fetch"); }
       api.calls.push({ method, path, query, body, status: failure.status });
-      return new Response(JSON.stringify({ error: failure.error, ...(failure.details ? { details: failure.details } : {}) }), { status: failure.status, headers: { "content-type": "application/json" } });
+      // As the API does: the request id in the body and on the answer, so the console can quote it.
+      const requestId = `fake-${(++failureCount).toString(16).padStart(4, "0")}`;
+      return new Response(JSON.stringify({ error: failure.error, ...(failure.details ? { details: failure.details } : {}), requestId }), { status: failure.status, headers: { "content-type": "application/json", "x-request-id": requestId } });
     }
     let status = 200, payload: unknown;
     try {

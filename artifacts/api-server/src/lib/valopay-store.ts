@@ -537,6 +537,33 @@ export async function initialiseCloseCursors(): Promise<number> {
   return updated.rowCount || 0;
 }
 
+/** Readiness: one bounded round trip to the database. Never throws; the reason stays in the caller's log, not in an answer. */
+export async function pingDatabase(timeoutMs = 2000): Promise<{ status: "ok" | "failed"; latencyMs: number; error?: string }> {
+  const started = performance.now();
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      pool.query("SELECT 1"),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${timeoutMs} ms`)), timeoutMs); }),
+    ]);
+    return { status: "ok", latencyMs: Math.round(performance.now() - started) };
+  } catch (error) {
+    return { status: "failed", latencyMs: Math.round(performance.now() - started), error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** An idle connection that fails emits an error on the pool; unheard, that event ends the process. Heard, it is a log line and the pool replaces the connection. */
+export function watchDatabase(log: { error: (fields: object, message: string) => void }): void {
+  pool.on("error", (error) => log.error({ event: "database.pool_error", err: error }, "Database connection error on an idle client"));
+}
+
+/** Ends the pool on shutdown, after the last transaction. */
+export async function closeDatabase(): Promise<void> {
+  await pool.end();
+}
+
 export function appendAudit(state: DomainState, ctx: Context, action: string, objectId: string, summary: string, changes?: unknown): ValopayRecord {
   const chain = recordsOf(state, "audit").sort((a, b) => Number(a.data.sequence || 0) - Number(b.data.sequence || 0));
   const previous = chain.at(-1);

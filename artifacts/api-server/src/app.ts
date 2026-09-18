@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+import type { IncomingHttpHeaders } from "node:http";
 import express, { type Express } from "express";
 import pinoHttp from "pino-http";
 import router from "./routes";
@@ -11,9 +13,25 @@ const app: Express = express();
 app.set("trust proxy",1);
 app.disable("x-powered-by");
 
+/**
+ * Every request has an id: the one the host's edge already gave it, when that is
+ * a plain token, so the two logs line up, or a short random one. It is on every
+ * log line of the request, on the answer as X-Request-Id, and in every error body
+ * as requestId, so the reference a person quotes finds the lines.
+ */
+const REQUEST_ID = /^[A-Za-z0-9._-]{8,64}$/;
+export function requestIdFor(req: { headers: IncomingHttpHeaders }): string {
+  const given = req.headers["x-request-id"];
+  const first = Array.isArray(given) ? given[0] : given;
+  return first && REQUEST_ID.test(first) ? first : randomBytes(8).toString("hex");
+}
+
 app.use(
   pinoHttp({
     logger,
+    genReqId: requestIdFor,
+    // A failed answer is an error line; every other request is one info line with its status and time.
+    customLogLevel: (_req, res, error) => (error || res.statusCode >= 500 ? "error" : "info"),
     serializers: {
       req(req) {
         return {
@@ -30,6 +48,7 @@ app.use(
     },
   }),
 );
+app.use((req,res,next)=>{res.setHeader("X-Request-Id",String(req.id));next();});
 app.use(CLERK_PROXY_PATH,clerkProxyMiddleware());
 app.use(express.json({limit:"2mb"}));
 app.use(express.urlencoded({ extended: false,limit:"2mb" }));
@@ -46,18 +65,24 @@ app.use("/api/v1",(req,res,next)=>{
   res.setHeader("Cross-Origin-Resource-Policy","same-origin");
   const origin=req.get("Origin"),host=getClerkProxyHost(req);
   if(origin){
-    try{if(new URL(origin).host!==host){res.status(403).json({error:"Cross-origin requests are not permitted."});return;}}
-    catch{res.status(403).json({error:"Invalid request origin."});return;}
+    try{if(new URL(origin).host!==host){req.log.warn({event:"request.refused",reason:"origin"},"Cross-origin request refused");res.status(403).json({error:"Cross-origin requests are not permitted.",requestId:req.id});return;}}
+    catch{req.log.warn({event:"request.refused",reason:"origin_malformed"},"Malformed request origin refused");res.status(403).json({error:"Invalid request origin.",requestId:req.id});return;}
   }
   const now=Date.now(),key=req.ip||"unknown";
   if(limits.size>10000)for(const [ip,value]of limits)if(value.reset<now)limits.delete(ip);
   const limit=limits.get(key);
   if(!limit||limit.reset<now)limits.set(key,{count:1,reset:now+60000});
-  else if(++limit.count>300){res.setHeader("Retry-After","60");res.status(429).json({error:"Request limit reached. Please try again in one minute."});return;}
+  else if(++limit.count>300){
+    // Named once per client and window, not once per refused request, so a flood does not double its own log.
+    if(limit.count===301)req.log.warn({event:"request.refused",reason:"rate_limit"},"Request limit reached for a client address");
+    res.setHeader("Retry-After","60");res.status(429).json({error:"Request limit reached. Please try again in one minute.",requestId:req.id});return;
+  }
   next();
 });
 
 app.use("/api", router);
+// An address under /api that no route answers is a JSON answer with the request id, not the framework's HTML page.
+app.use("/api",(req,res)=>{res.status(404).json({error:"Unknown resource.",requestId:req.id});});
 app.use(errorHandler);
 
 export default app;

@@ -4,11 +4,19 @@ import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
 import { rm, copyFile } from "node:fs/promises";
+import { execSync } from "node:child_process";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
+
+// The build stamp the API reports on every log line and on /api/healthz: the commit and the build time.
+function buildStamp() {
+  let commit = "unknown";
+  try { commit = execSync("git rev-parse --short HEAD", { cwd: artifactDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { /* not a git checkout */ }
+  return `${commit} ${new Date().toISOString()}`;
+}
 
 async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
@@ -103,6 +111,7 @@ async function buildAll() {
       "electron",
     ],
     sourcemap: "linked",
+    define: { __VALOPAY_BUILD__: JSON.stringify(buildStamp()) },
     plugins: [
       // pino relies on workers to handle logging, instead of externalizing it we use a plugin to handle it
       esbuildPluginPino({ transports: ["pino-pretty"] })

@@ -5,6 +5,7 @@ import { LookedFor, Notice } from '@/components/notice';
 import { PublicFrame } from '@/components/public-frame';
 import { AuthShow } from '@/lib/auth';
 import { formatDate } from '@/lib/formatters';
+import { referenceOf } from '@/lib/notify';
 
 /**
  * Shown in place of the console when the workspace request fails. Nothing
@@ -16,7 +17,7 @@ import { formatDate } from '@/lib/formatters';
  * (Nielsen 1 and 9; Dix: recoverability; Shneiderman: informative feedback).
  */
 
-export type WorkspaceExplanation = { title: string; lines: string[]; reportTime?: boolean };
+export type WorkspaceExplanation = { title: string; lines: string[]; reportTime?: boolean; reference?: string };
 
 /**
  * The API's own 4xx wording is plain language written for the person
@@ -30,13 +31,13 @@ export function explainWorkspaceError(error: unknown): WorkspaceExplanation {
   const message = typeof said === 'string' && said.trim() ? said.trim() : '';
   if (typeof status !== 'number') return { title: 'The console could not reach the service', lines: ['Check your connection and try again.'] };
   if (status === 429) return { title: 'The service asked you to wait', lines: [message || 'Too many requests from this address. Try again shortly.'] };
-  if (status >= 500) return { title: 'The service hit an error', lines: ['It did not finish loading your workspace. Try again in a moment.'], reportTime: true };
+  if (status >= 500) return { title: 'The service hit an error', lines: ['It did not finish loading your workspace. Try again in a moment.'], reportTime: true, reference: referenceOf(error) };
   return { title: 'Could not load your workspace', lines: [message || 'The service refused the request.'] };
 }
 
 export function WorkspaceUnavailable({ error, retry, busy }: { error: unknown; retry: () => void; busy: boolean }) {
   const [at] = useState(() => new Date().toISOString());
-  const { title, lines, reportTime } = explainWorkspaceError(error);
+  const { title, lines, reportTime, reference } = explainWorkspaceError(error);
   useEffect(() => { document.title = 'Workspace not loaded · Valo Pay'; }, []);
   return (
     <PublicFrame>
@@ -51,7 +52,9 @@ export function WorkspaceUnavailable({ error, retry, busy }: { error: unknown; r
           </>}
         >
           {lines.map((line) => <p key={line}>{line}</p>)}
-          {reportTime && <p>If it continues, tell us the time: <LookedFor>{formatDate(at)}</LookedFor>.</p>}
+          {reportTime && (reference
+            ? <p>If it continues, tell us the time and the reference: <LookedFor>{formatDate(at)}</LookedFor>, <LookedFor>{reference}</LookedFor>.</p>
+            : <p>If it continues, tell us the time: <LookedFor>{formatDate(at)}</LookedFor>.</p>)}
           <p>No lender data has been changed.</p>
         </Notice>
       </main>

@@ -68,7 +68,7 @@ export async function createExportFile(state:DomainState,ctx:Context,input:Expor
  const checksum=createHash("sha256").update(bytes).digest("hex");
  // AUD-02: pack generation is itself an audited event (the route appends the audit entry) and is counted for Test 5 (MEA-01).
  makeRecord(state,"exports",{id,name:`${input.kind} · ${input.format.toUpperCase()}`,status:"ready",customerId:pack?String(pack.customer.id):"",createdAt:ctx.now,updatedAt:ctx.now,data:{checksum,kind:input.kind,format:input.format,usedInRealCase:false,objectName,bucket,contentType,byteLength:bytes.length,generationMs:Date.now()-started,events:pack?.timeline.length,customerReference:pack?String(pack.customer.reference):undefined}});
- return {id,downloadUrl:`/api/v1/exports/${id}/download?merchantId=${state.merchant.id}`,checksum,generatedAt:ctx.now};
+ return {id,downloadUrl:`/api/v1/exports/${id}/download?merchantId=${state.merchant.id}`,checksum,generatedAt:ctx.now,byteLength:bytes.length,generationMs:Date.now()-started};
 }
 export interface ExportDescriptor{id:string;bucket:string;objectName:string;checksum:string;contentType:string;filename:string}
 /** The authorised export metadata from the lender's state; resolved inside the transaction, used after it. */
