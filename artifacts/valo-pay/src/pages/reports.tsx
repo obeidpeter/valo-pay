@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow, EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -204,7 +205,7 @@ export default function ReportsPage() {
                   {billingLines(reports.billing).length === 0 ? (
                     <p className="text-xs text-muted-foreground">No signed design-partner terms for this period; nothing is billable.</p>
                   ) : (
-                    <div className="overflow-x-auto">
+                    <ScrollFrame label="Statement lines" className="overflow-x-auto">
                       <table className="w-full text-xs text-left font-mono">
                         <thead className="text-muted-foreground border-b">
                           <tr><th className="py-1 pr-2">Prospect</th><th className="py-1 pr-2">Tier</th><th className="py-1 pr-2 text-right">Licence</th><th className="py-1 pr-2 text-right">Usage</th><th className="py-1 pr-2 text-right">Total</th><th className="py-1">Note</th></tr>
@@ -222,13 +223,13 @@ export default function ReportsPage() {
                           ))}
                         </tbody>
                       </table>
-                    </div>
+                    </ScrollFrame>
                   )}
                 </div>
                 <div className="mt-6">
                   <h3 className="text-sm font-semibold mb-2">Receipts by channel (BIL-01)</h3>
                   <p className="text-xs text-muted-foreground mb-2">Only direct-debit attempts that succeeded are billable, once settled, unreversed and past the provider's reversal window. Transfers and card receipts are reconciled and shown here, never billed.</p>
-                  <div className="overflow-x-auto">
+                  <ScrollFrame label="Receipts by channel" className="overflow-x-auto">
                     <table className="w-full text-xs text-left font-mono">
                       <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Channel</th><th className="py-1 pr-2 text-right">Receipts</th><th className="py-1 pr-2 text-right">Value</th><th className="py-1 pr-2 text-right">Billable</th></tr></thead>
                       <tbody className="divide-y">
@@ -238,7 +239,7 @@ export default function ReportsPage() {
                         {Object.keys((reports.billing?.channelBreakdown as Record<string, any>) || {}).length === 0 && <tr><td colSpan={4} className="py-2 text-muted-foreground">No receipts in this period.</td></tr>}
                       </tbody>
                     </table>
-                  </div>
+                  </ScrollFrame>
                   <p className="text-xs text-muted-foreground mt-2">Withheld inside the reversal window: {String(reports.billing?.withheldInsideReversalWindow ?? 0)} (billed on a later statement).</p>
                 </div>
                 <div className="mt-6">
@@ -257,7 +258,7 @@ export default function ReportsPage() {
                   {invoiceRows(reports.billing).length === 0 ? (
                     <p className="text-xs text-muted-foreground">No invoice issued yet. The next one covers {String(reports.billing?.nextInvoicePeriod || 'the previous month')}; issued invoices are immutable and VAT is shown separately.</p>
                   ) : (
-                    <div className="overflow-x-auto">
+                    <ScrollFrame label="Issued invoices" className="overflow-x-auto">
                       <table className="w-full text-xs text-left font-mono">
                         <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Invoice</th><th className="py-1 pr-2">Period</th><th className="py-1 pr-2 text-right">Counted</th><th className="py-1 pr-2 text-right">Adjustments</th><th className="py-1 pr-2 text-right">Net</th><th className="py-1 pr-2 text-right">VAT</th><th className="py-1 pr-2 text-right">Total</th></tr></thead>
                         <tbody className="divide-y">
@@ -274,7 +275,7 @@ export default function ReportsPage() {
                           ))}
                         </tbody>
                       </table>
-                    </div>
+                    </ScrollFrame>
                   )}
                 </div>
                 <div className="mt-6">
@@ -372,7 +373,7 @@ export default function ReportsPage() {
                 );
               })()}
             </div>
-            <div className="overflow-x-auto max-h-[400px]">
+            <ScrollFrame label="Daily close snapshots" className="overflow-x-auto max-h-[400px]">
               <table className="w-full text-sm text-left">
                 <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                   <tr>
@@ -412,7 +413,7 @@ export default function ReportsPage() {
                   )}
                 </tbody>
               </table>
-            </div>
+            </ScrollFrame>
           </section>
 
         </div>

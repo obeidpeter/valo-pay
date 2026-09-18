@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { ScrollFrame } from '@/components/scroll-frame';
 import { FieldError, FormAlert, attentionTitle, focusField, invalidProps, missingMessage, serverFieldErrors } from '@/components/form-field';
 import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
@@ -132,7 +133,7 @@ export default function MandatesPage() {
             Mandates arrive from your loan software by API or CSV. In the sandbox you can create a synthetic one to see the activation workflow.
           </EmptyState>
         ) : (
-          <div className="overflow-x-auto">
+          <ScrollFrame label="Mandates" className="overflow-x-auto">
             <table className="w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground">
                 <tr>
@@ -171,7 +172,7 @@ export default function MandatesPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollFrame>
         )}
       </div>
 

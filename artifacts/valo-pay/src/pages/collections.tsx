@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow } from '@/components/empty-state';
 import { LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -120,7 +121,9 @@ export default function CollectionsPage() {
             <p className="text-sm text-muted-foreground mb-4">
               Paste CSV data to simulate incoming operational data. No real data permitted.
             </p>
+            <label htmlFor="import-kind" className="text-sm font-medium block mb-1">Import as</label>
             <select 
+              id="import-kind"
               className="w-full bg-background border rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring mb-4"
               value={importKind}
                onChange={(e) => { setImportKind(e.target.value); setImportResult(null); setPreviewSignature(''); }}
@@ -137,7 +140,7 @@ export default function CollectionsPage() {
               value={importText}
                onChange={e => { setImportText(e.target.value); setImportResult(null); setPreviewSignature(''); }}
             />
-            <Button type="button" variant="link" className="h-auto p-0 mb-4 text-xs" onClick={downloadSample}>Download {importKind} sample CSV</Button>
+            <Button type="button" variant="link" className="h-auto min-h-6 p-0 mb-4 text-xs" onClick={downloadSample}>Download {importKind} sample CSV</Button>
             <div className="flex gap-2">
               <Button variant="outline" className="flex-1" onClick={handlePreview} disabled={doImport.isPending || !importText} busy={doImport.isPending && !doImport.variables?.data.commit} busyLabel="Checking the file…">Preview</Button>
               <Button className="flex-1" onClick={handleCommit} disabled={doImport.isPending || !importText || !importResult || importResult.valid === 0 || importResult.invalid > 0 || previewSignature !== `${importKind}:${importText}`} busy={doImport.isPending && Boolean(doImport.variables?.data.commit)} busyLabel="Importing…">Commit</Button>
@@ -173,7 +176,7 @@ export default function CollectionsPage() {
               </h2>
             </div>
             
-            <div className="flex-1 overflow-auto">
+            <ScrollFrame label="Active due items" className="flex-1 overflow-auto">
               <table className="w-full text-sm text-left">
                 <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                   <tr>
@@ -205,7 +208,7 @@ export default function CollectionsPage() {
                   )}
                 </tbody>
               </table>
-            </div>
+            </ScrollFrame>
           </section>
         </div>
       </div>

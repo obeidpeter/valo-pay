@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { ScrollFrame } from '@/components/scroll-frame';
 import { useSearchShortcut } from '@/lib/focus';
 import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
@@ -65,6 +66,7 @@ export default function CustomersPage() {
             <input 
               type="text" 
               placeholder="Search by name, reference, or phone..."
+              aria-label="Search customers"
               ref={searchRef}
               aria-keyshortcuts="/"
               onKeyDown={event => { if (event.key === 'Escape') { setSearch(''); } }} 
@@ -89,7 +91,7 @@ export default function CustomersPage() {
             </EmptyState>
           )
         ) : (
-          <div className="overflow-x-auto">
+          <ScrollFrame label="Customers" className="overflow-x-auto">
             <table className="w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground">
                 <tr>
@@ -128,7 +130,7 @@ export default function CustomersPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollFrame>
         )}
         
         {data && data.total > data.items.length && (

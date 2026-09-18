@@ -1,4 +1,5 @@
 import React from 'react';
+import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow, EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -124,7 +125,7 @@ export default function OverviewPage() {
           <Activity className="h-5 w-5 text-success" /> Recent Activity
         </h2>
         <div className="bg-card border rounded-xl shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
+          <ScrollFrame label="Recent activity" className="overflow-x-auto">
             <table className="w-full text-sm text-left">
               <thead className="bg-secondary/50 border-b text-muted-foreground">
                 <tr>
@@ -157,7 +158,7 @@ export default function OverviewPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollFrame>
         </div>
       </section>
     </div>

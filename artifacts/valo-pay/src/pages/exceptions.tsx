@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -64,7 +65,7 @@ export default function ExceptionsPage() {
           <p className="hidden print:block text-sm">Showing: {filters.find(option => option.key === filter)?.label}</p>
           <div className="flex flex-wrap gap-2" role="tablist" aria-label="Exception filter">
             {filters.map((option, index) => (
-              <Button key={option.key} ref={element => { tabRefs.current[index] = element; }} role="tab" aria-selected={filter === option.key} tabIndex={filter === option.key ? 0 : -1} onKeyDown={event => onTabKeyDown(event, index, filters.map(item => item.key))} variant={filter === option.key ? 'secondary' : 'ghost'} size="sm" className={filter === option.key ? 'bg-primary text-primary-foreground' : ''} onClick={() => setFilter(option.key)}>
+              <Button key={option.key} ref={element => { tabRefs.current[index] = element; }} role="tab" aria-selected={filter === option.key} tabIndex={filter === option.key ? 0 : -1} onKeyDown={event => onTabKeyDown(event, index, filters.map(item => item.key))} variant={filter === option.key ? 'secondary' : 'ghost'} size="sm" className={filter === option.key ? 'bg-primary text-primary-foreground hover:bg-primary/90' : ''} onClick={() => setFilter(option.key)}>
                 {option.label}
               </Button>
             ))}
@@ -80,7 +81,7 @@ export default function ExceptionsPage() {
               : 'The daily close raises an exception for each unmatched payment, failed attempt or missing notice, with an owner and a business-day deadline.'}
           </EmptyState>
         ) : (
-          <div className="overflow-x-auto">
+          <ScrollFrame label="Exceptions" className="overflow-x-auto">
             <table className="w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground">
                 <tr>
@@ -144,7 +145,7 @@ export default function ExceptionsPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollFrame>
         )}
       </div>
 
