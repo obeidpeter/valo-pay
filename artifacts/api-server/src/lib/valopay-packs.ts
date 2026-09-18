@@ -6,7 +6,8 @@
  * Everything here is pure; storage and checksums live in valopay-exports.
  */
 import PDFDocument from "pdfkit";
-import { WAT_OFFSET_MS } from "@workspace/valopay-schema";
+import { VALO_PACK_SANS_BOLD, VALO_PACK_SANS_REGULAR } from "../fonts/valo-pack-sans";
+import { counted, WAT_OFFSET_MS } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { positionFor, type CustomerPosition } from "../domain/close";
 import { recordsOf } from "../domain/records";
@@ -190,9 +191,21 @@ export function disputePackCsv(pack: DisputePack): string {
 
 // ---------- PDF ----------
 
-/** The standard PDF fonts encode WinAnsi only, so the naira sign and a few symbols are spelled out. */
+/**
+ * The PDF standard fonts encode WinAnsi only, which has no Yoruba or Igbo letters
+ * (ẹ, ọ, ṣ), no tone-marked vowels and no naira sign, so the packs embed their own
+ * typeface: a Latin subset of Liberation Sans, metrically the same as Helvetica
+ * (src/fonts/README.md). It ships as base64 inside the bundle and is decoded once.
+ */
+let fontFiles: { regular: Buffer; bold: Buffer } | undefined;
+export function packFonts(): { regular: Buffer; bold: Buffer } {
+  fontFiles ??= { regular: Buffer.from(VALO_PACK_SANS_REGULAR.replace(/\s+/g, ""), "base64"), bold: Buffer.from(VALO_PACK_SANS_BOLD.replace(/\s+/g, ""), "base64") };
+  return fontFiles;
+}
+
+/** The naira sign is spelled "NGN" so the PDF reads as the CSV does, and control characters other than line breaks are dropped; everything else is rendered by the embedded typeface. */
 function pdfSafe(value: unknown): string {
-  return text(value).replace(/₦/g, "NGN ").replace(/≥/g, ">=").replace(/≤/g, "<=").replace(/→/g, "->").replace(/[^\x00-\xff]/g, "?");
+  return text(value).replace(/₦/g, "NGN ").replace(/[\p{Cc}\p{Cf}]/gu, (character) => (character === "\n" || character === "\t" ? character : ""));
 }
 
 export interface PdfOptions { compress?: boolean }
@@ -201,24 +214,26 @@ export interface PdfOptions { compress?: boolean }
 export function renderDisputePackPdf(pack: DisputePack, options: PdfOptions = {}): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const margin = 40;
-    const document = new PDFDocument({ size: "A4", margin, bufferPages: true, compress: options.compress ?? true, info: { Title: `Dispute pack ${text(pack.customer.reference)}`, Author: "Valo Pay", Subject: "AUD-02 dispute pack (synthetic sandbox)" } });
+    const document = new PDFDocument({ size: "A4", lang: "en-GB", margin, bufferPages: true, compress: options.compress ?? true, info: { Title: `Dispute pack ${text(pack.customer.reference)}`, Author: "Valo Pay", Subject: "AUD-02 dispute pack (synthetic sandbox)" } });
     const chunks: Buffer[] = [];
     document.on("data", (chunk: Buffer) => chunks.push(chunk));
     document.on("end", () => resolve(Buffer.concat(chunks)));
     document.on("error", reject);
+    const fonts = packFonts();
+    document.registerFont("Sans", fonts.regular).registerFont("Sans-Bold", fonts.bold);
     const width = document.page.width - margin * 2;
     const bottom = document.page.height - margin - 24;
-    const line = (label: string, value: unknown) => { document.font("Helvetica-Bold").fontSize(9).text(pdfSafe(label), { continued: true }).font("Helvetica").text(`  ${pdfSafe(value)}`); };
-    const heading = (title: string) => { document.moveDown(0.6); document.font("Helvetica-Bold").fontSize(12).fillColor("#102E2A").text(pdfSafe(title)); document.fillColor("#222222").moveDown(0.3); };
+    const line = (label: string, value: unknown) => { document.font("Sans-Bold").fontSize(9).text(pdfSafe(label), { continued: true }).font("Sans").text(`  ${pdfSafe(value)}`); };
+    const heading = (title: string) => { document.moveDown(0.6); document.font("Sans-Bold").fontSize(12).fillColor("#102E2A").text(pdfSafe(title)); document.fillColor("#222222").moveDown(0.3); };
 
     // ---- Page 1: summary ----
-    document.font("Helvetica-Bold").fontSize(20).fillColor("#102E2A").text("VALO PAY  -  Dispute pack");
-    document.font("Helvetica").fontSize(9).fillColor("#9B6524").text("SYNTHETIC SANDBOX - NOT LIVE EVIDENCE").fillColor("#222222").moveDown(0.5);
+    document.font("Sans-Bold").fontSize(20).fillColor("#102E2A").text("VALO PAY  -  Dispute pack");
+    document.font("Sans").fontSize(9).fillColor("#9B6524").text("SYNTHETIC SANDBOX - NOT LIVE EVIDENCE").fillColor("#222222").moveDown(0.5);
     line("Customer", `${text(pack.customer.name)} (${text(pack.customer.reference)}) - ${text(pack.customer.status)}`);
     line("Lender", `${pack.merchant.name} - provider ${pack.merchant.provider} - ${pack.merchant.mode} mode`);
     line("Bank", `${text(pack.customer.bankName) || "n/a"} ${text(pack.customer.accountMasked)}  phone ${text(pack.customer.phoneMasked) || "n/a"}`);
     line("Generated", `${watStamp(pack.generatedAt)} by ${pack.generatedBy}`);
-    line("Audit chain", `${pack.auditVerification.valid ? "verified intact" : "BROKEN"}; ${pack.auditVerification.count} entries; head ${pack.auditVerification.headHash.slice(0, 16)}`);
+    line("Audit chain", `${pack.auditVerification.valid ? "verified intact" : "BROKEN"}; ${counted(pack.auditVerification.count, "entry", "entries")}; head ${pack.auditVerification.headHash.slice(0, 16)}`);
     heading("Position (derived from obligations and payment evidence; no funds are held)");
     line("Obligations", kobo(pack.position.obligationsKobo));
     line("Allocated", kobo(pack.position.allocatedKobo));
@@ -236,7 +251,7 @@ export function renderDisputePackPdf(pack: DisputePack, options: PdfOptions = {}
     line("Retry decisions", `${s.retryDecisions}`);
     line("Human actions", `${s.humanActions}`);
     heading("Consent");
-    if (!s.consent.length) document.font("Helvetica").fontSize(9).text("No mandate on file.");
+    if (!s.consent.length) document.font("Sans").fontSize(9).text("No mandate on file.");
     for (const item of s.consent as Array<{ mandate: string; evidence: string; gaps: string[]; provenance: string }>) {
       line(item.mandate, `evidence ${item.evidence || "none"}; provenance ${item.provenance || "n/a"}${item.gaps.length ? `; GAPS: ${item.gaps.join(", ")}` : "; no gaps"}`);
     }
@@ -245,7 +260,7 @@ export function renderDisputePackPdf(pack: DisputePack, options: PdfOptions = {}
     line("Notice template", s.governingVersions.templates.join("; ") || "no approved version");
     line("Cutover contract", s.governingVersions.cutovers.join("; ") || "none");
     document.moveDown(0.6);
-    document.font("Helvetica").fontSize(8).fillColor("#555555").text(pdfSafe(pack.note)).fillColor("#222222");
+    document.font("Sans").fontSize(8).fillColor("#555555").text(pdfSafe(pack.note)).fillColor("#222222");
 
     // ---- Timeline pages ----
     const columns = [
@@ -256,16 +271,16 @@ export function renderDisputePackPdf(pack: DisputePack, options: PdfOptions = {}
       { key: "policy", title: "Pol.", x: margin + width - 28, width: 28 },
     ] as const;
     const tableHeader = () => {
-      document.font("Helvetica-Bold").fontSize(8).fillColor("#102E2A");
+      document.font("Sans-Bold").fontSize(8).fillColor("#102E2A");
       const top = document.y;
       for (const column of columns) document.text(column.title, column.x, top, { width: column.width, lineBreak: false });
       const y = top + 12;
       document.moveTo(margin, y).lineTo(margin + width, y).lineWidth(0.5).strokeColor("#888888").stroke();
       document.y = y + 4;
-      document.fillColor("#222222").font("Helvetica").fontSize(7.5);
+      document.fillColor("#222222").font("Sans").fontSize(7.5);
     };
     document.addPage();
-    document.font("Helvetica-Bold").fontSize(12).fillColor("#102E2A").text(`Timeline: ${pack.timeline.length} events, oldest first`, margin, margin, { width }).fillColor("#222222").moveDown(0.4);
+    document.font("Sans-Bold").fontSize(12).fillColor("#102E2A").text(`Timeline: ${counted(pack.timeline.length, "event")}, oldest first`, margin, margin, { width }).fillColor("#222222").moveDown(0.4);
     tableHeader();
     for (const event of pack.timeline) {
       const cells: Record<string, string> = { at: watStamp(event.at), event: pdfSafe(`${event.event}${event.actor ? ` (${event.actor})` : ""}`), detail: pdfSafe(event.detail), amount: event.amountKobo ? kobo(event.amountKobo) : "", policy: event.policyVersion ? `v${event.policyVersion}` : "-" };
@@ -279,15 +294,15 @@ export function renderDisputePackPdf(pack: DisputePack, options: PdfOptions = {}
 
     // ---- Governing documents ----
     document.addPage();
-    document.font("Helvetica-Bold").fontSize(12).fillColor("#102E2A").text("Governing documents as they applied (AUD-06)", margin, margin, { width }).fillColor("#222222").moveDown(0.4);
-    if (!pack.documents.length) document.font("Helvetica").fontSize(9).text("No approved policy version, template or cutover contract applied to this customer's events.", margin, document.y, { width });
+    document.font("Sans-Bold").fontSize(12).fillColor("#102E2A").text("Governing documents as they applied (AUD-06)", margin, margin, { width }).fillColor("#222222").moveDown(0.4);
+    if (!pack.documents.length) document.font("Sans").fontSize(9).text("No approved policy version, template or cutover contract applied to this customer's events.", margin, document.y, { width });
     for (const item of pack.documents) {
       const title = `${item.kind === "policies" ? "Retry policy" : item.kind === "templates" ? "Notice template" : "Cutover contract"} ${item.version ? `v${item.version} ` : ""}- ${item.name} (${item.status}); applied from ${watStamp(item.appliesFrom)}${item.appliesUntil ? ` until ${watStamp(item.appliesUntil)}` : " onwards"}`;
       const body = pdfSafe(item.text);
       const needed = document.heightOfString(title, { width }) + document.heightOfString(body, { width }) + 16;
       if (document.y + needed > bottom) { document.addPage(); document.y = margin; }
-      document.font("Helvetica-Bold").fontSize(9).text(pdfSafe(title), margin, document.y, { width });
-      document.font("Helvetica").fontSize(8.5).text(body, margin, document.y, { width }).moveDown(0.6);
+      document.font("Sans-Bold").fontSize(9).text(pdfSafe(title), margin, document.y, { width });
+      document.font("Sans").fontSize(8.5).text(body, margin, document.y, { width }).moveDown(0.6);
     }
 
     // ---- Footers ----
@@ -296,7 +311,7 @@ export function renderDisputePackPdf(pack: DisputePack, options: PdfOptions = {}
       document.switchToPage(index);
       // Writing inside the bottom margin would otherwise make pdfkit open a new page.
       document.page.margins.bottom = 0;
-      document.font("Helvetica").fontSize(7.5).fillColor("#666666").text(pdfSafe(`Page ${index - range.start + 1} of ${range.count}  |  Valo Pay dispute pack  |  ${text(pack.customer.reference)}  |  synthetic sandbox  |  generated ${watStamp(pack.generatedAt)}`), margin, document.page.height - margin + 4, { width, align: "center", lineBreak: false });
+      document.font("Sans").fontSize(7.5).fillColor("#666666").text(pdfSafe(`Page ${index - range.start + 1} of ${range.count}  |  Valo Pay dispute pack  |  ${text(pack.customer.reference)}  |  synthetic sandbox  |  generated ${watStamp(pack.generatedAt)}`), margin, document.page.height - margin + 4, { width, align: "center", lineBreak: false });
     }
     document.end();
   });

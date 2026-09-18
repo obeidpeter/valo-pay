@@ -14,6 +14,8 @@ const steps = [
   ["node", ["scripts/github-snapshot.test.mjs"]],
   [tsx, ["artifacts/api-server/tests/valopay-store-guards.test.ts"]],
   [tsx, ["artifacts/api-server/tests/export-download.test.ts"]],
+  [tsx, ["artifacts/api-server/tests/api-security.test.ts"]],
+  [tsx, ["artifacts/api-server/tests/i18n.test.ts"]],
   [tsx, ["artifacts/api-server/tests/validation-golden.test.ts"]],
   [tsx, ["artifacts/api-server/tests/retry-engine-golden.test.ts"]],
   [tsx, ["artifacts/api-server/tests/reconciliation-golden.test.ts"]],

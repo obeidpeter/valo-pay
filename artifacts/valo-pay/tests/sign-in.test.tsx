@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
-import { renderApp, screen } from "./harness";
+import { renderApp, screen, waitFor } from "./harness";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -18,7 +18,7 @@ describe("sign-in pages without Clerk", () => {
     expect(screen.getAllByRole("link", { name: "Back to the start" }).map((link) => link.getAttribute("href"))).toEqual(["/", "/"]);
     expect(screen.getByRole("heading", { name: "What signing in changes" })).toBeTruthy();
     expect(screen.getByText(/We never hold money\. Nothing in this console moves funds/)).toBeTruthy();
-    expect(document.title).toBe("Sign in to your workspace · Valo Pay");
+    await waitFor(() => expect(document.title).toBe("Sign in to your workspace · Valo Pay"));
     expect(api.calls).toEqual([]);
   });
 
@@ -27,7 +27,7 @@ describe("sign-in pages without Clerk", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Create your workspace" })).toBeTruthy();
     expect(screen.getByText(/so you cannot create an account here/)).toBeTruthy();
     expect(screen.getByRole("link", { name: /Continue to the sandbox/ }).getAttribute("href")).toBe("/overview");
-    expect(document.title).toBe("Create your workspace · Valo Pay");
+    await waitFor(() => expect(document.title).toBe("Create your workspace · Valo Pay"));
     expect(api.calls).toEqual([]);
   });
 });

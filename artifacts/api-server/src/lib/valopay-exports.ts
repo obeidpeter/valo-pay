@@ -6,8 +6,10 @@ import { buildReports, customerTimeline, makeRecord } from "../domain";
 import { getGates } from "./valopay-readiness";
 import { verifyAudit } from "./valopay-store";
 import { readExportBytes } from "./export-download";
-import { buildDisputePack, disputePackCsv, renderDisputePackPdf, type DisputePack } from "./valopay-packs";
+import { buildDisputePack, disputePackCsv, packFonts, renderDisputePackPdf, type DisputePack } from "./valopay-packs";
 
+/** CSV downloads are UTF-8 and start with the byte order mark, which is what spreadsheet programs look for before they read accented letters correctly on opening; the importer skips it (csv-parse `bom`). */
+const CSV_BOM="\uFEFF";
 function escapeCsv(value:unknown){
  let text=typeof value==="object"?JSON.stringify(value):String(value??"");
  if(/^[=+\-@\t\r]/.test(text))text="'"+text;
@@ -15,14 +17,15 @@ function escapeCsv(value:unknown){
 }
 async function pdfBytes(title:string,data:unknown):Promise<Buffer>{
  return new Promise((resolve,reject)=>{
-  const document=new PDFDocument({size:"A4",margin:45,info:{Title:title,Author:"Valo Pay"}});
+  const document=new PDFDocument({size:"A4",lang:"en-GB",margin:45,info:{Title:title,Author:"Valo Pay"}});
   const chunks:Buffer[]=[];
   document.on("data",chunk=>chunks.push(chunk));document.on("end",()=>resolve(Buffer.concat(chunks)));document.on("error",reject);
+  const fonts=packFonts();document.registerFont("Sans",fonts.regular).registerFont("Sans-Bold",fonts.bold).font("Sans");
   document.fontSize(24).fillColor("#102E2A").text("VALO PAY").moveDown(0.4);
   document.fontSize(15).text(title).moveDown();
   document.fillColor("#9B6524").fontSize(10).text("SYNTHETIC SANDBOX - NOT LIVE EVIDENCE").moveDown();
   document.fillColor("#333333").fontSize(9).text("We never hold money. All amounts below are integer kobo (NGN). Times are UTC unless stated. This export cannot satisfy a production gate.").moveDown();
-  document.font("Courier").fontSize(7).text(JSON.stringify(data,null,2),{width:505});
+  document.font("Sans").fontSize(7).text(JSON.stringify(data,null,2),{width:505});
   document.end();
  });
 }
@@ -38,7 +41,7 @@ export async function buildExportBytes(state:DomainState,ctx:Context,input:Expor
   // AUD-02: one-page summary followed by the timeline, as PDF, CSV or JSON of the same data.
   const pack=buildDisputePack(state,ctx,input.customerId||"");
   if(input.format==="pdf")return {bytes:await renderDisputePackPdf(pack,options),contentType:"application/pdf",payload:pack,pack};
-  if(input.format==="csv")return {bytes:Buffer.from(disputePackCsv(pack)),contentType:"text/csv; charset=utf-8",payload:pack,pack};
+  if(input.format==="csv")return {bytes:Buffer.from(CSV_BOM+disputePackCsv(pack)),contentType:"text/csv; charset=utf-8",payload:pack,pack};
   return {bytes:Buffer.from(JSON.stringify(pack,null,2)),contentType:"application/json",payload:pack,pack};
  }
  const reports=input.kind==="gate-pack"||input.kind==="billing"?buildReports(state,ctx.now):undefined;
@@ -49,7 +52,7 @@ export async function buildExportBytes(state:DomainState,ctx:Context,input:Expor
  if(input.format==="csv"){
   const rows=Array.isArray(payload)?payload:[payload];
   const keys=[...new Set(rows.flatMap(r=>Object.keys(r)))];
-  return {bytes:Buffer.from([["environment","merchant",...keys].join(","),...rows.map(r=>["synthetic_sandbox",state.merchant.name,...keys.map(k=>r[k])].map(escapeCsv).join(","))].join("\r\n")),contentType:"text/csv; charset=utf-8",payload:snapshot};
+  return {bytes:Buffer.from(CSV_BOM+[["environment","merchant",...keys].join(","),...rows.map(r=>["synthetic_sandbox",state.merchant.name,...keys.map(k=>r[k])].map(escapeCsv).join(","))].join("\r\n")),contentType:"text/csv; charset=utf-8",payload:snapshot};
  }
  return {bytes:Buffer.from(JSON.stringify(snapshot,null,2)),contentType:"application/json",payload:snapshot};
 }

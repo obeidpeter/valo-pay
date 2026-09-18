@@ -7,7 +7,7 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, usePerformAction, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { Search, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { formatDate } from '@/lib/formatters';
+import { formatDate, formatCount } from '@/lib/formatters';
 import { notifyProblem, saidBy } from '@/lib/notify';
 
 export default function AuditPage() {
@@ -57,7 +57,7 @@ export default function AuditPage() {
       {verification && (
         <div role="status" className={`rounded-xl border p-4 text-sm ${verification.valid ? 'border-success/30 bg-success/5' : 'border-destructive/30 bg-destructive/5 text-destructive'}`}>
           <p className="font-semibold">{verification.valid ? 'Chain intact' : 'Chain broken: a sequence, previous hash or digest did not verify'}</p>
-          <p className="font-mono text-xs mt-1">{verification.count} entries · head hash {verification.headHash}</p>
+          <p className="font-mono text-xs mt-1">{formatCount(verification.count, 'entry', 'entries')} · head hash {verification.headHash}</p>
         </div>
       )}
 

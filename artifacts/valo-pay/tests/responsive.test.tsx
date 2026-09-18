@@ -41,7 +41,7 @@ describe("responsive layout", () => {
     await screen.findByRole("heading", { name: "Audit Log" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await waitFor(() => expect(document.activeElement?.id).toBe("main"));
-    expect(document.title).toBe("Audit Log · Valo Pay");
+    await waitFor(() => expect(document.title).toBe("Audit Log · Valo Pay"));
   });
 
   it("closes the drawer on Escape and returns focus to the Menu button", async () => {
@@ -55,7 +55,7 @@ describe("responsive layout", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(menu));
     // Nothing was navigated: the page and its title are as they were.
-    expect(document.title).toBe("Customers · Valo Pay");
+    await waitFor(() => expect(document.title).toBe("Customers · Valo Pay"));
     expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
   });
 

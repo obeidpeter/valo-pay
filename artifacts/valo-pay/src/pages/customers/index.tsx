@@ -5,7 +5,7 @@ import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
-import { formatKobo, formatDate } from '@/lib/formatters';
+import { formatKobo, formatDate, formatNumber, formatCount } from '@/lib/formatters';
 import { Search, UserPlus, FileText, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Link } from 'wouter';
@@ -135,7 +135,7 @@ export default function CustomersPage() {
         
         {data && data.total > data.items.length && (
           <div className="p-4 border-t text-center text-xs text-muted-foreground">
-            Showing {data.items.length} of {data.total} records. Refine search to see more.
+            Showing {formatNumber(data.items.length)} of {formatCount(data.total, 'record')}. Refine search to see more.
           </div>
         )}
       </div>

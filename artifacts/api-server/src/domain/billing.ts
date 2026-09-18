@@ -6,6 +6,7 @@
  * an issued one.  The recovery fee (BIL-03) stays behind its gate.
  */
 import {
+  counted,
   DEFAULT_REVERSAL_WINDOW_DAYS, DEFAULT_VAT_BPS, DESIGN_PARTNER_DISCOUNT, DESIGN_PARTNER_DISCOUNT_YEAR, RECOVERY_FEE_KOBO, USAGE_FEE_BPS, USAGE_FEE_CAP_KOBO,
   billableChannels, experimentRules, isBillableChannel, licenceTierFor, usageFeeKobo, vatKobo, type AdjustmentReason,
 } from "@workspace/valopay-schema";
@@ -282,7 +283,7 @@ export function issueInvoice(state: DomainState, ctx: Context, input: { period?:
       adjustments, recoveryFee,
       subtotals: { licenceKobo: contractedLicence, usageKobo, adjustmentsKobo, discountKobo, recoveryKobo: recoveryFee.kobo },
       totals: { netKobo, vatBps, vatKobo: vat, totalKobo, creditNote: totalKobo < 0 },
-      statement: `${usageLines.length} collections counted at ${USAGE_FEE_BPS / 100}% capped at ${naira(USAGE_FEE_CAP_KOBO)}; ${adjustments.length} adjustment lines; VAT at ${vatBps / 100}% shown separately.`,
+      statement: `${counted(usageLines.length, "collection")} counted at ${USAGE_FEE_BPS / 100}% capped at ${naira(USAGE_FEE_CAP_KOBO)}; ${counted(adjustments.length, "adjustment line")}; VAT at ${vatBps / 100}% shown separately.`,
       disputeRoute: "Dispute a count by raising it with your Valo Pay contact quoting the invoice reference and the collection reference; the count is derived from records and reproducible (BIL-01).",
       synthetic: true,
     },

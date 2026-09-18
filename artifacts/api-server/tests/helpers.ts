@@ -85,3 +85,36 @@ export function addHoliday(state: DomainState, date: string): ValopayRecord {
 }
 
 export const outstandingOf = (due: ValopayRecord): number => Number.isInteger(due.data.outstandingKobo) ? Number(due.data.outstandingKobo) : due.amountKobo;
+
+/**
+ * The text of a pdfkit document written with `compress: false`, in content order.
+ * A standard font writes one byte a character; an embedded font writes two bytes a
+ * glyph, read back here through the font's ToUnicode map, as a PDF reader does.
+ */
+export function decodePdfText(pdf: Buffer): string {
+  const body = pdf.toString("latin1");
+  const objects = new Map<number, string>();
+  for (const match of body.matchAll(/(\d+) 0 obj\s*([\s\S]*?)\s*endobj/g)) objects.set(Number(match[1]), match[2]!);
+  const glyphMaps = new Map<string, Map<number, string>>();
+  for (const resources of body.matchAll(/\/Font\s*<<([^>]*)>>/g)) {
+    for (const entry of resources[1]!.matchAll(/\/(F\d+)\s+(\d+) 0 R/g)) {
+      if (glyphMaps.has(entry[1]!)) continue;
+      const map = new Map<number, string>();
+      const toUnicode = Number(objects.get(Number(entry[2]))?.match(/\/ToUnicode (\d+) 0 R/)?.[1]);
+      if (toUnicode) for (const range of (objects.get(toUnicode) ?? "").matchAll(/<([0-9a-f]+)>\s*<[0-9a-f]+>\s*\[([^\]]*)\]/gi)) {
+        const start = parseInt(range[1]!, 16);
+        [...range[2]!.matchAll(/<([0-9a-f ]*)>/gi)].forEach((code, index) => map.set(start + index, Buffer.from(code[1]!.replace(/ /g, ""), "hex").swap16().toString("utf16le")));
+      }
+      glyphMaps.set(entry[1]!, map);
+    }
+  }
+  let glyphs: Map<number, string> | undefined;
+  const lines: string[] = [];
+  // The array pattern is deliberately flat ([^\]]*): a nested repetition backtracks exponentially over the embedded font's binary stream.
+  for (const token of body.matchAll(/\/(F\d+)\s+[\d.]+\s+Tf|\[([^\]]*)\]\s*TJ/g)) {
+    if (token[1]) { glyphs = glyphMaps.get(token[1]); continue; }
+    const hexes = [...token[2]!.matchAll(/<([0-9a-fA-F]*)>/g)].map((chunk) => chunk[1]!);
+    lines.push(hexes.map((hex) => glyphs?.size ? (hex.match(/.{4}/g) ?? []).map((glyph) => glyphs!.get(parseInt(glyph, 16)) ?? "\uFFFD").join("") : Buffer.from(hex, "hex").toString("latin1")).join(""));
+  }
+  return lines.join("\n");
+}
