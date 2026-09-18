@@ -6,7 +6,8 @@ import { ArrowLeft, Clock, FileText, CheckCircle, AlertTriangle, CreditCard, Dow
 import { Link, useParams } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
-import { LookedFor, NotFoundNotice } from '@/pages/not-found';
+import { LookedFor } from '@/components/notice';
+import { NotFoundNotice } from '@/pages/not-found';
 
 const watStamp = (iso: unknown) => typeof iso === 'string' && Number.isFinite(Date.parse(iso)) ? formatDate(iso) : 'n/a';
 

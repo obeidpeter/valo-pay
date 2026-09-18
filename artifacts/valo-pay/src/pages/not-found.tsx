@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
+import { LookedFor, Notice } from '@/components/notice';
 import { PublicFrame } from '@/components/public-frame';
 
 /**
@@ -15,21 +16,17 @@ import { PublicFrame } from '@/components/public-frame';
 
 type Action = { href: string; label: string };
 
-/** The reference or address that was looked for, shown exactly so a typo can be seen. */
-export function LookedFor({ children }: { children: ReactNode }) {
-  return <code className="rounded bg-secondary px-1.5 py-0.5 font-mono text-xs text-foreground">{children}</code>;
-}
-
 export function NotFoundNotice({ title, children, primary, secondary }: { title: string; children: ReactNode; primary: Action; secondary?: Action }) {
   return (
-    <section aria-labelledby="not-found-title" className="max-w-lg rounded-xl border bg-card p-6">
-      <h1 id="not-found-title" className="text-2xl font-bold tracking-tight">{title}</h1>
-      <div className="mt-3 space-y-2 text-sm text-muted-foreground">{children}</div>
-      <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+    <Notice
+      title={title}
+      actions={<>
         <Button asChild><Link href={primary.href}>{primary.label}</Link></Button>
         {secondary && <Button asChild variant="outline"><Link href={secondary.href}>{secondary.label}</Link></Button>}
-      </div>
-    </section>
+      </>}
+    >
+      {children}
+    </Notice>
   );
 }
 

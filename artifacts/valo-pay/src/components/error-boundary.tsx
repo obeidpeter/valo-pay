@@ -1,9 +1,15 @@
 import {
   Component,
+  useEffect,
+  useState,
   type ComponentType,
   type ErrorInfo,
   type ReactNode,
 } from 'react';
+import { Button } from '@/components/ui/button';
+import { LookedFor, Notice } from '@/components/notice';
+import { PublicFrame } from '@/components/public-frame';
+import { formatDate } from '@/lib/formatters';
 
 export interface ErrorFallbackProps {
   error: Error;
@@ -15,6 +21,8 @@ interface ErrorBoundaryProps {
   FallbackComponent?: ComponentType<ErrorFallbackProps>;
   /** Changing this clears a caught error. Pass the route to recover on navigation. */
   resetKey?: unknown;
+  /** Told the caught error, and null once it is cleared, so a parent can reflect the state (the layout's page title). */
+  onErrorChange?: (error: Error | null) => void;
 }
 
 interface ErrorBoundaryState {
@@ -35,32 +43,55 @@ function toError(value: unknown): Error {
   }
 }
 
-function DefaultFallback({ error, resetError }: ErrorFallbackProps) {
+const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+/**
+ * What a page that stopped working says: that it did, that an error on a
+ * page changes no record, the time and the address for a report, and two
+ * ways on (Nielsen 1 and 9; Dix: recoverability; Shneiderman: simple error
+ * handling). It never shows a stack trace or an API response to a lender's
+ * staff; the error's message can carry internals, so it is printed in
+ * development only. The links are plain anchors rather than router links,
+ * so the notice works outside the router too and a click starts the page
+ * afresh rather than re-entering the state that broke.
+ */
+export function ErrorNotice({ error, resetError }: ErrorFallbackProps) {
+  const [at] = useState(() => new Date().toISOString());
+  const where = window.location.pathname;
+  useEffect(() => {
+    const previous = document.title;
+    document.title = 'Page error · Valo Pay';
+    return () => { document.title = previous; };
+  }, []);
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gray-50 p-6">
-      <div className="max-w-lg w-full text-center">
-        <h1 className="text-xl font-semibold text-gray-900">
-          Something went wrong
-        </h1>
-        <p className="mt-2 text-sm text-gray-600">
-          This part of the app hit an error. The rest of the app is still
-          running.
-        </p>
-        {/* Dev only: messages can carry API responses and other internals. */}
-        {import.meta.env.DEV ? (
-          <pre className="mt-4 overflow-x-auto rounded bg-gray-100 p-3 text-left text-xs text-gray-800">
-            {error.message || String(error)}
-          </pre>
-        ) : null}
-        <button
-          type="button"
-          onClick={resetError}
-          className="mt-4 rounded bg-gray-900 px-4 py-2 text-sm text-white hover:bg-gray-700"
-        >
-          Try again
-        </button>
-      </div>
-    </div>
+    <Notice
+      role="alert"
+      title="This page stopped working"
+      actions={<>
+        <Button onClick={resetError}>Try again</Button>
+        <Button asChild variant="outline"><a href={`${basePath}/overview`}>Go to the overview</a></Button>
+      </>}
+    >
+      <p>The page hit an error it could not recover from. An error on a page does not change any record; if you had just confirmed an action, its result is in the <a href={`${basePath}/audit`} className="font-medium text-primary underline-offset-4 hover:underline">audit log</a>.</p>
+      <p>If it happens again, tell us the time and the address: <LookedFor>{formatDate(at)}</LookedFor>, <LookedFor>{where}</LookedFor>.</p>
+      {import.meta.env.DEV ? (
+        <details className="text-xs">
+          <summary className="cursor-pointer">Technical details (development only)</summary>
+          <pre className="mt-2 overflow-x-auto rounded bg-secondary p-3 text-foreground">{error.message || String(error)}</pre>
+        </details>
+      ) : null}
+    </Notice>
+  );
+}
+
+/** The fallback outside the console: the notice in the public frame. Inside the console the layout passes ErrorNotice on its own, so the sidebar stays. */
+function DefaultFallback(props: ErrorFallbackProps) {
+  return (
+    <PublicFrame>
+      <main id="main" className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16">
+        <ErrorNotice {...props} />
+      </main>
+    </PublicFrame>
   );
 }
 
@@ -80,6 +111,7 @@ export class ErrorBoundary extends Component<
       toError(error),
       info.componentStack,
     );
+    this.props.onErrorChange?.(toError(error));
   }
 
   componentDidUpdate(prevProps: ErrorBoundaryProps): void {
@@ -93,6 +125,7 @@ export class ErrorBoundary extends Component<
 
   resetError = (): void => {
     this.setState({ error: null });
+    this.props.onErrorChange?.(null);
   };
 
   render(): ReactNode {
