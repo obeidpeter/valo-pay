@@ -40,7 +40,7 @@ export function WorkspaceUnavailable({ error, retry, busy }: { error: unknown; r
   useEffect(() => { document.title = 'Workspace not loaded · Valo Pay'; }, []);
   return (
     <PublicFrame>
-      <main id="main" className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16">
+      <main id="main" tabIndex={-1} className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16 focus:outline-none">
         <Notice
           role="alert"
           title={title}

@@ -48,7 +48,7 @@ function Shell({ title, children }: { title: string; children: ReactNode }) {
   useEffect(() => { document.title = `${title} · Valo Pay`; }, [title]);
   return (
     <PublicFrame>
-      <main id="main" className="mx-auto grid max-w-6xl gap-10 px-4 py-12 sm:px-6 lg:grid-cols-[2fr_3fr] lg:items-start lg:py-16">
+      <main id="main" tabIndex={-1} className="mx-auto grid max-w-6xl gap-10 px-4 py-12 sm:px-6 lg:grid-cols-[2fr_3fr] lg:items-start lg:py-16 focus:outline-none">
         <aside aria-labelledby="context-title" className="lg:pt-6">
           <h1 id="context-title" className="text-3xl font-bold tracking-tight">{title}</h1>
           <p className="mt-3 text-muted-foreground">A collections operations layer for lenders that collect by direct debit. We never hold money.</p>

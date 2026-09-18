@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { keyboardShortcuts } from '@/lib/focus';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetSettings, useUpdateSettings, usePerformAction, getGetSettingsQueryKey } from '@workspace/api-client-react';
@@ -321,6 +322,21 @@ export default function SettingsPage() {
         fields={[]}
       />
 
+      {/* Keyboard: listed so the shortcuts can be found rather than guessed (Nielsen 7: accelerators; 10: help focused on the task). */}
+      <section className="bg-card border rounded-xl shadow-sm overflow-hidden" aria-labelledby="keyboard-title">
+        <div className="p-4 border-b bg-secondary/20">
+          <h2 id="keyboard-title" className="font-semibold text-lg">Keyboard</h2>
+          <p className="text-sm text-muted-foreground mt-1">Everything in the console works without a mouse. These keys save steps.</p>
+        </div>
+        <dl className="divide-y">
+          {keyboardShortcuts.map(shortcut => (
+            <div key={shortcut.keys} className="grid grid-cols-[minmax(8rem,auto)_1fr] gap-4 px-6 py-3 text-sm">
+              <dt><kbd className="rounded border bg-secondary px-1.5 py-0.5 font-mono text-xs">{shortcut.keys}</kbd></dt>
+              <dd className="text-muted-foreground">{shortcut.does}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
     </div>
   );
 }

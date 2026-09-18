@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
+import { useSearchShortcut } from '@/lib/focus';
 import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -13,6 +14,8 @@ import { recordStatuses } from '@workspace/valopay-schema';
 export default function CustomersPage() {
   const { merchantId } = useWorkspace();
   const [search, setSearch] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
+  useSearchShortcut(searchRef);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   
   const { data, isLoading, error } = useListRecords(
@@ -60,11 +63,15 @@ export default function CustomersPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <input 
               type="text" 
-              placeholder="Search by name, reference, or phone..." 
+              placeholder="Search by name, reference, or phone..."
+              ref={searchRef}
+              aria-keyshortcuts="/"
+              onKeyDown={event => { if (event.key === 'Escape') { setSearch(''); } }} 
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="w-full pl-9 pr-4 py-2 bg-background border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             />
+            <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border bg-secondary px-1.5 font-mono text-[11px] text-muted-foreground" aria-hidden="true">/</kbd>
           </div>
         </div>
 

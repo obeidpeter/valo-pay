@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -15,6 +15,16 @@ export default function ExceptionsPage() {
   const [actionKind, setActionKind] = useState<'update' | 'resolve' | ''>('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [filter, setFilter] = useState<'open' | 'high' | 'resolved'>('open');
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  /** WAI-ARIA tabs: one tab stop for the group, arrows and Home/End move the selection and the focus together. */
+  const onTabKeyDown = (event: React.KeyboardEvent, index: number, keys: Array<'open' | 'high' | 'resolved'>) => {
+    const moves: Record<string, number> = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: keys.length - 1 };
+    if (!(event.key in moves)) return;
+    event.preventDefault();
+    const next = (moves[event.key]! + keys.length) % keys.length;
+    setFilter(keys[next]!);
+    tabRefs.current[next]?.focus();
+  };
 
   const { data, isLoading } = useListRecords(
     'exceptions',
@@ -52,8 +62,8 @@ export default function ExceptionsPage() {
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
         <div className="p-4 border-b flex items-center gap-4 bg-secondary/20">
           <div className="flex gap-2" role="tablist" aria-label="Exception filter">
-            {filters.map(option => (
-              <Button key={option.key} role="tab" aria-selected={filter === option.key} variant={filter === option.key ? 'secondary' : 'ghost'} size="sm" className={filter === option.key ? 'bg-primary text-primary-foreground' : ''} onClick={() => setFilter(option.key)}>
+            {filters.map((option, index) => (
+              <Button key={option.key} ref={element => { tabRefs.current[index] = element; }} role="tab" aria-selected={filter === option.key} tabIndex={filter === option.key ? 0 : -1} onKeyDown={event => onTabKeyDown(event, index, filters.map(item => item.key))} variant={filter === option.key ? 'secondary' : 'ghost'} size="sm" className={filter === option.key ? 'bg-primary text-primary-foreground' : ''} onClick={() => setFilter(option.key)}>
                 {option.label}
               </Button>
             ))}

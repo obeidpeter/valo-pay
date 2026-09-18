@@ -88,7 +88,7 @@ export function ErrorNotice({ error, resetError }: ErrorFallbackProps) {
 function DefaultFallback(props: ErrorFallbackProps) {
   return (
     <PublicFrame>
-      <main id="main" className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16">
+      <main id="main" tabIndex={-1} className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16 focus:outline-none">
         <ErrorNotice {...props} />
       </main>
     </PublicFrame>
