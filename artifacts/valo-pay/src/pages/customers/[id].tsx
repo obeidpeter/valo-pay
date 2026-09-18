@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetCustomerTimeline, getGetCustomerTimelineQueryKey, useCreateExport } from '@workspace/api-client-react';
 import { formatKobo, formatDate, formatCompactDate } from '@/lib/formatters';
@@ -6,6 +6,7 @@ import { ArrowLeft, Clock, FileText, CheckCircle, AlertTriangle, CreditCard, Dow
 import { Link, useParams } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
+import { LookedFor, NotFoundNotice } from '@/pages/not-found';
 
 const watStamp = (iso: unknown) => typeof iso === 'string' && Number.isFinite(Date.parse(iso)) ? formatDate(iso) : 'n/a';
 
@@ -18,6 +19,17 @@ function decisionDetail(data: Record<string, any>): string {
     notice ? `Notice ${String(notice.purpose || '').replace(/_/g, ' ')}${notice.requiredBy ? ` required by ${watStamp(notice.requiredBy)}` : ''}${notice.evidenced ? ', evidenced.' : ', not evidenced.'}` : '',
     `Policy v${String(data.policyVersion || '?')}${data.experimentArm ? ` · arm ${String(data.experimentArm)}` : ''}.`,
   ].filter(Boolean).join(' ');
+}
+
+/** The address is a customer page, but the current lender has no customer with that reference. */
+function MissingCustomer({ id }: { id: string }) {
+  useEffect(() => { document.title = 'Customer not found · Valo Pay'; }, []);
+  return (
+    <NotFoundNotice title="No customer with this reference" primary={{ href: '/customers', label: 'Back to customers' }} secondary={{ href: '/overview', label: 'Go to the overview' }}>
+      <p>The current lender has no customer with the reference <LookedFor>{id}</LookedFor>. It may belong to another lender in this workspace, which the lender selector switches to, or the address may be mistyped.</p>
+      <p>Nothing has been changed.</p>
+    </NotFoundNotice>
+  );
 }
 
 export default function CustomerTimelinePage() {
@@ -44,6 +56,7 @@ export default function CustomerTimelinePage() {
 
   if (!merchantId) return null;
   if (isLoading) return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading timeline...</div>;
+  if ((error as { status?: number } | null)?.status === 404) return <MissingCustomer id={String(id)} />;
   if (error || !timeline) return <div className="p-8 text-center text-destructive">Failed to load customer timeline.</div>;
 
   const { customer, position, events, mandates, dueItems, payments } = timeline;

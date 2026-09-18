@@ -41,7 +41,7 @@ The sandbox and the workspace are the same console. The sandbox is anonymous and
 | 6. Recognition rather than recall | Section links in the header. The figure shows the product's daily close instead of describing it. The two ways in are repeated at the end of the page so nobody scrolls back. The sign-in page lists what signing in changes. |
 | 7. Flexibility and efficiency of use | Skip link, in-page anchors, both ways in within one click of the header for a returning visitor, keyboard reachable in reading order. |
 | 8. Aesthetic and minimalist design | One illustration, one H1, no testimonials, logos, carousel or chat widget. Each section answers one of the five questions. The sign-in page carries three lines of context, not a marketing column. |
-| 9. Help users recognise, diagnose and recover from errors | The unavailable-sign-in card says what is missing (a Clerk key on this host), why, and what to do. The not-found page says the address may be mistyped, that nothing changed, and offers two ways out. Clerk's own error text is plain language. |
+| 9. Help users recognise, diagnose and recover from errors | The unavailable-sign-in card says what is missing (a Clerk key on this host), why, and what to do. The not-found page shows the address it looked for so a typo can be seen, says nothing changed, and offers two ways out; a customer page whose record the lender does not have says so inside the console, with the sidebar as the way out. Clerk's own error text is plain language. |
 | 10. Help and documentation | Footer links to how the sandbox works and to the security boundary. The sign-in aside is the help for the one decision made there. |
 
 ## Norman's principles
@@ -83,7 +83,11 @@ Where this host has no Clerk key there is no account to sign into. The old conso
 
 ## Routing
 
-The landing and sign-in pages are routed outside the console's workspace provider (`App.tsx`). Visiting `/`, `/sign-in` or `/sign-up` therefore sends no request to the API and creates no sandbox; the workspace request happens only when someone opens the console. The overview moved from `/` to `/overview` to make room, and the console's brand lockup links back to `/`.
+The landing and sign-in pages are routed outside the console's workspace provider (`App.tsx`). Visiting `/`, `/sign-in` or `/sign-up` therefore sends no request to the API and creates no sandbox; the workspace request happens only when someone opens the console. The overview moved from `/` to `/overview` to make room, and the console's brand lockup links back to `/`. `App.tsx` keeps one list of the console's addresses and mounts the console only for those, so an address it has no page for is answered outside the provider too: a mistyped address or a stray crawler creates no sandbox.
+
+## Not found
+
+There are two not-found states, and they are different pages because the visitor's situation is different. An address the console has no page for gets the public frame (the same header as the sign-in pages), the address it looked for shown exactly so a typo can be seen, a sentence that nothing changed, and two ways out: the overview and the start. It fetches nothing, so it renders at once and creates nothing. A customer address whose record the current lender does not have is a page that exists with a record that does not, so it stays inside the console with the sidebar and the lender selector, names the reference it looked for, says the customer may belong to another lender in the workspace, and links back to the customer list. Neither state shows a code or a stack trace, and each sets a page title that says what happened (Nielsen 1 and 9, Dix recoverability, Shneiderman's simple error handling).
 
 ## What we left out, on purpose
 

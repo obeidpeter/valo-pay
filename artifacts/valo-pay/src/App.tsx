@@ -1,13 +1,15 @@
-import { type ReactNode } from 'react';
+import { type ComponentType, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import NotFound from '@/pages/not-found';
+import NotFoundPage from '@/pages/not-found';
 import {
   Route,
   Switch,
+  matchRoute,
   useLocation,
+  useRouter,
   Router as WouterRouter
 } from 'wouter';
 import { ClerkProvider } from '@clerk/react';
@@ -47,6 +49,44 @@ function stripBase(path: string): string {
     : path;
 }
 
+/** Every address the console has a page for. Anything else is not found, and gets no workspace. */
+const consoleRoutes: Array<{ path: string; component: ComponentType<any> }> = [
+  { path: '/overview', component: OverviewPage },
+  { path: '/customers', component: CustomersPage },
+  { path: '/customers/:id', component: CustomerTimelinePage },
+  { path: '/reconciliation', component: ReconciliationPage },
+  { path: '/exceptions', component: ExceptionsPage },
+  { path: '/policies', component: PoliciesPage },
+  { path: '/mandates', component: MandatesPage },
+  { path: '/collections', component: CollectionsPage },
+  { path: '/reports', component: ReportsPage },
+  { path: '/evidence', component: EvidencePage },
+  { path: '/audit', component: AuditPage },
+  { path: '/settings', component: SettingsPage },
+];
+
+/**
+ * The console mounts once for every address it has a page for, so the
+ * workspace and the chosen lender survive navigation. Any other address gets
+ * the not-found page outside the workspace provider: a mistyped address or a
+ * stray crawler creates no sandbox (frontend contract, Pages).
+ */
+function Console() {
+  const [location] = useLocation();
+  const { parser } = useRouter();
+  const known = consoleRoutes.some((route) => matchRoute(parser, route.path, location)[0]);
+  if (!known) return <NotFoundPage />;
+  return (
+    <WorkspaceProvider>
+      <Layout>
+        <Switch>
+          {consoleRoutes.map((route) => <Route key={route.path} path={route.path} component={route.component} />)}
+        </Switch>
+      </Layout>
+    </WorkspaceProvider>
+  );
+}
+
 function RoutedErrorBoundary({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>;
@@ -62,31 +102,11 @@ function ClerkProviderWithRoutes() {
             <Switch>
               {/* The public pages sit outside the workspace provider: reading about the product or
                   signing in never creates a sandbox. The workspace request happens only once someone
-                  opens the console (frontend contract, Pages). */}
+                  opens the console. */}
               <Route path="/" component={LandingPage} />
               <Route path="/sign-in/*?" component={SignInPage} />
               <Route path="/sign-up/*?" component={SignUpPage} />
-              <Route>
-                <WorkspaceProvider>
-                  <Layout>
-                    <Switch>
-                      <Route path="/overview" component={OverviewPage} />
-                      <Route path="/customers" component={CustomersPage} />
-                      <Route path="/customers/:id" component={CustomerTimelinePage} />
-                      <Route path="/reconciliation" component={ReconciliationPage} />
-                      <Route path="/exceptions" component={ExceptionsPage} />
-                      <Route path="/policies" component={PoliciesPage} />
-                      <Route path="/mandates" component={MandatesPage} />
-                      <Route path="/collections" component={CollectionsPage} />
-                      <Route path="/reports" component={ReportsPage} />
-                      <Route path="/evidence" component={EvidencePage} />
-                      <Route path="/audit" component={AuditPage} />
-                      <Route path="/settings" component={SettingsPage} />
-                      <Route component={NotFound} />
-                    </Switch>
-                  </Layout>
-                </WorkspaceProvider>
-              </Route>
+              <Route component={Console} />
             </Switch>
           </RoutedErrorBoundary>
           <Toaster />

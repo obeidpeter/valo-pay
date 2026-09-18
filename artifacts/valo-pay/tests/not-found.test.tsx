@@ -1,0 +1,32 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { installFakeApi, type FakeApi } from "./fake-api";
+import { renderApp, screen, userEvent } from "./harness";
+
+let api: FakeApi;
+beforeEach(() => { api = installFakeApi(); });
+afterEach(() => api.uninstall());
+
+describe("not found", () => {
+  it("answers an address the console has no page for, without creating a sandbox", async () => {
+    const user = userEvent.setup();
+    renderApp("/reportz");
+    expect(await screen.findByRole("heading", { level: 1, name: "There is no page at this address" })).toBeTruthy();
+    expect(screen.getByText("/reportz")).toBeTruthy();
+    expect(document.title).toBe("Page not found · Valo Pay");
+    expect(screen.getByRole("link", { name: "Go to the overview" }).getAttribute("href")).toBe("/overview");
+    expect(screen.getAllByRole("link", { name: "Back to the start" }).map((link) => link.getAttribute("href"))).toEqual(["/", "/"]);
+    // No sidebar and no workspace request: the console was never mounted.
+    expect(screen.queryByRole("link", { name: /Audit Log/ })).toBeNull();
+    expect(api.calls).toEqual([]);
+
+    await user.click(screen.getByRole("link", { name: "Go to the overview" }));
+    expect(await screen.findByRole("heading", { name: "Operations Overview" })).toBeTruthy();
+    expect(api.calls.some((call) => call.path === "/v1/workspace")).toBe(true);
+  });
+
+  it("treats an address below a known page the same way", async () => {
+    renderApp("/customers/abc/def");
+    expect(await screen.findByRole("heading", { level: 1, name: "There is no page at this address" })).toBeTruthy();
+    expect(api.calls).toEqual([]);
+  });
+});
