@@ -61,7 +61,7 @@ try {
   }
   const siblingState = await inWorkspace(req, res, (context) => loadState(context, fixture.sibling));
   const readsBeforeDenial = mediaRequests;
-  await assert.rejects(() => downloadExport(siblingState, fixture.id), (error: any) => error.status === 404);
+  assert.throws(() => downloadExport(siblingState, fixture.id), (error: any) => error.status === 404);
   assert.equal(mediaRequests, readsBeforeDenial, "Denied exports must not touch object storage.");
   const corruptMetadata = structuredClone(fixture.state);
   corruptMetadata.records.find((record) => record.id === fixture.id)!.data.checksum = "incorrect";
