@@ -1,10 +1,11 @@
-import React, { ReactNode, useEffect } from 'react';
+import React, { ReactNode, useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { useWorkspace } from '@/lib/workspace-context';
 import { AuthShow, useSignOut } from '@/lib/auth';
 import { Shield, Home, Users, FileText, ArrowRightLeft, CheckSquare, AlertTriangle, FileBarChart, HardDrive, FileCheck, Settings, Lock, LogOut } from 'lucide-react';
 import { Button } from './ui/button';
 import { BrandLockup } from './brand';
+import { ErrorBoundary, ErrorNotice } from './error-boundary';
 
 export function Layout({ children }: { children: ReactNode }) {
   const { workspace, merchantId, setMerchantId } = useWorkspace();
@@ -24,7 +25,9 @@ export function Layout({ children }: { children: ReactNode }) {
     { href: '/audit', label: 'Audit Log', icon: HardDrive },
     { href: '/settings', label: 'Settings', icon: Settings },
   ];
-  useEffect(()=>{document.title=`${navItems.find(n=>n.href===location)?.label||"Customer timeline"} · Valo Pay`;},[location]);
+  // The title names the page, or says the page stopped working while the boundary below shows its notice.
+  const [pageError,setPageError]=useState<Error|null>(null);
+  useEffect(()=>{document.title=`${pageError?"Page error":navItems.find(n=>n.href===location)?.label||"Customer timeline"} · Valo Pay`;},[location,pageError]);
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -104,7 +107,8 @@ export function Layout({ children }: { children: ReactNode }) {
         {/* Main Content */}
         <main className="flex-1 overflow-auto bg-background">
           <div className="p-6 md:p-8 max-w-7xl mx-auto">
-            {children}
+            {/* A page that stops working keeps the sidebar and the lender selector as the way out. */}
+            <ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{children}</ErrorBoundary>
           </div>
         </main>
       </div>
