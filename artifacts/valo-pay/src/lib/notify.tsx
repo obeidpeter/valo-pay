@@ -14,8 +14,10 @@ import { ToastAction } from '@/components/ui/toast';
  */
 export const DONE_DURATION_MS = 6000;
 
+/** An action offered on a done notice, such as Open for a pack the browser kept closed. */
 export type NoticeAction = { label: string; altText: string; onClick: () => void };
 
+/** A done notice: what happened and where its result is; it goes away on its own. */
 export function notifyDone(title: string, description?: string, action?: NoticeAction) {
   return toast({
     title,
@@ -26,6 +28,7 @@ export function notifyDone(title: string, description?: string, action?: NoticeA
   });
 }
 
+/** A problem notice: what did not happen and what to do; it stays until dismissed. */
 export function notifyProblem(title: string, description?: string) {
   return toast({ title, description, variant: 'destructive', type: 'foreground', duration: Infinity });
 }

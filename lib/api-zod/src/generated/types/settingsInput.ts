@@ -6,6 +6,9 @@
  * OpenAPI spec version: 1.0.0
  */
 
+/**
+ * The execution settings to change; every field is optional.
+ */
 export interface SettingsInput {
   executionStart?: number;
   executionEnd?: number;

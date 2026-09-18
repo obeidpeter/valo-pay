@@ -7,6 +7,9 @@
  */
 import type { Gate } from './gate';
 
+/**
+ * The prerequisites and decisions, the sandbox's limitations, and the cash and burn figures used for the funding decision.
+ */
 export interface Gates {
   prerequisites: Gate[];
   decisions: Gate[];

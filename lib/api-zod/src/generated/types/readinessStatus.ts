@@ -5,15 +5,14 @@
  * Valo Pay Stage 1 observation-first sandbox API. All monetary fields are integer kobo. Live lender data and all outbound provider instructions are blocked until production readiness is verified.
  * OpenAPI spec version: 1.0.0
  */
-import type { SchedulerStatus } from './schedulerStatus';
+import type { ReadinessStatusChecks } from './readinessStatusChecks';
+import type { ReadinessStatusStatus } from './readinessStatusStatus';
 
 /**
- * The liveness answer: the build, when the process started, its uptime and what the close scheduler is doing.
+ * The readiness answer: ok, or degraded while the database does not answer.
  */
-export interface HealthStatus {
-  status: string;
+export interface ReadinessStatus {
+  status: ReadinessStatusStatus;
   build: string;
-  startedAt: string;
-  uptimeSeconds: number;
-  scheduler: SchedulerStatus;
+  checks: ReadinessStatusChecks;
 }

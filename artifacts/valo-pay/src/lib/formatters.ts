@@ -6,8 +6,11 @@
  * zone label never changes.
  */
 export const DATE_LOCALE = 'en-GB';
+/** Nigerian English for numbers and money. */
 export const MARKET_LOCALE = 'en-NG';
+/** The lender's operating zone, applied to every instant shown. */
 export const TIME_ZONE = 'Africa/Lagos';
+/** The zone's name as shown after a time. */
 export const TIME_ZONE_LABEL = 'WAT';
 
 const DAY_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -17,6 +20,7 @@ const naira = new Intl.NumberFormat(MARKET_LOCALE, { style: 'currency', currency
 const number = new Intl.NumberFormat(MARKET_LOCALE);
 const plural = new Intl.PluralRules(MARKET_LOCALE);
 
+/** An amount in kobo as naira: ₦25,000.00. */
 export function formatKobo(kobo: number): string {
   return naira.format(kobo / 100);
 }

@@ -7,8 +7,17 @@
  */
 
 export type ListRecordsParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
 merchantId: string;
+/**
+ * Text matched, ignoring case and accents, against the name, reference, status and data.
+ */
 search?: string;
+/**
+ * Only records in this status; omitted or "all" for every status.
+ */
 status?: string;
 /**
  * Page size; omitted returns the whole filtered set (at most 500 per page).

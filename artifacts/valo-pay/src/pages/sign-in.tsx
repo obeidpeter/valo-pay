@@ -107,6 +107,7 @@ function Unavailable({ action }: { action: 'sign in' | 'create an account' }) {
   );
 }
 
+/** The sign-in page: Clerk's form beside what signing in changes, or the unavailable notice on a host without a key. */
 export function SignInPage() {
   const clerkAppearance = useClerkAppearance();
   return (
@@ -121,6 +122,7 @@ export function SignInPage() {
   );
 }
 
+/** The sign-up page, in the same shell. */
 export function SignUpPage() {
   const clerkAppearance = useClerkAppearance();
   return (

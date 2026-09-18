@@ -8,47 +8,54 @@
 import * as zod from 'zod';
 
 
-export const SchedulerRun = zod.object({
-  "runId": zod.string(),
-  "at": zod.string(),
-  "durationMs": zod.number(),
-  "initialised": zod.number(),
-  "examined": zod.number(),
-  "closed": zod.number(),
-  "skipped": zod.number(),
-  "failed": zod.number()
-})
-
-export const SchedulerStatus = zod.object({
-  "state": zod.enum(["not_started", "running", "off", "stopped"]),
-  "intervalMs": zod.number().nullable(),
-  "ticks": zod.number(),
-  "lastTickAt": zod.string().nullable(),
-  "lastRun": SchedulerRun.nullable()
-})
-
+/**
+ * Never touches the database, so a database outage does not read as a dead process. Needs no sandbox or sign-in.
+ * @summary Liveness: the process answers, with its build, uptime and scheduler state
+ */
 export const HealthCheckResponse = zod.object({
   "status": zod.string(),
   "build": zod.string(),
   "startedAt": zod.string(),
-  "uptimeSeconds": zod.number(),
-  "scheduler": SchedulerStatus
-})
+  "uptimeSeconds": zod.number().int(),
+  "scheduler": zod.object({
+  "state": zod.enum(['not_started', 'running', 'off', 'stopped']),
+  "intervalMs": zod.number().int().nullable(),
+  "ticks": zod.number().int(),
+  "lastTickAt": zod.string().nullable(),
+  "lastRun": zod.union([zod.object({
+  "runId": zod.string(),
+  "at": zod.string(),
+  "durationMs": zod.number().int(),
+  "initialised": zod.number().int(),
+  "examined": zod.number().int(),
+  "closed": zod.number().int(),
+  "skipped": zod.number().int(),
+  "failed": zod.number().int()
+}).describe('The last scheduler pass that found work: its id, when it ran, how long it took and what it did.'),zod.null()])
+}).describe('Whether closes are scheduled in this process, how often it looks, when it last looked and its last pass with work.')
+}).describe('The liveness answer: the build, when the process started, its uptime and what the close scheduler is doing.')
 
-export const DatabaseCheck = zod.object({
-  "status": zod.enum(["ok", "failed"]),
-  "latencyMs": zod.number()
-})
 
+/**
+ * Answers 503 with status degraded while the database does not answer within the check's time limit; the reason is in the log, not the answer. Needs no sandbox or sign-in.
+ * @summary Readiness: one bounded round trip to the database
+ */
 export const ReadinessCheckResponse = zod.object({
-  "status": zod.enum(["ok", "degraded"]),
+  "status": zod.enum(['ok', 'degraded']),
   "build": zod.string(),
   "checks": zod.object({
-    "database": DatabaseCheck
-  })
+  "database": zod.object({
+  "status": zod.enum(['ok', 'failed']),
+  "latencyMs": zod.number().int()
+}).describe('One round trip to the database and how long it took.')
 })
+}).describe('The readiness answer: ok, or degraded while the database does not answer.')
 
 
+/**
+ * On a first visit an anonymous caller gets a new synthetic sandbox with two lenders; a signed-in person gets their own workspace. New sandboxes are limited per client address.
+ * @summary The caller's workspace: its lenders, roles and actor
+ */
 export const GetWorkspaceResponse = zod.object({
   "name": zod.string(),
   "environment": zod.string(),
@@ -67,14 +74,18 @@ export const GetWorkspaceResponse = zod.object({
   "killSwitch": zod.boolean(),
   "preDataReady": zod.boolean(),
   "preLiveReady": zod.boolean()
-})),
+}).describe('A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags.')),
   "roles": zod.array(zod.string()),
   "productionEnabled": zod.boolean()
-})
+}).describe('The caller\'s workspace: who is acting, in which role, whether they signed in, and the lenders and roles available.')
 
 
+/**
+ * Metrics, queues, recent activity, upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02).
+ * @summary The operations overview for one lender
+ */
 export const GetOverviewQueryParams = zod.object({
-  "merchantId": zod.coerce.string()
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
 })
 
 export const GetOverviewResponse = zod.object({
@@ -84,14 +95,14 @@ export const GetOverviewResponse = zod.object({
   "value": zod.number(),
   "unit": zod.string(),
   "detail": zod.string()
-})),
+}).describe('A named measurement with its unit and the basis it was derived from.')),
   "queues": zod.array(zod.object({
   "key": zod.string(),
   "label": zod.string(),
   "value": zod.number(),
   "unit": zod.string(),
   "detail": zod.string()
-})),
+}).describe('A named measurement with its unit and the basis it was derived from.')),
   "activity": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -103,8 +114,8 @@ export const GetOverviewResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-})),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
   "upcoming": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -116,8 +127,8 @@ export const GetOverviewResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-})),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
   "mode": zod.string(),
   "environment": zod.string(),
   "lastClose": zod.string(),
@@ -131,12 +142,16 @@ export const GetOverviewResponse = zod.object({
   "count": zod.number().int().optional(),
   "since": zod.string().optional(),
   "linkedRecordId": zod.string().optional()
-}))
-})
+}).describe('An NFR-OBS-02 alert: what condition holds, how severe it is, since when and the record it points at.'))
+}).describe('The overview: metrics, queues, recent activity, upcoming due items, the close schedule and the alerts.')
 
 
+/**
+ * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync.
+ * @summary Records of one kind for one lender, newest first
+ */
 export const ListRecordsParams = zod.object({
-  "kind": zod.coerce.string()
+  "kind": zod.coerce.string().describe('Record kind: one of the shared schema\'s recordKinds (customers, mandates, due-items, attempts, observations, payments, ...).')
 })
 
 export const listRecordsQueryLimitMax = 500;
@@ -146,9 +161,9 @@ export const listRecordsQueryOffsetMin = 0;
 
 
 export const ListRecordsQueryParams = zod.object({
-  "merchantId": zod.coerce.string(),
-  "search": zod.coerce.string().optional(),
-  "status": zod.coerce.string().optional(),
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "search": zod.coerce.string().optional().describe('Text matched, ignoring case and accents, against the name, reference, status and data.'),
+  "status": zod.coerce.string().optional().describe('Only records in this status; omitted or "all" for every status.'),
   "limit": zod.coerce.number().int().min(1).max(listRecordsQueryLimitMax).optional().describe('Page size; omitted returns the whole filtered set (at most 500 per page).'),
   "offset": zod.coerce.number().int().min(listRecordsQueryOffsetMin).optional().describe('Rows to skip in the newest-first order.'),
   "updatedSince": zod.coerce.string().optional().describe('ISO timestamp; only records updated at or after it (incremental sync).')
@@ -166,19 +181,23 @@ export const ListRecordsResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-})),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
   "total": zod.number().int(),
   "nextOffset": zod.number().int().optional()
-})
+}).describe('One page of records with the filtered total; nextOffset is present while more rows remain.')
 
 
+/**
+ * Validated against the kind's data schema; a status only a domain action may set is refused.
+ * @summary Create a record of an editable kind
+ */
 export const CreateRecordParams = zod.object({
-  "kind": zod.coerce.string()
+  "kind": zod.coerce.string().describe('Record kind: one of the shared schema\'s recordKinds (customers, mandates, due-items, attempts, observations, payments, ...).')
 })
 
 export const CreateRecordQueryParams = zod.object({
-  "merchantId": zod.coerce.string()
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
 })
 
 export const createRecordBodyAmountKoboMin = 0;
@@ -191,8 +210,8 @@ export const CreateRecordBody = zod.object({
   "reference": zod.string().optional(),
   "amountKobo": zod.number().int().min(createRecordBodyAmountKoboMin).optional(),
   "customerId": zod.string().optional(),
-  "data": zod.record(zod.string(), zod.unknown()).optional()
-})
+  "data": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A new record: only the name is required; the kind\'s default status applies when none is given.')
 
 export const CreateRecordResponse = zod.object({
   "id": zod.string(),
@@ -205,17 +224,21 @@ export const CreateRecordResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-})
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')
 
 
+/**
+ * Editable kinds only; an approved, preregistered or closed version is immutable, and deletion does not exist.
+ * @summary Update a record
+ */
 export const UpdateRecordParams = zod.object({
-  "kind": zod.coerce.string(),
-  "id": zod.coerce.string()
+  "kind": zod.coerce.string().describe('Record kind: one of the shared schema\'s recordKinds (customers, mandates, due-items, attempts, observations, payments, ...).'),
+  "id": zod.coerce.string().describe('The record\'s id.')
 })
 
 export const UpdateRecordQueryParams = zod.object({
-  "merchantId": zod.coerce.string()
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
 })
 
 export const updateRecordBodyAmountKoboMin = 0;
@@ -228,8 +251,8 @@ export const UpdateRecordBody = zod.object({
   "reference": zod.string().optional(),
   "amountKobo": zod.number().int().min(updateRecordBodyAmountKoboMin).optional(),
   "customerId": zod.string().optional(),
-  "data": zod.record(zod.string(), zod.unknown()).optional()
-})
+  "data": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('The fields to change on a record; omitted fields keep their values.')
 
 export const UpdateRecordResponse = zod.object({
   "id": zod.string(),
@@ -242,20 +265,24 @@ export const UpdateRecordResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-})
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')
 
 
+/**
+ * Every action is audited, most require a reason, and the persona's role applies; the catalogue of actions is in docs/frontend-contract.md.
+ * @summary Run a domain action on the lender's state
+ */
 export const PerformActionQueryParams = zod.object({
-  "merchantId": zod.coerce.string()
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
 })
 
 export const PerformActionBody = zod.object({
   "action": zod.string(),
   "recordId": zod.string().optional(),
   "reason": zod.string().optional(),
-  "data": zod.record(zod.string(), zod.unknown()).optional()
-})
+  "data": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('An action to run: its name, the record it applies to, the reason for it and any data it needs.')
 
 export const PerformActionResponse = zod.object({
   "message": zod.string(),
@@ -270,14 +297,18 @@ export const PerformActionResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-}).optional(),
-  "data": zod.record(zod.string(), zod.unknown())
-})
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).optional().describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('What an action did, in words, with the record it produced or changed and any data it returns.')
 
 
+/**
+ * commit=false validates every row and reports each; commit=true persists all rows or none. syntheticOnly must be true: no real lender data.
+ * @summary Preview or commit a synthetic CSV import
+ */
 export const ImportRecordsQueryParams = zod.object({
-  "merchantId": zod.coerce.string()
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
 })
 
 export const ImportRecordsBody = zod.object({
@@ -285,8 +316,8 @@ export const ImportRecordsBody = zod.object({
   "csv": zod.string(),
   "syntheticOnly": zod.boolean(),
   "commit": zod.boolean(),
-  "mapping": zod.record(zod.string(), zod.unknown()).optional()
-})
+  "mapping": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A synthetic CSV to preview or commit for one kind, with an optional column mapping.')
 
 export const ImportRecordsResponse = zod.object({
   "valid": zod.number().int(),
@@ -296,16 +327,20 @@ export const ImportRecordsResponse = zod.object({
   "row": zod.number().int(),
   "status": zod.string(),
   "message": zod.string()
-}))
-})
+}).describe('The outcome of one imported row.'))
+}).describe('How many rows were valid, invalid and imported, and each row\'s outcome.')
 
 
+/**
+ * Every event, mandate, due item and payment, with each retry decision as it was recorded.
+ * @summary A customer's position and complete timeline
+ */
 export const GetCustomerTimelineParams = zod.object({
-  "id": zod.coerce.string()
+  "id": zod.coerce.string().describe('The record\'s id.')
 })
 
 export const GetCustomerTimelineQueryParams = zod.object({
-  "merchantId": zod.coerce.string()
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
 })
 
 export const GetCustomerTimelineResponse = zod.object({
@@ -320,9 +355,9 @@ export const GetCustomerTimelineResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-}),
-  "position": zod.record(zod.string(), zod.unknown()),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'),
+  "position": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
   "events": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -334,8 +369,8 @@ export const GetCustomerTimelineResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-})),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
   "mandates": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -347,8 +382,8 @@ export const GetCustomerTimelineResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-})),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
   "dueItems": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -360,8 +395,8 @@ export const GetCustomerTimelineResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-})),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
   "payments": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -373,13 +408,17 @@ export const GetCustomerTimelineResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-}))
-})
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'))
+}).describe('A customer, their derived position, and every related event, mandate, due item and payment.')
 
 
+/**
+ * Metrics, the billing statement and invoices, the recovery experiment, operational measurement (Test 5) and the daily closes with their REC-07 reports.
+ * @summary Reports for one lender
+ */
 export const GetReportsQueryParams = zod.object({
-  "merchantId": zod.coerce.string()
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
 })
 
 export const GetReportsResponse = zod.object({
@@ -389,10 +428,10 @@ export const GetReportsResponse = zod.object({
   "value": zod.number(),
   "unit": zod.string(),
   "detail": zod.string()
-})),
-  "billing": zod.record(zod.string(), zod.unknown()),
-  "experiment": zod.record(zod.string(), zod.unknown()),
-  "operational": zod.record(zod.string(), zod.unknown()),
+}).describe('A named measurement with its unit and the basis it was derived from.')),
+  "billing": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
+  "experiment": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
+  "operational": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
   "closes": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -404,13 +443,17 @@ export const GetReportsResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-}))
-})
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'))
+}).describe('The reports: metrics, billing, the experiment, operational measurement and the daily closes.')
 
 
+/**
+ * Prerequisites and decisions, always unproven on synthetic data, and the limitations the sandbox cannot remove.
+ * @summary Production readiness gates
+ */
 export const GetGatesQueryParams = zod.object({
-  "merchantId": zod.coerce.string()
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
 })
 
 export const GetGatesResponse = zod.object({
@@ -421,7 +464,7 @@ export const GetGatesResponse = zod.object({
   "status": zod.string(),
   "evidence": zod.string(),
   "due": zod.string()
-})),
+}).describe('One readiness gate: what it needs, its status and the evidence recorded.')),
   "decisions": zod.array(zod.object({
   "id": zod.string(),
   "title": zod.string(),
@@ -429,15 +472,19 @@ export const GetGatesResponse = zod.object({
   "status": zod.string(),
   "evidence": zod.string(),
   "due": zod.string()
-})),
+}).describe('One readiness gate: what it needs, its status and the evidence recorded.')),
   "limitations": zod.array(zod.string()),
   "cashKobo": zod.number().int(),
   "burnKobo": zod.number().int()
-})
+}).describe('The prerequisites and decisions, the sandbox\'s limitations, and the cash and burn figures used for the funding decision.')
 
 
+/**
+ * Permissions are those of the caller's current persona.
+ * @summary A lender's settings, permissions, integrations, members and calendar
+ */
 export const GetSettingsQueryParams = zod.object({
-  "merchantId": zod.coerce.string()
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
 })
 
 export const GetSettingsResponse = zod.object({
@@ -453,9 +500,9 @@ export const GetSettingsResponse = zod.object({
   "killSwitch": zod.boolean(),
   "preDataReady": zod.boolean(),
   "preLiveReady": zod.boolean()
-}),
-  "settings": zod.record(zod.string(), zod.unknown()),
-  "permissions": zod.record(zod.string(), zod.unknown()),
+}).describe('A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags.'),
+  "settings": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
+  "permissions": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
   "integrations": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -467,8 +514,8 @@ export const GetSettingsResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-})),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
   "members": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -480,8 +527,8 @@ export const GetSettingsResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-})),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
   "calendar": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -493,13 +540,17 @@ export const GetSettingsResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-}))
-})
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'))
+}).describe('A lender\'s settings and the caller\'s permissions, with integrations, members and the business calendar.')
 
 
+/**
+ * The execution window, authorisation mode, contact route, thresholds, the daily close time (WAT) and whether closes are scheduled; Admin only.
+ * @summary Change a lender's execution settings
+ */
 export const UpdateSettingsQueryParams = zod.object({
-  "merchantId": zod.coerce.string()
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
 })
 
 export const UpdateSettingsBody = zod.object({
@@ -514,7 +565,7 @@ export const UpdateSettingsBody = zod.object({
   "notificationCostAlertKobo": zod.number().int().optional(),
   "closeTime": zod.string().optional(),
   "scheduledCloseEnabled": zod.boolean().optional()
-})
+}).describe('The execution settings to change; every field is optional.')
 
 export const UpdateSettingsResponse = zod.object({
   "merchant": zod.object({
@@ -529,9 +580,9 @@ export const UpdateSettingsResponse = zod.object({
   "killSwitch": zod.boolean(),
   "preDataReady": zod.boolean(),
   "preLiveReady": zod.boolean()
-}),
-  "settings": zod.record(zod.string(), zod.unknown()),
-  "permissions": zod.record(zod.string(), zod.unknown()),
+}).describe('A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags.'),
+  "settings": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
+  "permissions": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
   "integrations": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -543,8 +594,8 @@ export const UpdateSettingsResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-})),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
   "members": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -556,8 +607,8 @@ export const UpdateSettingsResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-})),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
   "calendar": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -569,45 +620,61 @@ export const UpdateSettingsResponse = zod.object({
   "customerId": zod.string(),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
-  "data": zod.record(zod.string(), zod.unknown())
-}))
-})
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'))
+}).describe('A lender\'s settings and the caller\'s permissions, with integrations, members and the business calendar.')
 
 
+/**
+ * A record kind, the gate pack, the billing statement or a customer's dispute pack, as JSON, CSV or PDF; stored privately with a SHA-256 checksum and recorded as an export.
+ * @summary Generate a private export
+ */
 export const CreateExportQueryParams = zod.object({
-  "merchantId": zod.coerce.string()
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
 })
 
 export const CreateExportBody = zod.object({
   "kind": zod.string(),
   "customerId": zod.string().optional(),
   "format": zod.enum(['json', 'csv', 'pdf'])
-})
+}).describe('What to export (a record kind, gate-pack, billing, dispute-pack or customer-pack with a customerId) and in which format.')
 
 export const CreateExportResponse = zod.object({
   "id": zod.string(),
   "downloadUrl": zod.string(),
   "checksum": zod.string(),
   "generatedAt": zod.string()
-})
+}).describe('The export\'s id, its download address on this API, its SHA-256 checksum and when it was generated.')
 
 
+/**
+ * The bytes are read from private storage and checked against the recorded SHA-256 before any are sent.
+ * @summary Download an export
+ */
 export const DownloadExportParams = zod.object({
-  "id": zod.coerce.string()
+  "id": zod.coerce.string().describe('The record\'s id.')
 })
 
 export const DownloadExportQueryParams = zod.object({
-  "merchantId": zod.coerce.string()
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
 })
 
 export const DownloadExportResponse = zod.unknown()
 
 
+/**
+ * The versioned public contract the console and the generated clients are built from.
+ * @summary This specification
+ */
 export const GetOpenApiDocumentResponse = zod.record(zod.string(), zod.unknown())
 
 
+/**
+ * Always 403: no provider adapter is configured and no event is processed.
+ * @summary Provider webhook ingress, disabled in the sandbox
+ */
 export const DisabledProviderWebhookParams = zod.object({
-  "provider": zod.coerce.string()
+  "provider": zod.coerce.string().describe('Provider name; every provider\'s ingress is disabled in the sandbox.')
 })
 
 export const DisabledProviderWebhookResponse = zod.void()

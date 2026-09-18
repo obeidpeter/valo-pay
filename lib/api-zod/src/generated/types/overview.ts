@@ -9,6 +9,9 @@ import type { Alert } from './alert';
 import type { Metric } from './metric';
 import type { ValopayRecord } from './valopayRecord';
 
+/**
+ * The overview: metrics, queues, recent activity, upcoming due items, the close schedule and the alerts.
+ */
 export interface Overview {
   metrics: Metric[];
   queues: Metric[];

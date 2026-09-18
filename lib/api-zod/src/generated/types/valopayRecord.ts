@@ -7,6 +7,9 @@
  */
 import type { RecordData } from './recordData';
 
+/**
+ * A stored record of any kind, with its lender, status, reference, amount in kobo and data.
+ */
 export interface ValopayRecord {
   id: string;
   merchantId: string;

@@ -6,6 +6,9 @@
  * OpenAPI spec version: 1.0.0
  */
 
+/**
+ * A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags.
+ */
 export interface Merchant {
   id: string;
   name: string;

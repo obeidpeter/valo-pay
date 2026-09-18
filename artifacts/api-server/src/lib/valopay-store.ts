@@ -8,8 +8,11 @@ import { recordsOf } from "../domain/records";
 import { seedMerchant } from "./valopay-seed";
 import { createCreationLimiter } from "./creation-limit";
 
+/** The demo persona roles, the same list as the shared schema's. */
 export const roles = ["Admin", "Operations", "Finance", "Compliance reviewer", "Read-only"];
+/** SHA-256 of a string, as hex. */
 export const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+/** A stable JSON form with sorted keys, so two states with the same content hash the same. */
 export function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   // Preserve the historical byte format regardless of JSONB key order.
@@ -39,6 +42,7 @@ export interface StoreContext extends Context {
 const sessions = new WeakMap<StoreContext, Session>();
 const databaseConflictCodes = new Set(["23503", "23505", "23514", "P0001"]);
 
+/** Throws an error carrying the HTTP status the error handler answers with (400 unless given). */
 export function fail(message: string, status = 400): never {
   throw Object.assign(new Error(message), { status });
 }
@@ -92,6 +96,7 @@ function scopedMerchantQuery(lock: MerchantLock = "none") {
     WHERE m.id=$1 AND m.workspace_id=$2 AND w.id=$2 AND w.principal_hash=$3${lock === "update" ? " FOR UPDATE OF m" : lock === "share" ? " FOR SHARE OF m" : ""}`;
 }
 
+/** Runs a request's work in one transaction on the caller's workspace: the principal lock, the sandbox bootstrap on a first visit, the persona's role, and the database clock as the request's time. */
 export async function inWorkspace<T>(req: Request, res: Response, fn: (context: StoreContext) => Promise<T>): Promise<T> {
   const identity = principalFor(req, res);
   const client = await pool.connect();
@@ -194,6 +199,7 @@ export async function loadState(context: StoreContext, merchantId: string, lock:
   return state;
 }
 
+/** The stored answer for an idempotency key, when the request was already made. */
 export async function findIdempotency(context: StoreContext, id: string) {
   const session = sessionFor(context);
   const merchantId = lockedMerchant(session);
@@ -204,6 +210,7 @@ export async function findIdempotency(context: StoreContext, id: string) {
     [id, merchantId, session.workspace.id, session.principal],
   )).rows[0];
 }
+/** Stores the answer under the key with the request's fingerprint, so a replay with different input is refused. */
 export async function saveIdempotency(context: StoreContext, id: string, requestHash: string, response: unknown) {
   const session = sessionFor(context);
   const merchantId = lockedMerchant(session);
@@ -223,6 +230,7 @@ export async function saveIdempotency(context: StoreContext, id: string, request
     throw error;
   }
 }
+/** Switches the workspace's demo persona. */
 export async function changeRole(context: StoreContext, role: string) {
   const session = sessionFor(context);
   if (!roles.includes(role)) fail("Unknown sandbox persona.");
@@ -564,6 +572,7 @@ export async function closeDatabase(): Promise<void> {
   await pool.end();
 }
 
+/** Appends a hash-chained audit entry for an action to the lender's state. */
 export function appendAudit(state: DomainState, ctx: Context, action: string, objectId: string, summary: string, changes?: unknown): ValopayRecord {
   const chain = recordsOf(state, "audit").sort((a, b) => Number(a.data.sequence || 0) - Number(b.data.sequence || 0));
   const previous = chain.at(-1);
@@ -572,6 +581,7 @@ export function appendAudit(state: DomainState, ctx: Context, action: string, ob
   state.records.push(record);
   return record;
 }
+/** Walks the chain: valid when every entry's sequence, previous hash and digest agree; returns the count and the head hash. */
 export function verifyAudit(state: DomainState) {
   const chain = recordsOf(state, "audit").sort((a, b) => Number(a.data.sequence) - Number(b.data.sequence));
   let hash = "GENESIS", valid = true, index = 0;

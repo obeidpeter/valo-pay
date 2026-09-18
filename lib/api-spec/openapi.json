@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Api",
+    "title": "Valo Pay sandbox API",
     "version": "1.0.0",
     "description": "Valo Pay Stage 1 observation-first sandbox API. All monetary fields are integer kobo. Live lender data and all outbound provider instructions are blocked until production readiness is verified."
   },
@@ -41,7 +41,9 @@
           "409": {
             "description": "Conflict"
           }
-        }
+        },
+        "summary": "Liveness: the process answers, with its build, uptime and scheduler state",
+        "description": "Never touches the database, so a database outage does not read as a dead process. Needs no sandbox or sign-in."
       }
     },
     "/readyz": {
@@ -84,7 +86,9 @@
               }
             }
           }
-        }
+        },
+        "summary": "Readiness: one bounded round trip to the database",
+        "description": "Answers 503 with status degraded while the database does not answer within the check's time limit; the reason is in the log, not the answer. Needs no sandbox or sign-in."
       }
     },
     "/v1/workspace": {
@@ -117,7 +121,9 @@
           "409": {
             "description": "Conflict"
           }
-        }
+        },
+        "summary": "The caller's workspace: its lenders, roles and actor",
+        "description": "On a first visit an anonymous caller gets a new synthetic sandbox with two lenders; a signed-in person gets their own workspace. New sandboxes are limited per client address."
       }
     },
     "/v1/overview": {
@@ -133,7 +139,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
           }
         ],
         "responses": {
@@ -159,7 +166,9 @@
           "409": {
             "description": "Conflict"
           }
-        }
+        },
+        "summary": "The operations overview for one lender",
+        "description": "Metrics, queues, recent activity, upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02)."
       }
     },
     "/v1/records/{kind}": {
@@ -175,7 +184,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Record kind: one of the shared schema's recordKinds (customers, mandates, due-items, attempts, observations, payments, ...)."
           },
           {
             "name": "merchantId",
@@ -183,21 +193,24 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
           },
           {
             "name": "search",
             "in": "query",
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Text matched, ignoring case and accents, against the name, reference, status and data."
           },
           {
             "name": "status",
             "in": "query",
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Only records in this status; omitted or \"all\" for every status."
           },
           {
             "name": "limit",
@@ -250,7 +263,9 @@
           "409": {
             "description": "Conflict"
           }
-        }
+        },
+        "summary": "Records of one kind for one lender, newest first",
+        "description": "Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync."
       },
       "post": {
         "operationId": "createRecord",
@@ -264,7 +279,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Record kind: one of the shared schema's recordKinds (customers, mandates, due-items, attempts, observations, payments, ...)."
           },
           {
             "name": "merchantId",
@@ -272,7 +288,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
           }
         ],
         "responses": {
@@ -308,7 +325,9 @@
               }
             }
           }
-        }
+        },
+        "summary": "Create a record of an editable kind",
+        "description": "Validated against the kind's data schema; a status only a domain action may set is refused."
       }
     },
     "/v1/records/{kind}/{id}": {
@@ -324,7 +343,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Record kind: one of the shared schema's recordKinds (customers, mandates, due-items, attempts, observations, payments, ...)."
           },
           {
             "name": "id",
@@ -332,7 +352,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The record's id."
           },
           {
             "name": "merchantId",
@@ -340,7 +361,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
           }
         ],
         "responses": {
@@ -376,7 +398,9 @@
               }
             }
           }
-        }
+        },
+        "summary": "Update a record",
+        "description": "Editable kinds only; an approved, preregistered or closed version is immutable, and deletion does not exist."
       }
     },
     "/v1/actions": {
@@ -392,7 +416,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
           }
         ],
         "responses": {
@@ -428,7 +453,9 @@
               }
             }
           }
-        }
+        },
+        "summary": "Run a domain action on the lender's state",
+        "description": "Every action is audited, most require a reason, and the persona's role applies; the catalogue of actions is in docs/frontend-contract.md."
       }
     },
     "/v1/imports": {
@@ -444,7 +471,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
           }
         ],
         "responses": {
@@ -480,7 +508,9 @@
               }
             }
           }
-        }
+        },
+        "summary": "Preview or commit a synthetic CSV import",
+        "description": "commit=false validates every row and reports each; commit=true persists all rows or none. syntheticOnly must be true: no real lender data."
       }
     },
     "/v1/customers/{id}/timeline": {
@@ -496,7 +526,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The record's id."
           },
           {
             "name": "merchantId",
@@ -504,7 +535,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
           }
         ],
         "responses": {
@@ -530,7 +562,9 @@
           "409": {
             "description": "Conflict"
           }
-        }
+        },
+        "summary": "A customer's position and complete timeline",
+        "description": "Every event, mandate, due item and payment, with each retry decision as it was recorded."
       }
     },
     "/v1/reports": {
@@ -546,7 +580,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
           }
         ],
         "responses": {
@@ -572,7 +607,9 @@
           "409": {
             "description": "Conflict"
           }
-        }
+        },
+        "summary": "Reports for one lender",
+        "description": "Metrics, the billing statement and invoices, the recovery experiment, operational measurement (Test 5) and the daily closes with their REC-07 reports."
       }
     },
     "/v1/gates": {
@@ -588,7 +625,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
           }
         ],
         "responses": {
@@ -614,7 +652,9 @@
           "409": {
             "description": "Conflict"
           }
-        }
+        },
+        "summary": "Production readiness gates",
+        "description": "Prerequisites and decisions, always unproven on synthetic data, and the limitations the sandbox cannot remove."
       }
     },
     "/v1/settings": {
@@ -630,7 +670,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
           }
         ],
         "responses": {
@@ -656,7 +697,9 @@
           "409": {
             "description": "Conflict"
           }
-        }
+        },
+        "summary": "A lender's settings, permissions, integrations, members and calendar",
+        "description": "Permissions are those of the caller's current persona."
       },
       "patch": {
         "operationId": "updateSettings",
@@ -670,7 +713,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
           }
         ],
         "responses": {
@@ -706,7 +750,9 @@
               }
             }
           }
-        }
+        },
+        "summary": "Change a lender's execution settings",
+        "description": "The execution window, authorisation mode, contact route, thresholds, the daily close time (WAT) and whether closes are scheduled; Admin only."
       }
     },
     "/v1/exports": {
@@ -722,7 +768,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
           }
         ],
         "responses": {
@@ -758,7 +805,9 @@
               }
             }
           }
-        }
+        },
+        "summary": "Generate a private export",
+        "description": "A record kind, the gate pack, the billing statement or a customer's dispute pack, as JSON, CSV or PDF; stored privately with a SHA-256 checksum and recorded as an export."
       }
     },
     "/v1/exports/{id}/download": {
@@ -774,7 +823,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The record's id."
           },
           {
             "name": "merchantId",
@@ -782,7 +832,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
           }
         ],
         "responses": {
@@ -800,7 +851,9 @@
           "404": {
             "description": "Export not found in tenant"
           }
-        }
+        },
+        "summary": "Download an export",
+        "description": "The bytes are read from private storage and checked against the recorded SHA-256 before any are sent."
       }
     },
     "/v1/openapi.json": {
@@ -821,7 +874,9 @@
               }
             }
           }
-        }
+        },
+        "summary": "This specification",
+        "description": "The versioned public contract the console and the generated clients are built from."
       }
     },
     "/v1/webhooks/{provider}": {
@@ -837,14 +892,17 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Provider name; every provider's ingress is disabled in the sandbox."
           }
         ],
         "responses": {
           "403": {
             "description": "Disabled until a provider-specific signed adapter is configured. No events are processed."
           }
-        }
+        },
+        "summary": "Provider webhook ingress, disabled in the sandbox",
+        "description": "Always 403: no provider adapter is configured and no event is processed."
       }
     }
   },
@@ -875,7 +933,8 @@
           "startedAt",
           "uptimeSeconds",
           "scheduler"
-        ]
+        ],
+        "description": "The liveness answer: the build, when the process started, its uptime and what the close scheduler is doing."
       },
       "SchedulerRun": {
         "type": "object",
@@ -914,7 +973,8 @@
           "closed",
           "skipped",
           "failed"
-        ]
+        ],
+        "description": "The last scheduler pass that found work: its id, when it ran, how long it took and what it did."
       },
       "SchedulerStatus": {
         "type": "object",
@@ -960,7 +1020,8 @@
           "ticks",
           "lastTickAt",
           "lastRun"
-        ]
+        ],
+        "description": "Whether closes are scheduled in this process, how often it looks, when it last looked and its last pass with work."
       },
       "DatabaseCheck": {
         "type": "object",
@@ -979,7 +1040,8 @@
         "required": [
           "status",
           "latencyMs"
-        ]
+        ],
+        "description": "One round trip to the database and how long it took."
       },
       "ReadinessStatus": {
         "type": "object",
@@ -1010,11 +1072,13 @@
           "status",
           "build",
           "checks"
-        ]
+        ],
+        "description": "The readiness answer: ok, or degraded while the database does not answer."
       },
       "RecordData": {
         "type": "object",
-        "additionalProperties": {}
+        "additionalProperties": {},
+        "description": "A record's data: the fields the kind's schema declares, and anything else a caller stored."
       },
       "ValopayRecord": {
         "type": "object",
@@ -1065,7 +1129,8 @@
           "createdAt",
           "updatedAt",
           "data"
-        ]
+        ],
+        "description": "A stored record of any kind, with its lender, status, reference, amount in kobo and data."
       },
       "RecordInput": {
         "type": "object",
@@ -1092,7 +1157,8 @@
         },
         "required": [
           "name"
-        ]
+        ],
+        "description": "A new record: only the name is required; the kind's default status applies when none is given."
       },
       "RecordUpdate": {
         "type": "object",
@@ -1117,7 +1183,8 @@
             "$ref": "#/components/schemas/RecordData"
           }
         },
-        "required": []
+        "required": [],
+        "description": "The fields to change on a record; omitted fields keep their values."
       },
       "Merchant": {
         "type": "object",
@@ -1168,7 +1235,8 @@
           "killSwitch",
           "preDataReady",
           "preLiveReady"
-        ]
+        ],
+        "description": "A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags."
       },
       "Workspace": {
         "type": "object",
@@ -1213,7 +1281,8 @@
           "merchants",
           "roles",
           "productionEnabled"
-        ]
+        ],
+        "description": "The caller's workspace: who is acting, in which role, whether they signed in, and the lenders and roles available."
       },
       "Metric": {
         "type": "object",
@@ -1240,7 +1309,8 @@
           "value",
           "unit",
           "detail"
-        ]
+        ],
+        "description": "A named measurement with its unit and the basis it was derived from."
       },
       "Alert": {
         "type": "object",
@@ -1272,7 +1342,8 @@
           "severity",
           "title",
           "detail"
-        ]
+        ],
+        "description": "An NFR-OBS-02 alert: what condition holds, how severe it is, since when and the record it points at."
       },
       "Overview": {
         "type": "object",
@@ -1334,7 +1405,8 @@
           "nextClose",
           "closeTime",
           "alerts"
-        ]
+        ],
+        "description": "The overview: metrics, queues, recent activity, upcoming due items, the close schedule and the alerts."
       },
       "RecordList": {
         "type": "object",
@@ -1355,7 +1427,8 @@
         "required": [
           "items",
           "total"
-        ]
+        ],
+        "description": "One page of records with the filtered total; nextOffset is present while more rows remain."
       },
       "ActionInput": {
         "type": "object",
@@ -1375,7 +1448,8 @@
         },
         "required": [
           "action"
-        ]
+        ],
+        "description": "An action to run: its name, the record it applies to, the reason for it and any data it needs."
       },
       "ActionResult": {
         "type": "object",
@@ -1393,7 +1467,8 @@
         "required": [
           "message",
           "data"
-        ]
+        ],
+        "description": "What an action did, in words, with the record it produced or changed and any data it returns."
       },
       "ImportInput": {
         "type": "object",
@@ -1419,7 +1494,8 @@
           "csv",
           "syntheticOnly",
           "commit"
-        ]
+        ],
+        "description": "A synthetic CSV to preview or commit for one kind, with an optional column mapping."
       },
       "ImportRow": {
         "type": "object",
@@ -1438,7 +1514,8 @@
           "row",
           "status",
           "message"
-        ]
+        ],
+        "description": "The outcome of one imported row."
       },
       "ImportResult": {
         "type": "object",
@@ -1464,7 +1541,8 @@
           "invalid",
           "imported",
           "rows"
-        ]
+        ],
+        "description": "How many rows were valid, invalid and imported, and each row's outcome."
       },
       "Report": {
         "type": "object",
@@ -1497,7 +1575,8 @@
           "experiment",
           "operational",
           "closes"
-        ]
+        ],
+        "description": "The reports: metrics, billing, the experiment, operational measurement and the daily closes."
       },
       "Gate": {
         "type": "object",
@@ -1528,7 +1607,8 @@
           "status",
           "evidence",
           "due"
-        ]
+        ],
+        "description": "One readiness gate: what it needs, its status and the evidence recorded."
       },
       "Gates": {
         "type": "object",
@@ -1564,7 +1644,8 @@
           "limitations",
           "cashKobo",
           "burnKobo"
-        ]
+        ],
+        "description": "The prerequisites and decisions, the sandbox's limitations, and the cash and burn figures used for the funding decision."
       },
       "Timeline": {
         "type": "object",
@@ -1607,7 +1688,8 @@
           "mandates",
           "dueItems",
           "payments"
-        ]
+        ],
+        "description": "A customer, their derived position, and every related event, mandate, due item and payment."
       },
       "Settings": {
         "type": "object",
@@ -1647,7 +1729,8 @@
           "integrations",
           "members",
           "calendar"
-        ]
+        ],
+        "description": "A lender's settings and the caller's permissions, with integrations, members and the business calendar."
       },
       "SettingsInput": {
         "type": "object",
@@ -1686,7 +1769,8 @@
             "type": "boolean"
           }
         },
-        "required": []
+        "required": [],
+        "description": "The execution settings to change; every field is optional."
       },
       "ExportInput": {
         "type": "object",
@@ -1709,7 +1793,8 @@
         "required": [
           "kind",
           "format"
-        ]
+        ],
+        "description": "What to export (a record kind, gate-pack, billing, dispute-pack or customer-pack with a customerId) and in which format."
       },
       "ExportResult": {
         "type": "object",
@@ -1732,7 +1817,8 @@
           "downloadUrl",
           "checksum",
           "generatedAt"
-        ]
+        ],
+        "description": "The export's id, its download address on this API, its SHA-256 checksum and when it was generated."
       }
     }
   }

@@ -7,6 +7,9 @@
  */
 import type { RecordData } from './recordData';
 
+/**
+ * An action to run: its name, the record it applies to, the reason for it and any data it needs.
+ */
 export interface ActionInput {
   action: string;
   recordId?: string;

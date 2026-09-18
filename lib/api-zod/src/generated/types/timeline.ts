@@ -8,6 +8,9 @@
 import type { RecordData } from './recordData';
 import type { ValopayRecord } from './valopayRecord';
 
+/**
+ * A customer, their derived position, and every related event, mandate, due item and payment.
+ */
 export interface Timeline {
   customer: ValopayRecord;
   position: RecordData;

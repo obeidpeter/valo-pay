@@ -1,5 +1,6 @@
 import type { DomainState } from "../domain/types";
 
+/** What the sandbox cannot prove, listed on the gates page and in the gate pack. */
 export const limitations=[
   "Synthetic sandbox only. No real lender or customer data may be loaded.",
   "P1: qualified Nigerian legal opinion and permitted operating model not verified.",
@@ -12,6 +13,7 @@ export const limitations=[
   "Production outbox dispatcher, partner-specific signed webhook adapters, automated scheduling, field encryption/crypto-shredding, retention-locked storage and time-boxed staff access are not implemented.",
   "No measured load, uptime, restore, notification delivery or production latency certification. Sandbox outputs cannot prove Tests 2, 3 or 5.",
 ];
+/** The readiness gates: prerequisites and decisions, always unproven on synthetic data. */
 export function getGates(state:DomainState){
  const evidence=state.records.filter(r=>r.kind==="evidence");
  const prerequisites=[
@@ -28,6 +30,7 @@ export function getGates(state:DomainState){
  ];
  return {prerequisites,decisions,limitations,cashKobo:0,burnKobo:1250000000};
 }
+/** A lender's settings, the role's permissions, and its integrations, members and calendar. */
 export function getSettings(state:DomainState,role:string){
  const allowed=(roles:string[])=>roles.includes(role);
  return {merchant:state.merchant,settings:state.settings,permissions:{

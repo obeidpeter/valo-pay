@@ -7,11 +7,15 @@
  */
 
 /**
- * The export's id, its download address on this API, its SHA-256 checksum and when it was generated.
+ * The last scheduler pass that found work: its id, when it ran, how long it took and what it did.
  */
-export interface ExportResult {
-  id: string;
-  downloadUrl: string;
-  checksum: string;
-  generatedAt: string;
+export interface SchedulerRun {
+  runId: string;
+  at: string;
+  durationMs: number;
+  initialised: number;
+  examined: number;
+  closed: number;
+  skipped: number;
+  failed: number;
 }

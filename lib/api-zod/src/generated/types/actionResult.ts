@@ -8,6 +8,9 @@
 import type { RecordData } from './recordData';
 import type { ValopayRecord } from './valopayRecord';
 
+/**
+ * What an action did, in words, with the record it produced or changed and any data it returns.
+ */
 export interface ActionResult {
   message: string;
   record?: ValopayRecord;

@@ -7,6 +7,9 @@
  */
 import type { ValopayRecord } from './valopayRecord';
 
+/**
+ * One page of records with the filtered total; nextOffset is present while more rows remain.
+ */
 export interface RecordList {
   items: ValopayRecord[];
   total: number;

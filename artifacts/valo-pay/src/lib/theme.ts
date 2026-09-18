@@ -11,12 +11,16 @@ import { useSyncExternalStore } from 'react';
  * together.
  */
 export const THEME_STORAGE_KEY = 'valopay-theme';
+/** What the person chose: follow the device, or one theme. */
 export type ThemeChoice = 'system' | 'light' | 'dark';
+/** A theme as shown. */
 export type Theme = 'light' | 'dark';
+/** The choice and the theme it resolves to right now. */
 export type ThemeState = { choice: ThemeChoice; theme: Theme };
 
 const DARK_QUERY = '(prefers-color-scheme: dark)';
 
+/** The choices as the settings page offers them, with their labels. */
 export const themeChoices: ReadonlyArray<{ value: ThemeChoice; label: string }> = [
   { value: 'system', label: 'Follow the device' },
   { value: 'light', label: 'Light' },
@@ -31,6 +35,7 @@ export function resolveTheme(choice: ThemeChoice, deviceDark: boolean): Theme {
 // When storage is blocked (a private window, cleared site data) a choice still lasts for this page.
 let memoryChoice: ThemeChoice = 'system';
 
+/** The stored choice, or the in-memory one when storage is blocked; "system" when nothing is stored. */
 export function readChoice(): ThemeChoice {
   try {
     const stored = localStorage.getItem(THEME_STORAGE_KEY);
@@ -69,6 +74,7 @@ export function initTheme(): void {
   apply();
 }
 
+/** Stores the choice where storage allows and applies it at once. */
 export function setThemeChoice(choice: ThemeChoice): void {
   memoryChoice = choice;
   try {

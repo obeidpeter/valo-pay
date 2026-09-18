@@ -27,6 +27,7 @@ export type RecordOf<K extends string> = K extends RecordKind ? TypedRecord<K> :
 /** What makeRecord accepts: any stored field, and for a known kind that kind's data fields, all optional at creation. */
 export type RecordInput<K extends string> = Partial<Omit<ValopayRecord, "kind" | "data">> & { data?: K extends RecordKind ? Partial<RecordDataOf<K>> : Record<string, any> };
 
+/** A lender as the API returns it. */
 export interface Merchant {
   id: string;
   name: string;
@@ -41,18 +42,21 @@ export interface Merchant {
   preLiveReady: boolean;
 }
 
+/** A lender's complete state as loaded for one transaction: the merchant, its settings and every record. */
 export interface DomainState {
   merchant: Merchant;
   records: ValopayRecord[];
   settings: Record<string, any>;
 }
 
+/** Who is acting, in which role, and when (the database clock at the start of the transaction). */
 export interface Context {
   actor: string;
   role: string;
   now: string;
 }
 
+/** A named measurement for the overview and the reports. */
 export interface Metric {
   key: string;
   label: string;
@@ -61,6 +65,7 @@ export interface Metric {
   detail: string;
 }
 
+/** The reports answer: metrics, billing, the experiment, operational measurement and the closes. */
 export interface Report {
   metrics: Metric[];
   billing: Record<string, any>;
@@ -69,6 +74,7 @@ export interface Report {
   closes: ValopayRecord[];
 }
 
+/** An action request: the action, the record it applies to, the reason and its data. */
 export interface ActionInput {
   action: string;
   recordId?: string;
@@ -76,6 +82,7 @@ export interface ActionInput {
   data?: Record<string, any>;
 }
 
+/** What an action returns: a message, the record it produced or changed, and data. */
 export interface ActionResult {
   message: string;
   record?: ValopayRecord;

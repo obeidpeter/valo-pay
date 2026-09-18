@@ -26,7 +26,7 @@ assert.deepEqual(changedFiles(preserved, [remoteWorkflow, otherRemoteWorkflow]),
 assert.deepEqual(changedFiles([source, workflow], [source, remoteWorkflow]), [workflow]);
 assert.deepEqual(changedFiles(preserved, preserved), []);
 
-for (const path of ["README.md", "artifacts/api-server/src/app.ts", "lib/db/src/schema/index.ts", "scripts/github-sync.mjs", ".github/workflows/ci.yml", "docs/design/landing-and-login.md"]) assert.equal(allowedPath(path), true);
+for (const path of ["README.md", "artifacts/api-server/src/app.ts", "lib/db/src/schema/index.ts", "scripts/github-sync.mjs", ".github/workflows/ci.yml", "docs/design/console.md"]) assert.equal(allowedPath(path), true);
 for (const path of [".agents/memory/MEMORY.md", ".conversation/file.md", "docs/source/business.txt", "docs/PUBLISHED_SANDBOX_VERIFICATION.md", "artifacts/valo-pay/.env.local", "artifacts/api-server/dist/index.js", "lib/backups/records.json", "scripts/password.key", "lib/../private.json", ".github/workflows/deploy.yml", ".github/workflows/ci.yaml", ".github/actions/custom/action.yml", ".github/workflows/../private.yml"]) assert.equal(allowedPath(path), false, path);
 assert.throws(() => assertSafeText("fixture", "ghp_" + "a".repeat(36)), /Potential credential/);
 assert.throws(() => assertSafeText("fixture", ["postgres:", "//real:password", "@example.invalid/db"].join("")), /Potential credential/);

@@ -12,6 +12,7 @@ const localHost = /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/i.test(window.l
  * synthetic sandbox runs on its own (frontend contract: accessible without login).
  */
 const signInWanted = Boolean(configuredKey) || !localHost;
+/** The Clerk key for this host, or undefined where sign-in is not wanted (a local host without a configured key). */
 export const clerkPublishableKey = signInWanted ? publishableKeyFromHost(window.location.hostname, configuredKey) || undefined : undefined;
 /** True only when a ClerkProvider will be mounted, so the Clerk hooks below are never used without one. */
 export const authEnabled = Boolean(clerkPublishableKey);
@@ -34,6 +35,7 @@ function useClerkSignOut(): () => void {
 function useNoSignOut(): () => void {
   return () => {};
 }
+/** A sign-out function, or a no-op when sign-in is unavailable. */
 export const useSignOut: () => () => void = authEnabled ? useClerkSignOut : useNoSignOut;
 
 /** Renders its children for the given session state; renders nothing when sign-in is unavailable. */

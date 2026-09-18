@@ -8,6 +8,7 @@ export interface ExceptionDefinition {
   readonly resolutionCodes: readonly string[];
 }
 
+/** The Appendix A catalogue, keyed by exception type. */
 export const exceptionCatalogue = {
   activation_expired: { title: "Activation expired", trigger: "Mandate passes its activation deadline", owner: "Operations", slaBusinessDays: 2, severity: "medium", resolutionCodes: ["reissued", "customer_declined", "wrong_number", "abandoned"] },
   unallocated_payment: { title: "Unallocated payment", trigger: "No ladder result after 24 hours", owner: "Finance", slaBusinessDays: 2, severity: "medium", resolutionCodes: ["allocated_manual", "refund_requested", "held_credit", "not_ours"] },
@@ -25,7 +26,9 @@ export const exceptionCatalogue = {
   mapping_needed: { title: "Mapping needed", trigger: "UNKNOWN failure code", owner: "Valo Pay ops", slaBusinessDays: 2, severity: "low", resolutionCodes: ["mapped_to_code"] },
 } as const satisfies Record<string, ExceptionDefinition>;
 
+/** A catalogue exception type. */
 export type ExceptionType = keyof typeof exceptionCatalogue;
+/** Every catalogue type. */
 export const exceptionTypes = Object.keys(exceptionCatalogue) as ExceptionType[];
 
 /** Type spellings earlier builds wrote.  Read as the catalogue type, never written. */
@@ -36,6 +39,7 @@ export const exceptionTypeAliases: Readonly<Record<string, ExceptionType>> = {
   final_attempt: "unpaid_after_final_attempt",
 };
 
+/** Reads a type from stored or input data, accepting earlier spellings; undefined when unknown. */
 export function resolveExceptionType(raw: unknown): ExceptionType | undefined {
   const value = String(raw ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
   if (value in exceptionCatalogue) return value as ExceptionType;
@@ -45,6 +49,7 @@ export function resolveExceptionType(raw: unknown): ExceptionType | undefined {
 /** Codes accepted for an exception whose type is not in the catalogue (legacy rows). */
 export const genericResolutionCodes = ["no_action_required", "customer_contacted", "evidence_received", "ownership_corrected", "refunded_externally", "allocated", "duplicate_confirmed", "mandate_reissued"] as const;
 
+/** The controlled resolution codes for an exception's type, or the generic list for a type outside the catalogue. */
 export function resolutionCodesFor(rawType: unknown): readonly string[] {
   const type = resolveExceptionType(rawType);
   return type ? exceptionCatalogue[type].resolutionCodes : genericResolutionCodes;

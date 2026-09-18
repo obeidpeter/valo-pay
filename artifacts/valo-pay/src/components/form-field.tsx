@@ -19,6 +19,7 @@ export function invalidProps(id: string, error?: string): { 'aria-invalid'?: tru
   return error ? { 'aria-invalid': true, 'aria-describedby': fieldMessageId(id) } : {};
 }
 
+/** The message under a field, when there is one. */
 export function FieldError({ id, message }: { id: string; message?: string }) {
   if (!message) return null;
   return <p id={fieldMessageId(id)} className="text-sm text-destructive">{message}</p>;
@@ -34,6 +35,7 @@ export function FormAlert({ title, children }: { title: string; children?: React
   );
 }
 
+/** Moves focus to a control by its id. */
 export function focusField(id: string): void {
   document.getElementById(id)?.focus();
 }

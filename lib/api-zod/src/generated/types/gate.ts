@@ -6,6 +6,9 @@
  * OpenAPI spec version: 1.0.0
  */
 
+/**
+ * One readiness gate: what it needs, its status and the evidence recorded.
+ */
 export interface Gate {
   id: string;
   title: string;

@@ -6,6 +6,9 @@
  * OpenAPI spec version: 1.0.0
  */
 
+/**
+ * A named measurement with its unit and the basis it was derived from.
+ */
 export interface Metric {
   key: string;
   label: string;
