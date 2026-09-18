@@ -1,9 +1,10 @@
 import { positionFor } from "./close";
+import { recordsOf } from "./records";
 import type { DomainState } from "./types";
 
 /** One customer's timeline: the record, its derived position (REC-05) and every related record newest first. */
 export function customerTimeline(state: DomainState, id: string) {
-  const customer = state.records.find((record) => record.kind === "customers" && record.id === id);
+  const customer = recordsOf(state, "customers").find((record) => record.id === id);
   if (!customer) throw Object.assign(new Error("Customer not found."), { status: 404 });
   const related = state.records.filter((record) => record.customerId === id);
   const dueItems = related.filter((record) => record.kind === "due-items"), payments = related.filter((record) => record.kind === "payments");

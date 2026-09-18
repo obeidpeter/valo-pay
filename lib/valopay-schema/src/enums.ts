@@ -10,6 +10,11 @@ export const executionOwners = ["valopay", "lms", "merchant_manual", "provider_a
 export type ExecutionOwner = (typeof executionOwners)[number];
 export const PLATFORM_OWNER: ExecutionOwner = "valopay";
 export const handBackOwners = ["lms", "merchant_manual", "provider_auto"] as const;
+export type HandBackOwner = (typeof handBackOwners)[number];
+/** DEB-12: the platform itself is never a fallback owner. */
+export function isHandBackOwner(value: unknown): value is HandBackOwner {
+  return typeof value === "string" && (handBackOwners as readonly string[]).includes(value);
+}
 export function normaliseOwner(raw: unknown): ExecutionOwner | undefined {
   const value = String(raw ?? "").trim().toLowerCase();
   if (value === "valo" || value === "valopay" || value === "valo_pay") return "valopay";
@@ -28,6 +33,7 @@ export const observationSources = ["webhook", "settlement", "statement", "transf
 export type ObservationSource = (typeof observationSources)[number];
 
 export const paymentChannels = ["direct_debit", "transfer", "card", "statement", "manual", "webhook", "settlement"] as const;
+export type PaymentChannel = (typeof paymentChannels)[number];
 
 /** DEB-02 authorisation modes. */
 export const authorisationModes = ["batch", "standing"] as const;
@@ -47,6 +53,7 @@ export const exceptionSeverities = ["low", "medium", "high"] as const;
 export type ExceptionSeverity = (typeof exceptionSeverities)[number];
 
 export const attemptSources = ["valo", "external"] as const;
+export type AttemptSource = (typeof attemptSources)[number];
 
 /**
  * TRD 4.2: a Payment carries four independent status dimensions.  These are

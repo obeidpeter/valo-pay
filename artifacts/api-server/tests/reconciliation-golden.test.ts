@@ -214,7 +214,8 @@ function assertOnePayment(state: DomainState, due: ValopayRecord, label: string)
   assert.equal(after, before + GROSS, "a payment reconciled at runtime counts in reconciled collections");
   // Legacy rows written by earlier builds are read as the same vocabulary.
   const legacy = recordsOf(state, "payments").find((item) => item.reference !== "S1" && item.status === "allocated")!;
-  legacy.data.reversalStatus = "not_reversed"; legacy.data.refundStatus = "not_refunded";
+  // Legacy spellings a connector may still send, outside the typed vocabulary on purpose.
+  Object.assign(legacy.data, { reversalStatus: "not_reversed", refundStatus: "not_refunded" });
   assert.equal(buildOverview(state, wat("2027-07-01T08:00:00")).metrics.find((item) => item.key === "settled")!.value, after);
   // A provider reversal reopens the due item as in_dispute and removes the payment from the total.
   addObservation(state, { reference: "S1", amountKobo: GROSS, source: "webhook", customerId: due.customerId, eventId: "rev", occurredAt: wat("2027-07-03T07:00:00"), reversed: true });

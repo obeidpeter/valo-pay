@@ -8,7 +8,7 @@ import { evaluateRetry, policySummary, samePolicyLineage } from "../src/domain/p
 import { validateRecord } from "../src/domain/validation.js";
 import { buildAlerts } from "../src/domain/alerts.js";
 import { buildOverview } from "../src/domain/reports.js";
-import { makeRecord, recordsOf } from "../src/domain/records.js";
+import { findRecord, makeRecord, recordsOf } from "../src/domain/records.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
 
 let checks = 0;
@@ -31,7 +31,7 @@ const reviewer = (now: string) => ctxAt(now, "Compliance reviewer");
   // The seeded fixture mandate predates pinning: pin it as its creation would have.
   mandate.data.consentPolicyId = policy.id; mandate.data.consentPolicyVersion = 1; mandate.data.consentPolicySummary = policySummary(policy);
   // A new version is drafted and approved by a different reviewer.
-  const draft = executeAction(state, admin(wat("2027-06-02T09:00:00")), { action: "new_policy_version", recordId: policy.id, reason: "shorter spacing" }).record!;
+  const draft = findRecord(state, executeAction(state, admin(wat("2027-06-02T09:00:00")), { action: "new_policy_version", recordId: policy.id, reason: "shorter spacing" }).record!.id, "policies");
   draft.data.spacingHours = 24;
   executeAction(state, admin(wat("2027-06-02T09:10:00")), { action: "submit_policy", recordId: draft.id, reason: "review" });
   executeAction(state, reviewer(wat("2027-06-02T09:20:00")), { action: "approve_policy", recordId: draft.id, reason: "compliant" });
@@ -69,8 +69,8 @@ const reviewer = (now: string) => ctxAt(now, "Compliance reviewer");
   assert.equal(mandate.data.consentPolicyId, draft.id); assert.equal(mandate.data.consentPolicyVersion, 2);
   assert.equal(mandate.data.consentEvidence, "CONSENT-9-V2");
   assert.match(mandate.data.consentPolicySummary, /Version 2: .*at least 24 hours between attempts/);
-  assert.equal(mandate.data.policyVersionHistory.length, 1);
-  assert.deepEqual([mandate.data.policyVersionHistory[0].fromVersion, mandate.data.policyVersionHistory[0].toVersion, mandate.data.policyVersionHistory[0].noticeId], [1, 2, accepted.id], "the history names the notice and versions");
+  assert.equal(mandate.data.policyVersionHistory!.length, 1);
+  assert.deepEqual([mandate.data.policyVersionHistory![0].fromVersion, mandate.data.policyVersionHistory![0].toVersion, mandate.data.policyVersionHistory![0].noticeId], [1, 2, accepted.id], "the history names the notice and versions");
   assert.throws(() => apply(wat("2027-06-07T09:00:00"), { consentEvidence: "again" }), /already covers/);
   // Now version 2 governs the customer's items and version 1 is refused.
   assert.equal(evaluateRetry(state, ctxAt(wat("2027-06-28T09:01:00")), due, draft).decision, "would_schedule");

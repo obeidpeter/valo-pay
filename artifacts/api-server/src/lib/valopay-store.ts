@@ -4,6 +4,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
 import { closeTimeOf, nextCloseInstant } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
+import { recordsOf } from "../domain/records";
 import { seedMerchant } from "./valopay-seed";
 import { createCreationLimiter } from "./creation-limit";
 
@@ -533,7 +534,7 @@ export async function initialiseCloseCursors(): Promise<number> {
 }
 
 export function appendAudit(state: DomainState, ctx: Context, action: string, objectId: string, summary: string, changes?: unknown): ValopayRecord {
-  const chain = state.records.filter((record) => record.kind === "audit").sort((a, b) => Number(a.data.sequence || 0) - Number(b.data.sequence || 0));
+  const chain = recordsOf(state, "audit").sort((a, b) => Number(a.data.sequence || 0) - Number(b.data.sequence || 0));
   const previous = chain.at(-1);
   const body = { sequence: chain.length + 1, actor: ctx.actor, action, objectId, summary, changeDigest: digest(canonical(changes ?? {})), previousHash: previous?.data.hash ?? "GENESIS", timestamp: ctx.now };
   const record: ValopayRecord = { id: randomUUID(), merchantId: state.merchant.id, kind: "audit", name: action, status: "recorded", reference: "", amountKobo: 0, customerId: state.records.find((item) => item.id === objectId)?.customerId || "", createdAt: ctx.now, updatedAt: ctx.now, data: { ...body, hash: digest(canonical(body)) } };
@@ -541,7 +542,7 @@ export function appendAudit(state: DomainState, ctx: Context, action: string, ob
   return record;
 }
 export function verifyAudit(state: DomainState) {
-  const chain = state.records.filter((record) => record.kind === "audit").sort((a, b) => Number(a.data.sequence) - Number(b.data.sequence));
+  const chain = recordsOf(state, "audit").sort((a, b) => Number(a.data.sequence) - Number(b.data.sequence));
   let hash = "GENESIS", valid = true, index = 0;
   for (const event of chain) {
     const { hash: recorded, ...body } = event.data;

@@ -4,7 +4,7 @@ import {
   normaliseOwner, policyGuardrails, recordDataSchemas, recordStatuses, resolveExceptionType, roles, isKnownFailureCode,
 } from "@workspace/valopay-schema";
 import { assertNoRealBankDetails, findRecord, masked, recordsOf } from "./records";
-import type { Context, DomainState, ValopayRecord } from "./types";
+import type { Context, DomainState, RecordOf, TypedRecord, ValopayRecord } from "./types";
 import { addBusinessDays } from "./calendar";
 import { countedAttempts, minimumTicketKobo, policySummary } from "./policy-engine";
 
@@ -38,7 +38,7 @@ function validateDates(value: unknown, key = ""): void {
   } else if (Array.isArray(value)) value.forEach((child) => validateDates(child, key));
 }
 
-function parent(state: DomainState, id: unknown, kind: string, label: string): ValopayRecord {
+function parent<K extends string>(state: DomainState, id: unknown, kind: K, label: string): RecordOf<K> {
   if (typeof id !== "string" || !id) throw new Error(`${label} is required.`);
   const item = findRecord(state, id, kind);
   if (item.merchantId !== state.merchant.id) throw new Error(`${label} belongs to another tenant.`);
@@ -55,7 +55,7 @@ function parseData(kind: string, data: Record<string, any>): void {
 }
 
 /** The cutover contract (DEB-11) is complete only when steps 1 to 6 are recorded. */
-export function cutoverComplete(cutover: ValopayRecord): boolean {
+export function cutoverComplete(cutover: TypedRecord<"cutovers">): boolean {
   const data = cutover.data;
   return cutover.status === "ready" && data.incumbentDisabled === true && data.externalAttemptsImported === true && data.dualRunComplete === true && Boolean(data.accountableUser) && Boolean(data.confirmation);
 }
@@ -260,7 +260,7 @@ export function validateRecord(
   if (kind === "cutovers") {
     requireRole(ctx, ["Admin"]);
     if (input.status === "ready" && existing?.status !== "ready") {
-      const candidate = { ...(existing ?? { id: "", merchantId: "", kind, name: "", reference: "", amountKobo: 0, customerId: "", createdAt: "", updatedAt: "" }), status: "ready", data } as ValopayRecord;
+      const candidate = { ...(existing ?? { id: "", merchantId: "", kind, name: "", reference: "", amountKobo: 0, customerId: "", createdAt: "", updatedAt: "" }), status: "ready", data } as TypedRecord<"cutovers">;
       if (!cutoverComplete(candidate)) throw new Error("A cutover is ready only when the incumbent is disabled in writing, external attempts are imported, the dual-run day is complete, and an accountable user has confirmed (DEB-11 steps 1 to 6).");
     }
     if (input.status === "handed_back" && existing?.status !== "handed_back") throw new Error("Hand-back is recorded by the hand_back action.");

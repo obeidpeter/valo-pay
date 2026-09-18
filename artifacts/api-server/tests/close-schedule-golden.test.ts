@@ -129,7 +129,7 @@ const quietDeadlines = (state: ReturnType<typeof seedMerchant>) => { for (const 
   runDailyClose(state, ctxAt(wat("2027-06-28T09:30:00"), "Operations"), "scheduled");
   const after = closeSchedule(state, wat("2027-06-28T09:31:00"));
   assert.equal(after.lastTrigger, "scheduled"); assert.equal(after.lastAt, wat("2027-06-28T09:30:00")); assert.equal(after.nextAt, wat("2027-06-29T09:30:00")); assert.equal(after.missed, false);
-  assert.equal(recordsOf(state, "closes").at(-1)!.data.schedule.nextAt, wat("2027-06-29T09:30:00"));
+  assert.equal(recordsOf(state, "closes").at(-1)!.data.schedule!.nextAt, wat("2027-06-29T09:30:00"));
   checks += 9;
 }
 

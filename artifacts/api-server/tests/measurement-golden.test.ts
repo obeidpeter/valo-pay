@@ -40,10 +40,10 @@ const decisionsFor = (state: DomainState, due: ValopayRecord) => recordsOf(state
   assert.equal(decision.data.inputs.attemptNumber, 1);
   assert.equal(decision.data.inputs.ceiling, 3);
   assert.deepEqual(decision.data.inputs.noticeEvidence, { noticeId: notice.id, acceptedAt: notice.data.acceptedAt }, "notice evidence recorded");
-  assert.deepEqual(decision.data.inputs.calendar.holidaysApplied, [], "calendar inputs recorded");
-  assert.equal(decision.data.noticeRequired.purpose, "failed_debit");
-  assert.equal(decision.data.noticeRequired.evidenced, true);
-  assert.equal(toWat(decision.data.noticeRequired.requiredBy), "2027-06-29T06:16:00", "the notice it requires, due 24 hours before the attempt");
+  assert.deepEqual((decision.data.inputs.calendar as { holidaysApplied: string[] }).holidaysApplied, [], "calendar inputs recorded");
+  assert.equal(decision.data.noticeRequired!.purpose, "failed_debit");
+  assert.equal(decision.data.noticeRequired!.evidenced, true);
+  assert.equal(toWat(decision.data.noticeRequired!.requiredBy), "2027-06-29T06:16:00", "the notice it requires, due 24 hours before the attempt");
   assert.equal(decision.data.experimentArm, null, "no experiment enrolled: the arm is recorded as null");
   assert.equal(first.data.retryDecisionsRecorded >= 1, true);
   checks += 17;
@@ -55,7 +55,7 @@ const decisionsFor = (state: DomainState, due: ValopayRecord) => recordsOf(state
   const moved = decisionsFor(state, due);
   assert.equal(moved.length, 2, "a changed plan is a new decision");
   assert.equal(toWat(moved[1]!.data.nextAt), "2027-07-01T06:00:00", "the holiday rolls the plan to Thursday at the window start");
-  assert.deepEqual(moved[1]!.data.inputs.calendar.holidaysApplied, ["2027-06-30"], "the holiday that moved the plan is recorded");
+  assert.deepEqual((moved[1]!.data.inputs.calendar as { holidaysApplied: string[] }).holidaysApplied, ["2027-06-30"], "the holiday that moved the plan is recorded");
   assert.equal(moved[1]!.data.previousDecisionId, moved[0]!.id, "decisions chain to the one they replace");
   assert.equal(latestDecisionFor(state, due.id)?.id, moved[1]!.id);
   check(customerTimeline(state, due.customerId).events.some((event) => event.kind === "retry-decisions"), "AUD-01: the timeline carries every retry decision");
@@ -107,8 +107,8 @@ const decisionsFor = (state: DomainState, due: ValopayRecord) => recordsOf(state
   const close = recordsOf(state, "closes").at(-1)!;
   assert.equal(first.record?.id, close.id);
   const report = close.data.report;
-  assert.equal(close.data.period.from, null, "the first close covers everything before it");
-  assert.equal(close.data.period.to, finance.now);
+  assert.equal(close.data.period!.from, null, "the first close covers everything before it");
+  assert.equal(close.data.period!.to, finance.now);
   assert.equal(report.openingUnallocated.count, openingUnallocated, "opening unallocated is the count before reconciliation ran");
   assert.equal(report.observations.bySource.webhook.received, seededWebhook + 1, "observations received by source");
   assert.equal(report.observations.bySource.webhook.paymentsResolvedTo, seededWebhook + 1, "and the Payments they resolved to");
@@ -121,9 +121,9 @@ const decisionsFor = (state: DomainState, due: ValopayRecord) => recordsOf(state
   assert.equal(typeof report.variances.count, "number");
   assert.equal(typeof report.exceptions.opened.count, "number");
   assert.equal(typeof report.exceptions.closed.count, "number");
-  const changed = report.customerPositionsChanged.find((item: any) => item.customerId === customer.id);
+  const changed = report.customerPositionsChanged.find((item) => item.customerId === customer.id);
   assert.ok(changed, "the customer whose position changed is listed");
-  assert.equal(changed.before.outstandingKobo, outstandingBefore);
+  assert.equal(changed.before!.outstandingKobo, outstandingBefore);
   assert.equal(changed.after.outstandingKobo, outstandingBefore - due.amountKobo, "before and after positions");
   assert.equal(report.positionRebuild.alert, false, "REC-05: the rebuilt positions agree with the stored view");
   assert.equal(report.positionRebuild.mismatches.length, 0);
@@ -132,7 +132,7 @@ const decisionsFor = (state: DomainState, due: ValopayRecord) => recordsOf(state
   const second = executeAction(state, ctxAt(wat("2027-07-01T07:00:00"), "Finance"), { action: "daily_close" });
   const next = recordsOf(state, "closes").at(-1)!;
   assert.notEqual(next.id, close.id);
-  assert.equal(next.data.period.from, close.data.closedAt, "the next close starts where the last one ended");
+  assert.equal(next.data.period!.from, close.data.closedAt, "the next close starts where the last one ended");
   assert.equal(next.data.report.observations.received, 0, "nothing new arrived");
   assert.equal(next.data.report.customerPositionsChanged.length, 0, "no position changed");
   assert.equal(second.data.positionAlert, false);

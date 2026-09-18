@@ -10,7 +10,7 @@ import {
   billableChannels, experimentRules, isBillableChannel, licenceTierFor, usageFeeKobo, vatKobo, type AdjustmentReason,
 } from "@workspace/valopay-schema";
 import { makeRecord, recordsOf } from "./records";
-import type { Context, DomainState, ValopayRecord } from "./types";
+import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { paymentObservedAt, paymentRefunded, paymentReversed } from "./reconciliation";
 import { attemptTime } from "./policy-engine";
 
@@ -46,7 +46,7 @@ export function reversalWindowDays(state: DomainState, provider: unknown): numbe
  * has passed.  Transfers, card receipts and statement credits are reconciled
  * and reported, never billed as collections.
  */
-export function billableCollection(state: DomainState, payment: ValopayRecord, now: string, checkWindow = true): boolean {
+export function billableCollection(state: DomainState, payment: TypedRecord<"payments">, now: string, checkWindow = true): boolean {
   if (!isBillableChannel(payment.data.channel) || payment.data.collectionStatus !== "succeeded") return false;
   if (!["allocated", "overpaid", "partial"].includes(payment.status) || payment.data.settlementStatus !== "settled") return false;
   if (paymentReversed(payment) || paymentRefunded(payment)) return false;
@@ -58,15 +58,15 @@ export function vatBpsFor(state: DomainState): number {
   return Number.isInteger(configured) && configured >= 0 ? configured : DEFAULT_VAT_BPS;
 }
 
-const issuedInvoices = (state: DomainState): ValopayRecord[] =>
+const issuedInvoices = (state: DomainState): TypedRecord<"invoices">[] =>
   recordsOf(state, "invoices").filter((item) => item.status === "issued").sort((a, b) => String(a.data.period).localeCompare(String(b.data.period)) || String(a.data.issuedAt).localeCompare(String(b.data.issuedAt)));
 
-function confirmedDuplicate(state: DomainState, payment: ValopayRecord): boolean {
+function confirmedDuplicate(state: DomainState, payment: TypedRecord<"payments">): boolean {
   return payment.status === "possible_duplicate" || recordsOf(state, "exceptions").some((item) => item.data.linkedRecordId === payment.id && item.data.type === "suspected_duplicate" && item.data.resolutionCode === "confirmed_duplicate_refund");
 }
 
 /** What a collection that was already billed is worth today: its usage fee, or nothing with the reason it is no longer billable. */
-export function collectionFeeNow(state: DomainState, payment: ValopayRecord): { feeKobo: number; allocatedKobo: number; reason: AdjustmentReason | null } {
+export function collectionFeeNow(state: DomainState, payment: TypedRecord<"payments">): { feeKobo: number; allocatedKobo: number; reason: AdjustmentReason | null } {
   const allocatedKobo = Number(payment.data.allocatedKobo || 0);
   if (paymentReversed(payment)) return { feeKobo: 0, allocatedKobo, reason: "reversal" };
   if (paymentRefunded(payment)) return { feeKobo: 0, allocatedKobo, reason: "refund" };
@@ -94,6 +94,16 @@ export function billedLedger(state: DomainState): Map<string, LedgerEntry> {
     }
   }
   return ledger;
+}
+
+/** A recovery fee line (BIL-05): one per obligation the engine recovered inside the 30-day window, billed once. */
+export interface RecoveryFeeLine {
+  dueItemId: string;
+  reference: string;
+  attemptId: string;
+  firstFailureAt?: string;
+  windowClosedAt: string;
+  feeKobo: number;
 }
 
 export interface AdjustmentLine {
@@ -153,7 +163,7 @@ export function recoveryFeeLines(state: DomainState, period: string) {
   const note = enabled
     ? `NGN ${RECOVERY_FEE_KOBO / 100} per recovered failed debit in the engine arm, billed once its ${experimentRules.outcomeWindowDays}-day window has closed, so a reversal inside the window never needs a credit.`
     : "Recovery fee is off: BIL-03 switches it on only when the Test 2 decision is recorded as proven (settings.recoveryFeeDecision) and settings.recoveryFeeEnabled is true.";
-  if (!enabled) return { enabled, lines: [] as Array<Record<string, unknown>>, kobo: 0, note };
+  if (!enabled) return { enabled, lines: [] as RecoveryFeeLine[], kobo: 0, note };
   const end = Date.parse(periodEnd(period));
   const billed = new Set(issuedInvoices(state).flatMap((invoice) => ((invoice.data.recoveryFee?.lines || []) as Array<{ dueItemId: string }>).map((line) => line.dueItemId)));
   const lines = recordsOf(state, "due-items").flatMap((due) => {
@@ -168,10 +178,10 @@ export function recoveryFeeLines(state: DomainState, period: string) {
 }
 
 /** The signed design-partner terms that price this merchant, if any; prospects are evidence, not subscriptions. */
-function signedTerms(state: DomainState, period: string): ValopayRecord | undefined {
+function signedTerms(state: DomainState, period: string): TypedRecord<"commercial"> | undefined {
   return recordsOf(state, "commercial").find((item) => item.name === state.merchant.name && item.data.designPartner === true && item.data.signed && String(item.data.effectiveDate || "").slice(0, 7) <= period);
 }
-const designDiscountFor = (terms: ValopayRecord | undefined, period: string): number => terms?.data.designPartner === true && period.startsWith(DESIGN_PARTNER_DISCOUNT_YEAR) ? DESIGN_PARTNER_DISCOUNT : 1;
+const designDiscountFor = (terms: TypedRecord<"commercial"> | undefined, period: string): number => terms?.data.designPartner === true && period.startsWith(DESIGN_PARTNER_DISCOUNT_YEAR) ? DESIGN_PARTNER_DISCOUNT : 1;
 
 /** The monthly statement for the console and the billing export: what the period's receipts are worth and what the next invoice will carry. */
 export function buildBillingStatement(state: DomainState, now: string): Record<string, any> {
@@ -230,7 +240,7 @@ function nextPeriodAfter(period: string): string {
  * reversal window is billed on the next invoice), the design-partner discount,
  * the BIL-07 adjustment lines, the gated recovery fee, then VAT on the net.
  */
-export function issueInvoice(state: DomainState, ctx: Context, input: { period?: unknown }): ValopayRecord {
+export function issueInvoice(state: DomainState, ctx: Context, input: { period?: unknown }): TypedRecord<"invoices"> {
   const now = ctx.now;
   const period = input.period ? String(input.period) : previousMonth(now);
   if (!/^\d{4}-\d{2}$/.test(period) || Number.isNaN(Date.parse(`${period}-01T00:00:00Z`))) throw new Error("data.period must be a calendar month as YYYY-MM.");

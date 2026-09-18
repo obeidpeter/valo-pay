@@ -4,7 +4,7 @@ import {
   clampExecutionHour, executionWindow, experimentRules, normaliseFailureCode, policyGuardrails, retryRuleFor,
   type ExperimentArm, type FailureCode, type RetryDecisionKind,
 } from "@workspace/valopay-schema";
-import type { Context, DomainState, ValopayRecord } from "./types";
+import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { makeRecord, recordsOf } from "./records";
 import { holidaySet, isBusinessDay, nonBusinessDaysBetween } from "./calendar";
 
@@ -43,7 +43,7 @@ export interface RetryDecision {
 }
 
 /** The policy parameters as a sentence: what a consent record stores as the policy text as it stood (MAN-02, RET-07). */
-export function policySummary(policy: ValopayRecord): string {
+export function policySummary(policy: TypedRecord<"policies">): string {
   const d = policy.data;
   return `Version ${d.version ?? 1}: up to ${d.maxAttempts ?? policyGuardrails.defaultMaxAttempts} attempts counting every source; at least ${d.spacingHours ?? policyGuardrails.defaultSpacingHours} hours between attempts; first notice ${d.firstNoticeHours ?? policyGuardrails.defaultFirstNoticeHours} hours before the first attempt; failed-debit notice ${d.retryNoticeHours ?? policyGuardrails.defaultRetryNoticeHours} hours before any re-presentation; partial debits ${d.partialAllowed ? "allowed" : "not allowed"}.`;
 }
@@ -67,24 +67,24 @@ export function samePolicyLineage(state: DomainState, aId: string, bId: string):
   return Boolean(a && b && a.name === b.name);
 }
 
-export function policyIdFor(state: DomainState, due: ValopayRecord): string | undefined {
-  return due.data.policyId || state.records.find((r) => r.kind === "mandates" && r.id === due.data.mandateId)?.data.policyId;
+export function policyIdFor(state: DomainState, due: TypedRecord<"due-items">): string | undefined {
+  return due.data.policyId || recordsOf(state, "mandates").find((r) => r.id === due.data.mandateId)?.data.policyId;
 }
 
-export function approvedPolicyFor(state: DomainState, due: ValopayRecord): ValopayRecord | undefined {
+export function approvedPolicyFor(state: DomainState, due: TypedRecord<"due-items">): TypedRecord<"policies"> | undefined {
   const id = policyIdFor(state, due);
   return id ? recordsOf(state, "policies").find((policy) => policy.id === id && policy.status === "approved") : undefined;
 }
 
-export const attemptTime = (attempt: ValopayRecord): string => String(attempt.data.occurredAt || attempt.createdAt);
+export const attemptTime = (attempt: TypedRecord<"attempts">): string => String(attempt.data.occurredAt || attempt.createdAt);
 
-export function attemptsFor(state: DomainState, dueItemId: string): ValopayRecord[] {
+export function attemptsFor(state: DomainState, dueItemId: string): TypedRecord<"attempts">[] {
   return recordsOf(state, "attempts").filter((attempt) => attempt.data.dueItemId === dueItemId).sort((a, b) => attemptTime(a).localeCompare(attemptTime(b)));
 }
 
 /** Attempts the customer experienced.  Cancelled and not-yet-sent attempts never count toward the ceiling (DEB-05). */
 export const countedAttemptStatuses: ReadonlySet<string> = new Set(["sent", "succeeded", "failed", "unknown", "reversed"]);
-export function countedAttempts(state: DomainState, dueItemId: string): ValopayRecord[] {
+export function countedAttempts(state: DomainState, dueItemId: string): TypedRecord<"attempts">[] {
   return attemptsFor(state, dueItemId).filter((attempt) => countedAttemptStatuses.has(attempt.status));
 }
 
@@ -100,7 +100,7 @@ export function policyKillSwitchOn(state: DomainState, policyId: string | undefi
   return !!policyId && state.settings.policyKillSwitches?.[policyId] === true;
 }
 
-export function policyCeiling(policy: ValopayRecord): number {
+export function policyCeiling(policy: TypedRecord<"policies">): number {
   const configured = Number(policy.data.maxAttempts);
   const maximum = Number.isInteger(configured) && configured >= 1 ? configured : policyGuardrails.defaultMaxAttempts;
   return Math.min(policyGuardrails.maxAttemptsCeiling, maximum);
@@ -138,7 +138,7 @@ export function nextExecutionSlot(state: DomainState, earliestMs: number): numbe
   return NaN;
 }
 
-function overrideRecorded(due: ValopayRecord): boolean {
+function overrideRecorded(due: TypedRecord<"due-items">): boolean {
   return Boolean(due.data.overrideReason || due.data.adminOverrideReason);
 }
 
@@ -149,7 +149,7 @@ const iso = (ms: number): string => new Date(ms).toISOString();
  * documented order; ownership and mode are evaluated last so a backtest can
  * show what the policy would have done while the merchant observes.
  */
-export function evaluateRetry(state: DomainState, ctx: Context, due: ValopayRecord, policy: ValopayRecord): RetryDecision {
+export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord<"due-items">, policy: TypedRecord<"policies">): RetryDecision {
   const attempts = attemptsFor(state, due.id);
   const counted = countedAttempts(state, due.id);
   const last = counted.at(-1);
@@ -191,7 +191,7 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: ValopayReco
   }
   // RET-01: only an approved version by a reviewer who is not its author may plan a retry.
   if (policy.status !== "approved" || !policy.data.reviewer || policy.data.reviewer === policy.data.author) return explain("blocked", "unapproved_policy", "Independent compliance approval is required before a retry can be planned.");
-  const mandate = state.records.find((record) => record.kind === "mandates" && record.id === due.data.mandateId);
+  const mandate = recordsOf(state, "mandates").find((record) => record.id === due.data.mandateId);
   // RET-07: the engine applies the version the consent covers until a notice, and fresh consent where required, moves the mandate to a newer one.
   if (mandate?.data.consentPolicyId && mandate.data.consentPolicyId !== policy.id) {
     inputs.consentPolicyVersion = mandate.data.consentPolicyVersion;
@@ -253,7 +253,7 @@ export function decisionFingerprint(decision: RetryDecision): string {
   return createHash("sha256").update(JSON.stringify(rest, Object.keys(rest).sort())).digest("hex");
 }
 
-export function latestDecisionFor(state: DomainState, dueItemId: string): ValopayRecord | undefined {
+export function latestDecisionFor(state: DomainState, dueItemId: string): TypedRecord<"retry-decisions"> | undefined {
   return recordsOf(state, "retry-decisions").filter((record) => record.data.dueItemId === dueItemId).sort((a, b) => String(a.data.evaluatedAt).localeCompare(String(b.data.evaluatedAt)) || a.createdAt.localeCompare(b.createdAt)).at(-1);
 }
 
@@ -262,7 +262,7 @@ export function latestDecisionFor(state: DomainState, dueItemId: string): Valopa
  * A close that re-evaluates an item and reaches the same decision writes nothing;
  * any change of row, outcome, scheduled time, evidence or policy version is a new record.
  */
-export function recordRetryDecision(state: DomainState, ctx: Context, due: ValopayRecord, decision: RetryDecision): ValopayRecord | undefined {
+export function recordRetryDecision(state: DomainState, ctx: Context, due: TypedRecord<"due-items">, decision: RetryDecision): TypedRecord<"retry-decisions"> | undefined {
   const fingerprint = decisionFingerprint(decision);
   const latest = latestDecisionFor(state, due.id);
   if (latest && latest.data.fingerprint === fingerprint) return undefined;
@@ -307,7 +307,7 @@ export function enrolEligibleFailures(state: DomainState, ctx: Context): void {
     const retry = retryRuleFor(first.data.failureCode);
     if (retry !== "yes" && retry !== "once") continue;
     if (counted.some((attempt) => normaliseFailureCode(attempt.data.failureCode) === "CUSTOMER_DISPUTED")) continue;
-    const mandate = state.records.find((record) => record.kind === "mandates" && record.id === due.data.mandateId);
+    const mandate = recordsOf(state, "mandates").find((record) => record.id === due.data.mandateId);
     if (!mandate || mandate.status !== "active") continue;
     const failureAt = attemptTime(first);
     if (due.data.amendedAt && String(due.data.amendedAt) > failureAt) continue;
