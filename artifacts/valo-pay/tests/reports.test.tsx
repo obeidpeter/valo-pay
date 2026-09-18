@@ -11,7 +11,7 @@ describe("reports", () => {
     const user = userEvent.setup();
     renderApp("/reports");
     expect(await screen.findByText("No daily close yet")).toBeTruthy();
-    expect(screen.getByText(/^Next scheduled close .+ \(07:00 WAT daily\)\.$/)).toBeTruthy();
+    expect(screen.getByText(/^Next scheduled close .+ WAT, then daily at the same time\.$/)).toBeTruthy();
     expect(screen.getByText("Counts from the first daily close.")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Trigger Daily Close" }));

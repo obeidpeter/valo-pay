@@ -6,7 +6,7 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { useGetGates, useListRecords, useCreateExport, getGetGatesQueryKey, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { ShieldCheck, Download, AlertTriangle, FileCheck, CheckCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { formatKobo, formatDate } from '@/lib/formatters';
+import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 
 /** The prerequisite and decision ids the gate register matches evidence on (data.gateId). */
@@ -206,7 +206,7 @@ export default function EvidencePage() {
                 commercial.items.map(comm => (
                   <tr key={comm.id} className="hover:bg-secondary/10">
                     <td className="px-6 py-4 font-medium">{comm.name}</td>
-                    <td className="px-6 py-4 font-mono">{Number(comm.data?.monthlyVolume || 0).toLocaleString()}</td>
+                    <td className="px-6 py-4 font-mono">{formatNumber(Number(comm.data?.monthlyVolume || 0))}</td>
                     <td className="px-6 py-4 font-mono">{formatKobo(Number(comm.data?.averageTicketKobo || 0))}</td>
                     <td className="px-6 py-4 font-mono">{formatKobo(Number(comm.data?.licenceKobo || 0))}</td>
                     <td className="px-6 py-4 font-mono text-xs text-muted-foreground">

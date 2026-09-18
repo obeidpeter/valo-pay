@@ -1,4 +1,5 @@
 import {
+  counted,
   DEFAULT_ACTIVATION_WINDOW_DAYS, PLATFORM_OWNER, activationReminderCaps, closeRules, failureCodeList, isHandBackOwner, isKnownFailureCode,
   nextCloseInstant, normaliseFailureCode, normaliseOwner, passRuleText, resolutionCodesFor, resolveExceptionType, withinQuietHours,
   type CloseTrigger,
@@ -65,7 +66,7 @@ export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTr
   report.alerts = buildAlerts(state, now);
   const reports = buildReports(state, now);
   state.settings.nextCloseAt = nextCloseInstant(now, schedule.time);
-  const summary = `${report.observations.received} observations received, ${report.allocated.count} allocations confirmed, ${report.unallocated.count} unallocated (${report.unallocated.olderThan24Hours} older than 24h), ${report.exceptions.opened.count} exceptions opened and ${report.exceptions.closed.count} closed, ${report.customerPositionsChanged.length} customer positions changed.`;
+  const summary = `${counted(report.observations.received, "observation")} received, ${counted(report.allocated.count, "allocation")} confirmed, ${report.unallocated.count} unallocated (${report.unallocated.olderThan24Hours} older than 24h), ${counted(report.exceptions.opened.count, "exception")} opened and ${report.exceptions.closed.count} closed, ${counted(report.customerPositionsChanged.length, "customer position")} changed.`;
   const close = makeRecord(state, "closes", {
     name: `Daily close ${now.slice(0, 10)}${trigger === "scheduled" ? " · scheduled" : ""}`, status: "completed", createdAt: now,
     data: {

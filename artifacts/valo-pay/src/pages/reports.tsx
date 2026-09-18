@@ -6,7 +6,7 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { useGetReports, usePerformAction, getGetReportsQueryKey, useCreateExport, useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { BarChart3, Download, FileText, CheckSquare, RefreshCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { formatKobo, formatDate } from '@/lib/formatters';
+import { formatKobo, formatDate, formatCount } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 
 type Unknown = Record<string, unknown> | undefined;
@@ -21,7 +21,7 @@ const adjustmentRows = (record: Unknown): Array<Record<string, any>> => Array.is
 /** REC-07: the close report fields, in the order the TRD lists them. */
 function closeReportChips(report: Record<string, any>): Array<[string, string]> {
   const money = (row: any) => `${row?.count ?? 0} · ${formatKobo(Number(row?.kobo || 0))}`;
-  const bySource = Object.entries(report.observations?.bySource || {}).map(([source, row]: [string, any]) => `${source} ${row.received}→${row.paymentsResolvedTo} payments`).join(', ') || 'none';
+  const bySource = Object.entries(report.observations?.bySource || {}).map(([source, row]: [string, any]) => `${source} ${row.received}→${formatCount(row.paymentsResolvedTo, 'payment')}`).join(', ') || 'none';
   const byRule = Object.entries(report.allocatedByRule || {}).map(([rule, row]: [string, any]) => `${rule} ${row.count}`).join(', ') || 'none';
   return [
     ['opening unallocated', money(report.openingUnallocated)],
@@ -367,8 +367,8 @@ export default function ReportsPage() {
                     {!schedule.enabled
                       ? 'Automatic close off: closes are triggered by hand.'
                       : schedule.missed
-                        ? `Scheduled close at ${schedule.time} WAT missed: ${schedule.overdueMinutes} minutes past its time.`
-                        : `Next scheduled close ${formatDate(schedule.nextAt)} (${schedule.time} WAT daily).`}
+                        ? `Scheduled close at ${schedule.time} WAT missed: ${formatCount(schedule.overdueMinutes, 'minute')} past its time.`
+                        : `Next scheduled close ${formatDate(schedule.nextAt)}, then daily at the same time.`}
                   </p>
                 );
               })()}

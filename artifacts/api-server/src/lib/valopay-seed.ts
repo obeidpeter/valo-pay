@@ -13,7 +13,7 @@ export function seedMerchant(id: string, smaller = false): DomainState {
   }
   const policy=add("policies","Standard lender retry policy","draft",{version:1,maxAttempts:3,spacingHours:48,firstNoticeHours:48,retryNoticeHours:24,partialAllowed:false,author:"Sandbox Admin",reviewer:"",complianceMapping:"CBN notification and re-presentation; FCCPC debt-recovery conduct. Requires independent review."});
   add("templates","Pre-debit notice","draft",{version:1,purpose:"pre_debit",text:"{{merchant}}: Your payment of {{amount}} is due on {{date}}. For help, contact {{contact}}.",author:"Sandbox Admin"});
-  const names=["Ada Okonkwo","Tunde Bakare","Chiamaka Obi","Yusuf Bello","Ngozi Eze","Dami Adeyemi","Ife Nwosu","Seyi Ajayi"];
+  const names=["Ada Okonkwo","Túndé Bakare","Chiamaka Ọbi","Yusuf Bello","Ngozi Eze","Dami Adéyẹmí","Ifẹ Nwosu","Ṣeyi Ajayi"]; // Yoruba and Igbo names carry their marks, as their bearers write them
   names.forEach((name,i)=>{
     const c=add("customers",name,"active",{bankName:["Access Bank","GTBank","Zenith Bank","UBA"][i%4],accountMasked:`•••• ${1000+i}`,phoneMasked:`+234 ••• ••${30+i}`,consentProvenance:"Synthetic imported consent",synthetic:true},0,"",`DEMO-C${1001+i}`);
     const mandate=add("mandates",`${name} · monthly mandate`,i===2||i===5?"pending_activation":i===7?"suspended":"active",{workflow:i%2?"hosted_consent":"transfer_to_activate",frequency:"monthly",activationDeadline:date(i===2?2:5),consentEvidence:`DEMO-CONSENT-${i+1}`,consentGaps:i===7?["No captured timestamp"]:[],policyId:policy.id,origin:"imported",reminderCount:i===2?1:0,synthetic:true},5000000,c.id,`SBX-MND-${1001+i}`);

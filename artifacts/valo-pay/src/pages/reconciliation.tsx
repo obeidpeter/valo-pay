@@ -4,7 +4,7 @@ import { EmptyRow } from '@/components/empty-state';
 import { LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, usePerformAction, getListRecordsQueryKey, useGetReports, getGetReportsQueryKey } from '@workspace/api-client-react';
-import { formatKobo, formatDate } from '@/lib/formatters';
+import { formatKobo, formatDate, formatCount } from '@/lib/formatters';
 import { CheckSquare, Info, ShieldAlert, CornerUpLeft, Plus, ClipboardCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
@@ -169,7 +169,7 @@ export default function ReconciliationPage() {
             <Info className="h-5 w-5 text-info-strong" />
             <h2 className="font-semibold">Unallocated Payments</h2>
             <span className="ml-auto bg-info text-info-foreground text-xs font-bold px-2 py-1 rounded-full">
-              {payments?.items.length || 0} items
+              {formatCount(payments?.items.length || 0, 'item')}
             </span>
           </div>
           <ScrollFrame label="Unallocated payments" className="p-0 overflow-auto max-h-[400px]">
@@ -214,7 +214,7 @@ export default function ReconciliationPage() {
             <ShieldAlert className="h-5 w-5 text-destructive" />
             <h2 className="font-semibold">Unresolved Observations</h2>
             <span className="ml-auto bg-destructive/10 text-destructive text-xs font-bold px-2 py-1 rounded-full">
-              {observations?.items.length || 0} items
+              {formatCount(observations?.items.length || 0, 'item')}
             </span>
           </div>
           <ScrollFrame label="Unresolved observations" className="p-0 overflow-auto max-h-[400px]">

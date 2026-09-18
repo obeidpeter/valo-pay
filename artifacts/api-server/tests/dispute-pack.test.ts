@@ -3,7 +3,7 @@
 // as they applied at the time of each event.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { addNotice, ctxAt, liveFixture, wat } from "./helpers.js";
+import { addNotice, ctxAt, decodePdfText, liveFixture, wat } from "./helpers.js";
 import { reconcile } from "../src/domain/reconciliation.js";
 import { executeAction } from "../src/domain/actions.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
@@ -63,15 +63,14 @@ checks += 9;
 
 // ---- PDF: paginated, summary first, timeline, documents, page numbers ----
 const body = pdf.toString("latin1");
-const decodePdfText = (pdf: Buffer): string => [...pdf.toString("latin1").matchAll(/\[((?:<[0-9a-fA-F]*>|-?[\d.]+|\s)+)\]\s*TJ/g)]
-  .map((array) => [...array[1]!.matchAll(/<([0-9a-fA-F]*)>/g)].map((chunk) => Buffer.from(chunk[1]!, "hex").toString("latin1")).join(""))
-  .join("\n");
 const decoded = decodePdfText(pdf);
 assert.equal(pdf.subarray(0, 5).toString(), "%PDF-");
 const pages = Number(body.match(/\/Count (\d+)/)?.[1]);
 assert.ok(pages >= 3, `summary, timeline and documents pages: ${pages}`);
 for (const needle of ["Dispute pack", `Timeline: ${pack.timeline.length} events`, "Governing documents", `Page 1 of ${pages}`, `Page ${pages} of ${pages}`, "NGN 25,000.00", customer.name, "Retry policy v1", "Notice template v2"]) assert.ok(decoded.includes(needle), `PDF text contains "${needle}"`);
-assert.ok(!decoded.includes("₦"), "no naira sign reaches the WinAnsi fonts");
+assert.ok(!decoded.includes("₦"), "the naira sign is spelled NGN, as in the CSV");
+assert.match(body, /\/BaseFont \/[A-Z]{6}\+ValoPackSans-Regular/, "the pack embeds its own typeface rather than a WinAnsi standard font");
+assert.match(body, /\/Lang \(en-GB\)/, "the document declares its language");
 checks += 12;
 
 // ---- CSV and JSON of the same data ----
@@ -89,7 +88,7 @@ const asPdf = await buildExportBytes(state, ctx, { kind: "dispute-pack", custome
 assert.equal(asPdf.contentType, "application/pdf");
 assert.equal(asPdf.pack?.timeline.length, pack.timeline.length);
 const asCsv = await buildExportBytes(state, ctx, { kind: "customer-pack", customerId: customer.id, format: "csv" });
-assert.equal(asCsv.bytes.toString(), csv);
+assert.equal(asCsv.bytes.toString(), `\uFEFF${csv}`, "the CSV download starts with the byte order mark spreadsheet programs need for accented letters");
 assert.equal(createHash("sha256").update(asCsv.bytes).digest("hex").length, 64, "the checksum is SHA-256");
 await assert.rejects(buildExportBytes(state, ctx, { kind: "customer-pack", customerId: "missing", format: "pdf" }), /Customer not found/);
 checks += 11;

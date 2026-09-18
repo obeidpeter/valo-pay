@@ -16,7 +16,7 @@ describe("overview", () => {
     expect(screen.getByText(/Sandbox · Synthetic data\. We never hold money\./)).toBeTruthy();
     const nextClose = String(api.state().settings.nextCloseAt);
     expect(screen.getByText(/Last close: Not closed yet/)).toBeTruthy();
-    expect(screen.getByText(new RegExp(`Next scheduled close: ${escape(formatDate(nextClose))} \\(07:00 WAT\\)`))).toBeTruthy();
+    expect(screen.getByText(new RegExp(`Next scheduled close: ${escape(formatDate(nextClose))} \\(daily\\)`))).toBeTruthy();
     // NFR-OBS-02: no close has run, and one seeded exception is past its deadline.
     expect(screen.getByText("No daily close yet")).toBeTruthy();
     expect(screen.getByText("Exceptions past their deadline")).toBeTruthy();

@@ -28,7 +28,7 @@ export default function OverviewPage() {
           <span className="mx-2">·</span> 
           Last close: {overview.lastClose ? formatDate(overview.lastClose) : 'Never'}
           <span className="mx-2">·</span>
-          Next scheduled close: {overview.nextClose ? `${formatDate(overview.nextClose)} (${overview.closeTime} WAT)` : 'automatic close off'}
+          Next scheduled close: {overview.nextClose ? `${formatDate(overview.nextClose)} (daily)` : 'automatic close off'}
         </p>
       </header>
 
