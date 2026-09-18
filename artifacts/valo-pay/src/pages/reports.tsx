@@ -111,7 +111,7 @@ export default function ReportsPage() {
           <h1 className="text-3xl font-bold tracking-tight">Reports & Analytics</h1>
           <p className="text-muted-foreground mt-1">Daily closes, billing, and operational measurement.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Button 
             variant="outline" 
             className="gap-2"
@@ -189,9 +189,10 @@ export default function ReportsPage() {
               <div className="p-6">
                 <div className="space-y-4 font-mono text-sm">
                   {scalarEntries(reports.billing).map(([key, value]) => (
-                    <div key={key} className="flex justify-between items-baseline border-b border-dashed border-border pb-2">
+                    <div key={key} className="flex justify-between items-baseline gap-4 border-b border-dashed border-border pb-2">
                       <span className="capitalize">{labelOf(key)}</span>
-                      <span className="font-bold">{renderValue(key, value)}</span>
+                      {/* A rule's text can carry one long token (a settings key); it breaks rather than pushing past a phone's edge. */}
+                      <span className="min-w-0 font-bold [overflow-wrap:anywhere]">{renderValue(key, value)}</span>
                     </div>
                   ))}
                   {scalarEntries(reports.billing).length === 0 && (
@@ -203,37 +204,41 @@ export default function ReportsPage() {
                   {billingLines(reports.billing).length === 0 ? (
                     <p className="text-xs text-muted-foreground">No signed design-partner terms for this period; nothing is billable.</p>
                   ) : (
-                    <table className="w-full text-xs text-left font-mono">
-                      <thead className="text-muted-foreground border-b">
-                        <tr><th className="py-1 pr-2">Prospect</th><th className="py-1 pr-2">Tier</th><th className="py-1 pr-2 text-right">Licence</th><th className="py-1 pr-2 text-right">Usage</th><th className="py-1 pr-2 text-right">Total</th><th className="py-1">Note</th></tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {billingLines(reports.billing).map(line => (
-                          <tr key={String(line.commercialId)}>
-                            <td className="py-1 pr-2 font-sans">{String(line.prospect)}</td>
-                            <td className="py-1 pr-2">{String(line.volumeTier)}{line.tierMismatch ? ' (contract differs)' : ''}</td>
-                            <td className="py-1 pr-2 text-right">{formatKobo(Number(line.licenceKobo || 0))}</td>
-                            <td className="py-1 pr-2 text-right">{formatKobo(Number(line.usageKobo || 0))}</td>
-                            <td className="py-1 pr-2 text-right font-bold">{formatKobo(Number(line.totalKobo || 0))}</td>
-                            <td className="py-1 font-sans text-muted-foreground">{line.designPartnerDiscount ? 'Design-partner discount applied' : 'Full public price'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-left font-mono">
+                        <thead className="text-muted-foreground border-b">
+                          <tr><th className="py-1 pr-2">Prospect</th><th className="py-1 pr-2">Tier</th><th className="py-1 pr-2 text-right">Licence</th><th className="py-1 pr-2 text-right">Usage</th><th className="py-1 pr-2 text-right">Total</th><th className="py-1">Note</th></tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {billingLines(reports.billing).map(line => (
+                            <tr key={String(line.commercialId)}>
+                              <td className="py-1 pr-2 font-sans">{String(line.prospect)}</td>
+                              <td className="py-1 pr-2">{String(line.volumeTier)}{line.tierMismatch ? ' (contract differs)' : ''}</td>
+                              <td className="py-1 pr-2 text-right">{formatKobo(Number(line.licenceKobo || 0))}</td>
+                              <td className="py-1 pr-2 text-right">{formatKobo(Number(line.usageKobo || 0))}</td>
+                              <td className="py-1 pr-2 text-right font-bold">{formatKobo(Number(line.totalKobo || 0))}</td>
+                              <td className="py-1 font-sans text-muted-foreground">{line.designPartnerDiscount ? 'Design-partner discount applied' : 'Full public price'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
                 <div className="mt-6">
                   <h3 className="text-sm font-semibold mb-2">Receipts by channel (BIL-01)</h3>
                   <p className="text-xs text-muted-foreground mb-2">Only direct-debit attempts that succeeded are billable, once settled, unreversed and past the provider's reversal window. Transfers and card receipts are reconciled and shown here, never billed.</p>
-                  <table className="w-full text-xs text-left font-mono">
-                    <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Channel</th><th className="py-1 pr-2 text-right">Receipts</th><th className="py-1 pr-2 text-right">Value</th><th className="py-1 pr-2 text-right">Billable</th></tr></thead>
-                    <tbody className="divide-y">
-                      {Object.entries((reports.billing?.channelBreakdown as Record<string, any>) || {}).map(([channel, row]) => (
-                        <tr key={channel}><td className="py-1 pr-2">{channel}</td><td className="py-1 pr-2 text-right">{String(row.count)}</td><td className="py-1 pr-2 text-right">{formatKobo(Number(row.kobo || 0))}</td><td className="py-1 pr-2 text-right">{String(row.billable)}</td></tr>
-                      ))}
-                      {Object.keys((reports.billing?.channelBreakdown as Record<string, any>) || {}).length === 0 && <tr><td colSpan={4} className="py-2 text-muted-foreground">No receipts in this period.</td></tr>}
-                    </tbody>
-                  </table>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left font-mono">
+                      <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Channel</th><th className="py-1 pr-2 text-right">Receipts</th><th className="py-1 pr-2 text-right">Value</th><th className="py-1 pr-2 text-right">Billable</th></tr></thead>
+                      <tbody className="divide-y">
+                        {Object.entries((reports.billing?.channelBreakdown as Record<string, any>) || {}).map(([channel, row]) => (
+                          <tr key={channel}><td className="py-1 pr-2">{channel}</td><td className="py-1 pr-2 text-right">{String(row.count)}</td><td className="py-1 pr-2 text-right">{formatKobo(Number(row.kobo || 0))}</td><td className="py-1 pr-2 text-right">{String(row.billable)}</td></tr>
+                        ))}
+                        {Object.keys((reports.billing?.channelBreakdown as Record<string, any>) || {}).length === 0 && <tr><td colSpan={4} className="py-2 text-muted-foreground">No receipts in this period.</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
                   <p className="text-xs text-muted-foreground mt-2">Withheld inside the reversal window: {String(reports.billing?.withheldInsideReversalWindow ?? 0)} (billed on a later statement).</p>
                 </div>
                 <div className="mt-6">
@@ -252,22 +257,24 @@ export default function ReportsPage() {
                   {invoiceRows(reports.billing).length === 0 ? (
                     <p className="text-xs text-muted-foreground">No invoice issued yet. The next one covers {String(reports.billing?.nextInvoicePeriod || 'the previous month')}; issued invoices are immutable and VAT is shown separately.</p>
                   ) : (
-                    <table className="w-full text-xs text-left font-mono">
-                      <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Invoice</th><th className="py-1 pr-2">Period</th><th className="py-1 pr-2 text-right">Counted</th><th className="py-1 pr-2 text-right">Adjustments</th><th className="py-1 pr-2 text-right">Net</th><th className="py-1 pr-2 text-right">VAT</th><th className="py-1 pr-2 text-right">Total</th></tr></thead>
-                      <tbody className="divide-y">
-                        {invoiceRows(reports.billing).map(invoice => (
-                          <tr key={String(invoice.id)}>
-                            <td className="py-1 pr-2">{String(invoice.reference)}{invoice.creditNote ? ' (credit note)' : ''}</td>
-                            <td className="py-1 pr-2">{String(invoice.period)}</td>
-                            <td className="py-1 pr-2 text-right">{String(invoice.collectionsCounted ?? 0)}</td>
-                            <td className="py-1 pr-2 text-right">{String(invoice.adjustmentCount ?? 0)} · {formatKobo(Number(invoice.adjustmentsKobo || 0))}</td>
-                            <td className="py-1 pr-2 text-right">{formatKobo(Number(invoice.netKobo || 0))}</td>
-                            <td className="py-1 pr-2 text-right">{formatKobo(Number(invoice.vatKobo || 0))}</td>
-                            <td className="py-1 pr-2 text-right font-bold">{formatKobo(Number(invoice.totalKobo || 0))}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-left font-mono">
+                        <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Invoice</th><th className="py-1 pr-2">Period</th><th className="py-1 pr-2 text-right">Counted</th><th className="py-1 pr-2 text-right">Adjustments</th><th className="py-1 pr-2 text-right">Net</th><th className="py-1 pr-2 text-right">VAT</th><th className="py-1 pr-2 text-right">Total</th></tr></thead>
+                        <tbody className="divide-y">
+                          {invoiceRows(reports.billing).map(invoice => (
+                            <tr key={String(invoice.id)}>
+                              <td className="py-1 pr-2">{String(invoice.reference)}{invoice.creditNote ? ' (credit note)' : ''}</td>
+                              <td className="py-1 pr-2">{String(invoice.period)}</td>
+                              <td className="py-1 pr-2 text-right">{String(invoice.collectionsCounted ?? 0)}</td>
+                              <td className="py-1 pr-2 text-right">{String(invoice.adjustmentCount ?? 0)} · {formatKobo(Number(invoice.adjustmentsKobo || 0))}</td>
+                              <td className="py-1 pr-2 text-right">{formatKobo(Number(invoice.netKobo || 0))}</td>
+                              <td className="py-1 pr-2 text-right">{formatKobo(Number(invoice.vatKobo || 0))}</td>
+                              <td className="py-1 pr-2 text-right font-bold">{formatKobo(Number(invoice.totalKobo || 0))}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
                 <div className="mt-6">
@@ -301,7 +308,7 @@ export default function ReportsPage() {
                 <div className="space-y-4">
                   {(experiments?.items || []).map(experiment => (
                     <div key={experiment.id} className="border rounded-lg p-3">
-                      <div className="flex items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <p className="text-sm font-medium">{experiment.name}</p>
                           <p className="text-xs text-muted-foreground">{experiment.status} · holdout {String(experiment.data?.holdoutShare ?? '')}</p>

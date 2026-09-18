@@ -18,13 +18,15 @@ export function BrandMark({ className = 'h-8 w-8' }: { className?: string }) {
 /**
  * The lockup pairs the name with its descriptor because the name says "Pay"
  * and the product never touches money; the descriptor is part of the brand,
- * not a tagline (marketing strategy, section 3.1).
+ * not a tagline (marketing strategy, section 3.1). `compact` shows the mark
+ * alone below 640 px, where the console's phone bar has no room for the name;
+ * the link's label still says what it is.
  */
-export function BrandLockup({ href = '/', descriptor = true, className = '' }: { href?: string; descriptor?: boolean; className?: string }) {
+export function BrandLockup({ href = '/', descriptor = true, compact = false, className = '' }: { href?: string; descriptor?: boolean; compact?: boolean; className?: string }) {
   return (
     <Link href={href} className={`inline-flex items-center gap-3 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${className}`} aria-label="Valo Pay, collections operations layer. Go to the start">
       <BrandMark />
-      <span className="leading-tight">
+      <span className={compact ? 'hidden leading-tight sm:block' : 'leading-tight'}>
         <span className="block text-lg font-bold tracking-tight text-foreground">Valo Pay</span>
         {descriptor && <span className="block text-xs text-muted-foreground">Collections operations layer</span>}
       </span>
