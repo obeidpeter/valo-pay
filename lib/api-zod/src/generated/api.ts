@@ -8,8 +8,44 @@
 import * as zod from 'zod';
 
 
+export const SchedulerRun = zod.object({
+  "runId": zod.string(),
+  "at": zod.string(),
+  "durationMs": zod.number(),
+  "initialised": zod.number(),
+  "examined": zod.number(),
+  "closed": zod.number(),
+  "skipped": zod.number(),
+  "failed": zod.number()
+})
+
+export const SchedulerStatus = zod.object({
+  "state": zod.enum(["not_started", "running", "off", "stopped"]),
+  "intervalMs": zod.number().nullable(),
+  "ticks": zod.number(),
+  "lastTickAt": zod.string().nullable(),
+  "lastRun": SchedulerRun.nullable()
+})
+
 export const HealthCheckResponse = zod.object({
-  "status": zod.string()
+  "status": zod.string(),
+  "build": zod.string(),
+  "startedAt": zod.string(),
+  "uptimeSeconds": zod.number(),
+  "scheduler": SchedulerStatus
+})
+
+export const DatabaseCheck = zod.object({
+  "status": zod.enum(["ok", "failed"]),
+  "latencyMs": zod.number()
+})
+
+export const ReadinessCheckResponse = zod.object({
+  "status": zod.enum(["ok", "degraded"]),
+  "build": zod.string(),
+  "checks": zod.object({
+    "database": DatabaseCheck
+  })
 })
 
 

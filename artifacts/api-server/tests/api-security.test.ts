@@ -12,7 +12,7 @@ type Answer = { status?: number; body?: unknown };
 function answer(error: unknown): Answer {
   const out: Answer = {};
   const logged: unknown[] = [];
-  const req = { log: { error: (...args: unknown[]) => logged.push(args), warn: (...args: unknown[]) => logged.push(args) } };
+  const req = { id: "test-request", log: { error: (...args: unknown[]) => logged.push(args), warn: (...args: unknown[]) => logged.push(args), info: (...args: unknown[]) => logged.push(args) } };
   const res = { headersSent: false, status(code: number) { out.status = code; return this; }, json(body: unknown) { out.body = body; return this; } };
   errorHandler(error, req as never, res as never, () => undefined);
   return out;
@@ -20,8 +20,8 @@ function answer(error: unknown): Answer {
 
 {
   const raised = Object.assign(new Error("Only an Admin can change lender settings."), { status: 403 });
-  assert.deepEqual(answer(raised), { status: 403, body: { error: "Only an Admin can change lender settings." } }, "an error raised with a status is answered in its own words");
-  assert.deepEqual(answer(new Error("A reason is required for this business or destructive action.")), { status: 400, body: { error: "A reason is required for this business or destructive action." } }, "a domain rule without a status is a 400 in its own words");
+  assert.deepEqual(answer(raised), { status: 403, body: { error: "Only an Admin can change lender settings.", requestId: "test-request" } }, "an error raised with a status is answered in its own words, with the request id");
+  assert.deepEqual(answer(new Error("A reason is required for this business or destructive action.")), { status: 400, body: { error: "A reason is required for this business or destructive action.", requestId: "test-request" } }, "a domain rule without a status is a 400 in its own words");
   assert.equal(answer(new Error("Execution is not permitted in observation mode.")).status, 403, "the wording of a refusal implies 403");
   const typeError = answer(new TypeError("Cannot read properties of undefined (reading 'merchant')"));
   assert.equal(typeError.status, 500, "a programming error is a 500");
@@ -48,6 +48,8 @@ function answer(error: unknown): Answer {
 // The shell over HTTP: placeholder Clerk keys make the middleware compute "signed out" locally, and a
 // placeholder database address satisfies the store's start-up check; no query is ever made here.
 process.env["DATABASE_URL"] ??= "postgres://postgres@127.0.0.1:1/valopay-unused";
+// The log is not this test's subject; the observability test reads it back.
+process.env["LOG_LEVEL"] ??= "silent";
 process.env["CLERK_SECRET_KEY"] ??= "sk_test_placeholder";
 process.env["CLERK_PUBLISHABLE_KEY"] ??= `pk_test_${Buffer.from("clerk.example.test$").toString("base64")}`;
 const { default: app } = await import("../src/app.js");

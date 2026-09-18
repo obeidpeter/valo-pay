@@ -44,6 +44,49 @@
         }
       }
     },
+    "/readyz": {
+      "get": {
+        "operationId": "readinessCheck",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "503": {
+            "description": "Not ready: the database cannot be reached within the check's time limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/workspace": {
       "get": {
         "operationId": "getWorkspace",
@@ -812,10 +855,161 @@
         "properties": {
           "status": {
             "type": "string"
+          },
+          "build": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "uptimeSeconds": {
+            "type": "integer"
+          },
+          "scheduler": {
+            "$ref": "#/components/schemas/SchedulerStatus"
           }
         },
         "required": [
-          "status"
+          "status",
+          "build",
+          "startedAt",
+          "uptimeSeconds",
+          "scheduler"
+        ]
+      },
+      "SchedulerRun": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string"
+          },
+          "durationMs": {
+            "type": "integer"
+          },
+          "initialised": {
+            "type": "integer"
+          },
+          "examined": {
+            "type": "integer"
+          },
+          "closed": {
+            "type": "integer"
+          },
+          "skipped": {
+            "type": "integer"
+          },
+          "failed": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runId",
+          "at",
+          "durationMs",
+          "initialised",
+          "examined",
+          "closed",
+          "skipped",
+          "failed"
+        ]
+      },
+      "SchedulerStatus": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "not_started",
+              "running",
+              "off",
+              "stopped"
+            ]
+          },
+          "intervalMs": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ticks": {
+            "type": "integer"
+          },
+          "lastTickAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastRun": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SchedulerRun"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "intervalMs",
+          "ticks",
+          "lastTickAt",
+          "lastRun"
+        ]
+      },
+      "DatabaseCheck": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "failed"
+            ]
+          },
+          "latencyMs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status",
+          "latencyMs"
+        ]
+      },
+      "ReadinessStatus": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded"
+            ]
+          },
+          "build": {
+            "type": "string"
+          },
+          "checks": {
+            "type": "object",
+            "properties": {
+              "database": {
+                "$ref": "#/components/schemas/DatabaseCheck"
+              }
+            },
+            "required": [
+              "database"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "build",
+          "checks"
         ]
       },
       "RecordData": {

@@ -47,7 +47,8 @@ describe("workspace", () => {
     api.failNext(workspace, { status: 500, error: "relation \"valopay_workspaces\" does not exist" });
     renderApp("/overview");
     expect(await screen.findByRole("heading", { level: 1, name: "The service hit an error" })).toBeTruthy();
-    expect(screen.getByText(/If it continues, tell us the time:/)).toBeTruthy();
+    expect(screen.getByText(/If it continues, tell us the time and the reference:/)).toBeTruthy();
+    expect(screen.getByText(/^fake-[0-9a-f]{4}$/)).toBeTruthy();
     expect(screen.queryByText(/valopay_workspaces/)).toBeNull();
   });
 });

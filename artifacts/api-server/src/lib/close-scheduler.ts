@@ -18,6 +18,19 @@ import { enrolEligibleFailures } from "../domain/policy-engine";
 export const SCHEDULED_CLOSE_ACTOR = `${SYSTEM_ACTOR_PREFIX}scheduled close`;
 
 export interface ClosedMerchant { merchantId: string; closeId: string; late: boolean; delayMinutes: number | null }
+
+/** What the scheduler is doing, for /api/healthz: whether it ticks, when it last looked, and what its last pass that found work did. */
+export interface SchedulerStatus {
+  state: "not_started" | "running" | "off" | "stopped";
+  intervalMs: number | null;
+  ticks: number;
+  lastTickAt: string | null;
+  lastRun: { runId: string; at: string; durationMs: number; initialised: number; examined: number; closed: number; skipped: number; failed: number } | null;
+}
+const status: SchedulerStatus = { state: "not_started", intervalMs: null, ticks: 0, lastTickAt: null, lastRun: null };
+export function schedulerStatus(): SchedulerStatus { return structuredClone(status); }
+/** Recorded when the process is told not to schedule closes (VALOPAY_CLOSE_SCHEDULER=off), so the health answer says so. */
+export function markSchedulerOff(): void { status.state = "off"; }
 export interface CloseRun {
   runId: string;
   /** Legacy merchants given a cursor on this pass. */
@@ -33,6 +46,7 @@ export interface CloseRun {
 /** One pass: give legacy merchants a cursor, then close every due merchant in the batch, each in its own transaction. */
 export async function runDueCloses(options: { batchSize?: number; log?: Logger } = {}): Promise<CloseRun> {
   const run: CloseRun = { runId: randomUUID(), initialised: 0, examined: 0, closed: [], skipped: [], failed: [] };
+  const started = Date.now();
   const log = options.log?.child({ job: "scheduled_close", runId: run.runId });
   run.initialised = await initialiseCloseCursors();
   const due = await dueScheduledCloses(options.batchSize ?? closeRules.batchSize);
@@ -63,6 +77,9 @@ export async function runDueCloses(options: { batchSize?: number; log?: Logger }
     }
   }
   if (run.initialised) log?.info({ initialised: run.initialised }, "close cursors initialised for merchants that had none");
+  // One line per pass that found work, with its duration; a quiet pass is a debug line so the log is not a metronome.
+  const summary = { event: "close.run", durationMs: Date.now() - started, initialised: run.initialised, examined: run.examined, closed: run.closed.length, skipped: run.skipped.length, failed: run.failed.length };
+  if (run.examined || run.failed.length) log?.info(summary, "scheduled close pass finished"); else log?.debug(summary, "scheduled close pass found nothing due");
   return run;
 }
 
@@ -70,6 +87,8 @@ export interface CloseScheduler {
   stop(): void;
   /** Runs a pass now, or joins the pass already running. */
   tick(): Promise<CloseRun | null>;
+  /** Waits for the pass in progress, if any, without starting one: what a shutdown does before it ends the pool. */
+  settle(): Promise<void>;
 }
 
 /** Starts the tick loop.  Ticks never overlap, and the timers are unreferenced so they never hold the process open. */
@@ -78,8 +97,15 @@ export function startCloseScheduler(options: { intervalMs?: number; firstDelayMs
   let running: Promise<CloseRun | null> | null = null;
   const tick = (): Promise<CloseRun | null> => {
     if (running) return running;
+    status.ticks += 1;
+    status.lastTickAt = new Date().toISOString();
+    const started = Date.now();
     running = runDueCloses(options)
-      .catch((error: unknown) => { options.log?.error({ err: error }, "scheduled close tick failed"); return null; })
+      .then((run) => {
+        if (run.examined || run.failed.length) status.lastRun = { runId: run.runId, at: new Date().toISOString(), durationMs: Date.now() - started, initialised: run.initialised, examined: run.examined, closed: run.closed.length, skipped: run.skipped.length, failed: run.failed.length };
+        return run;
+      })
+      .catch((error: unknown) => { options.log?.error({ event: "close.tick_failed", err: error }, "scheduled close tick failed"); return null; })
       .finally(() => { running = null; });
     return running;
   };
@@ -88,6 +114,12 @@ export function startCloseScheduler(options: { intervalMs?: number; firstDelayMs
   const timer = setInterval(tick, intervalMs);
   first.unref();
   timer.unref();
-  options.log?.info({ intervalMs, batchSize: options.batchSize ?? closeRules.batchSize }, "scheduled daily close running");
-  return { stop() { clearTimeout(first); clearInterval(timer); }, tick };
+  status.state = "running";
+  status.intervalMs = intervalMs;
+  options.log?.info({ event: "scheduler.started", intervalMs, batchSize: options.batchSize ?? closeRules.batchSize }, "scheduled daily close running");
+  return {
+    stop() { clearTimeout(first); clearInterval(timer); status.state = "stopped"; },
+    tick,
+    settle() { return running ? running.then(() => undefined) : Promise.resolve(); },
+  };
 }

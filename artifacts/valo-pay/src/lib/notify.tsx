@@ -30,8 +30,24 @@ export function notifyProblem(title: string, description?: string) {
   return toast({ title, description, variant: 'destructive', type: 'foreground', duration: Infinity });
 }
 
-/** The words the server gave, or a plain fallback; never an HTTP status line. */
+/** The request's reference from the service: the requestId in its error body, or the X-Request-Id header when the body has none. */
+export function referenceOf(error: unknown): string | undefined {
+  const inBody = (error as { data?: { requestId?: unknown } } | null)?.data?.requestId;
+  if (typeof inBody === 'string' && inBody.trim()) return inBody.trim();
+  const headers = (error as { headers?: { get?: (name: string) => string | null } } | null)?.headers;
+  const inHeader = headers?.get?.('x-request-id');
+  return typeof inHeader === 'string' && inHeader.trim() ? inHeader.trim() : undefined;
+}
+
+/**
+ * The words the server gave, or a plain fallback; never an HTTP status line.
+ * When the service itself failed (a 5xx), its words are general, so the
+ * request's reference follows them: quoting it finds the request in the log.
+ */
 export function saidBy(error: unknown, fallback: string): string {
   const said = (error as { data?: { error?: unknown } } | null)?.data?.error;
-  return typeof said === 'string' && said.trim() ? said.trim() : fallback;
+  const words = typeof said === 'string' && said.trim() ? said.trim() : fallback;
+  const status = (error as { status?: unknown } | null)?.status;
+  const reference = typeof status === 'number' && status >= 500 ? referenceOf(error) : undefined;
+  return reference ? `${words} Reference ${reference}.` : words;
 }

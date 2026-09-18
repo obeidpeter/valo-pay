@@ -146,6 +146,7 @@ router.post("/v1/exports",async(req,res)=>{
  if(!kinds.has(body.kind)&&!(exportKinds as readonly string[]).includes(body.kind))fail("Unknown export kind.");
  if(["customer-pack","dispute-pack"].includes(body.kind)&&!body.customerId)fail("A dispute pack needs customerId.");
   const result=await withState(req,res,(state,ctx)=>createExportFile(state,ctx,body),true,S.CreateExportResponse);
+ req.log.info({event:"export.generated",kind:body.kind,format:body.format,byteLength:result.byteLength,generationMs:result.generationMs},"Export generated");
  res.json(S.CreateExportResponse.parse(result));
 });
 router.get("/v1/exports/:id/download",async(req,res)=>{
