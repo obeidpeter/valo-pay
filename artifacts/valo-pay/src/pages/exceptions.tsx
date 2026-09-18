@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
+import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
-import { AlertTriangle, User, Calendar, CheckSquare } from 'lucide-react';
+import { AlertTriangle, User, Calendar } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatKobo, formatDate } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
@@ -62,11 +63,11 @@ export default function ExceptionsPage() {
         {isLoading ? (
           <Loading what="exceptions" />
         ) : items.length === 0 ? (
-          <div className="p-16 text-center flex flex-col items-center justify-center">
-            <CheckSquare className="h-12 w-12 text-muted-foreground mb-4 opacity-20" />
-            <h3 className="text-lg font-medium">{filter === 'resolved' ? 'Nothing resolved yet' : 'All clear'}</h3>
-            <p className="text-muted-foreground text-sm mt-1">{filter === 'resolved' ? 'Resolved and closed exceptions will appear here.' : 'No exceptions match this filter.'}</p>
-          </div>
+          <EmptyState filtered title={filter === 'resolved' ? 'Nothing resolved yet' : filter === 'high' ? 'No high-severity exceptions open' : 'All clear: no open exceptions'}>
+            {filter === 'resolved'
+              ? 'Resolved and closed exceptions are kept here with their resolution code.'
+              : 'The daily close raises an exception for each unmatched payment, failed attempt or missing notice, with an owner and a business-day deadline.'}
+          </EmptyState>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-left">

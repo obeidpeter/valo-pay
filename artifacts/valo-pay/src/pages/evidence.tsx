@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { EmptyRow } from '@/components/empty-state';
 import { Loading, LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetGates, useListRecords, useCreateExport, getGetGatesQueryKey, getListRecordsQueryKey } from '@workspace/api-client-react';
@@ -199,7 +200,7 @@ export default function EvidencePage() {
               {isLoadingComm ? (
                 <LoadingRow colSpan={7} what="commercial commitments" />
               ) : !commercial || commercial.items.length === 0 ? (
-                <tr><td colSpan={7} className="px-6 py-8 text-center text-muted-foreground">No commercial records found.</td></tr>
+                <EmptyRow colSpan={7} title="No commercial commitments">Signed design-partner terms, licence tiers and pricing commitments are recorded here as evidence for the gate.</EmptyRow>
               ) : (
                 commercial.items.map(comm => (
                   <tr key={comm.id} className="hover:bg-secondary/10">
@@ -252,7 +253,7 @@ export default function EvidencePage() {
               {isLoadingReviews ? (
                 <LoadingRow colSpan={4} what="reviews" />
               ) : !reviews || reviews.items.length === 0 ? (
-                <tr><td colSpan={4} className="px-6 py-8 text-center text-muted-foreground">No reviews logged.</td></tr>
+                <EmptyRow colSpan={4} title="No reviews logged">A fortnightly confirmation by a named reviewer is logged here, and the cadence check counts them (MEA-05).</EmptyRow>
               ) : (
                 reviews.items.map(rev => (
                   <tr key={rev.id} className="hover:bg-secondary/10">

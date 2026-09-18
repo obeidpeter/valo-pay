@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { EmptyRow } from '@/components/empty-state';
 import { LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, usePerformAction, getListRecordsQueryKey, useGetReports, getGetReportsQueryKey } from '@workspace/api-client-react';
@@ -128,7 +129,7 @@ export default function ReconciliationPage() {
                 {isLoadingProposals ? (
                   <LoadingRow colSpan={6} what="proposals" />
                 ) : !proposals || proposals.items.length === 0 ? (
-                  <tr><td colSpan={6} className="p-12 text-center text-muted-foreground">No proposals pending review. Run engine to generate.</td></tr>
+                  <EmptyRow colSpan={6} title="No proposals waiting for review">The engine proposes a match when a payment fits an instalment by amount, reference or timing but not with certainty. Run the engine to look for new ones.</EmptyRow>
                 ) : (
                   proposals.items.map(prop => (
                     <tr key={prop.id} className="hover:bg-secondary/10">
@@ -183,7 +184,7 @@ export default function ReconciliationPage() {
                 {isLoadingPayments ? (
                   <LoadingRow colSpan={3} what="unallocated payments" />
                 ) : !payments || payments.items.length === 0 ? (
-                  <tr><td colSpan={3} className="p-8 text-center text-muted-foreground">No unallocated payments.</td></tr>
+                  <EmptyRow colSpan={3} title="No unallocated payments">Every payment received is matched to an instalment. One that cannot be matched appears here with an owner and a deadline.</EmptyRow>
                 ) : (
                   payments.items.map(pay => (
                     <tr key={pay.id} className="hover:bg-secondary/10">
@@ -228,7 +229,7 @@ export default function ReconciliationPage() {
                 {isLoadingObs ? (
                   <LoadingRow colSpan={3} what="unresolved observations" />
                 ) : !observations || observations.items.length === 0 ? (
-                  <tr><td colSpan={3} className="p-8 text-center text-muted-foreground">No unresolved observations.</td></tr>
+                  <EmptyRow colSpan={3} title="No unresolved observations">Every webhook, settlement line and statement line has been resolved to a payment. Anything the engine cannot resolve waits here as evidence.</EmptyRow>
                 ) : (
                   observations.items.map(obs => (
                     <tr key={obs.id} className="hover:bg-secondary/10">
@@ -269,7 +270,7 @@ export default function ReconciliationPage() {
                 {isLoadingAudit ? (
                   <LoadingRow colSpan={7} what="the precision sample" />
                 ) : auditSample.length === 0 ? (
-                  <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">No automatic certain allocations to review yet.</td></tr>
+                  <EmptyRow colSpan={7} title="No automatic certain matches to review yet">The sample is drawn from the completed month's automatic certain allocations at the daily close, for Finance to confirm or reject (REC-09).</EmptyRow>
                 ) : (
                   auditSample.map(allocation => (
                     <tr key={allocation.id} className="hover:bg-secondary/10">
@@ -315,7 +316,7 @@ export default function ReconciliationPage() {
                 {isLoadingBatches ? (
                   <LoadingRow colSpan={6} what="settlement batches" />
                 ) : !batches || batches.items.length === 0 ? (
-                  <tr><td colSpan={6} className="p-8 text-center text-muted-foreground">No settlement batches found.</td></tr>
+                  <EmptyRow colSpan={6} title="No settlement batches">A batch appears when a settlement report arrives from the aggregator or is imported as a CSV.</EmptyRow>
                 ) : (
                   batches.items.map(b => (
                     <tr key={b.id} className="hover:bg-secondary/10 cursor-pointer" onClick={() => handleAction(b, 'edit_batch')}>

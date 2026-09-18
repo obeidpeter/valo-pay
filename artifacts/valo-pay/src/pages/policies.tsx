@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, usePerformAction, getListRecordsQueryKey } from '@workspace/api-client-react';
@@ -59,7 +60,9 @@ export default function PoliciesPage() {
           {isLoading ? (
             <Loading what="policies" />
           ) : !policies || policies.items.length === 0 ? (
-            <div className="p-12 text-center text-muted-foreground">No policies defined.</div>
+            <EmptyState title="No retry policies yet" action={<Button size="sm" variant="outline" onClick={() => handleAction(null, 'create_policy')}>Draft a policy</Button>}>
+              A policy sets the retry rules: notice in advance, caps, quiet hours and the kill switch. Draft a version, submit it, and a compliance reviewer approves it before it applies.
+            </EmptyState>
           ) : (
             policies.items.map(policy => (
               <div key={policy.id} className="p-6 flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -141,7 +144,7 @@ export default function PoliciesPage() {
           {isLoadingTemplates ? (
             <Loading what="templates" className="col-span-2" />
           ) : !templates || templates.items.length === 0 ? (
-            <div className="col-span-2 p-8 text-center text-muted-foreground border-2 border-dashed rounded-xl">No templates defined.</div>
+            <EmptyState className="col-span-2" title="No notification templates yet">A template carries the notice a customer receives before a retry; a compliance reviewer approves each version before it is used.</EmptyState>
           ) : (
             templates.items.map(template => (
               <div key={template.id} className="border rounded-lg p-4 bg-secondary/5 relative">
