@@ -7,7 +7,7 @@ import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { buildReports } from "../domain";
 import { getGates } from "./valopay-readiness";
 import { verifyAudit } from "./valopay-store";
-import { collectExportBytes, EXPORT_STORAGE_TIMEOUT_MS, readExportBytes } from "./export-download";
+import { EXPORT_STORAGE_TIMEOUT_MS, readExportBytes, readExportMetadata } from "./export-download";
 import { buildDisputePack, disputePackCsv, packFonts, renderDisputePackPdf, type DisputePack } from "./valopay-packs";
 import { MAX_EXPORT_BYTES, publicExportRecord, type ClaimedExport, type ExportArtifact, type ExportJobStorage } from './export-jobs';
 
@@ -92,8 +92,7 @@ export const exportJobStorage: ExportJobStorage = {
   const file=objectStorageClient.bucket(claim.location.bucket).file(claim.location.objectName);
   let metadata;
   try {
-   const stream=file.requestStream({uri:'',headers:{'Cache-Control':'no-store'},timeout:EXPORT_STORAGE_TIMEOUT_MS});
-   metadata=JSON.parse((await collectExportBytes(stream,undefined,256*1024)).toString('utf8'));
+   metadata=await readExportMetadata(file);
   } catch(error) { if(Number((error as {statusCode?:unknown;code?:unknown}).statusCode??(error as {code?:unknown}).code)===404)return null; throw error; }
   const custom=metadata.metadata||{};
   if(custom.valopayExportId!==claim.id||custom.valopayMerchantId!==claim.merchantId)throw new Error('Export object ownership metadata does not match its job.');
