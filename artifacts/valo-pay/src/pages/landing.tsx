@@ -8,7 +8,7 @@ import { authEnabled, useSessionUser } from '@/lib/auth';
 /**
  * The landing page: what Valo Pay is, what it is not, and two ways in.
  *
- * Design rationale (docs/design/landing-and-login.md): one primary action per
+ * Design rationale (docs/design/console.md): one primary action per
  * screen, the descriptor and "we never hold money" inside the first three
  * lines, four equal cards for the four jobs (Gestalt proximity, small
  * multiples), white space as the grouping element, a left-aligned

@@ -12,6 +12,7 @@ const env = { ...process.env, DATABASE_URL: process.env.DATABASE_URL || "postgre
 const steps = [
   ["node", ["scripts/check-db-boundary.mjs"]],
   ["node", ["scripts/github-snapshot.test.mjs"]],
+  ["node", ["scripts/check-docs.mjs"]],
   [tsx, ["artifacts/api-server/tests/valopay-store-guards.test.ts"]],
   [tsx, ["artifacts/api-server/tests/export-download.test.ts"]],
   [tsx, ["artifacts/api-server/tests/api-security.test.ts"]],

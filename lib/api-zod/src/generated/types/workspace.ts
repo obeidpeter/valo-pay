@@ -7,6 +7,9 @@
  */
 import type { Merchant } from './merchant';
 
+/**
+ * The caller's workspace: who is acting, in which role, whether they signed in, and the lenders and roles available.
+ */
 export interface Workspace {
   name: string;
   environment: string;

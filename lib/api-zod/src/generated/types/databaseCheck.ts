@@ -5,13 +5,12 @@
  * Valo Pay Stage 1 observation-first sandbox API. All monetary fields are integer kobo. Live lender data and all outbound provider instructions are blocked until production readiness is verified.
  * OpenAPI spec version: 1.0.0
  */
+import type { DatabaseCheckStatus } from './databaseCheckStatus';
 
 /**
- * The export's id, its download address on this API, its SHA-256 checksum and when it was generated.
+ * One round trip to the database and how long it took.
  */
-export interface ExportResult {
-  id: string;
-  downloadUrl: string;
-  checksum: string;
-  generatedAt: string;
+export interface DatabaseCheck {
+  status: DatabaseCheckStatus;
+  latencyMs: number;
 }

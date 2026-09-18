@@ -41,6 +41,7 @@ import type {
   ListRecordsParams,
   Overview,
   PerformActionParams,
+  ReadinessStatus,
   RecordInput,
   RecordList,
   RecordUpdate,
@@ -89,6 +90,10 @@ export const getHealthCheckUrl = () => {
   return `/api/healthz`
 }
 
+/**
+ * Never touches the database, so a database outage does not read as a dead process. Needs no sandbox or sign-in.
+ * @summary Liveness: the process answers, with its build, uptime and scheduler state
+ */
 export const healthCheck = async ( options?: Parameters<typeof customFetch>[1]): Promise<HealthStatus> => {
 
   return customFetch<HealthStatus>(getHealthCheckUrl(),
@@ -133,6 +138,9 @@ export type HealthCheckQueryResult = NonNullable<Awaited<ReturnType<typeof healt
 export type HealthCheckQueryError = ErrorType<void>
 
 
+/**
+ * @summary Liveness: the process answers, with its build, uptime and scheduler state
+ */
 
 export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, TError = ErrorType<void>>(
   options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof healthCheck>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
@@ -140,6 +148,84 @@ export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getHealthCheckQueryOptions(options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getReadinessCheckUrl = () => {
+
+
+
+
+  return `/api/readyz`
+}
+
+/**
+ * Answers 503 with status degraded while the database does not answer within the check's time limit; the reason is in the log, not the answer. Needs no sandbox or sign-in.
+ * @summary Readiness: one bounded round trip to the database
+ */
+export const readinessCheck = async ( options?: Parameters<typeof customFetch>[1]): Promise<ReadinessStatus> => {
+
+  return customFetch<ReadinessStatus>(getReadinessCheckUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getReadinessCheckQueryKey = () => {
+    return [
+    `/api/readyz`
+    ] as const;
+    }
+
+
+export const getReadinessCheckQueryOptions = <TData = Awaited<ReturnType<typeof readinessCheck>>, TError = ErrorType<void | ReadinessStatus>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof readinessCheck>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getReadinessCheckQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof readinessCheck>>> = ({ signal }) => readinessCheck({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof readinessCheck>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ReadinessCheckQueryResult = NonNullable<Awaited<ReturnType<typeof readinessCheck>>>
+export type ReadinessCheckQueryError = ErrorType<void | ReadinessStatus>
+
+
+/**
+ * @summary Readiness: one bounded round trip to the database
+ */
+
+export function useReadinessCheck<TData = Awaited<ReturnType<typeof readinessCheck>>, TError = ErrorType<void | ReadinessStatus>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof readinessCheck>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getReadinessCheckQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 
@@ -160,6 +246,10 @@ export const getGetWorkspaceUrl = () => {
   return `/api/v1/workspace`
 }
 
+/**
+ * On a first visit an anonymous caller gets a new synthetic sandbox with two lenders; a signed-in person gets their own workspace. New sandboxes are limited per client address.
+ * @summary The caller's workspace: its lenders, roles and actor
+ */
 export const getWorkspace = async ( options?: Parameters<typeof customFetch>[1]): Promise<Workspace> => {
 
   return customFetch<Workspace>(getGetWorkspaceUrl(),
@@ -204,6 +294,9 @@ export type GetWorkspaceQueryResult = NonNullable<Awaited<ReturnType<typeof getW
 export type GetWorkspaceQueryError = ErrorType<void>
 
 
+/**
+ * @summary The caller's workspace: its lenders, roles and actor
+ */
 
 export function useGetWorkspace<TData = Awaited<ReturnType<typeof getWorkspace>>, TError = ErrorType<void>>(
   options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getWorkspace>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
@@ -238,6 +331,10 @@ export const getGetOverviewUrl = (params: GetOverviewParams,) => {
   return stringifiedParams.length > 0 ? `/api/v1/overview?${stringifiedParams}` : `/api/v1/overview`
 }
 
+/**
+ * Metrics, queues, recent activity, upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02).
+ * @summary The operations overview for one lender
+ */
 export const getOverview = async (params: GetOverviewParams, options?: Parameters<typeof customFetch>[1]): Promise<Overview> => {
 
   return customFetch<Overview>(getGetOverviewUrl(params),
@@ -282,6 +379,9 @@ export type GetOverviewQueryResult = NonNullable<Awaited<ReturnType<typeof getOv
 export type GetOverviewQueryError = ErrorType<void>
 
 
+/**
+ * @summary The operations overview for one lender
+ */
 
 export function useGetOverview<TData = Awaited<ReturnType<typeof getOverview>>, TError = ErrorType<void>>(
  params: GetOverviewParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getOverview>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
@@ -317,6 +417,10 @@ export const getListRecordsUrl = (kind: string,
   return stringifiedParams.length > 0 ? `/api/v1/records/${kind}?${stringifiedParams}` : `/api/v1/records/${kind}`
 }
 
+/**
+ * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync.
+ * @summary Records of one kind for one lender, newest first
+ */
 export const listRecords = async (kind: string,
     params: ListRecordsParams, options?: Parameters<typeof customFetch>[1]): Promise<RecordList> => {
 
@@ -364,6 +468,9 @@ export type ListRecordsQueryResult = NonNullable<Awaited<ReturnType<typeof listR
 export type ListRecordsQueryError = ErrorType<void>
 
 
+/**
+ * @summary Records of one kind for one lender, newest first
+ */
 
 export function useListRecords<TData = Awaited<ReturnType<typeof listRecords>>, TError = ErrorType<void>>(
  kind: string,
@@ -400,6 +507,10 @@ export const getCreateRecordUrl = (kind: string,
   return stringifiedParams.length > 0 ? `/api/v1/records/${kind}?${stringifiedParams}` : `/api/v1/records/${kind}`
 }
 
+/**
+ * Validated against the kind's data schema; a status only a domain action may set is refused.
+ * @summary Create a record of an editable kind
+ */
 export const createRecord = async (kind: string,
     recordInput: RecordInput,
     params: CreateRecordParams, options?: Parameters<typeof customFetch>[1]): Promise<ValopayRecord> => {
@@ -465,7 +576,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type CreateRecordMutationError = ErrorType<void>
     export type CreateRecordMutationVariables = {kind: string;data: BodyType<RecordInput>;params: CreateRecordParams}
 
-    export const useCreateRecord = <TError = ErrorType<void>,
+    /**
+ * @summary Create a record of an editable kind
+ */
+export const useCreateRecord = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createRecord>>, TError,CreateRecordMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof createRecord>>,
@@ -493,6 +607,10 @@ export const getUpdateRecordUrl = (kind: string,
   return stringifiedParams.length > 0 ? `/api/v1/records/${kind}/${id}?${stringifiedParams}` : `/api/v1/records/${kind}/${id}`
 }
 
+/**
+ * Editable kinds only; an approved, preregistered or closed version is immutable, and deletion does not exist.
+ * @summary Update a record
+ */
 export const updateRecord = async (kind: string,
     id: string,
     recordUpdate: RecordUpdate,
@@ -559,7 +677,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type UpdateRecordMutationError = ErrorType<void>
     export type UpdateRecordMutationVariables = {kind: string;id: string;data: BodyType<RecordUpdate>;params: UpdateRecordParams}
 
-    export const useUpdateRecord = <TError = ErrorType<void>,
+    /**
+ * @summary Update a record
+ */
+export const useUpdateRecord = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateRecord>>, TError,UpdateRecordMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof updateRecord>>,
@@ -585,6 +706,10 @@ export const getPerformActionUrl = (params: PerformActionParams,) => {
   return stringifiedParams.length > 0 ? `/api/v1/actions?${stringifiedParams}` : `/api/v1/actions`
 }
 
+/**
+ * Every action is audited, most require a reason, and the persona's role applies; the catalogue of actions is in docs/frontend-contract.md.
+ * @summary Run a domain action on the lender's state
+ */
 export const performAction = async (actionInput: ActionInput,
     params: PerformActionParams, options?: Parameters<typeof customFetch>[1]): Promise<ActionResult> => {
 
@@ -649,7 +774,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type PerformActionMutationError = ErrorType<void>
     export type PerformActionMutationVariables = {data: BodyType<ActionInput>;params: PerformActionParams}
 
-    export const usePerformAction = <TError = ErrorType<void>,
+    /**
+ * @summary Run a domain action on the lender's state
+ */
+export const usePerformAction = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof performAction>>, TError,PerformActionMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof performAction>>,
@@ -675,6 +803,10 @@ export const getImportRecordsUrl = (params: ImportRecordsParams,) => {
   return stringifiedParams.length > 0 ? `/api/v1/imports?${stringifiedParams}` : `/api/v1/imports`
 }
 
+/**
+ * commit=false validates every row and reports each; commit=true persists all rows or none. syntheticOnly must be true: no real lender data.
+ * @summary Preview or commit a synthetic CSV import
+ */
 export const importRecords = async (importInput: ImportInput,
     params: ImportRecordsParams, options?: Parameters<typeof customFetch>[1]): Promise<ImportResult> => {
 
@@ -739,7 +871,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type ImportRecordsMutationError = ErrorType<void>
     export type ImportRecordsMutationVariables = {data: BodyType<ImportInput>;params: ImportRecordsParams}
 
-    export const useImportRecords = <TError = ErrorType<void>,
+    /**
+ * @summary Preview or commit a synthetic CSV import
+ */
+export const useImportRecords = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof importRecords>>, TError,ImportRecordsMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof importRecords>>,
@@ -766,6 +901,10 @@ export const getGetCustomerTimelineUrl = (id: string,
   return stringifiedParams.length > 0 ? `/api/v1/customers/${id}/timeline?${stringifiedParams}` : `/api/v1/customers/${id}/timeline`
 }
 
+/**
+ * Every event, mandate, due item and payment, with each retry decision as it was recorded.
+ * @summary A customer's position and complete timeline
+ */
 export const getCustomerTimeline = async (id: string,
     params: GetCustomerTimelineParams, options?: Parameters<typeof customFetch>[1]): Promise<Timeline> => {
 
@@ -813,6 +952,9 @@ export type GetCustomerTimelineQueryResult = NonNullable<Awaited<ReturnType<type
 export type GetCustomerTimelineQueryError = ErrorType<void>
 
 
+/**
+ * @summary A customer's position and complete timeline
+ */
 
 export function useGetCustomerTimeline<TData = Awaited<ReturnType<typeof getCustomerTimeline>>, TError = ErrorType<void>>(
  id: string,
@@ -848,6 +990,10 @@ export const getGetReportsUrl = (params: GetReportsParams,) => {
   return stringifiedParams.length > 0 ? `/api/v1/reports?${stringifiedParams}` : `/api/v1/reports`
 }
 
+/**
+ * Metrics, the billing statement and invoices, the recovery experiment, operational measurement (Test 5) and the daily closes with their REC-07 reports.
+ * @summary Reports for one lender
+ */
 export const getReports = async (params: GetReportsParams, options?: Parameters<typeof customFetch>[1]): Promise<Report> => {
 
   return customFetch<Report>(getGetReportsUrl(params),
@@ -892,6 +1038,9 @@ export type GetReportsQueryResult = NonNullable<Awaited<ReturnType<typeof getRep
 export type GetReportsQueryError = ErrorType<void>
 
 
+/**
+ * @summary Reports for one lender
+ */
 
 export function useGetReports<TData = Awaited<ReturnType<typeof getReports>>, TError = ErrorType<void>>(
  params: GetReportsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getReports>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
@@ -926,6 +1075,10 @@ export const getGetGatesUrl = (params: GetGatesParams,) => {
   return stringifiedParams.length > 0 ? `/api/v1/gates?${stringifiedParams}` : `/api/v1/gates`
 }
 
+/**
+ * Prerequisites and decisions, always unproven on synthetic data, and the limitations the sandbox cannot remove.
+ * @summary Production readiness gates
+ */
 export const getGates = async (params: GetGatesParams, options?: Parameters<typeof customFetch>[1]): Promise<Gates> => {
 
   return customFetch<Gates>(getGetGatesUrl(params),
@@ -970,6 +1123,9 @@ export type GetGatesQueryResult = NonNullable<Awaited<ReturnType<typeof getGates
 export type GetGatesQueryError = ErrorType<void>
 
 
+/**
+ * @summary Production readiness gates
+ */
 
 export function useGetGates<TData = Awaited<ReturnType<typeof getGates>>, TError = ErrorType<void>>(
  params: GetGatesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getGates>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
@@ -1004,6 +1160,10 @@ export const getGetSettingsUrl = (params: GetSettingsParams,) => {
   return stringifiedParams.length > 0 ? `/api/v1/settings?${stringifiedParams}` : `/api/v1/settings`
 }
 
+/**
+ * Permissions are those of the caller's current persona.
+ * @summary A lender's settings, permissions, integrations, members and calendar
+ */
 export const getSettings = async (params: GetSettingsParams, options?: Parameters<typeof customFetch>[1]): Promise<Settings> => {
 
   return customFetch<Settings>(getGetSettingsUrl(params),
@@ -1048,6 +1208,9 @@ export type GetSettingsQueryResult = NonNullable<Awaited<ReturnType<typeof getSe
 export type GetSettingsQueryError = ErrorType<void>
 
 
+/**
+ * @summary A lender's settings, permissions, integrations, members and calendar
+ */
 
 export function useGetSettings<TData = Awaited<ReturnType<typeof getSettings>>, TError = ErrorType<void>>(
  params: GetSettingsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSettings>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
@@ -1082,6 +1245,10 @@ export const getUpdateSettingsUrl = (params: UpdateSettingsParams,) => {
   return stringifiedParams.length > 0 ? `/api/v1/settings?${stringifiedParams}` : `/api/v1/settings`
 }
 
+/**
+ * The execution window, authorisation mode, contact route, thresholds, the daily close time (WAT) and whether closes are scheduled; Admin only.
+ * @summary Change a lender's execution settings
+ */
 export const updateSettings = async (settingsInput: SettingsInput,
     params: UpdateSettingsParams, options?: Parameters<typeof customFetch>[1]): Promise<Settings> => {
 
@@ -1146,7 +1313,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type UpdateSettingsMutationError = ErrorType<void>
     export type UpdateSettingsMutationVariables = {data: BodyType<SettingsInput>;params: UpdateSettingsParams}
 
-    export const useUpdateSettings = <TError = ErrorType<void>,
+    /**
+ * @summary Change a lender's execution settings
+ */
+export const useUpdateSettings = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateSettings>>, TError,UpdateSettingsMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof updateSettings>>,
@@ -1172,6 +1342,10 @@ export const getCreateExportUrl = (params: CreateExportParams,) => {
   return stringifiedParams.length > 0 ? `/api/v1/exports?${stringifiedParams}` : `/api/v1/exports`
 }
 
+/**
+ * A record kind, the gate pack, the billing statement or a customer's dispute pack, as JSON, CSV or PDF; stored privately with a SHA-256 checksum and recorded as an export.
+ * @summary Generate a private export
+ */
 export const createExport = async (exportInput: ExportInput,
     params: CreateExportParams, options?: Parameters<typeof customFetch>[1]): Promise<ExportResult> => {
 
@@ -1236,7 +1410,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type CreateExportMutationError = ErrorType<void>
     export type CreateExportMutationVariables = {data: BodyType<ExportInput>;params: CreateExportParams}
 
-    export const useCreateExport = <TError = ErrorType<void>,
+    /**
+ * @summary Generate a private export
+ */
+export const useCreateExport = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createExport>>, TError,CreateExportMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof createExport>>,
@@ -1263,6 +1440,10 @@ export const getDownloadExportUrl = (id: string,
   return stringifiedParams.length > 0 ? `/api/v1/exports/${id}/download?${stringifiedParams}` : `/api/v1/exports/${id}/download`
 }
 
+/**
+ * The bytes are read from private storage and checked against the recorded SHA-256 before any are sent.
+ * @summary Download an export
+ */
 export const downloadExport = async (id: string,
     params: DownloadExportParams, options?: Parameters<typeof customFetch>[1]): Promise<Blob> => {
 
@@ -1310,6 +1491,9 @@ export type DownloadExportQueryResult = NonNullable<Awaited<ReturnType<typeof do
 export type DownloadExportQueryError = ErrorType<void>
 
 
+/**
+ * @summary Download an export
+ */
 
 export function useDownloadExport<TData = Awaited<ReturnType<typeof downloadExport>>, TError = ErrorType<void>>(
  id: string,
@@ -1338,6 +1522,10 @@ export const getGetOpenApiDocumentUrl = () => {
   return `/api/v1/openapi.json`
 }
 
+/**
+ * The versioned public contract the console and the generated clients are built from.
+ * @summary This specification
+ */
 export const getOpenApiDocument = async ( options?: Parameters<typeof customFetch>[1]): Promise<GetOpenApiDocument200> => {
 
   return customFetch<GetOpenApiDocument200>(getGetOpenApiDocumentUrl(),
@@ -1382,6 +1570,9 @@ export type GetOpenApiDocumentQueryResult = NonNullable<Awaited<ReturnType<typeo
 export type GetOpenApiDocumentQueryError = ErrorType<unknown>
 
 
+/**
+ * @summary This specification
+ */
 
 export function useGetOpenApiDocument<TData = Awaited<ReturnType<typeof getOpenApiDocument>>, TError = ErrorType<unknown>>(
   options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getOpenApiDocument>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
@@ -1409,6 +1600,10 @@ export const getDisabledProviderWebhookUrl = (provider: string,) => {
   return `/api/v1/webhooks/${provider}`
 }
 
+/**
+ * Always 403: no provider adapter is configured and no event is processed.
+ * @summary Provider webhook ingress, disabled in the sandbox
+ */
 export const disabledProviderWebhook = async (provider: string, options?: Parameters<typeof customFetch>[1]): Promise<unknown> => {
 
   return customFetch<unknown>(getDisabledProviderWebhookUrl(provider),
@@ -1458,7 +1653,10 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type DisabledProviderWebhookMutationError = ErrorType<void>
     export type DisabledProviderWebhookMutationVariables = {provider: string}
 
-    export const useDisabledProviderWebhook = <TError = ErrorType<void>,
+    /**
+ * @summary Provider webhook ingress, disabled in the sandbox
+ */
+export const useDisabledProviderWebhook = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof disabledProviderWebhook>>, TError,DisabledProviderWebhookMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof disabledProviderWebhook>>,

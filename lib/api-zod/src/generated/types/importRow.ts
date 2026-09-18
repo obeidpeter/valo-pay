@@ -6,6 +6,9 @@
  * OpenAPI spec version: 1.0.0
  */
 
+/**
+ * The outcome of one imported row.
+ */
 export interface ImportRow {
   row: number;
   status: string;

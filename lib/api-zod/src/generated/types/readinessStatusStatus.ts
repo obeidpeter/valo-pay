@@ -6,12 +6,10 @@
  * OpenAPI spec version: 1.0.0
  */
 
-/**
- * The export's id, its download address on this API, its SHA-256 checksum and when it was generated.
- */
-export interface ExportResult {
-  id: string;
-  downloadUrl: string;
-  checksum: string;
-  generatedAt: string;
-}
+export type ReadinessStatusStatus = typeof ReadinessStatusStatus[keyof typeof ReadinessStatusStatus];
+
+
+export const ReadinessStatusStatus = {
+  ok: 'ok',
+  degraded: 'degraded',
+} as const;

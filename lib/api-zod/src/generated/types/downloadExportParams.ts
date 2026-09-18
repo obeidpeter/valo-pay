@@ -7,5 +7,8 @@
  */
 
 export type DownloadExportParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
 merchantId: string;
 };

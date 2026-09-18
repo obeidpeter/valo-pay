@@ -15,8 +15,10 @@ import { runDailyClose } from "../domain/actions";
 import { scheduledCloseDue } from "../domain/close";
 import { enrolEligibleFailures } from "../domain/policy-engine";
 
+/** The system actor recorded on a scheduled close. */
 export const SCHEDULED_CLOSE_ACTOR = `${SYSTEM_ACTOR_PREFIX}scheduled close`;
 
+/** One lender closed by a pass. */
 export interface ClosedMerchant { merchantId: string; closeId: string; late: boolean; delayMinutes: number | null }
 
 /** What the scheduler is doing, for /api/healthz: whether it ticks, when it last looked, and what its last pass that found work did. */
@@ -28,9 +30,11 @@ export interface SchedulerStatus {
   lastRun: { runId: string; at: string; durationMs: number; initialised: number; examined: number; closed: number; skipped: number; failed: number } | null;
 }
 const status: SchedulerStatus = { state: "not_started", intervalMs: null, ticks: 0, lastTickAt: null, lastRun: null };
+/** A copy of the scheduler's state, for the health answer. */
 export function schedulerStatus(): SchedulerStatus { return structuredClone(status); }
 /** Recorded when the process is told not to schedule closes (VALOPAY_CLOSE_SCHEDULER=off), so the health answer says so. */
 export function markSchedulerOff(): void { status.state = "off"; }
+/** What one scheduler pass did. */
 export interface CloseRun {
   runId: string;
   /** Legacy merchants given a cursor on this pass. */
@@ -83,6 +87,7 @@ export async function runDueCloses(options: { batchSize?: number; log?: Logger }
   return run;
 }
 
+/** The running scheduler: stop it, run a pass now, or wait for the pass in progress. */
 export interface CloseScheduler {
   stop(): void;
   /** Runs a pass now, or joins the pass already running. */

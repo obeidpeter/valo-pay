@@ -4,12 +4,14 @@
  */
 export type RetryRule = "yes" | "once" | "no" | "never" | "unresolved";
 
+/** A catalogue entry: what the code means, its retry rule and how it is handled. */
 export interface FailureCodeDefinition {
   readonly meaning: string;
   readonly retry: RetryRule;
   readonly handling: string;
 }
 
+/** The TRD 4.4 catalogue, keyed by normalised code. */
 export const failureCodes = {
   INSUFFICIENT_FUNDS: { meaning: "Not enough money on the due date.", retry: "yes", handling: "Policy retry with notice." },
   ACCOUNT_RESTRICTED: { meaning: "Post-no-debit or similar restriction.", retry: "once", handling: "One retry after spacing; then exception." },
@@ -24,7 +26,9 @@ export const failureCodes = {
   UNKNOWN: { meaning: "Unmapped provider code.", retry: "no", handling: "Exception; classify; extend mapping." },
 } as const satisfies Record<string, FailureCodeDefinition>;
 
+/** A catalogue code. */
 export type FailureCode = keyof typeof failureCodes;
+/** Every catalogue code, in catalogue order. */
 export const failureCodeList = Object.keys(failureCodes) as FailureCode[];
 
 /** Spellings earlier builds and some providers use.  Mapped, never stored. */
@@ -40,6 +44,7 @@ export const failureCodeAliases: Readonly<Record<string, FailureCode>> = {
   DISPUTED: "CUSTOMER_DISPUTED",
 };
 
+/** True for a catalogue code or a known alias, whatever its case. */
 export function isKnownFailureCode(raw: unknown): boolean {
   const value = String(raw ?? "").trim().toUpperCase();
   return value in failureCodes || value in failureCodeAliases;
@@ -52,6 +57,7 @@ export function normaliseFailureCode(raw: unknown): FailureCode {
   return failureCodeAliases[value] ?? "UNKNOWN";
 }
 
+/** The retry rule for any raw code; an unmapped code is UNKNOWN and is not retried. */
 export function retryRuleFor(raw: unknown): RetryRule {
   return failureCodes[normaliseFailureCode(raw)].retry;
 }

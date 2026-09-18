@@ -29,9 +29,13 @@ async function pdfBytes(title:string,data:unknown):Promise<Buffer>{
   document.end();
  });
 }
+/** The export kinds that are a customer's dispute pack (customer-pack is the older name). */
 export const packKinds=["customer-pack","dispute-pack"] as const;
+/** The export kinds that are not a record kind. */
 export const exportKinds=["gate-pack","billing",...packKinds] as const;
+/** What to export and in which format. */
 export interface ExportInput{kind:string;customerId?:string;format:"json"|"csv"|"pdf"}
+/** The file for an export request and the payload it was made from. */
 export interface ExportBytes{bytes:Buffer;contentType:string;payload:unknown;pack?:DisputePack}
 
 /** Pure: the file for an export request.  Storage, the checksum and the audit entry happen in createExportFile. */
@@ -56,6 +60,7 @@ export async function buildExportBytes(state:DomainState,ctx:Context,input:Expor
  }
  return {bytes:Buffer.from(JSON.stringify(snapshot,null,2)),contentType:"application/json",payload:snapshot};
 }
+/** Writes the export to private storage with its SHA-256, records it on the lender's state, and returns its download address, size and generation time. */
 export async function createExportFile(state:DomainState,ctx:Context,input:ExportInput){
  const started=Date.now();
  const {bytes,contentType,pack}=await buildExportBytes(state,ctx,input);
@@ -70,6 +75,7 @@ export async function createExportFile(state:DomainState,ctx:Context,input:Expor
  makeRecord(state,"exports",{id,name:`${input.kind} · ${input.format.toUpperCase()}`,status:"ready",customerId:pack?String(pack.customer.id):"",createdAt:ctx.now,updatedAt:ctx.now,data:{checksum,kind:input.kind,format:input.format,usedInRealCase:false,objectName,bucket,contentType,byteLength:bytes.length,generationMs:Date.now()-started,events:pack?.timeline.length,customerReference:pack?String(pack.customer.reference):undefined}});
  return {id,downloadUrl:`/api/v1/exports/${id}/download?merchantId=${state.merchant.id}`,checksum,generatedAt:ctx.now,byteLength:bytes.length,generationMs:Date.now()-started};
 }
+/** Where an export lives and what to check it against. */
 export interface ExportDescriptor{id:string;bucket:string;objectName:string;checksum:string;contentType:string;filename:string}
 /** The authorised export metadata from the lender's state; resolved inside the transaction, used after it. */
 export function exportDescriptor(state:DomainState,id:string):ExportDescriptor{
@@ -83,6 +89,7 @@ export async function readExport(descriptor:ExportDescriptor,signal?:AbortSignal
  if(createHash("sha256").update(bytes).digest("hex")!==descriptor.checksum)throw new Error("Export checksum verification failed.");
  return {bytes,contentType:descriptor.contentType,filename:descriptor.filename};
 }
+/** The export's bytes for a download, resolved from the lender's state and checksum verified. */
 export function downloadExport(state:DomainState,id:string,signal?:AbortSignal){
  return readExport(exportDescriptor(state,id),signal);
 }

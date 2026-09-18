@@ -5,6 +5,19 @@
  * Valo Pay Stage 1 observation-first sandbox API. All monetary fields are integer kobo. Live lender data and all outbound provider instructions are blocked until production readiness is verified.
  * OpenAPI spec version: 1.0.0
  */
+export type SchedulerStatusState = typeof SchedulerStatusState[keyof typeof SchedulerStatusState];
+
+
+export const SchedulerStatusState = {
+  not_started: 'not_started',
+  running: 'running',
+  off: 'off',
+  stopped: 'stopped',
+} as const;
+
+/**
+ * The last scheduler pass that found work: its id, when it ran, how long it took and what it did.
+ */
 export interface SchedulerRun {
   runId: string;
   at: string;
@@ -16,14 +29,22 @@ export interface SchedulerRun {
   failed: number;
 }
 
+/**
+ * Whether closes are scheduled in this process, how often it looks, when it last looked and its last pass with work.
+ */
 export interface SchedulerStatus {
-  state: "not_started" | "running" | "off" | "stopped";
+  state: SchedulerStatusState;
+  /** @nullable */
   intervalMs: number | null;
   ticks: number;
+  /** @nullable */
   lastTickAt: string | null;
   lastRun: SchedulerRun | null;
 }
 
+/**
+ * The liveness answer: the build, when the process started, its uptime and what the close scheduler is doing.
+ */
 export interface HealthStatus {
   status: string;
   build: string;
@@ -32,19 +53,51 @@ export interface HealthStatus {
   scheduler: SchedulerStatus;
 }
 
+export type DatabaseCheckStatus = typeof DatabaseCheckStatus[keyof typeof DatabaseCheckStatus];
+
+
+export const DatabaseCheckStatus = {
+  ok: 'ok',
+  failed: 'failed',
+} as const;
+
+/**
+ * One round trip to the database and how long it took.
+ */
 export interface DatabaseCheck {
-  status: "ok" | "failed";
+  status: DatabaseCheckStatus;
   latencyMs: number;
 }
 
+export type ReadinessStatusStatus = typeof ReadinessStatusStatus[keyof typeof ReadinessStatusStatus];
+
+
+export const ReadinessStatusStatus = {
+  ok: 'ok',
+  degraded: 'degraded',
+} as const;
+
+export type ReadinessStatusChecks = {
+  database: DatabaseCheck;
+};
+
+/**
+ * The readiness answer: ok, or degraded while the database does not answer.
+ */
 export interface ReadinessStatus {
-  status: "ok" | "degraded";
+  status: ReadinessStatusStatus;
   build: string;
-  checks: { database: DatabaseCheck };
+  checks: ReadinessStatusChecks;
 }
 
+/**
+ * A record's data: the fields the kind's schema declares, and anything else a caller stored.
+ */
 export interface RecordData {[key: string]: unknown}
 
+/**
+ * A stored record of any kind, with its lender, status, reference, amount in kobo and data.
+ */
 export interface ValopayRecord {
   id: string;
   merchantId: string;
@@ -59,6 +112,9 @@ export interface ValopayRecord {
   data: RecordData;
 }
 
+/**
+ * A new record: only the name is required; the kind's default status applies when none is given.
+ */
 export interface RecordInput {
   name: string;
   status?: string;
@@ -69,6 +125,9 @@ export interface RecordInput {
   data?: RecordData;
 }
 
+/**
+ * The fields to change on a record; omitted fields keep their values.
+ */
 export interface RecordUpdate {
   name?: string;
   status?: string;
@@ -79,6 +138,9 @@ export interface RecordUpdate {
   data?: RecordData;
 }
 
+/**
+ * A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags.
+ */
 export interface Merchant {
   id: string;
   name: string;
@@ -93,6 +155,9 @@ export interface Merchant {
   preLiveReady: boolean;
 }
 
+/**
+ * The caller's workspace: who is acting, in which role, whether they signed in, and the lenders and roles available.
+ */
 export interface Workspace {
   name: string;
   environment: string;
@@ -104,6 +169,9 @@ export interface Workspace {
   productionEnabled: boolean;
 }
 
+/**
+ * A named measurement with its unit and the basis it was derived from.
+ */
 export interface Metric {
   key: string;
   label: string;
@@ -112,6 +180,9 @@ export interface Metric {
   detail: string;
 }
 
+/**
+ * An NFR-OBS-02 alert: what condition holds, how severe it is, since when and the record it points at.
+ */
 export interface Alert {
   key: string;
   severity: string;
@@ -122,6 +193,9 @@ export interface Alert {
   linkedRecordId?: string;
 }
 
+/**
+ * The overview: metrics, queues, recent activity, upcoming due items, the close schedule and the alerts.
+ */
 export interface Overview {
   metrics: Metric[];
   queues: Metric[];
@@ -135,12 +209,18 @@ export interface Overview {
   alerts: Alert[];
 }
 
+/**
+ * One page of records with the filtered total; nextOffset is present while more rows remain.
+ */
 export interface RecordList {
   items: ValopayRecord[];
   total: number;
   nextOffset?: number;
 }
 
+/**
+ * An action to run: its name, the record it applies to, the reason for it and any data it needs.
+ */
 export interface ActionInput {
   action: string;
   recordId?: string;
@@ -148,12 +228,18 @@ export interface ActionInput {
   data?: RecordData;
 }
 
+/**
+ * What an action did, in words, with the record it produced or changed and any data it returns.
+ */
 export interface ActionResult {
   message: string;
   record?: ValopayRecord;
   data: RecordData;
 }
 
+/**
+ * A synthetic CSV to preview or commit for one kind, with an optional column mapping.
+ */
 export interface ImportInput {
   kind: string;
   csv: string;
@@ -162,12 +248,18 @@ export interface ImportInput {
   mapping?: RecordData;
 }
 
+/**
+ * The outcome of one imported row.
+ */
 export interface ImportRow {
   row: number;
   status: string;
   message: string;
 }
 
+/**
+ * How many rows were valid, invalid and imported, and each row's outcome.
+ */
 export interface ImportResult {
   valid: number;
   invalid: number;
@@ -175,6 +267,9 @@ export interface ImportResult {
   rows: ImportRow[];
 }
 
+/**
+ * The reports: metrics, billing, the experiment, operational measurement and the daily closes.
+ */
 export interface Report {
   metrics: Metric[];
   billing: RecordData;
@@ -183,6 +278,9 @@ export interface Report {
   closes: ValopayRecord[];
 }
 
+/**
+ * One readiness gate: what it needs, its status and the evidence recorded.
+ */
 export interface Gate {
   id: string;
   title: string;
@@ -192,6 +290,9 @@ export interface Gate {
   due: string;
 }
 
+/**
+ * The prerequisites and decisions, the sandbox's limitations, and the cash and burn figures used for the funding decision.
+ */
 export interface Gates {
   prerequisites: Gate[];
   decisions: Gate[];
@@ -200,6 +301,9 @@ export interface Gates {
   burnKobo: number;
 }
 
+/**
+ * A customer, their derived position, and every related event, mandate, due item and payment.
+ */
 export interface Timeline {
   customer: ValopayRecord;
   position: RecordData;
@@ -209,6 +313,9 @@ export interface Timeline {
   payments: ValopayRecord[];
 }
 
+/**
+ * A lender's settings and the caller's permissions, with integrations, members and the business calendar.
+ */
 export interface Settings {
   merchant: Merchant;
   settings: RecordData;
@@ -218,6 +325,9 @@ export interface Settings {
   calendar: ValopayRecord[];
 }
 
+/**
+ * The execution settings to change; every field is optional.
+ */
 export interface SettingsInput {
   executionStart?: number;
   executionEnd?: number;
@@ -241,12 +351,18 @@ export const ExportInputFormat = {
   pdf: 'pdf',
 } as const;
 
+/**
+ * What to export (a record kind, gate-pack, billing, dispute-pack or customer-pack with a customerId) and in which format.
+ */
 export interface ExportInput {
   kind: string;
   customerId?: string;
   format: ExportInputFormat;
 }
 
+/**
+ * The export's id, its download address on this API, its SHA-256 checksum and when it was generated.
+ */
 export interface ExportResult {
   id: string;
   downloadUrl: string;
@@ -255,12 +371,24 @@ export interface ExportResult {
 }
 
 export type GetOverviewParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
 merchantId: string;
 };
 
 export type ListRecordsParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
 merchantId: string;
+/**
+ * Text matched, ignoring case and accents, against the name, reference, status and data.
+ */
 search?: string;
+/**
+ * Only records in this status; omitted or "all" for every status.
+ */
 status?: string;
 /**
  * Page size; omitted returns the whole filtered set (at most 500 per page).
@@ -280,46 +408,79 @@ updatedSince?: string;
 };
 
 export type CreateRecordParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
 merchantId: string;
 };
 
 export type UpdateRecordParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
 merchantId: string;
 };
 
 export type PerformActionParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
 merchantId: string;
 };
 
 export type ImportRecordsParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
 merchantId: string;
 };
 
 export type GetCustomerTimelineParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
 merchantId: string;
 };
 
 export type GetReportsParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
 merchantId: string;
 };
 
 export type GetGatesParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
 merchantId: string;
 };
 
 export type GetSettingsParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
 merchantId: string;
 };
 
 export type UpdateSettingsParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
 merchantId: string;
 };
 
 export type CreateExportParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
 merchantId: string;
 };
 
 export type DownloadExportParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
 merchantId: string;
 };
 

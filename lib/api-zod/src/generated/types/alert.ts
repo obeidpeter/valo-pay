@@ -6,6 +6,9 @@
  * OpenAPI spec version: 1.0.0
  */
 
+/**
+ * An NFR-OBS-02 alert: what condition holds, how severe it is, since when and the record it points at.
+ */
 export interface Alert {
   key: string;
   severity: string;

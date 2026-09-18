@@ -9,6 +9,7 @@ export const recordKinds = [
   "closes", "exports", "commercial", "reviews", "evidence", "experiments", "costs", "calendar",
   "integrations", "members", "retry-decisions", "invoices",
 ] as const;
+/** A record kind, as stored and as addressed in the API's path. */
 export type RecordKind = (typeof recordKinds)[number];
 
 /** Kinds a merchant user may create or edit through the generic record API. */
@@ -16,11 +17,13 @@ export const editableKinds = [
   "customers", "mandates", "due-items", "attempts", "observations", "exceptions", "policies", "templates",
   "cutovers", "commercial", "reviews", "evidence", "experiments", "costs", "calendar", "settlement-batches",
 ] as const;
+/** A kind the generic record API may create or edit. */
 export type EditableKind = (typeof editableKinds)[number];
 
 /** Kinds accepted by the synthetic CSV importer. */
 export const importKinds = ["customers", "mandates", "due-items", "attempts", "observations"] as const;
 
+/** The statuses each kind may carry; a kind absent here has a free-form status. */
 export const recordStatuses = {
   customers: ["active", "inactive"],
   mandates: ["draft", "submitted", "pending_activation", "active", "suspended", "expired", "cancelled", "failed"],
@@ -42,9 +45,13 @@ export const recordStatuses = {
   exports: ["ready"],
   invoices: ["issued"],
 } as const satisfies Partial<Record<RecordKind, readonly string[]>>;
+/** The status union of a kind with a controlled vocabulary. */
 export type StatusOf<K extends keyof typeof recordStatuses> = (typeof recordStatuses)[K][number];
+/** A mandate's status. */
 export type MandateStatus = StatusOf<"mandates">;
+/** A due item's status. */
 export type DueItemStatus = StatusOf<"due-items">;
+/** An exception's status. */
 export type ExceptionStatus = StatusOf<"exceptions">;
 
 /** Status a record starts in when the caller does not supply one. */
@@ -89,7 +96,10 @@ export const actionOnlyStatuses: Partial<Record<RecordKind, readonly string[]>> 
   cutovers: ["handed_back"],
   "settlement-batches": ["reconciled", "variance"],
 };
+/** True when a generic create or update must refuse the status because only a domain action may set it. */
 export const isActionOnlyStatus = (kind: string, status: string): boolean => (actionOnlyStatuses[kind as RecordKind] ?? []).includes(status);
 
+/** The statuses of an exception still being worked. */
 export const openExceptionStatuses = ["open", "assigned", "in_progress"] as const;
+/** True while an exception is still being worked. */
 export const isOpenException = (status: string): boolean => (openExceptionStatuses as readonly string[]).includes(status);

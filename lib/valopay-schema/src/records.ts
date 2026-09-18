@@ -7,7 +7,9 @@ import type { RecordKind } from "./kinds";
 
 /** ISO date (YYYY-MM-DD) or a UTC ISO timestamp with millisecond precision or less. */
 export const isoDateOrTimestamp = z.string().regex(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/, "must be an ISO date or UTC ISO timestamp").refine((value) => !Number.isNaN(Date.parse(value)), "must be a real date");
+/** A day as YYYY-MM-DD. */
 export const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").refine((value) => !Number.isNaN(Date.parse(value)), "must be a real date");
+/** An amount in kobo: a non-negative safe integer. */
 export const kobo = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const versionNumber = z.coerce.number().int().min(1);
 /** Every record the platform writes is marked synthetic; a provider-accepted notice clears it (NOT-10). */
@@ -58,9 +60,13 @@ export const closeReportSchema = z.object({
   reconciliation: z.record(z.unknown()),
   alerts: z.array(alertSchema).optional(),
 }).passthrough();
+/** The REC-07 report a daily close freezes. */
 export type CloseReport = z.infer<typeof closeReportSchema>;
+/** A named measurement with its unit and basis. */
 export type MetricData = z.infer<typeof metricSchema>;
+/** An NFR-OBS-02 alert as the overview returns it. */
 export type AlertData = z.infer<typeof alertSchema>;
+/** A customer's derived position: obligations, payment evidence and the outstanding amount. */
 export type CustomerPositionData = z.infer<typeof positionSchema>;
 
 /**
@@ -476,7 +482,9 @@ export const recordDataSchemas = {
   }).passthrough(),
 } as const satisfies Record<RecordKind, z.ZodTypeAny>;
 
+/** The map of every kind's data schema. */
 export type RecordDataSchemas = typeof recordDataSchemas;
+/** The data type of a kind by its schema key; the same as RecordDataOf for a record kind. */
 export type DataOf<K extends keyof RecordDataSchemas> = z.infer<RecordDataSchemas[K]>;
 /** The typed data of a record of kind K: the declared fields with their types, and anything else as unknown. */
 export type RecordDataOf<K extends RecordKind> = z.infer<RecordDataSchemas[K]>;
@@ -488,4 +496,5 @@ export function describeIssues(error: z.ZodError): string {
 
 /** Fields the CSV importer coerces to numbers and booleans, derived from the schemas above. */
 export const importNumericFields = new Set(["amountKobo", "maxAttempts", "spacingHours", "firstNoticeHours", "retryNoticeHours", "number", "outstandingKobo", "monthlyVolume", "grossKobo", "feeKobo", "netKobo", "grossAmountKobo", "baselineRate", "holdoutShare", "minPerArm", "reminderCount", "payDay", "version"]);
+/** Data fields the CSV importer reads as booleans ("true", anything else false). */
 export const importBooleanFields = new Set(["simulated", "partialAllowed", "reversed", "consentGiven", "signed", "signedFullPriceTerms", "designPartner", "incumbentDisabled", "externalAttemptsImported", "dualRunComplete"]);

@@ -13,6 +13,7 @@ type WorkspaceContextType = {
 
 const WorkspaceContext = createContext<WorkspaceContextType | null>(null);
 
+/** Loads the caller's workspace and provides it to the console; shows the failure notice while it cannot be loaded. */
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const {userId,isLoaded:authLoaded}=useSessionUser();
   // Never hold the anonymous sandbox hostage to a slow or unreachable sign-in service.
@@ -38,6 +39,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
 }
 
+/** The loaded workspace, the selected lender and the way to change it; only valid inside WorkspaceProvider. */
 export function useWorkspace() {
   const context = useContext(WorkspaceContext);
   if (!context) {

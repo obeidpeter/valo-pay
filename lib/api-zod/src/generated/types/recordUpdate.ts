@@ -7,6 +7,9 @@
  */
 import type { RecordData } from './recordData';
 
+/**
+ * The fields to change on a record; omitted fields keep their values.
+ */
 export interface RecordUpdate {
   name?: string;
   status?: string;

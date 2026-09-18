@@ -9,6 +9,9 @@ import type { Merchant } from './merchant';
 import type { RecordData } from './recordData';
 import type { ValopayRecord } from './valopayRecord';
 
+/**
+ * A lender's settings and the caller's permissions, with integrations, members and the business calendar.
+ */
 export interface Settings {
   merchant: Merchant;
   settings: RecordData;

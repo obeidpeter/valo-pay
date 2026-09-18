@@ -13,6 +13,7 @@ import { positionFor, type CustomerPosition } from "../domain/close";
 import { recordsOf } from "../domain/records";
 import { verifyAudit } from "./valopay-store";
 
+/** One event on a customer's timeline as the pack prints it, with the versions that governed it. */
 export interface TimelineEvent {
   at: string;
   kind: string;
@@ -28,6 +29,7 @@ export interface TimelineEvent {
   recordId: string;
 }
 
+/** A policy, template or cutover version as it applied, with its text. */
 export interface GoverningDocument {
   id: string;
   kind: "policies" | "templates" | "cutovers";
@@ -40,6 +42,7 @@ export interface GoverningDocument {
   parameters: Record<string, unknown>;
 }
 
+/** The whole pack: identity, summary, position, timeline, governing documents and the audit verification. */
 export interface DisputePack {
   kind: "dispute-pack";
   environment: "synthetic_sandbox";
@@ -208,6 +211,7 @@ function pdfSafe(value: unknown): string {
   return text(value).replace(/₦/g, "NGN ").replace(/[\p{Cc}\p{Cf}]/gu, (character) => (character === "\n" || character === "\t" ? character : ""));
 }
 
+/** Rendering options; compress false for a test that reads the PDF back. */
 export interface PdfOptions { compress?: boolean }
 
 /** A4 pack: page one is the summary, the timeline follows as a paginated table, then the governing documents; every page is numbered. */

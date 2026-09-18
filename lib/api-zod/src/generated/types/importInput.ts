@@ -7,6 +7,9 @@
  */
 import type { RecordData } from './recordData';
 
+/**
+ * A synthetic CSV to preview or commit for one kind, with an optional column mapping.
+ */
 export interface ImportInput {
   kind: string;
   csv: string;

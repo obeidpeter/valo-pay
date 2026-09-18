@@ -3,6 +3,7 @@
 /** West Africa Time is UTC+1 all year. */
 export const WAT_OFFSET_MS = 60 * 60 * 1000;
 
+/** The floors and defaults every retry policy must respect (TRD 6.2). */
 export const policyGuardrails = {
   /** Ceiling no policy may exceed, counting external attempts (RET-02). */
   maxAttemptsCeiling: 4,
@@ -23,13 +24,16 @@ export const executionWindow = { earliestHour: 6, latestHour: 20, defaultStartHo
 /** Quiet hours for all customer messages, 21:00–08:00 WAT; the adapter refuses sends inside them. */
 export const quietHours = { startHour: 21, endHour: 8 } as const;
 
+/** The hour of the day in West Africa Time for an instant. */
 export function watHourOf(epochMs: number): number {
   return new Date(epochMs + WAT_OFFSET_MS).getUTCHours();
 }
+/** True inside the quiet hours, when no customer message may be sent. */
 export function withinQuietHours(epochMs: number): boolean {
   const hour = watHourOf(epochMs);
   return hour >= quietHours.startHour || hour < quietHours.endHour;
 }
+/** An execution-window hour from input, kept within the allowed window; the fallback when the input is not a whole number. */
 export function clampExecutionHour(value: unknown, fallback: number): number {
   const hour = Number(value);
   if (!Number.isInteger(hour)) return fallback;
@@ -38,6 +42,7 @@ export function clampExecutionHour(value: unknown, fallback: number): number {
 
 /** MAN-05 activation reminder caps by workflow type. */
 export const activationReminderCaps = { transfer_to_activate: 4, hosted_consent: 2 } as const;
+/** Days a new mandate has to activate before it expires. */
 export const DEFAULT_ACTIVATION_WINDOW_DAYS = 7;
 
 /** Section 6.6 experiment design and the pre-registered pass rule (RET-11). */
@@ -55,6 +60,7 @@ export const experimentRules = {
   enrolmentCloseBeforeAnalysisDays: 30,
 } as const;
 
+/** The pre-registered pass rule for the recovery experiment, as written (RET-11). */
 export const passRuleText = "For each lender: engine minus holdout recovery rate by value ≥ 8 percentage points; the 90% confidence interval of the difference excludes zero; each arm has at least the pre-computed minimum sample. Any other result is 'not proven'.";
 
 /** REC-09 and MEA-05 measurement rules: the monthly precision sample, its interval, the fortnightly review cadence and the Test 5 live-day floor. */

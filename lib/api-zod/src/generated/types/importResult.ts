@@ -7,6 +7,9 @@
  */
 import type { ImportRow } from './importRow';
 
+/**
+ * How many rows were valid, invalid and imported, and each row's outcome.
+ */
 export interface ImportResult {
   valid: number;
   invalid: number;

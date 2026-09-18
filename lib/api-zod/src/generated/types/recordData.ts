@@ -6,4 +6,7 @@
  * OpenAPI spec version: 1.0.0
  */
 
+/**
+ * A record's data: the fields the kind's schema declares, and anything else a caller stored.
+ */
 export interface RecordData {[key: string]: unknown}

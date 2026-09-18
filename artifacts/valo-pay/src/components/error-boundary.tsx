@@ -11,6 +11,7 @@ import { LookedFor, Notice } from '@/components/notice';
 import { PublicFrame } from '@/components/public-frame';
 import { formatDate } from '@/lib/formatters';
 
+/** What the fallback needs: the error, and a way to try the page again. */
 export interface ErrorFallbackProps {
   error: Error;
   resetError: () => void;
@@ -95,6 +96,7 @@ function DefaultFallback(props: ErrorFallbackProps) {
   );
 }
 
+/** Catches a render error below it and shows the notice in its place; reports the error to the browser console and to onErrorChange. */
 export class ErrorBoundary extends Component<
   ErrorBoundaryProps,
   ErrorBoundaryState

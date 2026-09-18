@@ -7,6 +7,9 @@
  */
 import type { RecordData } from './recordData';
 
+/**
+ * A new record: only the name is required; the kind's default status applies when none is given.
+ */
 export interface RecordInput {
   name: string;
   status?: string;

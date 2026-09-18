@@ -4,8 +4,10 @@
  * separately from the general request limit.  In-memory, per process.
  */
 export const WORKSPACE_CREATION_LIMIT = 20;
+/** The window: one hour. */
 export const WORKSPACE_CREATION_WINDOW_MS = 60 * 60 * 1000;
 
+/** A fixed-window counter keyed by client address. */
 export interface CreationLimiter {
   /** Returns true when a slot was taken; false when the key is over the limit for the current window. */
   take(key: string, nowMs: number): boolean;

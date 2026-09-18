@@ -16,6 +16,7 @@ import { PublicFrame } from '@/components/public-frame';
 
 type Action = { href: string; label: string };
 
+/** The not-found notice, with a primary and an optional secondary way out. */
 export function NotFoundNotice({ title, children, primary, secondary }: { title: string; children: ReactNode; primary: Action; secondary?: Action }) {
   return (
     <Notice
@@ -30,6 +31,7 @@ export function NotFoundNotice({ title, children, primary, secondary }: { title:
   );
 }
 
+/** The page for an address the console has no page for; it creates no sandbox. */
 export default function NotFoundPage() {
   const [location] = useLocation();
   useEffect(() => { document.title = 'Page not found · Valo Pay'; }, []);

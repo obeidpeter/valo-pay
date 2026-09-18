@@ -9,6 +9,9 @@ import type { Metric } from './metric';
 import type { RecordData } from './recordData';
 import type { ValopayRecord } from './valopayRecord';
 
+/**
+ * The reports: metrics, billing, the experiment, operational measurement and the daily closes.
+ */
 export interface Report {
   metrics: Metric[];
   billing: RecordData;
