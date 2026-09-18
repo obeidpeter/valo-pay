@@ -30,6 +30,10 @@ if (typeof window.matchMedia !== "function") {
   });
 }
 if (typeof Element.prototype.scrollIntoView !== "function") Element.prototype.scrollIntoView = () => { /* no scrolling in tests */ };
+// Radix's swipe-to-dismiss on a notice asks for pointer capture, which jsdom does not implement.
+if (typeof Element.prototype.hasPointerCapture !== "function") Element.prototype.hasPointerCapture = () => false;
+if (typeof Element.prototype.setPointerCapture !== "function") Element.prototype.setPointerCapture = () => { /* no pointer capture in tests */ };
+if (typeof Element.prototype.releasePointerCapture !== "function") Element.prototype.releasePointerCapture = () => { /* no pointer capture in tests */ };
 
 // The app retries failed queries with backoff; a test asserting an error state must see it at once.
 queryClient.setDefaultOptions({ queries: { retry: false } });

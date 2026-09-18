@@ -24,7 +24,8 @@ describe("customer timeline", () => {
     const record = api.state().records.find((item) => item.kind === "exports")!;
     expect(record.customerId).toBe(ada.id);
     await waitFor(() => expect(opened).toHaveBeenCalledWith(`/api/v1/exports/${record.id}/download?merchantId=${api.merchantIds[0]}`, "_blank"));
-    expect(screen.getByText(new RegExp(`SHA-256 ${String(record.data.checksum).slice(0, 16)}`))).toBeTruthy();
+    // Radix also announces a new notice through a hidden copy for a moment, so the text may be present twice.
+    expect(screen.getAllByText(new RegExp(`SHA-256 ${String(record.data.checksum).slice(0, 16)}`)).length).toBeGreaterThanOrEqual(1);
   });
 
   it("says when the lender has no customer with the reference, inside the console", async () => {
