@@ -105,7 +105,7 @@ try {
   const customer = editState.records.find(row => row.kind === "customers")!;
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { (req as any).auth = auth(); next(); });
+  app.use((req, _res, next) => { (req as any).auth = auth(); (req as any).log = { info() {} }; next(); });
   app.use("/api", router);
   app.use((error: any, _req: any, res: any, _next: any) => res.status(error.status || 500).json({ error: error.message }));
   server = await new Promise<Server>(resolve => { const running = app.listen(0, "127.0.0.1", () => resolve(running)); });
@@ -143,6 +143,28 @@ try {
   assert.equal(roleChanged.status, 200);
   assert.deepEqual(await api("/actions", "POST", roleChange, "role-switch-once"), roleChanged, "a role switch can replay after changing its own actor");
   assert.equal((await api("/actions", "POST", { action: "set_role", data: { role: "Admin" } }, "role-switch-once")).status, 409);
+  const { queueExport } = await import("../src/lib/export-jobs");
+  const jobs = await inWorkspace(request(editingToken), response(), async context => {
+    const state = await loadState(context, editingMerchant);
+    const result = ["failed", "running"].map(status => {
+      const job = queueExport(state, context, { kind: "customers", format: "csv" }, "/private/synthetic-tests");
+      const record = state.records.find(row => row.id === job.id)!;
+      record.status = status; Object.assign(record.data, { lastError: "Synthetic failure", leaseToken: "expired-claim", leaseExpiresAt: new Date(Date.parse(context.now) - 1).toISOString() });
+      return { id: job.id, objectName: record.data.objectName, updatedAt: record.updatedAt };
+    });
+    await saveState(context, state); return result;
+  });
+  for (const job of jobs) {
+    const retry = await api(`/exports/${job.id}/retry`, "POST", {}, `retry-${job.id}`);
+    assert.equal(retry.status, 200, JSON.stringify(retry.body)); assert.equal(retry.body.status, "queued");
+    assert.deepEqual(await api(`/exports/${job.id}/retry`, "POST", {}, `retry-${job.id}`), retry);
+    await inWorkspace(request(editingToken), response(), async context => {
+      const state = await loadState(context, editingMerchant, "share"); const record = state.records.find(row => row.id === job.id)!;
+      assert.equal(record.status, "queued"); assert.equal(record.data.objectName, job.objectName);
+      assert.equal(record.data.leaseToken, undefined); assert.equal(record.data.lastError, undefined);
+      assert.ok(Date.parse(record.updatedAt) > Date.parse(job.updatedAt));
+    }, "read");
+  }
   console.log("Record list integration passed: 10k rows, scoped paging/counts, exact search, history totals, tenant isolation, stale edits and successful replay.");
 } finally {
   if (server) await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve()));

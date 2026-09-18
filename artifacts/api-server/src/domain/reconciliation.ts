@@ -239,11 +239,11 @@ function reversePayment(state: DomainState, ctx: Context, payment: TypedRecord<"
 }
 
 /** ING-03: every observation resolves to one canonical Payment by its strong keys; the batch leg of a statement never becomes a customer Payment. */
-function canonicalPayment(state: DomainState, ctx: Context, observation: TypedRecord<"observations">): TypedRecord<"payments"> | undefined {
+function canonicalPayment(state: DomainState, ctx: Context, observation: TypedRecord<"observations">, payments: CanonicalPaymentIndex): TypedRecord<"payments"> | undefined {
   const source = String(observation.data.source);
   const ref = observation.reference;
   if (source === "statement" && (observation.data.batchReference || observation.data.resolutionKey === "batch")) return undefined;
-  const prior = recordsOf(state, "payments").find((item) => item.reference === ref || item.data.providerReference === ref || item.id === observation.data.paymentId);
+  const prior = payments.find(ref, observation.data.paymentId);
   const gross = Number(observation.data.grossAmountKobo ?? observation.amountKobo);
   const observedAt = String(observation.data.occurredAt || observation.createdAt);
   const payment = prior || makeRecord(state, "payments", {
@@ -256,6 +256,7 @@ function canonicalPayment(state: DomainState, ctx: Context, observation: TypedRe
       allocatedKobo: 0, canonical: true,
     },
   });
+  if (!prior) payments.add(payment);
   paymentDimensions(payment);
   if (prior && source === "webhook" && gross > payment.amountKobo && Number(payment.data.allocatedKobo) === 0) payment.amountKobo = gross;
   if (!payment.data.observedAt || Date.parse(observedAt) < Date.parse(String(payment.data.observedAt))) payment.data.observedAt = observedAt;
@@ -277,24 +278,68 @@ function canonicalPayment(state: DomainState, ctx: Context, observation: TypedRe
   return payment;
 }
 
+/** Strong-key lookups preserve the previous first-record-wins OR matching
+ * semantics, including legacy rows whose different keys collide. New canonical
+ * payments are registered immediately so repeated observations remain one payment. */
+class CanonicalPaymentIndex {
+  private reference = new Map<unknown, TypedRecord<"payments">>();
+  private providerReference = new Map<unknown, TypedRecord<"payments">>();
+  private id = new Map<unknown, TypedRecord<"payments">>();
+  private order = new Map<string, number>();
+  constructor(state: DomainState) { for (const payment of recordsOf(state, "payments")) this.add(payment); }
+  add(payment: TypedRecord<"payments">) {
+    this.order.set(payment.id, this.order.size);
+    for (const [map, key] of [[this.reference, payment.reference], [this.providerReference, payment.data.providerReference], [this.id, payment.id]] as const) if (!map.has(key)) map.set(key, payment);
+  }
+  find(reference: string, id: unknown) {
+    return [this.reference.get(reference), this.providerReference.get(reference), this.id.get(id)]
+      .filter((value): value is TypedRecord<"payments"> => !!value)
+      .sort((a, b) => this.order.get(a.id)! - this.order.get(b.id)!)[0];
+  }
+}
+
+/** Built after canonicalisation; records are live references so later payments
+ * see earlier allocations/duplicate holds. No lookup survives a reconcile call. */
+class MatchIndex {
+  attempts = new Map<string, TypedRecord<"attempts">>();
+  dues = new Map<string, TypedRecord<"due-items">>();
+  duesByCustomer = new Map<string, TypedRecord<"due-items">[]>();
+  paymentsByCustomer = new Map<string, TypedRecord<"payments">[]>();
+  constructor(state: DomainState) {
+    for (const attempt of recordsOf(state, "attempts")) {
+      const key = attempt.data.providerReference || attempt.reference;
+      if (key && !this.attempts.has(key)) this.attempts.set(key, attempt);
+    }
+    for (const due of recordsOf(state, "due-items")) {
+      this.dues.set(due.id, due);
+      const group = this.duesByCustomer.get(due.customerId) ?? [];
+      group.push(due); this.duesByCustomer.set(due.customerId, group);
+    }
+    for (const payment of recordsOf(state, "payments")) {
+      const group = this.paymentsByCustomer.get(payment.customerId) ?? [];
+      group.push(payment); this.paymentsByCustomer.set(payment.customerId, group);
+    }
+  }
+}
+
 /** The due item a Payment was collected for, by its strong keys: the attempt's provider debit reference, then the observation's explicit link. */
-export function intendedDueItem(state: DomainState, payment: TypedRecord<"payments">): { due: TypedRecord<"due-items">; key: string } | undefined {
-  const byAttempt = recordsOf(state, "attempts").find((attempt) => attempt.data.providerReference ? attempt.data.providerReference === payment.reference : Boolean(attempt.reference) && attempt.reference === payment.reference);
+export function intendedDueItem(state: DomainState, payment: TypedRecord<"payments">, index?: MatchIndex): { due: TypedRecord<"due-items">; key: string } | undefined {
+  const byAttempt = index ? index.attempts.get(payment.reference) : recordsOf(state, "attempts").find((attempt) => attempt.data.providerReference ? attempt.data.providerReference === payment.reference : Boolean(attempt.reference) && attempt.reference === payment.reference);
   const candidate = byAttempt
     ? { id: String(byAttempt.data.dueItemId), key: byAttempt.data.providerReference ? "attempt_provider_reference" : "attempt_reference" }
     : payment.data.dueItemId ? { id: String(payment.data.dueItemId), key: "observation_due_item" } : undefined;
   if (!candidate) return undefined;
-  const due = recordsOf(state, "due-items").find((record) => record.id === candidate.id);
+  const due = index ? index.dues.get(candidate.id) : recordsOf(state, "due-items").find((record) => record.id === candidate.id);
   if (!due || (payment.customerId && due.customerId !== payment.customerId)) return undefined;
   return { due, key: candidate.key };
 }
 
 /** Section 7.2 rule ladder, applied to canonical Payments, never to observations. */
-function matchPayment(state: DomainState, ctx: Context, payment: TypedRecord<"payments">): void {
+function matchPayment(state: DomainState, ctx: Context, payment: TypedRecord<"payments">, index: MatchIndex): void {
   if (payment.status !== "unallocated" || paymentReversed(payment)) return;
   const sameConnection = String(payment.data.providerConnection || state.merchant.provider) === String(state.merchant.provider) || Boolean(payment.data.providerConnection);
   const currencyOk = String(payment.data.currency || "NGN") === "NGN";
-  const intended = intendedDueItem(state, payment);
+  const intended = intendedDueItem(state, payment, index);
   // ING-05 (b): a second Payment for a due item that is already paid is held, never allocated.
   if (intended && outstanding(intended.due) === 0) {
     payment.status = "possible_duplicate";
@@ -307,7 +352,7 @@ function matchPayment(state: DomainState, ctx: Context, payment: TypedRecord<"pa
     const delta = paymentObservedAt(item) - paymentObservedAt(payment);
     return delta < 0 || (delta === 0 && `${item.createdAt}${item.id}` < `${payment.createdAt}${payment.id}`);
   };
-  const twin = recordsOf(state, "payments").find((item) =>
+  const twin = (index.paymentsByCustomer.get(payment.customerId) ?? []).find((item) =>
     item.id !== payment.id && item.reference !== payment.reference && payment.customerId && item.customerId === payment.customerId &&
     item.amountKobo === payment.amountKobo && item.status !== "possible_duplicate" && !paymentReversed(item) &&
     observedBefore(item) && paymentObservedAt(payment) - paymentObservedAt(item) <= DUPLICATE_WINDOW_MS,
@@ -318,7 +363,7 @@ function matchPayment(state: DomainState, ctx: Context, payment: TypedRecord<"pa
     raiseException(state, ctx, "suspected_duplicate", { linkedRecordId: payment.id, customerId: payment.customerId, amountKobo: payment.amountKobo, notes: payment.data.explanation });
     return;
   }
-  const dues = recordsOf(state, "due-items").filter((item) => item.customerId === payment.customerId && outstanding(item) > 0 && !["in_dispute", "unpaid_final", "cancelled", "closed"].includes(item.status));
+  const dues = (index.duesByCustomer.get(payment.customerId) ?? []).filter((item) => outstanding(item) > 0 && !["in_dispute", "unpaid_final", "cancelled", "closed"].includes(item.status));
   // R1: provider reference, same tenant and connection, NGN, gross amount equals the attempt (due) amount.
   if (intended && currencyOk && sameConnection && payment.amountKobo === intended.due.amountKobo && outstanding(intended.due) >= payment.amountKobo) {
     allocatePayment(state, ctx, payment, intended.due, payment.amountKobo, "R1", "certain", true, `Provider reference ${payment.reference} resolved to instalment ${intended.due.reference} by ${intended.key}; currency and gross amount match.`);
@@ -381,11 +426,13 @@ function applyDecisions(state: DomainState, ctx: Context): { finalFailures: numb
 export function reconcile(state: DomainState, ctx: Context): { message: string; data: Record<string, any> } {
   const observations = recordsOf(state, "observations").filter((item) => item.status === "unresolved");
   const exceptionsBefore = recordsOf(state, "exceptions").length;
-  const resolved = observations.map((item) => canonicalPayment(state, ctx, item)).filter(Boolean) as TypedRecord<"payments">[];
+  const canonicalPayments = new CanonicalPaymentIndex(state);
+  const resolved = observations.map((item) => canonicalPayment(state, ctx, item, canonicalPayments)).filter(Boolean) as TypedRecord<"payments">[];
   const statementBatchesMatched = matchSettlementStatements(state, ctx);
   const feeVariances = checkBatchFees(state, ctx);
   const allocationsBefore = new Set(recordsOf(state, "allocations").map((item) => item.id));
-  recordsOf(state, "payments").filter((item) => item.status === "unallocated").forEach((payment) => matchPayment(state, ctx, payment));
+  const matches = new MatchIndex(state);
+  recordsOf(state, "payments").filter((item) => item.status === "unallocated").forEach((payment) => matchPayment(state, ctx, payment, matches));
   const now = Date.parse(ctx.now);
   const aged = recordsOf(state, "payments").filter((item) => item.status === "unallocated" && now - paymentObservedAt(item) >= UNALLOCATED_AGE_MS);
   aged.forEach((payment) => raiseException(state, ctx, "unallocated_payment", { linkedRecordId: payment.id, customerId: payment.customerId, amountKobo: payment.amountKobo, notes: "No certain or confirmed allocation after 24 hours." }));

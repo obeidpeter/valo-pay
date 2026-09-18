@@ -74,13 +74,16 @@ describe("settings", () => {
     expect(api.calls.filter((call) => call.method === "PATCH" && call.path === "/v1/settings").at(-1)?.status).toBe(400);
   });
 
-  it("refuses the change for a persona that is not Admin", async () => {
+  it("explains the Admin requirement before another persona starts editing", async () => {
     const user = userEvent.setup();
     api.role = "Finance";
     renderApp("/settings");
     await screen.findByText("07:00 WAT");
-    await user.click(screen.getByRole("button", { name: "Edit" }));
-    await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByText("Only an Admin can change lender settings.")).toBeTruthy();
+    const edit = screen.getByRole("button", { name: "Edit" });
+    expect(edit.hasAttribute("disabled")).toBe(true);
+    expect(document.getElementById(edit.getAttribute("aria-describedby")!)?.textContent).toBe("Requires Admin.");
+    await user.click(edit);
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(api.calls.some(call => call.path === '/v1/settings' && call.method === 'PATCH')).toBe(false);
   });
 });

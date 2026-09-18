@@ -29,6 +29,7 @@ import type {
   ExportResult,
   Gates,
   GetCustomerTimelineParams,
+  GetExportJobParams,
   GetGatesParams,
   GetOpenApiDocument200,
   GetOverviewParams,
@@ -46,6 +47,7 @@ import type {
   RecordList,
   RecordUpdate,
   Report,
+  RetryExportJobParams,
   Settings,
   SettingsInput,
   Timeline,
@@ -1343,8 +1345,8 @@ export const getCreateExportUrl = (params: CreateExportParams,) => {
 }
 
 /**
- * A record kind, the gate pack, the billing statement or a customer's dispute pack, as JSON, CSV or PDF; stored privately with a SHA-256 checksum and recorded as an export.
- * @summary Generate a private export
+ * Durably saves a queued export job and returns immediately. Poll its status before downloading. Rendering and private storage run outside the database transaction; retries use the same immutable object key. A record kind, gate pack, billing statement or customer dispute pack supports JSON, CSV or PDF.
+ * @summary Queue a private export
  */
 export const createExport = async (exportInput: ExportInput,
     params: CreateExportParams, options?: Parameters<typeof customFetch>[1]): Promise<ExportResult> => {
@@ -1411,7 +1413,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type CreateExportMutationVariables = {data: BodyType<ExportInput>;params: CreateExportParams}
 
     /**
- * @summary Generate a private export
+ * @summary Queue a private export
  */
 export const useCreateExport = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createExport>>, TError,CreateExportMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
@@ -1422,6 +1424,180 @@ export const useCreateExport = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getCreateExportMutationOptions(options));
+    }
+
+export const getGetExportJobUrl = (id: string,
+    params: GetExportJobParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/exports/${id}?${stringifiedParams}` : `/api/v1/exports/${id}`
+}
+
+/**
+ * Tenant-authorised status, safe failure reason and checksum/download details once ready. Older immediate export records remain downloadable.
+ * @summary Check a saved export
+ */
+export const getExportJob = async (id: string,
+    params: GetExportJobParams, options?: Parameters<typeof customFetch>[1]): Promise<ExportResult> => {
+
+  return customFetch<ExportResult>(getGetExportJobUrl(id,params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetExportJobQueryKey = (id: string,
+    params?: GetExportJobParams,) => {
+    return [
+    `/api/v1/exports/${id}`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetExportJobQueryOptions = <TData = Awaited<ReturnType<typeof getExportJob>>, TError = ErrorType<void>>(id: string,
+    params: GetExportJobParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getExportJob>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetExportJobQueryKey(id,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getExportJob>>> = ({ signal }) => getExportJob(id,params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getExportJob>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetExportJobQueryResult = NonNullable<Awaited<ReturnType<typeof getExportJob>>>
+export type GetExportJobQueryError = ErrorType<void>
+
+
+/**
+ * @summary Check a saved export
+ */
+
+export function useGetExportJob<TData = Awaited<ReturnType<typeof getExportJob>>, TError = ErrorType<void>>(
+ id: string,
+    params: GetExportJobParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getExportJob>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetExportJobQueryOptions(id,params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getRetryExportJobUrl = (id: string,
+    params: RetryExportJobParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/exports/${id}/retry?${stringifiedParams}` : `/api/v1/exports/${id}/retry`
+}
+
+/**
+ * Requeues a failed or expired job while preserving its identity and private object key. Running and ready jobs are returned unchanged; retries cannot overwrite a completed file.
+ * @summary Retry a saved export
+ */
+export const retryExportJob = async (id: string,
+    params: RetryExportJobParams, options?: Parameters<typeof customFetch>[1]): Promise<ExportResult> => {
+
+  return customFetch<ExportResult>(getRetryExportJobUrl(id,params),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getRetryExportJobMutationKey = () => ['retryExportJob'] as const;
+
+export const getRetryExportJobMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retryExportJob>>, TError,RetryExportJobMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof retryExportJob>>, TError,RetryExportJobMutationVariables, TContext> => {
+
+const mutationKey = getRetryExportJobMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof retryExportJob>>, RetryExportJobMutationVariables> = (props) => {
+          const {id,params} = props ?? {};
+
+          return  retryExportJob(id,params,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type RetryExportJobMutationResult = NonNullable<Awaited<ReturnType<typeof retryExportJob>>>
+
+    export type RetryExportJobMutationError = ErrorType<void>
+    export type RetryExportJobMutationVariables = {id: string;params: RetryExportJobParams}
+
+    /**
+ * @summary Retry a saved export
+ */
+export const useRetryExportJob = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retryExportJob>>, TError,RetryExportJobMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof retryExportJob>>,
+        TError,
+        RetryExportJobMutationVariables,
+        TContext
+      > => {
+      return useMutation(getRetryExportJobMutationOptions(options));
     }
 
 export const getDownloadExportUrl = (id: string,

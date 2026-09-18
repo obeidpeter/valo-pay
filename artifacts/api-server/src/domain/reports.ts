@@ -200,7 +200,7 @@ export function test5Report(state: DomainState, now: string) {
     const open = Number(close.data.report?.exceptions?.openAtClose ?? NaN), overdue = Number(close.data.report?.exceptions?.overdueAtClose ?? NaN);
     return { month, closeId: close.id, open: Number.isFinite(open) ? open : null, overdue: Number.isFinite(overdue) ? overdue : null, share: Number.isFinite(open) && Number.isFinite(overdue) ? (open ? overdue / open : 0) : null };
   });
-  const packs = recordsOf(state, "exports").filter((item) => ["customer-pack", "dispute-pack", "gate-pack", "audit-pack"].includes(String(item.data.kind)));
+  const packs = recordsOf(state, "exports").filter((item) => item.status === "ready" && ["customer-pack", "dispute-pack", "gate-pack", "audit-pack"].includes(String(item.data.kind)));
   return {
     liveDays, requiredLiveDays: measurementRules.liveDaysRequired, liveSince: firstClose, liveDaysMet: liveDays >= measurementRules.liveDaysRequired,
     fortnightlyStaffConfirmed, latestReviewAt: latest ? new Date(reviewAt(latest)).toISOString() : null, latestReviewer: latest ? String(latest.data.reviewer) : null, confirmingReviews: reviews.length, reviewCadenceMet: cadenceMet,
@@ -277,7 +277,7 @@ export function buildReports(state: DomainState, now: string): Report {
       reviewedCount: reviewedAll.length, reviewedAutomaticCount: reviewed.length, falseMatchRate: audit.falseMatchRate, falseMatchInterval: audit.interval, requiredAuditSample: audit.requiredSample, precisionAudit: audit,
       overdueExceptionRate: openExceptions.length ? openExceptions.filter((e) => Date.parse(String(e.data.dueBy)) < Date.parse(now)).length / openExceptions.length : 0,
       liveDays: test5.liveDays, requiredLiveDays: test5.requiredLiveDays, liveSince: test5.liveSince,
-      packsGenerated: test5.packsGenerated, disputePacksGenerated: recordsOf(state, "exports").filter((item) => ["customer-pack", "dispute-pack"].includes(String(item.data.kind))).length,
+      packsGenerated: test5.packsGenerated, disputePacksGenerated: recordsOf(state, "exports").filter((item) => item.status === "ready" && ["customer-pack", "dispute-pack"].includes(String(item.data.kind))).length,
       realCasesUsed: test5.realCasesUsed, requiredRealCases: test5.requiredRealCases,
       fortnightlyStaffConfirmed: test5.fortnightlyStaffConfirmed, latestReviewAt: test5.latestReviewAt, reviewCadenceMet: test5.reviewCadenceMet, test5, timeToClose: closeTiming, monthEndCloseDays: closeTiming?.days ?? null,
       closeSchedule: closeSchedule(state, now),

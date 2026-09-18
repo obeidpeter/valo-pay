@@ -17,6 +17,9 @@ export default defineConfig({
     setupFiles: ["tests/setup.ts"],
     css: false,
     restoreMocks: true,
+    // Each worker hosts jsdom and the full domain-backed API. Bound parallel
+    // cold imports so a large machine's CPU count cannot overwhelm the runner.
+    maxWorkers: 4,
     testTimeout: 20_000,
   },
 });

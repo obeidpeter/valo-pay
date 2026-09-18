@@ -10,6 +10,7 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { readableLabel } from './record-label';
 import { formatDate } from '@/lib/formatters';
 import { koboToNaira, moneyFieldLabel, nairaToKobo } from '@/lib/money-input';
+import { permissionReason } from '@/lib/permissions';
 
 const actionLabels: Record<string, string> = {
   mandate_suspend: 'Suspend mandate', mandate_cancel: 'Cancel mandate', mandate_reinstate: 'Resume mandate',
@@ -31,6 +32,7 @@ type FieldDef = {
   options?: { label: string; value: string }[];
   isData?: boolean; // if true, placed in record.data
   required?: boolean;
+  help?: string;
 };
 
 type RecordDialogProps = {
@@ -50,7 +52,8 @@ type RecordDialogProps = {
 export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourceFields, title, defaultValues = {}, actionMutation, actionRecordId, context, validate }: RecordDialogProps) {
   const isMoney = (field: FieldDef) => field.type === 'number' && /Kobo$/.test(field.name);
   const fields = sourceFields.map(field => isMoney(field) ? { ...field, label: moneyFieldLabel(field.label) } : field);
-  const { merchantId } = useWorkspace();
+  const { merchantId, workspace } = useWorkspace();
+  const blockedReason = permissionReason(workspace, { action: actionMutation, kind, record });
   const queryClient = useQueryClient();
   const [formData, setFormData] = useState<any>({});
   const [result,setResult]=useState<any>(null);
@@ -69,6 +72,10 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
   const { confirmDiscard } = useUnsavedChanges(isOpen && initialForm !== '' && submissionFingerprint(formData) !== initialForm);
   const changeOpen = (open: boolean) => { if (open || confirmDiscard()) onOpenChange(open); };
   const fieldId = (name: string) => `record-${name}`;
+  const fieldProps = (field: FieldDef) => {
+    const props = invalidProps(fieldId(field.name), fieldErrors[field.name]);
+    return { ...props, 'aria-describedby': [props['aria-describedby'], field.help ? `${fieldId(field.name)}-help` : undefined].filter(Boolean).join(' ') || undefined };
+  };
   /** The server names a field by its path in the body; a data field arrives as data.<name>. */
   const resolveField = (path: string): string | null => {
     const name = path.replace(/^data\./, '');
@@ -138,6 +145,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!merchantId || isPending) return;
+    if (blockedReason) { setFormErrors([blockedReason]); return; }
     // Every field is checked here first, so a missing value is named at the field and never costs a request.
     const errors: Record<string, string> = {};
     fields.forEach(f => {
@@ -212,7 +220,8 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
           </div>
           
           <form noValidate onSubmit={handleSubmit} className="space-y-4 py-4">
-            <fieldset disabled={isPending} className="contents">
+            {blockedReason && <p role="status" className="rounded-lg border bg-secondary/30 p-3 text-sm">{blockedReason}</p>}
+            <fieldset disabled={isPending || !!blockedReason} className="contents">
             {typeof context === 'function' ? context(formData) : context}
             {(formErrors.length > 0 || Object.keys(fieldErrors).length > 0) && (
               <FormAlert title={formErrors[0] ?? attentionTitle(Object.keys(fieldErrors).length)}>
@@ -230,7 +239,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
                     value={Array.isArray(formData[f.name])?formData[f.name].join(" | "):(formData[f.name]??'')} 
                     onChange={e => handleChange(f.name, e.target.value)} 
                     required={f.required} 
-                    {...invalidProps(`record-${f.name}`, fieldErrors[f.name])}
+                    {...fieldProps(f)}
                   />
                 ) : f.type === 'select' ? (
                   <select 
@@ -239,7 +248,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
                     value={formData[f.name] || ''} 
                     onChange={e => handleChange(f.name, e.target.value)} 
                     required={f.required}
-                    {...invalidProps(`record-${f.name}`, fieldErrors[f.name])}
+                    {...fieldProps(f)}
                   >
                     <option value="">Choose an option</option>
                     {f.options?.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -260,9 +269,10 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
                     value={Array.isArray(formData[f.name])?formData[f.name].join(" | "):(formData[f.name]??'')} 
                     onChange={e => handleChange(f.name, e.target.value)} 
                     required={f.required} 
-                    {...invalidProps(`record-${f.name}`, fieldErrors[f.name])}
+                    {...fieldProps(f)}
                   />
                 )}
+                {f.help && <p id={`${fieldId(f.name)}-help`} className="text-xs text-muted-foreground">{f.help}</p>}
                 <FieldError id={`record-${f.name}`} message={fieldErrors[f.name]} />
               </div>
             ))}
@@ -288,7 +298,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
             </fieldset>
             <div className="flex justify-end gap-2 mt-4 pt-4 border-t">
               <Button type="button" variant="outline" onClick={() => changeOpen(false)}>Cancel</Button>
-              <Button type="submit" busy={isPending} busyLabel={actionMutation ? 'Working…' : 'Saving…'}>{actionMutation ? actionLabels[actionMutation] || 'Confirm action' : 'Save'}</Button>
+              <Button type="submit" disabled={!!blockedReason} busy={isPending} busyLabel={actionMutation ? 'Working…' : 'Saving…'}>{actionMutation ? actionLabels[actionMutation] || 'Confirm action' : 'Save'}</Button>
             </div>
           </form>
 

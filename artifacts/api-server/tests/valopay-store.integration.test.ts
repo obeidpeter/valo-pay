@@ -71,7 +71,7 @@ try {
       await changeRole(context, "Finance");
       await saveState(context, state);
       throw new Error("intentional repository rollback");
-    }),
+    }, "persona"),
     /intentional repository rollback/,
   );
 

@@ -4,6 +4,7 @@ import { themeChoices, useTheme } from '@/lib/theme';
 import { Loading } from '@/components/loading';
 import { DailyCloseStatus } from '@/components/daily-close-status';
 import { useWorkspace } from '@/lib/workspace-context';
+import { permissionReason } from '@/lib/permissions';
 import { useGetSettings, getGetSettingsQueryKey } from '@workspace/api-client-react';
 import { useSafeUpdateSettings as useUpdateSettings, useSafePerformAction as usePerformAction, submissionFingerprint } from '@/lib/safe-mutations';
 import { useUnsavedChanges } from '@/lib/unsaved-changes';
@@ -14,7 +15,7 @@ import { FieldError, FormAlert, focusField, invalidProps } from '@/components/fo
 import { formatKobo } from '@/lib/formatters';
 import { koboToNaira, nairaToKobo } from '@/lib/money-input';
 import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
-import { Button } from '@/components/ui/button';
+import { PermissionButton as Button } from '@/components/permission-button';
 import { RecordDialog } from '@/components/record-dialog';
 import { LoadProblem } from '@/components/load-problem';
 
@@ -59,6 +60,8 @@ export default function SettingsPage() {
   };
   const changeStop = async () => {
     if (!merchantId || !settings || killSwitch.isPending) return;
+    const blocked = permissionReason(workspace, { action: 'kill_switch' });
+    if (blocked) { notifyProblem('Emergency stop unchanged', blocked); return; }
     const isCurrent = captureVisit();
     try {
       const data = await killSwitch.mutateAsync({ data: { action: 'kill_switch', reason: killReason, data: { enabled: !settings.merchant.killSwitch } }, params: { merchantId } });
@@ -100,6 +103,8 @@ export default function SettingsPage() {
   };
   const saveExec = async () => {
     if (!merchantId || updateExecSettings.isPending || refreshingLatest) return;
+    const blocked = permissionReason(workspace, { action: 'update_settings' });
+    if (blocked) { setExecAlert(blocked); return; }
     const errors: Record<string, string> = {};
     if (execSettings.closeTime !== undefined && !isCloseTime(execSettings.closeTime)) errors.closeTime = 'Enter the close time as HH:MM in West Africa Time, for example 07:00.';
     for (const key of ['unallocatedAlertThreshold'] as const) {
@@ -217,11 +222,11 @@ export default function SettingsPage() {
               <h2 className="font-semibold text-lg">Collection settings</h2>
             </div>
             {!isEditingExec ? (
-              <Button size="sm" variant="outline" onClick={startEditExec}>Edit</Button>
+              <Button size="sm" variant="outline" action="update_settings" onClick={startEditExec}>Edit</Button>
             ) : (
               <div className="flex gap-2">
                 <Button size="sm" variant="ghost" onClick={cancelExec}>Cancel</Button>
-                <Button size="sm" onClick={saveExec} disabled={refreshingLatest} busy={updateExecSettings.isPending} busyLabel="Saving…">Save</Button>
+                <Button size="sm" action="update_settings" onClick={saveExec} disabled={refreshingLatest} busy={updateExecSettings.isPending} busyLabel="Saving…">Save</Button>
               </div>
             )}
           </div>
@@ -367,7 +372,7 @@ export default function SettingsPage() {
                 <div className="flex flex-col gap-2 sm:flex-row">
                 <Button 
                   variant="destructive"
-                  onClick={() => { void changeStop(); }}
+                  action="kill_switch" onClick={() => { void changeStop(); }}
                   disabled={!killReason}
                   busy={killSwitch.isPending}
                   busyLabel={settings.merchant.killSwitch ? 'Deactivating…' : 'Activating…'}
@@ -377,7 +382,7 @@ export default function SettingsPage() {
                 
                 <Button 
                   variant="outline"
-                   onClick={() => setIsHandBackOpen(true)}
+                   action="hand_back" onClick={() => setIsHandBackOpen(true)}
                 >
                   Return collection ownership
                 </Button>

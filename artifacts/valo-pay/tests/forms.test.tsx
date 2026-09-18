@@ -36,6 +36,7 @@ describe("forms", () => {
     await user.type(await screen.findByLabelText(/Full name/), "Bola Adeyemi");
     const reference = screen.getByLabelText(/Loan software reference/);
     await user.type(reference, "DEMO-C1001");
+    await user.type(screen.getByLabelText(/Consent source or reference/), "Signed sample form CONSENT-001");
     const status = screen.getByLabelText(/Status/) as HTMLSelectElement;
     if (!status.value) await user.selectOptions(status, status.options[1]!.value);
     await user.click(screen.getByRole("button", { name: "Save" }));

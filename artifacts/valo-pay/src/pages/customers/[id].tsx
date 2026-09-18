@@ -1,4 +1,4 @@
-import { useSafeCreateExport as useCreateExport } from '@/lib/safe-mutations';
+import { ExportJobControl } from '@/components/export-job-control';
 import React, { useEffect } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyState } from '@/components/empty-state';
@@ -6,17 +6,15 @@ import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetCustomerTimeline, getGetCustomerTimelineQueryKey, } from '@workspace/api-client-react';
 import { formatKobo, formatDate, formatCompactDate, formatCount } from '@/lib/formatters';
-import { ArrowLeft, Clock, FileText, CheckCircle, AlertTriangle, Download } from 'lucide-react';
+import { ArrowLeft, Clock, FileText, CheckCircle, AlertTriangle } from 'lucide-react';
 import { CustomerAvatar, StatusBadge, readableLabel } from '@/components/record-label';
 import { Link, useParams, useSearch } from 'wouter';
-import { Button } from '@/components/ui/button';
-import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
 import { LookedFor } from '@/components/notice';
 import { NotFoundNotice } from '@/pages/not-found';
 import { LoadProblem } from '@/components/load-problem';
 import { RecordPagination } from '@/components/record-pagination';
 import { useRecordPagination } from '@/lib/use-record-pagination';
-import { safeCollectionReturnTo } from '@/lib/record-navigation';
+import { safeCustomerReturnTo } from '@/lib/record-navigation';
 import { useHashTarget } from '@/lib/use-hash-target';
 
 const watStamp = (iso: unknown) => typeof iso === 'string' && Number.isFinite(Date.parse(iso)) ? formatDate(iso) : 'not recorded';
@@ -49,7 +47,7 @@ export default function CustomerTimelinePage() {
   const search = new URLSearchParams(useSearch());
   const sameLender = !search.get('lender') || search.get('lender') === merchantId;
   const requestedRecord = sameLender ? search.get('record') : null;
-  const returnTo = safeCollectionReturnTo(search.get('returnTo'), merchantId);
+  const returnTo = safeCustomerReturnTo(search.get('returnTo'), merchantId);
 
   const { data: timeline, isLoading, isFetching, error, refetch } = useGetCustomerTimeline(
     id!,
@@ -64,22 +62,6 @@ export default function CustomerTimelinePage() {
   const focusedRecord = timeline?.events.find(event => event.id === requestedRecord);
   useHashTarget(`record-${requestedRecord}`, !!focusedRecord && !error);
 
-  const createExport = useCreateExport({
-    mutation: {
-      onSuccess: (data) => {
-        const opened = window.open(data.downloadUrl, '_blank');
-        notifyDone(
-          'Dispute pack ready',
-          `${opened ? 'The file opened in a new tab.' : 'Your browser blocked the new tab. Select Open to view the file.'} SHA-256 checksum: ${data.checksum.slice(0, 16)}… · created ${formatDate(data.generatedAt)}`,
-          { label: 'Open', altText: 'Open the dispute pack in a new tab', onClick: () => { window.open(data.downloadUrl, '_blank'); } },
-        );
-      },
-      onError: (error: unknown) => notifyProblem('Dispute pack could not be created', `${saidBy(error, 'The service could not create the file.')} Try the export again.`),
-    }
-  }, `${merchantId}:${id}`);
-  const exportPack = (format: 'pdf' | 'csv' | 'json') => createExport.mutate({ data: { kind: 'dispute-pack', format, customerId: String(id) }, params: { merchantId: merchantId! } });
-  /** Only the export that was asked for says it is being generated; the others wait, disabled. */
-  const generating = (format: 'pdf' | 'csv' | 'json') => createExport.isPending && createExport.variables?.data.format === format;
 
   if (!merchantId) return null;
   if (!sameLender) return <NotFoundNotice title="Choose the linked lender" primary={{ href: '/collections', label: 'Go to collections' }} secondary={{ href: '/customers', label: 'Go to customers' }}><p>This link belongs to {workspace?.merchants.find(merchant => merchant.id === search.get('lender'))?.name || 'another lender'}. Select that lender using the lender menu to review this customer.</p></NotFoundNotice>;
@@ -93,7 +75,7 @@ export default function CustomerTimelinePage() {
     <div className="space-y-6">
       <div>
         <Link href={returnTo || '/customers'} className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4 print:hidden">
-          <ArrowLeft className="h-4 w-4" /> {returnTo ? 'Back to collections' : 'Back to customers'}
+          <ArrowLeft className="h-4 w-4" /> {returnTo?.startsWith('/collections?') ? 'Back to collections' : 'Back to customers'}
         </Link>
         <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-6">
           <div className="min-w-0 flex-1">
@@ -116,13 +98,7 @@ export default function CustomerTimelinePage() {
                 <span className="ml-2"><StatusBadge status={customer.status} /></span>
               </div>
             </div>
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <Button variant="outline" size="sm" className="gap-2" onClick={() => exportPack('pdf')} disabled={createExport.isPending} busy={generating('pdf')} busyLabel="Preparing PDF…">
-                <Download className="h-4 w-4" /> Export dispute pack (PDF)
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => exportPack('csv')} disabled={createExport.isPending} busy={generating('csv')} busyLabel="Preparing CSV…">CSV</Button>
-              <Button variant="ghost" size="sm" onClick={() => exportPack('json')} disabled={createExport.isPending} busy={generating('json')} busyLabel="Preparing JSON…">JSON</Button>
-            </div>
+            <div className="mt-4"><ExportJobControl kind="dispute-pack" customerId={String(id)} formats={['pdf', 'csv', 'json']} label="Export dispute pack (PDF)" /></div>
             <p className="mt-2 max-w-xl text-xs leading-relaxed text-muted-foreground">Create a file for reviewing a dispute: a summary, full customer history, and the policy, message template and handover versions used at each event. Includes a checksum to verify the file.</p>
           </div>
 

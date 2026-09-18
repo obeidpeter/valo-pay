@@ -1,3 +1,4 @@
+import { QueueFreshness } from '@/components/queue-freshness';
 import React, { useEffect, useRef, useState } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyState } from '@/components/empty-state';
@@ -5,7 +6,7 @@ import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { AlertTriangle, User, Calendar } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { PermissionButton as Button } from '@/components/permission-button';
 import { formatKobo, formatDate } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { exceptionSeverities, resolutionCodesFor } from '@workspace/valopay-schema';
@@ -35,12 +36,14 @@ export default function ExceptionsPage() {
     tabRefs.current[next]?.focus();
   };
 
-  const { data, isLoading, error, refetch } = useListRecords(
+  const exceptionsQuery = useListRecords(
     'exceptions',
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('exceptions', { merchantId: merchantId! }) } }
   );
-  const { data: customers } = useListRecords('customers', { merchantId: merchantId! }, { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('customers', { merchantId: merchantId! }) } });
+  const { data, isLoading, error, refetch } = exceptionsQuery;
+  const customersQuery = useListRecords('customers', { merchantId: merchantId! }, { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('customers', { merchantId: merchantId! }) } });
+  const { data: customers } = customersQuery;
   const customerById = new Map(customers?.items.map(customer => [customer.id, customer]));
 
   const handleAction = (ex: any, kind: 'update' | 'resolve') => {
@@ -89,6 +92,8 @@ export default function ExceptionsPage() {
         </div>
       </header>
 
+      <QueueFreshness key={merchantId} queries={[exceptionsQuery, customersQuery]} />
+
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
         <div className="p-5 border-b flex flex-wrap items-center gap-4">
           <p className="hidden print:block text-sm">Showing: {filters.find(option => option.key === filter)?.label}</p>
@@ -116,7 +121,7 @@ export default function ExceptionsPage() {
 
         {isLoading ? (
           <Loading what="exceptions" />
-        ) : error ? (
+        ) : error && !data ? (
           <div role="alert" className="p-6 text-sm"><p>Exceptions could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => refetch()}>Try again</Button></div>
         ) : items.length === 0 ? (
           <EmptyState filtered title={owner || type ? 'No exceptions match these filters' : filter === 'resolved' ? 'Nothing resolved yet' : filter === 'high' ? 'No high-severity exceptions open' : filter === 'overdue' ? 'No overdue exceptions' : filter === 'due-today' ? 'No exceptions due today' : 'All clear: no open exceptions'}>
@@ -177,10 +182,10 @@ export default function ExceptionsPage() {
                     <td className="px-6 py-4 text-right space-x-2">
                       {exception.status !== 'resolved' && exception.status !== 'closed' ? (
                         <div className="flex justify-end gap-2">
-                          <Button size="sm" variant="ghost" className="text-xs" onClick={() => handleAction(exception, 'update')}>
+                          <Button size="sm" variant="ghost" className="text-xs" kind="exceptions" record={exception} onClick={() => handleAction(exception, 'update')}>
                             Edit
                           </Button>
-                          <Button size="sm" variant="outline" className="text-xs" onClick={() => handleAction(exception, 'resolve')}>
+                          <Button size="sm" variant="outline" className="text-xs" action="resolve_exception" record={exception} onClick={() => handleAction(exception, 'resolve')}>
                             Resolve
                           </Button>
                         </div>

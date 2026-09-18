@@ -21,7 +21,7 @@ const schemas = {
   RecordList: obj({ items: arr("ValopayRecord"), total: num, nextOffset: num }, ["items","total"]),
   ActionInput: obj({ action: str, recordId: str, reason: str, data: ref("RecordData"), expectedUpdatedAt: str }, ["action"]),
   ActionResult: obj({ message: str, record: ref("ValopayRecord"), data: ref("RecordData") }, ["message","data"]),
-  ImportInput: obj({ kind: str, csv: str, syntheticOnly: bool, commit: bool, mapping: ref("RecordData") }, ["kind","csv","syntheticOnly","commit"]),
+  ImportInput: obj({ kind: str, csv: str, syntheticOnly: bool, commit: bool, mapping: ref("RecordData"), amountUnit: { type: "string", enum: ["naira", "kobo"], description: "Unit used by source amount values; defaults to kobo for existing API clients. The console requires an explicit choice." } }, ["kind","csv","syntheticOnly","commit"]),
   ImportRow: obj({ row: num, status: str, message: str }),
   ImportResult: obj({ valid: num, invalid: num, imported: num, rows: arr("ImportRow") }),
   Report: obj({ metrics: arr("Metric"), billing: ref("RecordData"), experiment: ref("RecordData"), operational: ref("RecordData"), closes: arr("ValopayRecord") }),
@@ -31,7 +31,7 @@ const schemas = {
   Settings: obj({ merchant: ref("Merchant"), settings: ref("RecordData"), permissions: ref("RecordData"), integrations: arr("ValopayRecord"), members: arr("ValopayRecord"), calendar: arr("ValopayRecord") }),
   SettingsInput: obj({ executionStart: num, executionEnd: num, authorisationMode: str, contactRoute: str, minimumTicketKobo:num, defaultOwner: str, policyChangeRequiresConsent: bool, unallocatedAlertThreshold: num, notificationCostAlertKobo: num, closeTime: str, scheduledCloseEnabled: bool }, []),
   ExportInput: obj({ kind: str, customerId: str, format: {type:"string", enum:["json","csv","pdf"]} }, ["kind","format"]),
-  ExportResult: obj({ id:str, downloadUrl: str, checksum: str, generatedAt: str }),
+  ExportResult: obj({ id:str, downloadUrl: str, status:{type:'string',enum:['queued','running','ready','failed']}, kind:str, format:str, customerId:str, requestedAt:str, attempts:num, checksum:str, generatedAt:str, byteLength:num, generationMs:num, error:str }, ['id','downloadUrl']),
   EffectiveCloseSchedule: obj({
     time: str, enabled: bool, automatic: bool, nextAt: { type: ["string", "null"] },
     runtimeState: { type: "string", enum: ["not_started", "running", "off", "stopped"] },
@@ -48,7 +48,7 @@ const paths = {};
 schemas.Settings.properties.revision = str;
 schemas.SettingsInput.properties.expectedRevision = str;
 schemas.ImportResult.properties.columns = { type: "array", items: str };
-schemas.ImportResult.properties.preview = { type: "array", items: obj({ row: num, values: ref("RecordData") }) };
+schemas.ImportResult.properties.preview = { type: "array", items: obj({ row: num, values: ref("RecordData"), amountKobo: num }, ["row", "values"]) };
 schemas.ImportResult.properties.skipped = num;
 function add(path, method, id, response, body, params = []) {
  const op = {operationId:id, tags:["valopay"], parameters:params, responses:{"200":{description:"Success",content:{"application/json":{schema:ref(response)}}},"400":{description:"Invalid request"},"401":{description:"Authentication required"},"403":{description:"Permission or readiness gate blocked"},"409":{description:"Conflict"}}};
@@ -82,6 +82,8 @@ add("/v1/gates","get","getGates","Gates",null,[merchant]);
 add("/v1/settings","get","getSettings","Settings",null,[merchant]);
 add("/v1/settings","patch","updateSettings","Settings","SettingsInput",[merchant]);
 add("/v1/exports","post","createExport","ExportResult","ExportInput",[merchant]);
+add('/v1/exports/{id}','get','getExportJob','ExportResult',null,[pathParam('id'),merchant]);
+add('/v1/exports/{id}/retry','post','retryExportJob','ExportResult',null,[pathParam('id'),merchant]);
 paths["/v1/exports/{id}/download"]={get:{operationId:"downloadExport",tags:["valopay"],parameters:[pathParam("id"),merchant],responses:{"200":{description:"Private verified export bytes",content:{"application/octet-stream":{schema:{type:"string",format:"binary"}}}},"404":{description:"Export not found in tenant"}}}};
 paths["/v1/openapi.json"]={get:{operationId:"getOpenApiDocument",tags:["valopay"],responses:{"200":{description:"Versioned public API specification",content:{"application/json":{schema:{type:"object",additionalProperties:true}}}}}}};
 paths["/v1/webhooks/{provider}"]={post:{operationId:"disabledProviderWebhook",tags:["valopay"],parameters:[pathParam("provider")],responses:{"403":{description:"Disabled until a provider-specific signed adapter is configured. No events are processed."}}}};
@@ -99,7 +101,9 @@ describe("/v1/reports","get","Reports for one lender","Metrics, the billing stat
 describe("/v1/gates","get","Production readiness gates","Prerequisites and decisions, always unproven on synthetic data, and the limitations the sandbox cannot remove.");
 describe("/v1/settings","get","A lender's settings, permissions, integrations, members and calendar","Permissions are those of the caller's current persona.");
 describe("/v1/settings","patch","Change a lender's execution settings","Admin only. Send expectedRevision from the settings originally opened; 409 leaves outdated edits unapplied. The revision covers editable preferences and is unaffected by scheduler cursor changes. An identical successful Idempotency-Key replay returns its original result before checking the version.");
-describe("/v1/exports","post","Generate a private export","A record kind, the gate pack, the billing statement or a customer's dispute pack, as JSON, CSV or PDF; stored privately with a SHA-256 checksum and recorded as an export.");
+describe("/v1/exports","post","Queue a private export","Durably saves a queued export job and returns immediately. Poll its status before downloading. Rendering and private storage run outside the database transaction; retries use the same immutable object key. A record kind, gate pack, billing statement or customer dispute pack supports JSON, CSV or PDF.");
+describe('/v1/exports/{id}','get','Check a saved export','Tenant-authorised status, safe failure reason and checksum/download details once ready. Older immediate export records remain downloadable.');
+describe('/v1/exports/{id}/retry','post','Retry a saved export','Requeues a failed or expired job while preserving its identity and private object key. Running and ready jobs are returned unchanged; retries cannot overwrite a completed file.');
 describe("/v1/exports/{id}/download","get","Download an export","The bytes are read from private storage and checked against the recorded SHA-256 before any are sent.");
 describe("/v1/openapi.json","get","This specification","The versioned public contract the console and the generated clients are built from.");
 describe("/v1/webhooks/{provider}","post","Provider webhook ingress, disabled in the sandbox","Always 403: no provider adapter is configured and no event is processed.");
@@ -131,7 +135,7 @@ const schemaDescriptions = {
   Settings: "A lender's settings and the caller's permissions, with integrations, members and the business calendar.",
   SettingsInput: "The execution settings to change; every field is optional.",
   ExportInput: "What to export (a record kind, gate-pack, billing, dispute-pack or customer-pack with a customerId) and in which format.",
-  ExportResult: "The export's id, its download address on this API, its SHA-256 checksum and when it was generated.",
+  ExportResult: "Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.",
   EffectiveCloseSchedule: "Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.",
 };
 for (const [name, description] of Object.entries(schemaDescriptions)) schemas[name].description = description;

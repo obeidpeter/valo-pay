@@ -1,4 +1,5 @@
-import { useSafePerformAction as usePerformAction, useSafeCreateExport as useCreateExport } from '@/lib/safe-mutations';
+import { ExportJobControl } from '@/components/export-job-control';
+import { useSafePerformAction as usePerformAction } from '@/lib/safe-mutations';
 import React, { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow, EmptyState } from '@/components/empty-state';
@@ -6,8 +7,8 @@ import { Loading } from '@/components/loading';
 import { DailyCloseStatus } from '@/components/daily-close-status';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetReports, getGetReportsQueryKey, useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
-import { BarChart3, Download, FileText, CheckSquare, RefreshCcw, ChevronDown } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { BarChart3, FileText, CheckSquare, RefreshCcw, ChevronDown } from 'lucide-react';
+import { PermissionButton as Button } from '@/components/permission-button';
 import { formatKobo, formatDate, formatCount, formatNumber } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { readableLabel } from '@/components/record-label';
@@ -106,7 +107,6 @@ export default function ReportsPage() {
   const [selectedExperiment, setSelectedExperiment] = useState<any>(null);
   const [invoiceDialogOpen, setInvoiceDialogOpen] = useState(false);
   const queryClient = useQueryClient();
-  const [download, setDownload] = useState<{ merchantId: string; url: string } | null>(null);
   const [closeResult, setCloseResult] = useState<{ merchantId: string; message: string; failed: boolean } | null>(null);
   useEffect(() => { setExperimentDialog(null); setInvoiceDialogOpen(false); }, [merchantId]);
 
@@ -138,15 +138,6 @@ export default function ReportsPage() {
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('policies', { merchantId: merchantId! }) } }
   );
 
-  const createExport = useCreateExport({
-    mutation: {
-      onSuccess: (data, variables) => {
-        setDownload({ merchantId: variables.params!.merchantId, url: data.downloadUrl });
-        window.open(data.downloadUrl, '_blank');
-      },
-      onError: (error: unknown) => notifyProblem('Billing export not generated', saidBy(error, 'Check your connection and try generating the billing export again.')),
-    }
-  }, merchantId);
 
   if (!merchantId) return null;
   const approvedPolicyOptions = (policies?.items || [])
@@ -166,21 +157,13 @@ export default function ReportsPage() {
           <p className="text-sm text-muted-foreground mt-2">Review daily close records, billing and operational results.</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <Button 
-            variant="outline" 
-            className="gap-2"
-            onClick={() => createExport.mutate({ data: { kind: 'billing', format: 'csv' }, params: { merchantId } })}
-            busy={createExport.isPending}
-            busyLabel="Generating…"
-          >
-            <Download className="h-4 w-4" /> Export billing CSV
-          </Button>
-          <Button variant="outline" className="gap-2" onClick={() => setInvoiceDialogOpen(true)}>
+          <ExportJobControl kind="billing" formats={['csv']} label="Export billing CSV" />
+          <Button variant="outline" className="gap-2" action="issue_invoice" onClick={() => setInvoiceDialogOpen(true)}>
             <FileText className="h-4 w-4" /> Issue invoice
           </Button>
           <Button 
             className="gap-2"
-            onClick={() => dailyClose.mutate({ data: { action: 'daily_close' }, params: { merchantId } })}
+            action="daily_close" onClick={() => dailyClose.mutate({ data: { action: 'daily_close' }, params: { merchantId } })}
             busy={dailyClose.isPending}
             busyLabel="Closing the day…"
           >
@@ -188,7 +171,6 @@ export default function ReportsPage() {
           </Button>
         </div>
       </header>
-      {download?.merchantId === merchantId && <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card px-5 py-4 text-sm"><p>Billing CSV ready. It contains sample data only.</p><Button asChild variant="outline" size="sm"><a href={download.url} target="_blank" rel="noopener noreferrer">Open billing CSV</a></Button></div>}
       {closeResult?.merchantId === merchantId && <div role={closeResult.failed ? 'alert' : 'status'} className={`rounded-lg border p-5 text-sm ${closeResult.failed ? 'border-destructive/30 bg-destructive/5' : 'bg-card'}`}>
         <p className="font-semibold">{closeResult.failed ? 'Daily close could not be confirmed' : 'Daily close completed'}</p>
         <p className="mt-2 text-muted-foreground">{closeResult.message}</p>
@@ -378,7 +360,7 @@ export default function ReportsPage() {
                   <BarChart3 aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
                   <h2 className="font-semibold">Recovery experiment</h2>
                 </div>
-                <Button size="sm" disabled={!policies || !!policiesError} onClick={() => openExperimentDialog('create')}>New experiment</Button>
+                <Button size="sm" disabled={!policies || !!policiesError} kind="experiments" onClick={() => openExperimentDialog('create')}>New experiment</Button>
               </div>
               <div className="p-5">
                 {policiesError && <LoadProblem what="approved policies" error={policiesError} retry={() => { void retryPolicies(); }} busy={fetchingPolicies} />}
@@ -394,8 +376,8 @@ export default function ReportsPage() {
                         </div>
                         {experiment.status === 'draft' && (
                           <div className="flex gap-2">
-                            <Button size="sm" variant="outline" onClick={() => openExperimentDialog('edit', experiment)}>Edit</Button>
-                            <Button size="sm" onClick={() => openExperimentDialog('preregister', experiment)}>Register plan</Button>
+                            <Button size="sm" variant="outline" kind="experiments" record={experiment} onClick={() => openExperimentDialog('edit', experiment)}>Edit</Button>
+                            <Button size="sm" action="preregister_experiment" record={experiment} onClick={() => openExperimentDialog('preregister', experiment)}>Register plan</Button>
                           </div>
                         )}
                       </div>

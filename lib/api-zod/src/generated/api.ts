@@ -337,7 +337,8 @@ export const ImportRecordsBody = zod.object({
   "csv": zod.string(),
   "syntheticOnly": zod.boolean(),
   "commit": zod.boolean(),
-  "mapping": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+  "mapping": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
+  "amountUnit": zod.enum(['naira', 'kobo']).optional().describe('Unit used by source amount values; defaults to kobo for existing API clients. The console requires an explicit choice.')
 }).describe('A synthetic CSV to preview or commit for one kind, with an optional column mapping.')
 
 export const ImportRecordsResponse = zod.object({
@@ -352,7 +353,8 @@ export const ImportRecordsResponse = zod.object({
   "columns": zod.array(zod.string()).optional(),
   "preview": zod.array(zod.object({
   "row": zod.number().int(),
-  "values": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+  "values": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
+  "amountKobo": zod.number().int().optional()
 })).optional(),
   "skipped": zod.number().int().optional()
 }).describe('How many rows were valid, invalid and imported, and each row\'s outcome.')
@@ -686,8 +688,8 @@ export const UpdateSettingsResponse = zod.object({
 
 
 /**
- * A record kind, the gate pack, the billing statement or a customer's dispute pack, as JSON, CSV or PDF; stored privately with a SHA-256 checksum and recorded as an export.
- * @summary Generate a private export
+ * Durably saves a queued export job and returns immediately. Poll its status before downloading. Rendering and private storage run outside the database transaction; retries use the same immutable object key. A record kind, gate pack, billing statement or customer dispute pack supports JSON, CSV or PDF.
+ * @summary Queue a private export
  */
 export const CreateExportQueryParams = zod.object({
   "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
@@ -702,9 +704,76 @@ export const CreateExportBody = zod.object({
 export const CreateExportResponse = zod.object({
   "id": zod.string(),
   "downloadUrl": zod.string(),
-  "checksum": zod.string(),
-  "generatedAt": zod.string()
-}).describe('The export\'s id, its download address on this API, its SHA-256 checksum and when it was generated.')
+  "status": zod.enum(['queued', 'running', 'ready', 'failed']).optional(),
+  "kind": zod.string().optional(),
+  "format": zod.string().optional(),
+  "customerId": zod.string().optional(),
+  "requestedAt": zod.string().optional(),
+  "attempts": zod.number().int().optional(),
+  "checksum": zod.string().optional(),
+  "generatedAt": zod.string().optional(),
+  "byteLength": zod.number().int().optional(),
+  "generationMs": zod.number().int().optional(),
+  "error": zod.string().optional()
+}).describe('Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.')
+
+
+/**
+ * Tenant-authorised status, safe failure reason and checksum/download details once ready. Older immediate export records remain downloadable.
+ * @summary Check a saved export
+ */
+export const GetExportJobParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const GetExportJobQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const GetExportJobResponse = zod.object({
+  "id": zod.string(),
+  "downloadUrl": zod.string(),
+  "status": zod.enum(['queued', 'running', 'ready', 'failed']).optional(),
+  "kind": zod.string().optional(),
+  "format": zod.string().optional(),
+  "customerId": zod.string().optional(),
+  "requestedAt": zod.string().optional(),
+  "attempts": zod.number().int().optional(),
+  "checksum": zod.string().optional(),
+  "generatedAt": zod.string().optional(),
+  "byteLength": zod.number().int().optional(),
+  "generationMs": zod.number().int().optional(),
+  "error": zod.string().optional()
+}).describe('Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.')
+
+
+/**
+ * Requeues a failed or expired job while preserving its identity and private object key. Running and ready jobs are returned unchanged; retries cannot overwrite a completed file.
+ * @summary Retry a saved export
+ */
+export const RetryExportJobParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const RetryExportJobQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const RetryExportJobResponse = zod.object({
+  "id": zod.string(),
+  "downloadUrl": zod.string(),
+  "status": zod.enum(['queued', 'running', 'ready', 'failed']).optional(),
+  "kind": zod.string().optional(),
+  "format": zod.string().optional(),
+  "customerId": zod.string().optional(),
+  "requestedAt": zod.string().optional(),
+  "attempts": zod.number().int().optional(),
+  "checksum": zod.string().optional(),
+  "generatedAt": zod.string().optional(),
+  "byteLength": zod.number().int().optional(),
+  "generationMs": zod.number().int().optional(),
+  "error": zod.string().optional()
+}).describe('Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.')
 
 
 /**

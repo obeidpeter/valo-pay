@@ -1,12 +1,15 @@
 import PDFDocument from "pdfkit";
-import { randomUUID, createHash } from "node:crypto";
-import { objectStorageClient, ObjectStorageService } from "./objectStorage";
-import type { Context, DomainState } from "../domain/types";
-import { buildReports, customerTimeline, makeRecord } from "../domain";
+import { createHash } from "node:crypto";
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { objectStorageClient } from "./objectStorage";
+import type { Context, DomainState, ValopayRecord } from "../domain/types";
+import { buildReports } from "../domain";
 import { getGates } from "./valopay-readiness";
 import { verifyAudit } from "./valopay-store";
-import { readExportBytes } from "./export-download";
+import { collectExportBytes, EXPORT_STORAGE_TIMEOUT_MS, readExportBytes } from "./export-download";
 import { buildDisputePack, disputePackCsv, packFonts, renderDisputePackPdf, type DisputePack } from "./valopay-packs";
+import { MAX_EXPORT_BYTES, publicExportRecord, type ClaimedExport, type ExportArtifact, type ExportJobStorage } from './export-jobs';
 
 /** CSV downloads are UTF-8 and start with the byte order mark, which is what spreadsheet programs look for before they read accented letters correctly on opening; the importer skips it (csv-parse `bom`). */
 const CSV_BOM="\uFEFF";
@@ -38,20 +41,36 @@ export interface ExportInput{kind:string;customerId?:string;format:"json"|"csv"|
 /** The file for an export request and the payload it was made from. */
 export interface ExportBytes{bytes:Buffer;contentType:string;payload:unknown;pack?:DisputePack}
 
-/** Pure: the file for an export request.  Storage, the checksum and the audit entry happen in createExportFile. */
+/** Walk the rendered payload before PDF/JSON encoding allocates a second copy.
+ * Each string is measured once; unrelated lender history is not an export limit. */
+function assertPayloadSize(payload:unknown):void{
+ let length=0;
+ const visit=(value:unknown):void=>{
+  if(value&&typeof value==='object'){
+   length+=2;
+   for(const [key,child] of Object.entries(value)){length+=Buffer.byteLength(JSON.stringify(key))+2;visit(child);}
+  }else length+=Buffer.byteLength(JSON.stringify(value)??'null');
+  if(length>MAX_EXPORT_BYTES)throw Object.assign(new Error('Export source exceeds the supported size.'),{exportTooLarge:true});
+ };
+ visit(payload);
+}
+
+/** Pure byte generation. The worker records the checksum and uploads outside database transactions. */
 export async function buildExportBytes(state:DomainState,ctx:Context,input:ExportInput,options:{compress?:boolean}={}):Promise<ExportBytes>{
  const generatedAt=ctx.now;
  if((packKinds as readonly string[]).includes(input.kind)){
   // AUD-02: one-page summary followed by the timeline, as PDF, CSV or JSON of the same data.
   const pack=buildDisputePack(state,ctx,input.customerId||"");
+  assertPayloadSize(pack);
   if(input.format==="pdf")return {bytes:await renderDisputePackPdf(pack,options),contentType:"application/pdf",payload:pack,pack};
   if(input.format==="csv")return {bytes:Buffer.from(CSV_BOM+disputePackCsv(pack)),contentType:"text/csv; charset=utf-8",payload:pack,pack};
   return {bytes:Buffer.from(JSON.stringify(pack,null,2)),contentType:"application/json",payload:pack,pack};
  }
  const reports=input.kind==="gate-pack"||input.kind==="billing"?buildReports(state,ctx.now):undefined;
  // MEA-02 and RET-06: the gate pack carries the uplift report with the pre-registered rule and its result, frozen at generation.
- const payload=input.kind==="gate-pack"?{...getGates(state),upliftReport:reports!.experiment,operational:reports!.operational,billing:reports!.billing}:input.kind==="billing"?reports!.billing:state.records.filter(r=>r.kind===input.kind);
+ const payload=input.kind==="gate-pack"?{...getGates(state),upliftReport:reports!.experiment,operational:reports!.operational,billing:reports!.billing}:input.kind==="billing"?reports!.billing:state.records.filter(r=>r.kind===input.kind).map(record=>record.kind==='exports'?publicExportRecord(record):record);
  const snapshot={merchant:state.merchant.name,environment:"synthetic_sandbox",generatedAt,generatedBy:ctx.actor,auditVerification:verifyAudit(state),data:payload};
+ assertPayloadSize(snapshot);
  if(input.format==="pdf")return {bytes:await pdfBytes(input.kind,snapshot),contentType:"application/pdf",payload:snapshot};
  if(input.format==="csv"){
   const rows=Array.isArray(payload)?payload:[payload];
@@ -60,28 +79,48 @@ export async function buildExportBytes(state:DomainState,ctx:Context,input:Expor
  }
  return {bytes:Buffer.from(JSON.stringify(snapshot,null,2)),contentType:"application/json",payload:snapshot};
 }
-/** Writes the export to private storage with its SHA-256, records it on the lender's state, and returns its download address, size and generation time. */
-export async function createExportFile(state:DomainState,ctx:Context,input:ExportInput){
- const started=Date.now();
- const {bytes,contentType,pack}=await buildExportBytes(state,ctx,input);
- const id=randomUUID();
- const dir=new ObjectStorageService().getPrivateObjectDir();
- const parts=dir.replace(/^\//,"").split("/");
- const bucket=parts.shift()!;
- const objectName=`${parts.join("/")}/exports/${state.merchant.id}/${id}.${input.format}`;
- await objectStorageClient.bucket(bucket).file(objectName).save(bytes,{resumable:false,contentType,preconditionOpts:{ifGenerationMatch:0},metadata:{cacheControl:"private, no-store"}});
- const checksum=createHash("sha256").update(bytes).digest("hex");
- // AUD-02: pack generation is itself an audited event (the route appends the audit entry) and is counted for Test 5 (MEA-01).
- makeRecord(state,"exports",{id,name:`${input.kind} · ${input.format.toUpperCase()}`,status:"ready",customerId:pack?String(pack.customer.id):"",createdAt:ctx.now,updatedAt:ctx.now,data:{checksum,kind:input.kind,format:input.format,usedInRealCase:false,objectName,bucket,contentType,byteLength:bytes.length,generationMs:Date.now()-started,events:pack?.timeline.length,customerReference:pack?String(pack.customer.reference):undefined}});
- return {id,downloadUrl:`/api/v1/exports/${id}/download?merchantId=${state.merchant.id}`,checksum,generatedAt:ctx.now,byteLength:bytes.length,generationMs:Date.now()-started};
+/** Pure byte generation, called only after the durable worker claim transaction has committed. */
+export async function generateExportArtifact(claim: ClaimedExport): Promise<{ bytes: Buffer; artifact: ExportArtifact }> {
+ const started=performance.now();
+ const {bytes,contentType,pack}=await buildExportBytes(claim.state,claim.context,claim.input);
+ return {bytes,artifact:{checksum:createHash('sha256').update(bytes).digest('hex'),contentType,byteLength:bytes.length,generationMs:Math.round(performance.now()-started),generatedAt:claim.context.now,
+  ...(pack?{events:pack.timeline.length,customerReference:String(pack.customer.reference)}:{})}};
 }
+/** A stable private key and create-only upload make recovery safe after lost acknowledgements and failed commits. */
+export const exportJobStorage: ExportJobStorage = {
+ async existing(claim) {
+  const file=objectStorageClient.bucket(claim.location.bucket).file(claim.location.objectName);
+  let metadata;
+  try {
+   const stream=file.requestStream({uri:'',headers:{'Cache-Control':'no-store'},timeout:EXPORT_STORAGE_TIMEOUT_MS});
+   metadata=JSON.parse((await collectExportBytes(stream,undefined,256*1024)).toString('utf8'));
+  } catch(error) { if(Number((error as {statusCode?:unknown;code?:unknown}).statusCode??(error as {code?:unknown}).code)===404)return null; throw error; }
+  const custom=metadata.metadata||{};
+  if(custom.valopayExportId!==claim.id||custom.valopayMerchantId!==claim.merchantId)throw new Error('Export object ownership metadata does not match its job.');
+  const artifact=JSON.parse(String(custom.valopayArtifact||'null')) as ExportArtifact|null;
+  if(!artifact||!/^[a-f0-9]{64}$/.test(artifact.checksum)||!Number.isSafeInteger(artifact.byteLength)||artifact.byteLength<0||artifact.byteLength>MAX_EXPORT_BYTES||Number(metadata.size)!==artifact.byteLength)throw new Error('Export object metadata is invalid.');
+  const bytes=await readExportBytes(file,undefined,MAX_EXPORT_BYTES);
+  if(bytes.length!==artifact.byteLength||createHash('sha256').update(bytes).digest('hex')!==artifact.checksum)throw new Error('Export recovery checksum verification failed.');
+  return artifact;
+ },
+ async put(claim,bytes,artifact) {
+  const stream=objectStorageClient.bucket(claim.location.bucket).file(claim.location.objectName).createWriteStream({resumable:false,timeout:EXPORT_STORAGE_TIMEOUT_MS,contentType:artifact.contentType,preconditionOpts:{ifGenerationMatch:0},metadata:{cacheControl:'private, no-store',metadata:{valopayExportId:claim.id,valopayMerchantId:claim.merchantId,valopayArtifact:JSON.stringify(artifact)}}});
+  // Abort destroys the actual upload stream, rather than leaving a timed-out
+  // promise uploading in the background and consuming an unbounded worker slot.
+  await pipeline(Readable.from([bytes]),stream,{signal:AbortSignal.timeout(EXPORT_STORAGE_TIMEOUT_MS)});
+ },
+};
 /** Where an export lives and what to check it against. */
 export interface ExportDescriptor{id:string;bucket:string;objectName:string;checksum:string;contentType:string;filename:string}
 /** The authorised export metadata from the lender's state; resolved inside the transaction, used after it. */
 export function exportDescriptor(state:DomainState,id:string):ExportDescriptor{
  const record=state.records.find(r=>r.kind==="exports"&&r.id===id);
  if(!record)throw Object.assign(new Error("Export not found in this lender."),{status:404});
- return {id,bucket:String(record.data.bucket),objectName:String(record.data.objectName),checksum:String(record.data.checksum),contentType:String(record.data.contentType),filename:`valopay-${record.data.kind}-${id}.${record.data.format}`};
+ return exportDescriptorForRecord(record);
+}
+export function exportDescriptorForRecord(record:ValopayRecord):ExportDescriptor{
+ if(record.status!=="ready")throw Object.assign(new Error("This export is not ready. Check its saved status or retry it from the console."),{status:409});
+ return {id:record.id,bucket:String(record.data.bucket),objectName:String(record.data.objectName),checksum:String(record.data.checksum),contentType:String(record.data.contentType),filename:`valopay-${record.data.kind}-${record.id}.${record.data.format}`};
 }
 /** Reads the object and verifies the immutable SHA-256 before any byte is returned; holds no database lock. */
 export async function readExport(descriptor:ExportDescriptor,signal?:AbortSignal){

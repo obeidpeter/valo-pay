@@ -30,6 +30,7 @@ type RecordRow = {
 };
 type Session = {
   client: PoolClient; workspace: WorkspaceRow; principal: string; active: boolean;
+  access: WorkspaceAccess;
   lockedMerchantId?: string; snapshot?: DomainState;
 };
 
@@ -92,28 +93,31 @@ function rowToRecord(row: RecordRow): ValopayRecord {
 }
 /** Row lock a load takes on the merchant: exclusive for a mutation, shared for a read so reads never queue behind each other. */
 export type MerchantLock = "update" | "share" | "none";
+export type WorkspaceAccess = "read" | "write" | "persona";
 function scopedMerchantQuery(lock: MerchantLock = "none") {
   return `SELECT m.id,m.info,m.settings FROM valopay_merchants m
     JOIN valopay_workspaces w ON w.id=m.workspace_id
     WHERE m.id=$1 AND m.workspace_id=$2 AND w.id=$2 AND w.principal_hash=$3${lock === "update" ? " FOR UPDATE OF m" : lock === "share" ? " FOR SHARE OF m" : ""}`;
 }
 
-/** Runs a request's work in one transaction on the caller's workspace: the principal lock, the sandbox bootstrap on a first visit, the persona's role, and the database clock as the request's time. */
-export async function inWorkspace<T>(req: Request, res: Response, fn: (context: StoreContext) => Promise<T>): Promise<T> {
+/** Persona changes lock the workspace exclusively. Ordinary work shares that
+ * lock, fixing the persona for the transaction while lender locks serialize
+ * mutations. Only first-visit bootstrap needs the principal advisory lock. */
+export async function inWorkspace<T>(req: Request, res: Response, fn: (context: StoreContext) => Promise<T>, access: WorkspaceAccess = "write"): Promise<T> {
   const identity = principalFor(req, res);
   const client = await pool.connect();
   let context: StoreContext | undefined;
   try {
     await client.query("BEGIN");
-    // This lock is intentional: it serializes bootstrap and persona changes for
-    // a server-derived principal without relying on a PostgreSQL role or GUC.
-    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [identity.principal]);
     // Single source of time: the database clock, read once per transaction.
     const now = (await client.query<{ now: Date }>("SELECT now() AS now")).rows[0]!.now.toISOString();
-    let workspace = (await client.query<WorkspaceRow>(
-      "SELECT id,principal_hash,role FROM valopay_workspaces WHERE principal_hash=$1 FOR UPDATE",
-      [identity.principal],
-    )).rows[0];
+    const workspaceQuery = `SELECT id,principal_hash,role FROM valopay_workspaces WHERE principal_hash=$1 FOR ${access === "persona" ? "UPDATE" : "SHARE"}`;
+    let workspace = (await client.query<WorkspaceRow>(workspaceQuery, [identity.principal])).rows[0];
+    if (!workspace) {
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [identity.principal]);
+      // Another first visit may have finished seeding while we waited.
+      workspace = (await client.query<WorkspaceRow>(workspaceQuery, [identity.principal])).rows[0];
+    }
     if (!workspace) {
       // A new anonymous sandbox seeds two lenders; creation is bounded per client address on top of the request limit.
       if (!identity.authenticated && !creationLimiter.take(identity.address, Date.now())) fail("Too many new sandboxes from this address; please try again in an hour.", 429);
@@ -123,7 +127,7 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
         [randomUUID(), identity.principal],
       )).rows[0];
       workspace = inserted || (await client.query<WorkspaceRow>(
-        "SELECT id,principal_hash,role FROM valopay_workspaces WHERE principal_hash=$1 FOR UPDATE",
+        workspaceQuery,
         [identity.principal],
       )).rows[0];
       if (!workspace) throw new Error("Workspace bootstrap could not be completed.");
@@ -139,7 +143,7 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       authenticated: identity.authenticated, role: workspace.role,
       actor: `Sandbox ${workspace.role}`, now,
     });
-    sessions.set(context, { client, workspace, principal: identity.principal, active: true });
+    sessions.set(context, { client, workspace, principal: identity.principal, active: true, access });
     const result = await fn(context);
     const committed = await client.query("COMMIT");
     // PostgreSQL accepts COMMIT after a caught statement error by returning
@@ -181,6 +185,7 @@ export async function listMerchants(context: StoreContext) {
  */
 async function readMerchant(context: StoreContext, merchantId: string, lock: Exclude<MerchantLock, "none"> = "share"): Promise<MerchantRow> {
   const session = sessionFor(context);
+  if (session.access === "read" && lock === "update") conflict("A read transaction cannot acquire a lender write lock.");
   if (session.lockedMerchantId && session.lockedMerchantId !== merchantId) conflict("A transaction may operate on only one lender.");
   const merchant = (await session.client.query<MerchantRow>(
     scopedMerchantQuery(lock),
@@ -204,7 +209,9 @@ export async function loadState(context: StoreContext, merchantId: string, lock:
   )).rows.map(rowToRecord);
   const state: DomainState = { merchant: merchant.info, settings: merchant.settings, records };
   if (state.merchant.id !== merchantId) conflict("Lender identity does not match its stored scope.");
-  session.snapshot = structuredClone(state);
+  // A shared load is read-only, even in an otherwise write-capable context.
+  // Avoid cloning the entire history just to serve a dashboard or export lookup.
+  session.snapshot = lock === "update" ? structuredClone(state) : undefined;
   return state;
 }
 
@@ -319,6 +326,7 @@ export async function saveIdempotency(context: StoreContext, id: string, request
 /** Switches the workspace's demo persona. */
 export async function changeRole(context: StoreContext, role: string) {
   const session = sessionFor(context);
+  if (session.access !== "persona") conflict("A persona change requires an exclusive workspace transaction.");
   if (!roles.includes(role)) fail("Unknown sandbox persona.");
   const result = await session.client.query(
     "UPDATE valopay_workspaces SET role=$3 WHERE id=$1 AND principal_hash=$2",
@@ -329,6 +337,7 @@ export async function changeRole(context: StoreContext, role: string) {
 }
 
 function lockedMerchant(session: Session): string {
+  if (session.access === "read") fail("A read transaction cannot write lender data.", 409);
   if (!session.lockedMerchantId || !session.snapshot) fail("Load a lender before using this repository operation.", 409);
   return session.lockedMerchantId;
 }
@@ -339,7 +348,18 @@ function reference(record: ValopayRecord, id: unknown, kind: string, label: stri
   return target;
 }
 /** Pure guard exported for focused repository guard tests. */
-export function assertFinalState(snapshot: DomainState, state: DomainState, merchantId: string) {
+function isExportRetry(before: ValopayRecord, after: ValopayRecord, now?: string): boolean {
+  const expired = before.status === "running" && !!now && (!before.data.leaseExpiresAt || Date.parse(String(before.data.leaseExpiresAt)) <= Date.parse(now));
+  if (after.status !== "queued" || !(before.status === "failed" || expired)) return false;
+  const cleared = ["leaseToken", "leaseExpiresAt", "lastError"];
+  if (cleared.some(key => after.data[key] !== undefined)) return false;
+  const stableData = (record: ValopayRecord) => Object.fromEntries(Object.entries(record.data).filter(([key]) => !cleared.includes(key)));
+  // A retry cannot change the request, private object identity, attempts,
+  // checksum, customer or any prior evidence; it only clears the old lease/error.
+  return canonical({ ...after, status: before.status, updatedAt: before.updatedAt, data: stableData(after) }) === canonical({ ...before, data: stableData(before) });
+}
+
+export function assertFinalState(snapshot: DomainState, state: DomainState, merchantId: string, now?: string) {
   if (state.merchant.id !== merchantId || snapshot.merchant.id !== merchantId) conflict("Lender identity cannot be reassigned.");
   const final = new Map<string, ValopayRecord>();
   for (const record of state.records) {
@@ -356,7 +376,8 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
     if (present.id !== before.id || present.merchantId !== before.merchantId || present.kind !== before.kind || present.createdAt !== before.createdAt) {
       conflict("Record identity, lender, kind, and creation time are immutable.");
     }
-    if (["audit", "exports", "reviews", "closes", "retry-decisions", "invoices"].includes(before.kind) && canonical(present) !== canonical(before)) conflict("Evidence records are immutable.");
+    if (["audit", "exports", "reviews", "closes", "retry-decisions", "invoices"].includes(before.kind) && canonical(present) !== canonical(before)
+      && !(before.kind === "exports" && isExportRetry(before, present, now))) conflict("Evidence records are immutable.");
     if (["policies", "templates", "experiments"].includes(before.kind) && ["approved", "preregistered", "closed"].includes(before.status) && canonical(present) !== canonical(before)) {
       conflict("Approved, preregistered, and closed versions are immutable.");
     }
@@ -463,7 +484,7 @@ export async function saveState(context: StoreContext, state: DomainState): Prom
   const merchantId = lockedMerchant(session);
   const snapshot = session.snapshot!;
   advanceRecordVersions(snapshot, state, context.now);
-  assertFinalState(snapshot, state, merchantId);
+  assertFinalState(snapshot, state, merchantId, context.now);
   const owned = await session.client.query(scopedMerchantQuery(), [merchantId, session.workspace.id, session.principal]);
   if (!owned.rows[0]) fail("Lender not found in this workspace.", 404);
   const old = new Map(snapshot.records.map((record) => [record.id, canonical(record)]));
@@ -581,7 +602,7 @@ export async function inMerchantAsSystem<T>(merchantId: string, actor: string, f
     if (!scope) { await client.query("ROLLBACK"); return undefined; }
     const now = (await client.query<{ now: Date }>("SELECT now() AS now")).rows[0]!.now.toISOString();
     context = Object.freeze({ authenticated: true, role: "Operations", actor, now });
-    sessions.set(context, { client, workspace: { id: scope.workspace_id, principal_hash: scope.principal_hash, role: scope.role }, principal: scope.principal_hash, active: true });
+    sessions.set(context, { client, workspace: { id: scope.workspace_id, principal_hash: scope.principal_hash, role: scope.role }, principal: scope.principal_hash, active: true, access: "write" });
     const result = await fn(context);
     const committed = await client.query("COMMIT");
     if (committed.command !== "COMMIT") throw new Error("The system transaction was rolled back.");

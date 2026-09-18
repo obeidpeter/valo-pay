@@ -23,6 +23,9 @@ const suites = [
   "artifacts/api-server/tests/valopay-store.integration.test.ts",
   "artifacts/api-server/tests/close-scheduler.integration.test.ts",
   "artifacts/api-server/tests/record-lists.integration.test.ts",
+  "artifacts/api-server/tests/workspace-concurrency.integration.test.ts",
+  "artifacts/api-server/tests/export-jobs.integration.test.ts",
+  "artifacts/api-server/tests/workflow-performance.integration.test.ts",
 ];
 for (const suite of suites) {
   console.log(`\n▶ ${suite}`);

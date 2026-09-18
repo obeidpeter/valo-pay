@@ -1,10 +1,10 @@
 import { useRef } from 'react';
 import { useMutation, type UseMutationOptions } from '@tanstack/react-query';
 import {
-  performAction, createRecord, updateRecord, updateSettings, importRecords, createExport,
+  performAction, createRecord, updateRecord, updateSettings, importRecords, createExport, retryExportJob,
   type PerformActionMutationVariables, type CreateRecordMutationVariables,
   type UpdateRecordMutationVariables, type UpdateSettingsMutationVariables,
-  type ImportRecordsMutationVariables, type CreateExportMutationVariables,
+  type ImportRecordsMutationVariables, type CreateExportMutationVariables, type RetryExportJobMutationVariables,
 } from '@workspace/api-client-react';
 
 /** Object key order must not turn an unchanged retry into another operation. */
@@ -58,4 +58,7 @@ export function useSafeImportRecords(options?: Options<Awaited<ReturnType<typeof
 }
 export function useSafeCreateExport(options?: Options<Awaited<ReturnType<typeof createExport>>, CreateExportMutationVariables>, scope?: unknown) {
   return useSafeMutation((v: CreateExportMutationVariables, request) => createExport(v.data, v.params, request), options, scope);
+}
+export function useSafeRetryExportJob(options?: Options<Awaited<ReturnType<typeof retryExportJob>>, RetryExportJobMutationVariables>, scope?: unknown) {
+  return useSafeMutation((v: RetryExportJobMutationVariables, request) => retryExportJob(v.id, v.params, request), options, scope);
 }

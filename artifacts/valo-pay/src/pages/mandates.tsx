@@ -8,9 +8,10 @@ import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useWorkspace } from '@/lib/workspace-context';
+import { permissionReason } from '@/lib/permissions';
 import { useListRecords, getListRecordsQueryKey, } from '@workspace/api-client-react';
 import { formatKobo, formatDate } from '@/lib/formatters';
-import { Button } from '@/components/ui/button';
+import { PermissionButton as Button } from '@/components/permission-button';
 import { RecordDialog } from '@/components/record-dialog';
 import { useQueryClient } from '@tanstack/react-query';
 import { activationWorkflows, mandateFrequencies } from '@workspace/valopay-schema';
@@ -33,7 +34,7 @@ const mandateActionTitles: Record<string, string> = {
 };
 
 export default function MandatesPage() {
-  const { merchantId } = useWorkspace();
+  const { merchantId, workspace } = useWorkspace();
   const [selectedMandate, setSelectedMandate] = useState<any>(null);
   const [actionKind, setActionKind] = useState<string>('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -116,6 +117,8 @@ export default function MandatesPage() {
 
   const submitCreate = (event: React.FormEvent) => {
     event.preventDefault();
+    const blocked = permissionReason(workspace, { kind: 'mandates' });
+    if (blocked) { setFormErrors([blocked]); return; }
     const errors: Record<string, string> = {};
     for (const field of requiredFields) {
       const value = String(draft[field.name] ?? '').trim();
@@ -180,7 +183,7 @@ export default function MandatesPage() {
           <h1 className="text-3xl font-bold tracking-tight">Mandates</h1>
           <p className="text-muted-foreground mt-1">A mandate is a customer's permission to collect by direct debit. Track each mandate and its activation status here.</p>
         </div>
-        <Button onClick={() => setIsCreateOpen(true)}>Create synthetic mandate</Button>
+        <Button kind="mandates" onClick={() => setIsCreateOpen(true)}>Create synthetic mandate</Button>
       </header>
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
@@ -199,7 +202,7 @@ export default function MandatesPage() {
             {wrongLender ? 'Switch to the lender you were reviewing to open this record.' : 'The record could not be found for the active lender. Return to collections to check its linked mandate.'}
           </EmptyState>
         ) : shown.length === 0 ? (
-          <EmptyState title={view === 'all' ? 'No mandates yet' : 'No mandates match this view'} action={view === 'all' ? <Button size="sm" variant="outline" onClick={() => setIsCreateOpen(true)}>Create synthetic mandate</Button> : <Button size="sm" variant="outline" onClick={() => setView('all')}>View all mandates</Button>}>
+          <EmptyState title={view === 'all' ? 'No mandates yet' : 'No mandates match this view'} action={view === 'all' ? <Button kind="mandates" size="sm" variant="outline" onClick={() => setIsCreateOpen(true)}>Create synthetic mandate</Button> : <Button size="sm" variant="outline" onClick={() => setView('all')}>View all mandates</Button>}>
             {view === 'all' ? 'Mandates appear after they are created or imported. Create a synthetic mandate to try the activation process.' : 'Choose All mandates to review other activation states.'}
           </EmptyState>
         ) : (
@@ -226,13 +229,13 @@ export default function MandatesPage() {
                     <td className="px-6 py-4 text-xs text-muted-foreground" title={readableLabel(mandate.data?.workflow || 'standard')}>{readableLabel(mandate.data?.workflow || 'standard')}</td>
                     <td className="px-6 py-4 text-xs"><p>{formatDate(deadlineInstant(mandate.data?.activationDeadline))}</p>{mandate.status === 'pending_activation' && isOverdue(mandate.data?.activationDeadline, now) && <p className="mt-1 font-semibold text-destructive">Overdue · follow up or reissue</p>}{mandate.status === 'pending_activation' && !isOverdue(mandate.data?.activationDeadline, now) && isDueToday(mandate.data?.activationDeadline, now) && <p className="mt-1 font-semibold text-warning-strong">Activation due today</p>}</td>
                     <td className="px-6 py-4 text-right space-x-2">
-                      {mandate.status === 'active' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_suspend')}>Suspend</Button>}
-                      {mandate.status === 'suspended' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_reinstate')}>Resume</Button>}
-                      {['draft', 'submitted', 'pending_activation', 'active', 'suspended'].includes(mandate.status) && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_cancel')}>Cancel</Button>}
-                      {['pending_activation', 'expired', 'cancelled', 'failed'].includes(mandate.status) && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_reissue')}>Reissue</Button>}
-                      {mandate.status === 'pending_activation' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'activation_reminder')}>Record reminder</Button>}
-                      {['active', 'suspended', 'pending_activation'].includes(mandate.status) && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => handleAction(mandate, 'notify_policy_change')}>Record change notice</Button>}
-                      {['active', 'suspended', 'pending_activation'].includes(mandate.status) && <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => handleAction(mandate, 'apply_policy_version')}>Apply policy version</Button>}
+                      {mandate.status === 'active' && <Button size="sm" variant="outline" className="h-7 text-xs" action="mandate_suspend" record={mandate} onClick={() => handleAction(mandate, 'mandate_suspend')}>Suspend</Button>}
+                      {mandate.status === 'suspended' && <Button size="sm" variant="outline" className="h-7 text-xs" action="mandate_reinstate" record={mandate} onClick={() => handleAction(mandate, 'mandate_reinstate')}>Resume</Button>}
+                      {['draft', 'submitted', 'pending_activation', 'active', 'suspended'].includes(mandate.status) && <Button size="sm" variant="outline" className="h-7 text-xs" action="mandate_cancel" record={mandate} onClick={() => handleAction(mandate, 'mandate_cancel')}>Cancel</Button>}
+                      {['pending_activation', 'expired', 'cancelled', 'failed'].includes(mandate.status) && <Button size="sm" variant="outline" className="h-7 text-xs" action="mandate_reissue" record={mandate} onClick={() => handleAction(mandate, 'mandate_reissue')}>Reissue</Button>}
+                      {mandate.status === 'pending_activation' && <Button size="sm" variant="outline" className="h-7 text-xs" action="activation_reminder" record={mandate} onClick={() => handleAction(mandate, 'activation_reminder')}>Record reminder</Button>}
+                      {['active', 'suspended', 'pending_activation'].includes(mandate.status) && <Button size="sm" variant="ghost" className="h-7 text-xs" action="notify_policy_change" record={mandate} onClick={() => handleAction(mandate, 'notify_policy_change')}>Record change notice</Button>}
+                      {['active', 'suspended', 'pending_activation'].includes(mandate.status) && <Button size="sm" variant="ghost" className="h-7 text-xs" action="apply_policy_version" record={mandate} onClick={() => handleAction(mandate, 'apply_policy_version')}>Apply policy version</Button>}
                     </td>
                   </tr>
                 ))}
@@ -300,7 +303,7 @@ export default function MandatesPage() {
               </fieldset>
               <div className="flex justify-end gap-2 border-t pt-4">
                 <Button type="button" variant="outline" onClick={() => changeCreateOpen(false)}>Cancel</Button>
-                <Button type="submit" busy={createMandate.isPending} busyLabel="Creating mandate…">Create mandate</Button>
+                <Button kind="mandates" type="submit" busy={createMandate.isPending} busyLabel="Creating mandate…">Create mandate</Button>
               </div>
             </form>
           </Dialog.Content>

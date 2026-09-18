@@ -5,13 +5,23 @@
  * Valo Pay Stage 1 observation-first sandbox API. All monetary fields are integer kobo. Live lender data and all outbound provider instructions are blocked until production readiness is verified.
  * OpenAPI spec version: 1.0.0
  */
+import type { ExportResultStatus } from './exportResultStatus';
 
 /**
- * The export's id, its download address on this API, its SHA-256 checksum and when it was generated.
+ * Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.
  */
 export interface ExportResult {
   id: string;
   downloadUrl: string;
-  checksum: string;
-  generatedAt: string;
+  status?: ExportResultStatus;
+  kind?: string;
+  format?: string;
+  customerId?: string;
+  requestedAt?: string;
+  attempts?: number;
+  checksum?: string;
+  generatedAt?: string;
+  byteLength?: number;
+  generationMs?: number;
+  error?: string;
 }

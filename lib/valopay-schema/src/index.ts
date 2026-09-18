@@ -3,6 +3,7 @@ export * from "./enums";
 export * from "./failure-codes";
 export * from "./exceptions";
 export * from "./money";
+export * from "./amount-input";
 export * from "./policy";
 export * from "./records";
 export * from "./text";

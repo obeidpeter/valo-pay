@@ -8,7 +8,9 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== "1" || process.env.NODE_ENV !== "dev
 }
 const { pool } = await import("@workspace/db");
 const { inWorkspace, listMerchants, loadState, saveState, appendAudit } = await import("../src/lib/valopay-store.js");
-const { createExportFile, downloadExport } = await import("../src/lib/valopay-exports.js");
+const { downloadExport, generateExportArtifact, exportJobStorage } = await import("../src/lib/valopay-exports.js");
+const { queueExport, processExportJob } = await import('../src/lib/export-jobs');
+const { exportJobRepository } = await import('../src/lib/export-job-store');
 const warnings: Array<{ type?: string; count?: number; stack?: string }> = [];
 const streams: Array<WeakRef<NodeJS.ReadableStream>> = [];
 const originalRead = File.prototype.requestStream;
@@ -36,15 +38,18 @@ const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex")
 const repetitions = Number(process.env.VALOPAY_EXPORT_REPETITIONS || 16);
 
 try {
-  const fixture = await inWorkspace(req, res, async (context) => {
+  const queued = await inWorkspace(req, res, async (context) => {
     const merchants = await listMerchants(context);
     const state = await loadState(context, merchants[0]!.id);
     const customer = state.records.find((record) => record.kind === "customers")!;
-    const exported = await createExportFile(state, context, { kind: "customer-pack", customerId: customer.id, format: "pdf" });
+    const exported = queueExport(state, context, { kind: "customer-pack", customerId: customer.id, format: "pdf" },process.env.PRIVATE_OBJECT_DIR||'');
     appendAudit(state, context, "test.export-created", exported.id, "Fresh synthetic export stream regression fixture");
     await saveState(context, state);
     return { state, id: exported.id, checksum: exported.checksum, sibling: merchants[1]!.id };
   });
+  assert.equal(await processExportJob(exportJobRepository,exportJobStorage,generateExportArtifact,{merchantId:queued.state.merchant.id,id:queued.id}),'ready');
+  const readyState=await inWorkspace(req,res,context=>loadState(context,queued.state.merchant.id,'share'),'read');
+  const fixture={...queued,state:readyState,checksum:String(readyState.records.find(record=>record.id===queued.id)!.data.checksum)};
   const originalMetadata = structuredClone(fixture.state.records.find((record) => record.id === fixture.id));
   const measurements: number[] = [];
   for (let i = 0; i < repetitions; i++) {
