@@ -1,4 +1,4 @@
-import React, { ReactNode, useEffect, useRef, useState } from 'react';
+import React, { ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { useWorkspace } from '@/lib/workspace-context';
 import { AuthShow, useSignOut } from '@/lib/auth';
@@ -82,6 +82,15 @@ export function Layout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const signOut = useSignOut();
   const { theme, setChoice } = useTheme();
+  const mainRef = useRef<HTMLElement>(null);
+  // The shell survives navigation, including its independently scrolling main region.
+  // Reset before paint only when the route changes; filters and other same-page updates keep their place.
+  useLayoutEffect(() => {
+    if (mainRef.current) {
+      mainRef.current.scrollTop = 0;
+      mainRef.current.scrollLeft = 0;
+    }
+  }, [location]);
 
   // The title names the page, or says the page stopped working while the boundary below shows its notice.
   const [pageError,setPageError]=useState<Error|null>(null);
@@ -192,7 +201,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </aside>
 
         {/* Main Content */}
-        <main id="main" tabIndex={-1} className="min-w-0 flex-1 overflow-auto bg-background focus:outline-none print:overflow-visible">
+        <main ref={mainRef} id="main" tabIndex={-1} className="min-w-0 flex-1 overflow-auto bg-background focus:outline-none print:overflow-visible">
           <div className="workspace-bar hidden md:flex items-center justify-between gap-4 border-b px-8 py-3.5 print:hidden">
             <div className="flex items-center gap-2 text-xs"><span className="text-muted-foreground">Workspace</span><ChevronRight className="h-3 w-3 text-muted-foreground" aria-hidden="true" /><span className="font-medium">{pageTitle}</span></div>
             <span className="text-[11px] text-muted-foreground flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-brand" />Observation mode</span>
