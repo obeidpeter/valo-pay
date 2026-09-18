@@ -1,9 +1,9 @@
-import { useEffect, useRef, type ComponentType, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react';
+import { Loading } from '@/components/loading';
 import { focusMain } from '@/lib/focus';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
-import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFoundPage from '@/pages/not-found';
 import {
   Route,
@@ -19,27 +19,83 @@ import { authEnabled, clerkPublishableKey } from '@/lib/auth';
 import { WorkspaceProvider } from '@/lib/workspace-context';
 import { Layout } from '@/components/layout';
 
-// Public pages: no workspace, no sandbox
+// Public pages: no workspace, no sandbox. The landing page ships with the shell, since it is the
+// first thing a visitor sees; the sign-in pages bring Clerk's form and load only when someone goes there.
 import LandingPage from '@/pages/landing';
-import { SignInPage, SignUpPage } from '@/pages/sign-in';
+const SignInPage: PageLoader = () => import('@/pages/sign-in').then((m) => ({ default: m.SignInPage }));
+const SignUpPage: PageLoader = () => import('@/pages/sign-in').then((m) => ({ default: m.SignUpPage }));
 
-// Console pages
-import OverviewPage from '@/pages/overview';
-import CustomersPage from '@/pages/customers/index';
-import CustomerTimelinePage from '@/pages/customers/[id]';
-import ReconciliationPage from '@/pages/reconciliation';
-import ExceptionsPage from '@/pages/exceptions';
-import PoliciesPage from '@/pages/policies';
+// Console pages load on first visit, each in its own chunk, so the landing page does not carry the
+// console and the console does not carry every page at once (design rationale, Performance).
+const OverviewPage: PageLoader = () => import('@/pages/overview');
+const CustomersPage: PageLoader = () => import('@/pages/customers/index');
+const CustomerTimelinePage: PageLoader = () => import('@/pages/customers/[id]');
+const ReconciliationPage: PageLoader = () => import('@/pages/reconciliation');
+const ExceptionsPage: PageLoader = () => import('@/pages/exceptions');
+const PoliciesPage: PageLoader = () => import('@/pages/policies');
+const MandatesPage: PageLoader = () => import('@/pages/mandates');
+const CollectionsPage: PageLoader = () => import('@/pages/collections');
+const ReportsPage: PageLoader = () => import('@/pages/reports');
+const EvidencePage: PageLoader = () => import('@/pages/evidence');
+const AuditPage: PageLoader = () => import('@/pages/audit');
+const SettingsPage: PageLoader = () => import('@/pages/settings');
 
-import MandatesPage from '@/pages/mandates';
-import CollectionsPage from '@/pages/collections';
-import ReportsPage from '@/pages/reports';
-import EvidencePage from '@/pages/evidence';
-import AuditPage from '@/pages/audit';
-import SettingsPage from '@/pages/settings';
+type PageLoader = () => Promise<{ default: ComponentType<any> }>;
+const loadedPages = new Map<PageLoader, ComponentType<any>>();
+/** Loads a page's code once; the loader is the key, so a page fetched ahead of time renders at once when visited. */
+export function loadPage(load: PageLoader): Promise<ComponentType<any>> {
+  const loaded = loadedPages.get(load);
+  if (loaded) return Promise.resolve(loaded);
+  return load().then((module) => { loadedPages.set(load, module.default); return module.default; });
+}
 
-/** Shared by the app and reset between console tests. */
-export const queryClient = new QueryClient();
+/**
+ * A page whose code arrives on its first visit. Plain state rather than Suspense: a committed
+ * Suspense fallback is held for 300 ms before the content may replace it, which on a fast connection
+ * is most of the wait (design rationale, Performance). Until the code is here the page area says so;
+ * a chunk that cannot be fetched is thrown to the error boundary, which shows the page-error notice.
+ */
+export function LazyPage({ load, ...props }: { load: PageLoader; [prop: string]: unknown }) {
+  const [Component, setComponent] = useState<ComponentType<any> | null>(() => loadedPages.get(load) ?? null);
+  const [failure, setFailure] = useState<Error | null>(null);
+  useEffect(() => {
+    let current = true;
+    loadPage(load).then((component) => { if (current) setComponent(() => component); }, (error: Error) => { if (current) setFailure(error); });
+    return () => { current = false; };
+  }, [load]);
+  if (failure) throw failure;
+  if (!Component) return <Loading what="the page" />;
+  return <Component {...props} />;
+}
+
+/**
+ * Fetches pages' code while the browser is idle, in the order given, so a first visit to a page
+ * usually finds its code already here. Nothing is requested from the API by this.
+ */
+function Prefetch({ pages }: { pages: PageLoader[] }) {
+  useEffect(() => {
+    // Someone who has asked their browser to save data, or is on a 2G connection, gets pages on demand only.
+    const connection = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
+    if (connection?.saveData || /2g/.test(connection?.effectiveType || '')) return;
+    const run = () => { pages.reduce((previous, load) => previous.then(() => loadPage(load)).catch(() => undefined), Promise.resolve<unknown>(undefined)); };
+    if (typeof window.requestIdleCallback === 'function') {
+      const handle = window.requestIdleCallback(run);
+      return () => window.cancelIdleCallback(handle);
+    }
+    const timer = window.setTimeout(run, 1500);
+    return () => window.clearTimeout(timer);
+  }, [pages]);
+  return null;
+}
+
+/**
+ * Shared by the app and reset between console tests. Data fetched in the last
+ * thirty seconds is shown at once when a page is returned to, instead of a
+ * loading line and a repeated request; an action's invalidation still refetches
+ * what it changed, and a tab that comes back after longer refetches on focus.
+ */
+export const QUERY_STALE_MS = 30_000;
+export const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: QUERY_STALE_MS } } });
 
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -51,20 +107,22 @@ function stripBase(path: string): string {
 }
 
 /** Every address the console has a page for. Anything else is not found, and gets no workspace. */
-const consoleRoutes: Array<{ path: string; component: ComponentType<any> }> = [
-  { path: '/overview', component: OverviewPage },
-  { path: '/customers', component: CustomersPage },
-  { path: '/customers/:id', component: CustomerTimelinePage },
-  { path: '/reconciliation', component: ReconciliationPage },
-  { path: '/exceptions', component: ExceptionsPage },
-  { path: '/policies', component: PoliciesPage },
-  { path: '/mandates', component: MandatesPage },
-  { path: '/collections', component: CollectionsPage },
-  { path: '/reports', component: ReportsPage },
-  { path: '/evidence', component: EvidencePage },
-  { path: '/audit', component: AuditPage },
-  { path: '/settings', component: SettingsPage },
+const consoleRoutes: Array<{ path: string; load: PageLoader }> = [
+  { path: '/overview', load: OverviewPage },
+  { path: '/customers', load: CustomersPage },
+  { path: '/customers/:id', load: CustomerTimelinePage },
+  { path: '/reconciliation', load: ReconciliationPage },
+  { path: '/exceptions', load: ExceptionsPage },
+  { path: '/policies', load: PoliciesPage },
+  { path: '/mandates', load: MandatesPage },
+  { path: '/collections', load: CollectionsPage },
+  { path: '/reports', load: ReportsPage },
+  { path: '/evidence', load: EvidencePage },
+  { path: '/audit', load: AuditPage },
+  { path: '/settings', load: SettingsPage },
 ];
+const consolePages = consoleRoutes.map((route) => route.load);
+const overviewOnly = [OverviewPage];
 
 /**
  * The console mounts once for every address it has a page for, so the
@@ -80,9 +138,12 @@ function Console() {
   return (
     <WorkspaceProvider>
       <Layout>
+        {/* A page's code arrives on its first visit; the sidebar and the lender stay meanwhile, and the
+            other pages are fetched while the browser is idle. */}
         <Switch>
-          {consoleRoutes.map((route) => <Route key={route.path} path={route.path} component={route.component} />)}
+          {consoleRoutes.map((route) => <Route key={route.path} path={route.path}>{(params) => <LazyPage load={route.load} params={params} />}</Route>)}
         </Switch>
+        <Prefetch pages={consolePages} />
       </Layout>
     </WorkspaceProvider>
   );
@@ -113,21 +174,20 @@ function ClerkProviderWithRoutes() {
 
   const routes = (
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
           <RoutedErrorBoundary>
             <Switch>
               {/* The public pages sit outside the workspace provider: reading about the product or
                   signing in never creates a sandbox. The workspace request happens only once someone
-                  opens the console. */}
-              <Route path="/" component={LandingPage} />
-              <Route path="/sign-in/*?" component={SignInPage} />
-              <Route path="/sign-up/*?" component={SignUpPage} />
+                  opens the console. The landing page fetches the overview's code while idle, since
+                  "Open the sandbox" leads there. */}
+              <Route path="/">{() => <><LandingPage /><Prefetch pages={overviewOnly} /></>}</Route>
+              <Route path="/sign-in/*?">{(params) => <LazyPage load={SignInPage} params={params} />}</Route>
+              <Route path="/sign-up/*?">{(params) => <LazyPage load={SignUpPage} params={params} />}</Route>
               <Route component={Console} />
             </Switch>
           </RoutedErrorBoundary>
           <RouteFocus />
           <Toaster />
-        </TooltipProvider>
       </QueryClientProvider>
   );
 

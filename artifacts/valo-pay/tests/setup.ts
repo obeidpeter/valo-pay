@@ -36,7 +36,8 @@ if (typeof Element.prototype.setPointerCapture !== "function") Element.prototype
 if (typeof Element.prototype.releasePointerCapture !== "function") Element.prototype.releasePointerCapture = () => { /* no pointer capture in tests */ };
 
 // The app retries failed queries with backoff; a test asserting an error state must see it at once.
-queryClient.setDefaultOptions({ queries: { retry: false } });
+// Everything else (the thirty-second staleness) stays as production configures it.
+queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } });
 
 afterEach(() => {
   cleanup();
