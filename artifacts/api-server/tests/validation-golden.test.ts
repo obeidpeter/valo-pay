@@ -32,7 +32,7 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   const state = seedMerchant("exceptions");
   const exception = recordsOf(state, "exceptions").find((item) => item.data.type === "activation_expired")!;
   assert.throws(() => validateRecord(state, ops, "exceptions", patch(exception, { status: "closed" }), true), /cannot move to closed/);
-  assert.throws(() => validateRecord(state, ops, "exceptions", patch(exception, { status: "resolved" }), true), /controlled resolution code/);
+  assert.throws(() => validateRecord(state, ops, "exceptions", patch(exception, { status: "resolved" }), true), /Use Resolve exception and choose a resolution/);
   assert.doesNotThrow(() => validateRecord(state, ops, "exceptions", patch(exception, { status: "assigned", data: { owner: "Ada" } }), true));
   assert.throws(() => executeAction(state, ops, { action: "resolve_exception", recordId: exception.id, reason: "done", data: { resolutionCode: "allocated" } }), /must be one of: reissued, customer_declined, wrong_number, abandoned/);
   executeAction(state, ops, { action: "resolve_exception", recordId: exception.id, reason: "done", data: { resolutionCode: "reissued" } });
@@ -57,15 +57,15 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   const customer = recordsOf(state, "customers")[0]!;
   const cutover = recordsOf(state, "cutovers")[0]!;
   const input = () => ({ name: "d", status: "scheduled", customerId: customer.id, amountKobo: 2_500_000, data: { dueDate: "2027-08-01", owner: "valopay" } });
-  assert.throws(() => validateRecord(state, admin, "due-items", input()), /cutover contract is complete/);
-  assert.throws(() => validateRecord(state, admin, "cutovers", patch(cutover, { status: "ready", data: { accountableUser: "Ops", confirmation: "signed" } }), true), /steps 1 to 6/);
+  assert.throws(() => validateRecord(state, admin, "due-items", input()), /handover agreement and parallel-run day are complete/);
+  assert.throws(() => validateRecord(state, admin, "cutovers", patch(cutover, { status: "ready", data: { accountableUser: "Ops", confirmation: "signed" } }), true), /previous collection system is disabled in writing/);
   assert.doesNotThrow(() => validateRecord(state, admin, "cutovers", patch(cutover, { status: "ready", data: { accountableUser: "Ops", confirmation: "signed", incumbentDisabled: true, externalAttemptsImported: true, dualRunComplete: true } }), true));
   completeCutover(state);
   assert.doesNotThrow(() => validateRecord(state, admin, "due-items", input()));
   const aliased: any = { ...input(), data: { dueDate: "2027-08-01", owner: "valo" } };
   validateRecord(state, admin, "due-items", aliased);
   assert.equal(aliased.data.owner, "valopay", "the TRD's owner spelling is accepted and normalised");
-  assert.throws(() => validateRecord(state, admin, "cutovers", patch(cutover, { status: "handed_back" }), true), /hand_back action/);
+  assert.throws(() => validateRecord(state, admin, "cutovers", patch(cutover, { status: "handed_back" }), true), /Use Return collection ownership/);
   checks += 6;
 }
 
@@ -81,7 +81,7 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   assert.throws(() => executeAction(state, ops, { action: "simulate_failure", recordId: due.id, reason: "r", data: { failureCode: "NOT_A_CODE" } }), /Unknown failure code/);
   const unknown = executeAction(state, ops, { action: "simulate_failure", recordId: due.id, reason: "r", data: { failureCode: "TIMEOUT_UNKNOWN" } }).record!;
   assert.equal(unknown.status, "unknown", "an unknown outcome is not a failure");
-  assert.throws(() => executeAction(state, ops, { action: "simulate_failure", recordId: due.id, reason: "r", data: { failureCode: "INSUFFICIENT_FUNDS" } }), /in-flight or unknown attempt/);
+  assert.throws(() => executeAction(state, ops, { action: "simulate_failure", recordId: due.id, reason: "r", data: { failureCode: "INSUFFICIENT_FUNDS" } }), /still pending or has an unknown outcome/);
   checks += 7;
 }
 
@@ -94,7 +94,7 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   assert.equal(batch.data.batchReference, "B-1", "the top-level reference is the batch reference");
   assert.throws(() => validateRecord(state, finance, "settlement-batches", { ...batch, status: "settled" }), /Allowed: pending, reconciled, variance/);
   assert.throws(() => validateRecord(state, finance, "settlement-batches", { ...batch, status: "reconciled" }), /set by a domain action|Batches start pending/);
-  assert.throws(() => validateRecord(state, finance, "settlement-batches", { ...batch, data: { ...batch.data, netKobo: 80 } }), /gross minus fees/);
+  assert.throws(() => validateRecord(state, finance, "settlement-batches", { ...batch, data: { ...batch.data, netKobo: 80 } }), /gross amount minus fees/);
   const customer: any = { name: "c", status: "inactive", data: { consentProvenance: "Imported" } };
   assert.doesNotThrow(() => validateRecord(state, ops, "customers", customer));
   assert.throws(() => validateRecord(state, ops, "customers", { ...customer, status: "archived" }), new RegExp(`Allowed: ${recordStatuses.customers.join(", ")}`));
@@ -102,8 +102,8 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   const policy: any = { name: "p", status: "draft", data: { version: "2", maxAttempts: 3, spacingHours: 48, firstNoticeHours: 48, retryNoticeHours: 24, author: admin.actor } };
   validateRecord(state, admin, "policies", policy);
   assert.equal(policy.data.version, 2, "coerced numbers are written back");
-  assert.throws(() => validateRecord(state, admin, "policies", { ...policy, data: { ...policy.data, maxAttempts: 5 } }), /at most 4 attempts/);
-  assert.throws(() => validateRecord(state, admin, "policies", { ...policy, data: { ...policy.data, spacingHours: 12 } }), /guardrails/);
+  assert.throws(() => validateRecord(state, admin, "policies", { ...policy, data: { ...policy.data, maxAttempts: 5 } }), /no more than 4 attempts/);
+  assert.throws(() => validateRecord(state, admin, "policies", { ...policy, data: { ...policy.data, spacingHours: 12 } }), /at least 24 hours between attempts/);
   const calendar: any = { name: "h", status: "active", data: { date: "not-a-date" } };
   assert.throws(() => validateRecord(state, admin, "calendar", calendar), /YYYY-MM-DD/);
   checks += 11;

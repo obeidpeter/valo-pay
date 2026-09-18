@@ -13,14 +13,14 @@ describe("notices", () => {
     const user = userEvent.setup();
     api.failNext(/^\/v1\/exports$/, { status: 400, error: "Packs are limited to five a day for this customer." }, "POST");
     renderApp(`/customers/${ada().id}`);
-    await user.click(await screen.findByRole("button", { name: "Dispute pack (PDF)" }));
+    await user.click(await screen.findByRole("button", { name: "Export dispute pack (PDF)" }));
     // A notice is also announced through a copy that lives for a second, so a text may be found twice.
-    expect(await screen.findAllByText("The dispute pack was not generated")).toBeTruthy();
-    expect(screen.getAllByText(/Packs are limited to five a day for this customer\. Nothing has been changed\./)).toBeTruthy();
+    expect(await screen.findAllByText("Dispute pack could not be created")).toBeTruthy();
+    expect(screen.getAllByText(/Packs are limited to five a day for this customer\. Try the export again\./)).toBeTruthy();
     const dismiss = screen.getByRole("button", { name: "Dismiss" });
     expect(dismiss).toBeTruthy();
     await user.click(dismiss);
-    await waitFor(() => expect(screen.queryByText("The dispute pack was not generated")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Dispute pack could not be created")).toBeNull());
   });
 
   it("says where a generated pack went and offers to open it again", async () => {
@@ -29,8 +29,8 @@ describe("notices", () => {
     window.open = opened as unknown as typeof window.open;
     renderApp(`/customers/${ada().id}`);
     await user.click(await screen.findByRole("button", { name: "CSV" }));
-    expect(await screen.findAllByText("Dispute pack generated")).toBeTruthy();
-    expect(screen.getAllByText(/Your browser kept the new tab closed; use Open\./)).toBeTruthy();
+    expect(await screen.findAllByText("Dispute pack ready")).toBeTruthy();
+    expect(screen.getAllByText(/Your browser blocked the new tab\. Select Open to view the file\./)).toBeTruthy();
     await user.click(screen.getAllByRole("button", { name: "Open" })[0]!);
     const record = api.state().records.find((item) => item.kind === "exports")!;
     expect(opened).toHaveBeenCalledTimes(2);
@@ -40,8 +40,8 @@ describe("notices", () => {
   it("raises no notice for a result the page shows itself", async () => {
     const user = userEvent.setup();
     renderApp("/audit");
-    await user.click(await screen.findByRole("button", { name: /Verify Chain Integrity/ }));
-    expect(await screen.findByText("Chain intact")).toBeTruthy();
+    await user.click(await screen.findByRole("button", { name: /Check audit log/ }));
+    expect(await screen.findByText("Audit log verified: all entries are intact")).toBeTruthy();
     expect(screen.queryByText("Audit chain verified")).toBeNull();
   });
 });

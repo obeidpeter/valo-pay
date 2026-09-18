@@ -11,32 +11,32 @@ describe("loading and waiting", () => {
     const release = api.hold(/^\/v1\/overview$/);
     renderApp("/overview");
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Loading the overview…"));
-    expect(screen.queryByRole("heading", { name: "Operations Overview" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Operations overview" })).toBeNull();
     release();
-    expect(await screen.findByRole("heading", { name: "Operations Overview" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Operations overview" })).toBeTruthy();
     expect(screen.queryByText(/^Loading /)).toBeNull();
   });
 
   it("names what a table is waiting for, in its own row", async () => {
     const release = api.hold(/^\/v1\/records\/due-items$/);
     renderApp("/collections");
-    const row = await screen.findByText("Loading due items…");
+    const row = await screen.findByText("Loading instalments…");
     expect(row.closest("tr")).toBeTruthy();
     release();
-    await waitFor(() => expect(screen.queryByText("Loading due items…")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Loading instalments…")).toBeNull());
   });
 
   it("says what a button is doing while its action runs, and cannot be pressed again", async () => {
     const user = userEvent.setup();
     const release = api.hold(/^\/v1\/actions$/);
     renderApp("/audit");
-    await user.click(await screen.findByRole("button", { name: /Verify Chain Integrity/ }));
-    const busy = await screen.findByRole("button", { name: "Verifying…" });
+    await user.click(await screen.findByRole("button", { name: /Check audit log/ }));
+    const busy = await screen.findByRole("button", { name: "Checking audit log…" });
     expect(busy.hasAttribute("disabled")).toBe(true);
     expect(busy.getAttribute("aria-busy")).toBe("true");
     release();
-    expect(await screen.findByText("Chain intact")).toBeTruthy();
-    const restored = screen.getByRole("button", { name: /Verify Chain Integrity/ });
+    expect(await screen.findByText("Audit log verified: all entries are intact")).toBeTruthy();
+    const restored = screen.getByRole("button", { name: /Check audit log/ });
     expect(restored.hasAttribute("disabled")).toBe(false);
     expect(restored.getAttribute("aria-busy")).toBeNull();
   });
@@ -48,11 +48,11 @@ describe("loading and waiting", () => {
     const release = api.hold(/^\/v1\/exports$/);
     renderApp(`/customers/${ada.id}`);
     await user.click(await screen.findByRole("button", { name: "CSV" }));
-    expect(await screen.findByRole("button", { name: "Generating…" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Dispute pack (PDF)" }).hasAttribute("disabled")).toBe(true);
+    expect(await screen.findByRole("button", { name: "Preparing CSV…" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Export dispute pack (PDF)" }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", { name: "JSON" }).hasAttribute("disabled")).toBe(true);
     release();
-    expect(await screen.findByText("Dispute pack generated")).toBeTruthy();
+    expect(await screen.findByText("Dispute pack ready")).toBeTruthy();
     expect(screen.getByRole("button", { name: "CSV" }).hasAttribute("disabled")).toBe(false);
   });
 });

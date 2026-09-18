@@ -116,12 +116,12 @@ function assertOnePayment(state: DomainState, due: ValopayRecord, label: string)
   reconcile(state, finance(wat("2027-07-01T10:05:00")));
   const payment = recordsOf(state, "payments").find((item) => item.reference === "TRF-X")!;
   assert.equal(payment.status, "unallocated", "no rule matches a transfer with no reference, narration or window");
-  assert.throws(() => executeAction(state, finance(wat("2027-07-01T11:00:00")), { action: "manual_allocate", recordId: payment.id, reason: "r", data: { dueItemId: due.id, amountKobo: 2_600_000 } }), /remaining balance/);
+  assert.throws(() => executeAction(state, finance(wat("2027-07-01T11:00:00")), { action: "manual_allocate", recordId: payment.id, reason: "r", data: { dueItemId: due.id, amountKobo: 2_600_000 } }), /outstanding instalment balance/);
   executeAction(state, finance(wat("2027-07-01T11:00:00")), { action: "manual_allocate", recordId: payment.id, reason: "r", data: { dueItemId: due.id, amountKobo: GROSS } });
   assert.equal(due.status, "paid");
   assert.equal(payment.status, "overpaid", "7.3: the excess is unapplied credit with an exception");
   assert.equal(recordsOf(state, "exceptions").find((item) => item.data.linkedRecordId === payment.id)!.data.type, "overpayment");
-  assert.throws(() => executeAction(state, finance(wat("2027-07-01T11:00:00")), { action: "manual_allocate", recordId: payment.id, reason: "r", data: { dueItemId: due.id, amountKobo: 1 } }), /remaining balance|remaining canonical/);
+  assert.throws(() => executeAction(state, finance(wat("2027-07-01T11:00:00")), { action: "manual_allocate", recordId: payment.id, reason: "r", data: { dueItemId: due.id, amountKobo: 1 } }), /outstanding instalment balance|payment has left to allocate/);
   invariant(state);
   checks += 5;
 }
@@ -260,7 +260,7 @@ function assertOnePayment(state: DomainState, due: ValopayRecord, label: string)
   executeAction(state, ops, { action: "mandate_cancel", recordId: mandate.id, reason: "closed loan" });
   assert.equal(mandate.status, "cancelled");
   assert.throws(() => executeAction(state, ops, { action: "mandate_cancel", recordId: mandate.id, reason: "again" }), /cannot be cancelled/);
-  assert.throws(() => executeAction(state, ops, { action: "mandate_reissue", recordId: mandate.id, reason: "r" }), /consentEvidence/);
+  assert.throws(() => executeAction(state, ops, { action: "mandate_reissue", recordId: mandate.id, reason: "r" }), /new consent evidence reference/);
   const reissued = executeAction(state, ops, { action: "mandate_reissue", recordId: mandate.id, reason: "new loan", data: { consentEvidence: "CONSENT-2027-07-01" } }).record!;
   assert.notEqual(reissued.id, mandate.id, "MAN-06: a re-issue is a new mandate");
   assert.equal(reissued.status, "pending_activation");

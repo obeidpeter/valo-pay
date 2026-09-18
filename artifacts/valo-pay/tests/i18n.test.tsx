@@ -24,7 +24,7 @@ describe("internationalisation", () => {
     renderApp("/customers");
     expect(await screen.findByText("Chiamaka Ọbi")).toBeTruthy();
     expect(screen.getByText("Dami Adéyẹmí")).toBeTruthy();
-    const search = screen.getByPlaceholderText("Search by name, reference, or phone...");
+    const search = screen.getByPlaceholderText("Search by name, reference or phone…");
     await user.type(search, "obi");
     await waitFor(() => expect(screen.queryByText("Ada Okonkwo")).toBeNull());
     expect(screen.getByText("Chiamaka Ọbi")).toBeTruthy();
@@ -44,7 +44,7 @@ describe("internationalisation", () => {
 
   it("agrees a badge's noun with its number", async () => {
     renderApp("/reconciliation");
-    const heading = await screen.findByRole("heading", { name: "Unallocated Payments" });
+    const heading = await screen.findByRole("heading", { name: "Unallocated payments" });
     const badge = heading.parentElement!.querySelector("span")!;
     const [count, noun] = badge.textContent!.split(" ");
     expect(noun).toBe(Number(count) === 1 ? "item" : "items");

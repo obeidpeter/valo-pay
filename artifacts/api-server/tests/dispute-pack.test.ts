@@ -37,7 +37,7 @@ const decisionEvents = pack.timeline.filter((event) => event.kind === "retry-dec
 assert.ok(decisionEvents.length >= 2, "both decisions are on the timeline");
 assert.match(decisionEvents[0]!.detail, /Next attempt 2027-06-30 06:16:00 WAT/, "the planned time is spelled out");
 assert.match(decisionEvents.at(-1)!.event, /give up/, "the give-up after ACCOUNT_CLOSED is on the timeline");
-assert.match(decisionEvents.at(-1)!.detail, /INVALID_ACCOUNT is not retryable/, "the raw code was normalised to the catalogue");
+assert.match(decisionEvents.at(-1)!.detail, /INVALID_ACCOUNT does not allow a retry/, "the raw code was normalised to the catalogue");
 assert.equal(pack.summary.dueItems && (pack.summary as any).dueItems.unpaidFinal, 1);
 assert.equal((pack.summary as any).exceptions.open, 1, "the unpaid-after-final-attempt exception is counted");
 assert.equal((pack.summary as any).retryDecisions, decisionEvents.length);
@@ -67,7 +67,7 @@ const decoded = decodePdfText(pdf);
 assert.equal(pdf.subarray(0, 5).toString(), "%PDF-");
 const pages = Number(body.match(/\/Count (\d+)/)?.[1]);
 assert.ok(pages >= 3, `summary, timeline and documents pages: ${pages}`);
-for (const needle of ["Dispute pack", `Timeline: ${pack.timeline.length} events`, "Governing documents", `Page 1 of ${pages}`, `Page ${pages} of ${pages}`, "NGN 25,000.00", customer.name, "Retry policy v1", "Notice template v2"]) assert.ok(decoded.includes(needle), `PDF text contains "${needle}"`);
+for (const needle of ["Dispute pack", `Timeline: ${pack.timeline.length} events`, "Documents in effect at the time", `Page 1 of ${pages}`, `Page ${pages} of ${pages}`, "NGN 25,000.00", customer.name, "Retry policy v1", "Notice template v2"]) assert.ok(decoded.includes(needle), `PDF text contains "${needle}"`);
 assert.ok(!decoded.includes("₦"), "the naira sign is spelled NGN, as in the CSV");
 assert.match(body, /\/BaseFont \/[A-Z]{6}\+ValoPackSans-Regular/, "the pack embeds its own typeface rather than a WinAnsi standard font");
 assert.match(body, /\/Lang \(en-GB\)/, "the document declares its language");

@@ -2,10 +2,24 @@ import React, { useState, useEffect, ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { Button } from './ui/button';
-import { FieldError, FormAlert, attentionTitle, focusField, invalidProps, missingMessage, serverFieldErrors } from './form-field';
+import { FieldError, FormAlert, attentionTitle, focusField, formErrorMessage, invalidProps, missingMessage, serverFieldErrors } from './form-field';
 import { useCreateRecord, useUpdateRecord, usePerformAction } from '@workspace/api-client-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkspace } from '@/lib/workspace-context';
+import { readableLabel } from './record-label';
+import { formatDate } from '@/lib/formatters';
+
+const actionLabels: Record<string, string> = {
+  mandate_suspend: 'Suspend mandate', mandate_cancel: 'Cancel mandate', mandate_reinstate: 'Resume mandate',
+  mandate_reissue: 'Reissue mandate', activation_reminder: 'Record activation reminder',
+  notify_policy_change: 'Record policy change notice', apply_policy_version: 'Apply policy version',
+  submit_policy: 'Submit for review', approve_policy: 'Approve policy', reject_policy: 'Reject policy',
+  new_policy_version: 'Create draft version', submit_template: 'Submit for review', approve_template: 'Approve template',
+  confirm_allocation: 'Confirm allocation', reject_allocation: 'Reject allocation', manual_allocate: 'Allocate payment',
+  review_allocation: 'Record review', resolve_exception: 'Resolve exception', record_refund: 'Record external refund',
+  simulate_failure: 'Simulate failure', backtest_policy: 'Run policy simulation',
+  preregister_experiment: 'Register experiment plan', hand_back: 'Return collection ownership', issue_invoice: 'Issue invoice',
+};
 
 type FieldDef = {
   name: string;
@@ -43,7 +57,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
   const firstNamed = (errors: Record<string, string>) => fields.find(f => errors[f.name])?.name ?? (errors.reason ? 'reason' : undefined);
   const applyServerError = (error: unknown) => {
     const { fields: named, general } = serverFieldErrors(error, resolveField);
-    setFieldErrors(named); setFormErrors(general);
+    setFieldErrors(named); setFormErrors(general.map(message => formErrorMessage(message, fields)));
     const first = firstNamed(named);
     if (first) focusField(fieldId(first));
   };
@@ -89,7 +103,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
       if (f.required && f.type !== 'checkbox' && empty) errors[f.name] = missingMessage(f.label, f.type);
       else if (f.type === 'number' && !empty && !Number.isFinite(Number(value))) errors[f.name] = `Enter ${f.label} as a number.`;
     });
-    if (actionMutation && !String(formData.reason || '').trim()) errors.reason = 'Give a reason. It is recorded in the audit log with this action.';
+    if (actionMutation && !String(formData.reason || '').trim()) errors.reason = 'Enter a reason for this action. It will be saved in the audit log.';
     setFieldErrors(errors); setFormErrors([]);
     const first = firstNamed(errors);
     if (first) { focusField(fieldId(first)); return; }
@@ -144,7 +158,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
         <Dialog.Content className="fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] -translate-y-[50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg max-h-[90vh] overflow-y-auto">
           <div className="flex flex-col space-y-1.5 text-center sm:text-left">
             <Dialog.Title className="text-lg font-semibold leading-none tracking-tight">{title}</Dialog.Title>
-            <Dialog.Description className="text-xs text-muted-foreground">Synthetic sandbox only. This action does not send a debit or a message.</Dialog.Description>
+            <Dialog.Description className="text-xs text-muted-foreground">Use sample data only. This action cannot collect money or send a customer message. Fields marked * are required.</Dialog.Description>
           </div>
           
           <form noValidate onSubmit={handleSubmit} className="space-y-4 py-4">
@@ -174,7 +188,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
                     required={f.required}
                     {...invalidProps(`record-${f.name}`, fieldErrors[f.name])}
                   >
-                    <option value="">Select...</option>
+                    <option value="">Choose an option</option>
                     {f.options?.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
                 ) : f.type === 'checkbox' ? (
@@ -214,12 +228,12 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
             )}
             
             {result&&<section className="space-y-2 rounded border p-3"><p className="font-medium">{result.message}</p>
-              {result.data?.decisions?.length===0&&<p>No due items use this policy.</p>}
-              {result.data?.decisions?.map((decision:any)=><div key={decision.dueItemId} className="border-t pt-2 text-sm"><span className="font-mono text-xs">{decision.dueItemId}</span><p className="font-semibold">{String(decision.decision).replaceAll("_"," ")}</p><p>{decision.reason}</p>{decision.nextAt&&<p>{decision.nextAt}</p>}</div>)}
+              {result.data?.decisions?.length===0&&<p>No instalments use this policy yet.</p>}
+              {result.data?.decisions?.map((decision:any)=><div key={decision.dueItemId} className="border-t pt-2 text-sm"><span className="font-mono text-xs">{decision.dueItemId}</span><p className="font-semibold">{readableLabel(decision.decision)}</p><p>{decision.reason}</p>{decision.nextAt&&<p>Next possible attempt: {formatDate(decision.nextAt)}</p>}</div>)}
             </section>}
             <div className="flex justify-end gap-2 mt-4 pt-4 border-t">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-              <Button type="submit" busy={isPending} busyLabel="Saving…">Save</Button>
+              <Button type="submit" busy={isPending} busyLabel={actionMutation ? 'Working…' : 'Saving…'}>{actionMutation ? actionLabels[actionMutation] || 'Confirm action' : 'Save'}</Button>
             </div>
           </form>
 

@@ -14,7 +14,7 @@ describe("responsive layout", () => {
   it("offers the same pages and lender in the phone bar's drawer as in the sidebar, with the current page marked", async () => {
     const user = userEvent.setup();
     renderApp("/overview");
-    await screen.findByRole("heading", { name: "Operations Overview" });
+    await screen.findByRole("heading", { name: "Operations overview" });
     // The lender is chosen in the same place on a phone and on a desktop: once each, the same name.
     const lenders = screen.getAllByLabelText("Active lender") as HTMLSelectElement[];
     expect(lenders).toHaveLength(2);
@@ -28,20 +28,20 @@ describe("responsive layout", () => {
     const drawerLabels = within(drawer).getAllByRole("link").map((link) => link.textContent);
     expect(drawerLabels).toEqual(sidebarLabels);
     expect(within(drawer).getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBe("page");
-    expect(within(drawer).getByRole("link", { name: "Audit Log" }).getAttribute("aria-current")).toBeNull();
+    expect(within(drawer).getByRole("link", { name: "Audit log" }).getAttribute("aria-current")).toBeNull();
   });
 
   it("closes the drawer after a page is chosen in it and moves focus to the page content, as the sidebar does", async () => {
     const user = userEvent.setup();
     renderApp("/overview");
-    await screen.findByRole("heading", { name: "Operations Overview" });
+    await screen.findByRole("heading", { name: "Operations overview" });
     await user.click(screen.getByRole("button", { name: "Menu" }));
     const drawer = await screen.findByRole("dialog", { name: "Menu" });
-    await user.click(within(drawer).getByRole("link", { name: "Audit Log" }));
-    await screen.findByRole("heading", { name: "Audit Log" });
+    await user.click(within(drawer).getByRole("link", { name: "Audit log" }));
+    await screen.findByRole("heading", { name: "Audit log" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await waitFor(() => expect(document.activeElement?.id).toBe("main"));
-    await waitFor(() => expect(document.title).toBe("Audit Log · Valo Pay"));
+    await waitFor(() => expect(document.title).toBe("Audit log · Valo Pay"));
   });
 
   it("closes the drawer on Escape and returns focus to the Menu button", async () => {
@@ -62,7 +62,7 @@ describe("responsive layout", () => {
   it("switches the lender from the phone bar and the drawer follows the change of page", async () => {
     const user = userEvent.setup();
     renderApp("/overview");
-    await screen.findByRole("heading", { name: "Operations Overview" });
+    await screen.findByRole("heading", { name: "Operations overview" });
     const [first, second] = api.merchantIds as [string, string];
     const [phoneLender] = screen.getAllByLabelText("Active lender") as HTMLSelectElement[];
     await user.selectOptions(phoneLender!, second);

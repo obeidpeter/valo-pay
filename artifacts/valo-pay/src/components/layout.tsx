@@ -19,10 +19,10 @@ const navItems = [
   { href: '/collections', label: 'Collections', icon: ArrowRightLeft },
   { href: '/reconciliation', label: 'Reconciliation', icon: CheckSquare },
   { href: '/exceptions', label: 'Exceptions', icon: AlertTriangle },
-  { href: '/policies', label: 'Policies & Templates', icon: Shield },
+  { href: '/policies', label: 'Policies & templates', icon: Shield },
   { href: '/reports', label: 'Reports', icon: FileBarChart },
-  { href: '/evidence', label: 'Evidence & Commercial', icon: FileCheck },
-  { href: '/audit', label: 'Audit Log', icon: HardDrive },
+  { href: '/evidence', label: 'Evidence & readiness', icon: FileCheck },
+  { href: '/audit', label: 'Audit log', icon: HardDrive },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
 
@@ -60,7 +60,7 @@ function AuthBlock({ role, signOut }: { role: string | undefined; signOut: () =>
       <AuthShow when="signed-in">
         <div className="flex items-center justify-between mb-4">
           <Button variant="ghost" size="sm" onClick={() => signOut()} className="gap-2 text-muted-foreground">
-            <LogOut className="h-4 w-4" aria-hidden="true" /> Sign Out
+            <LogOut className="h-4 w-4" aria-hidden="true" /> Sign out
           </Button>
           <div className="text-xs font-mono text-muted-foreground bg-secondary px-2 py-1 rounded">
             {role || 'User'}
@@ -69,9 +69,9 @@ function AuthBlock({ role, signOut }: { role: string | undefined; signOut: () =>
       </AuthShow>
       <AuthShow when="signed-out">
         <Link href="/sign-in" className="flex items-center justify-center gap-2 w-full bg-primary text-primary-foreground py-2 rounded-md text-sm font-medium hover:bg-primary/90 transition-colors mb-2">
-          <Lock className="h-4 w-4" aria-hidden="true" /> Sign In
+          <Lock className="h-4 w-4" aria-hidden="true" /> Sign in
         </Link>
-        <p className="text-xs text-center text-muted-foreground">Sign in to your own workspace</p>
+        <p className="text-xs text-center text-muted-foreground">Keep a workspace linked to your account</p>
       </AuthShow>
     </>
   );
@@ -137,8 +137,8 @@ export function Layout({ children }: { children: ReactNode }) {
       {/* Sandbox banner: on a phone it keeps the sentence that matters and drops the restatement, so it stays one line. */}
       <div className="environment-strip px-4 py-2 text-[11px] font-medium flex items-center justify-center gap-2 border-b z-50 print:hidden">
         <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
-        <span>Sandbox · Synthetic data. We never hold money.<span className="hidden sm:inline"> No live operations permitted.</span></span>
-        {workspace?.environment && <span className="ml-2 hidden sm:inline-block text-[10px] uppercase tracking-wider rounded border px-2 py-0.5">MODE: {workspace.environment}</span>}
+        <span>Sandbox · Sample data. We never hold money.<span className="hidden sm:inline"> Live collections are disabled.</span></span>
+        {workspace?.environment && <span className="ml-2 hidden sm:inline-block text-[10px] uppercase tracking-wider rounded border px-2 py-0.5">Mode: {workspace.environment}</span>}
       </div>
 
       {/* Phone bar: the brand, the lender being worked on, and the drawer with the same pages as the sidebar. */}
@@ -192,7 +192,7 @@ export function Layout({ children }: { children: ReactNode }) {
             {/* The sidebar has to fit a 720 px window with every page in view (measured in the design rationale), so this row stays one line high. */}
             <div className="flex items-center gap-3 [&:not(:last-child)]:mb-3">
               <span className="flex h-8 w-8 items-center justify-center rounded-full bg-secondary"><Layers className="h-4 w-4 text-muted-foreground" aria-hidden="true" /></span>
-              <div className="min-w-0 flex-1"><p className="text-xs font-semibold">Sandbox workspace</p><p className="text-[10px] text-muted-foreground mt-0.5">Synthetic data only</p></div>
+              <div className="min-w-0 flex-1"><p className="text-xs font-semibold">Sandbox workspace</p><p className="text-[10px] text-muted-foreground mt-0.5">Sample data only</p></div>
               <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setChoice(theme === 'dark' ? 'light' : 'dark')}>
                 {theme === 'dark' ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
               </Button>
@@ -205,16 +205,16 @@ export function Layout({ children }: { children: ReactNode }) {
         <main ref={mainRef} id="main" tabIndex={-1} className="min-w-0 flex-1 overflow-auto bg-background focus:outline-none print:overflow-visible">
           <div className="workspace-bar hidden md:flex items-center justify-between gap-4 border-b px-8 py-3.5 print:hidden">
             <div className="flex items-center gap-2 text-xs"><span className="text-muted-foreground">Workspace</span><ChevronRight className="h-3 w-3 text-muted-foreground" aria-hidden="true" /><span className="font-medium">{pageTitle}</span></div>
-            <span className="text-[11px] text-muted-foreground flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-brand" />Observation mode</span>
+            <span className="text-[11px] text-muted-foreground flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-brand" />No live instructions</span>
           </div>
           <div className="console-content p-4 sm:p-6 md:p-8 max-w-[1440px] mx-auto print:max-w-none print:p-0" aria-busy={isLoading && !workspace}>
             {/* Print only: the provenance the screen's banner and sidebar carried. */}
             <div className="hidden print:block mb-6 border-b pb-3">
               <div className="flex items-baseline justify-between gap-4 text-sm">
-                <span className="font-bold">Valo Pay · synthetic sandbox</span>
+                <span className="font-bold">Valo Pay · Sample data sandbox</span>
                 {lenderName && <span>{lenderName}</span>}
               </div>
-              <p className="mt-1 text-xs text-muted-foreground">Synthetic data. We never hold money. Nothing on this page is live evidence or a statement of account.</p>
+              <p className="mt-1 text-xs text-muted-foreground">Sample data only. We never hold money. This is not a live payment record or a statement of account.</p>
             </div>
             {/* Until the workspace arrives the pages have no lender to show, so the page area says what is happening instead.
                 A page that stops working keeps the sidebar and the lender selector as the way out. */}

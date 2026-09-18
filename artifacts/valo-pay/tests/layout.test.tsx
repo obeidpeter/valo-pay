@@ -10,11 +10,11 @@ describe("layout", () => {
   it("loads the first lender and switches to the second", async () => {
     const user = userEvent.setup();
     renderApp("/overview");
-    await screen.findByRole("heading", { name: "Operations Overview" });
+    await screen.findByRole("heading", { name: "Operations overview" });
     const [first, second] = api.merchantIds as [string, string];
     expect(api.calls.some((call) => call.path === "/v1/overview" && call.query.merchantId === first)).toBe(true);
     expect(api.calls.some((call) => call.path === "/v1/overview" && call.query.merchantId === second)).toBe(false);
-    expect(screen.getByText("MODE: sandbox")).toBeTruthy();
+    expect(screen.getByText("Mode: sandbox")).toBeTruthy();
 
     // The lender selector exists twice in the document (phone bar and sidebar); the browser shows one. Either changes the lender for both.
     await user.selectOptions(screen.getAllByLabelText("Active lender")[0]!, second);
@@ -25,12 +25,12 @@ describe("layout", () => {
   it("navigates between pages from the sidebar", async () => {
     const user = userEvent.setup();
     renderApp("/overview");
-    await screen.findByRole("heading", { name: "Operations Overview" });
-    await user.click(screen.getByRole("link", { name: /Audit Log/ }));
-    expect(await screen.findByRole("button", { name: /Verify Chain Integrity/ })).toBeTruthy();
-    await waitFor(() => expect(document.title).toBe("Audit Log · Valo Pay"));
+    await screen.findByRole("heading", { name: "Operations overview" });
+    await user.click(screen.getByRole("link", { name: /Audit log/ }));
+    expect(await screen.findByRole("button", { name: /Check audit log/ })).toBeTruthy();
+    await waitFor(() => expect(document.title).toBe("Audit log · Valo Pay"));
     // The brand in the sidebar and in the phone bar leads back to the landing page, the same lockup as on it.
-    const brands = screen.getAllByRole("link", { name: /Go to the start/ });
+    const brands = screen.getAllByRole("link", { name: /Go to home page/ });
     expect(brands).toHaveLength(2);
     expect(brands.every((link) => link.getAttribute("href") === "/")).toBe(true);
   });

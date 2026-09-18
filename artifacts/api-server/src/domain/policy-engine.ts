@@ -45,7 +45,7 @@ export interface RetryDecision {
 /** The policy parameters as a sentence: what a consent record stores as the policy text as it stood (MAN-02, RET-07). */
 export function policySummary(policy: TypedRecord<"policies">): string {
   const d = policy.data;
-  return `Version ${d.version ?? 1}: up to ${d.maxAttempts ?? policyGuardrails.defaultMaxAttempts} attempts counting every source; at least ${d.spacingHours ?? policyGuardrails.defaultSpacingHours} hours between attempts; first notice ${d.firstNoticeHours ?? policyGuardrails.defaultFirstNoticeHours} hours before the first attempt; failed-debit notice ${d.retryNoticeHours ?? policyGuardrails.defaultRetryNoticeHours} hours before any re-presentation; partial debits ${d.partialAllowed ? "allowed" : "not allowed"}.`;
+  return `Version ${d.version ?? 1}: up to ${d.maxAttempts ?? policyGuardrails.defaultMaxAttempts} attempts in total across all collection systems; at least ${d.spacingHours ?? policyGuardrails.defaultSpacingHours} hours between attempts; first notice ${d.firstNoticeHours ?? policyGuardrails.defaultFirstNoticeHours} hours before the first attempt; failed-debit notice ${d.retryNoticeHours ?? policyGuardrails.defaultRetryNoticeHours} hours before any retry; partial debits ${d.partialAllowed ? "allowed" : "not allowed"}.`;
 }
 
 /** Two policy records are versions of the same policy when their previousVersionId chains share a root, or they carry the same name. */
@@ -165,29 +165,29 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
 
   // Row 1: settled by any channel, or the obligation is frozen or closed.
   const outstanding = Number.isInteger(due.data.outstandingKobo) ? Number(due.data.outstandingKobo) : due.amountKobo;
-  if (["paid", "cancelled", "closed"].includes(due.status) || outstanding === 0) return explain("stop", "settled", "Due item settled by any channel or closed; any planned retry is cancelled.");
-  if (due.status === "in_dispute") return explain("stop", "disputed", "Due item is frozen while a customer dispute is open.");
-  if (due.status === "unpaid_final") return explain("stop", "final", "Attempts are exhausted; the exception and the LMS already hold this item.");
+  if (["paid", "cancelled", "closed"].includes(due.status) || outstanding === 0) return explain("stop", "settled", "This instalment is paid or closed. Any planned retry is cancelled.");
+  if (due.status === "in_dispute") return explain("stop", "disputed", "Collection is paused while the customer dispute is open.");
+  if (due.status === "unpaid_final") return explain("stop", "final", "No attempts remain. Follow up through the exception and the loan management system.");
   // Row 2: kill switches.  No exception for the switch itself; the item waits for release.
-  if (state.merchant.killSwitch) return explain("blocked", "kill_switch", "Merchant kill switch is active; no instruction is planned.");
-  if (policyKillSwitchOn(state, policy.id)) return explain("blocked", "kill_switch", "Policy version kill switch is active; no instruction is planned.");
+  if (state.merchant.killSwitch) return explain("blocked", "kill_switch", "The lender emergency stop is on. No collection instruction is planned.");
+  if (policyKillSwitchOn(state, policy.id)) return explain("blocked", "kill_switch", "The emergency stop for this policy version is on. No collection instruction is planned.");
   // Unknown or in-flight outcome: resolve by status query before anything else happens to the due item (DEB-04).
   if (attempts.some((attempt) => ["scheduled", "sent", "unknown"].includes(attempt.status))) {
-    return explain("blocked", "in_flight", "An in-flight or unknown outcome must be resolved by status query before anything else happens to this due item.");
+    return explain("blocked", "in_flight", "An earlier attempt is still pending or has an unknown outcome. Check its status with the provider before taking further action on this instalment.");
   }
-  if (!last || last.status !== "failed" || !code) return explain("not_eligible", "no_failure", "No failed attempt to re-present.");
+  if (!last || last.status !== "failed" || !code) return explain("not_eligible", "no_failure", "There is no failed debit attempt to retry.");
   inputs.rawCode = last.data.failureCode;
   inputs.attemptAt = attemptTime(last);
   const retry = retryRuleFor(code);
-  if (retry === "never") return explain("stop", "customer_disputed", "CUSTOMER_DISPUTED freezes the due item; a dispute exception with a one-day SLA is raised.");
-  if (retry === "unresolved") return explain("blocked", "timeout_unknown", "TIMEOUT_UNKNOWN: query the provider by reference; an exception is raised after 24 hours.");
+  if (retry === "never") return explain("stop", "customer_disputed", "The customer disputed the debit. Collection is paused and a dispute exception is raised with a one-business-day deadline.");
+  if (retry === "unresolved") return explain("blocked", "timeout_unknown", "The outcome is unknown. Check with the provider using the payment reference. An exception is raised after 24 hours without a confirmed outcome.");
   // Row 3: non-retryable code.
-  if (retry === "no") return explain("give_up", "non_retryable", `${code} is not retryable: final notice, exception and LMS informed.`, null, finalNotice);
+  if (retry === "no") return explain("give_up", "non_retryable", `${code} does not allow a retry. Follow-up requires a final notice, an exception and an update to the loan management system.`, null, finalNotice);
   // Row 4: attempt ceiling across every source.
-  if (counted.length >= policyCeiling(policy)) return explain("give_up", "ceiling", `Attempt ceiling of ${policyCeiling(policy)} reached counting every source: final notice, exception and LMS informed.`, null, finalNotice);
+  if (counted.length >= policyCeiling(policy)) return explain("give_up", "ceiling", `The limit of ${policyCeiling(policy)} attempts has been reached across all collection systems. Follow-up requires a final notice, an exception and an update to the loan management system.`, null, finalNotice);
   // Row 5: ACCOUNT_RESTRICTED is retried once only.
   if (retry === "once" && counted.filter((attempt) => attempt.status === "failed" && normaliseFailureCode(attempt.data.failureCode) === code).length >= 2) {
-    return explain("give_up", "restricted_once", `${code} has already been re-presented once: final notice, exception and LMS informed.`, null, finalNotice);
+    return explain("give_up", "restricted_once", `${code} has already had its one permitted retry. Follow-up requires a final notice, an exception and an update to the loan management system.`, null, finalNotice);
   }
   // RET-01: only an approved version by a reviewer who is not its author may plan a retry.
   if (policy.status !== "approved" || !policy.data.reviewer || policy.data.reviewer === policy.data.author) return explain("blocked", "unapproved_policy", "Independent compliance approval is required before a retry can be planned.");
@@ -195,20 +195,20 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
   // RET-07: the engine applies the version the consent covers until a notice, and fresh consent where required, moves the mandate to a newer one.
   if (mandate?.data.consentPolicyId && mandate.data.consentPolicyId !== policy.id) {
     inputs.consentPolicyVersion = mandate.data.consentPolicyVersion;
-    return explain("blocked", "policy_version_not_consented", `Consent covers policy version ${mandate.data.consentPolicyVersion}; version ${policy.data.version ?? "?"} applies to this customer only after the notice, and the fresh consent where the merchant's terms require it, that RET-07 demands.`);
+    return explain("blocked", "policy_version_not_consented", `The customer consent covers version ${mandate.data.consentPolicyVersion}. Before applying version ${policy.data.version ?? "?"}, record the required policy-change notice and any new consent required by the lender's terms.`);
   }
   // MAN-07: the absolute floor and the merchant minimum.
-  if (due.amountKobo < ABSOLUTE_TICKET_FLOOR_KOBO) return explain("stop", "floor", "Below the absolute ₦5,000 ticket floor; refused with no override.");
-  if (due.amountKobo < minimumTicketKobo(state) && !overrideRecorded(due)) return explain("blocked", "minimum_ticket", "Below the merchant minimum ticket and no merchant Admin override is recorded.");
+  if (due.amountKobo < ABSOLUTE_TICKET_FLOOR_KOBO) return explain("stop", "floor", "The amount is below the ₦5,000 minimum debit. This limit cannot be overridden.");
+  if (due.amountKobo < minimumTicketKobo(state) && !overrideRecorded(due)) return explain("blocked", "minimum_ticket", "The amount is below the lender minimum. An Admin must record an override reason before it can proceed.");
   // MAN-08, MAN-09, MAN-14: the mandate must be active, cover the amount and carry consent.
   if (!mandate || mandate.status !== "active") return explain("blocked", "mandate_inactive", "Mandate is not active.");
-  if (due.amountKobo > mandate.amountKobo) return explain("blocked", "mandate_limit", "Due amount exceeds the mandate limit; never re-sent at a lower amount without consent coverage.");
-  if (!mandate.data.consentEvidence || (Array.isArray(mandate.data.consentGaps) && mandate.data.consentGaps.length)) return explain("blocked", "consent_gap", "Consent evidence is missing or imported gaps are unresolved.");
+  if (due.amountKobo > mandate.amountKobo) return explain("blocked", "mandate_limit", "The instalment exceeds the mandate limit. Do not retry a lower amount unless the consent covers it.");
+  if (!mandate.data.consentEvidence || (Array.isArray(mandate.data.consentGaps) && mandate.data.consentGaps.length)) return explain("blocked", "consent_gap", "Consent evidence is missing or incomplete. Resolve the gaps before proceeding.");
   // Row 6: stable experiment assignment (RET-05).  A holdout item still receives the failed-debit notice.
-  if (arm === "holdout") return explain("holdout", "holdout", "Stable holdout assignment: the lender's documented manual process owns this item; the engine must not retry.", null, { purpose: "failed_debit", leadHours: 0, requiredBy: null, noticeId: null, acceptedAt: null, evidenced: false });
+  if (arm === "holdout") return explain("holdout", "holdout", "This instalment is in the comparison group. The lender's documented manual process is responsible for collection; automated retries are not allowed.", null, { purpose: "failed_debit", leadHours: 0, requiredBy: null, noticeId: null, acceptedAt: null, evidenced: false });
   // SCH-08 and DEB-10: only owner-valo obligations of a merchant in instruction mode are instructed.
-  if (due.data.owner !== PLATFORM_OWNER) return explain("observation_only", "ownership", `Execution belongs to ${due.data.owner}; Valo Pay cannot instruct this obligation.`);
-  if (state.merchant.mode !== "instruction" || !state.merchant.preLiveReady) return explain("observation_only", "observation_mode", "Instruction gate remains closed; synthetic evidence cannot open it.");
+  if (due.data.owner !== PLATFORM_OWNER) return explain("observation_only", "ownership", `Another collection system is responsible for this instalment (${due.data.owner}). Valo Pay cannot send its collection instructions.`);
+  if (state.merchant.mode !== "instruction" || !state.merchant.preLiveReady) return explain("observation_only", "observation_mode", "The live instruction gate is closed. Sample data cannot be used to approve live collection instructions.");
   // Row 8: plan the earliest slot that satisfies spacing, the calendar and the window; the required notice must be evidenced the lead time before it.
   const spacingHours = Math.max(policyGuardrails.minSpacingHours, Number(policy.data.spacingHours) || policyGuardrails.defaultSpacingHours);
   const leadHours = Math.max(policyGuardrails.minRetryNoticeHours, Number(policy.data.retryNoticeHours) || policyGuardrails.defaultRetryNoticeHours);
@@ -216,7 +216,7 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
   const earliestBySpacing = Math.max(now, Date.parse(attemptTime(last)) + spacingHours * HOUR);
   const planned = nextExecutionSlot(state, earliestBySpacing);
   Object.assign(inputs, { spacingHours, leadHours, window: executionWindowFor(state) });
-  if (!Number.isFinite(planned)) return explain("blocked", "window", "Execution window has no valid business-day slot.");
+  if (!Number.isFinite(planned)) return explain("blocked", "window", "There is no available business-day time within the configured collection hours.");
   const calendar = (fromMs: number, toMs: number) => ({ earliestAt: iso(fromMs), rolledForward: toMs > fromMs, ...nonBusinessDaysBetween(state, fromMs, toMs) });
   // NOT-10: the notice clock runs from provider acceptance, never from submission or simulation.
   const notice = recordsOf(state, "notifications").find((record) => record.id === last.data.noticeId && ["pre_debit", "failed_debit"].includes(String(record.data.purpose)) && record.data.acceptedAt && record.data.synthetic !== true);
@@ -224,26 +224,26 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
     const acceptedAt = Date.parse(String(notice.data.acceptedAt));
     const earliest = Math.max(earliestBySpacing, acceptedAt + leadHours * HOUR);
     const next = nextExecutionSlot(state, earliest);
-    if (!Number.isFinite(next)) return explain("blocked", "window", "Execution window has no valid business-day slot.");
+    if (!Number.isFinite(next)) return explain("blocked", "window", "There is no available business-day time within the configured collection hours.");
     inputs.noticeEvidence = { noticeId: notice.id, acceptedAt: notice.data.acceptedAt };
     inputs.calendar = calendar(earliest, next);
     const requirement: NoticeRequirement = { purpose: "failed_debit", leadHours, requiredBy: iso(next - leadHours * HOUR), noticeId: notice.id, acceptedAt: String(notice.data.acceptedAt), evidenced: true };
     return explain("would_schedule", "plan", next > planned
-      ? "Notice accepted after the planned deadline; the attempt moves to the first slot the lead time allows. No instruction is sent."
-      : "All policy checks passed in a read-only evaluation; no instruction is sent.", iso(next), requirement);
+      ? "The notice was accepted after the deadline. The attempt moves to the next available time that allows the full notice period. No instruction is sent."
+      : "All policy checks passed in this simulation. No instruction is sent.", iso(next), requirement);
   }
   inputs.noticeEvidence = null;
   inputs.calendar = calendar(earliestBySpacing, planned);
   const deadline = planned - leadHours * HOUR;
   if (now < deadline) {
     // The plan stands and the notice is scheduled; execution is refused unless the evidence arrives by the deadline (SCH-05).
-    return explain("would_schedule", "plan", "Planned subject to the failed-debit notice being evidenced by the deadline; no instruction is sent.", iso(planned),
+    return explain("would_schedule", "plan", "A retry can be planned if evidence of provider acceptance of the failed-debit notice arrives by the deadline. No instruction is sent.", iso(planned),
       { purpose: "failed_debit", leadHours, requiredBy: iso(deadline), noticeId: null, acceptedAt: null, evidenced: false });
   }
   // The deadline passed without provider acceptance: defer to the next compliant slot and raise the exception.
   const deferred = nextExecutionSlot(state, now + leadHours * HOUR);
   const deferredAt = Number.isFinite(deferred) ? iso(deferred) : null;
-  return explain("defer", "notice_not_evidenced", "Required notice had no provider acceptance evidence by the deadline; the attempt is deferred to the next compliant slot and a notice-not-evidenced exception is raised.", deferredAt,
+  return explain("defer", "notice_not_evidenced", "The deadline passed without evidence that the provider accepted the required notice. The attempt is postponed to the next allowed time and an exception is raised for review.", deferredAt,
     { purpose: "failed_debit", leadHours, requiredBy: Number.isFinite(deferred) ? iso(deferred - leadHours * HOUR) : null, noticeId: null, acceptedAt: null, evidenced: false });
 }
 
@@ -277,7 +277,7 @@ export function recordRetryDecision(state: DomainState, ctx: Context, due: Typed
 /** Section 6.6 minimum sample per arm at 80% power for an 8-point difference, one-sided 5% (a 90% interval excluding zero). */
 export function preregisterSample(baseline: number, holdout: number) {
   if (!(baseline > 0 && baseline < 1 - experimentRules.effectPoints && holdout >= experimentRules.minimumHoldoutShare && holdout <= experimentRules.maximumHoldoutShare)) {
-    throw new Error("Choose a baseline between 0 and 0.92 and a 10–50% holdout.");
+    throw new Error("Enter a baseline recovery rate greater than 0 and below 0.92, and a comparison group share from 10% to 50%.");
   }
   const ratio = (1 - holdout) / holdout;
   const z = experimentRules.zScore + 0.8416212335729143;

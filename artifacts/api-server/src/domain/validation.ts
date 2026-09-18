@@ -13,19 +13,19 @@ const editable = new Set<string>(editableKinds);
 const statuses: Record<string, readonly string[]> = recordStatuses;
 
 function requireRole(ctx: Context, allowed: string[]): void {
-  if (!roleSet.has(ctx.role)) throw new Error("Unknown demo role.");
+  if (!roleSet.has(ctx.role)) throw new Error("This demo role is not recognised. Choose one of the available roles.");
   if (!allowed.includes(ctx.role)) throw new Error(`${ctx.role} is not permitted to make this change.`);
 }
 
 function positiveInteger(value: unknown, label: string, allowZero = false): void {
   if (!Number.isSafeInteger(value) || Number(value) < (allowZero ? 0 : 1)) {
-    throw new Error(`${label} must be an integer in kobo.`);
+    throw new Error(`${label} must be a whole number in kobo (100 kobo = ₦1).`);
   }
 }
 
 function isoDate(value: unknown, label: string): void {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/.test(value) || Number.isNaN(Date.parse(value))) {
-    throw new Error(`${label} must be an ISO date or UTC ISO timestamp.`);
+    throw new Error(`${label} must use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z.`);
   }
 }
 
@@ -41,7 +41,7 @@ function validateDates(value: unknown, key = ""): void {
 function parent<K extends string>(state: DomainState, id: unknown, kind: K, label: string): RecordOf<K> {
   if (typeof id !== "string" || !id) throw new Error(`${label} is required.`);
   const item = findRecord(state, id, kind);
-  if (item.merchantId !== state.merchant.id) throw new Error(`${label} belongs to another tenant.`);
+  if (item.merchantId !== state.merchant.id) throw new Error(`${label} belongs to another lender workspace. Choose a record from this workspace.`);
   return item;
 }
 
@@ -62,7 +62,7 @@ export function cutoverComplete(cutover: TypedRecord<"cutovers">): boolean {
 
 function assertTransition(kind: string, from: string, to: string): void {
   if (from === to) return;
-  if (kind === "cutovers" && to === "handed_back") throw new Error("Hand-back is recorded by the hand_back action.");
+  if (kind === "cutovers" && to === "handed_back") throw new Error("Use Return collection ownership to hand this back to the configured fallback owner.");
   if (kind === "mandates") {
     const allowed = mandateTransitions[from as keyof typeof mandateTransitions] ?? [];
     if (!allowed.includes(to as never)) throw new Error(`A ${from} mandate cannot move to ${to}.`);
@@ -71,16 +71,16 @@ function assertTransition(kind: string, from: string, to: string): void {
   }
   if (kind === "exceptions") {
     const allowed = exceptionTransitions[from as keyof typeof exceptionTransitions] ?? [];
-    if (!allowed.includes(to as never)) throw new Error(to === "resolved" ? "Resolve an exception through its action with a controlled resolution code." : `A ${from} exception cannot move to ${to}.`);
+    if (!allowed.includes(to as never)) throw new Error(to === "resolved" ? "Use Resolve exception and choose a resolution from the list." : `A ${from} exception cannot move to ${to}.`);
     return;
   }
   if (["policies", "templates", "experiments"].includes(kind)) {
-    throw new Error("Lifecycle status transitions can only be performed by the domain action.");
+    throw new Error("Use the action for this record to change its status.");
   }
   if (["due-items", "attempts", "observations", "settlement-batches", "payments", "allocations"].includes(kind)) {
     throw new Error(`${kind} status is derived by the platform and cannot be set directly.`);
   }
-  if (isActionOnlyStatus(kind, to)) throw new Error("This protected status can only be set by its domain action.");
+  if (isActionOnlyStatus(kind, to)) throw new Error("Use the action for this record to set this status.");
 }
 
 export function validateRecord(
@@ -99,7 +99,7 @@ export function validateRecord(
   validateDates(input);
   if (!editable.has(kind)) throw new Error(`${kind} cannot be created or edited directly.`);
   if (!roleSet.has(ctx.role) || ctx.role === "Read-only") throw new Error("This demo role has read-only access.");
-  if (input.merchantId && input.merchantId !== state.merchant.id) throw new Error("Records cannot be linked across tenants.");
+  if (input.merchantId && input.merchantId !== state.merchant.id) throw new Error("Linked records must belong to the same lender workspace.");
   if (input.amountKobo !== undefined) positiveInteger(input.amountKobo, "amountKobo", true);
   if (input.status && statuses[kind] && !statuses[kind].includes(input.status)) {
     throw new Error(`Invalid ${kind} status. Allowed: ${statuses[kind].join(", ")}.`);
@@ -108,7 +108,7 @@ export function validateRecord(
   const existing = isUpdate && input.id ? findRecord(state, input.id, kind) : undefined;
   if (isUpdate && !existing) throw new Error("An update requires the existing record id.");
   if (existing?.status === "approved" && (kind === "policies" || kind === "templates")) {
-    throw new Error("Approved versions are immutable; create a new version instead.");
+    throw new Error("Approved versions cannot be edited. Create a new draft version instead.");
   }
   if (existing && input.status && input.status !== existing.status) assertTransition(kind, existing.status, input.status);
   if (!isUpdate && input.status && isActionOnlyStatus(kind, input.status)) {
@@ -135,8 +135,8 @@ export function validateRecord(
 
   if (kind === "customers") {
     requireRole(ctx, ["Admin", "Operations", "Finance"]);
-    if (data.accountMasked !== undefined && !masked(data.accountMasked)) throw new Error("Customer account identifiers must be masked.");
-    if (data.phoneMasked !== undefined && !masked(data.phoneMasked)) throw new Error("Customer phone identifiers must be masked.");
+    if (data.accountMasked !== undefined && !masked(data.accountMasked)) throw new Error("Mask the account number, for example •••• 1234. Do not enter a full account number.");
+    if (data.phoneMasked !== undefined && !masked(data.phoneMasked)) throw new Error("Mask the phone number, for example +234 •••• 32. Do not enter a full phone number.");
   }
   if (kind === "mandates") {
     requireRole(ctx, ["Admin", "Operations"]);
@@ -157,13 +157,13 @@ export function validateRecord(
       for (const key of consentKeys) delete data[key];
     }
     if (!existing?.data.policyVersionHistory && !existing?.data.consentPolicyId) delete data.policyVersionHistory;
-    if (data.origin === "imported" && !data.consentGaps) throw new Error("Imported mandates must record consent gaps.");
+    if (data.origin === "imported" && !data.consentGaps) throw new Error("For an imported mandate, record any missing consent evidence. Use an empty list if nothing is missing.");
     if (existing && ["consentEvidence", "workflow", "origin"].some((key) => JSON.stringify(data[key]) !== JSON.stringify(existing.data[key]))) {
-      throw new Error("Consent provenance is immutable. Reissue the mandate with a new consent record.");
+      throw new Error("Existing consent evidence cannot be changed. Reissue the mandate with a new consent record.");
     }
-    if (existing?.data.policyId && data.policyId !== existing.data.policyId) throw new Error("Move a mandate to another policy version through apply_policy_version so the notice and consent are recorded (RET-07).");
+    if (existing?.data.policyId && data.policyId !== existing.data.policyId) throw new Error("Use Apply policy version to change the version for this mandate and record the required notice and consent.");
     if (existing && consentKeys.some((key) => existing.data[key] !== undefined && JSON.stringify(data[key]) !== JSON.stringify(existing.data[key]))) {
-      throw new Error("The consented policy version is server-owned; use apply_policy_version.");
+      throw new Error("Use Apply policy version to update the version covered by consent.");
     }
   }
   if (kind === "due-items") {
@@ -171,21 +171,21 @@ export function validateRecord(
     parent(state, input.customerId, "customers", "A due item customer");
     positiveInteger(input.amountKobo, "Due amount");
     const amount = Number(input.amountKobo);
-    if (amount < ABSOLUTE_TICKET_FLOOR_KOBO) throw new Error("Debits under ₦5,000 are refused with no override.");
+    if (amount < ABSOLUTE_TICKET_FLOOR_KOBO) throw new Error("The minimum debit is ₦5,000. Amounts below this cannot be approved.");
     const minimum = minimumTicketKobo(state);
     if (amount < minimum) {
       const override = data.overrideReason || data.adminOverrideReason;
       const preserved = existing && existing.amountKobo === input.amountKobo && (existing.data.overrideReason || existing.data.adminOverrideReason) === override;
-      if (!override || (!preserved && ctx.role !== "Admin")) throw new Error(`Debits from ₦5,000 to below the merchant minimum of ₦${(minimum / 100).toLocaleString("en-NG")} require a recorded merchant Admin override reason.`);
+      if (!override || (!preserved && ctx.role !== "Admin")) throw new Error(`Debits from ₦5,000 to below the lender minimum of ₦${(minimum / 100).toLocaleString("en-NG")} need an Admin to record an override reason.`);
     }
-    if (!isUpdate && input.status !== "scheduled") throw new Error("New due items start scheduled. Payment status is derived from allocations.");
-    if (!normaliseOwner(data.owner)) throw new Error("A due item requires a valid execution owner: valopay, lms, merchant_manual or provider_auto.");
+    if (!isUpdate && input.status !== "scheduled") throw new Error("New instalments must start as scheduled. Their payment status updates when payments are allocated.");
+    if (!normaliseOwner(data.owner)) throw new Error("Choose who is responsible for collecting this instalment: Valo Pay, the loan management system, the lender team or the provider.");
     if (data.mandateId) {
       const mandate = parent(state, data.mandateId, "mandates", "dueItem mandateId");
-      if (mandate.customerId !== input.customerId) throw new Error("A due item mandate must belong to the same customer.");
+      if (mandate.customerId !== input.customerId) throw new Error("Choose a mandate that belongs to the customer on this instalment.");
     }
     if (data.owner === PLATFORM_OWNER && !recordsOf(state, "cutovers").some(cutoverComplete)) {
-      throw new Error("Valo ownership is blocked until a cutover contract is complete through the dual-run day with an accountable user and written confirmation (DEB-11).");
+      throw new Error("Valo Pay cannot take collection ownership until the handover agreement and parallel-run day are complete, with a named responsible user and written confirmation.");
     }
     if (data.outstandingKobo !== undefined && (!Number.isInteger(data.outstandingKobo) || data.outstandingKobo < 0 || data.outstandingKobo > input.amountKobo!)) {
       throw new Error("Outstanding balance cannot exceed the due amount.");
@@ -193,12 +193,12 @@ export function validateRecord(
   }
   if (kind === "attempts") {
     requireRole(ctx, ["Admin", "Operations"]);
-    if (isUpdate) throw new Error("Attempt facts are immutable.");
+    if (isUpdate) throw new Error("Recorded debit attempts cannot be edited.");
     const due = parent(state, data.dueItemId, "due-items", "attempt dueItemId");
-    if (due.customerId !== input.customerId) throw new Error("Attempt customer must match its due item.");
-    if (input.amountKobo !== due.amountKobo) throw new Error("Attempt amount must match the due item amount.");
+    if (due.customerId !== input.customerId) throw new Error("The debit attempt and instalment must belong to the same customer.");
+    if (input.amountKobo !== due.amountKobo) throw new Error("The debit attempt amount must match the instalment amount.");
     if (data.source !== "external" || data.simulated !== true) {
-      throw new Error("Attempts may only be immutable synthetic external imported facts; no debit instruction is available.");
+      throw new Error("Only sample records of external debit attempts can be imported. They cannot be edited later, and no debit instruction is available.");
     }
     if (input.status === "failed") {
       if (data.failureCode !== undefined && !isKnownFailureCode(data.failureCode)) data.rawFailureCode = String(data.failureCode);
@@ -208,38 +208,38 @@ export function validateRecord(
   }
   if (kind === "observations") {
     requireRole(ctx, ["Admin", "Operations", "Finance"]);
-    if (!input.reference) throw new Error("Observations require a canonical provider reference.");
+    if (!input.reference) throw new Error("Enter the original provider reference for this payment evidence.");
     if (input.customerId) parent(state, input.customerId, "customers", "observation customer");
-    if (isUpdate) throw new Error("Observation evidence is immutable; record a correction as new evidence.");
+    if (isUpdate) throw new Error("Saved payment evidence cannot be edited. Add a new record to correct it.");
     if (data.paymentId !== undefined || data.resolutionKey !== undefined || input.status === "resolved") {
-      throw new Error("Observation resolution is server-owned and cannot be supplied on create.");
+      throw new Error("Valo Pay determines how payment evidence is matched. Do not set its resolution when creating it.");
     }
     if (data.dueItemId) {
       const due = parent(state, data.dueItemId, "due-items", "observation dueItemId");
-      if (due.customerId !== input.customerId) throw new Error("Observation due item must belong to its customer.");
+      if (due.customerId !== input.customerId) throw new Error("The payment evidence and linked instalment must belong to the same customer.");
     }
   }
   if (kind === "policies") {
     requireRole(ctx, ["Admin"]);
     if (!isUpdate && input.status && input.status !== "draft") throw new Error("Policies are created as drafts only.");
-    if (data.reviewer !== undefined && data.reviewer !== existing?.data.reviewer) throw new Error("Policy reviewer metadata is server-owned.");
+    if (data.reviewer !== undefined && data.reviewer !== existing?.data.reviewer) throw new Error("The policy reviewer is recorded during approval and cannot be changed here.");
     const maxAttempts = data.maxAttempts ?? policyGuardrails.defaultMaxAttempts;
     const spacing = data.spacingHours ?? policyGuardrails.defaultSpacingHours;
     const firstNotice = data.firstNoticeHours ?? policyGuardrails.defaultFirstNoticeHours;
     const retryNotice = data.retryNoticeHours ?? policyGuardrails.defaultRetryNoticeHours;
     [maxAttempts, spacing, firstNotice, retryNotice].forEach((value) => {
-      if (!Number.isFinite(value) || !Number.isInteger(value)) throw new Error("Policy numeric inputs must be finite integers.");
+      if (!Number.isFinite(value) || !Number.isInteger(value)) throw new Error("Enter whole numbers for the policy limits and timings.");
     });
     if (maxAttempts > policyGuardrails.maxAttemptsCeiling || maxAttempts < 1 || spacing < policyGuardrails.minSpacingHours || firstNotice < policyGuardrails.minFirstNoticeHours || retryNotice < policyGuardrails.minRetryNoticeHours || data.partialAllowed === true) {
-      throw new Error(`Policy violates the immutable guardrails: at most ${policyGuardrails.maxAttemptsCeiling} attempts, ${policyGuardrails.minSpacingHours}-hour spacing and notice floors, no partial debits.`);
+      throw new Error(`Use no more than ${policyGuardrails.maxAttemptsCeiling} attempts, at least ${policyGuardrails.minSpacingHours} hours between attempts and for each notice period, and no partial debits. These limits cannot be overridden.`);
     }
-    if (data.author !== ctx.actor) throw new Error("The policy author must be the acting demo persona.");
+    if (data.author !== ctx.actor) throw new Error("The policy author must match the current demo user.");
   }
   if (kind === "templates") {
     requireRole(ctx, ["Admin"]);
     if (!isUpdate && input.status && input.status !== "draft") throw new Error("Templates are created as drafts only.");
-    if (data.reviewer !== undefined && data.reviewer !== existing?.data.reviewer) throw new Error("Template reviewer metadata is server-owned.");
-    if (data.author !== ctx.actor) throw new Error("The template author must be the acting demo persona.");
+    if (data.reviewer !== undefined && data.reviewer !== existing?.data.reviewer) throw new Error("The template reviewer is recorded during approval and cannot be changed here.");
+    if (data.author !== ctx.actor) throw new Error("The template author must match the current demo user.");
     const text = String(data.text || "");
     for (const field of ["{{amount}}", "{{date}}", "{{merchant}}", "{{contact}}"]) {
       if (!text.includes(field)) throw new Error(`Template text must include ${field}.`);
@@ -250,13 +250,13 @@ export function validateRecord(
     if (!isUpdate && input.status && input.status !== "draft") throw new Error("Experiments are created as drafts only.");
     const holdout = Number(data.holdoutShare);
     if (!Number.isFinite(holdout) || holdout < experimentRules.minimumHoldoutShare || holdout > experimentRules.maximumHoldoutShare || !Number.isInteger(data.minPerArm) || !data.seed) {
-      throw new Error("Experiment requires a 10–50% holdout, integer minimum per arm, and seed.");
+      throw new Error("Set the comparison group to 10–50%, enter a whole-number minimum sample for each group, and provide an assignment seed.");
     }
     parent(state, data.policyId, "policies", "experiment policyId");
   }
   if (kind === "exceptions" && data.linkedRecordId) {
     const linked = state.records.find((item) => item.id === data.linkedRecordId);
-    if (!linked || linked.merchantId !== state.merchant.id) throw new Error("Exception linkedRecordId must belong to this tenant.");
+    if (!linked || linked.merchantId !== state.merchant.id) throw new Error("Link the exception to a record in this lender workspace.");
   }
   if (kind === "commercial" && data.designPartner && !data.signedFullPriceTerms) {
     // A discounted design-partner entry is allowed, but it cannot be treated as proof of a real Test 3 sale.
@@ -266,16 +266,16 @@ export function validateRecord(
     requireRole(ctx, ["Admin"]);
     if (input.status === "ready" && existing?.status !== "ready") {
       const candidate = { ...(existing ?? { id: "", merchantId: "", kind, name: "", reference: "", amountKobo: 0, customerId: "", createdAt: "", updatedAt: "" }), status: "ready", data } as TypedRecord<"cutovers">;
-      if (!cutoverComplete(candidate)) throw new Error("A cutover is ready only when the incumbent is disabled in writing, external attempts are imported, the dual-run day is complete, and an accountable user has confirmed (DEB-11 steps 1 to 6).");
+      if (!cutoverComplete(candidate)) throw new Error("The handover is ready only after the previous collection system is disabled in writing, external attempts are imported, the parallel-run day is complete, and a named responsible user has confirmed.");
     }
-    if (input.status === "handed_back" && existing?.status !== "handed_back") throw new Error("Hand-back is recorded by the hand_back action.");
+    if (input.status === "handed_back" && existing?.status !== "handed_back") throw new Error("Use Return collection ownership to hand this back to the configured fallback owner.");
   }
   if (["evidence", "experiments"].includes(kind)) requireRole(ctx, ["Admin"]);
   if (["commercial", "costs", "settlement-batches"].includes(kind)) requireRole(ctx, ["Admin", "Finance"]);
   if (kind === "settlement-batches") {
     for (const key of ["grossKobo", "feeKobo", "netKobo"]) positiveInteger(data[key], key, true);
-    if (data.grossKobo - data.feeKobo !== data.netKobo) throw new Error("Batch net must equal gross minus fees.");
-    if (!isUpdate && input.status !== (defaultStatus["settlement-batches"] ?? "pending")) throw new Error("Batches start pending; reconciliation determines the outcome.");
+    if (data.grossKobo - data.feeKobo !== data.netKobo) throw new Error("The net settlement amount must equal the gross amount minus fees.");
+    if (!isUpdate && input.status !== (defaultStatus["settlement-batches"] ?? "pending")) throw new Error("New settlement batches must start as pending. Reconciliation updates their status.");
   }
 }
 

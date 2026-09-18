@@ -176,7 +176,7 @@ export function buildDisputePack(state: DomainState, ctx: Context, customerId: s
     },
     timeline, documents,
     auditVerification: verifyAudit(state),
-    note: "Synthetic sandbox evidence: amounts are integer kobo shown as NGN; times are West Africa Time. Valo Pay never holds money. The SHA-256 checksum of each file is recorded on its export record and returned with the download link.",
+    note: "Sample data only, not live evidence. Amounts are stored in whole kobo and displayed in naira (NGN). Times use West Africa Time (WAT). Valo Pay never holds money. Each file has a SHA-256 checksum to check its integrity, saved with the export record and download link.",
   };
 }
 
@@ -238,28 +238,28 @@ export function renderDisputePackPdf(pack: DisputePack, options: PdfOptions = {}
     line("Bank", `${text(pack.customer.bankName) || "n/a"} ${text(pack.customer.accountMasked)}  phone ${text(pack.customer.phoneMasked) || "n/a"}`);
     line("Generated", `${watStamp(pack.generatedAt)} by ${pack.generatedBy}`);
     line("Audit chain", `${pack.auditVerification.valid ? "verified intact" : "BROKEN"}; ${counted(pack.auditVerification.count, "entry", "entries")}; head ${pack.auditVerification.headHash.slice(0, 16)}`);
-    heading("Position (derived from obligations and payment evidence; no funds are held)");
-    line("Obligations", kobo(pack.position.obligationsKobo));
+    heading("Customer position (from instalments and payment records; no funds held)");
+    line("Total instalments", kobo(pack.position.obligationsKobo));
     line("Allocated", kobo(pack.position.allocatedKobo));
     line("Outstanding", kobo(pack.position.outstandingKobo));
-    line("Unapplied credit", kobo(pack.position.unallocatedKobo));
+    line("Unallocated payments", kobo(pack.position.unallocatedKobo));
     heading("Summary");
     const s = pack.summary as Record<string, any>;
     line("Mandates", `${s.mandates.count} (${s.mandates.active} active, ${s.mandates.pendingActivation} awaiting activation)`);
-    line("Due items", `${s.dueItems.count} (${s.dueItems.paid} paid, ${s.dueItems.inCollection} in collection, ${s.dueItems.unpaidFinal} unpaid after final attempt, ${s.dueItems.inDispute} in dispute)`);
+    line("Instalments", `${s.dueItems.count} (${s.dueItems.paid} paid, ${s.dueItems.inCollection} in collection, ${s.dueItems.unpaidFinal} unpaid after final attempt, ${s.dueItems.inDispute} in dispute)`);
     line("Attempts", `${s.attempts.count} (${s.attempts.succeeded} succeeded, ${s.attempts.failed} failed, ${s.attempts.cancelled} cancelled)`);
     line("Payments", `${s.payments.count} totalling ${kobo(s.payments.kobo)} (${s.payments.reversed} reversed)`);
     line("Allocations", `${s.allocations.confirmed} confirmed, ${s.allocations.superseded} superseded`);
     line("Exceptions", `${s.exceptions.open} open, ${s.exceptions.resolved} resolved`);
     line("Notifications", `${s.notifications.count} (${s.notifications.accepted} accepted by the provider, ${s.notifications.delivered} delivered)`);
     line("Retry decisions", `${s.retryDecisions}`);
-    line("Human actions", `${s.humanActions}`);
-    heading("Consent");
+    line("Staff actions", `${s.humanActions}`);
+    heading("Customer consent");
     if (!s.consent.length) document.font("Sans").fontSize(9).text("No mandate on file.");
     for (const item of s.consent as Array<{ mandate: string; evidence: string; gaps: string[]; provenance: string }>) {
       line(item.mandate, `evidence ${item.evidence || "none"}; provenance ${item.provenance || "n/a"}${item.gaps.length ? `; GAPS: ${item.gaps.join(", ")}` : "; no gaps"}`);
     }
-    heading("Versions that applied (AUD-06)");
+    heading("Versions in effect at the time (AUD-06)");
     line("Retry policy", s.governingVersions.policies.join("; ") || "no approved version");
     line("Notice template", s.governingVersions.templates.join("; ") || "no approved version");
     line("Cutover contract", s.governingVersions.cutovers.join("; ") || "none");
@@ -298,7 +298,7 @@ export function renderDisputePackPdf(pack: DisputePack, options: PdfOptions = {}
 
     // ---- Governing documents ----
     document.addPage();
-    document.font("Sans-Bold").fontSize(12).fillColor("#102E2A").text("Governing documents as they applied (AUD-06)", margin, margin, { width }).fillColor("#222222").moveDown(0.4);
+    document.font("Sans-Bold").fontSize(12).fillColor("#102E2A").text("Documents in effect at the time (AUD-06)", margin, margin, { width }).fillColor("#222222").moveDown(0.4);
     if (!pack.documents.length) document.font("Sans").fontSize(9).text("No approved policy version, template or cutover contract applied to this customer's events.", margin, document.y, { width });
     for (const item of pack.documents) {
       const title = `${item.kind === "policies" ? "Retry policy" : item.kind === "templates" ? "Notice template" : "Cutover contract"} ${item.version ? `v${item.version} ` : ""}- ${item.name} (${item.status}); applied from ${watStamp(item.appliesFrom)}${item.appliesUntil ? ` until ${watStamp(item.appliesUntil)}` : " onwards"}`;

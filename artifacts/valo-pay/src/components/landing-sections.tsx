@@ -5,30 +5,30 @@ import { Button } from '@/components/ui/button';
 import '@/landing-sections.css';
 
 const jobs = [
-  { icon: FileText, title: 'Mandate operations', text: "Every provider's mandates in one view. Activation is chased inside its window, and the consent record pins the policy version the customer agreed to." },
-  { icon: RefreshCcw, title: 'Retries that follow the rules', text: 'A versioned policy a compliance reviewer approves: notice in advance, caps, quiet hours, a kill switch you control, and every decision logged with the rule that fired.' },
-  { icon: CheckCircle2, title: 'Reconciliation every morning', text: 'Direct-debit settlements, transfers and card payments matched to instalments with the rule and the confidence. Anything unmatched gets an owner and a deadline.' },
-  { icon: FileCheck, title: 'Audit and dispute packs', text: 'One timeline per customer: consent, schedule, every attempt, every notice, every naira. Exported as a checksummed PDF, CSV or JSON in under a minute.' },
+  { icon: FileText, title: 'Manage mandates', text: "Track each provider's direct debit permissions (mandates) in one place. Follow up on activation before the deadline. Keep consent linked to the policy the customer accepted." },
+  { icon: RefreshCcw, title: 'Control retry rules', text: 'A compliance reviewer approves each policy version. Set notice periods, attempt limits and quiet hours. Use the emergency stop to block retries. Each decision records the rule applied.' },
+  { icon: CheckCircle2, title: 'Match payments to instalments', text: 'Match settled direct debits, transfers and card payments to instalments. See the rule used and how certain each match is. Give unmatched payments an owner and a deadline.' },
+  { icon: FileCheck, title: 'Export audit and dispute records', text: "See each customer's consent, schedule, attempts, notices and payments in one timeline. Export a PDF, CSV or JSON file with a checksum to verify that it has not changed." },
 ];
 
 const steps = [
-  { title: 'Plug in', text: 'By API, or by CSV if you have none, under a partner agreement with your aggregator. Never your API keys.' },
-  { title: 'Observe', text: 'We read what happened: webhooks, settlement reports, statements. In observation mode nothing leaves the platform.' },
-  { title: 'Instruct, within the rules', text: 'Only after a signed cutover. Retries run inside your execution window, 06:00 to 10:00 WAT by default, never in quiet hours, and never past the policy cap.' },
+  { title: 'Connect your data', text: 'Connect through your payment provider (aggregator) under a partner agreement, or import CSV files. You do not need to share your API keys.' },
+  { title: 'Review activity', text: 'Review payment updates, settlement reports and bank statements. In observation mode, Valo Pay records activity without sending collection instructions.' },
+  { title: 'Enable controlled retries', text: 'Enable retry instructions only after signed approval to go live. Retries stay within your collection window, 06:00 to 10:00 West Africa Time by default, outside quiet hours and within your attempt limit.' },
 ];
 
 const boundaries = [
-  { icon: Banknote, id: 'pricing', title: 'Below the rail', text: '₦90 on a ₦30,000 debit, against about ₦150 to your aggregator. Licence tiers from ₦150,000 a month. Prices are public.' },
-  { icon: Wallet, title: 'Not a wallet, not a bank, not a payment provider', text: "Money moves from your customer's bank through NIBSS and your aggregator into your settlement account, exactly as it does today." },
-  { icon: BadgeCheck, title: 'What we do not claim', text: 'We do not switch a failed debit to another provider. We do not promise recovered money until we have measured it on real data.' },
-  { icon: ShieldCheck, title: 'Written to the rules, not "fully compliant"', text: "Retry conduct is written to the CBN's consumer-protection rules and the FCCPC's position on debt-recovery conduct. Identifiers are masked and every action sits on a hash-chained audit trail." },
+  { icon: Banknote, id: 'pricing', title: 'Clear pricing', text: 'Example fees on a ₦30,000 debit: ₦90 for Valo Pay and about ₦150 for your aggregator. Monthly licences start at ₦150,000.' },
+  { icon: Wallet, title: 'Not a wallet, not a bank, not a payment provider', text: "Payments move from your customer's bank through Nigeria's interbank payment network and your payment provider into your settlement account. Valo Pay does not hold these funds." },
+  { icon: BadgeCheck, title: 'What we do not claim', text: 'We do not retry failed debits through a different provider. We do not claim improved recovery until results have been measured with real data.' },
+  { icon: ShieldCheck, title: 'Conduct rules and audit records', text: 'Retry rules are written around CBN consumer-protection and FCCPC debt-recovery requirements. This is not a claim of full compliance. Identifiers are masked, and linked audit records help detect changes.' },
 ];
 
 const audiences = [
   { icon: Landmark, title: 'Lenders', text: 'Mandates, collections and customer records in one clear view.' },
   { icon: Users, title: 'Cooperatives', text: 'A shared workspace for your collections operations.' },
-  { icon: Building2, title: 'Finance teams', text: 'Review payment matches, exceptions and daily close records.' },
-  { icon: ClipboardList, title: 'Operations teams', text: 'Follow activations and the work that needs attention.' },
+  { icon: Building2, title: 'Finance teams', text: 'Review payment matches, unresolved items and daily close reports.' },
+  { icon: ClipboardList, title: 'Operations teams', text: 'Track mandate activation and tasks that need attention.' },
 ];
 
 /** Product sections are static: visiting the landing page never creates a workspace. */
@@ -39,8 +39,8 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
         <div className="public-container">
           <div className="lp-section-intro lp-split-intro">
             <p className="lp-section-kicker">Less chasing. More clarity.</p>
-            <h2 id="what-title">The four jobs that today live in spreadsheets and call centres</h2>
-            <p>Your loan software creates mandates and debits on the due date, and we pull that from it. The rest is what Valo Pay does.</p>
+            <h2 id="what-title">Four collections tasks, one workspace</h2>
+            <p>Your loan software creates mandates and requests debits when payments are due. Valo Pay brings the records together so your team can track, review and follow up.</p>
           </div>
           <ul className="lp-job-grid" role="list">
             {jobs.map((job, index) => (
@@ -60,7 +60,7 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
           <div className="lp-section-intro lp-split-intro">
             <p className="lp-section-kicker">Fits the way you work</p>
             <h2 id="how-title">How it works</h2>
-            <p>Start with visibility. Move to instructions only when the right agreements and controls are in place.</p>
+            <p>Start by reviewing records. Enable collection instructions only when the required agreements and controls are in place.</p>
           </div>
           <ol className="lp-process-grid">
             {steps.map((step, index) => (
@@ -78,8 +78,8 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
         <div className="public-container lp-trust-layout">
           <div className="lp-trust-copy">
             <p className="lp-section-kicker">Trust starts with clarity</p>
-            <h2 id="boundaries-title">What we are,<br /> and what we are not</h2>
-            <p>Every number carries its basis. Nothing on this page is a promise the product cannot show you in its own records.</p>
+            <h2 id="boundaries-title">What Valo Pay does,<br /> and where it stops</h2>
+            <p>See how Valo Pay fits into your collections process, what it costs and where its responsibilities end.</p>
             <div className="lp-trust-lines" aria-hidden="true"><span /><span /><span /><span /></div>
           </div>
           <dl className="lp-boundary-grid">
@@ -115,16 +115,16 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
           <div className="lp-final-cta">
             <div className="lp-cta-art" aria-hidden="true"><span /><span /><span /><span /></div>
             <div className="lp-cta-copy">
-              <p className="lp-section-kicker">Your next morning, reimagined</p>
-              <h2 id="cta-title">See it on synthetic data first</h2>
-              <p>Two sample lenders, every queue and report, and a daily close you can run yourself. Sign in when you want a workspace that keeps your changes.</p>
+              <p className="lp-section-kicker">Explore before you sign in</p>
+              <h2 id="cta-title">Try it with sample data</h2>
+              <p>Explore two sample lenders, review outstanding tasks and run the daily close to check payment records. Sign in to keep your workspace between visits.</p>
             </div>
             <div className="lp-cta-controls">
               <div className="lp-cta-actions">
                 <Button asChild size="lg" className="lp-cta-button"><Link href="/overview">Open the sandbox <ArrowUpRight aria-hidden="true" /></Link></Button>
                 {!signedIn && <Button asChild size="lg" variant="ghost" className="lp-cta-signin"><Link href="/sign-in">Sign in <ArrowRight aria-hidden="true" /></Link></Button>}
               </div>
-              <span className="lp-cta-note"><span aria-hidden="true" /> No sign-in needed. Synthetic data only.</span>
+              <span className="lp-cta-note"><span aria-hidden="true" /> No sign-in needed. Sample data only.</span>
             </div>
           </div>
         </div>
@@ -140,7 +140,7 @@ export function LandingFooter() {
         <div className="lp-footer-main">
           <div className="lp-footer-brand"><BrandLockup /></div>
           <nav aria-label="Product sections" className="lp-footer-links"><a href="#what">What it does</a><a href="#how">How it works</a><a href="#boundaries">Our boundaries</a><a href="#pricing">Pricing</a></nav>
-          <nav aria-label="Help and documentation" className="lp-footer-links"><a href="https://github.com/obeidpeter/valo-pay#readme">How the sandbox works</a><a href="https://github.com/obeidpeter/valo-pay/blob/main/docs/DATABASE_SECURITY.md">Security boundary</a><Link href="/sign-in">Sign in</Link></nav>
+          <nav aria-label="Help and documentation" className="lp-footer-links"><a href="https://github.com/obeidpeter/valo-pay#readme">How the sandbox works</a><a href="https://github.com/obeidpeter/valo-pay/blob/main/docs/DATABASE_SECURITY.md">Security and data access</a><Link href="/sign-in">Sign in</Link></nav>
         </div>
         <div className="lp-footer-bottom"><p>Valo Pay · Collections operations layer · We never hold money.</p><div className="lp-footer-location"><span>Built for collections in Nigeria.</span><span className="lp-nigerian-flag" aria-hidden="true" /></div></div>
       </div>

@@ -42,16 +42,16 @@ describe("error boundary", () => {
     render(<Harness />);
 
     const alert = screen.getByRole("alert");
-    expect(within(alert).getByRole("heading", { level: 1, name: "This page stopped working" })).toBeTruthy();
+    expect(within(alert).getByRole("heading", { level: 1, name: "We could not display this page" })).toBeTruthy();
     expect(within(alert).getByText("/reports")).toBeTruthy();
-    expect(within(alert).getByText(/does not change any record/)).toBeTruthy();
+    expect(within(alert).getByText(/before repeating it/)).toBeTruthy();
     expect(within(alert).getByRole("link", { name: "audit log" }).getAttribute("href")).toBe("/audit");
-    expect(within(alert).getByRole("link", { name: "Go to the overview" }).getAttribute("href")).toBe("/overview");
+    expect(within(alert).getByRole("link", { name: "Go to overview" }).getAttribute("href")).toBe("/overview");
     // The message is kept for development, folded away, never in the sentence a lender's staff read.
     const details = alert.querySelector("details")!;
     expect(details.open).toBe(false);
     expect(within(alert).getByText("Technical details (development only)")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Back to the start" }).getAttribute("href")).toBe("/");
+    expect(screen.getByRole("link", { name: "Back to home" }).getAttribute("href")).toBe("/");
     await waitFor(() => expect(document.title).toBe("Page error · Valo Pay"));
 
     await user.click(screen.getByRole("button", { name: "Repair" }));
@@ -72,10 +72,10 @@ describe("error boundary", () => {
         </QueryClientProvider>
       </Router>,
     );
-    expect(await screen.findByRole("heading", { level: 1, name: "This page stopped working" })).toBeTruthy();
-    expect(await screen.findByRole("link", { name: /Audit Log/ })).toBeTruthy();
-    expect(screen.getByText("MODE: sandbox")).toBeTruthy();
-    expect(screen.getByText(/Sandbox · Synthetic data\. We never hold money\./)).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "We could not display this page" })).toBeTruthy();
+    expect(await screen.findByRole("link", { name: /Audit log/ })).toBeTruthy();
+    expect(screen.getByText("Mode: sandbox")).toBeTruthy();
+    expect(screen.getByText(/Sandbox · Sample data\. We never hold money\./)).toBeTruthy();
     await waitFor(() => expect(document.title).toBe("Page error · Valo Pay"));
   });
 });

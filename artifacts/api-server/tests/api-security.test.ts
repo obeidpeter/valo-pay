@@ -25,7 +25,7 @@ function answer(error: unknown): Answer {
   assert.equal(answer(new Error("Execution is not permitted in observation mode.")).status, 403, "the wording of a refusal implies 403");
   const typeError = answer(new TypeError("Cannot read properties of undefined (reading 'merchant')"));
   assert.equal(typeError.status, 500, "a programming error is a 500");
-  assert.equal((typeError.body as { error: string }).error, "The operation could not be completed. No partial change has been committed.", "a programming error's message stays out of the response");
+  assert.equal((typeError.body as { error: string }).error, "We could not complete this action. No changes were saved. Try again.", "a programming error's message stays out of the response");
   assert.equal(answer(new ReferenceError("x is not defined")).status, 500);
   assert.equal(answer("a string thrown by mistake").status, 500, "something that is not an Error is a 500");
   assert.equal(answer(Object.assign(new Error("duplicate key"), { code: "23505" })).status, 409, "a database safety constraint is a conflict");

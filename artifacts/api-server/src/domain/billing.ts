@@ -163,7 +163,7 @@ export function recoveryFeeLines(state: DomainState, period: string) {
   const enabled = state.settings.recoveryFeeEnabled === true && state.settings.recoveryFeeDecision === "proven";
   const note = enabled
     ? `NGN ${RECOVERY_FEE_KOBO / 100} per recovered failed debit in the engine arm, billed once its ${experimentRules.outcomeWindowDays}-day window has closed, so a reversal inside the window never needs a credit.`
-    : "Recovery fee is off: BIL-03 switches it on only when the Test 2 decision is recorded as proven (settings.recoveryFeeDecision) and settings.recoveryFeeEnabled is true.";
+    : "The recovery fee is off. It can be charged only after the recovery test (Test 2) is recorded as proven and the fee is enabled in settings.";
   if (!enabled) return { enabled, lines: [] as RecoveryFeeLine[], kobo: 0, note };
   const end = Date.parse(periodEnd(period));
   const billed = new Set(issuedInvoices(state).flatMap((invoice) => ((invoice.data.recoveryFee?.lines || []) as Array<{ dueItemId: string }>).map((line) => line.dueItemId)));
@@ -197,7 +197,7 @@ export function buildBillingStatement(state: DomainState, now: string): Record<s
   const channelBreakdown: Record<string, { count: number; kobo: number; billable: number; reason: string }> = {};
   for (const payment of inPeriod) {
     const channel = String(payment.data.channel || "manual");
-    const row = (channelBreakdown[channel] ||= { count: 0, kobo: 0, billable: 0, reason: isBillableChannel(channel) ? "Direct debit attempts that succeeded are billable once settled, unreversed and past the reversal window (BIL-01)." : "Reconciled receipt, not a collection the platform executed; reported, never billed." });
+    const row = (channelBreakdown[channel] ||= { count: 0, kobo: 0, billable: 0, reason: isBillableChannel(channel) ? "A successful direct debit can be billed after settlement, provided it has not been reversed and the reversal window has passed." : "This payment is included in reconciliation reports but is not charged a collection fee." });
     row.count += 1; row.kobo += payment.amountKobo; if (billableCollection(state, payment, now)) row.billable += 1;
   }
   // Collections that pass every BIL-01 check except the reversal window are billed on a later statement, never lost.
@@ -217,13 +217,13 @@ export function buildBillingStatement(state: DomainState, now: string): Record<s
   const adjustments = pendingAdjustments(state);
   return {
     period, usageRateBps: USAGE_FEE_BPS, usageCapKobo: USAGE_FEE_CAP_KOBO, reversalWindowDays: reversalWindowDays(state, state.merchant.provider), vatBps: vatBpsFor(state),
-    billableChannels: [...billableChannels], billableRule: "BIL-01: a collection is billable when its direct-debit attempt succeeded, the Payment is settled and unreversed at the invoice date, and the provider's reversal window has passed.",
+    billableChannels: [...billableChannels], billableRule: "A collection can be billed when the direct debit succeeded, the payment is settled and has not been reversed at the invoice date, and the provider's reversal window has passed.",
     eligibleAllocatedKobo: usageBase, successfulCollections: billablePayments.length, usageFeeKobo: usageFee, volumeTier: tier.name,
     channelBreakdown, withheldInsideReversalWindow: withheld.length,
     lines, totalKobo: lines.reduce((sum, line) => sum + line.totalKobo, 0),
     invoices, nextInvoicePeriod: invoices.length ? nextPeriodAfter(String(invoices.at(-1)!.period)) : previousMonth(now),
     pendingAdjustments: adjustments, pendingAdjustmentsKobo: adjustments.reduce((sum, line) => sum + line.kobo, 0),
-    adjustmentRule: "BIL-07: a reversal, refund, confirmed duplicate or superseded allocation affecting a billed collection is a credit or debit line on the next invoice with the references; issued invoices are never edited.",
+    adjustmentRule: "If a billed collection is reversed, refunded, confirmed as a duplicate or affected by an invalidated allocation, the correction appears as a credit or debit on the next invoice. Issued invoices are never changed.",
     recoveryFee: recoveryFeeLines(state, period).note,
     implementationExcludedFromRecurring: true, synthetic: true,
   };
@@ -244,11 +244,11 @@ function nextPeriodAfter(period: string): string {
 export function issueInvoice(state: DomainState, ctx: Context, input: { period?: unknown }): TypedRecord<"invoices"> {
   const now = ctx.now;
   const period = input.period ? String(input.period) : previousMonth(now);
-  if (!/^\d{4}-\d{2}$/.test(period) || Number.isNaN(Date.parse(`${period}-01T00:00:00Z`))) throw new Error("data.period must be a calendar month as YYYY-MM.");
+  if (!/^\d{4}-\d{2}$/.test(period) || Number.isNaN(Date.parse(`${period}-01T00:00:00Z`))) throw new Error("Enter the billing month as YYYY-MM, for example 2026-09.");
   if (period > monthOf(now)) throw new Error("An invoice cannot be issued for a future period.");
   const existing = issuedInvoices(state);
   const duplicate = existing.find((invoice) => invoice.data.period === period);
-  if (duplicate) throw new Error(`Invoice ${duplicate.reference} for ${period} is already issued; a correction is an adjustment line on the next invoice (BIL-07).`);
+  if (duplicate) throw new Error(`Invoice ${duplicate.reference} has already been issued for ${period}. Any correction will appear on the next invoice.`);
   const latest = existing.at(-1);
   if (latest && String(latest.data.period) > period) throw new Error(`Invoices are issued in period order; ${latest.reference} already covers ${latest.data.period}.`);
   const end = Date.parse(periodEnd(period));

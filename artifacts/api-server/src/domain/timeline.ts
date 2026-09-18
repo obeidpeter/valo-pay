@@ -12,7 +12,7 @@ export function customerTimeline(state: DomainState, id: string) {
   const { obligationsKobo, allocatedKobo, outstandingKobo, unallocatedKobo } = positionFor(state, id);
   return {
     customer,
-    position: { obligationsKobo, allocatedKobo, outstandingKobo, unallocatedKobo, note: "Derived obligations and payment evidence, not funds held by Valo Pay." },
+    position: { obligationsKobo, allocatedKobo, outstandingKobo, unallocatedKobo, note: "Calculated from instalments and payment records. Valo Pay does not hold these funds." },
     events: related.sort((a, b) => b.createdAt.localeCompare(a.createdAt)), mandates: related.filter((record) => record.kind === "mandates"), dueItems, payments,
   };
 }

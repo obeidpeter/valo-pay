@@ -35,8 +35,8 @@ export default function SettingsPage() {
 
   const killSwitch = usePerformAction({
     mutation: {
-      onSuccess: (data) => { refetch(); notifyDone('Kill switch updated', data.message); },
-      onError: (err: unknown) => notifyProblem('The kill switch was not changed', saidBy(err, 'The change was refused.'))
+      onSuccess: (data) => { refetch(); notifyDone('Emergency stop updated', data.message); },
+      onError: (err: unknown) => notifyProblem('The emergency stop was not changed', saidBy(err, 'The change was refused.'))
     }
   });
 
@@ -65,7 +65,12 @@ export default function SettingsPage() {
   const rejectExec = (err: any) => {
     const message = String(err?.data?.error || err?.message || 'The change was not saved.');
     const key = execKeys.find(candidate => message.startsWith(candidate));
-    setExecErrors(key ? { [key]: message } : {});
+    const fieldMessages = {
+      closeTime: 'Enter the close time as HH:MM in West Africa Time, for example 07:00.',
+      unallocatedAlertThreshold: 'Enter a whole number, 0 or more.',
+      notificationCostAlertKobo: 'Enter a whole number, 0 or more.',
+    };
+    setExecErrors(key ? { [key]: fieldMessages[key] } : {});
     setExecAlert(key ? 'The settings were not saved. Check the field marked below.' : message);
     if (key) focusField(`settings-${key}`);
   };
@@ -94,21 +99,21 @@ export default function SettingsPage() {
   return (
     <div className="space-y-8 max-w-4xl mx-auto">
       <header>
-        <h1 className="text-3xl font-bold tracking-tight">Settings & Administration</h1>
-        <p className="text-muted-foreground mt-1">Manage workspace configuration and demo personas.</p>
+        <h1 className="text-3xl font-bold tracking-tight">Settings & administration</h1>
+        <p className="text-muted-foreground mt-1">Manage workspace settings and test access with demo roles.</p>
       </header>
 
       {/* Role Persona Switcher */}
       <section className="bg-card border rounded-xl shadow-sm p-6">
         <div className="flex items-center gap-2 mb-4">
           <Shield className="h-5 w-5 text-primary" />
-          <h2 className="font-semibold text-lg">Demo Persona</h2>
+          <h2 className="font-semibold text-lg">Demo role</h2>
         </div>
         <p className="text-sm text-muted-foreground mb-4">
-          Switch roles to test permissions and approval workflows. This is a synthetic sandbox feature only.
+          Switch demo roles to test permissions and approvals. This changes only your sandbox role; it does not grant real access. Live instructions are always blocked here.
         </p>
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
-          <label htmlFor="persona" className="sr-only">Persona</label>
+          <label htmlFor="persona" className="sr-only">Demo role</label>
           <select 
             id="persona"
             className="w-full sm:min-w-48 sm:max-w-xs sm:flex-1 bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -125,9 +130,9 @@ export default function SettingsPage() {
             onClick={() => updateRole.mutate({ data: { action: 'set_role', data: { role } }, params: { merchantId } })}
             disabled={role === workspace?.role}
             busy={updateRole.isPending}
-            busyLabel="Switching persona…"
+            busyLabel="Switching role…"
           >
-            Apply Persona
+            Switch role
           </Button>
           
           <Button
@@ -137,12 +142,12 @@ export default function SettingsPage() {
             busy={requestInstruction.isPending}
             busyLabel="Requesting…"
           >
-            Request Live Instruction
+            Test live-instruction block
           </Button>
         </div>
       </section>
 
-      {/* Execution Settings */}
+      {/* Collection settings */}
       {isLoading ? (
         <Loading what="settings" className="bg-card border rounded-xl" />
       ) : settings ? (
@@ -150,7 +155,7 @@ export default function SettingsPage() {
           <div className="p-4 border-b bg-secondary/20 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <SettingsIcon className="h-5 w-5 text-primary" />
-              <h2 className="font-semibold text-lg">Execution Settings</h2>
+              <h2 className="font-semibold text-lg">Collection settings</h2>
             </div>
             {!isEditingExec ? (
               <Button size="sm" variant="outline" onClick={startEditExec}>Edit</Button>
@@ -165,7 +170,7 @@ export default function SettingsPage() {
           <div className="p-6 space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 gap-6">
               <div>
-                <label htmlFor="settings-authorisationMode" className="text-sm font-medium block mb-1">Authorisation Mode</label>
+                <label htmlFor="settings-authorisationMode" className="text-sm font-medium block mb-1">Instruction approval</label>
                 {isEditingExec ? (
                   <select 
                     id="settings-authorisationMode"
@@ -173,25 +178,25 @@ export default function SettingsPage() {
                     value={execSettings.authorisationMode || authorisationModes[0]}
                     onChange={(e) => setExecSettings({...execSettings, authorisationMode: e.target.value})}
                   >
-                    {authorisationModes.map(mode => <option key={mode} value={mode}>{mode === 'batch' ? 'Batch approval (Finance or Admin releases the day)' : 'Standing authorisation (signed configuration)'}</option>)}
+                    {authorisationModes.map(mode => <option key={mode} value={mode}>{mode === 'batch' ? 'Batch approval — Finance or Admin approves daily instructions' : 'Standing authorisation — instructions follow signed settings'}</option>)}
                   </select>
                 ) : (
                   <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">
-                    {String(settings.settings?.authorisationMode || authorisationModes[0])}
+                    {settings.settings?.authorisationMode === 'standing' ? 'Standing authorisation — follows signed settings' : 'Batch approval — Finance or Admin approves each day'}
                   </div>
                 )}
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">Policy change needs fresh consent (RET-07)</label>
+                <label className="text-sm font-medium block mb-1">New consent for policy changes</label>
                 {isEditingExec ? (
-                  <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={execSettings.policyChangeRequiresConsent === true} onChange={(e) => setExecSettings({...execSettings, policyChangeRequiresConsent: e.target.checked})} /> The merchant's terms require fresh consent before a new policy version applies to a customer</label>
+                  <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={execSettings.policyChangeRequiresConsent === true} onChange={(e) => setExecSettings({...execSettings, policyChangeRequiresConsent: e.target.checked})} /> The lender's terms require new consent before a changed policy applies to a customer</label>
                 ) : (
-                  <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">{settings.settings?.policyChangeRequiresConsent === true ? 'Yes: notice and fresh consent' : 'No: notice only'}</div>
+                  <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">{settings.settings?.policyChangeRequiresConsent === true ? 'Required: notice and new consent' : 'Not required: notice still needed'}</div>
                 )}
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 xl:grid-cols-2 gap-4">
                 <div>
-                  <label htmlFor="settings-unallocatedAlertThreshold" className="text-sm font-medium block mb-1">Unallocated alert threshold (Payments older than 24h)</label>
+                  <label htmlFor="settings-unallocatedAlertThreshold" className="text-sm font-medium block mb-1">Alert threshold: unmatched payments over 24 hours old</label>
                   {isEditingExec ? (
                     <><input id="settings-unallocatedAlertThreshold" {...invalidProps('settings-unallocatedAlertThreshold', execErrors.unallocatedAlertThreshold)} type="number" min={0} className="w-full bg-background border rounded-md px-3 py-2 text-sm" value={execSettings.unallocatedAlertThreshold ?? 10} onChange={(e) => setExecSettings({...execSettings, unallocatedAlertThreshold: Number(e.target.value)})} />
                     <FieldError id="settings-unallocatedAlertThreshold" message={execErrors.unallocatedAlertThreshold} /></>
@@ -211,7 +216,7 @@ export default function SettingsPage() {
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 xl:grid-cols-2 gap-4">
                 <div>
-                  <label htmlFor="settings-closeTime" className="text-sm font-medium block mb-1">Daily close time (WAT, HH:MM, REC-01)</label>
+                  <label htmlFor="settings-closeTime" className="text-sm font-medium block mb-1">Daily close time (HH:MM, West Africa Time)</label>
                   {isEditingExec ? (
                     <><input id="settings-closeTime" {...invalidProps('settings-closeTime', execErrors.closeTime)} type="text" inputMode="numeric" placeholder={closeRules.defaultTime} className="w-full bg-background border rounded-md px-3 py-2 text-sm font-mono" value={execSettings.closeTime ?? closeRules.defaultTime} onChange={(e) => setExecSettings({...execSettings, closeTime: e.target.value})} />
                     <FieldError id="settings-closeTime" message={execErrors.closeTime} /></>
@@ -222,14 +227,14 @@ export default function SettingsPage() {
                 <div>
                   <label className="text-sm font-medium block mb-1">Automatic daily close</label>
                   {isEditingExec ? (
-                    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={execSettings.scheduledCloseEnabled !== false} onChange={(e) => setExecSettings({...execSettings, scheduledCloseEnabled: e.target.checked})} /> Run the close at that time every day; a close missed while the platform was down runs on recovery</label>
+                    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={execSettings.scheduledCloseEnabled !== false} onChange={(e) => setExecSettings({...execSettings, scheduledCloseEnabled: e.target.checked})} /> Close at this time every day. The service runs missed closes when it recovers.</label>
                   ) : (
-                    <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">{settings.settings?.scheduledCloseEnabled === false ? 'Off: closes are triggered by hand' : `On · next ${settings.settings?.nextCloseAt ? formatDate(String(settings.settings.nextCloseAt)) : 'at the configured time'}`}</div>
+                    <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">{settings.settings?.scheduledCloseEnabled === false ? 'Off: run daily closes manually' : `On · next ${settings.settings?.nextCloseAt ? formatDate(String(settings.settings.nextCloseAt)) : 'at the configured time'}`}</div>
                   )}
                 </div>
               </div>
               <div>
-                <label htmlFor="settings-contactRoute" className="text-sm font-medium block mb-1">Contact Route (shown in every customer notice)</label>
+                <label htmlFor="settings-contactRoute" className="text-sm font-medium block mb-1">Lender contact details for customer notices</label>
                 {isEditingExec ? (
                   <input 
                     id="settings-contactRoute"
@@ -245,7 +250,7 @@ export default function SettingsPage() {
                 )}
               </div>
               <div>
-                <label htmlFor="settings-executionWindowStart" className="text-sm font-medium block mb-1">Execution Window Start (WAT hour, {executionWindow.earliestHour}–{executionWindow.latestHour})</label>
+                <label htmlFor="settings-executionWindowStart" className="text-sm font-medium block mb-1">Collection window starts (WAT hour, {executionWindow.earliestHour}–{executionWindow.latestHour})</label>
                 {isEditingExec ? (
                   <input 
                     id="settings-executionWindowStart"
@@ -263,7 +268,7 @@ export default function SettingsPage() {
                 )}
               </div>
               <div>
-                <label htmlFor="settings-executionWindowEnd" className="text-sm font-medium block mb-1">Execution Window End (WAT hour, up to {executionWindow.latestHour})</label>
+                <label htmlFor="settings-executionWindowEnd" className="text-sm font-medium block mb-1">Collection window ends (WAT hour, up to {executionWindow.latestHour})</label>
                 {isEditingExec ? (
                   <input 
                     id="settings-executionWindowEnd"
@@ -284,21 +289,21 @@ export default function SettingsPage() {
             
             <div className="pt-4 border-t">
               <h3 className="font-medium mb-4 text-destructive flex items-center gap-2">
-                <PowerOff className="h-4 w-4" /> Emergency Controls
+                <PowerOff className="h-4 w-4" /> Emergency controls
               </h3>
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
                 <div className="min-w-0 flex-1">
-                  <label htmlFor="kill-reason" className="text-sm font-medium block mb-1">Reason for the switch</label>
+                  <label htmlFor="kill-reason" className="text-sm font-medium block mb-1">Reason for changing the emergency stop</label>
                   <input 
                     id="kill-reason"
                     type="text" 
-                    placeholder="Reason for toggle..."
+                    placeholder="Explain why you are turning the stop on or off"
                     aria-describedby="kill-reason-help"
                     value={killReason}
                     onChange={(e) => setKillReason(e.target.value)}
                     className="w-full bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   />
-                  <p id="kill-reason-help" className="mt-1 text-xs text-muted-foreground">A reason is required; it is recorded in the audit log with the switch.</p>
+                  <p id="kill-reason-help" className="mt-1 text-xs text-muted-foreground">Enter a reason. The change and your reason will be recorded in the audit log.</p>
                 </div>
                 <div className="flex flex-col gap-2 sm:flex-row">
                 <Button 
@@ -308,20 +313,20 @@ export default function SettingsPage() {
                   busy={killSwitch.isPending}
                   busyLabel={settings.merchant.killSwitch ? 'Deactivating…' : 'Activating…'}
                 >
-                  {settings.merchant.killSwitch ? 'Deactivate Kill Switch' : 'Activate Kill Switch'}
+                  {settings.merchant.killSwitch ? 'Turn off emergency stop' : 'Activate emergency stop'}
                 </Button>
                 
                 <Button 
                   variant="outline"
                    onClick={() => setIsHandBackOpen(true)}
                 >
-                  Hand Back Portfolios
+                  Return collection ownership
                 </Button>
                 </div>
               </div>
               {settings.merchant.killSwitch && (
                 <p className="text-xs text-destructive mt-2 flex items-center gap-1 font-bold">
-                  <AlertTriangle className="h-3 w-3" /> SYSTEM HALTED. NO OUTBOUND INSTRUCTIONS PERMITTED.
+                  <AlertTriangle className="h-3 w-3" /> Emergency stop active. No instructions can be sent to a provider or bank.
                 </p>
               )}
             </div>
@@ -332,7 +337,7 @@ export default function SettingsPage() {
         kind="cutovers"
         isOpen={isHandBackOpen}
         onOpenChange={setIsHandBackOpen}
-        title="Hand back portfolios"
+        title="Return collection ownership"
         actionMutation="hand_back"
         fields={[]}
       />
@@ -341,7 +346,7 @@ export default function SettingsPage() {
           workspace setting, so it needs no account and no request (Nielsen 3: control; 7: personalisation). */}
       <section className="bg-card border rounded-xl shadow-sm p-6 print:hidden" aria-labelledby="appearance-title">
         <h2 id="appearance-title" className="font-semibold text-lg">Appearance</h2>
-        <p className="text-sm text-muted-foreground mt-1">Light or dark, for this browser only. It is not a workspace setting, so each person and each device keeps its own.</p>
+        <p className="text-sm text-muted-foreground mt-1">Choose a theme for this browser. Other users and devices keep their own choice.</p>
         <fieldset className="mt-4">
           <legend className="text-sm font-medium">Theme</legend>
           <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:gap-6">
@@ -362,7 +367,7 @@ export default function SettingsPage() {
       <section className="bg-card border rounded-xl shadow-sm overflow-hidden print:hidden" aria-labelledby="keyboard-title">
         <div className="p-4 border-b bg-secondary/20">
           <h2 id="keyboard-title" className="font-semibold text-lg">Keyboard</h2>
-          <p className="text-sm text-muted-foreground mt-1">Everything in the console works without a mouse. These keys save steps.</p>
+          <p className="text-sm text-muted-foreground mt-1">Use these shortcuts to move around the console without a mouse.</p>
         </div>
         <dl className="divide-y">
           {keyboardShortcuts.map(shortcut => (

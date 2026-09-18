@@ -14,7 +14,7 @@ import { ZodError } from "zod";
  */
 const programmingErrors = [TypeError, RangeError, ReferenceError, SyntaxError, URIError, EvalError];
 const databaseCodes = ["23503", "23505", "23514", "P0001"];
-const GENERAL_FAILURE = "The operation could not be completed. No partial change has been committed.";
+const GENERAL_FAILURE = "We could not complete this action. No changes were saved. Try again.";
 
 export const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
   if (res.headersSent) return;
@@ -34,7 +34,7 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
   const failure = error as Error & { code?: string; status?: number };
   if (failure.code && databaseCodes.includes(failure.code)) {
     req.log.warn({ event: "request.rejected", status: 409, code: failure.code }, "Database safety constraint rejected operation");
-    res.status(409).json({ error: "Operation conflicts with an existing record, immutable evidence or allocation limit.", requestId });
+    res.status(409).json({ error: "This change conflicts with an existing record, protected evidence or an allocation limit. Refresh the record and check the details before trying again.", requestId });
     return;
   }
   if (failure.code || (failure.status ?? 0) >= 500) {

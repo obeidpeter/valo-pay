@@ -10,23 +10,23 @@ describe("not found", () => {
   it("answers an address the console has no page for, without creating a sandbox", async () => {
     const user = userEvent.setup();
     renderApp("/reportz");
-    expect(await screen.findByRole("heading", { level: 1, name: "There is no page at this address" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "Page not found" })).toBeTruthy();
     expect(screen.getByText("/reportz")).toBeTruthy();
     await waitFor(() => expect(document.title).toBe("Page not found · Valo Pay"));
-    expect(screen.getByRole("link", { name: "Go to the overview" }).getAttribute("href")).toBe("/overview");
-    expect(screen.getAllByRole("link", { name: "Back to the start" }).map((link) => link.getAttribute("href"))).toEqual(["/", "/"]);
+    expect(screen.getByRole("link", { name: "Go to overview" }).getAttribute("href")).toBe("/overview");
+    expect(screen.getAllByRole("link", { name: "Back to home" }).map((link) => link.getAttribute("href"))).toEqual(["/", "/"]);
     // No sidebar and no workspace request: the console was never mounted.
-    expect(screen.queryByRole("link", { name: /Audit Log/ })).toBeNull();
+    expect(screen.queryByRole("link", { name: /Audit log/ })).toBeNull();
     expect(api.calls).toEqual([]);
 
-    await user.click(screen.getByRole("link", { name: "Go to the overview" }));
-    expect(await screen.findByRole("heading", { name: "Operations Overview" })).toBeTruthy();
+    await user.click(screen.getByRole("link", { name: "Go to overview" }));
+    expect(await screen.findByRole("heading", { name: "Operations overview" })).toBeTruthy();
     expect(api.calls.some((call) => call.path === "/v1/workspace")).toBe(true);
   });
 
   it("treats an address below a known page the same way", async () => {
     renderApp("/customers/abc/def");
-    expect(await screen.findByRole("heading", { level: 1, name: "There is no page at this address" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "Page not found" })).toBeTruthy();
     expect(api.calls).toEqual([]);
   });
 });
