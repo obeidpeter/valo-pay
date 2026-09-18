@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow, EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
+import { DailyCloseStatus } from '@/components/daily-close-status';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetReports, usePerformAction, getGetReportsQueryKey, useCreateExport, useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { BarChart3, Download, FileText, CheckSquare, RefreshCcw, ChevronDown } from 'lucide-react';
@@ -91,13 +92,7 @@ function renderValue(key: string, value: unknown): string {
 }
 
 /** REC-01: the schedule block on a close record and the schedule view in the operational report, typed from free-form data. */
-interface CloseScheduleView { time: string; enabled: boolean; nextAt: string; missed: boolean; overdueMinutes: number }
 interface CloseTriggerView { trigger: string; late: boolean; delayMinutes: number | null; scheduledFor: string | null }
-function scheduleView(value: unknown): CloseScheduleView | null {
-  if (!value || typeof value !== 'object') return null;
-  const raw = value as Record<string, unknown>;
-  return { time: String(raw.time ?? ''), enabled: raw.enabled !== false, nextAt: String(raw.nextAt ?? ''), missed: raw.missed === true, overdueMinutes: Number(raw.overdueMinutes ?? 0) };
-}
 function triggerView(value: unknown): CloseTriggerView | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as Record<string, unknown>;
@@ -116,7 +111,7 @@ export default function ReportsPage() {
 
   const { data: reports, isLoading, error: reportsError, isFetching: fetchingReports, refetch } = useGetReports(
     { merchantId: merchantId! },
-    { query: { enabled: !!merchantId, queryKey: getGetReportsQueryKey({ merchantId: merchantId! }) } }
+    { query: { enabled: !!merchantId, refetchInterval: 60_000, queryKey: getGetReportsQueryKey({ merchantId: merchantId! }) } }
   );
   useHashTarget('daily-closes', !!merchantId && !!reports && !isLoading && !reportsError);
 
@@ -441,19 +436,7 @@ export default function ReportsPage() {
                 <CheckSquare aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
                 <h2 className="font-semibold">Daily close records</h2>
               </div>
-              {(() => {
-                const schedule = scheduleView(reports.operational?.closeSchedule);
-                if (!schedule) return null;
-                return (
-                  <p className={`text-xs ${schedule.missed ? 'text-destructive font-medium' : 'text-muted-foreground'}`}>
-                    {!schedule.enabled
-                      ? 'Automatic daily close is off. Run closes manually.'
-                      : schedule.missed
-                        ? `Scheduled close at ${schedule.time} WAT missed: ${formatCount(schedule.overdueMinutes, 'minute')} past its time.`
-                        : `Next daily close: ${formatDate(schedule.nextAt)}, then every day at this time.`}
-                  </p>
-                );
-              })()}
+              <DailyCloseStatus value={reports.operational?.closeSchedule} showHistory />
             </div>
             <ScrollFrame label="Daily close records" className="overflow-x-auto max-h-[400px]">
               <table className="w-full text-sm text-left">
@@ -466,7 +449,7 @@ export default function ReportsPage() {
                 </thead>
                 <tbody className="divide-y">
                   {reports.closes.length === 0 ? (
-                    <EmptyRow colSpan={3} title="No daily close yet">Run a daily close above or wait for the scheduled time. Each close creates a record with its results here.</EmptyRow>
+                    <EmptyRow colSpan={3} title="No daily close yet">Run a daily close above to check the books. Each completed close creates a record with its results here.</EmptyRow>
                   ) : (
                     reports.closes.map(close => (
                       <tr key={close.id} className="hover:bg-secondary/10">

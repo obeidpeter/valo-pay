@@ -2,12 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { keyboardShortcuts } from '@/lib/focus';
 import { themeChoices, useTheme } from '@/lib/theme';
 import { Loading } from '@/components/loading';
+import { DailyCloseStatus } from '@/components/daily-close-status';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetSettings, useUpdateSettings, usePerformAction, getGetSettingsQueryKey } from '@workspace/api-client-react';
 import { Settings as SettingsIcon, Shield, PowerOff, AlertTriangle } from 'lucide-react';
 import { authorisationModes, closeRules, executionWindow, isCloseTime } from '@workspace/valopay-schema';
 import { FieldError, FormAlert, focusField, invalidProps } from '@/components/form-field';
-import { formatDate, formatKobo } from '@/lib/formatters';
+import { formatKobo } from '@/lib/formatters';
 import { koboToNaira, nairaToKobo } from '@/lib/money-input';
 import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
 import { Button } from '@/components/ui/button';
@@ -26,7 +27,7 @@ export default function SettingsPage() {
   
   const { data: settings, isLoading, error: settingsError, isFetching: fetchingSettings, refetch } = useGetSettings(
     { merchantId: merchantId! },
-    { query: { enabled: !!merchantId, queryKey: getGetSettingsQueryKey({ merchantId: merchantId! }) } }
+    { query: { enabled: !!merchantId, refetchInterval: 60_000, queryKey: getGetSettingsQueryKey({ merchantId: merchantId! }) } }
   );
 
   const updateRole = usePerformAction({
@@ -246,9 +247,9 @@ export default function SettingsPage() {
                 <div>
                   <label className="text-sm font-medium block mb-1">Automatic daily close</label>
                   {isEditingExec ? (
-                    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={execSettings.scheduledCloseEnabled !== false} onChange={(e) => setExecSettings({...execSettings, scheduledCloseEnabled: e.target.checked})} /> Close at this time every day. The service runs missed closes when it recovers.</label>
+                    <div className="space-y-2"><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={execSettings.scheduledCloseEnabled !== false} onChange={(e) => setExecSettings({...execSettings, scheduledCloseEnabled: e.target.checked})} /> Request an automatic close at this time every day.</label><p className="text-xs text-muted-foreground">This preference takes effect while the automatic close service is running. Saving it does not start the service. Missed closes run after the service recovers.</p><DailyCloseStatus value={settings.closeSchedule} /></div>
                   ) : (
-                    <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">{settings.settings?.scheduledCloseEnabled === false ? 'Off: run daily closes manually' : `On · next ${settings.settings?.nextCloseAt ? formatDate(String(settings.settings.nextCloseAt)) : 'at the configured time'}`}</div>
+                    <div className="p-3 bg-secondary/50 rounded border"><DailyCloseStatus value={settings.closeSchedule} showHistory /></div>
                   )}
                 </div>
               </div>

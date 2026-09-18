@@ -7,11 +7,16 @@ import { useGetCustomerTimeline, getGetCustomerTimelineQueryKey, useCreateExport
 import { formatKobo, formatDate, formatCompactDate, formatCount } from '@/lib/formatters';
 import { ArrowLeft, Clock, FileText, CheckCircle, AlertTriangle, Download } from 'lucide-react';
 import { CustomerAvatar, StatusBadge, readableLabel } from '@/components/record-label';
-import { Link, useParams } from 'wouter';
+import { Link, useParams, useSearch } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
 import { LookedFor } from '@/components/notice';
 import { NotFoundNotice } from '@/pages/not-found';
+import { LoadProblem } from '@/components/load-problem';
+import { RecordPagination } from '@/components/record-pagination';
+import { useRecordPagination } from '@/lib/use-record-pagination';
+import { safeCollectionReturnTo } from '@/lib/record-navigation';
+import { useHashTarget } from '@/lib/use-hash-target';
 
 const watStamp = (iso: unknown) => typeof iso === 'string' && Number.isFinite(Date.parse(iso)) ? formatDate(iso) : 'not recorded';
 
@@ -39,13 +44,24 @@ function MissingCustomer({ id }: { id: string }) {
 
 export default function CustomerTimelinePage() {
   const { id } = useParams();
-  const { merchantId } = useWorkspace();
+  const { merchantId, workspace } = useWorkspace();
+  const search = new URLSearchParams(useSearch());
+  const sameLender = !search.get('lender') || search.get('lender') === merchantId;
+  const requestedRecord = sameLender ? search.get('record') : null;
+  const returnTo = safeCollectionReturnTo(search.get('returnTo'), merchantId);
 
-  const { data: timeline, isLoading, error } = useGetCustomerTimeline(
+  const { data: timeline, isLoading, isFetching, error, refetch } = useGetCustomerTimeline(
     id!,
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId && !!id, queryKey: getGetCustomerTimelineQueryKey(id!, { merchantId: merchantId! }) } }
   );
+  const pageKey = `${merchantId}:${id}`;
+  const historyPage = useRecordPagination(pageKey, timeline?.events.length);
+  const mandatePage = useRecordPagination(pageKey, timeline?.mandates.length);
+  const duePage = useRecordPagination(pageKey, timeline?.dueItems.length);
+  const paymentPage = useRecordPagination(pageKey, timeline?.payments.length);
+  const focusedRecord = timeline?.events.find(event => event.id === requestedRecord);
+  useHashTarget(`record-${requestedRecord}`, !!focusedRecord && !error);
 
   const createExport = useCreateExport({
     mutation: {
@@ -65,17 +81,18 @@ export default function CustomerTimelinePage() {
   const generating = (format: 'pdf' | 'csv' | 'json') => createExport.isPending && createExport.variables?.data.format === format;
 
   if (!merchantId) return null;
+  if (!sameLender) return <NotFoundNotice title="Choose the linked lender" primary={{ href: '/collections', label: 'Go to collections' }} secondary={{ href: '/customers', label: 'Go to customers' }}><p>This link belongs to {workspace?.merchants.find(merchant => merchant.id === search.get('lender'))?.name || 'another lender'}. Select that lender using the lender menu to review this customer.</p></NotFoundNotice>;
   if (isLoading) return <Loading what="the customer history" />;
   if ((error as { status?: number } | null)?.status === 404) return <MissingCustomer id={String(id)} />;
-  if (error || !timeline) return <div role="alert" className="p-8 text-center text-destructive">Customer history could not be loaded. Reload the page to try again.</div>;
+  if (error || !timeline) return <LoadProblem what="customer history" error={error} retry={() => { void refetch(); }} busy={isFetching} />;
 
   const { customer, position, events, mandates, dueItems, payments } = timeline;
 
   return (
     <div className="space-y-6">
       <div>
-        <Link href="/customers" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4 print:hidden">
-          <ArrowLeft className="h-4 w-4" /> Back to customers
+        <Link href={returnTo || '/customers'} className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4 print:hidden">
+          <ArrowLeft className="h-4 w-4" /> {returnTo ? 'Back to collections' : 'Back to customers'}
         </Link>
         <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-6">
           <div className="min-w-0 flex-1">
@@ -129,6 +146,17 @@ export default function CustomerTimelinePage() {
         </div>
       </div>
 
+      {requestedRecord && <section id={`record-${requestedRecord}`} tabIndex={-1} aria-label="Selected collection record" className="scroll-mt-6 rounded-xl border border-primary/30 bg-secondary/30 p-5">
+        <h2 className="font-semibold">{focusedRecord ? `Selected ${readableLabel(focusedRecord.kind).toLowerCase()}` : 'Collection record unavailable'}</h2>
+        {focusedRecord ? <>
+          <p className="mt-2 font-medium">{focusedRecord.name} · {focusedRecord.reference}</p>
+          <p className="mt-1 text-sm">{formatKobo(focusedRecord.amountKobo)} · {readableLabel(focusedRecord.status)} · {formatDate(focusedRecord.createdAt)}</p>
+          {focusedRecord.data?.failureCode ? <p className="mt-2 text-sm">Failure reason: {readableLabel(focusedRecord.data.failureCode)}</p> : null}
+          {focusedRecord.kind === 'due-items' && <p className="mt-2 text-sm">Outstanding: {formatKobo(Number(focusedRecord.data?.outstandingKobo ?? focusedRecord.amountKobo))} · Due: {watStamp(focusedRecord.data?.dueDate)}</p>}
+          <p className="mt-2 text-xs text-muted-foreground">Review the customer's records below before deciding the next step.</p>
+        </> : <p className="mt-2 text-sm">This record was not found in this customer's history. Return to Collections and refresh the queue.</p>}
+      </section>}
+
       <div className="grid grid-cols-1 xl:grid-cols-5 gap-6 items-start">
         <div className="xl:col-span-2 space-y-6">
           {/* Active Mandates */}
@@ -141,7 +169,7 @@ export default function CustomerTimelinePage() {
               {mandates.length === 0 ? (
                 <EmptyState title="No mandates for this customer">A mandate is a customer's permission to collect by direct debit. Linked mandates appear here after they are created or imported.</EmptyState>
               ) : (
-                mandates.map(mandate => (
+                mandates.slice(mandatePage.offset, mandatePage.offset + mandatePage.pageSize).map(mandate => (
                   <div key={mandate.id} className="p-4">
                     <div className="flex justify-between items-start mb-2">
                       <div>
@@ -154,6 +182,7 @@ export default function CustomerTimelinePage() {
                 ))
               )}
             </div>
+            {mandates.length > 25 && <RecordPagination pagination={mandatePage} total={mandates.length} label="customer mandates" />}
           </section>
 
           {/* Due Items & Payments */}
@@ -167,7 +196,7 @@ export default function CustomerTimelinePage() {
                 {dueItems.length === 0 ? (
                   <EmptyState title="No instalments recorded">Import this customer's instalments from the Collections page to see their amounts and due dates here.</EmptyState>
                 ) : (
-                  dueItems.map(item => (
+                  dueItems.slice(duePage.offset, duePage.offset + duePage.pageSize).map(item => (
                     <div key={item.id} className="p-4">
                       <div className="flex justify-between items-baseline mb-1">
                         <span className="font-mono text-sm">{item.reference}</span>
@@ -181,6 +210,7 @@ export default function CustomerTimelinePage() {
                   ))
                 )}
               </div>
+              {dueItems.length > 25 && <RecordPagination pagination={duePage} total={dueItems.length} label="customer instalments" />}
             </section>
 
             <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
@@ -192,7 +222,7 @@ export default function CustomerTimelinePage() {
                 {payments.length === 0 ? (
                   <EmptyState title="No payments recorded">Payment records appear here when they are linked to this customer.</EmptyState>
                 ) : (
-                  payments.map(payment => (
+                  payments.slice(paymentPage.offset, paymentPage.offset + paymentPage.pageSize).map(payment => (
                     <div key={payment.id} className="p-4">
                       <div className="flex justify-between items-baseline mb-1">
                         <span className="font-mono text-sm">{payment.reference}</span>
@@ -206,6 +236,7 @@ export default function CustomerTimelinePage() {
                   ))
                 )}
               </div>
+              {payments.length > 25 && <RecordPagination pagination={paymentPage} total={payments.length} label="customer payments" />}
             </section>
           </div>
         </div>
@@ -224,7 +255,7 @@ export default function CustomerTimelinePage() {
               <EmptyState title="No events recorded yet" className="px-0">Consent, mandate changes, attempts, notices and payments are recorded here as they happen.</EmptyState>
             ) : (
               <ol className="relative border-l border-border ml-2 space-y-7">
-                {events.map(event => (
+                {events.slice(historyPage.offset, historyPage.offset + historyPage.pageSize).map(event => (
                   <li key={event.id} className="relative pl-6">
                     <span aria-hidden="true" className="absolute -left-[5px] top-1 h-2.5 w-2.5 rounded-full bg-brand ring-4 ring-card" />
                     <div className="flex flex-col items-start">
@@ -243,6 +274,7 @@ export default function CustomerTimelinePage() {
               </ol>
             )}
           </ScrollFrame>
+          {events.length > 25 && <RecordPagination pagination={historyPage} total={events.length} label="history events" />}
         </div>
       </div>
     </div>

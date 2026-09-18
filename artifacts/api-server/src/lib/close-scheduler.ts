@@ -27,11 +27,13 @@ export interface SchedulerStatus {
   intervalMs: number | null;
   ticks: number;
   lastTickAt: string | null;
+  lastSuccessAt: string | null;
+  lastErrorAt: string | null;
   lastRun: { runId: string; at: string; durationMs: number; initialised: number; examined: number; closed: number; skipped: number; failed: number } | null;
 }
-const status: SchedulerStatus = { state: "not_started", intervalMs: null, ticks: 0, lastTickAt: null, lastRun: null };
+const status: SchedulerStatus = { state: "not_started", intervalMs: null, ticks: 0, lastTickAt: null, lastSuccessAt: null, lastErrorAt: null, lastRun: null };
 /** A copy of the scheduler's state, for the health answer. */
-export function schedulerStatus(): SchedulerStatus { return structuredClone(status); }
+export function schedulerStatus(): SchedulerStatus & { observedAt: string } { return { ...structuredClone(status), observedAt: new Date().toISOString() }; }
 /** Recorded when the process is told not to schedule closes (VALOPAY_CLOSE_SCHEDULER=off), so the health answer says so. */
 export function markSchedulerOff(): void { status.state = "off"; }
 /** What one scheduler pass did. */
@@ -107,10 +109,12 @@ export function startCloseScheduler(options: { intervalMs?: number; firstDelayMs
     const started = Date.now();
     running = runDueCloses(options)
       .then((run) => {
+        status.lastSuccessAt = new Date().toISOString();
+        status.lastErrorAt = null;
         if (run.examined || run.failed.length) status.lastRun = { runId: run.runId, at: new Date().toISOString(), durationMs: Date.now() - started, initialised: run.initialised, examined: run.examined, closed: run.closed.length, skipped: run.skipped.length, failed: run.failed.length };
         return run;
       })
-      .catch((error: unknown) => { options.log?.error({ event: "close.tick_failed", err: error }, "scheduled close tick failed"); return null; })
+      .catch((error: unknown) => { status.lastErrorAt = new Date().toISOString(); options.log?.error({ event: "close.tick_failed", err: error }, "scheduled close tick failed"); return null; })
       .finally(() => { running = null; });
     return running;
   };

@@ -12,12 +12,14 @@ import {
   ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, isCloseTime,
   nextCloseInstant, recordKinds, roles,
 } from "@workspace/valopay-schema";
-import { buildAlerts, buildOverview, buildReports, customerTimeline, executeAction, makeRecord, rescheduleAfterSettings, validateRecord } from "../../api-server/src/domain";
+import { customerTimeline, executeAction, makeRecord, rescheduleAfterSettings, validateRecord } from "../../api-server/src/domain";
 import { enrolEligibleFailures } from "../../api-server/src/domain/policy-engine";
 import type { Context, DomainState, ValopayRecord } from "../../api-server/src/domain/types";
 import { seedMerchant } from "../../api-server/src/lib/valopay-seed";
-import { getGates, getSettings } from "../../api-server/src/lib/valopay-readiness";
+import { getGates } from "../../api-server/src/lib/valopay-readiness";
 import { pageRecords } from "../../api-server/src/lib/valopay-list";
+import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../../api-server/src/lib/valopay-close-views";
+import type { CloseRuntime } from "../../api-server/src/domain/effective-close-schedule";
 
 export interface FakeCall { method: string; path: string; query: Record<string, string>; body: unknown; status: number }
 export interface FakeApi {
@@ -27,6 +29,7 @@ export interface FakeApi {
   role: string;
   /** The instant every request sees, fixed at install unless setNow is called. */
   now: string;
+  scheduler: CloseRuntime;
   calls: FakeCall[];
   /** The current state of a lender (the first by default); mutations replace it, so read it fresh. */
   state(merchantId?: string): DomainState;
@@ -86,9 +89,10 @@ export function installFakeApi(options: { now?: string; role?: string } = {}): F
   const holds: Array<{ pattern: RegExp; promise: Promise<void> }> = [];
   const api: FakeApi = {
     merchantIds: [], role: options.role ?? "Admin", now: options.now ?? new Date().toISOString(), calls: [],
+    scheduler: { state: 'running', intervalMs: 60_000, lastTickAt: options.now ?? new Date().toISOString(), lastSuccessAt: options.now ?? new Date().toISOString(), lastErrorAt: null },
     state(merchantId) { const id = merchantId ?? api.merchantIds[0]!; return states.get(id) ?? fail("Lender not found in this workspace.", 404); },
     mutate(fn, merchantId) { return withState(merchantId ?? api.merchantIds[0]!, fn, { action: "test.mutation", objectId: "workspace", summary: "Arranged by a console test" }); },
-    setNow(iso) { api.now = iso; },
+    setNow(iso) { api.now = iso; if (api.scheduler.state === 'running') { api.scheduler.lastTickAt = iso; api.scheduler.lastSuccessAt = iso; } },
     failNext(pattern, failure, method) { failures.push({ pattern, failure, method: method?.toUpperCase() }); },
     hold(pattern) {
       let release = (): void => { /* replaced by the promise's resolver */ };
@@ -130,7 +134,7 @@ export function installFakeApi(options: { now?: string; role?: string } = {}): F
       name: "Valo Pay", environment: "sandbox", actor: `Sandbox ${api.role}`, role: api.role, authenticated: false,
       merchants: api.merchantIds.map((id) => states.get(id)!.merchant), roles: [...roles], productionEnabled: false,
     })],
-    ["GET", /^\/v1\/overview$/, (_p, query) => S.GetOverviewResponse.parse(withState(merchantOf(query), (state, ctx) => buildOverview(state, ctx.now, buildAlerts(state, ctx.now, verifyAudit(state)))))],
+    ["GET", /^\/v1\/overview$/, (_p, query) => S.GetOverviewResponse.parse(withState(merchantOf(query), (state, ctx) => buildConsoleOverview(state, ctx.now, verifyAudit(state), api.scheduler)))],
     ["GET", /^\/v1\/records\/(?<kind>[^/]+)$/, (params, query) => {
       if (!kinds.has(params.kind!)) fail("Unknown resource.", 404);
       const parsed = S.ListRecordsQueryParams.parse(query);
@@ -186,9 +190,9 @@ export function installFakeApi(options: { now?: string; role?: string } = {}): F
       return S.PerformActionResponse.parse(withState(merchantId, (state, ctx) => executeAction(state, ctx, body), { action: body.action, objectId: body.recordId || "workspace", summary: body.reason || "Synthetic workspace operation" }));
     }],
     ["GET", /^\/v1\/customers\/(?<id>[^/]+)\/timeline$/, (params, query) => S.GetCustomerTimelineResponse.parse(withState(merchantOf(query), (state) => customerTimeline(state, params.id!)))],
-    ["GET", /^\/v1\/reports$/, (_p, query) => S.GetReportsResponse.parse(withState(merchantOf(query), (state, ctx) => buildReports(state, ctx.now)))],
+    ["GET", /^\/v1\/reports$/, (_p, query) => S.GetReportsResponse.parse(withState(merchantOf(query), (state, ctx) => buildConsoleReports(state, ctx.now, api.scheduler)))],
     ["GET", /^\/v1\/gates$/, (_p, query) => S.GetGatesResponse.parse(withState(merchantOf(query), (state) => getGates(state)))],
-    ["GET", /^\/v1\/settings$/, (_p, query) => S.GetSettingsResponse.parse(withState(merchantOf(query), (state, ctx) => getSettings(state, ctx.role)))],
+    ["GET", /^\/v1\/settings$/, (_p, query) => S.GetSettingsResponse.parse(withState(merchantOf(query), (state, ctx) => buildConsoleSettings(state, ctx.role, ctx.now, api.scheduler)))],
     ["PATCH", /^\/v1\/settings$/, (_p, query, raw) => {
       const body = S.UpdateSettingsBody.parse(raw);
       return S.UpdateSettingsResponse.parse(withState(merchantOf(query), (state, ctx) => {
@@ -203,7 +207,7 @@ export function installFakeApi(options: { now?: string; role?: string } = {}): F
         const previous = { time: closeTimeOf(state.settings), enabled: state.settings.scheduledCloseEnabled !== false };
         Object.assign(state.settings, body);
         rescheduleAfterSettings(state, previous, ctx.now);
-        return getSettings(state, ctx.role);
+        return buildConsoleSettings(state, ctx.role, ctx.now, api.scheduler);
       }, { action: "patch.settings", objectId: "workspace", summary: "Synthetic workspace operation" }));
     }],
     ["POST", /^\/v1\/exports$/, (_p, query, raw) => {

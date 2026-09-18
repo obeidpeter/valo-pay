@@ -11,8 +11,53 @@ import { buildAlerts } from "../src/domain/alerts.js";
 import { buildOverview, buildReports } from "../src/domain/reports.js";
 import { recordsOf } from "../src/domain/records.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
+import { effectiveCloseSchedule, type CloseRuntime } from "../src/domain/effective-close-schedule.js";
+import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../src/lib/valopay-close-views.js";
+import * as S from "@workspace/api-zod";
 
 let checks = 0;
+
+// The public API must reflect effective service state, not only the lender preference.
+{
+  const state = seedMerchant('effective-schedule');
+  const now = wat('2027-06-28T08:00:00');
+  state.settings.nextCloseAt = wat('2027-06-28T07:00:00');
+  const runtime: CloseRuntime = { state: 'off', intervalMs: null, lastTickAt: null, lastSuccessAt: null, lastErrorAt: null };
+  const audit = { valid: true, count: 0, headHash: 'GENESIS' };
+  for (const status of ['off', 'not_started', 'stopped'] as const) {
+    runtime.state = status;
+    const overview = S.GetOverviewResponse.parse(buildConsoleOverview(state, now, audit, runtime));
+    const reports = S.GetReportsResponse.parse(buildConsoleReports(state, now, runtime));
+    const settings = S.GetSettingsResponse.parse(buildConsoleSettings(state, 'Admin', now, runtime));
+    assert.equal(overview.nextClose, '', `${status}: no false upcoming automatic run`);
+    assert.equal(overview.closeSchedule?.automatic, false);
+    assert.equal(overview.closeSchedule?.runtimeState, status);
+    assert.equal((reports.operational.closeSchedule as any).nextAt, null);
+    assert.equal(settings.closeSchedule?.nextAt, null);
+    checks += 5;
+  }
+  runtime.state = 'running';
+  assert.equal(effectiveCloseSchedule(state, now, runtime).serviceIssue, 'starting'); checks++;
+  runtime.lastSuccessAt = now;
+  let view = effectiveCloseSchedule(state, now, runtime);
+  assert.equal(view.automatic, true); assert.equal(view.missed, true); assert.equal(view.nextAt, state.settings.nextCloseAt); checks += 3;
+  runtime.lastErrorAt = now;
+  view = effectiveCloseSchedule(state, now, runtime);
+  assert.equal(view.serviceIssue, 'failed'); assert.equal(view.nextAt, null); checks += 2;
+  runtime.lastErrorAt = null;
+  runtime.lastSuccessAt = wat('2027-06-28T07:00:00');
+  view = effectiveCloseSchedule(state, now, runtime);
+  assert.equal(view.serviceIssue, 'delayed'); assert.equal(view.automatic, false); checks += 2;
+  runtime.lastSuccessAt = now;
+  runtime.observedAt = now;
+  view = effectiveCloseSchedule(state, wat('2027-06-28T09:00:00'), runtime);
+  assert.equal(view.automatic, true, 'heartbeat freshness uses its process clock even when the database schedule clock is ahead');
+  assert.equal(view.overdueMinutes, 120, 'the due schedule still uses the database clock'); checks += 2;
+  delete runtime.observedAt;
+  state.settings.scheduledCloseEnabled = false;
+  view = effectiveCloseSchedule(state, now, runtime);
+  assert.equal(view.automatic, false); assert.equal(view.nextAt, null); assert.equal(view.missed, false); checks += 3;
+}
 const quietDeadlines = (state: ReturnType<typeof seedMerchant>) => { for (const exception of recordsOf(state, "exceptions")) exception.data.dueBy = "2028-01-01T00:00:00.000Z"; };
 
 // ---------- The schedule arithmetic: WAT wall clock, strictly after now ----------

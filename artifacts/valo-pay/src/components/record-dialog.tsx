@@ -1,4 +1,4 @@
-import React, { useState, useEffect, ReactNode } from 'react';
+import React, { useState, useEffect, useRef, ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { Button } from './ui/button';
@@ -54,6 +54,11 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
   const [result,setResult]=useState<any>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formErrors, setFormErrors] = useState<string[]>([]);
+  const session = useRef(0);
+  const request = useRef(0);
+  const currentScope = useRef('');
+  const scope = JSON.stringify([merchantId, kind, record?.id, actionMutation, actionRecordId, isOpen]);
+  currentScope.current = scope;
   const fieldId = (name: string) => `record-${name}`;
   /** The server names a field by its path in the body; a data field arrives as data.<name>. */
   const resolveField = (path: string): string | null => {
@@ -69,6 +74,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
   };
   
   useEffect(() => {
+    session.current += 1;
     if (isOpen) {
       setResult(null); setFieldErrors({}); setFormErrors([]);
       create.reset();update.reset();perform.reset();
@@ -86,22 +92,23 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
       });
       setFormData(initial);
     }
+    // Closing, changing records/lenders, or unmounting ends this form session.
+    return () => { session.current += 1; };
   // Initialise once per opening/record. Inline field arrays must not reset typing.
-  }, [isOpen, record?.id, kind, actionMutation]);
+  }, [isOpen, merchantId, record?.id, kind, actionMutation, actionRecordId]);
 
-  const create = useCreateRecord({ mutation: { onSuccess: () => { queryClient.invalidateQueries(); onOpenChange(false); }, onError: applyServerError } });
-  const update = useUpdateRecord({ mutation: { onSuccess: () => { queryClient.invalidateQueries(); onOpenChange(false); }, onError: applyServerError } });
-  const perform = usePerformAction({ mutation: { onSuccess: (response) => {
-    queryClient.invalidateQueries();
-    if(actionMutation==='backtest_policy')setResult(response);
-    else onOpenChange(false);
-  }, onError: applyServerError } });
+  // A completed write still refreshes data even when its original form is gone.
+  // Form feedback below is scoped separately, so it cannot affect a newer dialog.
+  const invalidateChangedData = () => { void queryClient.invalidateQueries(); };
+  const create = useCreateRecord({ mutation: { onSuccess: invalidateChangedData } });
+  const update = useUpdateRecord({ mutation: { onSuccess: invalidateChangedData } });
+  const perform = usePerformAction({ mutation: { onSuccess: invalidateChangedData } });
 
   const isPending = create.isPending || update.isPending || perform.isPending;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!merchantId) return;
+    if (!merchantId || isPending) return;
     // Every field is checked here first, so a missing value is named at the field and never costs a request.
     const errors: Record<string, string> = {};
     fields.forEach(f => {
@@ -136,24 +143,25 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
       }
     });
 
-    if (actionMutation) {
-      perform.mutate({
-        data: { action: actionMutation, recordId: actionRecordId ?? record?.id, data: payload.data, reason: formData.reason },
-        params: { merchantId }
-      });
-    } else if (record) {
-      update.mutate({
-        kind,
-        id: record.id,
-        data: payload,
-        params: { merchantId }
-      });
-    } else {
-      create.mutate({
-        kind,
-        data: payload,
-        params: { merchantId }
-      });
+    const submittedSession = session.current;
+    const submittedRequest = ++request.current;
+    const isCurrent = () => session.current === submittedSession && request.current === submittedRequest && currentScope.current === scope;
+    try {
+      if (actionMutation) {
+        const response = await perform.mutateAsync({
+          data: { action: actionMutation, recordId: actionRecordId ?? record?.id, data: payload.data, reason: formData.reason },
+          params: { merchantId }
+        });
+        if (!isCurrent()) return;
+        if (actionMutation === 'backtest_policy') { setResult(response); return; }
+      } else if (record) {
+        await update.mutateAsync({ kind, id: record.id, data: payload, params: { merchantId } });
+      } else {
+        await create.mutateAsync({ kind, data: payload, params: { merchantId } });
+      }
+      if (isCurrent()) onOpenChange(false);
+    } catch (error) {
+      if (isCurrent()) applyServerError(error);
     }
   };
 

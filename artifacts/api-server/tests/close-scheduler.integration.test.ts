@@ -14,7 +14,7 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
 const { pool } = await import("@workspace/db");
 const { nextCloseInstant } = await import("@workspace/valopay-schema");
 const { SYSTEM_ACTOR_PREFIX, inWorkspace, listMerchants, loadState } = await import("../src/lib/valopay-store.js");
-const { SCHEDULED_CLOSE_ACTOR, runDueCloses, startCloseScheduler } = await import("../src/lib/close-scheduler.js");
+const { SCHEDULED_CLOSE_ACTOR, runDueCloses, startCloseScheduler, schedulerStatus } = await import("../src/lib/close-scheduler.js");
 
 const requestFor = (token: string) => ({ headers: { cookie: `valopay_sandbox=${token}` }, secure: false, auth: Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true }) }) as any;
 const response = () => ({ cookie() { /* a valid test cookie is already supplied */ } }) as any;
@@ -118,12 +118,36 @@ try {
   // The tick loop: two ticks at once share one pass.
   const scheduler = startCloseScheduler({ intervalMs: 60_000, firstDelayMs: 60_000, batchSize: 100 });
   try {
+    assert.equal(schedulerStatus().state, "running");
+    assert.equal(schedulerStatus().lastSuccessAt, null, "starting the timer is not a successful service check");
     const [first, second] = await Promise.all([scheduler.tick(), scheduler.tick()]);
     assert.ok(first);
     assert.equal(first, second, "a tick while a pass runs joins that pass");
+    const healthy = schedulerStatus();
+    assert.ok(healthy.lastTickAt && healthy.lastSuccessAt, "a returning pass records its check start and success");
+    assert.equal(healthy.lastErrorAt, null);
+    assert.ok(Date.parse(healthy.observedAt) >= Date.parse(healthy.lastSuccessAt));
+
+    // Fail the scan before any lender transaction. The last success stays historical,
+    // and a later healthy pass must clear the error rather than keep a false outage.
+    const originalQuery = pool.query;
+    try {
+      pool.query = (() => Promise.reject(new Error("Injected scheduler scan failure"))) as typeof pool.query;
+      assert.equal(await scheduler.tick(), null);
+      const failed = schedulerStatus();
+      assert.equal(failed.lastSuccessAt, healthy.lastSuccessAt);
+      assert.ok(failed.lastErrorAt, "a failed scan has a failure timestamp");
+      assert.ok(Date.parse(failed.lastErrorAt) >= Date.parse(healthy.lastSuccessAt));
+    } finally {
+      pool.query = originalQuery;
+    }
+    assert.ok(await scheduler.tick());
+    assert.equal(schedulerStatus().lastErrorAt, null, "a returning pass clears the service-level error");
+    assert.ok(schedulerStatus().lastSuccessAt);
   } finally {
     scheduler.stop();
   }
+  assert.equal(schedulerStatus().state, "stopped", "stop cannot retain a running status");
 
   // Expiry: scheduled-close audit entries never keep an abandoned sandbox alive.
   const workspace = (await pool.query<{ workspace_id: string }>("SELECT workspace_id FROM valopay_merchants WHERE id=$1", [a])).rows[0]!.workspace_id;

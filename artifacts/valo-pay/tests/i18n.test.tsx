@@ -26,10 +26,12 @@ describe("internationalisation", () => {
     expect(screen.getByText("Dami Adéyẹmí")).toBeTruthy();
     const search = screen.getByPlaceholderText("Search by name, reference or phone…");
     await user.type(search, "obi");
+    await screen.findByText("Chiamaka Ọbi");
     await waitFor(() => expect(screen.queryByText("Ada Okonkwo")).toBeNull());
     expect(screen.getByText("Chiamaka Ọbi")).toBeTruthy();
     await user.clear(search);
     await user.type(search, "ADEYEMI");
+    await screen.findByText("Dami Adéyẹmí");
     await waitFor(() => expect(screen.queryByText("Chiamaka Ọbi")).toBeNull());
     expect(screen.getByText("Dami Adéyẹmí")).toBeTruthy();
   });

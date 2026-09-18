@@ -5,6 +5,7 @@
  * Valo Pay Stage 1 observation-first sandbox API. All monetary fields are integer kobo. Live lender data and all outbound provider instructions are blocked until production readiness is verified.
  * OpenAPI spec version: 1.0.0
  */
+import type { EffectiveCloseSchedule } from './effectiveCloseSchedule';
 import type { Merchant } from './merchant';
 import type { RecordData } from './recordData';
 import type { ValopayRecord } from './valopayRecord';
@@ -19,4 +20,5 @@ export interface Settings {
   integrations: ValopayRecord[];
   members: ValopayRecord[];
   calendar: ValopayRecord[];
+  closeSchedule?: EffectiveCloseSchedule;
 }

@@ -19,4 +19,8 @@ export interface SchedulerStatus {
   /** @nullable */
   lastTickAt: string | null;
   lastRun: SchedulerRun | null;
+  /** @nullable */
+  lastSuccessAt?: string | null;
+  /** @nullable */
+  lastErrorAt?: string | null;
 }

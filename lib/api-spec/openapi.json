@@ -1012,6 +1012,18 @@
                 "type": "null"
               }
             ]
+          },
+          "lastSuccessAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastErrorAt": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1392,6 +1404,9 @@
             "items": {
               "$ref": "#/components/schemas/Alert"
             }
+          },
+          "closeSchedule": {
+            "$ref": "#/components/schemas/EffectiveCloseSchedule"
           }
         },
         "required": [
@@ -1720,6 +1735,9 @@
             "items": {
               "$ref": "#/components/schemas/ValopayRecord"
             }
+          },
+          "closeSchedule": {
+            "$ref": "#/components/schemas/EffectiveCloseSchedule"
           }
         },
         "required": [
@@ -1819,6 +1837,96 @@
           "generatedAt"
         ],
         "description": "The export's id, its download address on this API, its SHA-256 checksum and when it was generated."
+      },
+      "EffectiveCloseSchedule": {
+        "type": "object",
+        "properties": {
+          "time": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "automatic": {
+            "type": "boolean"
+          },
+          "nextAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runtimeState": {
+            "type": "string",
+            "enum": [
+              "not_started",
+              "running",
+              "off",
+              "stopped"
+            ]
+          },
+          "serviceIssue": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "starting",
+              "delayed",
+              "failed",
+              null
+            ]
+          },
+          "missed": {
+            "type": "boolean"
+          },
+          "overdueMinutes": {
+            "type": "integer"
+          },
+          "lateAfterMinutes": {
+            "type": "integer"
+          },
+          "lastAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastTrigger": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastCheckedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastErrorAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "time",
+          "enabled",
+          "automatic",
+          "nextAt",
+          "runtimeState",
+          "serviceIssue",
+          "missed",
+          "overdueMinutes",
+          "lateAfterMinutes",
+          "lastAt",
+          "lastTrigger",
+          "lastCheckedAt",
+          "lastErrorAt"
+        ],
+        "description": "Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender."
       }
     }
   }

@@ -11,6 +11,8 @@ import { RecordDialog } from '@/components/record-dialog';
 import { exceptionSeverities, resolutionCodesFor } from '@workspace/valopay-schema';
 import { readableLabel, RecordLabel, StatusBadge } from '@/components/record-label';
 import { deadlineInstant, deadlineOrder, isDueToday, isDeadlineOverdue as isOverdue, useQueueFilters } from '@/lib/queue-filters';
+import { RecordPagination } from '@/components/record-pagination';
+import { useRecordPagination } from '@/lib/use-record-pagination';
 
 const exceptionViews = ['open', 'high', 'overdue', 'due-today', 'resolved'] as const;
 
@@ -46,8 +48,6 @@ export default function ExceptionsPage() {
     setIsDialogOpen(true);
   };
 
-  if (!merchantId) return null;
-
   const isOpen = (status: string) => !['resolved', 'closed'].includes(status);
   const now = Date.now();
   const records = data?.items || [];
@@ -75,6 +75,9 @@ export default function ExceptionsPage() {
     { key: 'due-today', label: `Due today (${owned.filter(exception => matchesView(exception, 'due-today')).length})` },
     { key: 'resolved', label: `Resolved (${owned.filter(exception => matchesView(exception, 'resolved')).length})` },
   ];
+  const pagination = useRecordPagination(`${merchantId}:${filter}:${owner}:${type}`, items.length);
+
+  if (!merchantId) return null;
 
   return (
     <div className="space-y-6">
@@ -134,7 +137,7 @@ export default function ExceptionsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {items.map(exception => (
+                {items.slice(pagination.offset, pagination.offset + pagination.pageSize).map(exception => (
                   <tr key={exception.id} className="hover:bg-secondary/10 transition-colors">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
@@ -190,6 +193,7 @@ export default function ExceptionsPage() {
             </table>
           </ScrollFrame>
         )}
+        {!isLoading && !error && items.length > 25 && <RecordPagination pagination={pagination} total={items.length} label="exceptions" />}
       </div>
 
       <RecordDialog

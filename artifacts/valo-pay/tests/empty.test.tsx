@@ -13,8 +13,8 @@ describe("empty states", () => {
     expect(await screen.findByText("Ada Okonkwo")).toBeTruthy();
     const search = screen.getByPlaceholderText("Search by name, reference or phone…");
     await user.type(search, "zzzz");
-    const status = await screen.findByRole("status");
-    expect(within(status).getByText("No customers match “zzzz”")).toBeTruthy();
+    const title = await screen.findByText("No customers match “zzzz”");
+    const status = title.closest<HTMLElement>('[role="status"]')!;
     expect(within(status).getByText(/Check the spelling/)).toBeTruthy();
     await user.clear(search);
     expect(await screen.findByText("Ada Okonkwo")).toBeTruthy();
@@ -26,8 +26,8 @@ describe("empty states", () => {
     renderApp("/audit");
     await screen.findByRole("table");
     await user.type(screen.getByPlaceholderText("Search by action, person or summary…"), "nothing-like-this");
-    const status = await screen.findByRole("status");
-    expect(within(status).getByText("No entries match “nothing-like-this”")).toBeTruthy();
+    const title = await screen.findByText("No entries match “nothing-like-this”");
+    expect(title.closest('[role="status"]')).toBeTruthy();
   });
 
   it("says what would be in an empty table and where it comes from", async () => {

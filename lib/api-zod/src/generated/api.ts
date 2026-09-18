@@ -31,7 +31,9 @@ export const HealthCheckResponse = zod.object({
   "closed": zod.number().int(),
   "skipped": zod.number().int(),
   "failed": zod.number().int()
-}).describe('The last scheduler pass that found work: its id, when it ran, how long it took and what it did.'),zod.null()])
+}).describe('The last scheduler pass that found work: its id, when it ran, how long it took and what it did.'),zod.null()]),
+  "lastSuccessAt": zod.string().nullish(),
+  "lastErrorAt": zod.string().nullish()
 }).describe('Whether closes are scheduled in this process, how often it looks, when it last looked and its last pass with work.')
 }).describe('The liveness answer: the build, when the process started, its uptime and what the close scheduler is doing.')
 
@@ -142,7 +144,22 @@ export const GetOverviewResponse = zod.object({
   "count": zod.number().int().optional(),
   "since": zod.string().optional(),
   "linkedRecordId": zod.string().optional()
-}).describe('An NFR-OBS-02 alert: what condition holds, how severe it is, since when and the record it points at.'))
+}).describe('An NFR-OBS-02 alert: what condition holds, how severe it is, since when and the record it points at.')),
+  "closeSchedule": zod.object({
+  "time": zod.string(),
+  "enabled": zod.boolean(),
+  "automatic": zod.boolean(),
+  "nextAt": zod.string().nullable(),
+  "runtimeState": zod.enum(['not_started', 'running', 'off', 'stopped']),
+  "serviceIssue": zod.union([zod.literal('starting'),zod.literal('delayed'),zod.literal('failed'),zod.literal(null)]).nullable(),
+  "missed": zod.boolean(),
+  "overdueMinutes": zod.number().int(),
+  "lateAfterMinutes": zod.number().int(),
+  "lastAt": zod.string().nullable(),
+  "lastTrigger": zod.string().nullable(),
+  "lastCheckedAt": zod.string().nullable(),
+  "lastErrorAt": zod.string().nullable()
+}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.')
 }).describe('The overview: metrics, queues, recent activity, upcoming due items, the close schedule and the alerts.')
 
 
@@ -541,7 +558,22 @@ export const GetSettingsResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'))
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
+  "closeSchedule": zod.object({
+  "time": zod.string(),
+  "enabled": zod.boolean(),
+  "automatic": zod.boolean(),
+  "nextAt": zod.string().nullable(),
+  "runtimeState": zod.enum(['not_started', 'running', 'off', 'stopped']),
+  "serviceIssue": zod.union([zod.literal('starting'),zod.literal('delayed'),zod.literal('failed'),zod.literal(null)]).nullable(),
+  "missed": zod.boolean(),
+  "overdueMinutes": zod.number().int(),
+  "lateAfterMinutes": zod.number().int(),
+  "lastAt": zod.string().nullable(),
+  "lastTrigger": zod.string().nullable(),
+  "lastCheckedAt": zod.string().nullable(),
+  "lastErrorAt": zod.string().nullable()
+}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.')
 }).describe('A lender\'s settings and the caller\'s permissions, with integrations, members and the business calendar.')
 
 
@@ -621,7 +653,22 @@ export const UpdateSettingsResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'))
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
+  "closeSchedule": zod.object({
+  "time": zod.string(),
+  "enabled": zod.boolean(),
+  "automatic": zod.boolean(),
+  "nextAt": zod.string().nullable(),
+  "runtimeState": zod.enum(['not_started', 'running', 'off', 'stopped']),
+  "serviceIssue": zod.union([zod.literal('starting'),zod.literal('delayed'),zod.literal('failed'),zod.literal(null)]).nullable(),
+  "missed": zod.boolean(),
+  "overdueMinutes": zod.number().int(),
+  "lateAfterMinutes": zod.number().int(),
+  "lastAt": zod.string().nullable(),
+  "lastTrigger": zod.string().nullable(),
+  "lastCheckedAt": zod.string().nullable(),
+  "lastErrorAt": zod.string().nullable()
+}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.')
 }).describe('A lender\'s settings and the caller\'s permissions, with integrations, members and the business calendar.')
 
 
