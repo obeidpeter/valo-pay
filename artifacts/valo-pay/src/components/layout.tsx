@@ -24,10 +24,7 @@ export function Layout({ children }: { children: ReactNode }) {
     { href: '/audit', label: 'Audit Log', icon: HardDrive },
     { href: '/settings', label: 'Settings', icon: Settings },
   ];
-  useEffect(()=>{
-    const label=navItems.find(n=>n.href===location)?.label||(location.startsWith('/customers/')?'Customer timeline':'Page not found');
-    document.title=`${label} · Valo Pay`;
-  },[location]);
+  useEffect(()=>{document.title=`${navItems.find(n=>n.href===location)?.label||"Customer timeline"} · Valo Pay`;},[location]);
 
   return (
     <div className="min-h-screen flex flex-col bg-background">

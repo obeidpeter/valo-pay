@@ -1,8 +1,8 @@
 import { useEffect, type ReactNode } from 'react';
 import { Link } from 'wouter';
 import { SignIn, SignUp } from '@clerk/react';
-import { ArrowLeft, ArrowRight, Info } from 'lucide-react';
-import { BrandLockup } from '@/components/brand';
+import { ArrowRight, Info } from 'lucide-react';
+import { PublicFrame } from '@/components/public-frame';
 import { Button } from '@/components/ui/button';
 import { authEnabled } from '@/lib/auth';
 
@@ -47,14 +47,7 @@ const whatChanges = [
 function Shell({ title, children }: { title: string; children: ReactNode }) {
   useEffect(() => { document.title = `${title} · Valo Pay`; }, [title]);
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground">Skip to main content</a>
-      <header className="border-b bg-card">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
-          <BrandLockup />
-          <Link href="/" className="inline-flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" aria-hidden="true" /> Back to the start</Link>
-        </div>
-      </header>
+    <PublicFrame>
       <main id="main" className="mx-auto grid max-w-6xl gap-10 px-4 py-12 sm:px-6 lg:grid-cols-[2fr_3fr] lg:items-start lg:py-16">
         <aside aria-labelledby="context-title" className="lg:pt-6">
           <h1 id="context-title" className="text-3xl font-bold tracking-tight">{title}</h1>
@@ -71,7 +64,7 @@ function Shell({ title, children }: { title: string; children: ReactNode }) {
         </aside>
         <div className="w-full max-w-md lg:justify-self-end">{children}</div>
       </main>
-    </div>
+    </PublicFrame>
   );
 }
 

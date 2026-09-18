@@ -27,9 +27,15 @@ describe("customer timeline", () => {
     expect(screen.getByText(new RegExp(`SHA-256 ${String(record.data.checksum).slice(0, 16)}`))).toBeTruthy();
   });
 
-  it("reports a customer the lender does not have", async () => {
+  it("says when the lender has no customer with the reference, inside the console", async () => {
     renderApp("/customers/not-a-customer");
-    expect(await screen.findByText("Failed to load customer timeline.")).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "No customer with this reference" })).toBeTruthy();
+    expect(screen.getByText("not-a-customer")).toBeTruthy();
     expect(api.calls.find((call) => call.path.endsWith("/timeline"))?.status).toBe(404);
+    // The sidebar stays as the way out, and each action names where it goes.
+    expect(screen.getByRole("link", { name: /Audit Log/ })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Back to customers" }).getAttribute("href")).toBe("/customers");
+    expect(screen.getByRole("link", { name: "Go to the overview" }).getAttribute("href")).toBe("/overview");
+    await waitFor(() => expect(document.title).toBe("Customer not found · Valo Pay"));
   });
 });
