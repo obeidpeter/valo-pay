@@ -11,16 +11,21 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 export function ScrollFrame({ label, className = 'overflow-x-auto', children }: { label: string; className?: string; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const [scrolls, setScrolls] = useState(false);
+  const measure = () => {
+    const element = ref.current;
+    if (element) setScrolls(element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1);
+  };
+  // Measured after every render, since the content (a table that has just loaded) decides; observed
+  // once per frame for the resizes that happen without a render.
+  useEffect(measure);
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
-    const measure = () => setScrolls(element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1);
-    measure();
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     if (element.firstElementChild) observer.observe(element.firstElementChild);
     return () => observer.disconnect();
-  });
+  }, []);
   return (
     <div ref={ref} className={`${className} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`} tabIndex={scrolls ? 0 : undefined} role={scrolls ? 'region' : undefined} aria-label={scrolls ? label : undefined}>
       {children}
