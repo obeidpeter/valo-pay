@@ -45,7 +45,7 @@ export function WorkspaceUnavailable({ error, retry, busy }: { error: unknown; r
           role="alert"
           title={title}
           actions={<>
-            <Button onClick={retry} disabled={busy}>{busy ? 'Trying again…' : 'Try again'}</Button>
+            <Button onClick={retry} busy={busy} busyLabel="Trying again…">Try again</Button>
             <AuthShow when="signed-out"><Button asChild variant="outline"><Link href="/sign-in">Sign in</Link></Button></AuthShow>
             <Button asChild variant="outline"><Link href="/">Back to the start</Link></Button>
           </>}

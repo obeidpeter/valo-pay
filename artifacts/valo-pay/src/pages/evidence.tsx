@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Loading, LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetGates, useListRecords, useCreateExport, getGetGatesQueryKey, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { ShieldCheck, Download, AlertTriangle, FileCheck, CheckCircle } from 'lucide-react';
@@ -81,10 +82,11 @@ export default function EvidencePage() {
         </div>
         <Button 
           onClick={() => createExport.mutate({ data: { kind: 'gate-pack', format: 'pdf' }, params: { merchantId } })}
-          disabled={createExport.isPending}
+          busy={createExport.isPending}
+          busyLabel="Generating…"
           className="gap-2 bg-primary text-primary-foreground"
         >
-          <Download className="h-4 w-4" /> {createExport.isPending ? 'Generating...' : 'Export Gate Pack'}
+          <Download className="h-4 w-4" /> Export Gate Pack
         </Button>
       </header>
 
@@ -107,7 +109,7 @@ export default function EvidencePage() {
         </div>
         
         {isLoadingGates ? (
-          <div className="p-12 text-center text-muted-foreground animate-pulse">Loading gates...</div>
+          <Loading what="the gates" />
         ) : !gates ? (
           <div className="p-12 text-center text-destructive">Failed to load gate data.</div>
         ) : (
@@ -195,7 +197,7 @@ export default function EvidencePage() {
             </thead>
             <tbody className="divide-y">
               {isLoadingComm ? (
-                <tr><td colSpan={7} className="px-6 py-8 text-center text-muted-foreground animate-pulse">Loading...</td></tr>
+                <LoadingRow colSpan={7} what="commercial commitments" />
               ) : !commercial || commercial.items.length === 0 ? (
                 <tr><td colSpan={7} className="px-6 py-8 text-center text-muted-foreground">No commercial records found.</td></tr>
               ) : (
@@ -248,7 +250,7 @@ export default function EvidencePage() {
             </thead>
             <tbody className="divide-y">
               {isLoadingReviews ? (
-                <tr><td colSpan={4} className="px-6 py-8 text-center text-muted-foreground animate-pulse">Loading...</td></tr>
+                <LoadingRow colSpan={4} what="reviews" />
               ) : !reviews || reviews.items.length === 0 ? (
                 <tr><td colSpan={4} className="px-6 py-8 text-center text-muted-foreground">No reviews logged.</td></tr>
               ) : (

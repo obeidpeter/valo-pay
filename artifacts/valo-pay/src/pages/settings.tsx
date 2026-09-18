@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetSettings, useUpdateSettings, usePerformAction, getGetSettingsQueryKey } from '@workspace/api-client-react';
 import { Settings as SettingsIcon, Shield, PowerOff, AlertTriangle } from 'lucide-react';
@@ -91,7 +92,9 @@ export default function SettingsPage() {
           </select>
           <Button 
             onClick={() => updateRole.mutate({ data: { action: 'set_role', data: { role } }, params: { merchantId } })}
-            disabled={updateRole.isPending || role === workspace?.role}
+            disabled={role === workspace?.role}
+            busy={updateRole.isPending}
+            busyLabel="Switching persona…"
           >
             Apply Persona
           </Button>
@@ -100,6 +103,8 @@ export default function SettingsPage() {
             variant="outline"
             className="ml-auto"
             onClick={() => requestInstruction.mutate({ data: { action: 'request_instruction' }, params: { merchantId } })}
+            busy={requestInstruction.isPending}
+            busyLabel="Requesting…"
           >
             Request Live Instruction
           </Button>
@@ -108,7 +113,7 @@ export default function SettingsPage() {
 
       {/* Execution Settings */}
       {isLoading ? (
-        <div className="p-8 text-center text-muted-foreground animate-pulse bg-card border rounded-xl">Loading settings...</div>
+        <Loading what="settings" className="bg-card border rounded-xl" />
       ) : settings ? (
         <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b bg-secondary/20 flex items-center justify-between">
@@ -121,7 +126,7 @@ export default function SettingsPage() {
             ) : (
               <div className="flex gap-2">
                 <Button size="sm" variant="ghost" onClick={() => setIsEditingExec(false)}>Cancel</Button>
-                <Button size="sm" onClick={() => updateExecSettings.mutate({ data: execSettings, params: { merchantId } })} disabled={updateExecSettings.isPending}>Save</Button>
+                <Button size="sm" onClick={() => updateExecSettings.mutate({ data: execSettings, params: { merchantId } })} busy={updateExecSettings.isPending} busyLabel="Saving…">Save</Button>
               </div>
             )}
           </div>
@@ -253,7 +258,9 @@ export default function SettingsPage() {
                 <Button 
                   variant="destructive"
                   onClick={() => killSwitch.mutate({ data: { action: 'kill_switch', reason: killReason, data: { enabled: !settings.merchant.killSwitch } }, params: { merchantId } })}
-                  disabled={killSwitch.isPending || !killReason}
+                  disabled={!killReason}
+                  busy={killSwitch.isPending}
+                  busyLabel={settings.merchant.killSwitch ? 'Deactivating…' : 'Activating…'}
                 >
                   {settings.merchant.killSwitch ? 'Deactivate Kill Switch' : 'Activate Kill Switch'}
                 </Button>

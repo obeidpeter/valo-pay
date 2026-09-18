@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, useImportRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { FileText, ArrowRightLeft, Upload, CheckCircle, AlertTriangle } from 'lucide-react';
@@ -137,8 +138,8 @@ export default function CollectionsPage() {
             />
             <Button type="button" variant="link" className="h-auto p-0 mb-4 text-xs" onClick={downloadSample}>Download {importKind} sample CSV</Button>
             <div className="flex gap-2">
-              <Button variant="outline" className="flex-1" onClick={handlePreview} disabled={doImport.isPending || !importText}>Preview</Button>
-              <Button className="flex-1" onClick={handleCommit} disabled={doImport.isPending || !importText || !importResult || importResult.valid === 0 || importResult.invalid > 0 || previewSignature !== `${importKind}:${importText}`}>Commit</Button>
+              <Button variant="outline" className="flex-1" onClick={handlePreview} disabled={doImport.isPending || !importText} busy={doImport.isPending && !doImport.variables?.data.commit} busyLabel="Checking the file…">Preview</Button>
+              <Button className="flex-1" onClick={handleCommit} disabled={doImport.isPending || !importText || !importResult || importResult.valid === 0 || importResult.invalid > 0 || previewSignature !== `${importKind}:${importText}`} busy={doImport.isPending && Boolean(doImport.variables?.data.commit)} busyLabel="Importing…">Commit</Button>
             </div>
 
             {importResult && (
@@ -183,7 +184,7 @@ export default function CollectionsPage() {
                 </thead>
                 <tbody className="divide-y">
                   {isLoadingDue ? (
-                    <tr><td colSpan={4} className="p-8 text-center text-muted-foreground animate-pulse">Loading due items...</td></tr>
+                    <LoadingRow colSpan={4} what="due items" />
                   ) : !dueItems || dueItems.items.length === 0 ? (
                     <tr><td colSpan={4} className="p-12 text-center text-muted-foreground">No due items currently active.</td></tr>
                   ) : (

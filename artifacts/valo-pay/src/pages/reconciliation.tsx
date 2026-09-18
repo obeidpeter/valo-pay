@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, usePerformAction, getListRecordsQueryKey, useGetReports, getGetReportsQueryKey } from '@workspace/api-client-react';
 import { formatKobo, formatDate } from '@/lib/formatters';
@@ -91,10 +92,11 @@ export default function ReconciliationPage() {
         <div className="flex items-center gap-3">
           <Button 
             onClick={() => runRecon.mutate({ data: { action: 'run_reconciliation' }, params: { merchantId } })}
-            disabled={runRecon.isPending}
+            busy={runRecon.isPending}
+            busyLabel="Running the engine…"
             className="gap-2 bg-primary hover:bg-primary/90 text-primary-foreground"
           >
-            {runRecon.isPending ? 'Running Engine...' : 'Run Engine'}
+            Run Engine
           </Button>
         </div>
       </header>
@@ -124,7 +126,7 @@ export default function ReconciliationPage() {
               </thead>
               <tbody className="divide-y">
                 {isLoadingProposals ? (
-                  <tr><td colSpan={6} className="p-8 text-center text-muted-foreground animate-pulse">Loading proposals...</td></tr>
+                  <LoadingRow colSpan={6} what="proposals" />
                 ) : !proposals || proposals.items.length === 0 ? (
                   <tr><td colSpan={6} className="p-12 text-center text-muted-foreground">No proposals pending review. Run engine to generate.</td></tr>
                 ) : (
@@ -179,7 +181,7 @@ export default function ReconciliationPage() {
               </thead>
               <tbody className="divide-y">
                 {isLoadingPayments ? (
-                  <tr><td colSpan={3} className="p-4 text-center text-muted-foreground">Loading...</td></tr>
+                  <LoadingRow colSpan={3} what="unallocated payments" />
                 ) : !payments || payments.items.length === 0 ? (
                   <tr><td colSpan={3} className="p-8 text-center text-muted-foreground">No unallocated payments.</td></tr>
                 ) : (
@@ -224,7 +226,7 @@ export default function ReconciliationPage() {
               </thead>
               <tbody className="divide-y">
                 {isLoadingObs ? (
-                  <tr><td colSpan={3} className="p-4 text-center text-muted-foreground">Loading...</td></tr>
+                  <LoadingRow colSpan={3} what="unresolved observations" />
                 ) : !observations || observations.items.length === 0 ? (
                   <tr><td colSpan={3} className="p-8 text-center text-muted-foreground">No unresolved observations.</td></tr>
                 ) : (
@@ -265,7 +267,7 @@ export default function ReconciliationPage() {
               </thead>
               <tbody className="divide-y">
                 {isLoadingAudit ? (
-                  <tr><td colSpan={7} className="p-4 text-center text-muted-foreground">Loading...</td></tr>
+                  <LoadingRow colSpan={7} what="the precision sample" />
                 ) : auditSample.length === 0 ? (
                   <tr><td colSpan={7} className="p-8 text-center text-muted-foreground">No automatic certain allocations to review yet.</td></tr>
                 ) : (
@@ -311,7 +313,7 @@ export default function ReconciliationPage() {
               </thead>
               <tbody className="divide-y">
                 {isLoadingBatches ? (
-                  <tr><td colSpan={6} className="p-4 text-center text-muted-foreground">Loading...</td></tr>
+                  <LoadingRow colSpan={6} what="settlement batches" />
                 ) : !batches || batches.items.length === 0 ? (
                   <tr><td colSpan={6} className="p-8 text-center text-muted-foreground">No settlement batches found.</td></tr>
                 ) : (

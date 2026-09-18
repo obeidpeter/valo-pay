@@ -1,5 +1,6 @@
 import { Slot } from "@radix-ui/react-slot"
 import { cva, type VariantProps } from "class-variance-authority"
+import { Loader2 } from "lucide-react"
 import * as React from "react"
 import { cn } from "@/lib/utils"
 
@@ -36,17 +37,33 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
   asChild?: boolean
+  /**
+   * While the button's action is in flight: disabled, aria-busy, and the
+   * label says what is happening ("Saving…") beside a spinner that stops
+   * under reduced motion, so a click is seen to do something and cannot be
+   * repeated (Nielsen 1; Shneiderman: informative feedback). Ignored with
+   * asChild, whose child owns its content.
+   */
+  busy?: boolean
+  busyLabel?: string
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
+  ({ className, variant, size, asChild = false, busy = false, busyLabel, disabled, children, ...props }, ref) => {
     const Comp = asChild ? Slot : "button"
+    const content = busy && !asChild
+      ? <><Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" />{busyLabel ?? children}</>
+      : children
     return (
       <Comp
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
+        disabled={disabled || busy}
+        aria-busy={busy || undefined}
         {...props}
-      />
+      >
+        {content}
+      </Comp>
     )
   }
 )

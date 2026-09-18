@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetCustomerTimeline, getGetCustomerTimelineQueryKey, useCreateExport } from '@workspace/api-client-react';
 import { formatKobo, formatDate, formatCompactDate } from '@/lib/formatters';
@@ -54,9 +55,11 @@ export default function CustomerTimelinePage() {
     }
   });
   const exportPack = (format: 'pdf' | 'csv' | 'json') => createExport.mutate({ data: { kind: 'dispute-pack', format, customerId: String(id) }, params: { merchantId: merchantId! } });
+  /** Only the export that was asked for says it is being generated; the others wait, disabled. */
+  const generating = (format: 'pdf' | 'csv' | 'json') => createExport.isPending && createExport.variables?.data.format === format;
 
   if (!merchantId) return null;
-  if (isLoading) return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading timeline...</div>;
+  if (isLoading) return <Loading what="the timeline" />;
   if ((error as { status?: number } | null)?.status === 404) return <MissingCustomer id={String(id)} />;
   if (error || !timeline) return <div className="p-8 text-center text-destructive">Failed to load customer timeline.</div>;
 
@@ -87,11 +90,11 @@ export default function CustomerTimelinePage() {
               </div>
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-2">
-              <Button variant="outline" size="sm" className="gap-2" onClick={() => exportPack('pdf')} disabled={createExport.isPending}>
+              <Button variant="outline" size="sm" className="gap-2" onClick={() => exportPack('pdf')} disabled={createExport.isPending} busy={generating('pdf')} busyLabel="Generating…">
                 <Download className="h-4 w-4" /> Dispute pack (PDF)
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => exportPack('csv')} disabled={createExport.isPending}>CSV</Button>
-              <Button variant="ghost" size="sm" onClick={() => exportPack('json')} disabled={createExport.isPending}>JSON</Button>
+              <Button variant="ghost" size="sm" onClick={() => exportPack('csv')} disabled={createExport.isPending} busy={generating('csv')} busyLabel="Generating…">CSV</Button>
+              <Button variant="ghost" size="sm" onClick={() => exportPack('json')} disabled={createExport.isPending} busy={generating('json')} busyLabel="Generating…">JSON</Button>
               <span className="text-[11px] text-muted-foreground">Summary page, full timeline and the policy, template and cutover versions as they applied (AUD-02, AUD-06); SHA-256 checksum on the export record.</span>
             </div>
           </div>
