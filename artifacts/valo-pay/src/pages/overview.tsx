@@ -51,7 +51,7 @@ export default function OverviewPage() {
       {/* Metrics Grid */}
       <section>
         <h2 className="text-lg font-semibold mb-4">Key Metrics</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 print:grid-cols-4 gap-4">
           {overview.metrics.map(metric => (
             <div key={metric.key} className="bg-card border rounded-xl p-5 shadow-sm">
               <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">{metric.label}</p>
@@ -67,7 +67,7 @@ export default function OverviewPage() {
         </div>
       </section>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-2 print:grid-cols-2 gap-8">
         {/* Queues */}
         <section>
           <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
