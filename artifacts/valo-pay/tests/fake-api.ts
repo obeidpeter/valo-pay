@@ -33,8 +33,8 @@ export interface FakeApi {
   /** Applies a change as a committed mutation with an audit entry, the way a request would. */
   mutate<T>(fn: (state: DomainState, ctx: Context) => T, merchantId?: string): T;
   setNow(iso: string): void;
-  /** Makes the next request whose path matches fail: with an API-style error body and status, or as a network failure ("offline"). */
-  failNext(pattern: RegExp, failure: { status: number; error: string } | "offline"): void;
+  /** Makes the next request whose path (and method, when given) matches fail: with an API-style error body and status, or as a network failure ("offline"). */
+  failNext(pattern: RegExp, failure: { status: number; error: string; details?: Array<{ field: string; message: string }> } | "offline", method?: string): void;
   /** Holds every request whose path matches until the returned function is called, so a loading or busy state can be seen. */
   hold(pattern: RegExp): () => void;
   uninstall(): void;
@@ -82,14 +82,14 @@ type Handler = (params: Record<string, string>, query: Record<string, string>, b
 
 export function installFakeApi(options: { now?: string; role?: string } = {}): FakeApi {
   const states = new Map<string, DomainState>();
-  const failures: Array<{ pattern: RegExp; failure: { status: number; error: string } | "offline" }> = [];
+  const failures: Array<{ pattern: RegExp; method?: string; failure: { status: number; error: string; details?: Array<{ field: string; message: string }> } | "offline" }> = [];
   const holds: Array<{ pattern: RegExp; promise: Promise<void> }> = [];
   const api: FakeApi = {
     merchantIds: [], role: options.role ?? "Admin", now: options.now ?? new Date().toISOString(), calls: [],
     state(merchantId) { const id = merchantId ?? api.merchantIds[0]!; return states.get(id) ?? fail("Lender not found in this workspace.", 404); },
     mutate(fn, merchantId) { return withState(merchantId ?? api.merchantIds[0]!, fn, { action: "test.mutation", objectId: "workspace", summary: "Arranged by a console test" }); },
     setNow(iso) { api.now = iso; },
-    failNext(pattern, failure) { failures.push({ pattern, failure }); },
+    failNext(pattern, failure, method) { failures.push({ pattern, failure, method: method?.toUpperCase() }); },
     hold(pattern) {
       let release = (): void => { /* replaced by the promise's resolver */ };
       const entry = { pattern, promise: new Promise<void>((resolve) => { release = resolve; }) };
@@ -231,12 +231,12 @@ export function installFakeApi(options: { now?: string; role?: string } = {}): F
     const path = url.pathname.startsWith("/api") ? url.pathname.slice(4) : url.pathname;
     for (const entry of holds.filter((held) => held.pattern.test(path))) await entry.promise;
     // A planned failure stands in for the server refusing or the network dropping the request.
-    const planned = failures.findIndex((entry) => entry.pattern.test(path));
+    const planned = failures.findIndex((entry) => entry.pattern.test(path) && (!entry.method || entry.method === method));
     if (planned >= 0) {
       const { failure } = failures.splice(planned, 1)[0]!;
       if (failure === "offline") { api.calls.push({ method, path, query, body, status: 0 }); throw new TypeError("Failed to fetch"); }
       api.calls.push({ method, path, query, body, status: failure.status });
-      return new Response(JSON.stringify({ error: failure.error }), { status: failure.status, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ error: failure.error, ...(failure.details ? { details: failure.details } : {}) }), { status: failure.status, headers: { "content-type": "application/json" } });
     }
     let status = 200, payload: unknown;
     try {
