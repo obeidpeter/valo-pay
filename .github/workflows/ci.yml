@@ -41,6 +41,9 @@ jobs:
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Audit production dependencies for high or critical advisories
+        run: pnpm audit --prod --audit-level=high
+
       - name: Check TypeScript
         run: pnpm run typecheck
 

@@ -1,0 +1,45 @@
+# Security review
+
+A review of the source as it stands, made after the accessibility and performance audits and in the same manner: read the surface, test what can be tested here, fix what is this repository's to fix, and write down what was found, what changed, what is accepted and what belongs to the host. It is a review of a synthetic observation sandbox, not a clearance for real lender data; the prerequisites for that are unchanged in `DATABASE_SECURITY.md` and `BUILD_STATUS.md`.
+
+## Scope and method
+
+The API's request surface (`artifacts/api-server/src`): how a request becomes a principal, how every read and write is scoped to a workspace and a lender, the cross-site rules, what is validated and where, the limits, the answer headers, what is logged, and how an export leaves the system. The console (`artifacts/valo-pay/src`): what it renders from data, where it navigates, what it stores in the browser. The dependencies (`pnpm audit`) and the continuous-integration workflow.
+
+The method: every route read in full; the store's identity, transaction and lock code read; static scans for string-built SQL, HTML injection sinks, unsafe navigation, committed secrets and prototype-key handling; `pnpm audit --prod`; and the existing manual scripts noted (`pnpm run test:security-api` against a running sandbox host, which exercises tenant isolation, foreign identifiers, idempotency and allocation races end to end, and is not repeated here). New offline checks pin the changes (`artifacts/api-server/tests/api-security.test.ts`, run by `pnpm run test:pure`).
+
+## What is sound
+
+- **Identity.** A signed-in person is the digest of their Clerk user id; an anonymous visitor is the digest of a 32-byte random token held in an `HttpOnly`, `SameSite=Lax` cookie that is `Secure` behind TLS. The token itself is never stored or logged (the logger redacts cookies and authorisation headers, and logs only the method and the path). Malformed tokens are replaced, not honoured.
+- **Tenancy.** Every query joins the workspace on the request's principal hash and the lender on the workspace; every workspace transaction takes an advisory lock on the principal and a row lock on the lender; an export's storage location is read inside that transaction and stripped from list answers. Read-only and role rules are applied in the domain, and the API cannot reach production: provider webhook ingress fails closed with no signature configuration, and live instructions are refused.
+- **Cross-site requests.** A request whose `Origin` differs from the host is refused before any route runs; a browser cannot forge the forwarded-host header a cross-site page would need, since that header forces a preflight the API does not answer; and the `SameSite=Lax` cookie is not sent on cross-site posts in any case.
+- **Input.** Every body, query and path parameter goes through the shared zod contract before a route reads it; record kinds are checked against the schema's list; per-kind data schemas coerce and write back what they validated; SQL is parameterised throughout, with no string building; bodies are capped at 2 MB; idempotency keys are capped at 200 characters and digested.
+- **Limits.** 300 requests a minute per client address, a creation limiter per address for new sandboxes, a sweep of expired sandboxes that is opt-in and bounded.
+- **Answers.** `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer` on every API answer; validation failures name their fields; database safety constraints are a conflict; the server's identity header is off.
+- **Console.** React escapes what it renders; there is no HTML sink outside an unused chart primitive; downloads open server-issued same-origin addresses; the browser stores only the theme choice; the theme script in the page shell reads nothing but that choice.
+- **Repository.** No secret is tracked and `.env` files are ignored; the workflow has read-only contents permission and does not persist the checkout credential.
+
+## Findings, and what changed
+
+| # | Finding | Severity | Status |
+| --- | --- | --- | --- |
+| 1 | A programming error (a `TypeError`, a `ReferenceError`) thrown inside a route was answered as a 400 in its own words, so a bug could describe the code to a client. | Low | **Fixed.** The error handler (`lib/error-handler.ts`) answers such errors, and anything thrown that is not an `Error`, as a 500 in general words and logs the detail. Domain rules and errors raised with a status keep their own words. |
+| 2 | API answers could be framed and, where a browser applies no CORS rule, read cross-origin. | Low | **Fixed.** `X-Frame-Options: DENY` and `Cross-Origin-Resource-Policy: same-origin` on every `/api/v1` answer. |
+| 3 | A record's `data` accepted any key name, so JSON could carry `__proto__`, `constructor` or `prototype` into a stored object; code that copies fields from such an object would inherit from it. The impact was confined to the sender's own workspace. | Low | **Fixed.** `validateRecord` refuses those keys before anything else looks at the data, on create, update and import. |
+| 4 | Continuous integration did not audit dependencies, so a newly published advisory would go unnoticed until someone ran the audit by hand. | Low | **Fixed.** The source-checks job runs `pnpm audit --prod --audit-level=high` after installing. |
+| 5 | `uuid` 9.0.1, reached through `@google-cloud/storage` → `gaxios`: a missing bounds check in `v3`, `v5` and `v6` when a buffer is supplied (moderate). `gaxios` calls `v4` only, so the vulnerable path is not reached, and the patched line is a major version the client library does not yet take. | Moderate advisory, not reachable | **Accepted.** Tracked through the audit gate; it is below the gate's level and will be taken when the client library moves. |
+| 6 | The client address for the limits comes from the forwarded-for header with one trusted proxy hop, and the origin rule compares against the forwarded host. Both are right behind the host's single proxy; exposed directly, a client could name its own address and evade the limits. | Deployment assumption | **Accepted and documented.** The API is served behind the host's proxy; this must stay true. |
+| 7 | The console's HTML has no content security policy or frame-ancestors rule; those headers belong to the host that serves the built files. | Host | **Recommended to the host:** `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' <the Clerk frontend API>; frame-ancestors 'none'`, plus `Strict-Transport-Security`. The inline theme script is the only inline script and could be given a hash. |
+| 8 | The workflow's actions are pinned to major tags, not commit hashes. | Supply chain | **Recommended.** Pin `actions/checkout`, `actions/setup-node` and `pnpm/action-setup` to the commit of the release in use, with the version in a comment; this needs the upstream commit identities, which are not available from this repository. |
+| 9 | Downloads open with `window.open(url, '_blank')` without `noopener`. The address is server-issued and same-origin, so the opened page is the console's own. | Informational | **Accepted.** `noopener` would make the "tab kept closed" detection impossible, and the target is never a third party. |
+
+## What was not reviewed
+
+The Clerk sign-in flow itself (a hosted service, configured outside this repository); the host's TLS, proxy and static-file headers; App Storage credentials and bucket policies for exports; and the database role model, which `DATABASE_SECURITY.md` covers. Real data remains blocked pending the independent assessment and the prerequisites listed there.
+
+## How to re-run
+
+- `pnpm test` runs the offline security checks with everything else: error answers, prototype keys, response headers, the origin rule, the body limit and the webhook ingress (`tests/api-security.test.ts`).
+- `pnpm audit --prod` lists advisories; the workflow fails on high or critical ones.
+- `pnpm run test:security-api` against a running `*.replit.dev` sandbox host exercises tenant isolation, foreign identifiers, idempotency and allocation races end to end.
+- Before a change to the request surface: read this document's table, keep every route behind the shared contract, keep every query joined on the principal, and add a check here for what the change makes possible.

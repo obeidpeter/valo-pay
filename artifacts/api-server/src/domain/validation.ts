@@ -90,6 +90,11 @@ export function validateRecord(
   input: Partial<ValopayRecord> & { data?: Record<string, any> },
   isUpdate = false,
 ): void {
+  // A data field named like an object's own machinery is refused before anything else looks at the
+  // object: JSON can carry such a key, and code that copies fields would otherwise inherit from it.
+  for (const key of Object.keys(input.data ?? {})) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") throw new Error(`data.${key} is not an allowed field.`);
+  }
   assertNoRealBankDetails(input);
   validateDates(input);
   if (!editable.has(kind)) throw new Error(`${kind} cannot be created or edited directly.`);
