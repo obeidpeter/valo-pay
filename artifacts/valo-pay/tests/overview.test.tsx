@@ -11,7 +11,7 @@ afterEach(() => api.uninstall());
 
 describe("overview", () => {
   it("shows the sandbox banner, the next scheduled close and the alerts the seeded lender carries", async () => {
-    renderApp("/");
+    renderApp("/overview");
     expect(await screen.findByRole("heading", { name: "Operations Overview" })).toBeTruthy();
     expect(screen.getByText(/Sandbox · Synthetic data\. We never hold money\./)).toBeTruthy();
     const nextClose = String(api.state().settings.nextCloseAt);
@@ -30,7 +30,7 @@ describe("overview", () => {
       for (const exception of state.records.filter((record) => record.kind === "exceptions")) exception.data.dueBy = "2099-01-01T00:00:00.000Z";
       closedAt = String(executeAction(state, ctx, { action: "daily_close" }).record!.data.closedAt);
     });
-    renderApp("/");
+    renderApp("/overview");
     expect(await screen.findByText(/No alert conditions:/)).toBeTruthy();
     expect(screen.getByText(new RegExp(`Last close: ${escape(formatDate(closedAt))}`))).toBeTruthy();
     expect(screen.queryByText("No daily close yet")).toBeNull();

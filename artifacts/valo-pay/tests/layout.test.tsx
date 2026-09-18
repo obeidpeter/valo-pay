@@ -9,7 +9,7 @@ afterEach(() => api.uninstall());
 describe("layout", () => {
   it("loads the first lender and switches to the second", async () => {
     const user = userEvent.setup();
-    renderApp("/");
+    renderApp("/overview");
     await screen.findByRole("heading", { name: "Operations Overview" });
     const [first, second] = api.merchantIds as [string, string];
     expect(api.calls.some((call) => call.path === "/v1/overview" && call.query.merchantId === first)).toBe(true);
@@ -23,10 +23,12 @@ describe("layout", () => {
 
   it("navigates between pages from the sidebar", async () => {
     const user = userEvent.setup();
-    renderApp("/");
+    renderApp("/overview");
     await screen.findByRole("heading", { name: "Operations Overview" });
     await user.click(screen.getByRole("link", { name: /Audit Log/ }));
     expect(await screen.findByRole("button", { name: /Verify Chain Integrity/ })).toBeTruthy();
     expect(document.title).toBe("Audit Log · Valo Pay");
+    // The brand in the sidebar leads back to the landing page, the same lockup as on it.
+    expect(screen.getByRole("link", { name: /Go to the start/ }).getAttribute("href")).toBe("/");
   });
 });

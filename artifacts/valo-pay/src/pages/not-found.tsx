@@ -1,23 +1,22 @@
-import { Card, CardContent } from '@/components/ui/card';
-import { AlertCircle } from 'lucide-react';
+import { Link } from 'wouter';
+import { Button } from '@/components/ui/button';
 
+/**
+ * Shown inside the console for any address it has no page for. Plain words
+ * that say what happened and that nothing changed, and two ways out; never a
+ * message written for the developer (Nielsen 9: help users recognise,
+ * diagnose and recover from errors).
+ */
 export default function NotFound() {
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gray-50">
-      <Card className="w-full max-w-md mx-4">
-        <CardContent className="pt-6">
-          <div className="flex mb-4 gap-2">
-            <AlertCircle className="h-8 w-8 text-red-500" />
-            <h1 className="text-2xl font-bold text-gray-900">
-              404 Page Not Found
-            </h1>
-          </div>
-
-          <p className="mt-4 text-sm text-gray-600">
-            Did you forget to add the page to the router?
-          </p>
-        </CardContent>
-      </Card>
-    </div>
+    <section aria-labelledby="not-found-title" className="mx-auto max-w-md rounded-xl border bg-card p-6">
+      <p className="font-mono text-xs text-muted-foreground">404</p>
+      <h1 id="not-found-title" className="mt-2 text-2xl font-bold tracking-tight">There is no page at this address</h1>
+      <p className="mt-3 text-sm text-muted-foreground">The address may be mistyped, or the page may have moved. Nothing in your workspace has been changed.</p>
+      <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+        <Button asChild><Link href="/overview">Go to the overview</Link></Button>
+        <Button asChild variant="outline"><Link href="/">Back to the start</Link></Button>
+      </div>
+    </section>
   );
 }

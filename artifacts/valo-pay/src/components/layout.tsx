@@ -4,6 +4,7 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { AuthShow, useSignOut } from '@/lib/auth';
 import { Shield, Home, Users, FileText, ArrowRightLeft, CheckSquare, AlertTriangle, FileBarChart, HardDrive, FileCheck, Settings, Lock, LogOut } from 'lucide-react';
 import { Button } from './ui/button';
+import { BrandLockup } from './brand';
 
 export function Layout({ children }: { children: ReactNode }) {
   const { workspace, merchantId, setMerchantId } = useWorkspace();
@@ -11,7 +12,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const signOut = useSignOut();
 
   const navItems = [
-    { href: '/', label: 'Overview', icon: Home },
+    { href: '/overview', label: 'Overview', icon: Home },
     { href: '/customers', label: 'Customers', icon: Users },
     { href: '/mandates', label: 'Mandates', icon: FileText },
     { href: '/collections', label: 'Collections', icon: ArrowRightLeft },
@@ -23,7 +24,10 @@ export function Layout({ children }: { children: ReactNode }) {
     { href: '/audit', label: 'Audit Log', icon: HardDrive },
     { href: '/settings', label: 'Settings', icon: Settings },
   ];
-  useEffect(()=>{document.title=`${navItems.find(n=>n.href===location)?.label||"Customer timeline"} · Valo Pay`;},[location]);
+  useEffect(()=>{
+    const label=navItems.find(n=>n.href===location)?.label||(location.startsWith('/customers/')?'Customer timeline':'Page not found');
+    document.title=`${label} · Valo Pay`;
+  },[location]);
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -48,7 +52,7 @@ export function Layout({ children }: { children: ReactNode }) {
         {/* Sidebar */}
         <aside className="w-64 border-r bg-card flex flex-col hidden md:flex shrink-0">
           <div className="p-4 border-b h-16 flex items-center justify-between">
-            <span className="font-bold text-lg tracking-tight">Valo Pay</span>
+            <BrandLockup descriptor={false} />
             <span className="text-xs text-muted-foreground font-mono">STAGE 1</span>
           </div>
 
@@ -70,7 +74,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
           <nav className="flex-1 overflow-y-auto p-4 space-y-1">
             {navItems.map(item => {
-              const active = location === item.href || (item.href !== '/' && location.startsWith(item.href));
+              const active = location === item.href || location.startsWith(`${item.href}/`);
               return (
                 <Link key={item.href} href={item.href} className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}>
                   <item.icon className="h-4 w-4" />
