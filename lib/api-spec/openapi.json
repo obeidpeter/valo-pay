@@ -220,7 +220,7 @@
               "minimum": 1,
               "maximum": 500
             },
-            "description": "Page size; omitted returns the whole filtered set (at most 500 per page)."
+            "description": "Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views."
           },
           {
             "name": "offset",
@@ -238,6 +238,22 @@
               "type": "string"
             },
             "description": "ISO timestamp; only records updated at or after it (incremental sync)."
+          },
+          {
+            "name": "customerId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only records directly linked to this customer, in the selected lender."
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Only this exact record ID, in the selected kind and lender."
           }
         ],
         "responses": {
@@ -400,7 +416,7 @@
           }
         },
         "summary": "Update a record",
-        "description": "Editable kinds only; an approved, preregistered or closed version is immutable, and deletion does not exist."
+        "description": "Editable kinds only; an approved, preregistered or closed version is immutable. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version."
       }
     },
     "/v1/actions": {
@@ -752,7 +768,7 @@
           }
         },
         "summary": "Change a lender's execution settings",
-        "description": "The execution window, authorisation mode, contact route, thresholds, the daily close time (WAT) and whether closes are scheduled; Admin only."
+        "description": "Admin only. Send expectedRevision from the settings originally opened; 409 leaves outdated edits unapplied. The revision covers editable preferences and is unaffected by scheduler cursor changes. An identical successful Idempotency-Key replay returns its original result before checking the version."
       }
     },
     "/v1/exports": {
@@ -1193,6 +1209,9 @@
           },
           "data": {
             "$ref": "#/components/schemas/RecordData"
+          },
+          "expectedUpdatedAt": {
+            "type": "string"
           }
         },
         "required": [],
@@ -1459,6 +1478,9 @@
           },
           "data": {
             "$ref": "#/components/schemas/RecordData"
+          },
+          "expectedUpdatedAt": {
+            "type": "string"
           }
         },
         "required": [
@@ -1549,6 +1571,33 @@
             "items": {
               "$ref": "#/components/schemas/ImportRow"
             }
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "preview": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "row": {
+                  "type": "integer"
+                },
+                "values": {
+                  "$ref": "#/components/schemas/RecordData"
+                }
+              },
+              "required": [
+                "row",
+                "values"
+              ]
+            }
+          },
+          "skipped": {
+            "type": "integer"
           }
         },
         "required": [
@@ -1738,6 +1787,9 @@
           },
           "closeSchedule": {
             "$ref": "#/components/schemas/EffectiveCloseSchedule"
+          },
+          "revision": {
+            "type": "string"
           }
         },
         "required": [
@@ -1785,6 +1837,9 @@
           },
           "scheduledCloseEnabled": {
             "type": "boolean"
+          },
+          "expectedRevision": {
+            "type": "string"
           }
         },
         "required": [],

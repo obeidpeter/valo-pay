@@ -73,6 +73,7 @@ describe('actionable operational queues', () => {
   });
 
   it('discards a late import preview from the previous lender instead of enabling its import', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     const user = userEvent.setup();
     const fakeFetch = globalThis.fetch;
     let release: (response: Response) => void = () => {};
@@ -90,7 +91,8 @@ describe('actionable operational queues', () => {
       await waitFor(() => expect((screen.getAllByLabelText('Active lender')[0] as HTMLSelectElement).value).toBe(api.merchantIds[1]));
       await waitFor(() => expect(screen.getByRole('button', { name: 'Import data' }).hasAttribute('disabled')).toBe(true));
       expect(screen.queryByText('Ready to import.')).toBeNull();
-      expect(screen.getByRole('button', { name: 'Check data' }).hasAttribute('disabled')).toBe(false);
+      expect(screen.getByRole('button', { name: 'Check data' }).hasAttribute('disabled')).toBe(true);
+      expect((screen.getByLabelText('CSV content') as HTMLTextAreaElement).value).toBe('');
     } finally { spy.mockRestore(); }
   });
 

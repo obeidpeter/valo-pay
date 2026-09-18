@@ -3,6 +3,7 @@ import { buildOverview, buildReports } from "../domain/reports";
 import { effectiveCloseSchedule, type CloseRuntime } from "../domain/effective-close-schedule";
 import type { DomainState } from "../domain/types";
 import { getSettings } from "./valopay-readiness";
+import { settingsRevision } from "./edit-versions";
 
 /** Public console projections combine lender preferences with the actual running service. */
 export function buildConsoleOverview(state: DomainState, now: string, audit: AuditVerification, runtime: CloseRuntime) {
@@ -17,5 +18,5 @@ export function buildConsoleReports(state: DomainState, now: string, runtime: Cl
 }
 
 export function buildConsoleSettings(state: DomainState, role: string, now: string, runtime: CloseRuntime) {
-  return { ...getSettings(state, role), closeSchedule: effectiveCloseSchedule(state, now, runtime) };
+  return { ...getSettings(state, role), revision: settingsRevision(state.settings), closeSchedule: effectiveCloseSchedule(state, now, runtime) };
 }

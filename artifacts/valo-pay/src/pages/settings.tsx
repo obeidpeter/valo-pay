@@ -1,10 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { keyboardShortcuts } from '@/lib/focus';
 import { themeChoices, useTheme } from '@/lib/theme';
 import { Loading } from '@/components/loading';
 import { DailyCloseStatus } from '@/components/daily-close-status';
 import { useWorkspace } from '@/lib/workspace-context';
-import { useGetSettings, useUpdateSettings, usePerformAction, getGetSettingsQueryKey } from '@workspace/api-client-react';
+import { useGetSettings, getGetSettingsQueryKey } from '@workspace/api-client-react';
+import { useSafeUpdateSettings as useUpdateSettings, useSafePerformAction as usePerformAction, submissionFingerprint } from '@/lib/safe-mutations';
+import { useUnsavedChanges } from '@/lib/unsaved-changes';
+import { useQueryClient } from '@tanstack/react-query';
 import { Settings as SettingsIcon, Shield, PowerOff, AlertTriangle } from 'lucide-react';
 import { authorisationModes, closeRules, executionWindow, isCloseTime } from '@workspace/valopay-schema';
 import { FieldError, FormAlert, focusField, invalidProps } from '@/components/form-field';
@@ -24,51 +27,66 @@ export default function SettingsPage() {
   
   const [isEditingExec, setIsEditingExec] = useState(false);
   const [execSettings, setExecSettings] = useState<any>({});
+  const [execBaseline, setExecBaseline] = useState('');
+  const execRevision = useRef<string | undefined>(undefined);
+  const visit = useRef({ merchantId, generation: 0 });
+  if (visit.current.merchantId !== merchantId) visit.current = { merchantId, generation: visit.current.generation + 1 };
+  const execSession = useRef(0);
+  const queryClient = useQueryClient();
+  const dirtyExec = isEditingExec && submissionFingerprint(execSettings) !== execBaseline;
+  const { confirmDiscard: confirmExecDiscard } = useUnsavedChanges(dirtyExec);
+  useUnsavedChanges(Boolean(killReason) || role !== (workspace?.role || 'Admin'));
+  const captureVisit = () => { const submitted = visit.current; return () => visit.current === submitted; };
   
   const { data: settings, isLoading, error: settingsError, isFetching: fetchingSettings, refetch } = useGetSettings(
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, refetchInterval: 60_000, queryKey: getGetSettingsQueryKey({ merchantId: merchantId! }) } }
   );
 
-  const updateRole = usePerformAction({
-    mutation: {
-      onSuccess: () => window.location.reload(),
-      onError: (error: unknown) => notifyProblem('Demo role was not changed', saidBy(error, 'Check your connection and try again.')),
-    }
-  });
+  const changedData = () => { void queryClient.invalidateQueries(); };
+  const updateRole = usePerformAction({ mutation: { onSuccess: changedData } }, merchantId);
+  const killSwitch = usePerformAction({ mutation: { onSuccess: changedData } }, merchantId);
+  const requestInstruction = usePerformAction(undefined, merchantId);
+  const updateExecSettings = useUpdateSettings({ mutation: { onSuccess: changedData } }, `${merchantId}:${isEditingExec}`);
 
-  const killSwitch = usePerformAction({
-    mutation: {
-      onSuccess: (data) => { refetch(); notifyDone('Emergency stop updated', data.message); },
-      onError: (err: unknown) => notifyProblem('The emergency stop was not changed', saidBy(err, 'The change was refused.'))
-    }
-  });
-
-  const requestInstruction = usePerformAction({
-    mutation: {
-      onSuccess: (data) => notifyDone('Live instruction requested', data.message),
-      onError: (err: unknown) => notifyProblem('Live instruction refused', saidBy(err, 'The request was refused.'))
-    }
-  });
-  
-  const updateExecSettings = useUpdateSettings({
-    mutation: {
-      onSuccess: () => {
-        setIsEditingExec(false);
-        refetch();
-        notifyDone('Settings saved', 'Recorded in the audit log. The next scheduled close follows the saved time.');
-      },
-      onError: (err: any) => rejectExec(err)
-    }
-  });
+  const changeRole = async () => {
+    if (!merchantId || updateRole.isPending || !confirmExecDiscard()) return;
+    const isCurrent = captureVisit();
+    try {
+      await updateRole.mutateAsync({ data: { action: 'set_role', data: { role } }, params: { merchantId } });
+      if (isCurrent()) { setIsEditingExec(false); setKillReason(''); notifyDone('Demo role changed', 'Permissions now follow the selected sandbox role.'); }
+    } catch (error) { if (isCurrent()) notifyProblem('Demo role was not changed', saidBy(error, 'Check your connection and try again.')); }
+  };
+  const changeStop = async () => {
+    if (!merchantId || !settings || killSwitch.isPending) return;
+    const isCurrent = captureVisit();
+    try {
+      const data = await killSwitch.mutateAsync({ data: { action: 'kill_switch', reason: killReason, data: { enabled: !settings.merchant.killSwitch } }, params: { merchantId } });
+      if (isCurrent()) { setKillReason(''); notifyDone('Emergency stop updated', data.message); }
+    } catch (error) { if (isCurrent()) notifyProblem('The emergency stop was not changed', saidBy(error, 'Check your connection and try again.')); }
+  };
+  const testInstruction = async () => {
+    if (!merchantId || requestInstruction.isPending) return;
+    const isCurrent = captureVisit();
+    try {
+      const data = await requestInstruction.mutateAsync({ data: { action: 'request_instruction' }, params: { merchantId } });
+      if (isCurrent()) notifyDone('Live instruction requested', data.message);
+    } catch (error) { if (isCurrent()) notifyProblem('Live instruction refused', saidBy(error, 'The request was refused.')); }
+  };
 
   const [execErrors, setExecErrors] = useState<Record<string, string>>({});
   const [execAlert, setExecAlert] = useState('');
-  useEffect(() => { setIsEditingExec(false); setExecErrors({}); setExecAlert(''); setKillReason(''); setIsHandBackOpen(false); }, [merchantId]);
+  const [execConflict, setExecConflict] = useState(false);
+  const [refreshingLatest, setRefreshingLatest] = useState(false);
+  const pendingErrorFocus = useRef<string | null>(null);
+  useEffect(() => { if (!updateExecSettings.isPending && pendingErrorFocus.current) { focusField(`settings-${pendingErrorFocus.current}`); pendingErrorFocus.current = null; } }, [updateExecSettings.isPending, execErrors]);
+  useEffect(() => { execSession.current += 1; setIsEditingExec(false); setExecErrors({}); setExecAlert(''); setExecConflict(false); setRefreshingLatest(false); setKillReason(''); setRole(workspace?.role || 'Admin'); setIsHandBackOpen(false); updateRole.reset(); killSwitch.reset(); requestInstruction.reset(); updateExecSettings.reset(); }, [merchantId]);
+  useEffect(() => () => { visit.current = { merchantId: null, generation: visit.current.generation + 1 }; }, []);
   useEffect(() => { if (workspace?.role) setRole(workspace.role); }, [workspace?.role]);
   const execKeys = ['closeTime', 'unallocatedAlertThreshold', 'notificationCostAlertKobo'] as const;
   /** The server's rule messages begin with the key they concern, so the message goes under that field. */
   const rejectExec = (err: any) => {
+    setExecConflict(err?.status === 409);
     const message = String(err?.data?.error || err?.message || 'The change was not saved.');
     const key = execKeys.find(candidate => message.startsWith(candidate));
     const fieldMessages = {
@@ -78,10 +96,10 @@ export default function SettingsPage() {
     };
     setExecErrors(key ? { [key]: fieldMessages[key] } : {});
     setExecAlert(key ? 'The settings were not saved. Check the field marked below.' : saidBy(err, 'The settings were not saved. Check your connection and try again.'));
-    if (key) focusField(`settings-${key}`);
+    if (key) pendingErrorFocus.current = key;
   };
-  const saveExec = () => {
-    if (!merchantId) return;
+  const saveExec = async () => {
+    if (!merchantId || updateExecSettings.isPending || refreshingLatest) return;
     const errors: Record<string, string> = {};
     if (execSettings.closeTime !== undefined && !isCloseTime(execSettings.closeTime)) errors.closeTime = 'Enter the close time as HH:MM in West Africa Time, for example 07:00.';
     for (const key of ['unallocatedAlertThreshold'] as const) {
@@ -94,12 +112,33 @@ export default function SettingsPage() {
     setExecErrors(errors); setExecAlert('');
     const first = execKeys.find(key => errors[key]);
     if (first) { focusField(`settings-${first}`); return; }
-    updateExecSettings.mutate({ data: { ...execSettings, notificationCostAlertKobo }, params: { merchantId } });
+    const isCurrentVisit = captureVisit();
+    const submittedSession = execSession.current;
+    const isCurrent = () => isCurrentVisit() && submittedSession === execSession.current;
+    try {
+      await updateExecSettings.mutateAsync({ data: { ...execSettings, notificationCostAlertKobo, expectedRevision: execRevision.current }, params: { merchantId } });
+      if (isCurrent()) { setIsEditingExec(false); notifyDone('Settings saved', 'Recorded in the audit log. Automatic closes follow these settings while the close service is running.'); }
+    } catch (error) { if (isCurrent()) rejectExec(error); }
   };
-  const cancelExec = () => { setIsEditingExec(false); setExecErrors({}); setExecAlert(''); };
+  const cancelExec = () => { if (confirmExecDiscard()) { execSession.current += 1; setIsEditingExec(false); setExecErrors({}); setExecAlert(''); setExecConflict(false); } };
+  const refreshLatest = async () => {
+    if (!confirmExecDiscard() || refreshingLatest) return;
+    const isCurrentVisit = captureVisit();
+    const submittedSession = execSession.current;
+    setRefreshingLatest(true);
+    try {
+      const response = await refetch({ throwOnError: true });
+      if (isCurrentVisit() && submittedSession === execSession.current && response.data) { execSession.current += 1; setIsEditingExec(false); setExecErrors({}); setExecAlert(''); setExecConflict(false); }
+    } catch (error) { if (isCurrentVisit() && submittedSession === execSession.current) setExecAlert('Latest settings could not be loaded. Your draft is still here. Try refreshing again.'); }
+    finally { if (isCurrentVisit()) setRefreshingLatest(false); }
+  };
   const startEditExec = () => {
-    setExecSettings({ ...settings?.settings, notificationCostAlertKobo: koboToNaira(Number(settings?.settings?.notificationCostAlertKobo ?? 800)) });
-    setExecErrors({}); setExecAlert('');
+    execSession.current += 1;
+    updateExecSettings.reset();
+    const initial = { ...settings?.settings, notificationCostAlertKobo: koboToNaira(Number(settings?.settings?.notificationCostAlertKobo ?? 800)) };
+    setExecSettings(initial); setExecBaseline(submissionFingerprint(initial));
+    execRevision.current = (settings as typeof settings & { revision?: string })?.revision;
+    setExecErrors({}); setExecAlert(''); setExecConflict(false);
     setIsEditingExec(true);
   };
 
@@ -145,7 +184,7 @@ export default function SettingsPage() {
             <option value="Read-only">Read-only</option>
           </select>
           <Button 
-            onClick={() => updateRole.mutate({ data: { action: 'set_role', data: { role } }, params: { merchantId } })}
+            onClick={() => { void changeRole(); }}
             disabled={role === workspace?.role}
             busy={updateRole.isPending}
             busyLabel="Switching role…"
@@ -156,7 +195,7 @@ export default function SettingsPage() {
           <Button
             variant="outline"
             className="sm:ml-auto"
-            onClick={() => requestInstruction.mutate({ data: { action: 'request_instruction' }, params: { merchantId } })}
+            onClick={() => { void testInstruction(); }}
             busy={requestInstruction.isPending}
             busyLabel="Requesting…"
           >
@@ -182,13 +221,13 @@ export default function SettingsPage() {
             ) : (
               <div className="flex gap-2">
                 <Button size="sm" variant="ghost" onClick={cancelExec}>Cancel</Button>
-                <Button size="sm" onClick={saveExec} busy={updateExecSettings.isPending} busyLabel="Saving…">Save</Button>
+                <Button size="sm" onClick={saveExec} disabled={refreshingLatest} busy={updateExecSettings.isPending} busyLabel="Saving…">Save</Button>
               </div>
             )}
           </div>
-          {execAlert && <div className="px-6 pt-6"><FormAlert title="Settings not saved">{execAlert}</FormAlert></div>}
+          {execAlert && <div className="px-6 pt-6"><FormAlert title="Settings not saved">{execAlert}{execConflict && <><p className="mt-2">Your draft is still here. Refresh to review the latest settings before editing again.</p><Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => { void refreshLatest(); }} busy={refreshingLatest} busyLabel="Refreshing…">Discard draft and refresh</Button></>}</FormAlert></div>}
           <div className="p-6 space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 gap-6">
+            <fieldset disabled={updateExecSettings.isPending || refreshingLatest} className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 gap-6">
               <div>
                 <label htmlFor="settings-authorisationMode" className="text-sm font-medium block mb-1">Instruction approval</label>
                 {isEditingExec ? (
@@ -305,7 +344,7 @@ export default function SettingsPage() {
                   </div>
                 )}
               </div>
-            </div>
+            </fieldset>
             
             <div className="pt-4 border-t">
               <h3 className="font-medium mb-4 text-destructive flex items-center gap-2">
@@ -328,7 +367,7 @@ export default function SettingsPage() {
                 <div className="flex flex-col gap-2 sm:flex-row">
                 <Button 
                   variant="destructive"
-                  onClick={() => killSwitch.mutate({ data: { action: 'kill_switch', reason: killReason, data: { enabled: !settings.merchant.killSwitch } }, params: { merchantId } })}
+                  onClick={() => { void changeStop(); }}
                   disabled={!killReason}
                   busy={killSwitch.isPending}
                   busyLabel={settings.merchant.killSwitch ? 'Deactivating…' : 'Activating…'}

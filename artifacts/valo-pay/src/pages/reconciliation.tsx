@@ -1,9 +1,10 @@
+import { useSafePerformAction as usePerformAction } from '@/lib/safe-mutations';
 import React, { useEffect, useRef, useState } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow } from '@/components/empty-state';
 import { LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
-import { useListRecords, usePerformAction, getListRecordsQueryKey, useGetReports, getGetReportsQueryKey } from '@workspace/api-client-react';
+import { useListRecords, getListRecordsQueryKey, useGetReports, getGetReportsQueryKey } from '@workspace/api-client-react';
 import { formatKobo, formatDate, formatCount } from '@/lib/formatters';
 import { CheckSquare, Info, ShieldAlert, CornerUpLeft, Plus, ClipboardCheck, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -137,7 +138,7 @@ export default function ReconciliationPage() {
   const auditPage = useRecordPagination(pageKey, auditSample.length);
   const batchPage = useRecordPagination(pageKey, batches?.items.length);
 
-  const runRecon = usePerformAction();
+  const runRecon = usePerformAction(undefined, merchantId);
   useEffect(() => { runRequest.current += 1; setRunResult(null); runRecon.reset(); setIsDialogOpen(false); return () => { runRequest.current += 1; }; }, [merchantId]);
   const runReconciliation = async () => {
     if (!merchantId) return;

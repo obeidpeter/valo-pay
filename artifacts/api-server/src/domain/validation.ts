@@ -1,7 +1,7 @@
 import {
   ABSOLUTE_TICKET_FLOOR_KOBO, PLATFORM_OWNER, activationWorkflows, defaultStatus, describeIssues,
   editableKinds, exceptionCatalogue, exceptionTransitions, experimentRules, isActionOnlyStatus, mandateTransitions, normaliseFailureCode,
-  normaliseOwner, policyGuardrails, recordDataSchemas, recordStatuses, resolveExceptionType, roles, isKnownFailureCode,
+  normaliseOwner, policyGuardrails, recordDataSchemas, recordStatuses, resolveExceptionType, roles, isKnownFailureCode, templateTextProblems,
 } from "@workspace/valopay-schema";
 import { assertNoRealBankDetails, findRecord, masked, recordsOf } from "./records";
 import type { Context, DomainState, RecordOf, TypedRecord, ValopayRecord } from "./types";
@@ -238,12 +238,15 @@ export function validateRecord(
   if (kind === "templates") {
     requireRole(ctx, ["Admin"]);
     if (!isUpdate && input.status && input.status !== "draft") throw new Error("Templates are created as drafts only.");
-    if (data.reviewer !== undefined && data.reviewer !== existing?.data.reviewer) throw new Error("The template reviewer is recorded during approval and cannot be changed here.");
-    if (data.author !== ctx.actor) throw new Error("The template author must match the current demo user.");
-    const text = String(data.text || "");
-    for (const field of ["{{amount}}", "{{date}}", "{{merchant}}", "{{contact}}"]) {
-      if (!text.includes(field)) throw new Error(`Template text must include ${field}.`);
+    if (existing?.status === "submitted") throw new Error("A submitted template cannot be edited. A reviewer must reject it before its author can make changes.");
+    for (const key of ["reviewer", "approvedAt", "submittedAt", "rejectedAt", "rejectionReason", "reviewHistory", "previousVersionId", "templateRootId"]) {
+      if (JSON.stringify(data[key]) !== JSON.stringify(existing?.data[key])) throw new Error(`Template ${key} is recorded by its review or version action and cannot be changed here.`);
     }
+    if (existing && data.version !== existing.data.version) throw new Error("Template version numbers are assigned when a new draft version is created.");
+    if (existing && data.author !== existing.data.author) throw new Error("The template author is assigned when its draft is created and cannot be changed here.");
+    if (data.author !== ctx.actor) throw new Error("The template author must match the current demo user.");
+    const problems = templateTextProblems(data.text);
+    if (problems.length) throw new Error(problems.join(' '));
   }
   if (kind === "experiments") {
     requireRole(ctx, ["Admin"]);

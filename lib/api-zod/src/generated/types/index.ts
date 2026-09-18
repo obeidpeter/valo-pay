@@ -32,6 +32,7 @@ export * from './healthStatus';
 export * from './importInput';
 export * from './importRecordsParams';
 export * from './importResult';
+export * from './importResultPreviewItem';
 export * from './importRow';
 export * from './listRecordsParams';
 export * from './merchant';

@@ -19,8 +19,10 @@ if (!process.env.DATABASE_URL) {
 }
 const env = { ...process.env, NODE_ENV: process.env.NODE_ENV || "development" };
 const suites = [
+  "artifacts/api-server/tests/record-index-migration.integration.test.ts",
   "artifacts/api-server/tests/valopay-store.integration.test.ts",
   "artifacts/api-server/tests/close-scheduler.integration.test.ts",
+  "artifacts/api-server/tests/record-lists.integration.test.ts",
 ];
 for (const suite of suites) {
   console.log(`\n▶ ${suite}`);

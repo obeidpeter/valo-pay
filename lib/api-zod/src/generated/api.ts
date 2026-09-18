@@ -181,9 +181,11 @@ export const ListRecordsQueryParams = zod.object({
   "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
   "search": zod.coerce.string().optional().describe('Text matched, ignoring case and accents, against the name, reference, status and data.'),
   "status": zod.coerce.string().optional().describe('Only records in this status; omitted or "all" for every status.'),
-  "limit": zod.coerce.number().int().min(1).max(listRecordsQueryLimitMax).optional().describe('Page size; omitted returns the whole filtered set (at most 500 per page).'),
+  "limit": zod.coerce.number().int().min(1).max(listRecordsQueryLimitMax).optional().describe('Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views.'),
   "offset": zod.coerce.number().int().min(listRecordsQueryOffsetMin).optional().describe('Rows to skip in the newest-first order.'),
-  "updatedSince": zod.coerce.string().optional().describe('ISO timestamp; only records updated at or after it (incremental sync).')
+  "updatedSince": zod.coerce.string().optional().describe('ISO timestamp; only records updated at or after it (incremental sync).'),
+  "customerId": zod.coerce.string().optional().describe('Only records directly linked to this customer, in the selected lender.'),
+  "id": zod.coerce.string().optional().describe('Only this exact record ID, in the selected kind and lender.')
 })
 
 export const ListRecordsResponse = zod.object({
@@ -246,7 +248,7 @@ export const CreateRecordResponse = zod.object({
 
 
 /**
- * Editable kinds only; an approved, preregistered or closed version is immutable, and deletion does not exist.
+ * Editable kinds only; an approved, preregistered or closed version is immutable. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version.
  * @summary Update a record
  */
 export const UpdateRecordParams = zod.object({
@@ -268,7 +270,8 @@ export const UpdateRecordBody = zod.object({
   "reference": zod.string().optional(),
   "amountKobo": zod.number().int().min(updateRecordBodyAmountKoboMin).optional(),
   "customerId": zod.string().optional(),
-  "data": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+  "data": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
+  "expectedUpdatedAt": zod.string().optional()
 }).describe('The fields to change on a record; omitted fields keep their values.')
 
 export const UpdateRecordResponse = zod.object({
@@ -298,7 +301,8 @@ export const PerformActionBody = zod.object({
   "action": zod.string(),
   "recordId": zod.string().optional(),
   "reason": zod.string().optional(),
-  "data": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+  "data": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
+  "expectedUpdatedAt": zod.string().optional()
 }).describe('An action to run: its name, the record it applies to, the reason for it and any data it needs.')
 
 export const PerformActionResponse = zod.object({
@@ -344,7 +348,13 @@ export const ImportRecordsResponse = zod.object({
   "row": zod.number().int(),
   "status": zod.string(),
   "message": zod.string()
-}).describe('The outcome of one imported row.'))
+}).describe('The outcome of one imported row.')),
+  "columns": zod.array(zod.string()).optional(),
+  "preview": zod.array(zod.object({
+  "row": zod.number().int(),
+  "values": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+})).optional(),
+  "skipped": zod.number().int().optional()
 }).describe('How many rows were valid, invalid and imported, and each row\'s outcome.')
 
 
@@ -573,12 +583,13 @@ export const GetSettingsResponse = zod.object({
   "lastTrigger": zod.string().nullable(),
   "lastCheckedAt": zod.string().nullable(),
   "lastErrorAt": zod.string().nullable()
-}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.')
+}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.'),
+  "revision": zod.string().optional()
 }).describe('A lender\'s settings and the caller\'s permissions, with integrations, members and the business calendar.')
 
 
 /**
- * The execution window, authorisation mode, contact route, thresholds, the daily close time (WAT) and whether closes are scheduled; Admin only.
+ * Admin only. Send expectedRevision from the settings originally opened; 409 leaves outdated edits unapplied. The revision covers editable preferences and is unaffected by scheduler cursor changes. An identical successful Idempotency-Key replay returns its original result before checking the version.
  * @summary Change a lender's execution settings
  */
 export const UpdateSettingsQueryParams = zod.object({
@@ -596,7 +607,8 @@ export const UpdateSettingsBody = zod.object({
   "unallocatedAlertThreshold": zod.number().int().optional(),
   "notificationCostAlertKobo": zod.number().int().optional(),
   "closeTime": zod.string().optional(),
-  "scheduledCloseEnabled": zod.boolean().optional()
+  "scheduledCloseEnabled": zod.boolean().optional(),
+  "expectedRevision": zod.string().optional()
 }).describe('The execution settings to change; every field is optional.')
 
 export const UpdateSettingsResponse = zod.object({
@@ -668,7 +680,8 @@ export const UpdateSettingsResponse = zod.object({
   "lastTrigger": zod.string().nullable(),
   "lastCheckedAt": zod.string().nullable(),
   "lastErrorAt": zod.string().nullable()
-}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.')
+}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.'),
+  "revision": zod.string().optional()
 }).describe('A lender\'s settings and the caller\'s permissions, with integrations, members and the business calendar.')
 
 

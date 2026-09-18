@@ -1,7 +1,7 @@
 import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
 import { z } from "zod";
-import { inWorkspace, loadState, saveState, roles, fail, appendAudit, verifyAudit, digest, canonical, listMerchants, findIdempotency, saveIdempotency, changeRole, type StoreContext } from "../lib/valopay-store";
+import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, roles, fail, appendAudit, verifyAudit, digest, canonical, listMerchants, findIdempotency, saveIdempotency, changeRole, type StoreContext } from "../lib/valopay-store";
 import { customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
 import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, isCloseTime, recordKinds } from "@workspace/valopay-schema";
@@ -9,7 +9,7 @@ import type { DomainState } from "../domain/types";
 import { getGates } from "../lib/valopay-readiness";
 import { importCsv } from "../lib/valopay-import";
 import { createExportFile, exportDescriptor, exportKinds, readExport } from "../lib/valopay-exports";
-import { pageRecords } from "../lib/valopay-list";
+import { advanceRecordVersions, assertRecordVersion, assertSettingsVersion } from "../lib/edit-versions";
 import { schedulerStatus } from "../lib/close-scheduler";
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../lib/valopay-close-views";
 
@@ -21,9 +21,12 @@ async function withState<T>(req:Request,res:Response,operation:(state:DomainStat
  return inWorkspace(req,res,async ctx=>{
   // A read takes a share lock so it never queues behind other reads; a mutation takes the exclusive lock.
   const state=await loadState(ctx,merchantId,mutating?"update":"share");
-   const before=structuredClone(state);
+   const before=mutating?structuredClone(state):undefined;
   const key=req.header("Idempotency-Key");
-  const fingerprint=digest(canonical({path:req.path,method:req.method,body:req.body,actor:ctx.actor}));
+  // A demo-role switch changes ctx.actor itself. Its unchanged retry must keep
+  // the original request identity; all other actions stay persona-bound.
+  const replayActor=req.path==="/v1/actions"&&req.body?.action==="set_role"?"Sandbox role switch":ctx.actor;
+  const fingerprint=digest(canonical({path:req.path,method:req.method,body:req.body,actor:replayActor}));
   const idempotencyKey=key?digest(`${merchantId}:${key}`):undefined;
   if(mutating&&key){
    if(key.length>200)fail("Idempotency-Key must be at most 200 characters.");
@@ -31,10 +34,10 @@ async function withState<T>(req:Request,res:Response,operation:(state:DomainStat
     if(found){if(found.request_hash!==fingerprint)fail("This idempotency key was used with different input.",409);return responseSchema?responseSchema.parse(found.response):found.response;}
   }
    const rawResult=await operation(state,ctx);
+   if(mutating){enrolEligibleFailures(state,ctx);advanceRecordVersions(before!,state,ctx.now);}
    // Validate before committing: an invalid response must not leave durable writes.
    const result=responseSchema?responseSchema.parse(rawResult):rawResult;
   if(mutating){
-   enrolEligibleFailures(state,ctx);
    appendAudit(state,ctx,req.path.includes("/actions")?String(req.body.action):`${req.method.toLowerCase()}.${req.path.split("/").slice(2).join(".")}`,req.body.recordId||String(req.params.id||"workspace"),req.body.reason||"Synthetic workspace operation",{beforeDigest:digest(canonical(before)),afterDigest:digest(canonical(state))});
     await saveState(ctx,state);
     if(idempotencyKey)await saveIdempotency(ctx,idempotencyKey,fingerprint,result);
@@ -55,8 +58,8 @@ router.get("/v1/overview",async(req,res)=>{
 });
 router.get("/v1/records/:kind",async(req,res)=>{
  const kind=safeKind(req.params.kind),query=S.ListRecordsQueryParams.parse(req.query);
- const result=await withState(req,res,state=>{
-  const page=pageRecords(state.records.filter(r=>r.kind===kind),query);
+ const result=await inWorkspace(req,res,async ctx=>{
+  const page=await listRecords(ctx,query.merchantId,kind,query);
   // Never leak internal storage location through collection APIs.
   return {...page,items:page.items.map(r=>r.kind==="exports"?{...r,data:{...r.data,objectName:undefined,bucket:undefined}}:r)};
  });
@@ -79,7 +82,9 @@ router.patch("/v1/records/:kind/:id",async(req,res)=>{
  const kind=safeKind(req.params.kind),{id}=S.UpdateRecordParams.parse(req.params),body=S.UpdateRecordBody.parse(req.body);
  const result=await withState(req,res,(state,ctx)=>{
   const old=state.records.find(r=>r.kind===kind&&r.id===id);if(!old)fail("Record not found.",404);
-  const input={...old,...body,data:{...old.data,...body.data,synthetic:true} as Record<string,any>,updatedAt:ctx.now};
+  assertRecordVersion(old,body.expectedUpdatedAt);
+  const {expectedUpdatedAt: _version,...changes}=body;
+  const input={...old,...changes,data:{...old.data,...body.data,synthetic:true} as Record<string,any>,updatedAt:ctx.now};
   if(kind==="due-items"){
    const allocated=state.records.filter(r=>r.kind==="allocations"&&r.status==="confirmed"&&r.data.dueItemId===old.id).reduce((s,r)=>s+r.amountKobo,0);
    if(input.amountKobo<allocated)fail("Due amount cannot be reduced below confirmed allocations.");
@@ -95,6 +100,10 @@ router.patch("/v1/records/:kind/:id",async(req,res)=>{
 router.post("/v1/actions",async(req,res)=>{
  const body=S.PerformActionBody.parse(req.body);
  const result=await withState(req,res,async(state,ctx)=>{
+  if(body.expectedUpdatedAt!==undefined){
+   const record=state.records.find(r=>r.id===body.recordId);if(!record)fail("Record not found.",404);
+   assertRecordVersion(record,body.expectedUpdatedAt);
+  }
   if(body.action==="set_role"){
    const role=String(body.data?.role);if(!roles.includes(role))fail("Unknown sandbox persona.");
     await changeRole(ctx,role);
@@ -113,7 +122,8 @@ router.post("/v1/imports",async(req,res)=>{
 });
 router.get("/v1/customers/:id/timeline",async(req,res)=>{
  const {id}=S.GetCustomerTimelineParams.parse(req.params);
- res.json(S.GetCustomerTimelineResponse.parse(await withState(req,res,state=>customerTimeline(state,id))));
+ const {merchantId}=S.GetOverviewQueryParams.parse(req.query);
+ res.json(S.GetCustomerTimelineResponse.parse(await inWorkspace(req,res,async ctx=>customerTimeline(await loadCustomerView(ctx,merchantId,id),id))));
 });
 router.get("/v1/reports",async(req,res)=>{
  res.json(S.GetReportsResponse.parse(await withState(req,res,(state,ctx)=>buildConsoleReports(state,ctx.now,schedulerStatus()))));
@@ -122,12 +132,14 @@ router.get("/v1/gates",async(req,res)=>{
  res.json(S.GetGatesResponse.parse(await withState(req,res,getGates)));
 });
 router.get("/v1/settings",async(req,res)=>{
- res.json(S.GetSettingsResponse.parse(await withState(req,res,(state,ctx)=>buildConsoleSettings(state,ctx.role,ctx.now,schedulerStatus()))));
+ const {merchantId}=S.GetOverviewQueryParams.parse(req.query);
+ res.json(S.GetSettingsResponse.parse(await inWorkspace(req,res,async ctx=>buildConsoleSettings(await loadSettingsView(ctx,merchantId),ctx.role,ctx.now,schedulerStatus()))));
 });
 router.patch("/v1/settings",async(req,res)=>{
  const body=S.UpdateSettingsBody.parse(req.body);
  const result=await withState(req,res,(state,ctx)=>{
   if(ctx.role!=="Admin")fail("Only an Admin can change lender settings.",403);
+  assertSettingsVersion(state.settings,body.expectedRevision);
   const start=body.executionStart??state.settings.executionStart??executionWindow.defaultStartHour,end=body.executionEnd??state.settings.executionEnd??executionWindow.defaultEndHour;
   if(start<executionWindow.earliestHour||end>executionWindow.latestHour||start>=end)fail(`Set the collection window between ${executionWindow.earliestHour}:00 and ${executionWindow.latestHour}:00 West Africa Time, with the start before the end.`);
   if(body.minimumTicketKobo!==undefined&&body.minimumTicketKobo<ABSOLUTE_TICKET_FLOOR_KOBO)fail("The minimum debit is ₦5,000. This limit cannot be overridden.");
@@ -136,7 +148,8 @@ router.patch("/v1/settings",async(req,res)=>{
   for(const key of ["unallocatedAlertThreshold","notificationCostAlertKobo"] as const)if(body[key]!==undefined&&(!Number.isInteger(body[key])||Number(body[key])<0))fail(`${key} must be a whole number of zero or more.`);
   if(body.closeTime!==undefined&&!isCloseTime(body.closeTime))fail("closeTime must use HH:MM in West Africa Time, for example 07:00.");
   const previous={time:closeTimeOf(state.settings),enabled:state.settings.scheduledCloseEnabled!==false};
-  Object.assign(state.settings,body);
+  const {expectedRevision: _revision,...preferences}=body;
+  Object.assign(state.settings,preferences);
   // REC-01: a changed close time or a switched-on schedule starts from its next occurrence; an unchanged save leaves a pending close pending.
   rescheduleAfterSettings(state,previous,ctx.now);
   return buildConsoleSettings(state,ctx.role,ctx.now,schedulerStatus());

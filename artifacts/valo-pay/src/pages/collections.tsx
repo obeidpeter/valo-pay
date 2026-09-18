@@ -1,15 +1,16 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'wouter';
 import { useLocationProperty } from 'wouter/use-browser-location';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow } from '@/components/empty-state';
 import { LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
-import { useListRecords, useImportRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
-import { FileText, Upload, CheckCircle, AlertTriangle } from 'lucide-react';
+import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
+import { FileText, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
-import { useQueryClient } from '@tanstack/react-query';
+import { ImportWizard } from '@/components/import-wizard';
+import { confirmUnsavedChanges } from '@/lib/unsaved-changes';
 import { failureCodeList } from '@workspace/valopay-schema';
 import { RecordLabel, StatusBadge, readableLabel } from '@/components/record-label';
 import { formatKobo, formatDate } from '@/lib/formatters';
@@ -24,12 +25,6 @@ const isUnpaid = (status: string) => !['paid', 'closed', 'cancelled'].includes(s
 
 export default function CollectionsPage() {
   const { merchantId } = useWorkspace();
-  const currentMerchant = useRef(merchantId);
-  currentMerchant.current = merchantId;
-  const [importText, setImportText] = useState('');
-  const [importKind, setImportKind] = useState('due-items');
-  const [importResult, setImportResult] = useState<any>(null);
-  const [previewSignature, setPreviewSignature] = useState('');
   const [importOpen, setImportOpen] = useState(false);
   const [actionError, setActionError] = useState('');
   const { view, owner, setView, setOwner } = useQueueFilters(collectionViews, 'all');
@@ -40,7 +35,7 @@ export default function CollectionsPage() {
   const [actionKind, setActionKind] = useState<string>('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
 
-  const queryClient = useQueryClient();
+
 
   const { data: dueItems, isLoading: isLoadingDue, error: dueError, refetch: refetchDue } = useListRecords(
     'due-items',
@@ -63,35 +58,7 @@ export default function CollectionsPage() {
   );
   const rowTargets = useMemo(() => [...(dueItems?.items || []), ...(attempts?.items || [])].map(item => `record-${item.id}`), [dueItems, attempts]);
 
-  const doImport = useImportRecords({
-    mutation: {
-      onSuccess: (data, variables) => {
-        if (variables.data.commit) queryClient.invalidateQueries();
-        if (variables.params?.merchantId !== currentMerchant.current) return;
-        setImportResult(data);
-        if (!variables.data.commit) setPreviewSignature(`${variables.params?.merchantId}:${variables.data.kind}:${variables.data.csv}`);
-      }
-    }
-  });
-  const resetImport = doImport.reset;
-  useEffect(() => {
-    setImportResult(null); setPreviewSignature(''); setActionError('');
-    setIsDialogOpen(false); setSelectedItem(null); resetImport();
-  }, [merchantId, resetImport]);
-
-  const handlePreview = () => {
-    doImport.mutate({ 
-      data: { kind: importKind, csv: importText, syntheticOnly: true, commit: false }, 
-      params: { merchantId: merchantId! } 
-    });
-  };
-
-  const handleCommit = () => {
-    doImport.mutate({ 
-      data: { kind: importKind, csv: importText, syntheticOnly: true, commit: true }, 
-      params: { merchantId: merchantId! } 
-    });
-  };
+  useEffect(() => { setActionError(''); setIsDialogOpen(false); setSelectedItem(null); }, [merchantId]);
 
   const handleAction = (item: any, action: string) => {
     setActionError('');
@@ -108,24 +75,6 @@ export default function CollectionsPage() {
     }
     setActionKind(action);
     setIsDialogOpen(true);
-  };
-
-  const sampleCsv: Record<string, string> = {
-    customers: 'name,reference,consentProvenance,bankName,accountMasked,phoneMasked\nSample customer,SAMPLE-C001,Synthetic imported consent,Sandbox Bank,•••• 0001,+234 ••• ••01',
-    mandates: 'name,reference,customerId,amountKobo,workflow,frequency,activationDeadline,consentEvidence,consentGaps,policyId\nSample mandate,SAMPLE-M001,DEMO-C1001,5000000,hosted_consent,monthly,2028-12-01,SYNTHETIC-CONSENT-001,,',
-    'due-items': 'name,reference,customerId,amountKobo,dueDate,mandateId,owner,overrideReason\nSample instalment,SAMPLE-D001,DEMO-C1001,1000000,2028-12-01,,lms,',
-    attempts: 'name,reference,customerId,amountKobo,dueItemId,number,failureCode,occurredAt\nSample failed attempt,SAMPLE-A001,DEMO-C1001,2500000,DEMO-LOAN-1001,1,INSUFFICIENT_FUNDS,2028-12-02',
-    observations: 'name,reference,customerId,amountKobo,source,dueItemId,narration\nSample payment observation,SAMPLE-O001,DEMO-C1001,2500000,webhook,DEMO-LOAN-1001,Synthetic payment observation'
-  };
-
-  const downloadSample = () => {
-    const blob = new Blob([sampleCsv[importKind]], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `synthetic-${importKind}-sample.csv`;
-    anchor.click();
-    URL.revokeObjectURL(url);
   };
 
   const now = Date.now();
@@ -185,71 +134,13 @@ export default function CollectionsPage() {
           <h1 className="text-3xl font-bold tracking-tight">Collections</h1>
           <p className="text-muted-foreground mt-1">Track instalments and try collection scenarios with synthetic data.</p>
         </div>
-        <Button variant="outline" className="gap-2" aria-expanded={importOpen} aria-controls="collection-import" onClick={() => setImportOpen(open => !open)}><Upload className="h-4 w-4" aria-hidden="true" />{importOpen ? 'Hide import' : 'Import sample data'}</Button>
+        <Button variant="outline" className="gap-2" aria-expanded={importOpen} aria-controls="collection-import" onClick={() => { if (importOpen && !confirmUnsavedChanges()) return; setImportOpen(open => !open); }}><Upload className="h-4 w-4" aria-hidden="true" />{importOpen ? 'Hide import' : 'Import sample data'}</Button>
       </header>
 
       {actionError && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm">{actionError}</p>}
       <div className="flex flex-col gap-6">
         
-        {/* Synthetic Import */}
-        <div id="collection-import" hidden={!importOpen} className="order-1">
-          <section className="bg-card border rounded-xl shadow-sm p-5">
-            <h2 className="font-semibold text-lg flex items-center gap-2 mb-4">
-              <Upload className="h-5 w-5 text-primary" /> Import sample data
-            </h2>
-            <p className="text-sm text-muted-foreground mb-4">
-              Paste synthetic records in CSV format. Download a sample to see the required columns. CSV amounts remain in kobo: ₦1,000.00 is 100000 kobo. Do not use real customer data.
-            </p>
-            <label htmlFor="import-kind" className="text-sm font-medium block mb-1">Import as</label>
-            <select 
-              id="import-kind"
-              className="w-full bg-background border rounded-md p-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring mb-4"
-              value={importKind}
-              disabled={doImport.isPending}
-               onChange={(e) => { setImportKind(e.target.value); setImportResult(null); setPreviewSignature(''); resetImport(); }}
-            >
-              <option value="customers">Customers</option>
-              <option value="mandates">Mandates</option>
-              <option value="due-items">Instalments</option>
-              <option value="attempts">Collection attempts</option>
-              <option value="observations">Payment evidence</option>
-            </select>
-            <label htmlFor="import-csv" className="mb-1 block text-sm font-medium">CSV content</label>
-            <textarea id="import-csv"
-              className="w-full h-32 bg-background border rounded-md p-3 text-xs font-mono mb-4 focus:outline-none focus:ring-2 focus:ring-ring"
-              placeholder="Paste CSV content from the sample file…"
-              value={importText}
-              disabled={doImport.isPending}
-               onChange={e => { setImportText(e.target.value); setImportResult(null); setPreviewSignature(''); resetImport(); }}
-            />
-            <Button type="button" variant="link" className="h-auto min-h-6 p-0 mb-4 text-xs" onClick={downloadSample}>Download sample CSV</Button>
-            <div className="flex gap-2">
-              <Button variant="outline" className="flex-1" onClick={handlePreview} disabled={doImport.isPending || !importText} busy={doImport.isPending && !doImport.variables?.data.commit} busyLabel="Checking data…">Check data</Button>
-              <Button className="flex-1" onClick={handleCommit} disabled={doImport.isPending || !importText || !importResult || importResult.valid === 0 || importResult.invalid > 0 || previewSignature !== `${merchantId}:${importKind}:${importText}`} busy={doImport.isPending && Boolean(doImport.variables?.data.commit)} busyLabel="Importing data…">Import data</Button>
-            </div>
-
-            {doImport.error && <p role="alert" className="mt-4 text-sm text-destructive">The import request failed. {doImport.error.message || 'Check your connection and try again.'}</p>}
-
-            {importResult && (
-              <div className="mt-6 border-t pt-4">
-                <h3 className="font-medium text-sm mb-3">Import results</h3>
-                <div className="flex gap-4 mb-4 text-sm">
-                  <div className="flex items-center gap-1 text-success"><CheckCircle className="h-4 w-4" /> Valid rows: {importResult.valid}</div>
-                  <div className="flex items-center gap-1 text-destructive"><AlertTriangle className="h-4 w-4" /> Rows to fix: {importResult.invalid}</div>
-                </div>
-                {importResult.rows && importResult.rows.length > 0 && (
-                  <div className="space-y-2 max-h-40 overflow-y-auto bg-secondary/20 p-2 rounded text-xs font-mono">
-                    {importResult.rows.map((r: any) => (
-                      <div key={r.row} className={r.status === 'invalid' ? 'text-destructive' : r.status === 'duplicate' ? 'text-warning-strong' : 'text-success'}>
-                        Row {r.row}: {r.message}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-        </div>
+        <div id="collection-import" hidden={!importOpen} className="order-1">{importOpen && <ImportWizard key={merchantId} merchantId={merchantId} />}</div>
 
         {/* Due Items List */}
         <div className="order-2">

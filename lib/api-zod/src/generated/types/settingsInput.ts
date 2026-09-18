@@ -21,4 +21,5 @@ export interface SettingsInput {
   notificationCostAlertKobo?: number;
   closeTime?: string;
   scheduledCloseEnabled?: boolean;
+  expectedRevision?: string;
 }

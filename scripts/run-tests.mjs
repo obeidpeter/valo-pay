@@ -13,6 +13,8 @@ const steps = [
   ["node", ["scripts/check-db-boundary.mjs"]],
   ["node", ["scripts/github-snapshot.test.mjs"]],
   ["node", ["scripts/check-docs.mjs"]],
+  ["node", ["scripts/monitor-valopay.test.mjs"]],
+  [tsx, ["artifacts/api-server/tests/edit-versions.test.ts"]],
   [tsx, ["artifacts/api-server/tests/valopay-store-guards.test.ts"]],
   [tsx, ["artifacts/api-server/tests/export-download.test.ts"]],
   [tsx, ["artifacts/api-server/tests/api-security.test.ts"]],

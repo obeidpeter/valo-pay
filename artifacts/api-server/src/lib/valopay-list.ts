@@ -8,7 +8,7 @@ export function foldForSearch(value: string): string {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
-export interface ListQuery { status?: string; search?: string; limit?: number; offset?: number; updatedSince?: string }
+export interface ListQuery { status?: string; search?: string; limit?: number; offset?: number; updatedSince?: string; customerId?: string; id?: string }
 
 /**
  * Filter, order and page a kind's records: status and search as before, an
@@ -19,6 +19,8 @@ export interface ListQuery { status?: string; search?: string; limit?: number; o
 export function pageRecords(records: ValopayRecord[], query: ListQuery): { items: ValopayRecord[]; total: number; nextOffset?: number } {
   let items = records;
   if (query.status && query.status !== "all") items = items.filter((record) => record.status === query.status);
+  if (query.customerId) items = items.filter((record) => record.customerId === query.customerId);
+  if (query.id) items = items.filter((record) => record.id === query.id);
   if (query.search) { const search = foldForSearch(query.search); items = items.filter((record) => foldForSearch(`${record.name} ${record.reference} ${record.status} ${JSON.stringify(record.data)}`).includes(search)); }
   if (query.updatedSince) {
     const since = Date.parse(query.updatedSince);

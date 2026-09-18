@@ -20,7 +20,7 @@ search?: string;
  */
 status?: string;
 /**
- * Page size; omitted returns the whole filtered set (at most 500 per page).
+ * Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views.
  * @minimum 1
  * @maximum 500
  */
@@ -34,4 +34,12 @@ offset?: number;
  * ISO timestamp; only records updated at or after it (incremental sync).
  */
 updatedSince?: string;
+/**
+ * Only records directly linked to this customer, in the selected lender.
+ */
+customerId?: string;
+/**
+ * Only this exact record ID, in the selected kind and lender.
+ */
+id?: string;
 };

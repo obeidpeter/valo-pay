@@ -13,6 +13,7 @@ import { readableLabel, RecordLabel, StatusBadge } from '@/components/record-lab
 import { deadlineInstant, deadlineOrder, isDueToday, isDeadlineOverdue as isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { RecordPagination } from '@/components/record-pagination';
 import { useRecordPagination } from '@/lib/use-record-pagination';
+import { ExceptionContext } from '@/components/exception-context';
 
 const exceptionViews = ['open', 'high', 'overdue', 'due-today', 'resolved'] as const;
 
@@ -203,6 +204,7 @@ export default function ExceptionsPage() {
         onOpenChange={setIsDialogOpen}
         title={actionKind === 'resolve' ? 'Resolve exception' : 'Edit exception'}
         actionMutation={actionKind === 'resolve' ? 'resolve_exception' : undefined}
+        context={selectedEx ? values => <ExceptionContext exception={selectedEx} customer={customerById.get(String(selectedEx.customerId))} resolving={actionKind === 'resolve'} resolutionCode={values.resolutionCode} /> : undefined}
         fields={
           actionKind === 'resolve' ? [
             { name: 'resolutionCode', label: `How was this resolved? (${readableLabel(selectedEx?.data?.type || 'exception').toLowerCase()})`, type: 'select', isData: true, required: true, options: resolutionCodesFor(selectedEx?.data?.type).map(code => ({ label: readableLabel(code), value: code })) }

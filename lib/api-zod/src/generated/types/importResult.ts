@@ -5,6 +5,7 @@
  * Valo Pay Stage 1 observation-first sandbox API. All monetary fields are integer kobo. Live lender data and all outbound provider instructions are blocked until production readiness is verified.
  * OpenAPI spec version: 1.0.0
  */
+import type { ImportResultPreviewItem } from './importResultPreviewItem';
 import type { ImportRow } from './importRow';
 
 /**
@@ -15,4 +16,7 @@ export interface ImportResult {
   invalid: number;
   imported: number;
   rows: ImportRow[];
+  columns?: string[];
+  preview?: ImportResultPreviewItem[];
+  skipped?: number;
 }

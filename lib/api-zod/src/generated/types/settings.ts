@@ -21,4 +21,5 @@ export interface Settings {
   members: ValopayRecord[];
   calendar: ValopayRecord[];
   closeSchedule?: EffectiveCloseSchedule;
+  revision?: string;
 }

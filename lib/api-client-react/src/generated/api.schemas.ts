@@ -140,6 +140,7 @@ export interface RecordUpdate {
   amountKobo?: number;
   customerId?: string;
   data?: RecordData;
+  expectedUpdatedAt?: string;
 }
 
 /**
@@ -278,6 +279,7 @@ export interface ActionInput {
   recordId?: string;
   reason?: string;
   data?: RecordData;
+  expectedUpdatedAt?: string;
 }
 
 /**
@@ -309,6 +311,11 @@ export interface ImportRow {
   message: string;
 }
 
+export type ImportResultPreviewItem = {
+  row: number;
+  values: RecordData;
+};
+
 /**
  * How many rows were valid, invalid and imported, and each row's outcome.
  */
@@ -317,6 +324,9 @@ export interface ImportResult {
   invalid: number;
   imported: number;
   rows: ImportRow[];
+  columns?: string[];
+  preview?: ImportResultPreviewItem[];
+  skipped?: number;
 }
 
 /**
@@ -376,6 +386,7 @@ export interface Settings {
   members: ValopayRecord[];
   calendar: ValopayRecord[];
   closeSchedule?: EffectiveCloseSchedule;
+  revision?: string;
 }
 
 /**
@@ -393,6 +404,7 @@ export interface SettingsInput {
   notificationCostAlertKobo?: number;
   closeTime?: string;
   scheduledCloseEnabled?: boolean;
+  expectedRevision?: string;
 }
 
 export type ExportInputFormat = typeof ExportInputFormat[keyof typeof ExportInputFormat];
@@ -444,7 +456,7 @@ search?: string;
  */
 status?: string;
 /**
- * Page size; omitted returns the whole filtered set (at most 500 per page).
+ * Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views.
  * @minimum 1
  * @maximum 500
  */
@@ -458,6 +470,14 @@ offset?: number;
  * ISO timestamp; only records updated at or after it (incremental sync).
  */
 updatedSince?: string;
+/**
+ * Only records directly linked to this customer, in the selected lender.
+ */
+customerId?: string;
+/**
+ * Only this exact record ID, in the selected kind and lender.
+ */
+id?: string;
 };
 
 export type CreateRecordParams = {

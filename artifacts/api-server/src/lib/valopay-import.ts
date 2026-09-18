@@ -1,31 +1,46 @@
 import { parse } from "csv-parse/sync";
 import { makeRecord, validateRecord } from "../domain";
 import type { Context, DomainState } from "../domain/types";
-import { fail } from "./valopay-store";
 import { defaultStatus, importBooleanFields, importKinds as sharedImportKinds, importNumericFields } from "@workspace/valopay-schema";
 
 const importKinds:readonly string[]=sharedImportKinds;
 const topFields=new Set(["name","status","reference","amountKobo","customerId"]);
 const numeric=importNumericFields;
 const boolean=importBooleanFields;
+function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
+const unsafeKey = (key: string) => ["__proto__", "constructor", "prototype"].includes(key);
 export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:string;syntheticOnly:boolean;commit:boolean;mapping?:Record<string,unknown>}){
   if(!input.syntheticOnly)fail("Pre-data gate is closed. Only synthetic sample records are accepted.",403);
   if(!importKinds.includes(input.kind))fail("This resource does not support CSV import.");
-  if(input.csv.length>1500000)fail("Import is limited to 1.5 MB and 500 rows.");
+  if(new TextEncoder().encode(input.csv).length>1500000)fail("Import is limited to 1.5 MB and 500 rows.");
   let parsed:Record<string,string>[];
-  try{parsed=parse(input.csv,{columns:true,skip_empty_lines:true,bom:true,trim:true,max_record_size:20000});}
-  catch{fail("CSV could not be parsed. Use a header row and quoted fields for commas.");}
+  let columns: string[] = [];
+  let headerProblem = '';
+  try{parsed=parse(input.csv,{columns:(headers: string[]) => {
+    columns = headers;
+    if (headers.some(header => !header || unsafeKey(header)) || new Set(headers).size !== headers.length) {
+      headerProblem = 'Each CSV column needs a different, non-empty header. Reserved object names are not allowed.';
+      throw new Error(headerProblem);
+    }
+    return headers;
+  },skip_empty_lines:true,bom:true,trim:true,max_record_size:20000});}
+  catch{fail(headerProblem || "CSV could not be parsed. Use a header row, the same number of columns on every row, and quoted fields for commas.");}
   if(parsed.length>500||!parsed.length)fail("Provide between 1 and 500 CSV records.");
+  if (input.mapping && (Array.isArray(input.mapping) || Object.entries(input.mapping).some(([key, target]) => !columns.includes(key) || unsafeKey(key) || typeof target !== 'string' || unsafeKey(target)))) fail('Choose a valid destination or Skip column for each CSV column.');
+  const targets = columns.map(key => input.mapping && Object.hasOwn(input.mapping, key) ? String(input.mapping[key]).trim() : key);
+  if (new Set(targets.filter(Boolean)).size !== targets.filter(Boolean).length) fail('Map each destination field only once. Choose Skip column for unused columns.');
   const working=structuredClone(state), rows:{row:number;status:string;message:string}[]=[];
   let valid=0,invalid=0,imported=0;
   for(const [index,raw] of parsed.entries()){
     try{
       const record:Record<string,any>={data:{synthetic:true}};
       for(const [key,value] of Object.entries(raw)){
-        const target=String(input.mapping?.[key]||key);
+        const target=input.mapping && Object.hasOwn(input.mapping,key) ? String(input.mapping[key]).trim() : key;
+        if (!target) continue;
+        if (unsafeKey(target)) throw new Error('Reserved object names are not allowed as import fields.');
         let decoded:unknown=value;
         if(numeric.has(target))decoded=Number(value);
-        if(boolean.has(target))decoded=value==="true";
+        if(boolean.has(target)) { if (!['true', 'false', ''].includes(value)) throw new Error(`${target} must be true or false.`); decoded=value==="true"; }
         if(target==="consentGaps")decoded=value?value.split("|"):[];
         if(topFields.has(target))record[target]=decoded;else record.data[target]=decoded;
       }
@@ -54,5 +69,5 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
   // All-or-nothing: review every error before committing.
   if(input.commit&&invalid===0){state.records=working.records;imported=valid;}
   else if(input.commit&&invalid>0)rows.forEach(r=>{if(r.status==="valid")r.message="Not imported: resolve all row errors first.";});
-  return {valid,invalid,imported,rows};
+  return {valid,invalid,imported,skipped:rows.filter(row=>row.status==='duplicate').length,rows,columns,preview:parsed.slice(0,10).map((values,index)=>({row:index+2,values}))};
 }

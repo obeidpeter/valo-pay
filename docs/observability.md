@@ -62,6 +62,8 @@ Heartbeat freshness compares the API host's check timestamp with its internal `o
 
 ## What was left out
 
+An external one-shot probe and incident/recovery sender are now implemented in `scripts/monitor-valopay.mjs`. It has a local delivery rehearsal and a selected email recipient, but no configured external email service or recurring host schedule. See `docs/operational-rehearsals.md` for the setup and exact verification boundary.
+
 - **No metrics endpoint.** The lines above carry every count and duration a dashboard needs, and the host's log tooling aggregates them across instances; an in-process counter on an autoscaled instance would answer for one instance only and read as the whole.
 - **No distributed tracing.** One service and one database: the request id is the trace.
 - **No error beacon from the console.** A page error is written to the browser console with its component stack and shown with the time and the address; a service failure carries the reference. Collecting browser errors is a product decision that involves the people using it.

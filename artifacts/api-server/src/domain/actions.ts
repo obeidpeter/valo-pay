@@ -1,7 +1,7 @@
 import {
   counted,
   DEFAULT_ACTIVATION_WINDOW_DAYS, PLATFORM_OWNER, activationReminderCaps, closeRules, failureCodeList, isHandBackOwner, isKnownFailureCode,
-  nextCloseInstant, normaliseFailureCode, normaliseOwner, passRuleText, resolutionCodesFor, resolveExceptionType, withinQuietHours,
+  nextCloseInstant, normaliseFailureCode, normaliseOwner, passRuleText, resolutionCodesFor, resolveExceptionType, withinQuietHours, templateTextProblems,
   type CloseTrigger,
 } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
@@ -16,7 +16,7 @@ import { buildAlerts } from "./alerts";
 
 const requiresReason = new Set([
   "kill_switch", "mandate_suspend", "mandate_cancel", "mandate_reinstate", "mandate_reissue", "activation_reminder",
-  "submit_policy", "approve_policy", "reject_policy", "new_policy_version", "submit_template", "approve_template",
+  "submit_policy", "approve_policy", "reject_policy", "new_policy_version", "submit_template", "approve_template", "reject_template", "new_template_version",
   "confirm_allocation", "reject_allocation", "manual_allocate", "review_allocation", "resolve_exception", "record_refund",
   "simulate_failure", "backtest_policy", "preregister_experiment", "hand_back", "mark_pack_used", "issue_invoice", "notify_policy_change", "apply_policy_version",
 ]);
@@ -188,17 +188,61 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     policy.data.lastActionReason = reason(input); touch(policy, now);
     return result(`Policy ${policy.status}.`, policy);
   }
-  if (["submit_template", "approve_template"].includes(input.action)) {
+  if (["submit_template", "approve_template", "reject_template", "new_template_version"].includes(input.action)) {
     const template = findRecord(state, String(input.recordId), "templates");
+    if (input.action === "new_template_version") {
+      assertActionRole(ctx, ["Admin"]);
+      if (template.status !== "approved") throw new Error("Create a new version from an approved template. Edit or finish reviewing an existing draft first.");
+      const templates = recordsOf(state, "templates");
+      const rootOf = (record: TypedRecord<"templates">): string => {
+        const visited = new Set<string>();
+        let current = record;
+        while (current.data.previousVersionId) {
+          if (visited.has(current.id)) throw new Error("Template history contains a cycle. Review its version links before creating a draft.");
+          visited.add(current.id);
+          const previous = templates.find(item => item.id === current.data.previousVersionId);
+          if (!previous) throw new Error("The previous template version is unavailable. Restore its history before creating another version.");
+          current = previous;
+        }
+        return current.id;
+      };
+      const rootId = rootOf(template);
+      const family = new Set([rootId]);
+      let remaining = templates.filter(item => item.id !== rootId);
+      while (true) {
+        const children = remaining.filter(item => family.has(String(item.data.previousVersionId || '')));
+        if (!children.length) break;
+        children.forEach(item => family.add(item.id));
+        remaining = remaining.filter(item => !family.has(item.id));
+      }
+      const versions = templates.filter(item => family.has(item.id)).map(item => Number(item.data.version || 1));
+      if (versions.some(version => !Number.isSafeInteger(version) || version < 1)) throw new Error("Template history has an invalid version number.");
+      if (Math.max(...versions) >= Number.MAX_SAFE_INTEGER) throw new Error("This template has reached the supported version limit.");
+      const { reviewer: _reviewer, approvedAt: _approved, submittedAt: _submitted, rejectedAt: _rejected, rejectionReason: _rejection, reviewHistory: _history, lastActionReason: _reason, ...carried } = template.data;
+      const copy = makeRecord(state, "templates", { name: template.name, status: "draft", createdAt: now, data: { ...carried, version: Math.max(...versions) + 1, author: ctx.actor, previousVersionId: template.id, templateRootId: rootId } });
+      return result("Draft template version created. The approved version is unchanged.", copy);
+    }
     if (input.action === "submit_template") {
       assertActionRole(ctx, ["Admin"]);
       if (!["draft", "rejected"].includes(template.status)) throw new Error(`A ${template.status} template cannot be submitted.`);
-      template.status = "submitted"; template.data.author = ctx.actor;
+      if (!template.data.author || template.data.author !== ctx.actor) throw new Error("Only the template author can submit it for review.");
+      const problems = templateTextProblems(template.data.text);
+      if (problems.length) throw new Error(problems.join(' '));
+      template.status = "submitted"; template.data.submittedAt = now;
     } else {
       assertActionRole(ctx, ["Compliance reviewer"]);
-      if (template.data.author === ctx.actor || template.status !== "submitted") throw new Error("Submit the template for review, then ask a Compliance reviewer other than its author to approve it.");
-      template.status = "approved"; template.data.reviewer = ctx.actor; template.data.approvedAt = now;
+      if (!template.data.author || template.data.author === ctx.actor || template.status !== "submitted") throw new Error("Submit the template for review, then ask a Compliance reviewer other than its author to approve or reject it.");
+      if (input.action === "approve_template") {
+        const problems = templateTextProblems(template.data.text);
+        if (problems.length) throw new Error(problems.join(' '));
+        template.status = "approved"; template.data.approvedAt = now;
+      } else {
+        template.status = "rejected"; template.data.rejectedAt = now; template.data.rejectionReason = reason(input);
+      }
+      template.data.reviewer = ctx.actor;
+      template.data.reviewHistory = [...(Array.isArray(template.data.reviewHistory) ? template.data.reviewHistory : []), { status: template.status, reviewer: ctx.actor, at: now, reason: reason(input) }];
     }
+    template.data.lastActionReason = reason(input);
     touch(template, now); return result(`Template ${template.status}.`, template);
   }
   if (input.action === "run_reconciliation") {

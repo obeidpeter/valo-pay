@@ -2,6 +2,8 @@
 
 These helpers are a tested staging foundation. They do not approve live data, provision staff, change the sandbox's authentication or encrypt existing database records. A deployment must still meet the pre-data and pre-live requirements in `docs/BUILD_STATUS.md`. No application route calls these helpers automatically.
 
+The dedicated, separately constructed staging app now connects these helpers to a restricted repository for synthetic protected notes. It is not mounted in the deployed sandbox. Complete HTTP and database rehearsals are described in `docs/operational-rehearsals.md`; the identity service and key provider still require separate host provisioning.
+
 ## Provisioned access and MFA
 
 `artifacts/api-server/src/lib/pilot-access.ts` exports `authorizePilotAccess`. It accepts the authenticated object returned by Clerk's server middleware, a current server-provisioned membership, the requested lender/action and an injected staging policy. It does not verify JWT signatures itself. Decoding a token or accepting an object from the browser is not authentication.

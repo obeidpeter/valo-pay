@@ -18,6 +18,7 @@ import type { Context, DomainState, ValopayRecord } from "../../api-server/src/d
 import { seedMerchant } from "../../api-server/src/lib/valopay-seed";
 import { getGates } from "../../api-server/src/lib/valopay-readiness";
 import { pageRecords } from "../../api-server/src/lib/valopay-list";
+import { importCsv } from "../../api-server/src/lib/valopay-import";
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../../api-server/src/lib/valopay-close-views";
 import type { CloseRuntime } from "../../api-server/src/domain/effective-close-schedule";
 
@@ -188,6 +189,10 @@ export function installFakeApi(options: { now?: string; role?: string } = {}): F
       if (body.action === "verify_audit") return S.PerformActionResponse.parse(withState(merchantId, (state) => ({ message: "Audit-chain verification completed.", data: verifyAudit(state) }), { action: "verify_audit", objectId: "workspace", summary: body.reason || "Synthetic workspace operation" }));
       if (body.action === "mark_pack_used") fail("Synthetic packs cannot be recorded as evidence used in a real case.", 403);
       return S.PerformActionResponse.parse(withState(merchantId, (state, ctx) => executeAction(state, ctx, body), { action: body.action, objectId: body.recordId || "workspace", summary: body.reason || "Synthetic workspace operation" }));
+    }],
+    ["POST", /^\/v1\/imports$/, (_p, query, raw) => {
+      const body = S.ImportRecordsBody.parse(raw);
+      return S.ImportRecordsResponse.parse(withState(merchantOf(query), (state, ctx) => importCsv(state, ctx, body), body.commit ? { action: 'post.imports', objectId: 'workspace', summary: 'Synthetic CSV import' } : undefined));
     }],
     ["GET", /^\/v1\/customers\/(?<id>[^/]+)\/timeline$/, (params, query) => S.GetCustomerTimelineResponse.parse(withState(merchantOf(query), (state) => customerTimeline(state, params.id!)))],
     ["GET", /^\/v1\/reports$/, (_p, query) => S.GetReportsResponse.parse(withState(merchantOf(query), (state, ctx) => buildConsoleReports(state, ctx.now, api.scheduler)))],

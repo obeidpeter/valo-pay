@@ -6,3 +6,4 @@ export * from "./money";
 export * from "./policy";
 export * from "./records";
 export * from "./text";
+export * from "./templates";

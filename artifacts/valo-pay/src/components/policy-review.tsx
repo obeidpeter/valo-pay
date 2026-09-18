@@ -1,5 +1,5 @@
 import type { ValopayRecord } from '@workspace/api-client-react';
-import { policyGuardrails } from '@workspace/valopay-schema';
+import { policyGuardrails, templateTextProblems } from '@workspace/valopay-schema';
 import { readableLabel } from '@/components/record-label';
 
 /** An explicit link takes precedence. A missing link is never replaced with a guessed match. */
@@ -21,7 +21,7 @@ const sampleValues: Record<string, string> = {
 };
 
 export function renderSampleMessage(text: unknown) {
-  return String(text || '').replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (token, name: string) => Object.hasOwn(sampleValues, name) ? sampleValues[name]! : token);
+  return String(text || '').replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (token, name: string) => Object.hasOwn(sampleValues, name.trim()) ? sampleValues[name.trim()]! : token);
 }
 
 export function TemplatePreview({ text, title = 'Sample customer message' }: { text: unknown; title?: string }) {
@@ -31,7 +31,7 @@ export function TemplatePreview({ text, title = 'Sample customer message' }: { t
       <p className="text-xs font-semibold text-muted-foreground">{title}</p>
       <blockquote className="rounded-lg border bg-background p-3 text-sm whitespace-pre-wrap break-words">{rendered || 'Write a message to see the sample here.'}</blockquote>
       <p className="text-xs text-muted-foreground">Synthetic example only. No message is sent.</p>
-      {/\{\{[^{}]*\}\}/.test(rendered) && <p className="text-xs text-warning-foreground">This preview cannot fill every placeholder. Check any remaining braces before submitting the template.</p>}
+      {Boolean(text) && templateTextProblems(text).length > 0 && <div role="status" className="space-y-1 text-xs text-warning-foreground"><p>This message needs changes before it can be saved or submitted.</p>{templateTextProblems(text).map(problem => <p key={problem}>{problem}</p>)}</div>}
     </div>
   );
 }

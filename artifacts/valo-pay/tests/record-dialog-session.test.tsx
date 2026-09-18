@@ -1,10 +1,10 @@
 import { act } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { renderApp, screen, userEvent, waitFor, within } from './harness';
 
 let api: FakeApi;
-beforeEach(() => { api = installFakeApi(); });
+beforeEach(() => { api = installFakeApi(); vi.spyOn(window, 'confirm').mockReturnValue(true); });
 afterEach(() => api.uninstall());
 
 describe('record dialog request sessions', () => {

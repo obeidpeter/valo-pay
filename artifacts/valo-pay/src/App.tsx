@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import { Loading } from '@/components/loading';
 import { focusMain } from '@/lib/focus';
+import { installUnsavedNavigationGuard } from '@/lib/unsaved-changes';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -208,6 +209,7 @@ function ClerkProviderWithRoutes() {
 }
 
 function App() {
+  useEffect(installUnsavedNavigationGuard, []);
   return (
     <WouterRouter base={basePath}>
       <ClerkProviderWithRoutes />

@@ -608,7 +608,7 @@ export const getUpdateRecordUrl = (kind: string,
 }
 
 /**
- * Editable kinds only; an approved, preregistered or closed version is immutable, and deletion does not exist.
+ * Editable kinds only; an approved, preregistered or closed version is immutable. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version.
  * @summary Update a record
  */
 export const updateRecord = async (kind: string,
@@ -1246,7 +1246,7 @@ export const getUpdateSettingsUrl = (params: UpdateSettingsParams,) => {
 }
 
 /**
- * The execution window, authorisation mode, contact route, thresholds, the daily close time (WAT) and whether closes are scheduled; Admin only.
+ * Admin only. Send expectedRevision from the settings originally opened; 409 leaves outdated edits unapplied. The revision covers editable preferences and is unaffected by scheduler cursor changes. An identical successful Idempotency-Key replay returns its original result before checking the version.
  * @summary Change a lender's execution settings
  */
 export const updateSettings = async (settingsInput: SettingsInput,

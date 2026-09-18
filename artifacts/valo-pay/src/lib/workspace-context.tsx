@@ -3,6 +3,7 @@ import { useGetWorkspace, Workspace } from '@workspace/api-client-react';
 import { useSessionUser } from '@/lib/auth';
 import { useQueryClient } from '@tanstack/react-query';
 import { WorkspaceUnavailable } from '@/components/workspace-unavailable';
+import { confirmUnsavedChanges } from './unsaved-changes';
 
 type WorkspaceContextType = {
   merchantId: string | null;
@@ -33,7 +34,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   },[userId,isLoaded,queryClient]);
 
   return (
-    <WorkspaceContext.Provider value={{ merchantId, setMerchantId, workspace, isLoading:isLoading||!isLoaded }}>
+    <WorkspaceContext.Provider value={{ merchantId, setMerchantId: id => { if (id === merchantId || confirmUnsavedChanges()) setMerchantId(id); }, workspace, isLoading:isLoading||!isLoaded }}>
       {error?<WorkspaceUnavailable error={error} retry={()=>{void refetch();}} busy={isFetching}/>:children}
     </WorkspaceContext.Provider>
   );
