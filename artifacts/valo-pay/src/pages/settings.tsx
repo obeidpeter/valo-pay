@@ -161,7 +161,7 @@ export default function SettingsPage() {
           </div>
           {execAlert && <div className="px-6 pt-6"><FormAlert title="Settings not saved">{execAlert}</FormAlert></div>}
           <div className="p-6 space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 gap-6">
               <div>
                 <label className="text-sm font-medium block mb-1">Authorisation Mode</label>
                 {isEditingExec ? (
@@ -331,7 +331,7 @@ export default function SettingsPage() {
 
       {/* Appearance: light or dark for this browser. It follows the device unless chosen here, and it is not a
           workspace setting, so it needs no account and no request (Nielsen 3: control; 7: personalisation). */}
-      <section className="bg-card border rounded-xl shadow-sm p-6" aria-labelledby="appearance-title">
+      <section className="bg-card border rounded-xl shadow-sm p-6 print:hidden" aria-labelledby="appearance-title">
         <h2 id="appearance-title" className="font-semibold text-lg">Appearance</h2>
         <p className="text-sm text-muted-foreground mt-1">Light or dark, for this browser only. It is not a workspace setting, so each person and each device keeps its own.</p>
         <fieldset className="mt-4">
@@ -351,7 +351,7 @@ export default function SettingsPage() {
       </section>
 
       {/* Keyboard: listed so the shortcuts can be found rather than guessed (Nielsen 7: accelerators; 10: help focused on the task). */}
-      <section className="bg-card border rounded-xl shadow-sm overflow-hidden" aria-labelledby="keyboard-title">
+      <section className="bg-card border rounded-xl shadow-sm overflow-hidden print:hidden" aria-labelledby="keyboard-title">
         <div className="p-4 border-b bg-secondary/20">
           <h2 id="keyboard-title" className="font-semibold text-lg">Keyboard</h2>
           <p className="text-sm text-muted-foreground mt-1">Everything in the console works without a mouse. These keys save steps.</p>

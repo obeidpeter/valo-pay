@@ -8,6 +8,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from './ui
 import { BrandLockup } from './brand';
 import { ErrorBoundary, ErrorNotice } from './error-boundary';
 import { focusMain } from '@/lib/focus';
+import { formatDate } from '@/lib/formatters';
 
 /** The console's pages, in the one order they are listed: the sidebar, the phone drawer and the page title. */
 const navItems = [
@@ -97,6 +98,16 @@ export function Layout({ children }: { children: ReactNode }) {
     sidebar.addEventListener('change', onChange);
     return () => sidebar.removeEventListener('change', onChange);
   }, []);
+  // Paper carries what the screen's chrome carried: the lender, the sandbox notice, and when it was printed.
+  // The time is taken again as the print dialog opens, since a page can sit open for a day before it is printed.
+  const lenderName = workspace?.merchants.find((m: any) => m.id === merchantId)?.name;
+  const pageTitle = navItems.find(n => n.href === location)?.label || 'Customer timeline';
+  const [printedAt, setPrintedAt] = useState(() => formatDate(new Date().toISOString()));
+  useEffect(() => {
+    const stamp = () => setPrintedAt(formatDate(new Date().toISOString()));
+    window.addEventListener('beforeprint', stamp);
+    return () => window.removeEventListener('beforeprint', stamp);
+  }, []);
   const lenderSelect = (id: string, className: string) => (
     <select id={id} className={className} value={merchantId || ''} onChange={(e) => setMerchantId(e.target.value)}>
       {workspace?.merchants.map((m: any) => <option key={m.id} value={m.id}>{m.name}</option>)}
@@ -104,18 +115,18 @@ export function Layout({ children }: { children: ReactNode }) {
   );
 
   return (
-    <div className="min-h-screen flex flex-col bg-background">
+    <div className="min-h-screen flex flex-col bg-background print:block print:min-h-0">
       {/* The first tab stop skips the banner, the lender selector and eleven links (universal design: low physical effort). */}
       <a href="#main" onClick={focusMain} className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground">Skip to page content</a>
       {/* Sandbox banner: on a phone it keeps the sentence that matters and drops the restatement, so it stays one line. */}
-      <div className="bg-warning text-warning-foreground px-4 py-2 text-sm font-medium flex items-center justify-center gap-2 border-b border-warning-border z-50">
+      <div className="bg-warning text-warning-foreground px-4 py-2 text-sm font-medium flex items-center justify-center gap-2 border-b border-warning-border z-50 print:hidden">
         <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
         <span>Sandbox · Synthetic data. We never hold money.<span className="hidden sm:inline"> No live operations permitted.</span></span>
         {workspace?.environment && <span className="ml-2 hidden sm:inline-block font-mono text-xs bg-warning-border px-2 py-0.5 rounded">MODE: {workspace.environment}</span>}
       </div>
 
       {/* Phone bar: the brand, the lender being worked on, and the drawer with the same pages as the sidebar. */}
-      <div className="md:hidden sticky top-0 z-40 flex items-center gap-2 border-b bg-card px-3 py-2">
+      <div className="md:hidden sticky top-0 z-40 flex items-center gap-2 border-b bg-card px-3 py-2 print:hidden">
         <BrandLockup descriptor={false} compact className="shrink-0" />
         <label htmlFor="lender-phone" className="sr-only">Active lender</label>
         {lenderSelect('lender-phone', 'min-w-0 flex-1 rounded-md border bg-secondary p-2 text-sm text-secondary-foreground')}
@@ -140,9 +151,9 @@ export function Layout({ children }: { children: ReactNode }) {
           </SheetContent>
         </Sheet>
       </div>
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden print:block print:overflow-visible">
         {/* Sidebar */}
-        <aside className="w-64 border-r bg-card flex flex-col hidden md:flex shrink-0">
+        <aside className="w-64 border-r bg-card flex flex-col hidden md:flex shrink-0 print:hidden">
           <div className="p-4 border-b h-16 flex items-center justify-between">
             <BrandLockup descriptor={false} />
             <span className="text-xs text-muted-foreground font-mono">STAGE 1</span>
@@ -166,13 +177,22 @@ export function Layout({ children }: { children: ReactNode }) {
         </aside>
 
         {/* Main Content */}
-        <main id="main" tabIndex={-1} className="flex-1 overflow-auto bg-background focus:outline-none">
-          <div className="p-4 sm:p-6 md:p-8 max-w-7xl mx-auto" aria-busy={isLoading && !workspace}>
+        <main id="main" tabIndex={-1} className="flex-1 overflow-auto bg-background focus:outline-none print:overflow-visible">
+          <div className="p-4 sm:p-6 md:p-8 max-w-7xl mx-auto print:max-w-none print:p-0" aria-busy={isLoading && !workspace}>
+            {/* Print only: the provenance the screen's banner and sidebar carried. */}
+            <div className="hidden print:block mb-6 border-b pb-3">
+              <div className="flex items-baseline justify-between gap-4 text-sm">
+                <span className="font-bold">Valo Pay · synthetic sandbox</span>
+                {lenderName && <span>{lenderName}</span>}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">Synthetic data. We never hold money. Nothing on this page is live evidence or a statement of account.</p>
+            </div>
             {/* Until the workspace arrives the pages have no lender to show, so the page area says what is happening instead.
                 A page that stops working keeps the sidebar and the lender selector as the way out. */}
             {isLoading && !workspace
               ? <p role="status" className="text-sm text-muted-foreground">Loading your workspace…</p>
               : <ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{children}</ErrorBoundary>}
+            <p className="hidden print:block mt-8 border-t pt-3 text-xs text-muted-foreground">Printed {printedAt} from the Valo Pay sandbox · {pageTitle}{lenderName ? ` · ${lenderName}` : ''}.</p>
           </div>
         </main>
       </div>

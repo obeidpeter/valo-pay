@@ -3,7 +3,12 @@
 @import 'tw-animate-css';
 @plugin "@tailwindcss/typography";
 
-@custom-variant dark (&:is(.dark *));
+/* Class-based, and on screens only: on paper the light theme prints whatever the screen showed. */
+@custom-variant dark {
+  @media screen {
+    &:is(.dark *) { @slot; }
+  }
+}
 
 @theme inline {
   --color-background: hsl(var(--background));
@@ -124,58 +129,61 @@
   --radius: 0.5rem;
 }
 
-.dark {
-  color-scheme: dark;
-  --background: 232 47% 8%;
-  --foreground: 210 20% 98%;
-  
-  --border: 232 25% 18%;
-  --input: 232 25% 18%;
-  --ring: 214 32% 91%;
-  
-  --card: 232 47% 10%;
-  --card-foreground: 210 20% 98%;
-  --card-border: 232 25% 18%;
-  
-  --popover: 232 47% 10%;
-  --popover-foreground: 210 20% 98%;
-  --popover-border: 232 25% 18%;
-  
-  --primary: 210 20% 98%;
-  --primary-foreground: 232 47% 8%;
-  --primary-border: 210 20% 90%;
-  
-  --secondary: 232 25% 18%;
-  --secondary-foreground: 210 20% 98%;
-  --secondary-border: 232 25% 25%;
-  
-  --muted: 232 25% 15%;
-  --muted-foreground: 215 16% 65%;
-  --muted-border: 232 25% 18%;
-  
-  --accent: 232 25% 15%;
-  --accent-foreground: 210 20% 98%;
-  --accent-border: 232 25% 18%;
-  
-  /* Red light enough to read as text on the dark card (5.4:1); the destructive button therefore carries dark text, like success. */
-  --destructive: 348 85% 62%;
-  --destructive-foreground: 232 47% 8%;
-  --destructive-border: 348 83% 45%;
+/* The dark values apply on screens only; a printout is always the light theme's ink on white. */
+@media screen {
+  .dark {
+    color-scheme: dark;
+    --background: 232 47% 8%;
+    --foreground: 210 20% 98%;
+    
+    --border: 232 25% 18%;
+    --input: 232 25% 18%;
+    --ring: 214 32% 91%;
+    
+    --card: 232 47% 10%;
+    --card-foreground: 210 20% 98%;
+    --card-border: 232 25% 18%;
+    
+    --popover: 232 47% 10%;
+    --popover-foreground: 210 20% 98%;
+    --popover-border: 232 25% 18%;
+    
+    --primary: 210 20% 98%;
+    --primary-foreground: 232 47% 8%;
+    --primary-border: 210 20% 90%;
+    
+    --secondary: 232 25% 18%;
+    --secondary-foreground: 210 20% 98%;
+    --secondary-border: 232 25% 25%;
+    
+    --muted: 232 25% 15%;
+    --muted-foreground: 215 16% 65%;
+    --muted-border: 232 25% 18%;
+    
+    --accent: 232 25% 15%;
+    --accent-foreground: 210 20% 98%;
+    --accent-border: 232 25% 18%;
+    
+    /* Red light enough to read as text on the dark card (5.4:1); the destructive button therefore carries dark text, like success. */
+    --destructive: 348 85% 62%;
+    --destructive-foreground: 232 47% 8%;
+    --destructive-border: 348 83% 45%;
 
-  /* Status colours on a dark page: deep surfaces with pale text (12:1), and strong colours at 7.6:1 or better on the background. */
-  --success: 142 69% 58%;
-  --success-foreground: 232 47% 8%;
-  --warning: 21 92% 14%;
-  --warning-foreground: 48 96% 89%;
-  --warning-border: 23 83% 31%;
-  --warning-strong: 43 96% 56%;
-  --info: 226 57% 21%;
-  --info-foreground: 214 95% 93%;
-  --info-border: 226 71% 40%;
-  --info-strong: 213 94% 68%;
+    /* Status colours on a dark page: deep surfaces with pale text (12:1), and strong colours at 7.6:1 or better on the background. */
+    --success: 142 69% 58%;
+    --success-foreground: 232 47% 8%;
+    --warning: 21 92% 14%;
+    --warning-foreground: 48 96% 89%;
+    --warning-border: 23 83% 31%;
+    --warning-strong: 43 96% 56%;
+    --info: 226 57% 21%;
+    --info-foreground: 214 95% 93%;
+    --info-border: 226 71% 40%;
+    --info-strong: 213 94% 68%;
 
-  --brand: 14 100% 55%;
-  --brand-foreground: 0 0% 100%;
+    --brand: 14 100% 55%;
+    --brand-foreground: 0 0% 100%;
+  }
 }
 
 @layer base {
@@ -191,4 +199,29 @@
    Unlayered on purpose: it must win over the border utilities the controls carry. */
 [aria-invalid="true"] {
   border-color: hsl(var(--destructive));
+}
+
+/* Paper. Everything a page needs to be read later and nothing it needs to be operated: the chrome, the
+   controls and the notices go; tables open to their full width with the header repeated on each page;
+   rows and cards are kept whole; links are plain text; the ink is the light theme's whatever the screen
+   showed (the dark tokens are scoped to screens above). The layout adds the provenance line at the top
+   and the printed time at the foot (components/layout.tsx). */
+@media print {
+  @page { margin: 16mm 14mm; }
+  html { font-size: 11pt; }
+  body { background: #fff !important; }
+  button, input, select, textarea, nav, [role="tablist"], .fixed { display: none !important; }
+  * { box-shadow: none !important; text-shadow: none !important; }
+  a { color: inherit; text-decoration: none; }
+  .overflow-auto, .overflow-x-auto, .overflow-y-auto, .overflow-hidden { overflow: visible !important; }
+  [class*="max-h-"] { max-height: none !important; }
+  table { width: 100%; }
+  thead { display: table-header-group; }
+  tr, li, figure, dt, dd { break-inside: avoid; }
+  /* Long identifiers wrap so a table fits the paper; headings, amounts and status pills stay whole. */
+  td { overflow-wrap: anywhere; }
+  th { overflow-wrap: normal; }
+  td.text-right, td .rounded-full { white-space: nowrap; }
+  .truncate { overflow: visible !important; white-space: normal !important; text-overflow: clip !important; }
+  h1, h2, h3 { break-after: avoid; }
 }

@@ -58,7 +58,8 @@ export default function CustomersPage() {
       />
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
-        <div className="p-4 border-b flex items-center gap-4 bg-secondary/20">
+        {search.trim() && <p className="hidden print:block p-4 border-b text-sm">Search: “{search.trim()}”</p>}
+        <div className="p-4 border-b flex items-center gap-4 bg-secondary/20 print:hidden">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <input 
