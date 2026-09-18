@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
@@ -10,16 +10,20 @@ import { formatKobo, formatDate } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { exceptionSeverities, resolutionCodesFor } from '@workspace/valopay-schema';
 import { readableLabel, RecordLabel, StatusBadge } from '@/components/record-label';
+import { deadlineInstant, deadlineOrder, isDueToday, isDeadlineOverdue as isOverdue, useQueueFilters } from '@/lib/queue-filters';
+
+const exceptionViews = ['open', 'high', 'overdue', 'due-today', 'resolved'] as const;
 
 export default function ExceptionsPage() {
   const { merchantId } = useWorkspace();
   const [selectedEx, setSelectedEx] = useState<any>(null);
   const [actionKind, setActionKind] = useState<'update' | 'resolve' | ''>('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [filter, setFilter] = useState<'open' | 'high' | 'resolved'>('open');
+  const { view: filter, owner, type, setView: setFilter, setOwner, setType } = useQueueFilters(exceptionViews, 'open');
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  useEffect(() => { setSelectedEx(null); setIsDialogOpen(false); }, [merchantId]);
   /** WAI-ARIA tabs: one tab stop for the group, arrows and Home/End move the selection and the focus together. */
-  const onTabKeyDown = (event: React.KeyboardEvent, index: number, keys: Array<'open' | 'high' | 'resolved'>) => {
+  const onTabKeyDown = (event: React.KeyboardEvent, index: number, keys: Array<typeof filter>) => {
     const moves: Record<string, number> = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: keys.length - 1 };
     if (!(event.key in moves)) return;
     event.preventDefault();
@@ -28,7 +32,7 @@ export default function ExceptionsPage() {
     tabRefs.current[next]?.focus();
   };
 
-  const { data, isLoading, error } = useListRecords(
+  const { data, isLoading, error, refetch } = useListRecords(
     'exceptions',
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('exceptions', { merchantId: merchantId! }) } }
@@ -45,13 +49,31 @@ export default function ExceptionsPage() {
   if (!merchantId) return null;
 
   const isOpen = (status: string) => !['resolved', 'closed'].includes(status);
-  const items = (data?.items || []).filter(exception =>
-    filter === 'resolved' ? !isOpen(exception.status) : filter === 'high' ? isOpen(exception.status) && String(exception.data?.severity) === 'high' : isOpen(exception.status)
+  const now = Date.now();
+  const records = data?.items || [];
+  const owned = records.filter(exception => (!owner || String(exception.data?.owner || 'Unassigned') === owner) && (!type || exception.data?.type === type));
+  const matchesView = (exception: typeof records[number], view: typeof filter) => {
+    if (view === 'resolved') return !isOpen(exception.status);
+    if (!isOpen(exception.status)) return false;
+    if (view === 'high') return String(exception.data?.severity) === 'high';
+    if (view === 'overdue') return isOverdue(exception.data?.dueBy, now);
+    if (view === 'due-today') return isDueToday(exception.data?.dueBy, now);
+    return true;
+  };
+  const severityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+  const items = owned.filter(exception => matchesView(exception, filter)).sort((a, b) =>
+    Number(isOverdue(b.data?.dueBy, now)) - Number(isOverdue(a.data?.dueBy, now)) ||
+    (severityOrder[String(a.data?.severity)] ?? 4) - (severityOrder[String(b.data?.severity)] ?? 4) ||
+    deadlineOrder(a.data?.dueBy, b.data?.dueBy)
   );
+  const owners = [...new Set(records.map(exception => String(exception.data?.owner || 'Unassigned'))), ...(owner ? [owner] : [])].filter((value, index, values) => values.indexOf(value) === index).sort();
+  const types = [...new Set([...records.map(exception => String(exception.data?.type || 'unknown')), ...(type ? [type] : [])])].sort();
   const filters: Array<{ key: typeof filter; label: string }> = [
-    { key: 'open', label: `All open (${(data?.items || []).filter(exception => isOpen(exception.status)).length})` },
-    { key: 'high', label: `High severity (${(data?.items || []).filter(exception => isOpen(exception.status) && String(exception.data?.severity) === 'high').length})` },
-    { key: 'resolved', label: `Resolved (${(data?.items || []).filter(exception => !isOpen(exception.status)).length})` },
+    { key: 'open', label: `All open (${owned.filter(exception => matchesView(exception, 'open')).length})` },
+    { key: 'high', label: `High severity (${owned.filter(exception => matchesView(exception, 'high')).length})` },
+    { key: 'overdue', label: `Overdue (${owned.filter(exception => matchesView(exception, 'overdue')).length})` },
+    { key: 'due-today', label: `Due today (${owned.filter(exception => matchesView(exception, 'due-today')).length})` },
+    { key: 'resolved', label: `Resolved (${owned.filter(exception => matchesView(exception, 'resolved')).length})` },
   ];
 
   return (
@@ -64,7 +86,7 @@ export default function ExceptionsPage() {
       </header>
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
-        <div className="p-5 border-b flex items-center gap-4">
+        <div className="p-5 border-b flex flex-wrap items-center gap-4">
           <p className="hidden print:block text-sm">Showing: {filters.find(option => option.key === filter)?.label}</p>
           <div className="flex flex-wrap gap-2" role="tablist" aria-label="Exception filter">
             {filters.map((option, index) => (
@@ -73,18 +95,31 @@ export default function ExceptionsPage() {
               </Button>
             ))}
           </div>
+          <label className="flex items-center gap-2 text-sm sm:ml-auto">Owner
+            <select aria-label="Filter exceptions by owner" className="max-w-52 rounded-md border bg-background px-3 py-2" value={owner} onChange={event => setOwner(event.target.value)}>
+              <option value="">All owners</option>
+              {owners.map(value => <option key={value} value={value}>{value}</option>)}
+            </select>
+          </label>
+          <label className="flex items-center gap-2 text-sm">Type
+            <select aria-label="Filter exceptions by type" className="max-w-60 rounded-md border bg-background px-3 py-2" value={type} onChange={event => setType(event.target.value)}>
+              <option value="">All types</option>
+              {types.map(value => <option key={value} value={value}>{readableLabel(value)}</option>)}
+            </select>
+          </label>
+          <p className="w-full text-xs text-muted-foreground">Overdue items first, then severity and deadline. Dates use West Africa Time.</p>
         </div>
 
         {isLoading ? (
           <Loading what="exceptions" />
         ) : error ? (
-          <p role="alert" className="p-6 text-sm text-destructive">Exceptions could not be loaded. Reload the page to try again.</p>
+          <div role="alert" className="p-6 text-sm"><p>Exceptions could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => refetch()}>Try again</Button></div>
         ) : items.length === 0 ? (
-          <EmptyState filtered title={filter === 'resolved' ? 'Nothing resolved yet' : filter === 'high' ? 'No high-severity exceptions open' : 'All clear: no open exceptions'}>
+          <EmptyState filtered title={owner || type ? 'No exceptions match these filters' : filter === 'resolved' ? 'Nothing resolved yet' : filter === 'high' ? 'No high-severity exceptions open' : filter === 'overdue' ? 'No overdue exceptions' : filter === 'due-today' ? 'No exceptions due today' : 'All clear: no open exceptions'}>
             {filter === 'resolved'
               ? 'Resolved and closed items will appear here with a record of how they were resolved.'
-              : filter === 'high'
-                ? 'Select All open to review items with a lower severity.'
+              : filter !== 'open' || owner || type
+                ? 'Select All open, All owners and All types to review other exceptions.'
                 : 'Items appear here when reconciliation finds a problem that needs review, such as an unmatched payment or missing notice evidence.'}
           </EmptyState>
         ) : (
@@ -127,7 +162,8 @@ export default function ExceptionsPage() {
                       </div>
                       {!!exception.data?.dueBy && (
                         <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
-                          <Calendar className="h-3 w-3" /> Due {formatDate(String(exception.data.dueBy))}
+                          <Calendar className="h-3 w-3" /> Due {formatDate(deadlineInstant(exception.data.dueBy))}
+                          {isOpen(exception.status) && isOverdue(exception.data.dueBy, now) && <span className="font-semibold text-destructive">Overdue</span>}
                         </div>
                       )}
                       {!!exception.data?.notes && (

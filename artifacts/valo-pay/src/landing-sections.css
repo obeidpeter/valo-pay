@@ -141,3 +141,25 @@
   .landing-site .lp-footer-main { padding-block: 23px; }
   .landing-site .lp-footer-bottom { flex-direction: column; gap: 7px; }
 }
+.landing-site .lp-tour-tabs { display: flex; flex-wrap: wrap; gap: 10px; margin: 25px 0; }
+.landing-site .lp-tour-copy { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin: 20px 0; }
+.landing-site .lp-tour-copy h3 { font-size: 19px; font-weight: 600; color: var(--lp-ink); }
+.landing-site .lp-tour-copy p, .landing-site .lp-tour-footnote { color: var(--lp-muted); font-size: 13px; line-height: 1.7; margin-top: 8px; }
+.landing-site .lp-tour-frame { overflow: auto; border: 1px solid var(--lp-line); border-radius: 14px; background: var(--lp-card); }
+.landing-site .lp-tour-frame iframe { display: block; border: 0; width: 100%; min-width: 720px; height: 610px; }
+.landing-site .lp-tour-placeholder { min-height: 280px; padding: 36px 20px; display: flex; align-items: center; justify-content: center; flex-direction: column; text-align: center; gap: 18px; background: radial-gradient(ellipse at center, rgb(239 90 35 / .08), transparent 70%); }
+.landing-site .lp-tour-placeholder > svg { width: 44px; height: 44px; color: var(--lp-orange); stroke-width: 1.25; }
+.landing-site .lp-tour-placeholder p { color: var(--lp-ink); font-weight: 500; }
+.landing-site .lp-tour-placeholder span { max-width: 440px; color: var(--lp-muted); font-size: 12px; line-height: 1.7; }
+.landing-site .lp-pilot-inner { display: grid; grid-template-columns: 1.5fr 1fr; gap: 48px; align-items: center; }
+.landing-site .lp-pilot h2 { color: var(--lp-ink); font-size: clamp(25px, 3vw, 36px); font-weight: 600; letter-spacing: -.04em; line-height: 1.2; }
+.landing-site .lp-pilot p:not(.lp-section-kicker) { color: var(--lp-muted); font-size: 14px; line-height: 1.8; margin-top: 16px; max-width: 580px; }
+.landing-site .lp-pilot .lp-pilot-note { font-size: 12px !important; }
+.landing-site .lp-pilot-actions { display: flex; align-items: flex-start; flex-direction: column; gap: 12px; }
+.landing-site .lp-pilot-actions > a { font-size: 14px; overflow-wrap: anywhere; }
+.landing-site .lp-pilot-actions > a + a { color: var(--lp-ink); text-decoration: underline; text-underline-offset: 4px; }
+.landing-site .lp-pilot-actions > span { color: var(--lp-muted); font-size: 12px; }
+@media (max-width: 640px) {
+  .landing-site .lp-tour-copy { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .landing-site .lp-pilot-inner { grid-template-columns: 1fr; gap: 24px; }
+}

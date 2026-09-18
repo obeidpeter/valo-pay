@@ -3,13 +3,26 @@
 import assert from "node:assert/strict";
 import { DAY, ctxAt, wat } from "./helpers.js";
 import { executeAction } from "../src/domain/actions.js";
-import { buildReports, precisionAudit, test5Report, unitEconomics } from "../src/domain/reports.js";
+import { buildOverview, buildReports, precisionAudit, test5Report, unitEconomics } from "../src/domain/reports.js";
 import { seededSample, wilsonInterval } from "../src/domain/stats.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
 
 let checks = 0;
 const finance = (now: string) => ctxAt(now, "Finance");
+
+// Overview links must describe the records in their destination queue.
+{
+  const state = seedMerchant("overview-queues");
+  const now = wat("2027-07-20T09:00:00");
+  makeRecord(state, "allocations", { name: "Second proposed match", status: "proposed", amountKobo: 1000, data: { paymentId: "same-payment", dueItemId: "next-instalment" } });
+  const earliest = makeRecord(state, "due-items", { name: "Earliest deadline added last", status: "scheduled", amountKobo: 1000, data: { dueDate: "2020-01-01" } });
+  const overview = buildOverview(state, now);
+  assert.equal(overview.queues.find(item => item.key === "review")?.value, recordsOf(state, "allocations").filter(item => item.status === "proposed").length);
+  assert.equal(overview.upcoming[0]?.id, earliest.id, "sort all deadlines before limiting the dashboard list");
+  assert.equal(buildReports(state, now).operational.asOf, now);
+  checks += 3;
+}
 
 // ---------- Statistics helpers ----------
 {
@@ -83,6 +96,9 @@ const finance = (now: string) => ctxAt(now, "Finance");
   assert.equal(confirmed.reviewCadenceMet, true, "no gap longer than a fortnight since the first close");
   review(wat("2027-07-08T10:00:00"), 3); // three jobs is not a confirmation
   review(wat("2027-07-08T11:00:00"), 4, ""); // no named reviewer is not a confirmation
+  review(wat("2027-07-08T12:00:00"), ['mandates', 'mandates', 'mandates', 'mandates']);
+  review(wat("2027-07-08T12:30:00"), ['a', 'b', 'c', 'd']);
+  review(wat("2027-07-08T13:00:00"), ['mandates', 'retries', 'reconciliation', 'audit'], '   ');
   assert.equal(test5Report(state, now).confirmingReviews, 5);
   assert.equal(test5Report(state, wat("2027-07-25T09:00:00")).fortnightlyStaffConfirmed, false, "a confirmation older than a fortnight lapses");
   assert.equal(buildReports(state, now).operational.liveDays, 70);

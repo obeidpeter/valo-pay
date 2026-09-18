@@ -20,10 +20,10 @@ describe("loading and waiting", () => {
   it("names what a table is waiting for, in its own row", async () => {
     const release = api.hold(/^\/v1\/records\/due-items$/);
     renderApp("/collections");
-    const row = await screen.findByText("Loading instalments…");
+    const row = await screen.findByText("Loading collections…");
     expect(row.closest("tr")).toBeTruthy();
     release();
-    await waitFor(() => expect(screen.queryByText("Loading instalments…")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Loading collections…")).toBeNull());
   });
 
   it("says what a button is doing while its action runs, and cannot be pressed again", async () => {

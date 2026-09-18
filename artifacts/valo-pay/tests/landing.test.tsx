@@ -1,14 +1,40 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, waitFor } from "./harness";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
-afterEach(() => api.uninstall());
+afterEach(() => { api.uninstall(); vi.unstubAllEnvs(); });
 
 const hrefs = (name: RegExp) => screen.getAllByRole("link", { name }).map((link) => link.getAttribute("href"));
 
 describe("landing page", () => {
+  it('keeps the interactive preview inside a deployment mounted below the origin root', async () => {
+    vi.stubEnv('BASE_URL', '/preview/');
+    const user = userEvent.setup();
+    renderApp('/');
+    await user.click(screen.getByRole('button', { name: 'Load interactive preview' }));
+    expect(screen.getByTitle('Interactive Valo Pay overview preview — sample data').getAttribute('src')).toBe('/preview/overview?embedded=1');
+    await user.click(screen.getByRole('button', { name: /02 · Payment matching/ }));
+    expect(screen.getByTitle('Interactive Valo Pay payment matching preview — sample data').getAttribute('src')).toBe('/preview/reconciliation?view=review&embedded=1');
+    await user.click(screen.getByRole('button', { name: /03 · Daily close/ }));
+    expect(screen.getByTitle('Interactive Valo Pay daily close preview — sample data').getAttribute('src')).toBe('/preview/reports?embedded=1#daily-closes');
+    expect(api.calls).toEqual([]);
+  });
+  it("offers the approved pilot email and loads actual console screens only on request", async () => {
+    const user = userEvent.setup();
+    renderApp('/');
+    expect(document.querySelector('iframe')).toBeNull();
+    expect(api.calls).toEqual([]);
+    const contact = screen.getAllByRole('link', { name: 'Discuss a pilot' }).find(link => link.getAttribute('href')?.startsWith('mailto:'));
+    expect(contact?.getAttribute('href')).toMatch(/^mailto:obeidpeter1@gmail\.com\?subject=/);
+    await user.click(screen.getByRole('button', { name: 'Load interactive preview' }));
+    expect(screen.getByTitle('Interactive Valo Pay overview preview — sample data').getAttribute('src')).toBe('/overview?embedded=1');
+    await user.click(screen.getByRole('button', { name: /02 · Payment matching/ }));
+    expect(screen.getByTitle('Interactive Valo Pay payment matching preview — sample data').getAttribute('src')).toBe('/reconciliation?view=review&embedded=1');
+    // jsdom does not execute frames; actual frame requests are verified in a browser.
+    expect(api.calls).toEqual([]);
+  });
   it("says what Valo Pay is and is not, with every way in a real link, and creates no sandbox", async () => {
     renderApp("/");
     expect(await screen.findByRole("heading", { level: 1, name: "Know what was paid, what is due, and what needs attention." })).toBeTruthy();

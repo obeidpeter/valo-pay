@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
-import { renderApp, screen, userEvent } from "./harness";
+import { renderApp, screen, userEvent, within } from "./harness";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
-afterEach(() => api.uninstall());
+afterEach(() => { api.uninstall(); vi.restoreAllMocks(); });
 
 describe("reports", () => {
   it("runs a daily close from the page and shows the REC-07 chips, the trigger and the schedule", async () => {
@@ -33,5 +33,39 @@ describe("reports", () => {
     api.mutate((state) => { state.settings.scheduledCloseEnabled = false; });
     renderApp("/reports");
     expect(await screen.findByText("Automatic daily close is off. Run closes manually.")).toBeTruthy();
+  });
+
+  it('distinguishes no accuracy measurement from a measured zero and offers the next action', async () => {
+    renderApp('/reports');
+    const accuracy = await screen.findByText('Accuracy of reviewed allocations');
+    const card = accuracy.parentElement!;
+    expect(within(card).getByText('Not measured yet')).toBeTruthy();
+    expect(within(card).queryByText('0.0%')).toBeNull();
+    expect(within(card).getByRole('link', { name: 'Review matches' }).getAttribute('href')).toBe('/reconciliation#precision-audit');
+    expect(screen.getByText(/Current workspace totals.+Billing period:/)).toBeTruthy();
+  });
+
+  it('shows the daily-close failure and a safe way to check for a completed record before retrying', async () => {
+    const user = userEvent.setup();
+    api.failNext(/^\/v1\/actions$/, 'offline', 'POST');
+    renderApp('/reports');
+    await user.click(await screen.findByRole('button', { name: 'Run daily close' }));
+    expect(await screen.findByText('Daily close could not be confirmed')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Refresh close records' })).toBeTruthy();
+    expect(api.state().records.filter(record => record.kind === 'closes')).toHaveLength(0);
+    await user.click(screen.getByRole('button', { name: 'Run daily close' }));
+    expect(await screen.findByText('Daily close completed')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'View close record' }).getAttribute('href')).toBe('#daily-closes');
+  });
+
+  it('keeps billing exports reachable when the browser blocks the new tab', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    api.failNext(/^\/v1\/exports$/, 'offline', 'POST');
+    renderApp('/reports');
+    await user.click(await screen.findByRole('button', { name: 'Export billing CSV' }));
+    expect(await screen.findByText('Billing export not generated')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Export billing CSV' }));
+    expect(await screen.findByRole('link', { name: 'Open billing CSV' })).toBeTruthy();
   });
 });

@@ -8,6 +8,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useWorkspace } from '@/lib/workspace-context';
 import { readableLabel } from './record-label';
 import { formatDate } from '@/lib/formatters';
+import { koboToNaira, moneyFieldLabel, nairaToKobo } from '@/lib/money-input';
 
 const actionLabels: Record<string, string> = {
   mandate_suspend: 'Suspend mandate', mandate_cancel: 'Cancel mandate', mandate_reinstate: 'Resume mandate',
@@ -39,9 +40,14 @@ type RecordDialogProps = {
   title: string;
   defaultValues?: any;
   actionMutation?: string; // If provided, calls performAction with this action name instead of create/update
+  actionRecordId?: string; // An action can target a related record while the dialog keeps the review context.
+  context?: ReactNode | ((values: Record<string, any>) => ReactNode);
+  validate?: (values: Record<string, any>) => Record<string, string>;
 };
 
-export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title, defaultValues = {}, actionMutation }: RecordDialogProps) {
+export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourceFields, title, defaultValues = {}, actionMutation, actionRecordId, context, validate }: RecordDialogProps) {
+  const isMoney = (field: FieldDef) => field.type === 'number' && /Kobo$/.test(field.name);
+  const fields = sourceFields.map(field => isMoney(field) ? { ...field, label: moneyFieldLabel(field.label) } : field);
   const { merchantId } = useWorkspace();
   const queryClient = useQueryClient();
   const [formData, setFormData] = useState<any>({});
@@ -66,18 +72,19 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
     if (isOpen) {
       setResult(null); setFieldErrors({}); setFormErrors([]);
       create.reset();update.reset();perform.reset();
+      const initial: any = record ? { name: record.name, status: record.status, reference: record.reference, amountKobo: record.amountKobo, customerId: record.customerId, ...defaultValues } : { ...defaultValues };
       if (record) {
-        const initial: any = { ...defaultValues, name: record.name, status: record.status, reference: record.reference, amountKobo: record.amountKobo, customerId: record.customerId };
         fields.forEach(f => {
           // A field the record does not carry keeps its default instead of becoming undefined.
           if (f.isData && record.data && record.data[f.name] !== undefined) {
             initial[f.name] = record.data[f.name];
           }
         });
-        setFormData(initial);
-      } else {
-        setFormData(defaultValues);
       }
+      fields.forEach(field => {
+        if (isMoney(field) && initial[field.name] !== undefined && initial[field.name] !== '') initial[field.name] = koboToNaira(Number(initial[field.name]));
+      });
+      setFormData(initial);
     }
   // Initialise once per opening/record. Inline field arrays must not reset typing.
   }, [isOpen, record?.id, kind, actionMutation]);
@@ -101,8 +108,12 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
       const value = formData[f.name];
       const empty = value === undefined || value === null || String(value).trim() === '';
       if (f.required && f.type !== 'checkbox' && empty) errors[f.name] = missingMessage(f.label, f.type);
+      else if (isMoney(f) && !empty) {
+        try { nairaToKobo(String(value)); } catch (error) { errors[f.name] = (error as Error).message; }
+      }
       else if (f.type === 'number' && !empty && !Number.isFinite(Number(value))) errors[f.name] = `Enter ${f.label} as a number.`;
     });
+    if (!Object.keys(errors).length && validate) Object.assign(errors, validate(formData));
     if (actionMutation && !String(formData.reason || '').trim()) errors.reason = 'Enter a reason for this action. It will be saved in the audit log.';
     setFieldErrors(errors); setFormErrors([]);
     const first = firstNamed(errors);
@@ -114,7 +125,8 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
       // A checkbox always submits a boolean: an untouched box is false, never a missing field.
       if (f.type === 'checkbox') val = Boolean(val);
       else if(val===undefined || (val===''&&!f.required&&f.type!=='textarea'))return;
-      if (f.type === 'number') val = Number(val);
+      if (isMoney(f)) val = nairaToKobo(String(val));
+      else if (f.type === 'number') val = Number(val);
       if(['consentGaps','linePaymentIds','confirmedJobs'].includes(f.name)&&typeof val==='string')val=val.split(/[|,]/).map(s=>s.trim()).filter(Boolean);
       if(f.name==='correct'&&typeof val==='string')val=val==='true';
       if (f.isData) {
@@ -126,7 +138,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
 
     if (actionMutation) {
       perform.mutate({
-        data: { action: actionMutation, recordId: record?.id, data: payload.data, reason: formData.reason },
+        data: { action: actionMutation, recordId: actionRecordId ?? record?.id, data: payload.data, reason: formData.reason },
         params: { merchantId }
       });
     } else if (record) {
@@ -162,6 +174,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
           </div>
           
           <form noValidate onSubmit={handleSubmit} className="space-y-4 py-4">
+            {typeof context === 'function' ? context(formData) : context}
             {(formErrors.length > 0 || Object.keys(fieldErrors).length > 0) && (
               <FormAlert title={formErrors[0] ?? attentionTitle(Object.keys(fieldErrors).length)}>
                 {formErrors.slice(1).map(message => <p key={message}>{message}</p>)}
@@ -201,7 +214,8 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
                 ) : (
                   <input 
                     id={`record-${f.name}`}
-                    type={f.type === 'number' ? 'number' : f.type==='date'?'date':'text'}
+                    type={isMoney(f) ? 'text' : f.type === 'number' ? 'number' : f.type==='date'?'date':'text'}
+                    inputMode={isMoney(f) ? 'decimal' : undefined}
                     className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" 
                     value={Array.isArray(formData[f.name])?formData[f.name].join(" | "):(formData[f.name]??'')} 
                     onChange={e => handleChange(f.name, e.target.value)} 

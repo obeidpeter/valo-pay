@@ -35,7 +35,7 @@ describe("empty states", () => {
     renderApp("/collections");
     const title = await screen.findByText("No instalments recorded");
     expect(title.closest("tr")).toBeTruthy();
-    expect(screen.getByText(/Import synthetic instalments using the sample CSV/)).toBeTruthy();
+    expect(screen.getByText(/Open Import sample data to add synthetic instalments using a sample CSV/)).toBeTruthy();
   });
 
   it("offers the next step when a lender has none of something", async () => {

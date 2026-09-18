@@ -29,13 +29,13 @@ export function buildOverview(state: DomainState, now: string, alerts: Alert[] =
     ],
     queues: [
       metric("activation", "Awaiting activation", by("mandates").filter((item) => item.status === "pending_activation").length, "count", "Mandates waiting for activation through the provider."),
-      metric("review", "Matches to review", by("payments").filter((item) => item.status === "proposed").length, "count", "Proposed matches for the Finance team to confirm."),
+      metric("review", "Matches to review", by("allocations").filter((item) => item.status === "proposed").length, "count", "Proposed matches for the Finance team to confirm."),
       metric("duplicates", "Possible duplicates", by("payments").filter((item) => item.status === "possible_duplicate").length, "count", "Finance must review these before any payment is allocated."),
       metric("failures", "Failed collections", by("attempts").filter((item) => item.status === "failed").length, "count", "Failed debit attempts reported by an external collection system."),
       metric("overdue", "Overdue exceptions", open.filter((item) => Date.parse(String(item.data.dueBy)) < Date.parse(now)).length, "count", "Ask the assigned owner to follow up on these overdue issues."),
     ],
     activity: by("audit").sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 8),
-    upcoming: by("due-items").filter((item) => !["paid", "closed", "cancelled"].includes(item.status)).slice(0, 6),
+    upcoming: by("due-items").filter((item) => !["paid", "closed", "cancelled"].includes(item.status)).sort((a, b) => String(a.data.dueDate || '').localeCompare(String(b.data.dueDate || '')) || a.id.localeCompare(b.id)).slice(0, 6),
     mode: state.merchant.mode, environment: "sandbox", lastClose: by("closes").at(-1)?.createdAt || "Not closed yet",
     // REC-01: the next scheduled close, empty when the automatic close is off.
     nextClose: schedule.enabled ? schedule.nextAt : "", closeTime: schedule.time,
@@ -171,8 +171,9 @@ export function precisionAudit(state: DomainState, now: string) {
 function confirmingReviews(state: DomainState): TypedRecord<"reviews">[] {
   return recordsOf(state, "reviews").filter((item) => {
     const jobs = item.data.confirmedJobs;
-    const confirmed = Array.isArray(jobs) ? jobs.length >= measurementRules.jobsToConfirm : Number(jobs) >= measurementRules.jobsToConfirm;
-    return confirmed && Boolean(item.data.reviewer);
+    // Historical numeric reviews remain readable; new reviews name each distinct task.
+    const confirmed = Array.isArray(jobs) ? ['mandates', 'retries', 'reconciliation', 'audit'].every(job => jobs.includes(job)) : Number(jobs) >= measurementRules.jobsToConfirm;
+    return confirmed && Boolean(item.data.reviewer?.trim());
   }).sort((a, b) => String(a.data.reviewedAt || a.createdAt).localeCompare(String(b.data.reviewedAt || b.createdAt)));
 }
 
@@ -250,7 +251,7 @@ export function buildReports(state: DomainState, now: string): Report {
   const openExceptions = exceptions.filter((item) => isOpenException(item.status));
   const metrics: Metric[] = [
     metric("allocation_rate", "Allocation rate", allocationRate, "ratio", `${allocated.length} of ${payments.length} payments are fully or partly allocated, or exceed the amount due.`),
-    metric("allocation_precision", "Accuracy of reviewed allocations", precision, "ratio", `${reviewedAll.length} allocations reviewed. Unreviewed allocations are excluded from this accuracy measure.`),
+    metric("allocation_precision", "Accuracy of reviewed allocations", precision, "ratio", reviewedAll.length ? `${reviewedAll.length} allocations reviewed. Unreviewed allocations are excluded from this accuracy measure.` : "No payment matches have been reviewed yet."),
     metric("open_exceptions", "Open exceptions", openExceptions.length, "count", "Unresolved issues in this sample workspace."),
     metric("outstanding_kobo", "Outstanding amount", dueItems.reduce((sum, item) => sum + Number(item.data.outstandingKobo ?? item.amountKobo), 0), "kobo", "Amount still due on instalments. We never hold money."),
   ];
@@ -270,6 +271,7 @@ export function buildReports(state: DomainState, now: string): Report {
       note: "Each design partner must meet the recovery test criteria before the recovery fee can be enabled. A result from one lender is not enough.", synthetic: true,
     },
     operational: {
+      asOf: now,
       allocationRate, precision,
       certainAutomaticRate: payments.length ? new Set(automaticCertain.map((a) => a.data.paymentId)).size / payments.length : 0,
       reviewedCount: reviewedAll.length, reviewedAutomaticCount: reviewed.length, falseMatchRate: audit.falseMatchRate, falseMatchInterval: audit.interval, requiredAuditSample: audit.requiredSample, precisionAudit: audit,

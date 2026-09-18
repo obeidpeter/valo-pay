@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { keyboardShortcuts } from '@/lib/focus';
 import { themeChoices, useTheme } from '@/lib/theme';
 import { Loading } from '@/components/loading';
@@ -7,10 +7,12 @@ import { useGetSettings, useUpdateSettings, usePerformAction, getGetSettingsQuer
 import { Settings as SettingsIcon, Shield, PowerOff, AlertTriangle } from 'lucide-react';
 import { authorisationModes, closeRules, executionWindow, isCloseTime } from '@workspace/valopay-schema';
 import { FieldError, FormAlert, focusField, invalidProps } from '@/components/form-field';
-import { formatDate } from '@/lib/formatters';
+import { formatDate, formatKobo } from '@/lib/formatters';
+import { koboToNaira, nairaToKobo } from '@/lib/money-input';
 import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
 import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
+import { LoadProblem } from '@/components/load-problem';
 
 export default function SettingsPage() {
   const { merchantId, workspace } = useWorkspace();
@@ -22,14 +24,15 @@ export default function SettingsPage() {
   const [isEditingExec, setIsEditingExec] = useState(false);
   const [execSettings, setExecSettings] = useState<any>({});
   
-  const { data: settings, isLoading, refetch } = useGetSettings(
+  const { data: settings, isLoading, error: settingsError, isFetching: fetchingSettings, refetch } = useGetSettings(
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getGetSettingsQueryKey({ merchantId: merchantId! }) } }
   );
 
   const updateRole = usePerformAction({
     mutation: {
-      onSuccess: () => window.location.reload()
+      onSuccess: () => window.location.reload(),
+      onError: (error: unknown) => notifyProblem('Demo role was not changed', saidBy(error, 'Check your connection and try again.')),
     }
   });
 
@@ -60,6 +63,8 @@ export default function SettingsPage() {
 
   const [execErrors, setExecErrors] = useState<Record<string, string>>({});
   const [execAlert, setExecAlert] = useState('');
+  useEffect(() => { setIsEditingExec(false); setExecErrors({}); setExecAlert(''); setKillReason(''); setIsHandBackOpen(false); }, [merchantId]);
+  useEffect(() => { if (workspace?.role) setRole(workspace.role); }, [workspace?.role]);
   const execKeys = ['closeTime', 'unallocatedAlertThreshold', 'notificationCostAlertKobo'] as const;
   /** The server's rule messages begin with the key they concern, so the message goes under that field. */
   const rejectExec = (err: any) => {
@@ -68,28 +73,31 @@ export default function SettingsPage() {
     const fieldMessages = {
       closeTime: 'Enter the close time as HH:MM in West Africa Time, for example 07:00.',
       unallocatedAlertThreshold: 'Enter a whole number, 0 or more.',
-      notificationCostAlertKobo: 'Enter a whole number, 0 or more.',
+      notificationCostAlertKobo: 'Enter an amount in naira with no more than 2 decimal places.',
     };
     setExecErrors(key ? { [key]: fieldMessages[key] } : {});
-    setExecAlert(key ? 'The settings were not saved. Check the field marked below.' : message);
+    setExecAlert(key ? 'The settings were not saved. Check the field marked below.' : saidBy(err, 'The settings were not saved. Check your connection and try again.'));
     if (key) focusField(`settings-${key}`);
   };
   const saveExec = () => {
     if (!merchantId) return;
     const errors: Record<string, string> = {};
     if (execSettings.closeTime !== undefined && !isCloseTime(execSettings.closeTime)) errors.closeTime = 'Enter the close time as HH:MM in West Africa Time, for example 07:00.';
-    for (const key of ['unallocatedAlertThreshold', 'notificationCostAlertKobo'] as const) {
+    for (const key of ['unallocatedAlertThreshold'] as const) {
       const value = execSettings[key];
       if (value !== undefined && (!Number.isInteger(Number(value)) || Number(value) < 0)) errors[key] = 'Enter a whole number, 0 or more.';
     }
+    let notificationCostAlertKobo: number | undefined;
+    try { notificationCostAlertKobo = nairaToKobo(String(execSettings.notificationCostAlertKobo ?? '8.00')); }
+    catch (error) { errors.notificationCostAlertKobo = (error as Error).message; }
     setExecErrors(errors); setExecAlert('');
     const first = execKeys.find(key => errors[key]);
     if (first) { focusField(`settings-${first}`); return; }
-    updateExecSettings.mutate({ data: execSettings, params: { merchantId } });
+    updateExecSettings.mutate({ data: { ...execSettings, notificationCostAlertKobo }, params: { merchantId } });
   };
   const cancelExec = () => { setIsEditingExec(false); setExecErrors({}); setExecAlert(''); };
   const startEditExec = () => {
-    setExecSettings(settings?.settings || {});
+    setExecSettings({ ...settings?.settings, notificationCostAlertKobo: koboToNaira(Number(settings?.settings?.notificationCostAlertKobo ?? 800)) });
     setExecErrors({}); setExecAlert('');
     setIsEditingExec(true);
   };
@@ -102,6 +110,15 @@ export default function SettingsPage() {
         <h1 className="text-3xl font-bold tracking-tight">Settings & administration</h1>
         <p className="text-muted-foreground mt-1">Manage workspace settings and test access with demo roles.</p>
       </header>
+
+      <section className="bg-card border rounded-xl p-6" aria-labelledby="paystack-heading">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 id="paystack-heading" className="font-semibold text-lg">Paystack connection</h2>
+          <span className="rounded-full border px-3 py-1 text-xs font-medium">Not connected</span>
+        </div>
+        <p className="text-sm text-muted-foreground mt-3">The Paystack adapter is prepared for testing. A Paystack test key and a successful connection check are needed before provider testing can begin.</p>
+        <p className="text-sm text-muted-foreground mt-2">This sandbox uses sample records. No Paystack payments or mandates are created here. Direct-debit support must also be confirmed for your Paystack account.</p>
+      </section>
 
       {/* Role Persona Switcher */}
       <section className="bg-card border rounded-xl shadow-sm p-6">
@@ -150,6 +167,8 @@ export default function SettingsPage() {
       {/* Collection settings */}
       {isLoading ? (
         <Loading what="settings" className="bg-card border rounded-xl" />
+      ) : settingsError || !settings ? (
+        <LoadProblem what="collection settings" error={settingsError} retry={() => { void refetch(); }} busy={fetchingSettings} />
       ) : settings ? (
         <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
           <div className="p-4 border-b bg-secondary/20 flex items-center justify-between">
@@ -205,12 +224,12 @@ export default function SettingsPage() {
                   )}
                 </div>
                 <div>
-                  <label htmlFor="settings-notificationCostAlertKobo" className="text-sm font-medium block mb-1">Notification cost alert (kobo per collection)</label>
+                  <label htmlFor="settings-notificationCostAlertKobo" className="text-sm font-medium block mb-1">Notification cost alert (₦ per collection)</label>
                   {isEditingExec ? (
-                    <><input id="settings-notificationCostAlertKobo" {...invalidProps('settings-notificationCostAlertKobo', execErrors.notificationCostAlertKobo)} type="number" min={0} className="w-full bg-background border rounded-md px-3 py-2 text-sm" value={execSettings.notificationCostAlertKobo ?? 800} onChange={(e) => setExecSettings({...execSettings, notificationCostAlertKobo: Number(e.target.value)})} />
+                    <><input id="settings-notificationCostAlertKobo" {...invalidProps('settings-notificationCostAlertKobo', execErrors.notificationCostAlertKobo)} type="text" inputMode="decimal" className="w-full bg-background border rounded-md px-3 py-2 text-sm" value={execSettings.notificationCostAlertKobo ?? '8.00'} onChange={(e) => setExecSettings({...execSettings, notificationCostAlertKobo: e.target.value})} />
                     <FieldError id="settings-notificationCostAlertKobo" message={execErrors.notificationCostAlertKobo} /></>
                   ) : (
-                    <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">{String(settings.settings?.notificationCostAlertKobo ?? 800)}</div>
+                    <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">{formatKobo(Number(settings.settings?.notificationCostAlertKobo ?? 800))}</div>
                   )}
                 </div>
               </div>

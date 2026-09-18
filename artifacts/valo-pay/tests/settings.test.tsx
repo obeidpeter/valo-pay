@@ -1,13 +1,38 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { nextCloseInstant } from "@workspace/valopay-schema";
 import { installFakeApi, type FakeApi } from "./fake-api";
-import { renderApp, screen, userEvent } from "./harness";
+import { renderApp, screen, userEvent, within } from "./harness";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
 afterEach(() => api.uninstall());
 
 describe("settings", () => {
+  it('edits the notification cost in naira and sends exact kobo', async () => {
+    const user = userEvent.setup();
+    renderApp('/settings');
+    await screen.findByText('07:00 WAT');
+    expect(screen.getByText('₦8.00')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    const amount = screen.getByRole('textbox', { name: 'Notification cost alert (₦ per collection)' });
+    expect((amount as HTMLInputElement).value).toBe('8.00');
+    await user.clear(amount); await user.type(amount, '1,000.50');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('₦1,000.50')).toBeTruthy();
+    expect(api.state().settings.notificationCostAlertKobo).toBe(100050);
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+  });
+
+  it('keeps a retry action visible when collection settings fail to load', async () => {
+    const user = userEvent.setup();
+    api.failNext(/^\/v1\/settings$/, 'offline');
+    renderApp('/settings');
+    const error = await screen.findByText('Unable to load collection settings');
+    await user.click(within(error.closest('[role="alert"]')!).getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('07:00 WAT')).toBeTruthy();
+    expect(screen.queryByText('Unable to load collection settings')).toBeNull();
+  });
+
   it("edits the daily close time, and shows the server's rejection of an invalid one", async () => {
     const user = userEvent.setup();
     renderApp("/settings");
