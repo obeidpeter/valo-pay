@@ -1,4 +1,5 @@
-import { type ComponentType, type ReactNode } from 'react';
+import { useEffect, useRef, type ComponentType, type ReactNode } from 'react';
+import { focusMain } from '@/lib/focus';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
@@ -87,6 +88,21 @@ function Console() {
   );
 }
 
+/**
+ * After in-app navigation, focus moves to the page's main region, as it would
+ * on a page load, so keyboard and screen-reader users start at the top of what
+ * changed instead of on a link that may no longer exist.
+ */
+function RouteFocus() {
+  const [location] = useLocation();
+  const previous = useRef<string | null>(null);
+  useEffect(() => {
+    if (previous.current !== null && previous.current !== location) focusMain();
+    previous.current = location;
+  }, [location]);
+  return null;
+}
+
 function RoutedErrorBoundary({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>;
@@ -109,6 +125,7 @@ function ClerkProviderWithRoutes() {
               <Route component={Console} />
             </Switch>
           </RoutedErrorBoundary>
+          <RouteFocus />
           <Toaster />
         </TooltipProvider>
       </QueryClientProvider>

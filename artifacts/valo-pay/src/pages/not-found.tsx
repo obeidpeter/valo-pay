@@ -35,7 +35,7 @@ export default function NotFoundPage() {
   useEffect(() => { document.title = 'Page not found · Valo Pay'; }, []);
   return (
     <PublicFrame>
-      <main id="main" className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16">
+      <main id="main" tabIndex={-1} className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16 focus:outline-none">
         <NotFoundNotice title="There is no page at this address" primary={{ href: '/overview', label: 'Go to the overview' }} secondary={{ href: '/', label: 'Back to the start' }}>
           <p>We looked for <LookedFor>{location}</LookedFor> and the console has no page with that address. It may be mistyped, or the page may have moved.</p>
           <p>Nothing has been changed.</p>

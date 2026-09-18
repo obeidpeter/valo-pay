@@ -6,6 +6,7 @@ import { Shield, Home, Users, FileText, ArrowRightLeft, CheckSquare, AlertTriang
 import { Button } from './ui/button';
 import { BrandLockup } from './brand';
 import { ErrorBoundary, ErrorNotice } from './error-boundary';
+import { focusMain } from '@/lib/focus';
 
 export function Layout({ children }: { children: ReactNode }) {
   const { workspace, merchantId, setMerchantId, isLoading } = useWorkspace();
@@ -31,6 +32,8 @@ export function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
+      {/* The first tab stop skips the banner, the lender selector and eleven links (universal design: low physical effort). */}
+      <a href="#main" onClick={focusMain} className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground">Skip to page content</a>
       {/* Sandbox Banner */}
       <div className="bg-amber-100 text-amber-900 px-4 py-2 text-sm font-medium flex items-center justify-center gap-2 border-b border-amber-200 z-50">
         <AlertTriangle className="h-4 w-4" />
@@ -76,7 +79,7 @@ export function Layout({ children }: { children: ReactNode }) {
             {navItems.map(item => {
               const active = location === item.href || location.startsWith(`${item.href}/`);
               return (
-                <Link key={item.href} href={item.href} className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}>
+                <Link key={item.href} href={item.href} aria-current={active ? 'page' : undefined} className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}>
                   <item.icon className="h-4 w-4" />
                   {item.label}
                 </Link>
@@ -105,7 +108,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 overflow-auto bg-background">
+        <main id="main" tabIndex={-1} className="flex-1 overflow-auto bg-background focus:outline-none">
           <div className="p-6 md:p-8 max-w-7xl mx-auto" aria-busy={isLoading && !workspace}>
             {/* Until the workspace arrives the pages have no lender to show, so the page area says what is happening instead.
                 A page that stops working keeps the sidebar and the lender selector as the way out. */}

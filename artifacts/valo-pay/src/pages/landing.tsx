@@ -97,7 +97,7 @@ export default function LandingPage() {
         </div>
       </header>
 
-      <main id="main">
+      <main id="main" tabIndex={-1} className="focus:outline-none">
         {/* Hero: the descriptor is line one, the promise line two, "we never hold money" line three. */}
         <section className="mx-auto grid max-w-6xl gap-10 px-4 py-14 sm:px-6 lg:grid-cols-[3fr_2fr] lg:items-center lg:py-20" aria-labelledby="hero-title">
           <div className="max-w-2xl">
