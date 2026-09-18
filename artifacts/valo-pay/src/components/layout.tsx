@@ -41,8 +41,8 @@ function NavLinks({ location, spacious = false, onNavigate }: { location: string
         const active = location === item.href || location.startsWith(`${item.href}/`);
         return (
           <React.Fragment key={item.href}>
-          {[0, 6, 10].includes(index) && <p className={`nav-group-label ${index > 0 ? 'mt-6' : 'mt-1'}`}>{index === 0 ? 'Operations' : index === 6 ? 'Oversight' : 'Workspace'}</p>}
-          <Link href={item.href} aria-current={active ? 'page' : undefined} onClick={onNavigate} className={`console-nav-link flex items-center gap-3 px-3 rounded-lg text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${spacious ? 'py-3' : 'py-2.5'} ${active ? 'is-active' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}>
+          {[0, 6, 10].includes(index) && <p className={`nav-group-label ${index > 0 ? 'mt-2' : 'mt-0'}`}>{index === 0 ? 'Operations' : index === 6 ? 'Oversight' : 'Workspace'}</p>}
+          <Link href={item.href} aria-current={active ? 'page' : undefined} onClick={onNavigate} className={`console-nav-link flex items-center gap-3 px-3 rounded-lg text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${spacious ? 'py-3' : 'py-1.5'} ${active ? 'is-active' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}>
             <item.icon className="h-4 w-4" aria-hidden="true" />
             {item.label}
           </Link>
@@ -171,27 +171,28 @@ export function Layout({ children }: { children: ReactNode }) {
       <div className="flex flex-1 overflow-hidden print:block print:overflow-visible">
         {/* Sidebar */}
         <aside className="console-sidebar w-60 border-r bg-card flex flex-col hidden md:flex shrink-0 print:hidden">
-          <div className="px-5 py-5 flex items-center justify-between">
+          <div className="px-5 py-3 flex items-center justify-between">
             <BrandLockup descriptor={false} />
             <span className="text-[9px] tracking-widest uppercase text-muted-foreground border rounded px-1.5 py-1">Console</span>
           </div>
 
           {/* Lender selector */}
           {workspace && workspace.merchants.length > 0 && (
-            <div className="mx-4 mb-2 rounded-xl border bg-background p-3">
-              <label htmlFor="lender-sidebar" className="text-[10px] font-semibold tracking-widest text-muted-foreground uppercase mb-2 block">Active lender</label>
+            <div className="mx-3 mb-1 rounded-xl border bg-background px-3 py-2.5">
+              <label htmlFor="lender-sidebar" className="text-[10px] font-semibold tracking-widest text-muted-foreground uppercase mb-1 block">Active lender</label>
               {lenderSelect('lender-sidebar', 'w-full bg-transparent text-foreground rounded text-xs font-semibold py-1 border-none focus-visible:outline-2 focus-visible:outline-ring')}
             </div>
           )}
 
-          <nav aria-label="Pages" className="flex-1 overflow-y-auto px-3 py-3 space-y-1">
+          <nav aria-label="Pages" className="flex-1 overflow-y-auto px-3 py-2 space-y-0.5">
             <NavLinks location={location} />
           </nav>
 
-          <div className="p-4 border-t mt-auto">
-            <div className="flex items-center gap-3 mb-3">
-              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-secondary"><Layers className="h-4 w-4 text-muted-foreground" aria-hidden="true" /></span>
-              <div className="min-w-0 flex-1"><p className="text-xs font-semibold">Sandbox workspace</p><p className="text-[10px] text-muted-foreground mt-1">Synthetic data only</p></div>
+          <div className="p-3 border-t mt-auto">
+            {/* The sidebar has to fit a 720 px window with every page in view (measured in the design rationale), so this row stays one line high. */}
+            <div className="flex items-center gap-3 [&:not(:last-child)]:mb-3">
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-secondary"><Layers className="h-4 w-4 text-muted-foreground" aria-hidden="true" /></span>
+              <div className="min-w-0 flex-1"><p className="text-xs font-semibold">Sandbox workspace</p><p className="text-[10px] text-muted-foreground mt-0.5">Synthetic data only</p></div>
               <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={() => setChoice(theme === 'dark' ? 'light' : 'dark')}>
                 {theme === 'dark' ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
               </Button>

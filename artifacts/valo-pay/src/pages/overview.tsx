@@ -149,7 +149,7 @@ export default function OverviewPage() {
           <h2 id="overview-activity-title" className="flex items-center gap-2 font-semibold"><Activity aria-hidden="true" className="h-4 w-4 text-muted-foreground" /> Recent Activity</h2>
           <Link href="/audit" className="inline-flex min-h-8 items-center gap-1 text-xs font-semibold hover:underline">Open audit log<ArrowRight aria-hidden="true" className="h-3.5 w-3.5" /></Link>
         </div>
-        <ScrollFrame label="Recent activity" className="overflow-x-auto">
+        <ScrollFrame label="Recent activity table" className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead className="border-b bg-secondary/25 text-xs text-muted-foreground"><tr><th className="px-5 py-3 font-medium">Time</th><th className="px-5 py-3 font-medium">Record</th><th className="px-5 py-3 font-medium">Action/Status</th><th className="px-5 py-3 text-right font-medium">Value</th></tr></thead>
             <tbody className="divide-y">

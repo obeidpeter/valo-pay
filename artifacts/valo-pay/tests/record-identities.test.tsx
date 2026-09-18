@@ -41,4 +41,25 @@ describe('recognisable operational records', () => {
     })).toBe(true));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
+
+  it('names the customer and reads the status on the mandates and collections tables', async () => {
+    const mandate = api.state().records.find(record => record.kind === 'mandates' && record.status === 'pending_activation')!;
+    const customer = api.state().records.find(record => record.id === mandate.customerId)!;
+    renderApp('/mandates');
+    const link = (await screen.findAllByRole('link', { name: customer.name }))[0];
+    expect(link.getAttribute('href')).toBe(`/customers/${customer.id}`);
+    const row = link.closest('tr')!;
+    expect(within(row).getByText('Pending activation')).toBeTruthy();
+    const workflow = String(mandate.data.workflow).replace(/_/g, ' ');
+    expect(within(row).getByText(workflow.charAt(0).toUpperCase() + workflow.slice(1))).toBeTruthy();
+    expect(row.textContent).toContain(customer.id);
+    expect(screen.queryByText('pending_activation')).toBeNull();
+
+    const due = api.state().records.find(record => record.kind === 'due-items' && record.status === 'in_collection')!;
+    const payer = api.state().records.find(record => record.id === due.customerId)!;
+    renderApp('/collections');
+    const dueRow = (await screen.findByText(due.reference)).closest('tr')!;
+    expect(within(dueRow).getByRole('link', { name: payer.name }).getAttribute('href')).toBe(`/customers/${payer.id}`);
+    expect(within(dueRow).getByText('In collection')).toBeTruthy();
+  });
 });

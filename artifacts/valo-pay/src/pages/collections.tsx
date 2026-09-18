@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
 import { useQueryClient } from '@tanstack/react-query';
 import { failureCodeList, failureCodes } from '@workspace/valopay-schema';
+import { RecordLabel, StatusBadge } from '@/components/record-label';
 
 export default function CollectionsPage() {
   const { merchantId } = useWorkspace();
@@ -28,6 +29,9 @@ export default function CollectionsPage() {
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('due-items', { merchantId: merchantId! }) } }
   );
+  // Names for the customer column; the full ID stays available for tracing.
+  const { data: customers } = useListRecords('customers', { merchantId: merchantId! }, { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('customers', { merchantId: merchantId! }) } });
+  const customerById = new Map(customers?.items.map(customer => [customer.id, customer]));
   const { data: mandates } = useListRecords(
     'mandates',
     { merchantId: merchantId! },
@@ -195,10 +199,8 @@ export default function CollectionsPage() {
                     dueItems.items.map(item => (
                       <tr key={item.id} className="hover:bg-secondary/10">
                         <td className="px-4 py-3 font-mono text-xs">{item.reference}</td>
-                        <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{item.customerId}</td>
-                        <td className="px-4 py-3">
-                          <span className="px-2 py-0.5 bg-secondary text-xs rounded border capitalize">{item.status.replace('_', ' ')}</span>
-                        </td>
+                        <td className="px-4 py-3"><RecordLabel record={customerById.get(String(item.customerId))} id={item.customerId} customer /></td>
+                        <td className="px-4 py-3"><StatusBadge status={item.status} /></td>
                         <td className="px-4 py-3 text-right space-x-2">
                           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(item, 'simulate_failure')}>Sim. Fail</Button>
                           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(item, 'backtest_policy')}>Backtest</Button>

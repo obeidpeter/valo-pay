@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { RecordDialog } from '@/components/record-dialog';
 import { useQueryClient } from '@tanstack/react-query';
 import { activationWorkflows, mandateFrequencies } from '@workspace/valopay-schema';
+import { RecordLabel, StatusBadge, readableLabel } from '@/components/record-label';
 
 export default function MandatesPage() {
   const { merchantId } = useWorkspace();
@@ -59,6 +60,7 @@ export default function MandatesPage() {
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('policies', { merchantId: merchantId! }) } }
   );
+  const customerById = new Map(customers?.items.map(customer => [customer.id, customer]));
   const approvedVersionOptions = (policies?.items || []).filter(policy => policy.status === 'approved').map(policy => ({ value: policy.id, label: `${policy.name} · v${String(policy.data?.version || 1)}` }));
   const createMandate = useCreateRecord({
     mutation: {
@@ -149,16 +151,10 @@ export default function MandatesPage() {
                 {data.items.map(mandate => (
                   <tr key={mandate.id} className="hover:bg-secondary/10">
                     <td className="px-6 py-4 font-mono font-medium">{mandate.reference}</td>
-                    <td className="px-6 py-4 font-mono text-xs text-muted-foreground">{mandate.customerId}</td>
-                    <td className="px-6 py-4">
-                      <span className={`px-2 py-0.5 text-xs font-medium rounded border ${
-                        mandate.status === 'active' ? 'bg-success/10 text-success border-success/20' : 'bg-secondary text-secondary-foreground'
-                      }`}>
-                        {mandate.status}
-                      </span>
-                    </td>
+                    <td className="px-6 py-4"><RecordLabel record={customerById.get(String(mandate.customerId))} id={mandate.customerId} customer /></td>
+                    <td className="px-6 py-4"><StatusBadge status={mandate.status} /></td>
                     <td className="px-6 py-4 font-mono">{formatKobo(mandate.amountKobo)}</td>
-                    <td className="px-6 py-4 text-xs text-muted-foreground">{String(mandate.data?.workflow || 'Standard')}</td>
+                    <td className="px-6 py-4 text-xs text-muted-foreground" title={String(mandate.data?.workflow || '')}>{readableLabel(mandate.data?.workflow || 'standard')}</td>
                     <td className="px-6 py-4 text-right space-x-2">
                       {mandate.status === 'active' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_suspend')}>Suspend</Button>}
                       {mandate.status === 'suspended' && <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => handleAction(mandate, 'mandate_reinstate')}>Reinstate</Button>}
