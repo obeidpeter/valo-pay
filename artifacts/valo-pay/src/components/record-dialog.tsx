@@ -2,6 +2,7 @@ import React, { useState, useEffect, ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { Button } from './ui/button';
+import { FieldError, FormAlert, attentionTitle, focusField, invalidProps, missingMessage, serverFieldErrors } from './form-field';
 import { useCreateRecord, useUpdateRecord, usePerformAction } from '@workspace/api-client-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -31,10 +32,25 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
   const queryClient = useQueryClient();
   const [formData, setFormData] = useState<any>({});
   const [result,setResult]=useState<any>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [formErrors, setFormErrors] = useState<string[]>([]);
+  const fieldId = (name: string) => `record-${name}`;
+  /** The server names a field by its path in the body; a data field arrives as data.<name>. */
+  const resolveField = (path: string): string | null => {
+    const name = path.replace(/^data\./, '');
+    return fields.some(f => f.name === name) || (actionMutation && name === 'reason') ? name : null;
+  };
+  const firstNamed = (errors: Record<string, string>) => fields.find(f => errors[f.name])?.name ?? (errors.reason ? 'reason' : undefined);
+  const applyServerError = (error: unknown) => {
+    const { fields: named, general } = serverFieldErrors(error, resolveField);
+    setFieldErrors(named); setFormErrors(general);
+    const first = firstNamed(named);
+    if (first) focusField(fieldId(first));
+  };
   
   useEffect(() => {
     if (isOpen) {
-      setResult(null);
+      setResult(null); setFieldErrors({}); setFormErrors([]);
       create.reset();update.reset();perform.reset();
       if (record) {
         const initial: any = { ...defaultValues, name: record.name, status: record.status, reference: record.reference, amountKobo: record.amountKobo, customerId: record.customerId };
@@ -52,19 +68,31 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
   // Initialise once per opening/record. Inline field arrays must not reset typing.
   }, [isOpen, record?.id, kind, actionMutation]);
 
-  const create = useCreateRecord({ mutation: { onSuccess: () => { queryClient.invalidateQueries(); onOpenChange(false); } } });
-  const update = useUpdateRecord({ mutation: { onSuccess: () => { queryClient.invalidateQueries(); onOpenChange(false); } } });
+  const create = useCreateRecord({ mutation: { onSuccess: () => { queryClient.invalidateQueries(); onOpenChange(false); }, onError: applyServerError } });
+  const update = useUpdateRecord({ mutation: { onSuccess: () => { queryClient.invalidateQueries(); onOpenChange(false); }, onError: applyServerError } });
   const perform = usePerformAction({ mutation: { onSuccess: (response) => {
     queryClient.invalidateQueries();
     if(actionMutation==='backtest_policy')setResult(response);
     else onOpenChange(false);
-  } } });
+  }, onError: applyServerError } });
 
   const isPending = create.isPending || update.isPending || perform.isPending;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!merchantId) return;
+    // Every field is checked here first, so a missing value is named at the field and never costs a request.
+    const errors: Record<string, string> = {};
+    fields.forEach(f => {
+      const value = formData[f.name];
+      const empty = value === undefined || value === null || String(value).trim() === '';
+      if (f.required && f.type !== 'checkbox' && empty) errors[f.name] = missingMessage(f.label, f.type);
+      else if (f.type === 'number' && !empty && !Number.isFinite(Number(value))) errors[f.name] = `Enter ${f.label} as a number.`;
+    });
+    if (actionMutation && !String(formData.reason || '').trim()) errors.reason = 'Give a reason. It is recorded in the audit log with this action.';
+    setFieldErrors(errors); setFormErrors([]);
+    const first = firstNamed(errors);
+    if (first) { focusField(fieldId(first)); return; }
 
     const payload: any = { data: {...(record&&!actionMutation?record.data:{}),...(defaultValues.data||{})} };
     fields.forEach(f => {
@@ -105,6 +133,8 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
 
   const handleChange = (name: string, value: any) => {
     setFormData((prev: any) => ({ ...prev, [name]: value }));
+    // A field being corrected drops its message at once.
+    setFieldErrors(prev => { if (!prev[name]) return prev; const next = { ...prev }; delete next[name]; return next; });
   };
 
   return (
@@ -117,7 +147,12 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
             <Dialog.Description className="text-xs text-muted-foreground">Synthetic sandbox only. This action does not send a debit or a message.</Dialog.Description>
           </div>
           
-          <form onSubmit={handleSubmit} className="space-y-4 py-4">
+          <form noValidate onSubmit={handleSubmit} className="space-y-4 py-4">
+            {(formErrors.length > 0 || Object.keys(fieldErrors).length > 0) && (
+              <FormAlert title={formErrors[0] ?? attentionTitle(Object.keys(fieldErrors).length)}>
+                {formErrors.slice(1).map(message => <p key={message}>{message}</p>)}
+              </FormAlert>
+            )}
             {fields.map(f => (
               <div key={f.name} className="flex flex-col gap-2">
                 <label htmlFor={`record-${f.name}`} className="text-sm font-medium">{f.label} {f.required && '*'}</label>
@@ -128,6 +163,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
                     value={Array.isArray(formData[f.name])?formData[f.name].join(" | "):(formData[f.name]??'')} 
                     onChange={e => handleChange(f.name, e.target.value)} 
                     required={f.required} 
+                    {...invalidProps(`record-${f.name}`, fieldErrors[f.name])}
                   />
                 ) : f.type === 'select' ? (
                   <select 
@@ -136,6 +172,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
                     value={formData[f.name] || ''} 
                     onChange={e => handleChange(f.name, e.target.value)} 
                     required={f.required}
+                    {...invalidProps(`record-${f.name}`, fieldErrors[f.name])}
                   >
                     <option value="">Select...</option>
                     {f.options?.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -155,30 +192,27 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields, title
                     value={Array.isArray(formData[f.name])?formData[f.name].join(" | "):(formData[f.name]??'')} 
                     onChange={e => handleChange(f.name, e.target.value)} 
                     required={f.required} 
+                    {...invalidProps(`record-${f.name}`, fieldErrors[f.name])}
                   />
                 )}
+                <FieldError id={`record-${f.name}`} message={fieldErrors[f.name]} />
               </div>
             ))}
 
             {actionMutation && (
               <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium">Reason *</label>
+                <label htmlFor="record-reason" className="text-sm font-medium">Reason *</label>
                 <input 
                   type="text" 
                   className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" 
-                  value={formData.reason || ''} 
+                  id="record-reason" {...invalidProps('record-reason', fieldErrors.reason)} value={formData.reason || ''} 
                   onChange={e => handleChange('reason', e.target.value)} 
                   required 
                 />
+                <FieldError id="record-reason" message={fieldErrors.reason} />
               </div>
             )}
             
-            {[create.error,update.error,perform.error].filter(Boolean).map((error:any,index)=>(
-              <div key={index} role="alert" className="rounded border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-                {error.data?.error||error.message||"This action was rejected."}
-                {error.data?.details?.map((detail:any)=><div key={detail.field}>{detail.field}: {detail.message}</div>)}
-              </div>
-            ))}
             {result&&<section className="space-y-2 rounded border p-3"><p className="font-medium">{result.message}</p>
               {result.data?.decisions?.length===0&&<p>No due items use this policy.</p>}
               {result.data?.decisions?.map((decision:any)=><div key={decision.dueItemId} className="border-t pt-2 text-sm"><span className="font-mono text-xs">{decision.dueItemId}</span><p className="font-semibold">{String(decision.decision).replaceAll("_"," ")}</p><p>{decision.reason}</p>{decision.nextAt&&<p>{decision.nextAt}</p>}</div>)}

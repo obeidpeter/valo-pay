@@ -32,8 +32,19 @@ describe("settings", () => {
     await user.clear(again);
     await user.type(again, "25:00");
     await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(await screen.findByText("Settings rejected")).toBeTruthy();
+    // The console checks the format itself before asking the server, and says so at the field.
+    expect(await screen.findByText("Enter the close time as HH:MM in West Africa Time, for example 07:00.")).toBeTruthy();
+    expect(again.getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement).toBe(again);
+    expect(api.calls.filter((call) => call.method === "PATCH" && call.path === "/v1/settings").length).toBe(1);
+    // A refusal only the server can make is shown in the section, under the field it names.
+    api.failNext(/^\/v1\/settings$/, { status: 400, error: "closeTime must be a WAT time as HH:MM, for example 07:00 (REC-01)." });
+    await user.clear(again);
+    await user.type(again, "10:00");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Settings not saved")).toBeTruthy();
     expect(screen.getByText("closeTime must be a WAT time as HH:MM, for example 07:00 (REC-01).")).toBeTruthy();
+    expect(again.getAttribute("aria-describedby")).toBe("settings-closeTime-error");
     expect(api.state().settings.closeTime).toBe("09:30");
     expect(api.calls.filter((call) => call.method === "PATCH" && call.path === "/v1/settings").at(-1)?.status).toBe(400);
   });

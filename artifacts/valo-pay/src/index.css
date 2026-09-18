@@ -155,3 +155,9 @@
     @apply font-sans antialiased bg-background text-foreground;
   }
 }
+
+/* A control the form has marked invalid says so at its edge as well as in its message (never colour alone).
+   Unlayered on purpose: it must win over the border utilities the controls carry. */
+[aria-invalid="true"] {
+  border-color: hsl(var(--destructive));
+}

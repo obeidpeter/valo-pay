@@ -135,11 +135,14 @@ try {
   );
   assert.ok((await pool.query("SELECT 1 FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id WHERE m.workspace_id=$1 AND r.kind='audit' AND r.created_at >= now() - interval '1 day'", [workspace])).rowCount! >= 2, "recent system audit entries exist");
   for (let attempt = 0; attempt < 10; attempt += 1) {
+    // The sweep is opt-in; the scheduled close's own entries must not count as activity once it runs.
+    process.env.VALOPAY_EXPIRED_WORKSPACE_CLEANUP = "on";
     await inWorkspace(requestFor(token()), response(), async (context) => { await listMerchants(context); });
     if ((await pool.query("SELECT 1 FROM valopay_workspaces WHERE id=$1", [workspace])).rowCount === 0) break;
   }
   assert.equal((await pool.query("SELECT 1 FROM valopay_workspaces WHERE id=$1", [workspace])).rowCount, 0, "a sandbox touched only by the seed and the scheduled close expires");
   console.log("scheduled close integration tests passed");
 } finally {
+  delete process.env.VALOPAY_EXPIRED_WORKSPACE_CLEANUP;
   await pool.end();
 }

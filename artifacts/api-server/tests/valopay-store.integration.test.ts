@@ -123,8 +123,12 @@ try {
   const staleWorkspace = (await pool.query<{ workspace_id: string }>("SELECT workspace_id FROM valopay_merchants WHERE id=$1", [staleMerchant])).rows[0]!.workspace_id;
   await pool.query("UPDATE valopay_workspaces SET created_at = now() - interval '40 days' WHERE id=$1", [staleWorkspace]);
   await pool.query("UPDATE valopay_records SET created_at = created_at - interval '40 days', updated_at = updated_at - interval '40 days' WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id=$1)", [staleWorkspace]);
+  // Cleanup is opt-in (VALOPAY_EXPIRED_WORKSPACE_CLEANUP=on): by default a new bootstrap leaves the expired sandbox alone.
   await inWorkspace(requestFor(token()), response(), async (context) => { await listMerchants(context); });
-  assert.equal((await pool.query("SELECT 1 FROM valopay_workspaces WHERE id=$1", [staleWorkspace])).rowCount, 0, "the expired anonymous sandbox is removed");
+  assert.equal((await pool.query("SELECT 1 FROM valopay_workspaces WHERE id=$1", [staleWorkspace])).rowCount, 1, "with cleanup off, the default, the expired sandbox is kept");
+  process.env.VALOPAY_EXPIRED_WORKSPACE_CLEANUP = "on";
+  await inWorkspace(requestFor(token()), response(), async (context) => { await listMerchants(context); });
+  assert.equal((await pool.query("SELECT 1 FROM valopay_workspaces WHERE id=$1", [staleWorkspace])).rowCount, 0, "with cleanup on, the expired anonymous sandbox is removed");
   assert.equal((await pool.query("SELECT 1 FROM valopay_merchants WHERE workspace_id=$1", [staleWorkspace])).rowCount, 0, "with its lenders and records");
   assert.equal((await pool.query("SELECT 1 FROM valopay_workspaces WHERE id=(SELECT workspace_id FROM valopay_merchants WHERE id=$1)", [merchantA])).rowCount, 1, "a live sandbox stays");
   // A sandbox that is old but recently changed by a person stays; activity is read from the audit chain, and the seed's own system entry does not count.
@@ -143,5 +147,6 @@ try {
   assert.equal((await pool.query("SELECT 1 FROM valopay_workspaces WHERE id=$1", [activeWorkspace])).rowCount, 1, "a recent change by a person keeps an old sandbox alive");
   console.log("valopay repository integration tests passed");
 } finally {
+  delete process.env.VALOPAY_EXPIRED_WORKSPACE_CLEANUP;
   await pool.end();
 }

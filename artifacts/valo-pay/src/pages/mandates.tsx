@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { FieldError, FormAlert, attentionTitle, focusField, invalidProps, missingMessage, serverFieldErrors } from '@/components/form-field';
 import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -17,7 +18,18 @@ export default function MandatesPage() {
   const [actionKind, setActionKind] = useState<string>('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [createError, setCreateError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [formErrors, setFormErrors] = useState<string[]>([]);
+  /** The fields the form asks for, in order, with the words a missing value is named by. */
+  const requiredFields: Array<{ name: keyof typeof draft; label: string; type: 'text' | 'number' | 'select' }> = [
+    { name: 'name', label: 'Mandate name', type: 'text' }, { name: 'customerId', label: 'Customer', type: 'select' }, { name: 'amountKobo', label: 'Limit (kobo)', type: 'number' },
+    { name: 'reference', label: 'Provider reference', type: 'text' }, { name: 'workflow', label: 'Activation workflow', type: 'select' }, { name: 'consentEvidence', label: 'Consent evidence reference', type: 'text' },
+    { name: 'policyId', label: 'Policy', type: 'select' }, { name: 'frequency', label: 'Frequency', type: 'select' },
+  ];
+  const change = (name: keyof typeof draft, value: string) => {
+    setDraft(current => ({ ...current, [name]: value }));
+    setFieldErrors(prev => { if (!prev[name]) return prev; const next = { ...prev }; delete next[name]; return next; });
+  };
   const [draft, setDraft] = useState({
     name: '',
     customerId: '',
@@ -52,9 +64,14 @@ export default function MandatesPage() {
       onSuccess: () => {
         queryClient.invalidateQueries();
         setIsCreateOpen(false);
-        setCreateError('');
+        setFieldErrors({}); setFormErrors([]);
       },
-      onError: (error: any) => setCreateError(error.message || 'Unable to create this synthetic mandate.')
+      onError: (error: unknown) => {
+        const { fields, general } = serverFieldErrors(error, path => { const name = path.replace(/^data\./, ''); return requiredFields.some(field => field.name === name) ? name : null; });
+        setFieldErrors(fields); setFormErrors(general);
+        const first = requiredFields.find(field => fields[field.name]);
+        if (first) focusField(`mandate-${first.name}`);
+      }
     }
   });
 
@@ -66,7 +83,15 @@ export default function MandatesPage() {
 
   const submitCreate = (event: React.FormEvent) => {
     event.preventDefault();
-    setCreateError('');
+    const errors: Record<string, string> = {};
+    for (const field of requiredFields) {
+      const value = String(draft[field.name] ?? '').trim();
+      if (!value) errors[field.name] = missingMessage(field.label, field.type);
+      else if (field.type === 'number' && !Number.isFinite(Number(value))) errors[field.name] = `Enter ${field.label} as a number.`;
+    }
+    setFieldErrors(errors); setFormErrors([]);
+    const first = requiredFields.find(field => errors[field.name]);
+    if (first) { focusField(`mandate-${first.name}`); return; }
     createMandate.mutate({
       kind: 'mandates',
       data: {
@@ -171,18 +196,20 @@ export default function MandatesPage() {
           <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-full max-w-lg max-h-[90vh] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border bg-background p-6 shadow-lg">
             <Dialog.Title className="text-lg font-semibold">Create synthetic mandate</Dialog.Title>
             <p className="mt-1 text-sm text-muted-foreground">This records a sandbox mandate only; no bank instruction is sent.</p>
-            <form className="mt-5 space-y-4" onSubmit={submitCreate}>
-              <MandateField label="Mandate name" value={draft.name} onChange={value => setDraft({ ...draft, name: value })} required />
-              <MandateSelect label="Customer" value={draft.customerId} onChange={value => setDraft({ ...draft, customerId: value })} required options={(customers?.items || []).map(customer => ({ value: customer.id, label: `${customer.name} · ${customer.reference}` }))} />
-              <MandateField label="Limit (kobo)" type="number" value={draft.amountKobo} onChange={value => setDraft({ ...draft, amountKobo: value })} required />
-              <MandateField label="Provider reference" value={draft.reference} onChange={value => setDraft({ ...draft, reference: value })} required />
-              <MandateSelect label="Activation workflow" value={draft.workflow} onChange={value => setDraft({ ...draft, workflow: value })} required options={activationWorkflows.map(workflow => ({ value: workflow, label: workflow.replaceAll('_', ' ') }))} />
-              <MandateField label="Consent evidence reference" value={draft.consentEvidence} onChange={value => setDraft({ ...draft, consentEvidence: value })} required />
+            <form noValidate className="mt-5 space-y-4" onSubmit={submitCreate}>
+              {(formErrors.length > 0 || Object.keys(fieldErrors).length > 0) && (
+                <FormAlert title={formErrors[0] ?? attentionTitle(Object.keys(fieldErrors).length)}>{formErrors.slice(1).map(message => <p key={message}>{message}</p>)}</FormAlert>
+              )}
+              <MandateField label="Mandate name" value={draft.name} id="mandate-name" error={fieldErrors.name} onChange={value => change('name', value)} required />
+              <MandateSelect label="Customer" value={draft.customerId} id="mandate-customerId" error={fieldErrors.customerId} onChange={value => change('customerId', value)} required options={(customers?.items || []).map(customer => ({ value: customer.id, label: `${customer.name} · ${customer.reference}` }))} />
+              <MandateField label="Limit (kobo)" type="number" value={draft.amountKobo} id="mandate-amountKobo" error={fieldErrors.amountKobo} onChange={value => change('amountKobo', value)} required />
+              <MandateField label="Provider reference" value={draft.reference} id="mandate-reference" error={fieldErrors.reference} onChange={value => change('reference', value)} required />
+              <MandateSelect label="Activation workflow" value={draft.workflow} id="mandate-workflow" error={fieldErrors.workflow} onChange={value => change('workflow', value)} required options={activationWorkflows.map(workflow => ({ value: workflow, label: workflow.replaceAll('_', ' ') }))} />
+              <MandateField label="Consent evidence reference" value={draft.consentEvidence} id="mandate-consentEvidence" error={fieldErrors.consentEvidence} onChange={value => change('consentEvidence', value)} required />
               <label className="block text-sm font-medium">Consent gaps (one per line)</label>
               <textarea className="mt-1 min-h-[72px] w-full rounded-md border bg-transparent px-3 py-2 text-sm" value={draft.consentGaps} onChange={event => setDraft({ ...draft, consentGaps: event.target.value })} />
-              <MandateSelect label="Policy" value={draft.policyId} onChange={value => setDraft({ ...draft, policyId: value })} required options={(policies?.items || []).map(policy => ({ value: policy.id, label: `${policy.name} · ${policy.status}` }))} />
-              <MandateSelect label="Frequency" value={draft.frequency} onChange={value => setDraft({ ...draft, frequency: value })} required options={mandateFrequencies.map(frequency => ({ value: frequency, label: frequency.charAt(0).toUpperCase() + frequency.slice(1) }))} />
-              {createError && <p className="text-sm text-destructive">{createError}</p>}
+              <MandateSelect label="Policy" value={draft.policyId} id="mandate-policyId" error={fieldErrors.policyId} onChange={value => change('policyId', value)} required options={(policies?.items || []).map(policy => ({ value: policy.id, label: `${policy.name} · ${policy.status}` }))} />
+              <MandateSelect label="Frequency" value={draft.frequency} id="mandate-frequency" error={fieldErrors.frequency} onChange={value => change('frequency', value)} required options={mandateFrequencies.map(frequency => ({ value: frequency, label: frequency.charAt(0).toUpperCase() + frequency.slice(1) }))} />
               <div className="flex justify-end gap-2 border-t pt-4">
                 <Button type="button" variant="outline" onClick={() => setIsCreateOpen(false)}>Cancel</Button>
                 <Button type="submit" busy={createMandate.isPending} busyLabel="Saving…">Create mandate</Button>
@@ -195,10 +222,28 @@ export default function MandatesPage() {
   );
 }
 
-function MandateField({ label, value, onChange, required, type = 'text' }: { label: string; value: string; onChange: (value: string) => void; required?: boolean; type?: 'text' | 'number' }) {
-  return <label className="block text-sm font-medium">{label}{required ? ' *' : ''}<input type={type} required={required} value={value} onChange={event => onChange(event.target.value)} className="mt-1 flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm" /></label>;
+type MandateControl = { id: string; label: string; value: string; onChange: (value: string) => void; required?: boolean; error?: string };
+const controlClass = 'mt-1 flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring';
+
+function MandateField({ id, label, value, onChange, required, error, type = 'text' }: MandateControl & { type?: 'text' | 'number' }) {
+  return (
+    <div>
+      <label htmlFor={id} className="block text-sm font-medium">{label}{required ? ' *' : ''}</label>
+      <input id={id} type={type} required={required} value={value} onChange={event => onChange(event.target.value)} className={controlClass} {...invalidProps(id, error)} />
+      <FieldError id={id} message={error} />
+    </div>
+  );
 }
 
-function MandateSelect({ label, value, onChange, required, options }: { label: string; value: string; onChange: (value: string) => void; required?: boolean; options: { value: string; label: string }[] }) {
-  return <label className="block text-sm font-medium">{label}{required ? ' *' : ''}<select required={required} value={value} onChange={event => onChange(event.target.value)} className="mt-1 flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-sm"><option value="">Select...</option>{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
+function MandateSelect({ id, label, value, onChange, required, error, options }: MandateControl & { options: { value: string; label: string }[] }) {
+  return (
+    <div>
+      <label htmlFor={id} className="block text-sm font-medium">{label}{required ? ' *' : ''}</label>
+      <select id={id} required={required} value={value} onChange={event => onChange(event.target.value)} className={controlClass} {...invalidProps(id, error)}>
+        <option value="">Select…</option>
+        {options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+      <FieldError id={id} message={error} />
+    </div>
+  );
 }
