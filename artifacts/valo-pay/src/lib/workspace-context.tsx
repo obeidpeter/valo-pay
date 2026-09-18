@@ -2,6 +2,7 @@ import { createContext, useContext, ReactNode, useState, useEffect, useRef } fro
 import { useGetWorkspace, Workspace } from '@workspace/api-client-react';
 import { useSessionUser } from '@/lib/auth';
 import { useQueryClient } from '@tanstack/react-query';
+import { WorkspaceUnavailable } from '@/components/workspace-unavailable';
 
 type WorkspaceContextType = {
   merchantId: string | null;
@@ -20,7 +21,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const isLoaded=authLoaded||authTimedOut;
   const queryClient=useQueryClient();
   const previousUser=useRef<string|null|undefined>(undefined);
-  const { data: workspace, isLoading,error,refetch } = useGetWorkspace({query:{queryKey:["workspace",userId||"sandbox"],enabled:isLoaded,refetchInterval:30000}});
+  const { data: workspace, isLoading,isFetching,error,refetch } = useGetWorkspace({query:{queryKey:["workspace",userId||"sandbox"],enabled:isLoaded,refetchInterval:30000}});
   const [selectedMerchant, setMerchantId] = useState<string | null>(null);
   const merchantId=workspace?.merchants.some(m=>m.id===selectedMerchant)?selectedMerchant:workspace?.merchants[0]?.id||null;
 
@@ -32,7 +33,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   return (
     <WorkspaceContext.Provider value={{ merchantId, setMerchantId, workspace, isLoading:isLoading||!isLoaded }}>
-      {error?<div className="min-h-screen grid place-items-center p-6"><div role="alert" className="space-y-3 text-center"><h1 className="font-semibold text-xl">Could not load your workspace</h1><p>No lender data has been changed.</p><button className="rounded bg-primary text-primary-foreground px-4 py-2" onClick={()=>refetch()}>Try again</button></div></div>:children}
+      {error?<WorkspaceUnavailable error={error} retry={()=>{void refetch();}} busy={isFetching}/>:children}
     </WorkspaceContext.Provider>
   );
 }

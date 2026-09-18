@@ -8,7 +8,7 @@ import { BrandLockup } from './brand';
 import { ErrorBoundary, ErrorNotice } from './error-boundary';
 
 export function Layout({ children }: { children: ReactNode }) {
-  const { workspace, merchantId, setMerchantId } = useWorkspace();
+  const { workspace, merchantId, setMerchantId, isLoading } = useWorkspace();
   const [location,setLocation] = useLocation();
   const signOut = useSignOut();
 
@@ -106,9 +106,12 @@ export function Layout({ children }: { children: ReactNode }) {
 
         {/* Main Content */}
         <main className="flex-1 overflow-auto bg-background">
-          <div className="p-6 md:p-8 max-w-7xl mx-auto">
-            {/* A page that stops working keeps the sidebar and the lender selector as the way out. */}
-            <ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{children}</ErrorBoundary>
+          <div className="p-6 md:p-8 max-w-7xl mx-auto" aria-busy={isLoading && !workspace}>
+            {/* Until the workspace arrives the pages have no lender to show, so the page area says what is happening instead.
+                A page that stops working keeps the sidebar and the lender selector as the way out. */}
+            {isLoading && !workspace
+              ? <p role="status" className="text-sm text-muted-foreground">Loading your workspace…</p>
+              : <ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{children}</ErrorBoundary>}
           </div>
         </main>
       </div>
