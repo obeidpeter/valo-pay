@@ -171,7 +171,7 @@ export default function ReconciliationPage() {
               {payments?.items.length || 0} items
             </span>
           </div>
-          <div className="p-0 overflow-y-auto max-h-[400px]">
+          <div className="p-0 overflow-auto max-h-[400px]">
             <table className="w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
@@ -216,7 +216,7 @@ export default function ReconciliationPage() {
               {observations?.items.length || 0} items
             </span>
           </div>
-          <div className="p-0 overflow-y-auto max-h-[400px]">
+          <div className="p-0 overflow-auto max-h-[400px]">
              <table className="w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>

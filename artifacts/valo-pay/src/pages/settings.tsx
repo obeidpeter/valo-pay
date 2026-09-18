@@ -105,9 +105,9 @@ export default function SettingsPage() {
         <p className="text-sm text-muted-foreground mb-4">
           Switch roles to test permissions and approval workflows. This is a synthetic sandbox feature only.
         </p>
-        <div className="flex flex-wrap items-center gap-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
           <select 
-            className="flex-1 max-w-xs bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            className="w-full sm:min-w-48 sm:max-w-xs sm:flex-1 bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             value={role}
             onChange={(e) => setRole(e.target.value)}
           >
@@ -128,7 +128,7 @@ export default function SettingsPage() {
           
           <Button
             variant="outline"
-            className="ml-auto"
+            className="sm:ml-auto"
             onClick={() => requestInstruction.mutate({ data: { action: 'request_instruction' }, params: { merchantId } })}
             busy={requestInstruction.isPending}
             busyLabel="Requesting…"
@@ -184,7 +184,7 @@ export default function SettingsPage() {
                   <div className="font-mono text-sm p-2 bg-secondary/50 rounded border">{settings.settings?.policyChangeRequiresConsent === true ? 'Yes: notice and fresh consent' : 'No: notice only'}</div>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 xl:grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm font-medium block mb-1">Unallocated alert threshold (Payments older than 24h)</label>
                   {isEditingExec ? (
@@ -204,7 +204,7 @@ export default function SettingsPage() {
                   )}
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 xl:grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm font-medium block mb-1">Daily close time (WAT, HH:MM, REC-01)</label>
                   {isEditingExec ? (
@@ -278,15 +278,19 @@ export default function SettingsPage() {
               <h3 className="font-medium mb-4 text-destructive flex items-center gap-2">
                 <PowerOff className="h-4 w-4" /> Emergency Controls
               </h3>
-              <div className="flex gap-4">
-                <input 
-                  type="text" 
-                  placeholder="Reason for toggle..."
-                  value={killReason}
-                  onChange={(e) => setKillReason(e.target.value)}
-                  className="flex-1 bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                />
-                <p className="text-xs text-muted-foreground">A reason is required; it is recorded in the audit log with the switch.</p>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
+                <div className="min-w-0 flex-1">
+                  <input 
+                    type="text" 
+                    placeholder="Reason for toggle..."
+                    aria-describedby="kill-reason-help"
+                    value={killReason}
+                    onChange={(e) => setKillReason(e.target.value)}
+                    className="w-full bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  <p id="kill-reason-help" className="mt-1 text-xs text-muted-foreground">A reason is required; it is recorded in the audit log with the switch.</p>
+                </div>
+                <div className="flex flex-col gap-2 sm:flex-row">
                 <Button 
                   variant="destructive"
                   onClick={() => killSwitch.mutate({ data: { action: 'kill_switch', reason: killReason, data: { enabled: !settings.merchant.killSwitch } }, params: { merchantId } })}
@@ -303,6 +307,7 @@ export default function SettingsPage() {
                 >
                   Hand Back Portfolios
                 </Button>
+                </div>
               </div>
               {settings.merchant.killSwitch && (
                 <p className="text-xs text-destructive mt-2 flex items-center gap-1 font-bold">

@@ -61,7 +61,7 @@ export default function ExceptionsPage() {
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
         <div className="p-4 border-b flex items-center gap-4 bg-secondary/20">
-          <div className="flex gap-2" role="tablist" aria-label="Exception filter">
+          <div className="flex flex-wrap gap-2" role="tablist" aria-label="Exception filter">
             {filters.map((option, index) => (
               <Button key={option.key} ref={element => { tabRefs.current[index] = element; }} role="tab" aria-selected={filter === option.key} tabIndex={filter === option.key ? 0 : -1} onKeyDown={event => onTabKeyDown(event, index, filters.map(item => item.key))} variant={filter === option.key ? 'secondary' : 'ghost'} size="sm" className={filter === option.key ? 'bg-primary text-primary-foreground' : ''} onClick={() => setFilter(option.key)}>
                 {option.label}
