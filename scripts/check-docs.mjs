@@ -29,12 +29,13 @@ function walk(dir, keep) {
 const documents = ["README.md", "replit.md", ...walk("docs", (p) => p.endsWith(".md")), "artifacts/api-server/src/fonts/README.md"];
 const prose = (text) => text.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "").replace(/\(https?:\/\/[^)]*\)/g, "").replace(/https?:\/\/\S+/g, "");
 
-// ---- 1. Every path a document names exists ----
+// ---- 1. Every path a document names exists (build outputs excepted: they exist only after a build) ----
+const buildOutput = /(?:^|\/)(?:dist|node_modules|coverage)(?:\/|$)/;
 for (const doc of documents) {
   const text = read(doc);
   for (const match of text.matchAll(/`([^`\n]+)`/g)) {
     const token = match[1].replace(/[.,;:]$/, "");
-    if (!/^(?:artifacts|lib|scripts|docs|\.github|\.githooks)\/[\w./\[\]*-]+$/.test(token) || token.includes("*")) continue;
+    if (!/^(?:artifacts|lib|scripts|docs|\.github|\.githooks)\/[\w./\[\]*-]+$/.test(token) || token.includes("*") || buildOutput.test(token)) continue;
     const shorthand = ["artifacts/valo-pay/src", "artifacts/api-server/src"].some((base) => existsSync(join(root, base, token)));
     check(existsSync(join(root, token)) || shorthand, `${doc} names a path that does not exist: ${token}`);
   }

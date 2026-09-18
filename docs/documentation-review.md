@@ -32,7 +32,7 @@ The README, `docs/BUILD_STATUS.md`, `docs/DATABASE_SECURITY.md`, `docs/frontend-
 
 `node scripts/check-docs.mjs` runs with `pnpm run test:pure` and `pnpm test`. It reads the README, `replit.md`, every document under `docs/`, the typeface README, the contract and the code, and fails the suite when:
 
-- a document names a repository path, links to a file, or names a `pnpm` script that does not exist;
+- a document names a repository path (other than a build output, which exists only after a build), links to a file, or names a `pnpm` script that does not exist;
 - the code reads an environment variable the README does not mention, or the README's table documents one that nothing reads;
 - an operation, parameter or schema of the contract has no description, or the contract keeps the generator's placeholder title;
 - an export of `lib/valopay-schema` has no doc comment;
