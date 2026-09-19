@@ -9,6 +9,7 @@ import { seedMerchant } from "./valopay-seed";
 import { createCreationLimiter } from "./creation-limit";
 import { foldForSearch, LIST_PAGE_CEILING, type ListQuery } from "./valopay-list";
 import { advanceRecordVersions } from "./edit-versions";
+import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
 
 /** The demo persona roles, the same list as the shared schema's. */
 export const roles = ["Admin", "Operations", "Finance", "Compliance reviewer", "Read-only"];
@@ -271,6 +272,70 @@ export async function listRecords(context: StoreContext, merchantId: string, kin
   }
   const nextOffset = offset + items.length < total ? offset + items.length : undefined;
   return nextOffset === undefined ? { items, total } : { items, total, nextOffset };
+}
+
+/** Priority queues are counted and paged by PostgreSQL. Only the page and its
+ * linked records cross the repository boundary; no writable state is loaded. */
+export async function listQueue(context: StoreContext, merchantId: string, queue: QueueName, query: QueueQuery) {
+  const session = sessionFor(context);
+  await readMerchant(context, merchantId);
+  const view = queueView(queue, query.view), limit = query.limit || 25;
+  const values: unknown[] = [merchantId, session.workspace.id, session.principal, context.now, query.owner || '', query.type || '', query.record || ''];
+  // PostgreSQL 16's input check also handles malformed legacy dates without failing a queue.
+  const timestamp = (text: string) => `CASE WHEN pg_input_is_valid(${text},'timestamp with time zone') THEN (CASE WHEN length(${text})=10 THEN ${text} || 'T00:00:00Z' ELSE ${text} END)::timestamptz END`;
+  const dueData = `CASE WHEN r.kind='attempts' THEN d.data ELSE r.data END`;
+  const deadline = queue === 'exceptions' ? "r.data->>'dueBy'" : queue === 'mandates' ? "r.data->>'activationDeadline'" : `(${dueData})->>'dueDate'`;
+  const owner = queue === 'collections' ? `coalesce(nullif((${dueData})->>'owner',''),'unassigned')` : "coalesce(nullif(r.data->>'owner',''),'Unassigned')";
+  const kind = queue === 'collections' ? "(r.kind='due-items' OR r.kind='attempts' AND r.status='failed')" : `r.kind='${queue}'`;
+  const unpaid = `coalesce((CASE WHEN r.kind='attempts' THEN d.status ELSE r.status END) NOT IN ('paid','closed','cancelled'),false)`;
+  const overdue = queue === 'collections' ? `(CASE WHEN length(deadline)=10 THEN deadline < to_char($4::timestamptz AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD') ELSE deadline_at < $4::timestamptz END)` : 'deadline_at < $4::timestamptz';
+  const cte = `WITH scoped AS NOT MATERIALIZED (SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere}),
+    b AS (SELECT r.*, ${deadline} AS deadline, ${timestamp(deadline)} AS deadline_at, ${owner} AS queue_owner,
+      ${unpaid} AS unpaid, ${timestamp("r.data->>'occurredAt'")} AS attempt_at
+      FROM scoped r LEFT JOIN scoped d ON r.kind='attempts' AND d.kind='due-items' AND d.id=r.data->>'dueItemId' WHERE ${kind}),
+    q AS (SELECT b.*,coalesce(${overdue},false) AS overdue,
+      coalesce(CASE WHEN length(deadline)=10 THEN deadline ELSE to_char(deadline_at AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD') END = to_char($4::timestamptz AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD'),false) AS today FROM b)`;
+  const conditions: Record<string, string> = queue === 'exceptions' ? {
+    open: "status NOT IN ('closed','resolved')", high: "status NOT IN ('closed','resolved') AND data->>'severity'='high'",
+    overdue: "status NOT IN ('closed','resolved') AND overdue", 'due-today': "status NOT IN ('closed','resolved') AND today", resolved: "status IN ('closed','resolved')",
+  } : queue === 'mandates' ? { all: 'true', 'awaiting-activation': "status='pending_activation'", overdue: "status='pending_activation' AND overdue", 'due-today': "status='pending_activation' AND today" }
+    : { all: "kind='due-items'", overdue: "kind='due-items' AND unpaid AND overdue", 'due-today': "kind='due-items' AND unpaid AND today", failed: "kind='attempts'" };
+  const ownerFilter = "($5='' OR queue_owner=$5) AND ($6='' OR data->>'type'=$6)";
+  const selected = `${ownerFilter} AND (CASE WHEN $7<>'' THEN id=$7 ELSE (${conditions[view]}) END)`;
+  const order = (queue === 'exceptions' ? "overdue DESC,CASE data->>'severity' WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,"
+    : queue === 'mandates' ? "(status='pending_activation') DESC," : '(unpaid AND overdue) DESC,unpaid DESC,') + `deadline_at ASC NULLS LAST,${queue === 'collections' ? 'attempt_at ASC NULLS LAST,' : ''}id COLLATE "C"`;
+  const summary = (await session.client.query<{ counts: Record<string, number>; owners: string[]; types: string[]; total: string }>(`${cte} SELECT
+    json_build_object(${queueViews[queue].map(key => `'${key}',count(*) FILTER (WHERE ${ownerFilter} AND (${conditions[key]}))`).join(',')}) AS counts,
+    coalesce(array_agg(DISTINCT queue_owner),ARRAY[]::text[]) AS owners,
+    coalesce(array_agg(DISTINCT coalesce(data->>'type','unknown')),ARRAY[]::text[]) AS types,
+    count(*) FILTER (WHERE ${selected}) AS total FROM q`, values)).rows[0]!;
+  const total = Number(summary.total);
+  let offset = Math.min(query.offset || 0, Math.max(0, Math.ceil(total / limit) - 1) * limit);
+  if (query.target) {
+    const located = (await session.client.query<{ position: string }>(`${cte}, ranked AS (SELECT id,row_number() OVER (ORDER BY ${order})-1 AS position FROM q WHERE ${selected}) SELECT position FROM ranked WHERE id=$8`, [...values, query.target])).rows[0];
+    if (located) offset = Math.floor(Number(located.position) / limit) * limit;
+  }
+  const items = (await session.client.query<RecordRow>(`${cte} SELECT * FROM q WHERE ${selected} ORDER BY ${order} OFFSET $8 LIMIT $9`, [...values, offset, limit])).rows.map(rowToRecord);
+  const related = new Map<string, ValopayRecord>();
+  // Up to three link hops: attempt → instalment → mandate → policy. Each hop is lender scoped.
+  for (let hop = 0; hop < 3; hop++) {
+    const ids = [...new Set([...items, ...related.values()].flatMap(row => [row.customerId, row.data.dueItemId, row.data.mandateId, row.data.policyId]).filter((id): id is string => typeof id === 'string' && !!id && !related.has(id)))];
+    if (!ids.length) break;
+    const rows = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind IN ('customers','due-items','mandates','policies') AND r.id=ANY($4::text[])`, values.slice(0, 3).concat([ids]))).rows;
+    for (const row of rows) related.set(row.id, rowToRecord(row));
+  }
+  const dueIds = [...items, ...related.values()].filter(row => row.kind === 'due-items').map(row => row.id);
+  if (dueIds.length) {
+    const rows = (await session.client.query<RecordRow>(`SELECT DISTINCT ON (r.data->>'dueItemId') ${recordColumns} ${scopedRecordsFrom}
+      WHERE ${scopedRecordsWhere} AND r.kind='attempts' AND r.status='failed' AND r.data->>'dueItemId'=ANY($4::text[])
+      ORDER BY r.data->>'dueItemId',coalesce(${timestamp("r.data->>'occurredAt'")},r.created_at) DESC,r.id COLLATE "C"`, values.slice(0, 3).concat([dueIds]))).rows;
+    for (const row of rows) related.set(row.id, rowToRecord(row));
+  }
+  if (queue === 'mandates' && query.record) {
+    const rows = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='mandates' AND r.data->>'reissuedFrom'=$4 ORDER BY r.created_at DESC,r.id LIMIT 100`, values.slice(0, 3).concat(query.record))).rows;
+    for (const row of rows) related.set(row.id, rowToRecord(row));
+  }
+  return { items, related: [...related.values()], total, offset, counts: summary.counts, owners: summary.owners.sort(), types: summary.types.sort(), asOf: context.now };
 }
 
 /** Complete customer history and balances without every other customer's data.

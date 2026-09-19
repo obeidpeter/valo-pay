@@ -4,16 +4,16 @@ import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
-import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
+import { usePagedQueue } from '@/lib/use-paged-queue';
+import { SavedQueueViews } from '@/components/saved-queue-views';
 import { AlertTriangle, User, Calendar } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { formatKobo, formatDate } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { exceptionSeverities, resolutionCodesFor } from '@workspace/valopay-schema';
 import { readableLabel, RecordLabel, StatusBadge } from '@/components/record-label';
-import { deadlineInstant, deadlineOrder, isDueToday, isDeadlineOverdue as isOverdue, useQueueFilters } from '@/lib/queue-filters';
+import { deadlineInstant, isDueToday, isDeadlineOverdue as isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { RecordPagination } from '@/components/record-pagination';
-import { useRecordPagination } from '@/lib/use-record-pagination';
 import { ExceptionContext } from '@/components/exception-context';
 
 const exceptionViews = ['open', 'high', 'overdue', 'due-today', 'resolved'] as const;
@@ -36,15 +36,9 @@ export default function ExceptionsPage() {
     tabRefs.current[next]?.focus();
   };
 
-  const exceptionsQuery = useListRecords(
-    'exceptions',
-    { merchantId: merchantId! },
-    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('exceptions', { merchantId: merchantId! }) } }
-  );
-  const { data, isLoading, error, refetch } = exceptionsQuery;
-  const customersQuery = useListRecords('customers', { merchantId: merchantId! }, { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('customers', { merchantId: merchantId! }) } });
-  const { data: customers } = customersQuery;
-  const customerById = new Map(customers?.items.map(customer => [customer.id, customer]));
+  const exceptionsQuery = usePagedQueue('exceptions', { view: filter, owner, type });
+  const { data, isLoading, error, refetch, pagination } = exceptionsQuery;
+  const customerById = new Map(data?.related.filter(row => row.kind === 'customers').map(row => [row.id, row]));
 
   const handleAction = (ex: any, kind: 'update' | 'resolve') => {
     setSelectedEx(ex);
@@ -52,34 +46,15 @@ export default function ExceptionsPage() {
     setIsDialogOpen(true);
   };
 
+  const now = data?.asOf ? Date.parse(data.asOf) : Date.now();
   const isOpen = (status: string) => !['resolved', 'closed'].includes(status);
-  const now = Date.now();
-  const records = data?.items || [];
-  const owned = records.filter(exception => (!owner || String(exception.data?.owner || 'Unassigned') === owner) && (!type || exception.data?.type === type));
-  const matchesView = (exception: typeof records[number], view: typeof filter) => {
-    if (view === 'resolved') return !isOpen(exception.status);
-    if (!isOpen(exception.status)) return false;
-    if (view === 'high') return String(exception.data?.severity) === 'high';
-    if (view === 'overdue') return isOverdue(exception.data?.dueBy, now);
-    if (view === 'due-today') return isDueToday(exception.data?.dueBy, now);
-    return true;
-  };
-  const severityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
-  const items = owned.filter(exception => matchesView(exception, filter)).sort((a, b) =>
-    Number(isOverdue(b.data?.dueBy, now)) - Number(isOverdue(a.data?.dueBy, now)) ||
-    (severityOrder[String(a.data?.severity)] ?? 4) - (severityOrder[String(b.data?.severity)] ?? 4) ||
-    deadlineOrder(a.data?.dueBy, b.data?.dueBy)
-  );
-  const owners = [...new Set(records.map(exception => String(exception.data?.owner || 'Unassigned'))), ...(owner ? [owner] : [])].filter((value, index, values) => values.indexOf(value) === index).sort();
-  const types = [...new Set([...records.map(exception => String(exception.data?.type || 'unknown')), ...(type ? [type] : [])])].sort();
+  const items = data?.items || [];
+  const owners = [...new Set([...(data?.owners || []), ...(owner ? [owner] : [])])].sort();
+  const types = [...new Set([...(data?.types || []), ...(type ? [type] : [])])].sort();
   const filters: Array<{ key: typeof filter; label: string }> = [
-    { key: 'open', label: `All open (${owned.filter(exception => matchesView(exception, 'open')).length})` },
-    { key: 'high', label: `High severity (${owned.filter(exception => matchesView(exception, 'high')).length})` },
-    { key: 'overdue', label: `Overdue (${owned.filter(exception => matchesView(exception, 'overdue')).length})` },
-    { key: 'due-today', label: `Due today (${owned.filter(exception => matchesView(exception, 'due-today')).length})` },
-    { key: 'resolved', label: `Resolved (${owned.filter(exception => matchesView(exception, 'resolved')).length})` },
-  ];
-  const pagination = useRecordPagination(`${merchantId}:${filter}:${owner}:${type}`, items.length);
+    { key: 'open', label: 'All open' }, { key: 'high', label: 'High severity' },
+    { key: 'overdue', label: 'Overdue' }, { key: 'due-today', label: 'Due today' }, { key: 'resolved', label: 'Resolved' },
+  ].map(item => ({ ...item, key: item.key as typeof filter, label: item.label + ' (' + (data?.counts[item.key] ?? '…') + ')' }));
 
   if (!merchantId) return null;
 
@@ -92,7 +67,9 @@ export default function ExceptionsPage() {
         </div>
       </header>
 
-      <QueueFreshness key={merchantId} queries={[exceptionsQuery, customersQuery]} />
+      <QueueFreshness key={merchantId} queries={[exceptionsQuery]} />
+
+      <SavedQueueViews queue="exceptions" views={exceptionViews} fallback="open" />
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
         <div className="p-5 border-b flex flex-wrap items-center gap-4">
@@ -143,7 +120,7 @@ export default function ExceptionsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {items.slice(pagination.offset, pagination.offset + pagination.pageSize).map(exception => (
+                {items.map(exception => (
                   <tr key={exception.id} className="hover:bg-secondary/10 transition-colors">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
@@ -199,7 +176,7 @@ export default function ExceptionsPage() {
             </table>
           </ScrollFrame>
         )}
-        {!isLoading && !error && items.length > 25 && <RecordPagination pagination={pagination} total={items.length} label="exceptions" />}
+        {!isLoading && !error && (data?.total || 0) > 25 && <RecordPagination pagination={pagination} total={data?.total || 0} label="exceptions" />}
       </div>
 
       <RecordDialog

@@ -32,7 +32,7 @@ describe("keyboard", () => {
 
   it("starts the next console page at the top of its scrolling region", async () => {
     const user = userEvent.setup();
-    renderApp("/reports");
+    renderApp("/reports?view=billing");
     await screen.findByRole("heading", { name: "Reports & analytics" });
     await user.click(await screen.findByText("Billing rates & rules"));
     const main = screen.getByRole("main");

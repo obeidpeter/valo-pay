@@ -42,7 +42,7 @@ describe("reports", () => {
     expect(within(card).getByText('Not measured yet')).toBeTruthy();
     expect(within(card).queryByText('0.0%')).toBeNull();
     expect(within(card).getByRole('link', { name: 'Review matches' }).getAttribute('href')).toBe('/reconciliation#precision-audit');
-    expect(screen.getByText(/Current workspace totals.+Billing period:/)).toBeTruthy();
+    expect(screen.getByText(/Current workspace totals.+All figures use sample data/)).toBeTruthy();
   });
 
   it('shows the daily-close failure and a safe way to check for a completed record before retrying', async () => {
@@ -55,14 +55,14 @@ describe("reports", () => {
     expect(api.state().records.filter(record => record.kind === 'closes')).toHaveLength(0);
     await user.click(screen.getByRole('button', { name: 'Run daily close' }));
     expect(await screen.findByText('Daily close completed')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'View close record' }).getAttribute('href')).toBe('#daily-closes');
+    expect(screen.getByRole('link', { name: 'View close record' }).getAttribute('href')).toBe('/reports?view=operations#daily-closes');
   });
 
   it('keeps billing exports reachable when the browser blocks the new tab', async () => {
     const user = userEvent.setup();
     vi.spyOn(window, 'open').mockReturnValue(null);
     api.failNext(/^\/v1\/exports$/, 'offline', 'POST');
-    renderApp('/reports');
+    renderApp('/reports?view=billing');
     await user.click(await screen.findByRole('button', { name: 'Export billing CSV' }));
     expect(await screen.findByText('Billing export not generated')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Export billing CSV' }));

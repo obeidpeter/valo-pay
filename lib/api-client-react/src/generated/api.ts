@@ -39,9 +39,11 @@ import type {
   ImportInput,
   ImportRecordsParams,
   ImportResult,
+  ListQueueParams,
   ListRecordsParams,
   Overview,
   PerformActionParams,
+  QueuePage,
   ReadinessStatus,
   RecordInput,
   RecordList,
@@ -1843,3 +1845,86 @@ export const useDisabledProviderWebhook = <TError = ErrorType<void>,
       return useMutation(getDisabledProviderWebhookMutationOptions(options));
     }
 
+export const getListQueueUrl = (queue: 'exceptions' | 'mandates' | 'collections',
+    params: ListQueueParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/queues/${queue}?${stringifiedParams}` : `/api/v1/queues/${queue}`
+}
+
+/**
+ * Filters and priority order are applied before pagination. Counts cover the full filtered queue. Related records only support the current page and remain in the same lender. A target locates the page containing a linked record; an unavailable or filtered-out target leaves the requested page unchanged. Dates use West Africa Time and the returned asOf timestamp.
+ * @summary A priority-sorted, lender-scoped queue with complete filter counts and page-specific linked records
+ */
+export const listQueue = async (queue: 'exceptions' | 'mandates' | 'collections',
+    params: ListQueueParams, options?: Parameters<typeof customFetch>[1]): Promise<QueuePage> => {
+
+  return customFetch<QueuePage>(getListQueueUrl(queue,params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListQueueQueryKey = (queue: 'exceptions' | 'mandates' | 'collections',
+    params?: ListQueueParams,) => {
+    return [
+    `/api/v1/queues/${queue}`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListQueueQueryOptions = <TData = Awaited<ReturnType<typeof listQueue>>, TError = ErrorType<void>>(queue: 'exceptions' | 'mandates' | 'collections',
+    params: ListQueueParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listQueue>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListQueueQueryKey(queue,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listQueue>>> = ({ signal }) => listQueue(queue,params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: queue !== null && queue !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listQueue>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListQueueQueryResult = NonNullable<Awaited<ReturnType<typeof listQueue>>>
+export type ListQueueQueryError = ErrorType<void>
+
+
+/**
+ * @summary A priority-sorted, lender-scoped queue with complete filter counts and page-specific linked records
+ */
+
+export function useListQueue<TData = Awaited<ReturnType<typeof listQueue>>, TError = ErrorType<void>>(
+ queue: 'exceptions' | 'mandates' | 'collections',
+    params: ListQueueParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listQueue>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListQueueQueryOptions(queue,params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}

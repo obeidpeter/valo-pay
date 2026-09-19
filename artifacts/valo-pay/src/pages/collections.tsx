@@ -6,7 +6,8 @@ import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow } from '@/components/empty-state';
 import { LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
-import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
+import { usePagedQueue } from '@/lib/use-paged-queue';
+import { SavedQueueViews } from '@/components/saved-queue-views';
 import { FileText, Upload } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { RecordDialog } from '@/components/record-dialog';
@@ -15,10 +16,9 @@ import { confirmUnsavedChanges } from '@/lib/unsaved-changes';
 import { failureCodeList } from '@workspace/valopay-schema';
 import { RecordLabel, StatusBadge, readableLabel } from '@/components/record-label';
 import { formatKobo, formatDate } from '@/lib/formatters';
-import { deadlineOrder, isDueToday, isOverdue, useQueueFilters } from '@/lib/queue-filters';
+import { deadlineOrder, isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { collectionReturnTo, recordDestination } from '@/lib/record-navigation';
 import { useHashTarget } from '@/lib/use-hash-target';
-import { useRecordPagination } from '@/lib/use-record-pagination';
 import { RecordPagination } from '@/components/record-pagination';
 
 const collectionViews = ['all', 'overdue', 'due-today', 'failed'] as const;
@@ -38,31 +38,15 @@ export default function CollectionsPage() {
 
 
 
-  const dueItemsQuery = useListRecords(
-    'due-items',
-    { merchantId: merchantId! },
-    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('due-items', { merchantId: merchantId! }) } }
-  );
-  const { data: dueItems, isLoading: isLoadingDue, error: dueError, refetch: refetchDue } = dueItemsQuery;
-  const attemptsQuery = useListRecords('attempts', { merchantId: merchantId! }, { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('attempts', { merchantId: merchantId! }) } });
-  const { data: attempts, isLoading: isLoadingAttempts, error: attemptsError, refetch: refetchAttempts } = attemptsQuery;
-  // Names for the customer column; the full ID stays available for tracing.
-  const customersQuery = useListRecords('customers', { merchantId: merchantId! }, { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('customers', { merchantId: merchantId! }) } });
-  const { data: customers } = customersQuery;
-  const customerById = new Map(customers?.items.map(customer => [customer.id, customer]));
-  const mandatesQuery = useListRecords(
-    'mandates',
-    { merchantId: merchantId! },
-    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('mandates', { merchantId: merchantId! }) } }
-  );
-  const { data: mandates } = mandatesQuery;
-  const policiesQuery = useListRecords(
-    'policies',
-    { merchantId: merchantId! },
-    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('policies', { merchantId: merchantId! }) } }
-  );
-  const { data: policies } = policiesQuery;
-  const rowTargets = useMemo(() => [...(dueItems?.items || []), ...(attempts?.items || [])].map(item => `record-${item.id}`), [dueItems, attempts]);
+  const queue = usePagedQueue('collections', { view, owner, target: targetHash.startsWith('#record-') ? targetHash.slice(8) : undefined });
+  const { data, isLoading: isLoadingDue, error: dueError, refetch: refetchDue, pagination } = queue;
+  const dueItems = { items: [...(data?.items || []), ...(data?.related || [])].filter(row => row.kind === 'due-items') };
+  const attempts = { items: [...(data?.items || []), ...(data?.related || [])].filter(row => row.kind === 'attempts') };
+  const isLoadingAttempts = isLoadingDue, attemptsError = dueError, refetchAttempts = refetchDue;
+  const customerById = new Map(data?.related.filter(row => row.kind === 'customers').map(row => [row.id, row]));
+  const mandates = { items: data?.related.filter(row => row.kind === 'mandates') || [] };
+  const policies = { items: data?.related.filter(row => row.kind === 'policies') || [] };
+  const rowTargets = useMemo(() => (data?.items || []).map(row => 'record-' + row.id), [data]);
 
   useEffect(() => { setActionError(''); setIsDialogOpen(false); setSelectedItem(null); }, [merchantId]);
 
@@ -83,36 +67,22 @@ export default function CollectionsPage() {
     setIsDialogOpen(true);
   };
 
-  const now = Date.now();
-  const instalments = dueItems?.items || [];
+  const now = data?.asOf ? Date.parse(data.asOf) : Date.now();
+  const instalments = dueItems.items;
   const byId = new Map(instalments.map(item => [item.id, item]));
   const ownerOf = (item: typeof instalments[number] | undefined) => String(item?.data?.owner || 'unassigned');
-  const failedAttempts = (attempts?.items || []).filter(attempt => attempt.status === 'failed');
+  const failedAttempts = attempts.items;
   const latestFailure = new Map<string, typeof failedAttempts[number]>();
   for (const attempt of [...failedAttempts].sort((a, b) => deadlineOrder(a.data?.occurredAt || a.createdAt, b.data?.occurredAt || b.createdAt))) latestFailure.set(String(attempt.data?.dueItemId), attempt);
-  const owners = [...new Set([...instalments.map(ownerOf), ...(owner ? [owner] : [])])].sort();
-  const owned = instalments.filter(item => !owner || ownerOf(item) === owner);
-  const ownedFailures = failedAttempts.filter(attempt => !owner || ownerOf(byId.get(String(attempt.data?.dueItemId))) === owner);
+  const owners = [...new Set([...(data?.owners || []), ...(owner ? [owner] : [])])].sort();
   const isOverdueItem = (item: typeof instalments[number]) => isUnpaid(item.status) && isOverdue(item.data?.dueDate, now);
-  const isTodayItem = (item: typeof instalments[number]) => isUnpaid(item.status) && isDueToday(item.data?.dueDate, now);
-  const displayed = view === 'failed'
-    ? ownedFailures.map(attempt => ({ key: attempt.id, item: byId.get(String(attempt.data?.dueItemId)), attempt }))
-    : owned.filter(item => view === 'overdue' ? isOverdueItem(item) : view === 'due-today' ? isTodayItem(item) : true).map(item => ({ key: item.id, item, attempt: undefined }));
-  displayed.sort((a, b) => Number(!!b.item && isOverdueItem(b.item)) - Number(!!a.item && isOverdueItem(a.item)) || Number(!!b.item && isUnpaid(b.item.status)) - Number(!!a.item && isUnpaid(a.item.status)) || deadlineOrder(a.item?.data?.dueDate, b.item?.data?.dueDate) || deadlineOrder(a.attempt?.data?.occurredAt, b.attempt?.data?.occurredAt));
-  const pagination = useRecordPagination(`${merchantId}:${view}:${owner}`, displayed.length);
-  const targetIndex = displayed.findIndex(row => `#record-${row.key}` === targetHash);
-  useEffect(() => {
-    if (targetIndex >= 0) pagination.setPage(Math.floor(targetIndex / pagination.pageSize));
-    // Resolve a return link when its record arrives; normal paging must remain under the operator's control.
-  }, [merchantId, view, owner, targetHash, targetIndex, pagination.pageSize]);
-  const pagedRows = displayed.slice(pagination.offset, pagination.offset + pagination.pageSize);
-  useHashTarget(rowTargets, !isLoadingDue && !isLoadingAttempts && !dueError && !attemptsError && targetIndex >= pagination.offset && targetIndex < pagination.offset + pagination.pageSize);
-  const views: Array<{ key: typeof view; label: string; count: number }> = [
-    { key: 'all', label: 'All instalments', count: owned.length },
-    { key: 'overdue', label: 'Overdue', count: owned.filter(isOverdueItem).length },
-    { key: 'due-today', label: 'Due today', count: owned.filter(isTodayItem).length },
-    { key: 'failed', label: 'Failed attempts', count: ownedFailures.length },
-  ];
+  const displayed = (data?.items || []).map(row => row.kind === 'attempts' ? { key: row.id, item: byId.get(String(row.data?.dueItemId)), attempt: row } : { key: row.id, item: row, attempt: undefined });
+  const pagedRows = displayed;
+  useHashTarget(rowTargets, !!data && !isLoadingDue && !dueError);
+  const views: Array<{ key: typeof view; label: string; count: number | string }> = [
+    { key: 'all', label: 'All instalments' }, { key: 'overdue', label: 'Overdue' },
+    { key: 'due-today', label: 'Due today' }, { key: 'failed', label: 'Failed attempts' },
+  ].map(item => ({ ...item, key: item.key as typeof view, count: data?.counts[item.key] ?? '…' }));
   if (!merchantId) return null;
   const nextAction = (item: typeof instalments[number] | undefined, attempt: typeof failedAttempts[number] | undefined) => {
     const rowId = attempt?.id || item?.id;
@@ -143,7 +113,9 @@ export default function CollectionsPage() {
         <Button action={importOpen ? undefined : "import_records"} variant="outline" className="gap-2" aria-expanded={importOpen} aria-controls="collection-import" onClick={() => { if (importOpen && !confirmUnsavedChanges()) return; setImportOpen(open => !open); }}><Upload className="h-4 w-4" aria-hidden="true" />{importOpen ? 'Hide import' : 'Import sample data'}</Button>
       </header>
 
-      <QueueFreshness key={merchantId} queries={[dueItemsQuery, attemptsQuery, customersQuery, mandatesQuery, policiesQuery]} />
+      <QueueFreshness key={merchantId} queries={[queue]} />
+
+      <SavedQueueViews queue="collections" views={collectionViews} fallback="all" />
 
       {actionError && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm">{actionError}</p>}
       <div className="flex flex-col gap-6">
@@ -187,7 +159,7 @@ export default function CollectionsPage() {
                 <tbody className="divide-y">
                   {isLoadingDue || isLoadingAttempts ? (
                     <LoadingRow colSpan={7} what="collections" />
-                  ) : (dueError && !dueItems) || (attemptsError && !attempts) ? (
+                  ) : dueError && !data ? (
                     <tr><td colSpan={7} className="p-6"><div role="alert"><p>Collections could not be loaded completely.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => { refetchDue(); refetchAttempts(); }}>Try again</Button></div></td></tr>
                   ) : displayed.length === 0 ? (
                     <EmptyRow colSpan={7} title={view === 'all' && !owner ? 'No instalments recorded' : 'No collections match these filters'}>{view === 'all' && !owner ? 'Open Import sample data to add synthetic instalments using a sample CSV.' : 'Choose All instalments and All owners to see the full list.'}</EmptyRow>
@@ -210,7 +182,7 @@ export default function CollectionsPage() {
                 </tbody>
               </table>
             </ScrollFrame>
-            {!isLoadingDue && !isLoadingAttempts && !dueError && !attemptsError && <RecordPagination pagination={pagination} total={displayed.length} label={view === 'failed' ? 'failed attempts' : 'instalments'} />}
+            {!isLoadingDue && !isLoadingAttempts && !dueError && !attemptsError && <RecordPagination pagination={pagination} total={data?.total || 0} label={view === 'failed' ? 'failed attempts' : 'instalments'} />}
           </section>
         </div>
       </div>
