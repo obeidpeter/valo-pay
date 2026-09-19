@@ -3,14 +3,15 @@ import { Link } from 'wouter';
 import { SignIn, SignUp } from '@clerk/react';
 import { dark } from '@clerk/themes';
 import { useTheme } from '@/lib/theme';
-import { ArrowRight, CheckCircle2, LockKeyhole, ShieldCheck } from 'lucide-react';
+import { ArrowRight, ChevronDown, FolderCheck, History, LockKeyhole, ShieldCheck, Sparkles } from 'lucide-react';
 import { PublicFrame } from '@/components/public-frame';
 import { Button } from '@/components/ui/button';
 import { authEnabled } from '@/lib/auth';
+import '@/sign-in.css';
 
 /**
- * Sign-in and sign-up in a shell that matches the console: the brand and
- * what signing in changes on one side, the form on the other.  The form
+ * Sign-in and sign-up share a branded welcome panel and a focused form.
+ * On phones the form follows the welcome, before the supporting context. The form
  * itself is Clerk's, themed to the console's tokens, because it already
  * handles every strategy, its errors are in plain language and its labels are
  * visible.  Where Clerk is not configured there is no account to sign into,
@@ -29,14 +30,22 @@ const appearance = {
     colorBackground: 'hsl(var(--card))',
     colorInputBackground: 'hsl(var(--background))',
     colorInputText: 'hsl(var(--foreground))',
+    colorTextOnPrimaryBackground: 'hsl(var(--primary-foreground))',
     colorDanger: 'hsl(var(--destructive))',
     borderRadius: '0.75rem',
     fontFamily: "'Plus Jakarta Sans', sans-serif",
   },
   elements: {
-    rootBox: 'w-full',
-    cardBox: 'w-full shadow-none',
-    card: 'shadow-none border border-border rounded-xl',
+    rootBox: 'auth-clerk-root',
+    cardBox: 'auth-clerk-box',
+    card: 'auth-clerk-card',
+    headerTitle: 'auth-clerk-title',
+    headerSubtitle: 'auth-clerk-subtitle',
+    formFieldInput: 'auth-clerk-input',
+    formButtonPrimary: 'auth-clerk-submit',
+    socialButtonsBlockButton: 'auth-clerk-social',
+    footer: 'auth-clerk-footer',
+    footerActionLink: 'auth-clerk-link',
   },
 } as const;
 
@@ -55,32 +64,32 @@ function useClerkAppearance() {
   return theme === 'dark' ? darkAppearance : appearance;
 }
 
-const whatChanges = [
-  'Keep your lenders, mandates, payment matches and settings between visits.',
-  'Signed-in workspaces are not removed for inactivity. Anonymous sandboxes can be removed after 30 days without changes.',
-  'We never hold money. Nothing in this console moves funds, signed in or not.',
-];
-
-function Shell({ title, children }: { title: string; children: ReactNode }) {
+function Shell({ title, intro, children }: { title: string; intro: string; children: ReactNode }) {
   useEffect(() => { document.title = `${title} · Valo Pay`; }, [title]);
   return (
-    <PublicFrame>
+    <PublicFrame className="auth-site">
       <main id="main" tabIndex={-1} className="public-container public-auth focus:outline-none">
+        <div className="auth-welcome">
+          <p className="auth-eyebrow"><span aria-hidden="true" /> Your collections workspace</p>
+          <h1>{title}</h1>
+          <p className="auth-intro">Every payment. One clear picture.<br /> {intro}</p>
+        </div>
+        <div className="auth-form-area">
+          {children}
+          <p className="auth-footnote"><ShieldCheck aria-hidden="true" /> Sample data only. No live collections.</p>
+        </div>
         <aside aria-labelledby="context-title" className="auth-context">
-          <p className="public-eyebrow mb-5">Every payment. One clear picture.</p>
-          <h1 id="context-title">{title}</h1>
-          <p className="auth-intro">A collections operations layer for lenders that collect by direct debit. We never hold money.</p>
-          <h2 className="public-eyebrow mt-10">Why sign in?</h2>
+          <h2 id="context-title" className="auth-eyebrow">Why sign in?</h2>
           <ul className="auth-benefits" role="list">
-            {whatChanges.map((line) => (
-              <li key={line}><CheckCircle2 aria-hidden="true" /><span>{line}</span></li>
-            ))}
+            <li><span className="auth-benefit-icon"><FolderCheck aria-hidden="true" /></span><div><h3>Your work stays with you</h3><p>Keep your lenders, mandates, payment matches and settings between visits.</p></div></li>
+            <li><span className="auth-benefit-icon"><History aria-hidden="true" /></span><div><h3>A clear customer history</h3><p>Follow consent, payments and collection activity in one timeline.</p></div></li>
           </ul>
-          <p className="hero-stage" role="status">
-            <span className="h-2 w-2 rounded-full bg-success" aria-hidden="true" /> Sandbox · Sample data only
-          </p>
+          <details className="auth-retention">
+            <summary>How long is my workspace kept? <ChevronDown aria-hidden="true" /></summary>
+            <p>Signed-in workspaces are not removed for inactivity. Anonymous sandboxes can be removed after 30 days without changes.</p>
+          </details>
+          <p className="auth-custody"><ShieldCheck aria-hidden="true" /><span>We never hold money. Nothing in this console moves funds, signed in or not.</span></p>
         </aside>
-        <div className="auth-form-area">{children}<p className="auth-footnote"><ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" /> Sample data only. No live collections.</p></div>
       </main>
     </PublicFrame>
   );
@@ -89,11 +98,11 @@ function Shell({ title, children }: { title: string; children: ReactNode }) {
 /** When this host has no Clerk key there is no account to sign into: say so, say why, and offer the sandbox. */
 function Unavailable({ action }: { action: 'sign in' | 'create an account' }) {
   return (
-    <section aria-labelledby="unavailable-title" className="auth-unavailable">
+    <section aria-labelledby="unavailable-title" className="auth-unavailable auth-card">
       <span className="auth-unavailable-icon"><LockKeyhole className="h-5 w-5" aria-hidden="true" /></span>
       <h2 id="unavailable-title">Sign-in is unavailable here</h2>
       <p>You cannot {action} at this address. You can explore the sandbox without an account.</p>
-      <p className="auth-sandbox-note"><strong>Explore with sample data</strong>Try customer timelines, review payment matches and run the daily close to check payment records.</p>
+      <div className="auth-sandbox-note"><Sparkles aria-hidden="true" /><p><strong>Explore with sample data</strong>Try customer timelines, review payment matches and run the daily close to check payment records.</p></div>
       <div className="auth-unavailable-actions">
         <Button asChild className="gap-2"><Link href="/overview">Continue to the sandbox <ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button>
         <Button asChild variant="ghost"><Link href="/">Back to home</Link></Button>
@@ -102,15 +111,28 @@ function Unavailable({ action }: { action: 'sign in' | 'create an account' }) {
   );
 }
 
+function SandboxOption() {
+  return (
+    <div className="auth-sandbox-option">
+      <span className="auth-sandbox-divider">Just exploring?</span>
+      <Link href="/overview" className="auth-sandbox-link">
+        <span className="auth-sandbox-icon"><Sparkles aria-hidden="true" /></span>
+        <span><strong>Open the sandbox</strong><span>No account needed. Try the sample workspace.</span></span>
+        <ArrowRight aria-hidden="true" />
+      </Link>
+    </div>
+  );
+}
+
 /** The sign-in page: Clerk's form beside what signing in changes, or the unavailable notice on a host without a key. */
 export function SignInPage() {
   const clerkAppearance = useClerkAppearance();
   return (
-    <Shell title="Sign in to your workspace">
+    <Shell title="Sign in to your workspace" intro="Pick up where you left off.">
       {authEnabled ? (
         <>
           <SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} fallbackRedirectUrl={`${basePath}/overview`} appearance={clerkAppearance} />
-          <p className="mt-4 text-sm text-muted-foreground">Want to try it first? <Link href="/overview" className="font-medium text-primary underline-offset-4 hover:underline">Open the sandbox without an account</Link>.</p>
+          <SandboxOption />
         </>
       ) : <Unavailable action="sign in" />}
     </Shell>
@@ -121,11 +143,11 @@ export function SignInPage() {
 export function SignUpPage() {
   const clerkAppearance = useClerkAppearance();
   return (
-    <Shell title="Create your workspace">
+    <Shell title="Create your workspace" intro="Bring your collections work together.">
       {authEnabled ? (
         <>
           <SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} fallbackRedirectUrl={`${basePath}/overview`} appearance={clerkAppearance} />
-          <p className="mt-4 text-sm text-muted-foreground">Want to try it first? <Link href="/overview" className="font-medium text-primary underline-offset-4 hover:underline">Open the sandbox without an account</Link>.</p>
+          <SandboxOption />
         </>
       ) : <Unavailable action="create an account" />}
     </Shell>

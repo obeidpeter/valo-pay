@@ -10,9 +10,9 @@ import '@/public-pages.css';
  * a visitor recognises where they are (consistency). The landing page has
  * its own header because it also carries the section links and the ways in.
  */
-export function PublicFrame({ children }: { children: ReactNode }) {
+export function PublicFrame({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div className="public-site min-h-screen bg-background text-foreground">
+    <div className={`public-site min-h-screen bg-background text-foreground ${className}`}>
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground">Skip to main content</a>
       <header className="public-header">
         <div className="public-container flex items-center justify-between gap-4 py-5">
