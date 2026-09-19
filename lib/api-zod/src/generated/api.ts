@@ -447,7 +447,8 @@ export const GetCustomerTimelineResponse = zod.object({
  * @summary Reports for one lender
  */
 export const GetReportsQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "includeCloses": zod.enum(['true', 'false']).optional().describe('Default true for compatibility. The console passes false and loads paged close summaries separately.')
 })
 
 export const GetReportsResponse = zod.object({
@@ -832,6 +833,8 @@ export const listQueueQueryLimitMax = 100;
 export const listQueueQueryOffsetMin = 0;
 export const listQueueQueryOffsetMax = 2147483647;
 
+export const listQueueQueryQMax = 200;
+
 
 
 export const ListQueueQueryParams = zod.object({
@@ -842,7 +845,8 @@ export const ListQueueQueryParams = zod.object({
   "record": zod.coerce.string().max(listQueueQueryRecordMax).optional().describe('Select this exact record in the queue instead of applying its view, within the active lender.'),
   "target": zod.coerce.string().max(listQueueQueryTargetMax).optional().describe('Locate the page containing this record among the filtered results. Does not bypass filters.'),
   "limit": zod.coerce.number().int().min(1).max(listQueueQueryLimitMax).optional().describe('Page size, default 25 and maximum 100.'),
-  "offset": zod.coerce.number().int().min(listQueueQueryOffsetMin).max(listQueueQueryOffsetMax).optional().describe('Rows to skip after filtering and priority ordering. Clamped to the last available page if results shrink.')
+  "offset": zod.coerce.number().int().min(listQueueQueryOffsetMin).max(listQueueQueryOffsetMax).optional().describe('Rows to skip after filtering and priority ordering. Clamped to the last available page if results shrink.'),
+  "q": zod.coerce.string().max(listQueueQueryQMax).optional().describe('Literal accent-insensitive customer name, customer reference or queue record name/reference search, applied before counting and paging.')
 })
 
 export const listQueueResponseTotalMin = 0;
@@ -887,5 +891,159 @@ export const ListQueueResponse = zod.object({
   "types": zod.array(zod.string()),
   "asOf": zod.string()
 }).describe('A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states.')
+
+
+/**
+ * Filters and counts in PostgreSQL before paging. Linked payment, instalment and customer records belong to the same lender. Audit uses the reproducible previous-month sample including superseded reviewed matches.
+ * @summary Page a reconciliation work queue
+ */
+export const ListReconciliationParams = zod.object({
+  "queue": zod.enum(['proposals', 'duplicates', 'payments', 'observations', 'audit', 'batches']).describe('Reconciliation work queue.')
+})
+
+export const listReconciliationQueryDueItemMax = 200;
+
+export const listReconciliationQueryLimitMax = 100;
+
+export const listReconciliationQueryOffsetMin = 0;
+export const listReconciliationQueryOffsetMax = 2147483647;
+
+
+
+export const ListReconciliationQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "dueItem": zod.coerce.string().max(listReconciliationQueryDueItemMax).optional().describe('Optional instalment focus; payment queues are restricted to its customer, proposals to its exact instalment.'),
+  "limit": zod.coerce.number().int().min(1).max(listReconciliationQueryLimitMax).optional().describe('Page size; defaults to 25.'),
+  "offset": zod.coerce.number().int().min(listReconciliationQueryOffsetMin).max(listReconciliationQueryOffsetMax).optional().describe('Rows to skip; clamped when the result shrinks.')
+})
+
+export const ListReconciliationResponse = zod.object({
+  "items": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
+  "related": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
+  "total": zod.number().int(),
+  "offset": zod.number().int(),
+  "asOf": zod.string(),
+  "precision": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A database-filtered reconciliation queue page, with complete count and lender-scoped linked evidence. Precision metadata describes the complete seeded monthly sample.')
+
+
+/**
+ * Newest first, with complete range counts and whole-range comparison endpoints. Missing historical measures remain absent. Invalid dates or reversed ranges are rejected.
+ * @summary Page recorded daily closes
+ */
+export const listCloseHistoryQueryFromMax = 10;
+
+export const listCloseHistoryQueryToMax = 10;
+
+export const listCloseHistoryQueryLimitMax = 100;
+
+export const listCloseHistoryQueryOffsetMin = 0;
+export const listCloseHistoryQueryOffsetMax = 2147483647;
+
+
+
+export const ListCloseHistoryQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "from": zod.coerce.string().max(listCloseHistoryQueryFromMax).optional().describe('Inclusive date in YYYY-MM-DD format, in West Africa Time.'),
+  "to": zod.coerce.string().max(listCloseHistoryQueryToMax).optional().describe('Inclusive date in YYYY-MM-DD format, in West Africa Time.'),
+  "limit": zod.coerce.number().int().min(1).max(listCloseHistoryQueryLimitMax).optional().describe('Page size; defaults to 25.'),
+  "offset": zod.coerce.number().int().min(listCloseHistoryQueryOffsetMin).max(listCloseHistoryQueryOffsetMax).optional().describe('Rows to skip; clamped when the result shrinks.')
+})
+
+export const ListCloseHistoryResponse = zod.object({
+  "items": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
+  "total": zod.number().int(),
+  "allTotal": zod.number().int(),
+  "offset": zod.number().int(),
+  "first": zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).optional().describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'),
+  "latest": zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).optional().describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')
+}).describe('Paged close summaries and first/latest closing positions for the entire WAT date range; full REC-07 evidence is fetched separately.')
+
+
+/**
+ * Returns the full immutable close report on demand within the current lender.
+ * @summary Read the evidence for one recorded close
+ */
+export const GetCloseDetailParams = zod.object({
+  "id": zod.coerce.string().describe('Close record in the active lender.')
+})
+
+export const GetCloseDetailQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const GetCloseDetailResponse = zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')
 
 

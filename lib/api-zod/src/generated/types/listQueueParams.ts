@@ -48,4 +48,9 @@ limit?: number;
  * @maximum 2147483647
  */
 offset?: number;
+/**
+ * Literal accent-insensitive customer name, customer reference or queue record name/reference search, applied before counting and paging.
+ * @maxLength 200
+ */
+q?: string;
 };

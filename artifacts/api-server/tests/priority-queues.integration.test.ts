@@ -37,6 +37,7 @@ try {
   const timings: number[] = [];
   for (const queue of Object.keys(queueViews) as QueueName[]) {
     const cases: QueueQuery[] = queueViews[queue].flatMap(view => [{ view, limit: 25 }, { view, limit: 25, offset: 25 }, { view, limit: 100, offset: 99999 }]);
+    cases.push({q:'Queue instalment',limit:25},{q:'QDUE-1999',limit:25},{q:customer.name.normalize('NFD').replace(/[\u0300-\u036f]/g,''),limit:25},{q:'%_',limit:25});
     cases.push({ owner: queue === 'exceptions' ? 'Finance' : 'lender', type: queue === 'exceptions' ? 'unallocated_payment' : '', limit: 25 });
     if (queue === 'collections') cases.push({ view: 'failed', target: `${merchantId}-queue-attempt-01999`, limit: 25 }, { view: 'all', target: `${merchantId}-queue-due-00001`, limit: 25 });
     if (queue === 'mandates') cases.push({ record: mandate.id, view: 'overdue', limit: 25 });

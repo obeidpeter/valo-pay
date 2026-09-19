@@ -64,7 +64,7 @@ describe('reconciliation result visibility', () => {
     renderApp('/reconciliation');
     await screen.findByText(reference);
     const getCount = (path: string) => api.calls.filter(call => call.method === 'GET' && call.path === path).length;
-    const paths = ['/v1/records/payments', '/v1/records/observations', '/v1/records/allocations', '/v1/records/settlement-batches', '/v1/reports'];
+    const paths = ['/v1/reconciliation/payments', '/v1/reconciliation/observations', '/v1/reconciliation/proposals', '/v1/reconciliation/batches', '/v1/reconciliation/audit'];
     await waitFor(() => paths.forEach(path => expect(getCount(path)).toBeGreaterThan(0)));
     const before = paths.map(getCount);
     await user.click(screen.getByRole('button', { name: 'Run reconciliation' }));

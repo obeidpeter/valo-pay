@@ -10,6 +10,10 @@ import { createCreationLimiter } from "./creation-limit";
 import { foldForSearch, LIST_PAGE_CEILING, type ListQuery } from "./valopay-list";
 import { advanceRecordVersions } from "./edit-versions";
 import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
+import { validateCloseRange, pageOffset, type ReadPageQuery, type ReconciliationQueue } from './console-read-models';
+import { precisionAudit } from '../domain/reports';
+import { previousMonth } from '../domain/billing';
+import { measurementRules } from '@workspace/valopay-schema';
 
 /** The demo persona roles, the same list as the shared schema's. */
 export const roles = ["Admin", "Operations", "Finance", "Compliance reviewer", "Read-only"];
@@ -280,7 +284,7 @@ export async function listQueue(context: StoreContext, merchantId: string, queue
   const session = sessionFor(context);
   await readMerchant(context, merchantId);
   const view = queueView(queue, query.view), limit = query.limit || 25;
-  const values: unknown[] = [merchantId, session.workspace.id, session.principal, context.now, query.owner || '', query.type || '', query.record || ''];
+  const values: unknown[] = [merchantId, session.workspace.id, session.principal, context.now, query.owner || '', query.type || '', query.record || '', foldForSearch(query.q || '')];
   // PostgreSQL 16's input check also handles malformed legacy dates without failing a queue.
   const timestamp = (text: string) => `CASE WHEN pg_input_is_valid(${text},'timestamp with time zone') THEN (CASE WHEN length(${text})=10 THEN ${text} || 'T00:00:00Z' ELSE ${text} END)::timestamptz END`;
   const dueData = `CASE WHEN r.kind='attempts' THEN d.data ELSE r.data END`;
@@ -302,7 +306,9 @@ export async function listQueue(context: StoreContext, merchantId: string, queue
     overdue: "status NOT IN ('closed','resolved') AND overdue", 'due-today': "status NOT IN ('closed','resolved') AND today", resolved: "status IN ('closed','resolved')",
   } : queue === 'mandates' ? { all: 'true', 'awaiting-activation': "status='pending_activation'", overdue: "status='pending_activation' AND overdue", 'due-today': "status='pending_activation' AND today" }
     : { all: "kind='due-items'", overdue: "kind='due-items' AND unpaid AND overdue", 'due-today': "kind='due-items' AND unpaid AND today", failed: "kind='attempts'" };
-  const ownerFilter = "($5='' OR queue_owner=$5) AND ($6='' OR data->>'type'=$6)";
+  const searchText = (expression: string) => `lower(regexp_replace(normalize(${expression},NFD), U&'[\\0300-\\036f]', '', 'g'))`;
+  const searchFilter = `($8='' OR position($8 in ${searchText("concat_ws(' ',name,reference)")})>0 OR EXISTS(SELECT 1 FROM valopay_records c WHERE c.merchant_id=$1 AND c.kind='customers' AND c.id=q.customer_id AND position($8 in ${searchText("concat_ws(' ',c.name,c.reference)")})>0))`;
+  const ownerFilter = searchFilter + " AND ($5='' OR queue_owner=$5) AND ($6='' OR data->>'type'=$6)";
   const selected = `${ownerFilter} AND (CASE WHEN $7<>'' THEN id=$7 ELSE (${conditions[view]}) END)`;
   const order = (queue === 'exceptions' ? "overdue DESC,CASE data->>'severity' WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,"
     : queue === 'mandates' ? "(status='pending_activation') DESC," : '(unpaid AND overdue) DESC,unpaid DESC,') + `deadline_at ASC NULLS LAST,${queue === 'collections' ? 'attempt_at ASC NULLS LAST,' : ''}id COLLATE "C"`;
@@ -314,10 +320,10 @@ export async function listQueue(context: StoreContext, merchantId: string, queue
   const total = Number(summary.total);
   let offset = Math.min(query.offset || 0, Math.max(0, Math.ceil(total / limit) - 1) * limit);
   if (query.target) {
-    const located = (await session.client.query<{ position: string }>(`${cte}, ranked AS (SELECT id,row_number() OVER (ORDER BY ${order})-1 AS position FROM q WHERE ${selected}) SELECT position FROM ranked WHERE id=$8`, [...values, query.target])).rows[0];
+    const located = (await session.client.query<{ position: string }>(`${cte}, ranked AS (SELECT id,row_number() OVER (ORDER BY ${order})-1 AS position FROM q WHERE ${selected}) SELECT position FROM ranked WHERE id=$9`, [...values, query.target])).rows[0];
     if (located) offset = Math.floor(Number(located.position) / limit) * limit;
   }
-  const items = (await session.client.query<RecordRow>(`${cte} SELECT * FROM q WHERE ${selected} ORDER BY ${order} OFFSET $8 LIMIT $9`, [...values, offset, limit])).rows.map(rowToRecord);
+  const items = (await session.client.query<RecordRow>(`${cte} SELECT * FROM q WHERE ${selected} ORDER BY ${order} OFFSET $9 LIMIT $10`, [...values, offset, limit])).rows.map(rowToRecord);
   const related = new Map<string, ValopayRecord>();
   // Up to three link hops: attempt → instalment → mandate → policy. Each hop is lender scoped.
   for (let hop = 0; hop < 3; hop++) {
@@ -338,6 +344,76 @@ export async function listQueue(context: StoreContext, merchantId: string, queue
     for (const row of rows) related.set(row.id, rowToRecord(row));
   }
   return { items, related: [...related.values()], total, offset, counts: summary.counts, owners: summary.owners.sort(), types: summary.types.sort(), asOf: context.now };
+}
+
+/** All queue predicates execute inside the same lender-locked read transaction. */
+export async function listReconciliation(context: StoreContext, merchantId: string, queue: ReconciliationQueue, query: ReadPageQuery) {
+  const session = sessionFor(context), merchant = await readMerchant(context, merchantId);
+  const scope = [merchantId, session.workspace.id, session.principal];
+  const limit = query.limit || 25;
+  const select = (where: string) => `SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND ${where}`;
+  let precision: ReturnType<typeof precisionAudit> | undefined;
+  let sampledIds: string[] = [];
+  if (queue === 'audit') {
+    const month = previousMonth(context.now), seed = `${merchantId}:${month}`;
+    const predicate = "r.kind='allocations' AND r.status IN ('confirmed','superseded') AND r.data->'automatic'='true'::jsonb AND r.data->>'confidence'='certain' AND left(coalesce(nullif(r.data->>'confirmedAt',''),to_char(r.created_at AT TIME ZONE 'UTC','YYYY-MM-DD')),7)=$4";
+    const population = Number((await session.client.query<{total:string}>(`SELECT count(*) AS total ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND ${predicate}`, [...scope,month])).rows[0]!.total);
+    const sample = (await session.client.query<RecordRow>(`${select(predicate)} ORDER BY sha256(convert_to($5 || ':' || r.id,'UTF8')),r.id COLLATE "C" LIMIT $6`, [...scope,month,seed,measurementRules.precisionSampleSize])).rows.map(rowToRecord);
+    precision = { ...precisionAudit({merchant:merchant.info,settings:merchant.settings,records:sample},context.now), population, requiredSample:Math.min(measurementRules.precisionSampleSize,population) };
+    sampledIds = precision.sampledAllocationIds;
+  }
+  const conditions = { proposals:"r.kind='allocations' AND r.status='proposed'", duplicates:"r.kind='payments' AND r.status='possible_duplicate'", payments:"r.kind='payments' AND r.status='unallocated'", observations:"r.kind='observations' AND r.status='unresolved'", audit:"r.kind='allocations' AND r.id=ANY($5::text[])", batches:"r.kind='settlement-batches'" };
+  const due = query.dueItem ? (await session.client.query<RecordRow>(select("r.kind='due-items' AND r.id=$4"),[...scope,query.dueItem])).rows[0] : undefined;
+  const related = new Map<string,ValopayRecord>();
+  if (due) related.set(due.id,rowToRecord(due));
+  // An unavailable focus fails closed rather than showing the whole lender.
+  const focus = !query.dueItem ? 'true' : !due ? 'false' : queue === 'proposals' ? "r.data->>'dueItemId'=$4" : queue === 'observations' ? "(r.data->>'dueItemId'=$4 OR ($6<>'' AND r.customer_id=$6))" : "($6<>'' AND r.customer_id=$6)";
+  // All parameters are referenced in every variant so PostgreSQL can infer their types.
+  const where = `(${conditions[queue]}) AND (${focus}) AND $4::text IS NOT NULL AND $5::text[] IS NOT NULL AND $6::text IS NOT NULL`;
+  const values = [...scope, query.dueItem || '', sampledIds, due?.customer_id || ''];
+  const total = Number((await session.client.query<{total:string}>(`SELECT count(*) AS total ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND ${where}`,values)).rows[0]!.total);
+  const offset = pageOffset(total,limit,query.offset);
+  const items = (await session.client.query<RecordRow>(`${select(where)} ORDER BY r.created_at DESC,r.id DESC OFFSET $7 LIMIT $8`,[...values,offset,limit])).rows.map(rowToRecord);
+  for (let hop=0;hop<2;hop++) {
+    const ids = [...new Set([...items,...related.values()].flatMap(r=>[r.customerId,r.data.paymentId,r.data.dueItemId]).filter((id):id is string=>typeof id==='string' && !!id && !related.has(id)))];
+    if (!ids.length) break;
+    const rows = (await session.client.query<RecordRow>(select("r.kind IN ('customers','payments','due-items') AND r.id=ANY($4::text[])"),[...scope,ids])).rows;
+    for (const row of rows) related.set(row.id,rowToRecord(row));
+  }
+  return {items,related:[...related.values()],total,offset,asOf:context.now,...(precision?{precision}:{})};
+}
+
+const closeSummaryData = `jsonb_strip_nulls(jsonb_build_object('summary',r.data->'summary','closedAt',r.data->'closedAt','schedule',r.data->'schedule','positionAlert',r.data->'positionAlert',
+  'report',CASE WHEN r.data ? 'report' THEN jsonb_build_object('unallocated',jsonb_build_object('kobo',r.data#>'{report,unallocated,kobo}'),'exceptions',jsonb_build_object('openAtClose',r.data#>'{report,exceptions,openAtClose}')) END))`;
+
+export async function listCloseHistory(context: StoreContext, merchantId: string, query: ReadPageQuery) {
+  validateCloseRange(query.from,query.to);
+  const session = sessionFor(context); await readMerchant(context,merchantId);
+  const values = [merchantId,session.workspace.id,session.principal,query.from || '',query.to || ''];
+  const base = `${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='closes'`;
+  const day = "to_char(r.created_at AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD')";
+  const range = `($4='' OR ${day}>=$4) AND ($5='' OR ${day}<=$5)`;
+  const counts = (await session.client.query<{total:string;all_total:string}>(`SELECT count(*) AS all_total,count(*) FILTER(WHERE ${range}) AS total ${base}`,values)).rows[0]!;
+  const total = Number(counts.total),limit=query.limit || 25,offset=pageOffset(total,limit,query.offset);
+  const select = `SELECT ${recordColumns.replace('r.data',closeSummaryData+' AS data')} ${base} AND ${range}`;
+  const items = (await session.client.query<RecordRow>(`${select} ORDER BY r.created_at DESC,r.id DESC OFFSET $6 LIMIT $7`,[...values,offset,limit])).rows.map(rowToRecord);
+  const endpoints = total ? (await session.client.query<RecordRow>(`(${select} ORDER BY r.created_at,r.id LIMIT 1) UNION ALL (${select} ORDER BY r.created_at DESC,r.id DESC LIMIT 1)`,values)).rows.map(rowToRecord) : [];
+  return {items,total,allTotal:Number(counts.all_total),offset,...(total?{first:endpoints[0]!,latest:endpoints[1]!}:{})};
+}
+export async function getCloseDetail(context: StoreContext, merchantId:string, id:string) {
+  const session=sessionFor(context); await readMerchant(context,merchantId);
+  const row=(await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='closes' AND r.id=$4`,[merchantId,session.workspace.id,session.principal,id])).rows[0];
+  if (!row) fail('Close record not found in this lender.',404);
+  return rowToRecord(row);
+}
+
+/** Read-only reports keep the measures needed by historical calculations, without
+ * pulling large REC-07 evidence arrays into every summary request. */
+export async function loadReportsView(context:StoreContext,merchantId:string):Promise<DomainState> {
+  const session=sessionFor(context),merchant=await readMerchant(context,merchantId);
+  const data = "CASE WHEN r.kind='closes' THEN (r.data - 'report' - 'operational' - 'metrics') || CASE WHEN r.data ? 'report' THEN jsonb_build_object('report',jsonb_build_object('unallocated',r.data#>'{report,unallocated}','exceptions',r.data#>'{report,exceptions}')) ELSE '{}'::jsonb END ELSE r.data END AS data";
+  const rows=(await session.client.query<RecordRow>(`SELECT ${recordColumns.replace('r.data',data)} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind NOT IN ('audit','observations','notifications','retry-decisions') ORDER BY r.created_at,r.id`,[merchantId,session.workspace.id,session.principal])).rows;
+  return {merchant:merchant.info,settings:merchant.settings,records:rows.map(rowToRecord)};
 }
 
 /** Complete customer history and balances without every other customer's data.

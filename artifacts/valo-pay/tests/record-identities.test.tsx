@@ -14,7 +14,7 @@ describe('recognisable operational records', () => {
     const dueItem = api.state().records.find(record => record.id === proposal.data.dueItemId)!;
     renderApp('/reconciliation');
     const customerLink = await screen.findByRole('link', { name: customer.name });
-    expect(customerLink.getAttribute('href')).toBe(`/customers/${customer.id}`);
+    expect(customerLink.getAttribute('href')).toMatch(new RegExp(`^/customers/${customer.id}\\?`));
     const row = customerLink.closest('tr')!;
     await within(row).findByText(payment.reference);
     expect(within(row).getByText(dueItem.reference)).toBeTruthy();
@@ -47,7 +47,7 @@ describe('recognisable operational records', () => {
     const customer = api.state().records.find(record => record.id === mandate.customerId)!;
     const mandatesPage = renderApp('/mandates');
     const link = (await screen.findAllByRole('link', { name: customer.name }))[0];
-    expect(link.getAttribute('href')).toBe(`/customers/${customer.id}`);
+    expect(link.getAttribute('href')).toMatch(new RegExp(`^/customers/${customer.id}\\?`));
     const row = link.closest('tr')!;
     expect(within(row).getByText('Awaiting activation')).toBeTruthy();
     const workflowLabels: Record<string, string> = { transfer_to_activate: 'Activate with a bank transfer', hosted_consent: 'Consent through the provider', paper_mandate: 'Paper mandate' };
@@ -60,7 +60,7 @@ describe('recognisable operational records', () => {
     mandatesPage.unmount();
     renderApp('/collections');
     const dueRow = (await screen.findByText(due.reference)).closest('tr')!;
-    expect(within(dueRow).getByRole('link', { name: payer.name }).getAttribute('href')).toBe(`/customers/${payer.id}`);
+    expect(within(dueRow).getByRole('link', { name: payer.name }).getAttribute('href')).toMatch(new RegExp(`^/customers/${payer.id}\\?`));
     expect(within(dueRow).getByText('Collection in progress')).toBeTruthy();
   });
 });

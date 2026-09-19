@@ -598,6 +598,18 @@
               "type": "string"
             },
             "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
+          },
+          {
+            "name": "includeCloses",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "description": "Default true for compatibility. The console passes false and loads paged close summaries separately."
           }
         ],
         "responses": {
@@ -1131,6 +1143,15 @@
               "maximum": 2147483647
             },
             "description": "Rows to skip after filtering and priority ordering. Clamped to the last available page if results shrink."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "Literal accent-insensitive customer name, customer reference or queue record name/reference search, applied before counting and paging."
           }
         ],
         "responses": {
@@ -1158,6 +1179,234 @@
           }
         },
         "description": "Filters and priority order are applied before pagination. Counts cover the full filtered queue. Related records only support the current page and remain in the same lender. A target locates the page containing a linked record; an unavailable or filtered-out target leaves the requested page unchanged. Dates use West Africa Time and the returned asOf timestamp."
+      }
+    },
+    "/v1/reconciliation/{queue}": {
+      "get": {
+        "operationId": "listReconciliation",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
+          },
+          {
+            "name": "queue",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "proposals",
+                "duplicates",
+                "payments",
+                "observations",
+                "audit",
+                "batches"
+              ]
+            },
+            "description": "Reconciliation work queue."
+          },
+          {
+            "name": "dueItem",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "Optional instalment focus; payment queues are restricted to its customer, proposals to its exact instalment."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Page size; defaults to 25."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "description": "Rows to skip; clamped when the result shrinks."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        },
+        "summary": "Page a reconciliation work queue",
+        "description": "Filters and counts in PostgreSQL before paging. Linked payment, instalment and customer records belong to the same lender. Audit uses the reproducible previous-month sample including superseded reviewed matches."
+      }
+    },
+    "/v1/close-history": {
+      "get": {
+        "operationId": "listCloseHistory",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 10
+            },
+            "description": "Inclusive date in YYYY-MM-DD format, in West Africa Time."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 10
+            },
+            "description": "Inclusive date in YYYY-MM-DD format, in West Africa Time."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Page size; defaults to 25."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "description": "Rows to skip; clamped when the result shrinks."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloseHistoryPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        },
+        "summary": "Page recorded daily closes",
+        "description": "Newest first, with complete range counts and whole-range comparison endpoints. Missing historical measures remain absent. Invalid dates or reversed ranges are rejected."
+      }
+    },
+    "/v1/close-history/{id}": {
+      "get": {
+        "operationId": "getCloseDetail",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Close record in the active lender."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValopayRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        },
+        "summary": "Read the evidence for one recorded close",
+        "description": "Returns the full immutable close report on demand within the current lender."
       }
     }
   },
@@ -2321,6 +2570,76 @@
           }
         },
         "description": "A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states."
+      },
+      "ReconciliationPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          },
+          "related": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "asOf": {
+            "type": "string"
+          },
+          "precision": {
+            "$ref": "#/components/schemas/RecordData"
+          }
+        },
+        "required": [
+          "items",
+          "related",
+          "total",
+          "offset",
+          "asOf"
+        ],
+        "description": "A database-filtered reconciliation queue page, with complete count and lender-scoped linked evidence. Precision metadata describes the complete seeded monthly sample."
+      },
+      "CloseHistoryPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "allTotal": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "first": {
+            "$ref": "#/components/schemas/ValopayRecord"
+          },
+          "latest": {
+            "$ref": "#/components/schemas/ValopayRecord"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "allTotal",
+          "offset"
+        ],
+        "description": "Paged close summaries and first/latest closing positions for the entire WAT date range; full REC-07 evidence is fetched separately."
       }
     }
   }

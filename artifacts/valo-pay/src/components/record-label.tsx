@@ -1,5 +1,6 @@
 import React from 'react';
-import { Link } from 'wouter';
+import { Link, useLocation, useSearch } from 'wouter';
+import { useWorkspace } from '@/lib/workspace-context';
 
 /** Keep API values intact while using ordinary words in the interface. */
 const displayLabels: Record<string, string> = {
@@ -61,13 +62,17 @@ type RecordIdentity = { id: string; name?: string | null; reference?: string | n
 
 /** Full identifiers remain available without dominating the operational table. */
 export function RecordLabel({ record, id, customer = false }: { record?: RecordIdentity; id?: unknown; customer?: boolean }) {
+  const [path]=useLocation(), search=useSearch();const {merchantId}=useWorkspace();
+  const params=new URLSearchParams(search);if(merchantId)params.set('lender',merchantId);
+  const returnTo=['/exceptions','/mandates','/collections','/reconciliation'].includes(path) ? path+'?'+params : null;
+  const destination=record ? '/customers/'+record.id+(returnTo?'?'+new URLSearchParams({returnTo,lender:merchantId || ''}):'') : '';
   const fullId = record?.id || String(id || '');
   if (!record) return fullId
     ? <details className="text-xs"><summary className="cursor-pointer font-mono text-muted-foreground">{fullId.slice(0, 8)}…</summary><span className="mt-1 block max-w-56 break-all font-mono">{fullId}</span></details>
     : <span className="text-xs text-muted-foreground">{customer ? 'No customer linked' : 'Reference unavailable'}</span>;
   const title = customer ? record.name || record.reference || fullId : record.reference || record.name || fullId;
   return <div title={fullId} className="min-w-0">
-    {customer ? <Link href={`/customers/${record.id}`} className="font-medium text-foreground hover:text-primary hover:underline">{title}</Link> : <span className="font-medium text-foreground">{title}</span>}
+    {customer ? <Link href={destination} className="font-medium text-foreground hover:text-primary hover:underline">{title}</Link> : <span className="font-medium text-foreground">{title}</span>}
     {customer && record.reference && <span className="mt-0.5 block font-mono text-[11px] text-muted-foreground">{record.reference}</span>}
     <span className="sr-only"> Record ID: {fullId}</span>
   </div>;

@@ -1,3 +1,4 @@
+import { pageReconciliation, pageCloseHistory } from '../../api-server/src/lib/console-read-models';
 // An in-memory Valo Pay API for the console tests: the real domain code (seed,
 // validation, actions, reconciliation, reports, paging) behind the console's
 // routes, with every response validated by the same zod contract the server
@@ -133,6 +134,12 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
   const merchantOf = (query: Record<string, string>) => S.GetOverviewQueryParams.parse(query).merchantId;
 
   const routes: Array<[string, RegExp, Handler]> = [
+    ['GET', /^\/v1\/reconciliation\/(?<queue>[^/]+)$/, (params,query)=>{
+      const {queue:name}=S.ListReconciliationParams.parse(params), parsed=S.ListReconciliationQueryParams.parse(query);
+      return S.ListReconciliationResponse.parse(withState(parsed.merchantId,(state,ctx)=>pageReconciliation(state,name,parsed,ctx.now)));
+    }],
+    ['GET', /^\/v1\/close-history$/, (_p,query)=>{const parsed=S.ListCloseHistoryQueryParams.parse(query);return S.ListCloseHistoryResponse.parse(pageCloseHistory(api.state(parsed.merchantId).records,parsed));}],
+    ['GET', /^\/v1\/close-history\/(?<id>[^/]+)$/, (params,query)=>{const row=api.state(merchantOf(query)).records.find(r=>r.kind==='closes' && r.id===params.id);if(!row) fail('Close record not found in this lender.',404);return S.GetCloseDetailResponse.parse(row);}],
     ['GET', /^\/v1\/queues\/(?<queue>[^/]+)$/, (params, query) => {
       const { queue: name } = S.ListQueueParams.parse(params), filters = S.ListQueueQueryParams.parse(query);
       return S.ListQueueResponse.parse(withState(filters.merchantId, (state, ctx) => pageQueue(state.records, name, filters, ctx.now)));
@@ -201,7 +208,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
       return S.ImportRecordsResponse.parse(withState(merchantOf(query), (state, ctx) => importCsv(state, ctx, body), body.commit ? { action: 'post.imports', objectId: 'workspace', summary: 'Synthetic CSV import' } : undefined));
     }],
     ["GET", /^\/v1\/customers\/(?<id>[^/]+)\/timeline$/, (params, query) => S.GetCustomerTimelineResponse.parse(withState(merchantOf(query), (state) => customerTimeline(state, params.id!)))],
-    ["GET", /^\/v1\/reports$/, (_p, query) => S.GetReportsResponse.parse(withState(merchantOf(query), (state, ctx) => buildConsoleReports(state, ctx.now, api.scheduler)))],
+    ["GET", /^\/v1\/reports$/, (_p, query) => S.GetReportsResponse.parse(withState(merchantOf(query), (state, ctx) => ({...buildConsoleReports(state, ctx.now, api.scheduler), ...(query.includeCloses === 'false' ? {closes:[]} : {})})))],
     ["GET", /^\/v1\/gates$/, (_p, query) => S.GetGatesResponse.parse(withState(merchantOf(query), (state) => getGates(state)))],
     ["GET", /^\/v1\/settings$/, (_p, query) => S.GetSettingsResponse.parse(withState(merchantOf(query), (state, ctx) => buildConsoleSettings(state, ctx.role, ctx.now, api.scheduler)))],
     ["PATCH", /^\/v1\/settings$/, (_p, query, raw) => {

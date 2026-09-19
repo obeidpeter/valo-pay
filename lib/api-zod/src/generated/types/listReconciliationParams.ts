@@ -5,15 +5,27 @@
  * Valo Pay Stage 1 observation-first sandbox API. All monetary fields are integer kobo. Live lender data and all outbound provider instructions are blocked until production readiness is verified.
  * OpenAPI spec version: 1.0.0
  */
-import type { GetReportsIncludeCloses } from './getReportsIncludeCloses';
 
-export type GetReportsParams = {
+export type ListReconciliationParams = {
 /**
  * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
  */
 merchantId: string;
 /**
- * Default true for compatibility. The console passes false and loads paged close summaries separately.
+ * Optional instalment focus; payment queues are restricted to its customer, proposals to its exact instalment.
+ * @maxLength 200
  */
-includeCloses?: GetReportsIncludeCloses;
+dueItem?: string;
+/**
+ * Page size; defaults to 25.
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Rows to skip; clamped when the result shrinks.
+ * @minimum 0
+ * @maximum 2147483647
+ */
+offset?: number;
 };

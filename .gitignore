@@ -81,3 +81,7 @@ exports/
 /artifacts/api-server/src/lib/.gitkeep
 /artifacts/api-server/src/middlewares/.gitkeep
 /artifacts/valo-pay/public/robots.txt
+
+# Ephemeral browser-test output
+**/playwright-report/
+**/test-results/

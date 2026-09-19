@@ -100,7 +100,7 @@ describe('collection targets in reconciliation', () => {
   it('distinguishes a failed target lookup from a missing instalment and retries in place', async () => {
     const user = userEvent.setup();
     const { due, back } = targetDue();
-    api.failNext(/^\/v1\/records\/due-items$/, { status: 503, error: 'Instalments temporarily unavailable.' });
+    api.failNext(/^\/v1\/reconciliation\/proposals$/, { status: 503, error: 'Instalments temporarily unavailable.' });
     renderApp(recordDestination('/reconciliation', due.id, back, api.merchantIds[0]!, 'dueItem'));
     const selected = await screen.findByRole('region', { name: 'Selected instalment' });
     await within(selected).findByText('Unable to load the selected instalment');
@@ -135,7 +135,7 @@ describe('collection targets in reconciliation', () => {
     await screen.findByRole('button', { name: 'Reconciling payments…' });
     await user.selectOptions(screen.getAllByLabelText('Active lender')[0]!, api.merchantIds[1]!);
     await waitFor(() => expect(queryClient.isFetching()).toBe(0));
-    const reportReads = () => api.calls.filter(call => call.path === '/v1/reports' && call.query.merchantId === api.merchantIds[1]).length;
+    const reportReads = () => api.calls.filter(call => call.path === '/v1/reconciliation/audit' && call.query.merchantId === api.merchantIds[1]).length;
     const before = reportReads();
     release();
     await waitFor(() => expect(api.calls.some(call => call.path === '/v1/actions' && call.query.merchantId === api.merchantIds[0])).toBe(true));

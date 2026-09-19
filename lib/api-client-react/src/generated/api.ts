@@ -22,12 +22,14 @@ import type {
 import type {
   ActionInput,
   ActionResult,
+  CloseHistoryPage,
   CreateExportParams,
   CreateRecordParams,
   DownloadExportParams,
   ExportInput,
   ExportResult,
   Gates,
+  GetCloseDetailParams,
   GetCustomerTimelineParams,
   GetExportJobParams,
   GetGatesParams,
@@ -39,12 +41,15 @@ import type {
   ImportInput,
   ImportRecordsParams,
   ImportResult,
+  ListCloseHistoryParams,
   ListQueueParams,
+  ListReconciliationParams,
   ListRecordsParams,
   Overview,
   PerformActionParams,
   QueuePage,
   ReadinessStatus,
+  ReconciliationPage,
   RecordInput,
   RecordList,
   RecordUpdate,
@@ -1923,6 +1928,271 @@ export function useListQueue<TData = Awaited<ReturnType<typeof listQueue>>, TErr
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getListQueueQueryOptions(queue,params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getListReconciliationUrl = (queue: 'proposals' | 'duplicates' | 'payments' | 'observations' | 'audit' | 'batches',
+    params: ListReconciliationParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/reconciliation/${queue}?${stringifiedParams}` : `/api/v1/reconciliation/${queue}`
+}
+
+/**
+ * Filters and counts in PostgreSQL before paging. Linked payment, instalment and customer records belong to the same lender. Audit uses the reproducible previous-month sample including superseded reviewed matches.
+ * @summary Page a reconciliation work queue
+ */
+export const listReconciliation = async (queue: 'proposals' | 'duplicates' | 'payments' | 'observations' | 'audit' | 'batches',
+    params: ListReconciliationParams, options?: Parameters<typeof customFetch>[1]): Promise<ReconciliationPage> => {
+
+  return customFetch<ReconciliationPage>(getListReconciliationUrl(queue,params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListReconciliationQueryKey = (queue: 'proposals' | 'duplicates' | 'payments' | 'observations' | 'audit' | 'batches',
+    params?: ListReconciliationParams,) => {
+    return [
+    `/api/v1/reconciliation/${queue}`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListReconciliationQueryOptions = <TData = Awaited<ReturnType<typeof listReconciliation>>, TError = ErrorType<void>>(queue: 'proposals' | 'duplicates' | 'payments' | 'observations' | 'audit' | 'batches',
+    params: ListReconciliationParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listReconciliation>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListReconciliationQueryKey(queue,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listReconciliation>>> = ({ signal }) => listReconciliation(queue,params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: queue !== null && queue !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listReconciliation>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListReconciliationQueryResult = NonNullable<Awaited<ReturnType<typeof listReconciliation>>>
+export type ListReconciliationQueryError = ErrorType<void>
+
+
+/**
+ * @summary Page a reconciliation work queue
+ */
+
+export function useListReconciliation<TData = Awaited<ReturnType<typeof listReconciliation>>, TError = ErrorType<void>>(
+ queue: 'proposals' | 'duplicates' | 'payments' | 'observations' | 'audit' | 'batches',
+    params: ListReconciliationParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listReconciliation>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListReconciliationQueryOptions(queue,params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getListCloseHistoryUrl = (params: ListCloseHistoryParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/close-history?${stringifiedParams}` : `/api/v1/close-history`
+}
+
+/**
+ * Newest first, with complete range counts and whole-range comparison endpoints. Missing historical measures remain absent. Invalid dates or reversed ranges are rejected.
+ * @summary Page recorded daily closes
+ */
+export const listCloseHistory = async (params: ListCloseHistoryParams, options?: Parameters<typeof customFetch>[1]): Promise<CloseHistoryPage> => {
+
+  return customFetch<CloseHistoryPage>(getListCloseHistoryUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getListCloseHistoryQueryKey = (params?: ListCloseHistoryParams,) => {
+    return [
+    `/api/v1/close-history`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getListCloseHistoryQueryOptions = <TData = Awaited<ReturnType<typeof listCloseHistory>>, TError = ErrorType<void>>(params: ListCloseHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCloseHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getListCloseHistoryQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof listCloseHistory>>> = ({ signal }) => listCloseHistory(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof listCloseHistory>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type ListCloseHistoryQueryResult = NonNullable<Awaited<ReturnType<typeof listCloseHistory>>>
+export type ListCloseHistoryQueryError = ErrorType<void>
+
+
+/**
+ * @summary Page recorded daily closes
+ */
+
+export function useListCloseHistory<TData = Awaited<ReturnType<typeof listCloseHistory>>, TError = ErrorType<void>>(
+ params: ListCloseHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCloseHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getListCloseHistoryQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetCloseDetailUrl = (id: string,
+    params: GetCloseDetailParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/close-history/${id}?${stringifiedParams}` : `/api/v1/close-history/${id}`
+}
+
+/**
+ * Returns the full immutable close report on demand within the current lender.
+ * @summary Read the evidence for one recorded close
+ */
+export const getCloseDetail = async (id: string,
+    params: GetCloseDetailParams, options?: Parameters<typeof customFetch>[1]): Promise<ValopayRecord> => {
+
+  return customFetch<ValopayRecord>(getGetCloseDetailUrl(id,params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetCloseDetailQueryKey = (id: string,
+    params?: GetCloseDetailParams,) => {
+    return [
+    `/api/v1/close-history/${id}`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetCloseDetailQueryOptions = <TData = Awaited<ReturnType<typeof getCloseDetail>>, TError = ErrorType<void>>(id: string,
+    params: GetCloseDetailParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCloseDetail>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetCloseDetailQueryKey(id,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCloseDetail>>> = ({ signal }) => getCloseDetail(id,params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getCloseDetail>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetCloseDetailQueryResult = NonNullable<Awaited<ReturnType<typeof getCloseDetail>>>
+export type GetCloseDetailQueryError = ErrorType<void>
+
+
+/**
+ * @summary Read the evidence for one recorded close
+ */
+
+export function useGetCloseDetail<TData = Awaited<ReturnType<typeof getCloseDetail>>, TError = ErrorType<void>>(
+ id: string,
+    params: GetCloseDetailParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCloseDetail>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetCloseDetailQueryOptions(id,params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

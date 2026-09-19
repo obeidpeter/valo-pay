@@ -1,3 +1,4 @@
+import { foldForSearch } from './valopay-list';
 import type { ValopayRecord } from '../domain/types';
 
 export const queueViews = {
@@ -6,7 +7,7 @@ export const queueViews = {
   collections: ['all', 'overdue', 'due-today', 'failed'],
 } as const;
 export type QueueName = keyof typeof queueViews;
-export interface QueueQuery { view?: string; owner?: string; type?: string; limit?: number; offset?: number; record?: string; target?: string }
+export interface QueueQuery { q?: string; view?: string; owner?: string; type?: string; limit?: number; offset?: number; record?: string; target?: string }
 export function queueView(queue: QueueName, view?: string) {
   if (view && !(queueViews[queue] as readonly string[]).includes(view)) throw Object.assign(new Error('Unknown queue view.'), { status: 400 });
   return view || queueViews[queue][0];
@@ -37,7 +38,8 @@ export function pageQueue(records: ValopayRecord[], queue: QueueName, query: Que
     if (queue === 'mandates') return key === 'all' || row.status === 'pending_activation' && (key === 'overdue' ? overdue(row) : key === 'due-today' ? day(deadline(row)) === today : true);
     return key === 'failed' ? row.kind === 'attempts' : row.kind === 'due-items' && (key === 'all' || unpaid(row) && (key === 'overdue' ? overdue(row) : day(deadline(row)) === today));
   };
-  const owned = base.filter(row => (!query.owner || owner(row) === query.owner) && (!query.type || row.data.type === query.type));
+  const search = foldForSearch(query.q || '');
+  const owned = base.filter(row => (!search || foldForSearch([row.name,row.reference,byId.get(row.customerId)?.name,byId.get(row.customerId)?.reference].join(' ')).includes(search)) && (!query.owner || owner(row) === query.owner) && (!query.type || row.data.type === query.type));
   const counts = Object.fromEntries(queueViews[queue].map(key => [key, owned.filter(row => matches(row, key)).length]));
   const severity: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
   const compareDate = (a: unknown, b: unknown) => instant(a) === instant(b) ? 0 : instant(a) < instant(b) ? -1 : 1;

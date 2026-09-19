@@ -25,13 +25,11 @@ export function customerReturnTo(search: URLSearchParams, merchantId: string, ro
 }
 
 export function safeCustomerReturnTo(value: string | null, merchantId: string | null | undefined): string | null {
-  const collections = safeCollectionReturnTo(value, merchantId);
-  if (collections) return collections;
-  if (!value || !merchantId || value.length > 4096 || !value.startsWith('/customers?') || /[\\\r\n]/.test(value)) return null;
+  if (!value || !merchantId || value.length>4096 || /[\\\r\n]/.test(value)) return null;
   try {
-    const url = new URL(value, 'https://valopay.invalid');
-    if (url.origin !== 'https://valopay.invalid' || url.pathname !== '/customers' || url.searchParams.get('lender') !== merchantId) return null;
-    return `${url.pathname}${url.search}${url.hash}`;
+    const url=new URL(value,'https://valopay.invalid');
+    if(url.origin!=='https://valopay.invalid' || !['/customers','/collections','/exceptions','/mandates','/reconciliation'].includes(url.pathname) || url.searchParams.get('lender')!==merchantId) return null;
+    return url.pathname+url.search+url.hash;
   } catch { return null; }
 }
 

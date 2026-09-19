@@ -1,3 +1,4 @@
+import { listReconciliation, listCloseHistory, getCloseDetail, loadReportsView } from '../lib/valopay-store';
 import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
 import { z } from "zod";
@@ -134,8 +135,22 @@ router.get("/v1/customers/:id/timeline",async(req,res)=>{
   return {...timeline,events:timeline.events.map(record=>record.kind==='exports'?publicExportRecord(record):record)};
  },"read")));
 });
-router.get("/v1/reports",async(req,res)=>{
- res.json(S.GetReportsResponse.parse(await withState(req,res,(state,ctx)=>buildConsoleReports(state,ctx.now,schedulerStatus()))));
+router.get('/v1/reconciliation/:queue',async(req,res)=>{
+ const {queue}=S.ListReconciliationParams.parse(req.params), query=S.ListReconciliationQueryParams.parse(req.query);
+ res.json(S.ListReconciliationResponse.parse(await inWorkspace(req,res,ctx=>listReconciliation(ctx,query.merchantId,queue,query),'read')));
+});
+router.get('/v1/close-history',async(req,res)=>{
+ const query=S.ListCloseHistoryQueryParams.parse(req.query);
+ res.json(S.ListCloseHistoryResponse.parse(await inWorkspace(req,res,ctx=>listCloseHistory(ctx,query.merchantId,query),'read')));
+});
+router.get('/v1/close-history/:id',async(req,res)=>{
+ const {id}=S.GetCloseDetailParams.parse(req.params),{merchantId}=S.GetCloseDetailQueryParams.parse(req.query);
+ res.json(S.GetCloseDetailResponse.parse(await inWorkspace(req,res,ctx=>getCloseDetail(ctx,merchantId,id),'read')));
+});
+router.get('/v1/reports',async(req,res)=>{
+ const {merchantId,includeCloses}=S.GetReportsQueryParams.parse(req.query);
+ const report=includeCloses==='false' ? await inWorkspace(req,res,async ctx=>({...buildConsoleReports(await loadReportsView(ctx,merchantId),ctx.now,schedulerStatus()),closes:[]}),'read') : await withState(req,res,(state,ctx)=>buildConsoleReports(state,ctx.now,schedulerStatus()));
+ res.json(S.GetReportsResponse.parse(report));
 });
 router.get("/v1/gates",async(req,res)=>{
  res.json(S.GetGatesResponse.parse(await withState(req,res,getGates)));
