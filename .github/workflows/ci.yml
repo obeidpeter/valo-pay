@@ -78,6 +78,22 @@ jobs:
           PORT: "5173"
           BASE_PATH: "/"
 
+      - name: Install test browser
+        run: pnpm --filter @workspace/valopay exec playwright install --with-deps chromium
+
+      - name: Real-browser desktop and mobile workflows
+        run: pnpm --filter @workspace/valopay run test:browser
+
+      - name: Preserve browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-failure-evidence
+          path: |
+            artifacts/valo-pay/playwright-report
+            artifacts/valo-pay/test-results
+          retention-days: 7
+
   # The database-backed suites run against a PostgreSQL 16 that exists only for
   # this job: the schema is created in it with the development push and the
   # container is discarded with the runner.  No application secret, no real

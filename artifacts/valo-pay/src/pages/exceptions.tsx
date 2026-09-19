@@ -1,3 +1,4 @@
+import { QueueSearch } from '@/components/queue-search';
 import { QueueFreshness } from '@/components/queue-freshness';
 import React, { useEffect, useRef, useState } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
@@ -69,7 +70,7 @@ export default function ExceptionsPage() {
 
       <QueueFreshness key={merchantId} queries={[exceptionsQuery]} />
 
-      <SavedQueueViews queue="exceptions" views={exceptionViews} fallback="open" />
+      <QueueSearch /><SavedQueueViews queue="exceptions" views={exceptionViews} fallback="open" />
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
         <div className="p-5 border-b flex flex-wrap items-center gap-4">

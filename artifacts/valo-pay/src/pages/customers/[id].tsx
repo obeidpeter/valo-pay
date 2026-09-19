@@ -75,7 +75,7 @@ export default function CustomerTimelinePage() {
     <div className="space-y-6">
       <div>
         <Link href={returnTo || '/customers'} className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4 print:hidden">
-          <ArrowLeft className="h-4 w-4" /> {returnTo?.startsWith('/collections?') ? 'Back to collections' : 'Back to customers'}
+          <ArrowLeft className="h-4 w-4" /> {returnTo ? 'Back to '+(returnTo.split('?')[0].slice(1)) : 'Back to customers'}
         </Link>
         <div className="flex flex-col xl:flex-row xl:items-start justify-between gap-6">
           <div className="min-w-0 flex-1">

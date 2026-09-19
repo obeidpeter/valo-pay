@@ -5,15 +5,10 @@
  * Valo Pay Stage 1 observation-first sandbox API. All monetary fields are integer kobo. Live lender data and all outbound provider instructions are blocked until production readiness is verified.
  * OpenAPI spec version: 1.0.0
  */
-import type { GetReportsIncludeCloses } from './getReportsIncludeCloses';
 
-export type GetReportsParams = {
+export type GetCloseDetailParams = {
 /**
  * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
  */
 merchantId: string;
-/**
- * Default true for compatibility. The console passes false and loads paged close summaries separately.
- */
-includeCloses?: GetReportsIncludeCloses;
 };

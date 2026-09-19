@@ -51,6 +51,7 @@ export function useQueueFilters<T extends string>(views: readonly T[], fallback:
   const owner = search.get('owner') || '';
   const setFilter = (key: 'view' | 'owner' | 'type', value: string) => setSearch(current => {
     const next = new URLSearchParams(current);
+    next.delete('page');
     if (!value || (key === 'view' && value === fallback)) next.delete(key);
     else next.set(key, value);
     return next;

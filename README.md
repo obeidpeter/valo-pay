@@ -54,7 +54,9 @@ The current supported environment is Replit's Linux workspace with **Node.js 24*
 
 Reports has Operations, Billing and Pilot evidence views. Operations can filter recorded daily closes by inclusive West Africa Time dates and compare the first and latest closing positions in the range. Current totals and the current billing statement are not recalculated for that range. Missing historical measures remain unavailable; closing positions are never summed as collections.
 
-The sandbox guide starts collapsed, can be opened on every console page and keeps personal progress separately for each lender in this browser. Exceptions, Mandates and Collections use server-side priority filtering and pages of 25, 50 or 100 rows; counts cover the complete filtered queue. Linked records are scoped to the lender and the current page. Saved views keep up to ten named filter combinations per lender and queue in this browser. They contain filter preferences, not copies of customer records, and do not synchronise between browsers. Reconciliation retains its existing evidence and allocation workflow.
+The sandbox guide starts collapsed, can be opened on every console page and keeps personal progress separately for each lender in this browser. Exceptions, Mandates and Collections request server-filtered priority pages of 25, 50 or 100 rows. Search matches customer names and record references without case or accent sensitivity. Page, size and filters are lender-bound URL state, so browser Back and customer return links restore the queue. Saved views store the search and filters per lender in this browser; they do not store result rows.
+
+Reconciliation requests six separate server-paged queues with complete totals and only the related records needed by each page. The allocation picker fetches a searchable page of instalments when opened. Precision review pages the seeded previous-month sample, including superseded allocations already reviewed as wrong. Reports request compact, server-filtered daily-close summaries; opening a close fetches its full evidence. Inclusive WAT date comparisons use the first and latest closes across the entire selected range, independent of the visible page. Current operational and billing measures remain unchanged.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -160,7 +162,7 @@ pnpm run test:golden
 The local `.github/workflows/ci.yml` definition is configured to run on pull requests and pushes to `main`, using Ubuntu 24.04, Node.js 24 and pnpm 10.26.1, with two jobs that run in parallel:
 
 - **TypeScript, database boundary and pure tests** installs with `pnpm install --frozen-lockfile`, runs the four commands above and the console tests, then builds the API bundle and the console (the console build needs no Clerk key; see the environment table).
-- **Repository and scheduler tests on PostgreSQL** starts a PostgreSQL 16 service container that exists only for the job, creates the schema in it with the development push (`pnpm --filter @workspace/db run push`), and runs `pnpm run test:integration` against it: the repository suite (workspace bootstrap, locking, rollback, idempotency, expiry sweep) and the scheduled-close suite. The container is discarded with the runner.
+- **Repository and scheduler tests on PostgreSQL** starts a PostgreSQL 16 service container that exists only for the job, creates the schema in it with the development push (`pnpm --filter @workspace/db run push`), and runs `pnpm run test:integration` against it, including repository, queue-search, reconciliation/read-model parity, daily-close history, tenant isolation and scheduler checks. The container is discarded with the runner.
 
 Both jobs have read-only repository permissions and no application secrets. Neither publishes, deploys or migrates a real database, and neither runs the export-stream suite (it needs App Storage credentials) or the HTTP suites (they need the Replit development domain and Clerk). The workflow must first be committed to GitHub through an account with workflow-write permission; source sync with `--skip-workflows` does not install or enable it.
 
@@ -187,7 +189,7 @@ NODE_ENV=development VALOPAY_RUN_INTEGRATION=1 \
   artifacts/api-server/tests/export-streams.integration.test.ts
 ```
 
-`test:integration` (`scripts/run-integration-tests.mjs`) refuses to run without `VALOPAY_RUN_INTEGRATION=1` and a `DATABASE_URL`, sets `NODE_ENV=development` unless set, and runs the repository suite and the scheduled-close suite in turn. The database must be disposable and carry the pushed schema; the pull-request workflow runs the same command against its own PostgreSQL service container.
+`test:integration` (`scripts/run-integration-tests.mjs`) refuses to run without `VALOPAY_RUN_INTEGRATION=1` and a `DATABASE_URL`, sets `NODE_ENV=development` unless set, and runs the record-index, repository, list paging, priority queues, console read models, concurrency, export-job, performance and scheduled-close suites in turn. The database must be disposable and carry the pushed schema; the pull-request workflow runs the same command against its own PostgreSQL service container.
 
 The HTTP suites require Replit's `REPLIT_DEV_DOMAIN`. Never use real lender data for tests.
 
@@ -210,3 +212,7 @@ pnpm --filter @workspace/api-spec run codegen
 ## GitHub syncing
 
 The Replit-side procedure for publishing source to the public `obeidpeter/valo-pay` repository, the pre-push guard, the workflow allow-list and the legacy source-only upload utility are in `docs/github-sync.md`. In a fresh clone from GitHub, ordinary Git commits and pushes are the way to work.
+
+## Browser regression checks
+
+After building the console, install Chromium with `pnpm --filter @workspace/valopay exec playwright install chromium`, then run `pnpm --filter @workspace/valopay run test:browser`. The configuration starts a loopback-only synthetic HTTP server and tests Chromium desktop and phone layouts: queue search, paging, saved views, customer return links, browser Back, daily-close dates and lazy evidence, and reasoned match rejection. The server requires its test-only environment flag and never connects to payment providers or a database. CI installs browser dependencies and retains failure traces and screenshots for seven days. The separate PostgreSQL job checks the real repository read paths; browser checks do not claim external provider or production end-to-end verification.

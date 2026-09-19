@@ -1,3 +1,4 @@
+import { CloseHistorySection } from '@/components/close-history-section';
 import { ExportJobControl } from '@/components/export-job-control';
 import { useSafePerformAction as usePerformAction } from '@/lib/safe-mutations';
 import React, { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -17,7 +18,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import { LoadProblem } from '@/components/load-problem';
 import { notifyProblem, saidBy } from '@/lib/notify';
 import { useHashTarget } from '@/lib/use-hash-target';
-import { closeHistory } from '@/lib/close-history';
 
 type Unknown = Record<string, unknown> | undefined;
 const isScalar = (value: unknown) => value === null || ['string', 'number', 'boolean'].includes(typeof value);
@@ -65,23 +65,6 @@ function ReportDisclosure({ title, children }: { title: string; children: ReactN
     <div className="border-t px-4 py-4">{children}</div>
   </details>;
 }
-/** REC-07: the close report fields, in the order the TRD lists them. */
-function closeReportChips(report: Record<string, any>): Array<[string, string]> {
-  const money = (row: any) => `${row?.count ?? 0} · ${formatKobo(Number(row?.kobo || 0))}`;
-  const bySource = Object.entries(report.observations?.bySource || {}).map(([source, row]: [string, any]) => `${labelOf(source)}: ${row.received} records linked to ${formatCount(row.paymentsResolvedTo, 'payment')}`).join(', ') || 'none';
-  const byRule = Object.entries(report.allocatedByRule || {}).map(([rule, row]: [string, any]) => `${rule} ${row.count}`).join(', ') || 'none';
-  return [
-    ['Unmatched at start', money(report.openingUnallocated)],
-    ['Payment records received', `${report.observations?.received ?? 0} (${bySource})`],
-    ['Matches by rule', byRule],
-    ['Proposed matches', money(report.proposed)],
-    ['Unmatched at close', `${money(report.unallocated)} · ${report.unallocated?.olderThan24Hours ?? 0} older than 24 hours`],
-    ['Settlement differences', `${report.variances?.count ?? 0} · ${formatKobo(Number(report.variances?.feeVarianceKobo || 0))}`],
-    ['Exceptions', `${report.exceptions?.opened?.count ?? 0} opened · ${report.exceptions?.closed?.count ?? 0} closed · ${report.exceptions?.openAtClose ?? 0} open`],
-    ['Customer totals changed', String(report.customerPositionsChanged?.length ?? 0)],
-    ['Retry decisions', `${report.retryDecisions?.recorded ?? 0} recorded · ${report.retryDecisions?.finalAttempts ?? 0} final attempts · ${report.retryDecisions?.noticesNotEvidenced ?? 0} deferred for missing notice evidence`],
-  ];
-}
 function renderValue(key: string, value: unknown): string {
   if (value === null || value === undefined) return 'Not available';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
@@ -96,12 +79,6 @@ function renderValue(key: string, value: unknown): string {
 
 /** REC-01: the schedule block on a close record and the schedule view in the operational report, typed from free-form data. */
 interface CloseTriggerView { trigger: string; late: boolean; delayMinutes: number | null; scheduledFor: string | null }
-function triggerView(value: unknown): CloseTriggerView | null {
-  if (!value || typeof value !== 'object') return null;
-  const raw = value as Record<string, unknown>;
-  return { trigger: String(raw.trigger ?? 'manual'), late: raw.late === true, delayMinutes: typeof raw.delayMinutes === 'number' ? raw.delayMinutes : null, scheduledFor: typeof raw.scheduledFor === 'string' ? raw.scheduledFor : null };
-}
-
 export default function ReportsPage() {
   const { merchantId } = useWorkspace();
   const [search, setSearch] = useSearchParams();
@@ -120,8 +97,8 @@ export default function ReportsPage() {
   useEffect(() => { setExperimentDialog(null); setInvoiceDialogOpen(false); }, [merchantId]);
 
   const { data: reports, isLoading, error: reportsError, isFetching: fetchingReports, refetch } = useGetReports(
-    { merchantId: merchantId! },
-    { query: { enabled: !!merchantId, refetchInterval: 60_000, queryKey: getGetReportsQueryKey({ merchantId: merchantId! }) } }
+    { merchantId: merchantId!, includeCloses: 'false' as const },
+    { query: { enabled: !!merchantId, refetchInterval: 60_000, queryKey: getGetReportsQueryKey({ merchantId: merchantId!, includeCloses: 'false' as const }) } }
   );
   useHashTarget('daily-closes', view === 'operations' && !!merchantId && !!reports && !isLoading && !reportsError);
 
@@ -149,7 +126,6 @@ export default function ReportsPage() {
 
 
   if (!merchantId) return null;
-  const history = closeHistory(reports?.closes || [], from, to);
   const approvedPolicyOptions = (policies?.items || [])
     .filter(policy => policy.status === 'approved')
     .map(policy => ({ label: `${policy.name} · v${String(policy.data?.version || 1)}`, value: policy.id }));
@@ -188,7 +164,7 @@ export default function ReportsPage() {
       {closeResult?.merchantId === merchantId && <div role={closeResult.failed ? 'alert' : 'status'} className={`rounded-lg border p-5 text-sm ${closeResult.failed ? 'border-destructive/30 bg-destructive/5' : 'bg-card'}`}>
         <p className="font-semibold">{closeResult.failed ? 'Daily close could not be confirmed' : 'Daily close completed'}</p>
         <p className="mt-2 text-muted-foreground">{closeResult.message}</p>
-        {closeResult.failed ? <Button variant="outline" size="sm" className="mt-3" onClick={() => { void refetch(); }} busy={fetchingReports} busyLabel="Refreshing…">Refresh close records</Button> : <Link href="/reports?view=operations#daily-closes" className="mt-3 inline-flex min-h-6 items-center font-medium text-primary underline">View close record</Link>}
+        {closeResult.failed ? <Button variant="outline" size="sm" className="mt-3" onClick={() => { void refetch(); void queryClient.invalidateQueries({ queryKey: ['/api/v1/close-history'] }); }} busy={fetchingReports} busyLabel="Refreshing…">Refresh close records</Button> : <Link href="/reports?view=operations#daily-closes" className="mt-3 inline-flex min-h-6 items-center font-medium text-primary underline">View close record</Link>}
       </div>}
 
       {isLoading ? (
@@ -435,72 +411,7 @@ export default function ReportsPage() {
               </div>
               <DailyCloseStatus value={reports.operational?.closeSchedule} showHistory />
             </div>
-            <div className="space-y-4 border-b p-5">
-              <form key={`${merchantId}:${from}:${to}`} className="flex flex-wrap items-end gap-3 print:hidden" onSubmit={event => {
-                event.preventDefault();
-                const values = new FormData(event.currentTarget);
-                setSearch(current => {
-                  const next = new URLSearchParams(current);
-                  for (const key of ['from', 'to']) { const value = String(values.get(key) || ''); if (value) next.set(key, value); else next.delete(key); }
-                  return next;
-                });
-              }}>
-                <label className="grid gap-1 text-xs font-medium">From date (WAT)<input type="date" name="from" defaultValue={from} aria-invalid={!!history.error} aria-describedby="close-range-help" className="min-h-10 rounded-md border bg-background px-3" /></label>
-                <label className="grid gap-1 text-xs font-medium">To date (WAT)<input type="date" name="to" defaultValue={to} aria-invalid={!!history.error} aria-describedby="close-range-help" className="min-h-10 rounded-md border bg-background px-3" /></label>
-                <Button type="submit" variant="outline">Apply dates</Button>
-                {(from || to) && <Button type="button" variant="ghost" onClick={() => setSearch(current => { const next = new URLSearchParams(current); next.delete('from'); next.delete('to'); return next; })}>Clear dates</Button>}
-              </form>
-              <p id="close-range-help" className="text-xs text-muted-foreground">{history.error || `Showing ${formatCount(history.items.length, 'recorded close')}${from ? ` from ${from}` : ''}${to ? ` through ${to}` : ''}. Dates include the full day in West Africa Time. Current totals above are unchanged.`}</p>
-              {history.error && <p role="alert" className="text-sm text-destructive">The close history is hidden until the date range is corrected.</p>}
-              {!history.error && <div className="rounded-lg bg-secondary/25 p-4">
-                <h3 className="text-sm font-semibold">Change between recorded closes</h3>
-                {history.items.length < 2 ? <p className="mt-2 text-xs text-muted-foreground">At least two recorded closes in this range are needed for a comparison. No change has been estimated.</p> : <>
-                  <p className="mt-2 text-xs text-muted-foreground">First: {formatDate(history.first!.createdAt)} · Latest: {formatDate(history.latest!.createdAt)}. These are closing positions, not money collected during the period.</p>
-                  <div className="mt-4 grid gap-4 sm:grid-cols-2">{history.metrics.map(metric => <div key={metric.label}><p className="text-xs text-muted-foreground">{metric.label}</p><p className="mt-1 text-lg font-semibold tabular-nums">{metric.change === null ? 'Not available' : `${metric.change > 0 ? '+' : ''}${metric.money ? formatKobo(metric.change) : formatNumber(metric.change)}`}</p><p className="mt-1 text-xs text-muted-foreground">{metric.change === null ? 'One or both closes lack this recorded measure.' : `${metric.money ? formatKobo(metric.before) : formatNumber(metric.before)} → ${metric.money ? formatKobo(metric.after) : formatNumber(metric.after)}`}</p></div>)}</div>
-                </>}
-              </div>}
-            </div>
-            <ScrollFrame label="Daily close records" className="overflow-x-auto max-h-[400px]">
-              <table className="w-full min-w-[680px] text-sm text-left">
-                <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
-                  <tr>
-                    <th className="px-6 py-4 font-medium">Date</th>
-                    <th className="px-6 py-4 font-medium">Summary</th>
-                    <th className="px-6 py-4 font-medium">Close details</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {history.items.length === 0 ? (
-                    <EmptyRow colSpan={3} title={history.error ? 'Check the date range' : reports.closes.length ? 'No closes in this date range' : 'No daily close yet'}>{reports.closes.length ? 'Choose another date range to view recorded closes.' : 'Run a daily close above to check the books. Each completed close creates a record with its results here.'}</EmptyRow>
-                  ) : (
-                    history.items.map(close => (
-                      <tr key={close.id} className="report-close-row hover:bg-secondary/10">
-                        <td className="px-6 py-4 tabular-nums text-xs">{formatDate(close.createdAt)}</td>
-                        <td className="px-6 py-4 text-muted-foreground">{String(close.data?.summary || '')}</td>
-                        <td className="min-w-72 px-6 py-4 tabular-nums text-xs"><ReportDisclosure title="View close details">
-                          {close.data?.report ? closeReportChips(close.data.report).map(([label, value]) => (
-                            <span key={label} className="inline-block mr-3 mb-1 bg-secondary/30 px-1.5 py-0.5 rounded border border-border/50">
-                              <span className="text-muted-foreground mr-1">{label}:</span>
-                              <span className="font-medium">{value}</span>
-                            </span>
-                          )) : <span className="text-muted-foreground">Detailed reports were not available when this close ran.</span>}
-                          {close.data?.positionAlert === true && <span className="inline-block mr-3 mb-1 px-1.5 py-0.5 rounded border border-destructive/40 text-destructive">Customer totals need review</span>}
-                          {(() => {
-                            const trigger = triggerView(close.data?.schedule);
-                            if (!trigger) return null;
-                            return (
-                              <span className={`inline-block mr-3 mb-1 px-1.5 py-0.5 rounded border ${trigger.late ? 'border-warning-strong/60 text-warning-strong' : 'border-border/50 text-muted-foreground'}`}>
-                                {trigger.trigger}{trigger.late ? ` · ${trigger.delayMinutes} min late` : trigger.scheduledFor ? ' · on time' : ''}
-                              </span>
-                            );
-                          })()}
-                        </ReportDisclosure></td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </ScrollFrame>
+            <CloseHistorySection active={view === 'operations'} />
           </section>
 
         </div>

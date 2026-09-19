@@ -1,3 +1,4 @@
+import { QueueSearch } from '@/components/queue-search';
 import { useSafeCreateRecord as useCreateRecord } from '@/lib/safe-mutations';
 import React, { useEffect, useRef, useState } from 'react';
 import { useUnsavedChanges } from '@/lib/unsaved-changes';
@@ -178,7 +179,7 @@ export default function MandatesPage() {
         <Button kind="mandates" onClick={() => setIsCreateOpen(true)}>Create synthetic mandate</Button>
       </header>
 
-      <SavedQueueViews queue="mandates" views={mandateViews} fallback="all" />
+      <QueueSearch /><SavedQueueViews queue="mandates" views={mandateViews} fallback="all" />
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
         {targetId ? <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4"><p className="text-sm font-medium">Selected mandate</p><Button size="sm" variant="outline" onClick={leaveSelectedRecord}>View mandate queue</Button></div> : <div className="border-b p-4">

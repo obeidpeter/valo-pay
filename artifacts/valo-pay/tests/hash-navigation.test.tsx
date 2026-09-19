@@ -23,7 +23,7 @@ describe('section deep links', () => {
 
   it('follows the Reports accuracy link through client navigation and delayed allocation data', async () => {
     const user = userEvent.setup();
-    const release = api.hold(/^\/v1\/records\/allocations$/);
+    const release = api.hold(/^\/v1\/reconciliation\/audit$/);
     renderApp('/reports');
     await user.click(await screen.findByRole('link', { name: 'Review matches' }));
     expect(window.location.hash).toBe('#precision-audit');

@@ -486,6 +486,30 @@ export interface QueuePage {
   asOf: string;
 }
 
+/**
+ * A database-filtered reconciliation queue page, with complete count and lender-scoped linked evidence. Precision metadata describes the complete seeded monthly sample.
+ */
+export interface ReconciliationPage {
+  items: ValopayRecord[];
+  related: ValopayRecord[];
+  total: number;
+  offset: number;
+  asOf: string;
+  precision?: RecordData;
+}
+
+/**
+ * Paged close summaries and first/latest closing positions for the entire WAT date range; full REC-07 evidence is fetched separately.
+ */
+export interface CloseHistoryPage {
+  items: ValopayRecord[];
+  total: number;
+  allTotal: number;
+  offset: number;
+  first?: ValopayRecord;
+  latest?: ValopayRecord;
+}
+
 export type GetOverviewParams = {
 /**
  * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
@@ -571,7 +595,19 @@ export type GetReportsParams = {
  * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
  */
 merchantId: string;
+/**
+ * Default true for compatibility. The console passes false and loads paged close summaries separately.
+ */
+includeCloses?: GetReportsIncludeCloses;
 };
+
+export type GetReportsIncludeCloses = typeof GetReportsIncludeCloses[keyof typeof GetReportsIncludeCloses];
+
+
+export const GetReportsIncludeCloses = {
+  true: 'true',
+  false: 'false',
+} as const;
 
 export type GetGatesParams = {
 /**
@@ -666,5 +702,70 @@ limit?: number;
  * @maximum 2147483647
  */
 offset?: number;
+/**
+ * Literal accent-insensitive customer name, customer reference or queue record name/reference search, applied before counting and paging.
+ * @maxLength 200
+ */
+q?: string;
+};
+
+export type ListReconciliationParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+/**
+ * Optional instalment focus; payment queues are restricted to its customer, proposals to its exact instalment.
+ * @maxLength 200
+ */
+dueItem?: string;
+/**
+ * Page size; defaults to 25.
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Rows to skip; clamped when the result shrinks.
+ * @minimum 0
+ * @maximum 2147483647
+ */
+offset?: number;
+};
+
+export type ListCloseHistoryParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+/**
+ * Inclusive date in YYYY-MM-DD format, in West Africa Time.
+ * @maxLength 10
+ */
+from?: string;
+/**
+ * Inclusive date in YYYY-MM-DD format, in West Africa Time.
+ * @maxLength 10
+ */
+to?: string;
+/**
+ * Page size; defaults to 25.
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Rows to skip; clamped when the result shrinks.
+ * @minimum 0
+ * @maximum 2147483647
+ */
+offset?: number;
+};
+
+export type GetCloseDetailParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
 };
 

@@ -1,3 +1,4 @@
+import { QueueSearch } from '@/components/queue-search';
 import { QueueFreshness } from '@/components/queue-freshness';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'wouter';
@@ -115,7 +116,7 @@ export default function CollectionsPage() {
 
       <QueueFreshness key={merchantId} queries={[queue]} />
 
-      <SavedQueueViews queue="collections" views={collectionViews} fallback="all" />
+      <QueueSearch /><SavedQueueViews queue="collections" views={collectionViews} fallback="all" />
 
       {actionError && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm">{actionError}</p>}
       <div className="flex flex-col gap-6">
