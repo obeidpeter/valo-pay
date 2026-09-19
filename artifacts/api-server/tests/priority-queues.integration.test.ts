@@ -15,22 +15,22 @@ try {
   const customer = state.records.find(row => row.kind === 'customers')!, mandate = state.records.find(row => row.kind === 'mandates')!;
   const foreign = await inWorkspace(request(), response(), ctx => loadState(ctx, siblingId, 'share'), 'read');
   const foreignCustomer = foreign.records.find(row => row.kind === 'customers')!;
-  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data)
+  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data,amount_kobo)
     SELECT $1 || '-queue-ex-' || lpad(i::text,5,'0'),$1,'exceptions','Queue exception ' || i,
       CASE WHEN i%4=0 THEN 'resolved' ELSE 'open' END,'QEX-' || i,$2,
       jsonb_build_object('synthetic',true,'severity',CASE WHEN i%3=0 THEN 'high' ELSE 'medium' END,
         'owner',CASE WHEN i%2=0 THEN 'Finance' ELSE 'Operations' END,'type','unallocated_payment',
-        'dueBy',CASE WHEN i%5=0 THEN 'invalid legacy date' WHEN i%7=0 THEN '2026-09-18T23:30:00-02:00' ELSE '2026-09-19' END)
+        'dueBy',CASE WHEN i%5=0 THEN 'invalid legacy date' WHEN i%7=0 THEN '2026-09-18T23:30:00-02:00' ELSE '2026-09-19' END),1000000
     FROM generate_series(1,2000) i`, [merchantId, customer.id]);
-  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data)
+  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data,amount_kobo)
     SELECT $1 || '-queue-due-' || lpad(i::text,5,'0'),$1,'due-items','Queue instalment ' || i,
       CASE WHEN i%4=0 THEN 'paid' ELSE 'scheduled' END,'QDUE-' || i,CASE WHEN i=1 THEN $4 ELSE $2 END,
       jsonb_build_object('synthetic',true,'mandateId',$3::text,'owner',CASE WHEN i%2=0 THEN 'lender' ELSE 'valopay' END,
-        'dueDate',CASE WHEN i%5=0 THEN '2026-09-18' ELSE '2026-09-19' END)
+        'dueDate',CASE WHEN i%5=0 THEN '2026-09-18' ELSE '2026-09-19' END),1000000
     FROM generate_series(1,2000) i`, [merchantId, customer.id, mandate.id, foreignCustomer.id]);
-  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data)
+  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data,amount_kobo)
     SELECT $1 || '-queue-attempt-' || lpad(i::text,5,'0'),$1,'attempts','Queue attempt ' || i,'failed','QATT-' || i,$2,
-      jsonb_build_object('synthetic',true,'dueItemId',$1 || '-queue-due-' || lpad(i::text,5,'0'),'occurredAt','2026-09-18T12:00:00Z')
+      jsonb_build_object('synthetic',true,'dueItemId',$1 || '-queue-due-' || lpad(i::text,5,'0'),'occurredAt','2026-09-18T12:00:00Z'),1000000
     FROM generate_series(1,2000) i`, [merchantId, customer.id]);
   const baseline = await inWorkspace(request(), response(), ctx => loadState(ctx, merchantId, 'share'), 'read');
   const normalise = (page: ReturnType<typeof pageQueue>) => ({ ...page, related: page.related.sort((a, b) => a.id.localeCompare(b.id)) });

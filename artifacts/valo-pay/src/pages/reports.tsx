@@ -465,7 +465,7 @@ export default function ReportsPage() {
                     <EmptyRow colSpan={3} title={history.error ? 'Check the date range' : reports.closes.length ? 'No closes in this date range' : 'No daily close yet'}>{reports.closes.length ? 'Choose another date range to view recorded closes.' : 'Run a daily close above to check the books. Each completed close creates a record with its results here.'}</EmptyRow>
                   ) : (
                     history.items.map(close => (
-                      <tr key={close.id} className="align-top hover:bg-secondary/10">
+                      <tr key={close.id} className="report-close-row hover:bg-secondary/10">
                         <td className="px-6 py-4 tabular-nums text-xs">{formatDate(close.createdAt)}</td>
                         <td className="px-6 py-4 text-muted-foreground">{String(close.data?.summary || '')}</td>
                         <td className="min-w-72 px-6 py-4 tabular-nums text-xs"><ReportDisclosure title="View close details">
