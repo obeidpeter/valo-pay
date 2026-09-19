@@ -1,5 +1,5 @@
 import { Link } from 'wouter';
-import { ArrowRight, ArrowUpRight, BadgeCheck, Banknote, Building2, CheckCircle2, ClipboardList, FileCheck, FileText, Landmark, RefreshCcw, ShieldCheck, Users, Wallet } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, BadgeCheck, Building2, CheckCircle2, ClipboardList, FileCheck, FileText, Landmark, RefreshCcw, ShieldCheck, Users, Wallet } from 'lucide-react';
 import { BrandLockup } from '@/components/brand';
 import { Button } from '@/components/ui/button';
 import '@/landing-sections.css';
@@ -19,7 +19,6 @@ const steps = [
 ];
 
 const boundaries = [
-  { icon: Banknote, id: 'pricing', title: 'Clear pricing', text: 'Example fees on a ₦30,000 debit: ₦90 for Valo Pay and about ₦150 for your aggregator. Monthly licences start at ₦150,000.' },
   { icon: Wallet, title: 'Not a wallet, not a bank, not a payment provider', text: "Payments move from your customer's bank through Nigeria's interbank payment network and your payment provider into your settlement account. Valo Pay does not hold these funds." },
   { icon: BadgeCheck, title: 'What we do not claim', text: 'We do not retry failed debits through a different provider. We do not claim improved recovery until results have been measured with real data.' },
   { icon: ShieldCheck, title: 'Conduct rules and audit records', text: 'Retry rules are written around CBN consumer-protection and FCCPC debt-recovery requirements. This is not a claim of full compliance. Identifiers are masked, and linked audit records help detect changes.' },
@@ -36,7 +35,6 @@ const audiences = [
 export function LandingSections({ signedIn }: { signedIn: boolean }) {
   return (
     <>
-      <ProductWalkthrough />
       <section id="what" className="lp-section lp-jobs-section" aria-labelledby="what-title">
         <div className="public-container">
           <div className="lp-section-intro lp-split-intro">
@@ -47,15 +45,16 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
           <ul className="lp-job-grid" role="list">
             {jobs.map((job, index) => (
               <li key={job.title} className="lp-job-card">
-                <span className="lp-icon-tile"><job.icon aria-hidden="true" /></span>
+                <div className="lp-job-top"><span className="lp-icon-tile"><job.icon aria-hidden="true" /></span><span className="lp-card-number" aria-hidden="true">0{index + 1}</span></div>
                 <h3>{job.title}</h3>
                 <p>{job.text}</p>
-                <span className="lp-card-number" aria-hidden="true">0{index + 1}</span>
               </li>
             ))}
           </ul>
         </div>
       </section>
+
+      <ProductWalkthrough />
 
       <section id="how" className="lp-section lp-process-section" aria-labelledby="how-title">
         <div className="public-container">
@@ -81,12 +80,12 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
           <div className="lp-trust-copy">
             <p className="lp-section-kicker">Trust starts with clarity</p>
             <h2 id="boundaries-title">What Valo Pay does,<br /> and where it stops</h2>
-            <p>See how Valo Pay fits into your collections process, what it costs and where its responsibilities end.</p>
+            <p>Your payment provider moves the money. Valo Pay helps your team understand the records and manage the work around each collection.</p>
             <div className="lp-trust-lines" aria-hidden="true"><span /><span /><span /><span /></div>
           </div>
           <dl className="lp-boundary-grid">
             {boundaries.map((item) => (
-              <div key={item.title} id={item.id} className="lp-boundary-card">
+              <div key={item.title} className="lp-boundary-card">
                 <dt><span className="lp-boundary-icon"><item.icon aria-hidden="true" /></span>{item.title}</dt>
                 <dd>{item.text}</dd>
               </div>
@@ -95,11 +94,26 @@ export function LandingSections({ signedIn }: { signedIn: boolean }) {
         </div>
       </section>
 
+      <section id="pricing" className="lp-section lp-pricing-section" aria-labelledby="pricing-title">
+        <div className="public-container lp-pricing-layout">
+          <div className="lp-section-intro">
+            <p className="lp-section-kicker">Clear pricing</p>
+            <h2 id="pricing-title">Know what goes into the cost.</h2>
+            <p>A monthly licence, plus collection fees. Your payment provider’s charges are separate.</p>
+            <a className="lp-text-link" href="#pilot">Talk through your pilot <ArrowRight aria-hidden="true" /></a>
+          </div>
+          <div className="lp-pricing-card">
+            <div className="lp-licence-price"><p>Monthly licence</p><p><span>From</span> <strong>₦150,000</strong> <span>/ month</span></p></div>
+            <div className="lp-fee-example"><h3>Example: a ₦30,000 direct debit</h3><dl><div><dt>Valo Pay fee</dt><dd>₦90</dd></div><div><dt>Payment provider fee</dt><dd>About ₦150</dd></div></dl><p>Illustrative fees. Confirm your provider’s charges and the terms of your pilot before going live.</p></div>
+          </div>
+        </div>
+      </section>
+
       <section className="lp-section lp-audience-section" aria-labelledby="audience-title">
         <div className="public-container">
-          <div className="lp-audience-intro">
+          <div className="lp-section-intro lp-audience-intro">
             <p className="lp-section-kicker">Built for the teams who keep collections moving</p>
-            <h2 id="audience-title" className="sr-only">For the people behind the payments</h2>
+            <h2 id="audience-title">For the people behind the payments</h2>
           </div>
           <ul className="lp-audience-grid" role="list">
             {audiences.map((audience) => (
@@ -141,8 +155,8 @@ export function LandingFooter() {
     <footer className="lp-footer">
       <div className="public-container">
         <div className="lp-footer-main">
-          <div className="lp-footer-brand"><BrandLockup /></div>
-          <nav aria-label="Product sections" className="lp-footer-links"><a href="#what">What it does</a><a href="#how">How it works</a><a href="#boundaries">Our boundaries</a><a href="#pricing">Pricing</a></nav>
+          <div className="lp-footer-brand"><BrandLockup href="#main" /></div>
+          <nav aria-label="Product sections" className="lp-footer-links"><a href="#what">What it does</a><a href="#product-tour">Product tour</a><a href="#how">How it works</a><a href="#boundaries">Our boundaries</a><a href="#pricing">Pricing</a></nav>
           <nav aria-label="Help and documentation" className="lp-footer-links"><a href="https://github.com/obeidpeter/valo-pay#readme">How the sandbox works</a><a href="https://github.com/obeidpeter/valo-pay/blob/main/docs/DATABASE_SECURITY.md">Security and data access</a><Link href="/sign-in">Sign in</Link></nav>
         </div>
         <div className="lp-footer-bottom"><p>Valo Pay · Collections operations layer · We never hold money.</p><div className="lp-footer-location"><span>Built for collections in Nigeria.</span><span className="lp-nigerian-flag" aria-hidden="true" /></div></div>

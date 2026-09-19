@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'wouter';
-import { ArrowDownLeft, ArrowRight, Check, Clock3, Link2, ShieldCheck, Waypoints } from 'lucide-react';
+import { ArrowDownLeft, ArrowRight, Check, Clock3, Link2, Menu, ShieldCheck, Waypoints, X } from 'lucide-react';
 import { BrandLockup, BrandMark } from '@/components/brand';
 import { LandingFooter, LandingSections } from '@/components/landing-sections';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,14 @@ import '@/public-pages.css';
 import '@/landing.css';
 
 const landingTargets = ['main', 'what', 'how', 'boundaries', 'pricing', 'pilot', 'product-tour'];
+const sectionLinks = [
+  { href: '#what', label: 'What it does' },
+  { href: '#product-tour', label: 'Product tour' },
+  { href: '#how', label: 'How it works' },
+  { href: '#boundaries', label: 'Our boundaries' },
+  { href: '#pricing', label: 'Pricing' },
+  { href: '#pilot', label: 'Discuss a pilot' },
+];
 
 /** Static, explicitly synthetic illustration. Reading this page never creates a workspace. */
 function CollectionsIllustration() {
@@ -69,6 +77,8 @@ function CollectionsIllustration() {
 
 export default function LandingPage() {
   const { userId } = useSessionUser();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuButton = useRef<HTMLButtonElement>(null);
   useHashTarget(landingTargets, true);
   useEffect(() => { document.title = 'Valo Pay · Collections operations layer'; }, []);
   const signedIn = authEnabled && Boolean(userId);
@@ -76,22 +86,29 @@ export default function LandingPage() {
   return (
     <div className="public-site landing-site min-h-screen">
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground">Skip to main content</a>
-      <header className="public-header lp-header">
+      <header className="public-header lp-header" onKeyDown={(event) => {
+        if (event.key === 'Escape' && menuOpen) {
+          setMenuOpen(false);
+          menuButton.current?.focus();
+        }
+      }}>
         <div className="public-container lp-header-inner">
-          <BrandLockup />
+          <BrandLockup href="#main" />
           <nav aria-label="Sections" className="lp-header-nav">
-            <a href="#what">What it does</a>
-            <a href="#how">How it works</a>
-            <a href="#boundaries">Our boundaries</a>
-            <a href="#pricing">Pricing</a>
-            <a href="#pilot">Discuss a pilot</a>
+            {sectionLinks.map((link) => <a key={link.href} href={link.href} onClick={() => setMenuOpen(false)}>{link.label}<ArrowRight aria-hidden="true" /></a>)}
           </nav>
           <div className="lp-header-actions">
             <Button asChild variant="outline" size="sm" className="lp-header-sandbox"><Link href="/overview">Open the sandbox</Link></Button>
             {signedIn
               ? <Button asChild size="sm"><Link href="/overview"><span className="lp-workspace-label">Open your workspace</span><span className="lp-workspace-short" aria-hidden="true">Workspace</span></Link></Button>
               : <Button asChild size="sm"><Link href="/sign-in">Sign in</Link></Button>}
+            <Button ref={menuButton} variant="outline" size="icon" className="lp-menu-toggle" aria-label={menuOpen ? 'Close navigation' : 'Open navigation'} aria-expanded={menuOpen} aria-controls="landing-navigation" onClick={() => setMenuOpen(!menuOpen)}>
+              {menuOpen ? <X aria-hidden="true" /> : <Menu aria-hidden="true" />}
+            </Button>
           </div>
+          {menuOpen && <nav id="landing-navigation" aria-label="Mobile sections" className="lp-mobile-nav">
+            {sectionLinks.map((link) => <a key={link.href} href={link.href} onClick={() => setMenuOpen(false)}>{link.label}<ArrowRight aria-hidden="true" /></a>)}
+          </nav>}
         </div>
       </header>
 

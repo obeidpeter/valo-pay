@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
-import { renderApp, screen, userEvent, waitFor } from "./harness";
+import { renderApp, screen, userEvent, waitFor, within } from "./harness";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -9,6 +9,39 @@ afterEach(() => { api.uninstall(); vi.unstubAllEnvs(); });
 const hrefs = (name: RegExp) => screen.getAllByRole("link", { name }).map((link) => link.getAttribute("href"));
 
 describe("landing page", () => {
+  it('closes section navigation on Escape and returns focus to the toggle', async () => {
+    const user = userEvent.setup();
+    renderApp('/');
+    const toggle = screen.getByRole('button', { name: 'Open navigation' });
+    await user.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    await user.keyboard('{Escape}');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(toggle);
+    await user.click(toggle);
+    await user.tab();
+    expect(document.activeElement).toBe(within(screen.getByRole('navigation', { name: 'Mobile sections' })).getByRole('link', { name: 'What it does' }));
+    await user.click(within(screen.getByRole('navigation', { name: 'Mobile sections' })).getByRole('link', { name: 'Pricing' }));
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    await waitFor(() => expect(document.activeElement?.id).toBe('pricing'));
+    expect(screen.getByRole('heading', { name: 'Know what goes into the cost.' })).toBeTruthy();
+    expect(api.calls).toEqual([]);
+  });
+  it('lets visitors choose a screen before loading and close and reopen the preview', async () => {
+    const user = userEvent.setup();
+    renderApp('/');
+    await user.click(screen.getByRole('button', { name: /03 · Daily close/ }));
+    expect(document.querySelector('iframe')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Open full screen' }).getAttribute('href')).toBe('/reports#daily-closes');
+    await user.click(screen.getByRole('button', { name: 'Load interactive preview' }));
+    expect(screen.getByTitle('Interactive Valo Pay daily close preview — sample data')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Close preview' }));
+    expect(document.querySelector('iframe')).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Load interactive preview' })));
+    await user.click(screen.getByRole('button', { name: 'Load interactive preview' }));
+    expect(screen.getByTitle('Interactive Valo Pay daily close preview — sample data').getAttribute('src')).toBe('/reports?embedded=1#daily-closes');
+    expect(api.calls).toEqual([]);
+  });
   it('keeps the interactive preview inside a deployment mounted below the origin root', async () => {
     vi.stubEnv('BASE_URL', '/preview/');
     const user = userEvent.setup();
