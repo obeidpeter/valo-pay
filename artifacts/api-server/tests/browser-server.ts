@@ -76,7 +76,7 @@ app.post("/__test/session", async (req, res) => {
             : prefix === "DUE"
               ? { mandateId }
               : prefix === "PAY"
-                ? { proposedDueItemId: dueId }
+              ? { proposedDueItemId: dueId, dueItemId: dueId }
                 : {}),
         };
         rows.push({

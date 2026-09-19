@@ -81,9 +81,8 @@ test("real reconciliation search, recorded rejection, reload persistence and aud
   await page.goto("/reconciliation?view=review");
   await page.getByLabel("Search reconciliation").fill(fixture.paymentReference);
   await page.getByRole("button", { name: "Search", exact: true }).click();
-  await expect(
-    page.getByText("1–1 of 1 proposed matches", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("1 pending", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name:"Confirm", exact:true })).toHaveCount(1);
   await page.getByLabel("Search reconciliation").fill(fixture.customerName);
   await page.getByRole("button", { name: "Search", exact: true }).click();
   await expect(
