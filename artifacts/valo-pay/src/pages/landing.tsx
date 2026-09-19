@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { Link } from 'wouter';
-import { ArrowRight, ChartNoAxesColumnIncreasing, Check, Link2, ShieldCheck, Waypoints } from 'lucide-react';
+import { ArrowDownLeft, ArrowRight, Check, Clock3, Link2, ShieldCheck, Waypoints } from 'lucide-react';
 import { BrandLockup, BrandMark } from '@/components/brand';
 import { LandingFooter, LandingSections } from '@/components/landing-sections';
 import { Button } from '@/components/ui/button';
@@ -14,45 +14,54 @@ const landingTargets = ['main', 'what', 'how', 'boundaries', 'pricing', 'pilot',
 /** Static, explicitly synthetic illustration. Reading this page never creates a workspace. */
 function CollectionsIllustration() {
   return (
-    <figure className="lp-illustration" aria-label="Daily close example using sample data">
-      <div className="lp-artwork">
-        <div className="lp-art-glow" aria-hidden="true" />
-        <div className="lp-orbit lp-orbit-outer" aria-hidden="true" />
-        <div className="lp-orbit lp-orbit-middle" aria-hidden="true" />
-        <div className="lp-orbit lp-orbit-inner" aria-hidden="true" />
-        <div className="lp-art-dots" aria-hidden="true" />
-        <div className="lp-sphere lp-sphere-one" aria-hidden="true" />
-        <div className="lp-sphere lp-sphere-two" aria-hidden="true" />
-        <div className="lp-sphere lp-sphere-three" aria-hidden="true" />
-        <div className="lp-glass-sheet lp-glass-sheet-back" aria-hidden="true" />
-        <div className="lp-glass-sheet lp-glass-sheet-middle" aria-hidden="true" />
-        <div className="lp-brand-card" aria-hidden="true">
-          <BrandMark className="lp-art-mark" />
-          <span className="lp-art-name">Valo Pay</span>
-          <span className="lp-art-tagline">Collections. Clarity. Control.</span>
+    <figure className="lp-illustration" aria-label="Payment reconciliation example using sample data">
+      <div className="lp-preview">
+        <div className="lp-preview-heading">
+          <span className="lp-preview-brand"><BrandMark aria-hidden="true" /> Valo Pay <span>/ Collections</span></span>
+          <span className="lp-preview-sample">Sample data</span>
         </div>
-        <div className="lp-float-card lp-float-matched">
-          <span className="lp-art-number">1,240</span>
-          <span className="lp-art-label">Payments matched</span>
-          <span className="lp-art-success"><Check aria-hidden="true" /> Close complete</span>
+        <div className="lp-preview-summary">
+          <div className="lp-preview-summary-top">
+            <span className="lp-preview-kicker">Reconciliation snapshot</span>
+            <span className="lp-preview-emblem" aria-hidden="true"><ArrowDownLeft /></span>
+          </div>
+          <span className="lp-preview-total">₦67,000<span>.00</span></span>
+          <span className="lp-preview-total-label">Matched to customer instalments</span>
+          <div className="lp-preview-counts">
+            <span><Check aria-hidden="true" /> 2 payments matched</span>
+            <span><Clock3 aria-hidden="true" /> 1 needs review</span>
+          </div>
         </div>
-        <div className="lp-float-card lp-float-reconciled">
-          <ShieldCheck className="lp-art-icon" aria-hidden="true" />
-          <span className="lp-art-title">Clear payment<br />matching</span>
-          <span className="lp-art-label">See which instalment each payment covers.</span>
+        <div className="lp-preview-activity">
+          <div className="lp-preview-section-label"><span>Payment activity</span><span>Amount · NGN</span></div>
+          <ul className="lp-preview-payments" aria-label="Sample payment activity">
+            <li>
+              <span className="lp-preview-avatar" aria-hidden="true">AO</span>
+              <div className="lp-preview-person"><span>Ada Okonkwo</span><span>Instalment 1</span></div>
+              <div className="lp-preview-payment"><span>₦42,000</span><span className="lp-preview-matched"><Check aria-hidden="true" /> Matched</span></div>
+            </li>
+            <li>
+              <span className="lp-preview-avatar" aria-hidden="true">TB</span>
+              <div className="lp-preview-person"><span>Túndé Bakare</span><span>Instalment 2</span></div>
+              <div className="lp-preview-payment"><span>₦25,000</span><span className="lp-preview-matched"><Check aria-hidden="true" /> Matched</span></div>
+            </li>
+            <li>
+              <span className="lp-preview-avatar lp-preview-avatar-review" aria-hidden="true">CO</span>
+              <div className="lp-preview-person"><span>Chiamaka Obi</span><span>Proposed match · Instalment 3</span></div>
+              <div className="lp-preview-payment"><span>₦18,000</span><span className="lp-preview-review"><Clock3 aria-hidden="true" /> Needs review</span></div>
+            </li>
+          </ul>
         </div>
-        <div className="lp-float-card lp-float-decisions">
-          <ChartNoAxesColumnIncreasing className="lp-art-icon" aria-hidden="true" />
-          <span className="lp-art-title">Retry decisions<br />recorded</span>
-          <span className="lp-art-inline-number">18 <span>in this sample</span></span>
-        </div>
-        <div className="lp-float-card lp-float-timeline">
-          <Waypoints className="lp-art-icon" aria-hidden="true" />
-          <span className="lp-art-title">One clear<br />timeline</span>
-          <span className="lp-art-label">From consent<br />to collection.</span>
+        <div className="lp-preview-footer">
+          <Waypoints aria-hidden="true" />
+          <span>Every payment. A clear next step.</span>
         </div>
       </div>
-      <span className="lp-hero-note" aria-hidden="true">A clearer close.<br />A brighter morning.</span>
+      <div className="lp-preview-workflow" role="group" aria-label="The matching workflow">
+        <span><span>01</span> Receive</span><ArrowRight aria-hidden="true" />
+        <span><span>02</span> Match</span><ArrowRight aria-hidden="true" />
+        <span><span>03</span> Record</span>
+      </div>
       <figcaption>Illustration with synthetic figures. These are sample records, not live results.</figcaption>
     </figure>
   );
