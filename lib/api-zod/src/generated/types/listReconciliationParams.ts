@@ -28,4 +28,9 @@ limit?: number;
  * @maximum 2147483647
  */
 offset?: number;
+/**
+ * Literal case- and accent-insensitive customer, payment or instalment name/reference search before counting and paging. Audit sample metadata remains unfiltered.
+ * @maxLength 200
+ */
+q?: string;
 };

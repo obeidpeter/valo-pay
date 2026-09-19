@@ -47,7 +47,7 @@ describe('collection targets on customer history', () => {
   it('recovers a failed customer-history request while preserving its selected record and return address', async () => {
     const user = userEvent.setup();
     const { due, customer, back } = targetDue();
-    api.failNext(/^\/v1\/customers\/[^/]+\/timeline$/, { status: 503, error: 'History temporarily unavailable.' });
+    api.failNext(/^\/v1\/customers\/[^/]+\/history$/, { status: 503, error: 'History temporarily unavailable.' });
     renderApp(recordDestination(`/customers/${customer.id}`, due.id, back, api.merchantIds[0]!));
     const problem = (await screen.findByText('Unable to load customer history')).closest('[role="alert"]')!;
     expect(screen.queryByText('Collection record unavailable')).toBeNull();

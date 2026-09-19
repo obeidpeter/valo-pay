@@ -197,8 +197,8 @@ export default function MandatesPage() {
             {wrongLender ? 'Switch to the lender you were reviewing to open this record.' : 'The record could not be found for the active lender. Return to collections to check its linked mandate.'}
           </EmptyState>
         ) : shown.length === 0 ? (
-          <EmptyState title={view === 'all' ? 'No mandates yet' : 'No mandates match this view'} action={view === 'all' ? <Button kind="mandates" size="sm" variant="outline" onClick={() => setIsCreateOpen(true)}>Create synthetic mandate</Button> : <Button size="sm" variant="outline" onClick={() => setView('all')}>View all mandates</Button>}>
-            {view === 'all' ? 'Mandates appear after they are created or imported. Create a synthetic mandate to try the activation process.' : 'Choose All mandates to review other activation states.'}
+          <EmptyState title={search.get('q')?.trim() ? 'No results match your search' : view === 'all' ? 'No mandates yet' : 'No mandates match this view'} action={search.get('q')?.trim() ? undefined : view === 'all' ? <Button kind="mandates" size="sm" variant="outline" onClick={() => setIsCreateOpen(true)}>Create synthetic mandate</Button> : <Button size="sm" variant="outline" onClick={() => setView('all')}>View all mandates</Button>}>
+            {search.get('q')?.trim() ? 'Try another name or reference, or clear the search. Your activation filter will stay selected.' : view === 'all' ? 'Mandates appear after they are created or imported. Create a synthetic mandate to try the activation process.' : 'Choose All mandates to review other activation states.'}
           </EmptyState>
         ) : (
           <ScrollFrame label="Mandates" className="overflow-x-auto">

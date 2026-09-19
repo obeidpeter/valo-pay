@@ -25,11 +25,13 @@ import type {
   CloseHistoryPage,
   CreateExportParams,
   CreateRecordParams,
+  CustomerHistory,
   DownloadExportParams,
   ExportInput,
   ExportResult,
   Gates,
   GetCloseDetailParams,
+  GetCustomerHistoryParams,
   GetCustomerTimelineParams,
   GetExportJobParams,
   GetGatesParams,
@@ -2193,6 +2195,96 @@ export function useGetCloseDetail<TData = Awaited<ReturnType<typeof getCloseDeta
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetCloseDetailQueryOptions(id,params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getGetCustomerHistoryUrl = (id: string,
+    params: GetCustomerHistoryParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/customers/${id}/history?${stringifiedParams}` : `/api/v1/customers/${id}/history`
+}
+
+/**
+ * Each section is independently paged in SQL, newest first with stable ID ordering. Counts and monetary aggregates are calculated before paging; no partial state may be written. Unknown customers return 404. The existing timeline endpoint retains its full-history contract.
+ * @summary Page a customer history with complete balances
+ */
+export const getCustomerHistory = async (id: string,
+    params: GetCustomerHistoryParams, options?: Parameters<typeof customFetch>[1]): Promise<CustomerHistory> => {
+
+  return customFetch<CustomerHistory>(getGetCustomerHistoryUrl(id,params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetCustomerHistoryQueryKey = (id: string,
+    params?: GetCustomerHistoryParams,) => {
+    return [
+    `/api/v1/customers/${id}/history`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getGetCustomerHistoryQueryOptions = <TData = Awaited<ReturnType<typeof getCustomerHistory>>, TError = ErrorType<void>>(id: string,
+    params: GetCustomerHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCustomerHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetCustomerHistoryQueryKey(id,params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getCustomerHistory>>> = ({ signal }) => getCustomerHistory(id,params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, enabled: id !== null && id !== undefined, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getCustomerHistory>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetCustomerHistoryQueryResult = NonNullable<Awaited<ReturnType<typeof getCustomerHistory>>>
+export type GetCustomerHistoryQueryError = ErrorType<void>
+
+
+/**
+ * @summary Page a customer history with complete balances
+ */
+
+export function useGetCustomerHistory<TData = Awaited<ReturnType<typeof getCustomerHistory>>, TError = ErrorType<void>>(
+ id: string,
+    params: GetCustomerHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCustomerHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetCustomerHistoryQueryOptions(id,params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

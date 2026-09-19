@@ -1,3 +1,4 @@
+import { pageCustomerHistory } from '../../api-server/src/lib/customer-history';
 import { pageReconciliation, pageCloseHistory } from '../../api-server/src/lib/console-read-models';
 // An in-memory Valo Pay API for the console tests: the real domain code (seed,
 // validation, actions, reconciliation, reports, paging) behind the console's
@@ -134,6 +135,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
   const merchantOf = (query: Record<string, string>) => S.GetOverviewQueryParams.parse(query).merchantId;
 
   const routes: Array<[string, RegExp, Handler]> = [
+    ['GET', /^\/v1\/customers\/(?<id>[^/]+)\/history$/, (params,query)=>{const parsed=S.GetCustomerHistoryQueryParams.parse(query);return S.GetCustomerHistoryResponse.parse(withState(parsed.merchantId,state=>pageCustomerHistory(state,params.id!,parsed)));}],
     ['GET', /^\/v1\/reconciliation\/(?<queue>[^/]+)$/, (params,query)=>{
       const {queue:name}=S.ListReconciliationParams.parse(params), parsed=S.ListReconciliationQueryParams.parse(query);
       return S.ListReconciliationResponse.parse(withState(parsed.merchantId,(state,ctx)=>pageReconciliation(state,name,parsed,ctx.now)));

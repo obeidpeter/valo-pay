@@ -85,3 +85,5 @@ exports/
 # Ephemeral browser-test output
 **/playwright-report/
 **/test-results/
+**/playwright-database-report/
+**/test-results-database/

@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
+  testIgnore: "**/database/**",
   testMatch: "**/*.spec.ts",
   fullyParallel: false,
   workers: 1,
@@ -12,6 +13,11 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   projects: [
+    { name: "desktop-firefox", use: { ...devices["Desktop Firefox"] } },
+    {
+      name: "mobile-webkit",
+      use: { ...devices["iPhone 13"], defaultBrowserType: "webkit" },
+    },
     { name: "desktop-chromium", use: { ...devices["Desktop Chrome"] } },
     {
       name: "mobile-chromium",

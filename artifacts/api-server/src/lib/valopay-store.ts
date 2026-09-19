@@ -1,3 +1,4 @@
+import { historySections, historyKind, positionNote, type CustomerHistoryQuery, type HistorySection } from './customer-history';
 import { pool, type PoolClient } from "@workspace/db";
 import { getAuth } from "@clerk/express";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -369,11 +370,16 @@ export async function listReconciliation(context: StoreContext, merchantId: stri
   // An unavailable focus fails closed rather than showing the whole lender.
   const focus = !query.dueItem ? 'true' : !due ? 'false' : queue === 'proposals' ? "r.data->>'dueItemId'=$4" : queue === 'observations' ? "(r.data->>'dueItemId'=$4 OR ($6<>'' AND r.customer_id=$6))" : "($6<>'' AND r.customer_id=$6)";
   // All parameters are referenced in every variant so PostgreSQL can infer their types.
-  const where = `(${conditions[queue]}) AND (${focus}) AND $4::text IS NOT NULL AND $5::text[] IS NOT NULL AND $6::text IS NOT NULL`;
-  const values = [...scope, query.dueItem || '', sampledIds, due?.customer_id || ''];
+  const fold = (value:string) => `lower(regexp_replace(normalize(${value},NFD), U&'[\\0300-\\036f]', '', 'g'))`;
+  const searchFilter = `($7='' OR position($7 in ${fold("concat_ws(' ',r.name,r.reference)")})>0 OR EXISTS (
+    SELECT 1 FROM valopay_records linked LEFT JOIN valopay_records customer ON customer.merchant_id=r.merchant_id AND customer.kind='customers' AND customer.id=linked.customer_id
+    WHERE linked.merchant_id=r.merchant_id AND linked.kind IN ('customers','payments','due-items') AND linked.id=ANY(ARRAY[r.customer_id,r.data->>'paymentId',r.data->>'dueItemId'])
+    AND position($7 in ${fold("concat_ws(' ',linked.name,linked.reference,customer.name,customer.reference)")})>0))`;
+  const where = `${searchFilter} AND (${conditions[queue]}) AND (${focus}) AND $4::text IS NOT NULL AND $5::text[] IS NOT NULL AND $6::text IS NOT NULL`;
+  const values = [...scope, query.dueItem || '', sampledIds, due?.customer_id || '', foldForSearch(query.q || '').trim()];
   const total = Number((await session.client.query<{total:string}>(`SELECT count(*) AS total ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND ${where}`,values)).rows[0]!.total);
   const offset = pageOffset(total,limit,query.offset);
-  const items = (await session.client.query<RecordRow>(`${select(where)} ORDER BY r.created_at DESC,r.id DESC OFFSET $7 LIMIT $8`,[...values,offset,limit])).rows.map(rowToRecord);
+  const items = (await session.client.query<RecordRow>(`${select(where)} ORDER BY r.created_at DESC,r.id DESC OFFSET $8 LIMIT $9`,[...values,offset,limit])).rows.map(rowToRecord);
   for (let hop=0;hop<2;hop++) {
     const ids = [...new Set([...items,...related.values()].flatMap(r=>[r.customerId,r.data.paymentId,r.data.dueItemId]).filter((id):id is string=>typeof id==='string' && !!id && !related.has(id)))];
     if (!ids.length) break;
@@ -414,6 +420,33 @@ export async function loadReportsView(context:StoreContext,merchantId:string):Pr
   const data = "CASE WHEN r.kind='closes' THEN (r.data - 'report' - 'operational' - 'metrics') || CASE WHEN r.data ? 'report' THEN jsonb_build_object('report',jsonb_build_object('unallocated',r.data#>'{report,unallocated}','exceptions',r.data#>'{report,exceptions}')) ELSE '{}'::jsonb END ELSE r.data END AS data";
   const rows=(await session.client.query<RecordRow>(`SELECT ${recordColumns.replace('r.data',data)} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind NOT IN ('audit','observations','notifications','retry-decisions') ORDER BY r.created_at,r.id`,[merchantId,session.workspace.id,session.principal])).rows;
   return {merchant:merchant.info,settings:merchant.settings,records:rows.map(rowToRecord)};
+}
+
+/** Read-only customer cards and events are paged; balances aggregate every related record. */
+export async function getCustomerHistory(context: StoreContext, merchantId: string, id: string, query: CustomerHistoryQuery) {
+  const session = sessionFor(context); await readMerchant(context, merchantId);
+  const values = [merchantId, session.workspace.id, session.principal, id];
+  const base = `${scopedRecordsFrom} WHERE ${scopedRecordsWhere}`;
+  const customerRow = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${base} AND r.kind='customers' AND r.id=$4`, values)).rows[0];
+  if (!customerRow) fail('Customer not found.', 404);
+  const totalsRow = (await session.client.query<Record<string,string>>(`SELECT count(*) AS events,
+    count(*) FILTER(WHERE r.kind='mandates') AS mandates, count(*) FILTER(WHERE r.kind='due-items') AS "dueItems", count(*) FILTER(WHERE r.kind='payments') AS payments,
+    coalesce(sum(r.amount_kobo) FILTER(WHERE r.kind='due-items' AND r.status<>'cancelled'),0) AS obligations,
+    coalesce(sum(r.amount_kobo) FILTER(WHERE r.kind='allocations' AND r.status='confirmed'),0) AS allocated,
+    coalesce(sum(greatest(0,r.amount_kobo-coalesce((r.data->>'allocatedKobo')::numeric,0))) FILTER(WHERE r.kind='payments'),0) AS credit
+    ${base} AND r.customer_id=$4`,values)).rows[0]!;
+  const totals = {} as Record<HistorySection,number>, offsets = {} as Record<HistorySection,number>;
+  const pages = {} as Record<HistorySection,ValopayRecord[]>;
+  for (const section of historySections) {
+    const limit = Math.min(query[`${section}Limit`] || 25,100);
+    totals[section] = Number(totalsRow[section]);
+    offsets[section] = pageOffset(totals[section],limit,query[`${section}Offset`]);
+    const predicate = historyKind[section] ? `AND r.kind='${historyKind[section]}'` : '';
+    pages[section] = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${base} AND r.customer_id=$4 ${predicate} ORDER BY r.created_at DESC,r.id DESC OFFSET $5 LIMIT $6`,[...values,offsets[section],limit])).rows.map(rowToRecord);
+  }
+  const focusedRow = query.record ? (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${base} AND r.customer_id=$4 AND r.id=$5`,[...values,query.record])).rows[0] : undefined;
+  const obligationsKobo = Number(totalsRow.obligations), allocatedKobo = Number(totalsRow.allocated);
+  return {customer:rowToRecord(customerRow),position:{obligationsKobo,allocatedKobo,outstandingKobo:Math.max(0,obligationsKobo-allocatedKobo),unallocatedKobo:Number(totalsRow.credit),note:positionNote},...pages,totals,offsets,...(focusedRow?{focusedRecord:rowToRecord(focusedRow)}:{})};
 }
 
 /** Complete customer history and balances without every other customer's data.

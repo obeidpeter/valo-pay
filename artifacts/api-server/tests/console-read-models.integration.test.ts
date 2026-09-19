@@ -1,3 +1,5 @@
+import { pageCustomerHistory } from '../src/lib/customer-history';
+import { customerTimeline } from '../src/domain/timeline';
 import assert from "node:assert/strict";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
@@ -17,6 +19,7 @@ const {
   listReconciliation,
   listCloseHistory,
   getCloseDetail,
+  getCustomerHistory,
   loadReportsView,
 } = await import("../src/lib/valopay-store");
 const tokens = [
@@ -113,6 +116,7 @@ try {
           { limit: 100, offset: 99999 },
           { limit: 25, dueItem: due.id },
           { limit: 25, dueItem: "unavailable" },
+          ...[due.reference, state.records.find(r=>r.id===proposal.data.paymentId)!.reference, 'CHIAMAKA', 'read-match-4', '%_', 'no-match'].map(q=>({limit:25,offset:25,q})),
         ]) {
           const actual = await listReconciliation(
             ctx,
@@ -128,6 +132,15 @@ try {
           assert.ok(actual.items.length <= filters.limit);
           assert.ok(actual.related.every((r) => r.merchantId === merchantId));
         }
+      const complete=customerTimeline(full,due.customerId);
+      for(const historyQuery of [{},{eventsOffset:25,eventsLimit:25},{eventsOffset:99999,mandatesOffset:99999,dueItemsOffset:99999,paymentsOffset:99999},{eventsLimit:1,mandatesLimit:1,dueItemsLimit:1,paymentsLimit:1,record:complete.events.at(-1)!.id},{record:'not-this-customer'}]) {
+        const result=await getCustomerHistory(ctx,merchantId,due.customerId,historyQuery);
+        assert.deepEqual(result,pageCustomerHistory(full,due.customerId,historyQuery));
+        assert.deepEqual(result.position,complete.position,'paging never changes the full monetary position');
+        assert.ok(result.events.length<=(historyQuery.eventsLimit||25));
+        assert.equal(result.totals.events,complete.events.length);
+      }
+      await assert.rejects(()=>getCustomerHistory(ctx,merchantId,'missing',{}),(e:any)=>e.status===404);
       for (const filters of [
         { limit: 25 },
         { limit: 25, offset: 25 },
@@ -173,6 +186,7 @@ try {
     request(),
     response(),
     async (ctx) => {
+      await assert.rejects(()=>getCustomerHistory(ctx,otherId,due.customerId,{}),(e:any)=>e.status===404);
       const result = await listReconciliation(ctx, otherId, "proposals", {
         dueItem: due.id,
       });

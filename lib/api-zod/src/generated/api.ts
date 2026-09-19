@@ -908,13 +908,16 @@ export const listReconciliationQueryLimitMax = 100;
 export const listReconciliationQueryOffsetMin = 0;
 export const listReconciliationQueryOffsetMax = 2147483647;
 
+export const listReconciliationQueryQMax = 200;
+
 
 
 export const ListReconciliationQueryParams = zod.object({
   "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
   "dueItem": zod.coerce.string().max(listReconciliationQueryDueItemMax).optional().describe('Optional instalment focus; payment queues are restricted to its customer, proposals to its exact instalment.'),
   "limit": zod.coerce.number().int().min(1).max(listReconciliationQueryLimitMax).optional().describe('Page size; defaults to 25.'),
-  "offset": zod.coerce.number().int().min(listReconciliationQueryOffsetMin).max(listReconciliationQueryOffsetMax).optional().describe('Rows to skip; clamped when the result shrinks.')
+  "offset": zod.coerce.number().int().min(listReconciliationQueryOffsetMin).max(listReconciliationQueryOffsetMax).optional().describe('Rows to skip; clamped when the result shrinks.'),
+  "q": zod.coerce.string().max(listReconciliationQueryQMax).optional().describe('Literal case- and accent-insensitive customer, payment or instalment name/reference search before counting and paging. Audit sample metadata remains unfiltered.')
 })
 
 export const ListReconciliationResponse = zod.object({
@@ -1045,5 +1048,145 @@ export const GetCloseDetailResponse = zod.object({
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
 }).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')
+
+
+/**
+ * Each section is independently paged in SQL, newest first with stable ID ordering. Counts and monetary aggregates are calculated before paging; no partial state may be written. Unknown customers return 404. The existing timeline endpoint retains its full-history contract.
+ * @summary Page a customer history with complete balances
+ */
+export const GetCustomerHistoryParams = zod.object({
+  "id": zod.coerce.string().describe('Customer in the active lender.')
+})
+
+export const getCustomerHistoryQueryRecordMax = 200;
+
+export const getCustomerHistoryQueryEventsLimitMax = 100;
+
+export const getCustomerHistoryQueryEventsOffsetMin = 0;
+export const getCustomerHistoryQueryEventsOffsetMax = 2147483647;
+
+export const getCustomerHistoryQueryMandatesLimitMax = 100;
+
+export const getCustomerHistoryQueryMandatesOffsetMin = 0;
+export const getCustomerHistoryQueryMandatesOffsetMax = 2147483647;
+
+export const getCustomerHistoryQueryDueItemsLimitMax = 100;
+
+export const getCustomerHistoryQueryDueItemsOffsetMin = 0;
+export const getCustomerHistoryQueryDueItemsOffsetMax = 2147483647;
+
+export const getCustomerHistoryQueryPaymentsLimitMax = 100;
+
+export const getCustomerHistoryQueryPaymentsOffsetMin = 0;
+export const getCustomerHistoryQueryPaymentsOffsetMax = 2147483647;
+
+
+
+export const GetCustomerHistoryQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "record": zod.coerce.string().max(getCustomerHistoryQueryRecordMax).optional().describe('Optional selected history record; must belong to this customer and lender.'),
+  "eventsLimit": zod.coerce.number().int().min(1).max(getCustomerHistoryQueryEventsLimitMax).optional().describe('Page size; defaults to 25.'),
+  "eventsOffset": zod.coerce.number().int().min(getCustomerHistoryQueryEventsOffsetMin).max(getCustomerHistoryQueryEventsOffsetMax).optional().describe('Rows to skip; clamped when the result shrinks.'),
+  "mandatesLimit": zod.coerce.number().int().min(1).max(getCustomerHistoryQueryMandatesLimitMax).optional().describe('Page size; defaults to 25.'),
+  "mandatesOffset": zod.coerce.number().int().min(getCustomerHistoryQueryMandatesOffsetMin).max(getCustomerHistoryQueryMandatesOffsetMax).optional().describe('Rows to skip; clamped when the result shrinks.'),
+  "dueItemsLimit": zod.coerce.number().int().min(1).max(getCustomerHistoryQueryDueItemsLimitMax).optional().describe('Page size; defaults to 25.'),
+  "dueItemsOffset": zod.coerce.number().int().min(getCustomerHistoryQueryDueItemsOffsetMin).max(getCustomerHistoryQueryDueItemsOffsetMax).optional().describe('Rows to skip; clamped when the result shrinks.'),
+  "paymentsLimit": zod.coerce.number().int().min(1).max(getCustomerHistoryQueryPaymentsLimitMax).optional().describe('Page size; defaults to 25.'),
+  "paymentsOffset": zod.coerce.number().int().min(getCustomerHistoryQueryPaymentsOffsetMin).max(getCustomerHistoryQueryPaymentsOffsetMax).optional().describe('Rows to skip; clamped when the result shrinks.')
+})
+
+export const GetCustomerHistoryResponse = zod.object({
+  "customer": zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'),
+  "position": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
+  "events": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
+  "mandates": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
+  "dueItems": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
+  "payments": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
+  "totals": zod.object({
+  "events": zod.number().int(),
+  "mandates": zod.number().int(),
+  "dueItems": zod.number().int(),
+  "payments": zod.number().int()
+}).describe('Complete counts or actual offsets for the four customer-history sections.'),
+  "offsets": zod.object({
+  "events": zod.number().int(),
+  "mandates": zod.number().int(),
+  "dueItems": zod.number().int(),
+  "payments": zod.number().int()
+}).describe('Complete counts or actual offsets for the four customer-history sections.'),
+  "focusedRecord": zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).optional().describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')
+}).describe('Bounded pages of customer records with balances derived from every related record, full section counts and an optional lender-scoped selected record.')
 
 

@@ -1,3 +1,4 @@
+import { foldForSearch } from './valopay-list';
 import type { DomainState, ValopayRecord } from "../domain/types";
 import { precisionAudit } from "../domain/reports";
 
@@ -11,6 +12,7 @@ export const reconciliationQueues = [
 ] as const;
 export type ReconciliationQueue = (typeof reconciliationQueues)[number];
 export interface ReadPageQuery {
+  q?: string;
   limit?: number;
   offset?: number;
   dueItem?: string;
@@ -95,6 +97,9 @@ export function pageReconciliation(
   const ids = new Set(precision?.sampledAllocationIds || []);
   const rows = state.records
     .filter((r) => {
+      const linked = [r,...[r.customerId,r.data.paymentId,r.data.dueItemId].map(id=>byId.get(String(id))).filter((row):row is ValopayRecord=>!!row)];
+      const searchable = [...linked,...linked.map(row=>byId.get(row.customerId)).filter((row):row is ValopayRecord=>!!row)];
+      if (query.q?.trim() && !searchable.some(row=>foldForSearch(row.name+' '+row.reference).includes(foldForSearch(query.q!).trim()))) return false;
       const match =
         queue === "proposals"
           ? r.kind === "allocations" && r.status === "proposed"

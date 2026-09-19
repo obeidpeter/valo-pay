@@ -2,7 +2,17 @@ import { useSearchParams } from "wouter";
 import { Search } from "lucide-react";
 import { Button } from "./ui/button";
 import { useWorkspace } from "@/lib/workspace-context";
-export function QueueSearch() {
+export function QueueSearch({
+  label = "Search this queue",
+  placeholder = "Customer name or reference",
+  help = "Status and owner filters still apply.",
+  pagePrefixes = [],
+}: {
+  label?: string;
+  placeholder?: string;
+  help?: string;
+  pagePrefixes?: string[];
+} = {}) {
   const { merchantId } = useWorkspace();
   const [params, setParams] = useSearchParams();
   const q = params.get("q") || "";
@@ -10,6 +20,7 @@ export function QueueSearch() {
     setParams((current) => {
       const next = new URLSearchParams(current);
       next.delete("page");
+      for (const prefix of pagePrefixes) next.delete(prefix + "page");
       next.delete("record");
       if (value.trim()) next.set("q", value.trim());
       else next.delete("q");
@@ -25,13 +36,13 @@ export function QueueSearch() {
       }}
     >
       <label className="grid min-w-0 flex-1 gap-1 text-xs font-medium">
-        Search this queue
+        {label}
         <input
           type="search"
           name="q"
           maxLength={200}
           defaultValue={q}
-          placeholder="Customer name or reference"
+          placeholder={placeholder}
           className="min-h-10 w-full min-w-0 rounded-md border bg-background px-3 text-sm"
         />
       </label>
@@ -46,7 +57,7 @@ export function QueueSearch() {
       )}
       {q && (
         <p role="status" className="w-full text-xs text-muted-foreground">
-          Results matching “{q}”. Status and owner filters still apply.
+          Results matching “{q}”. {help}
         </p>
       )}
     </form>

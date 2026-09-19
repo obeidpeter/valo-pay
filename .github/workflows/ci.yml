@@ -79,9 +79,9 @@ jobs:
           BASE_PATH: "/"
 
       - name: Install test browser
-        run: pnpm --filter @workspace/valopay exec playwright install --with-deps chromium
+        run: pnpm --filter @workspace/valopay exec playwright install --with-deps chromium firefox webkit
 
-      - name: Real-browser desktop and mobile workflows
+      - name: Chromium, Firefox and WebKit browser workflows
         run: pnpm --filter @workspace/valopay run test:browser
 
       - name: Preserve browser failure evidence
@@ -166,3 +166,58 @@ jobs:
           name: synthetic-recovery-evidence
           path: recovery-evidence.json
           retention-days: 14
+
+  browser-database-checks:
+    name: Browser workflows on the real API and PostgreSQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: valopay_browser_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d valopay_browser_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CI: "true"
+      DATABASE_URL: postgres://postgres@127.0.0.1:5432/valopay_browser_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.1
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Create disposable browser database schema
+        run: pnpm --filter @workspace/db run push
+      - name: Build console
+        run: pnpm --filter @workspace/valopay run build
+        env:
+          PORT: "5173"
+          BASE_PATH: "/"
+      - name: Install Chromium
+        run: pnpm --filter @workspace/valopay exec playwright install --with-deps chromium
+      - name: Exercise real middleware, repositories and database persistence in a browser
+        run: pnpm --filter @workspace/valopay run test:browser:database
+      - name: Preserve browser database failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-database-failure-evidence
+          path: |
+            artifacts/valo-pay/playwright-database-report
+            artifacts/valo-pay/test-results-database
+          retention-days: 7
