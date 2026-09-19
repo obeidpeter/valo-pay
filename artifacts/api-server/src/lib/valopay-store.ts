@@ -289,7 +289,9 @@ export async function listQueue(context: StoreContext, merchantId: string, queue
   const kind = queue === 'collections' ? "(r.kind='due-items' OR r.kind='attempts' AND r.status='failed')" : `r.kind='${queue}'`;
   const unpaid = `coalesce((CASE WHEN r.kind='attempts' THEN d.status ELSE r.status END) NOT IN ('paid','closed','cancelled'),false)`;
   const overdue = queue === 'collections' ? `(CASE WHEN length(deadline)=10 THEN deadline < to_char($4::timestamptz AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD') ELSE deadline_at < $4::timestamptz END)` : 'deadline_at < $4::timestamptz';
-  const cte = `WITH scoped AS NOT MATERIALIZED (SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere}),
+  // Count/order only this queue's kinds. Materialise that scoped input once so
+  // related instalment joins cannot repeat workspace joins for every attempt.
+  const cte = `WITH scoped AS MATERIALIZED (SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND ${kind}),
     b AS (SELECT r.*, ${deadline} AS deadline, ${timestamp(deadline)} AS deadline_at, ${owner} AS queue_owner,
       ${unpaid} AS unpaid, ${timestamp("r.data->>'occurredAt'")} AS attempt_at
       FROM scoped r LEFT JOIN scoped d ON r.kind='attempts' AND d.kind='due-items' AND d.id=r.data->>'dueItemId' WHERE ${kind}),

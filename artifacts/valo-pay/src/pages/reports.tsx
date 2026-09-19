@@ -436,11 +436,20 @@ export default function ReportsPage() {
               <DailyCloseStatus value={reports.operational?.closeSchedule} showHistory />
             </div>
             <div className="space-y-4 border-b p-5">
-              <div className="flex flex-wrap items-end gap-3 print:hidden">
-                <label className="grid gap-1 text-xs font-medium">From date (WAT)<input type="date" value={from} aria-invalid={!!history.error} aria-describedby="close-range-help" onChange={event => setReportFilter('from', event.target.value)} className="min-h-10 rounded-md border bg-background px-3" /></label>
-                <label className="grid gap-1 text-xs font-medium">To date (WAT)<input type="date" value={to} aria-invalid={!!history.error} aria-describedby="close-range-help" onChange={event => setReportFilter('to', event.target.value)} className="min-h-10 rounded-md border bg-background px-3" /></label>
-                {(from || to) && <Button variant="ghost" onClick={() => setSearch(current => { const next = new URLSearchParams(current); next.delete('from'); next.delete('to'); return next; })}>Clear dates</Button>}
-              </div>
+              <form key={`${merchantId}:${from}:${to}`} className="flex flex-wrap items-end gap-3 print:hidden" onSubmit={event => {
+                event.preventDefault();
+                const values = new FormData(event.currentTarget);
+                setSearch(current => {
+                  const next = new URLSearchParams(current);
+                  for (const key of ['from', 'to']) { const value = String(values.get(key) || ''); if (value) next.set(key, value); else next.delete(key); }
+                  return next;
+                });
+              }}>
+                <label className="grid gap-1 text-xs font-medium">From date (WAT)<input type="date" name="from" defaultValue={from} aria-invalid={!!history.error} aria-describedby="close-range-help" className="min-h-10 rounded-md border bg-background px-3" /></label>
+                <label className="grid gap-1 text-xs font-medium">To date (WAT)<input type="date" name="to" defaultValue={to} aria-invalid={!!history.error} aria-describedby="close-range-help" className="min-h-10 rounded-md border bg-background px-3" /></label>
+                <Button type="submit" variant="outline">Apply dates</Button>
+                {(from || to) && <Button type="button" variant="ghost" onClick={() => setSearch(current => { const next = new URLSearchParams(current); next.delete('from'); next.delete('to'); return next; })}>Clear dates</Button>}
+              </form>
               <p id="close-range-help" className="text-xs text-muted-foreground">{history.error || `Showing ${formatCount(history.items.length, 'recorded close')}${from ? ` from ${from}` : ''}${to ? ` through ${to}` : ''}. Dates include the full day in West Africa Time. Current totals above are unchanged.`}</p>
               {history.error && <p role="alert" className="text-sm text-destructive">The close history is hidden until the date range is corrected.</p>}
               {!history.error && <div className="rounded-lg bg-secondary/25 p-4">

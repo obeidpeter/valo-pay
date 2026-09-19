@@ -3,6 +3,7 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { renderApp, screen, userEvent, waitFor, within } from './harness';
 import { closeHistory } from '@/lib/close-history';
+import { fireEvent } from '@testing-library/react';
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -80,6 +81,11 @@ describe('console efficiency', () => {
     await user.click(screen.getByRole('button', { name: 'Operations' }));
     await user.click(screen.getByRole('button', { name: 'Clear dates' }));
     expect(await screen.findByText('No daily close yet')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('From date (WAT)'), { target: { value: '2026-09-01' } });
+    fireEvent.change(screen.getByLabelText('To date (WAT)'), { target: { value: '2026-09-19' } });
+    expect(new URLSearchParams(window.location.search).has('from')).toBe(false);
+    await user.click(screen.getByRole('button', { name: 'Apply dates' }));
+    expect(await screen.findByText(/Showing 0 recorded closes from 2026-09-01 through 2026-09-19/)).toBeTruthy();
   });
 });
 

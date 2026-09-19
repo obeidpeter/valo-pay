@@ -34,6 +34,7 @@ try {
     FROM generate_series(1,2000) i`, [merchantId, customer.id]);
   const baseline = await inWorkspace(request(), response(), ctx => loadState(ctx, merchantId, 'share'), 'read');
   const normalise = (page: ReturnType<typeof pageQueue>) => ({ ...page, related: page.related.sort((a, b) => a.id.localeCompare(b.id)) });
+  const timings: number[] = [];
   for (const queue of Object.keys(queueViews) as QueueName[]) {
     const cases: QueueQuery[] = queueViews[queue].flatMap(view => [{ view, limit: 25 }, { view, limit: 25, offset: 25 }, { view, limit: 100, offset: 99999 }]);
     cases.push({ owner: queue === 'exceptions' ? 'Finance' : 'lender', type: queue === 'exceptions' ? 'unallocated_payment' : '', limit: 25 });
@@ -41,7 +42,9 @@ try {
     if (queue === 'mandates') cases.push({ record: mandate.id, view: 'overdue', limit: 25 });
     for (const query of cases) {
       await inWorkspace(request(), response(), async ctx => {
+        const start = performance.now();
         const actual = await listQueue(ctx, merchantId, queue, query);
+        timings.push(performance.now() - start);
         const expected = pageQueue(baseline.records, queue, query, ctx.now);
         assert.deepEqual(normalise(actual), normalise(expected), `${queue}: ${JSON.stringify(query)}`);
         assert.ok(actual.items.length <= (query.limit || 25));
@@ -53,6 +56,7 @@ try {
   const sibling = await inWorkspace(request(), response(), ctx => listQueue(ctx, siblingId, 'collections', { record: `${merchantId}-queue-due-00001`, limit: 25 }), 'read');
   assert.equal(sibling.total, 0);
   assert.equal(sibling.related.length, 0);
+  console.log(JSON.stringify({ benchmark: 'priority-queue-pages', syntheticRows: 6000, pages: timings.length, medianMs: Math.round([...timings].sort((a, b) => a - b)[Math.floor(timings.length / 2)]!), maximumMs: Math.round(Math.max(...timings)), note: 'Disposable CI database; not a production latency guarantee.' }));
   await assert.rejects(() => inWorkspace(request(), response(), ctx => listQueue(ctx, merchantId, 'collections', { view: 'invalid' }), 'read'), (error: any) => error.status === 400);
   console.log('Priority queue integration passed: 6,000 rows, all filters, complete counts, bounded pages, deep links, related-record scoping and malformed legacy dates.');
 } finally {
