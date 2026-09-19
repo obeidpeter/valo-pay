@@ -119,9 +119,16 @@ app.post("/__test/session", async (req, res) => {
   }
 });
 const root = path.resolve(import.meta.dirname, "../../valo-pay/dist/public");
-app.use(express.static(root));
-app.get("/{*path}", (_req, res) => res.sendFile(path.join(root, "index.html")));
-const server = app.listen(4174, "127.0.0.1");
+// Replit serves console documents separately from the API. Keep real API
+// middleware intact, without sending static documents into Clerk's handshake.
+const host = express();
+host.use((req, res, next) => {
+  if (req.path === '/api' || req.path.startsWith('/api/') || req.path.startsWith('/__test/')) app(req, res, next);
+  else next();
+});
+host.use(express.static(root));
+host.get("/{*path}", (_req, res) => res.sendFile(path.join(root, "index.html")));
+const server = host.listen(4174, "127.0.0.1");
 const stop = () =>
   server.close(() => {
     void pool.end().then(() => process.exit(0));

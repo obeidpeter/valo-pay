@@ -294,7 +294,8 @@ Regression coverage for this pass lives in `artifacts/valo-pay/tests/record-pagi
 Search is an explicit labelled form on the three priority queues. Search and saved-filter changes start on page one; returning from a customer restores the original filters and page. Pages remain shareable within their lender context, and changing lender does not reuse another lender's position. This supports recognition and recovery without browser-stored customer records.
 
 Daily-close summaries use stacked cards on phones and aligned columns on wider screens. Each close has a native disclosure, which supports keyboard navigation and fetches its evidence only when opened. Date filters compare positions across the full range, with clear empty/error states. Print output states that it includes summaries for the current page, while detailed billing disclosures continue to expand for print.
-# Clear search outcomes and bounded customer history
+
+## Clear search outcomes and bounded customer history
 
 A search with no matches now says so instead of implying that the queue is clear or that records must be created. Clear search preserves other filters. Reconciliation search includes the linked references operators already use, and switching its views retains the search (Nielsen 1, 3 and 6).
 

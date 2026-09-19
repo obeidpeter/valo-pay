@@ -152,7 +152,8 @@ Reports format ratios and basis points as percentages. Billing evidence is avail
 - `GET /v1/reports?includeCloses=false` omits the historical close array while retaining all operational, billing and experiment measures. Omitting the option preserves the existing response contract.
 
 All paged reads clamp deleted last pages, cap each page at 100 and remain inside the scoped repository. These read models never create writable partial snapshots. Desktop and phone Chromium tests use `artifacts/valo-pay/e2e`; database parity and isolation tests use `artifacts/api-server/tests/console-read-models.integration.test.ts`.
-# Search and history paging
+
+## Search and history paging
 
 The priority queues distinguish an unmatched search from an empty lender queue. Clearing the search keeps the status, owner and type filters. Reconciliation exposes the same explicit search form across its views and applies customer/payment/instalment reference matching before server counts and pages. Its monthly precision sample measures remain unfiltered.
 
