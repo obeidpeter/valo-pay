@@ -4,16 +4,16 @@ import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
-import { useGetCustomerTimeline, getGetCustomerTimelineQueryKey, } from '@workspace/api-client-react';
+import { useGetCustomerHistory, getGetCustomerHistoryQueryKey, } from '@workspace/api-client-react';
 import { formatKobo, formatDate, formatCompactDate, formatCount } from '@/lib/formatters';
 import { ArrowLeft, Clock, FileText, CheckCircle, AlertTriangle } from 'lucide-react';
 import { CustomerAvatar, StatusBadge, readableLabel } from '@/components/record-label';
-import { Link, useParams, useSearch } from 'wouter';
+import { Link, useParams, useSearch, useSearchParams } from 'wouter';
 import { LookedFor } from '@/components/notice';
 import { NotFoundNotice } from '@/pages/not-found';
 import { LoadProblem } from '@/components/load-problem';
 import { RecordPagination } from '@/components/record-pagination';
-import { useRecordPagination } from '@/lib/use-record-pagination';
+import { useUrlPagination } from '@/lib/use-url-pagination';
 import { safeCustomerReturnTo } from '@/lib/record-navigation';
 import { useHashTarget } from '@/lib/use-hash-target';
 
@@ -49,17 +49,26 @@ export default function CustomerTimelinePage() {
   const requestedRecord = sameLender ? search.get('record') : null;
   const returnTo = safeCustomerReturnTo(search.get('returnTo'), merchantId);
 
-  const { data: timeline, isLoading, isFetching, error, refetch } = useGetCustomerTimeline(
-    id!,
-    { merchantId: merchantId! },
-    { query: { enabled: !!merchantId && !!id, queryKey: getGetCustomerTimelineQueryKey(id!, { merchantId: merchantId! }) } }
-  );
-  const pageKey = `${merchantId}:${id}`;
-  const historyPage = useRecordPagination(pageKey, timeline?.events.length);
-  const mandatePage = useRecordPagination(pageKey, timeline?.mandates.length);
-  const duePage = useRecordPagination(pageKey, timeline?.dueItems.length);
-  const paymentPage = useRecordPagination(pageKey, timeline?.payments.length);
-  const focusedRecord = timeline?.events.find(event => event.id === requestedRecord);
+  const historyPage = useUrlPagination(merchantId, 'history-');
+  const mandatePage = useUrlPagination(merchantId, 'mandate-');
+  const duePage = useUrlPagination(merchantId, 'due-');
+  const paymentPage = useUrlPagination(merchantId, 'payment-');
+  const queryParams = {merchantId:merchantId!, record:requestedRecord || undefined,
+    eventsLimit:historyPage.pageSize, eventsOffset:historyPage.offset,
+    mandatesLimit:mandatePage.pageSize, mandatesOffset:mandatePage.offset,
+    dueItemsLimit:duePage.pageSize, dueItemsOffset:duePage.offset,
+    paymentsLimit:paymentPage.pageSize, paymentsOffset:paymentPage.offset};
+  const { data: timeline, isLoading, isFetching, error, refetch } = useGetCustomerHistory(id!,queryParams,
+    {query:{enabled:!!merchantId && !!id && sameLender,queryKey:getGetCustomerHistoryQueryKey(id!,queryParams)}});
+  const focusedRecord = timeline?.focusedRecord;
+  // Correct every out-of-range section together so one URL update cannot undo another.
+  const [, setSearch] = useSearchParams();
+  useEffect(() => {
+    if (!timeline) return;
+    const sections = [['events','history-',historyPage],['mandates','mandate-',mandatePage],['dueItems','due-',duePage],['payments','payment-',paymentPage]] as const;
+    if (!sections.some(([key,,page])=>timeline.offsets[key]!==page.offset)) return;
+    setSearch(current=>{const next=new URLSearchParams(current);for(const [key,prefix,page] of sections) if(timeline.offsets[key]!==page.offset) next.set(prefix+'page',String(Math.floor(timeline.offsets[key]/page.pageSize)+1));return next;},{replace:true});
+  },[timeline,historyPage.offset,mandatePage.offset,duePage.offset,paymentPage.offset]);
   useHashTarget(`record-${requestedRecord}`, !!focusedRecord && !error);
 
 
@@ -146,7 +155,7 @@ export default function CustomerTimelinePage() {
               {mandates.length === 0 ? (
                 <EmptyState title="No mandates for this customer">A mandate is a customer's permission to collect by direct debit. Linked mandates appear here after they are created or imported.</EmptyState>
               ) : (
-                mandates.slice(mandatePage.offset, mandatePage.offset + mandatePage.pageSize).map(mandate => (
+                mandates.map(mandate => (
                   <div key={mandate.id} className="p-4">
                     <div className="flex justify-between items-start mb-2">
                       <div>
@@ -159,7 +168,7 @@ export default function CustomerTimelinePage() {
                 ))
               )}
             </div>
-            {mandates.length > 25 && <RecordPagination pagination={mandatePage} total={mandates.length} label="customer mandates" />}
+            {timeline.totals.mandates > 25 && <RecordPagination pagination={mandatePage} total={timeline.totals.mandates} label="customer mandates" />}
           </section>
 
           {/* Due Items & Payments */}
@@ -173,7 +182,7 @@ export default function CustomerTimelinePage() {
                 {dueItems.length === 0 ? (
                   <EmptyState title="No instalments recorded">Import this customer's instalments from the Collections page to see their amounts and due dates here.</EmptyState>
                 ) : (
-                  dueItems.slice(duePage.offset, duePage.offset + duePage.pageSize).map(item => (
+                  dueItems.map(item => (
                     <div key={item.id} className="p-4">
                       <div className="flex justify-between items-baseline mb-1">
                         <span className="font-mono text-sm">{item.reference}</span>
@@ -187,7 +196,7 @@ export default function CustomerTimelinePage() {
                   ))
                 )}
               </div>
-              {dueItems.length > 25 && <RecordPagination pagination={duePage} total={dueItems.length} label="customer instalments" />}
+              {timeline.totals.dueItems > 25 && <RecordPagination pagination={duePage} total={timeline.totals.dueItems} label="customer instalments" />}
             </section>
 
             <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
@@ -199,7 +208,7 @@ export default function CustomerTimelinePage() {
                 {payments.length === 0 ? (
                   <EmptyState title="No payments recorded">Payment records appear here when they are linked to this customer.</EmptyState>
                 ) : (
-                  payments.slice(paymentPage.offset, paymentPage.offset + paymentPage.pageSize).map(payment => (
+                  payments.map(payment => (
                     <div key={payment.id} className="p-4">
                       <div className="flex justify-between items-baseline mb-1">
                         <span className="font-mono text-sm">{payment.reference}</span>
@@ -213,7 +222,7 @@ export default function CustomerTimelinePage() {
                   ))
                 )}
               </div>
-              {payments.length > 25 && <RecordPagination pagination={paymentPage} total={payments.length} label="customer payments" />}
+              {timeline.totals.payments > 25 && <RecordPagination pagination={paymentPage} total={timeline.totals.payments} label="customer payments" />}
             </section>
           </div>
         </div>
@@ -224,7 +233,7 @@ export default function CustomerTimelinePage() {
             <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-secondary"><Clock className="h-4 w-4 text-primary" /></span>
             <div>
               <h2 className="font-semibold">Customer history</h2>
-              <p className="mt-0.5 text-xs text-muted-foreground">The complete record · {formatCount(events.length, 'event')}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{formatCount(timeline.totals.events, 'event')} in the full history</p>
             </div>
           </div>
           <ScrollFrame label="Customer history" className="p-5 sm:p-6 overflow-y-auto max-h-[720px] space-y-4">
@@ -232,7 +241,7 @@ export default function CustomerTimelinePage() {
               <EmptyState title="No events recorded yet" className="px-0">Consent, mandate changes, attempts, notices and payments are recorded here as they happen.</EmptyState>
             ) : (
               <ol className="relative border-l border-border ml-2 space-y-7">
-                {events.slice(historyPage.offset, historyPage.offset + historyPage.pageSize).map(event => (
+                {events.map(event => (
                   <li key={event.id} className="relative pl-6">
                     <span aria-hidden="true" className="absolute -left-[5px] top-1 h-2.5 w-2.5 rounded-full bg-brand ring-4 ring-card" />
                     <div className="flex flex-col items-start">
@@ -251,7 +260,7 @@ export default function CustomerTimelinePage() {
               </ol>
             )}
           </ScrollFrame>
-          {events.length > 25 && <RecordPagination pagination={historyPage} total={events.length} label="history events" />}
+          {timeline.totals.events > 25 && <RecordPagination pagination={historyPage} total={timeline.totals.events} label="history events" />}
         </div>
       </div>
     </div>

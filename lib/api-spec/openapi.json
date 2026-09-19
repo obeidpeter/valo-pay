@@ -1242,6 +1242,15 @@
               "maximum": 2147483647
             },
             "description": "Rows to skip; clamped when the result shrinks."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "Literal case- and accent-insensitive customer, payment or instalment name/reference search before counting and paging. Audit sample metadata remains unfiltered."
           }
         ],
         "responses": {
@@ -1407,6 +1416,149 @@
         },
         "summary": "Read the evidence for one recorded close",
         "description": "Returns the full immutable close report on demand within the current lender."
+      }
+    },
+    "/v1/customers/{id}/history": {
+      "get": {
+        "operationId": "getCustomerHistory",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "merchantId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Customer in the active lender."
+          },
+          {
+            "name": "record",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "Optional selected history record; must belong to this customer and lender."
+          },
+          {
+            "name": "eventsLimit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Page size; defaults to 25."
+          },
+          {
+            "name": "eventsOffset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "description": "Rows to skip; clamped when the result shrinks."
+          },
+          {
+            "name": "mandatesLimit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Page size; defaults to 25."
+          },
+          {
+            "name": "mandatesOffset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "description": "Rows to skip; clamped when the result shrinks."
+          },
+          {
+            "name": "dueItemsLimit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Page size; defaults to 25."
+          },
+          {
+            "name": "dueItemsOffset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "description": "Rows to skip; clamped when the result shrinks."
+          },
+          {
+            "name": "paymentsLimit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "Page size; defaults to 25."
+          },
+          {
+            "name": "paymentsOffset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "description": "Rows to skip; clamped when the result shrinks."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerHistory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Permission or readiness gate blocked"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        },
+        "summary": "Page a customer history with complete balances",
+        "description": "Each section is independently paged in SQL, newest first with stable ID ordering. Counts and monetary aggregates are calculated before paging; no partial state may be written. Unknown customers return 404. The existing timeline endpoint retains its full-history contract."
       }
     }
   },
@@ -2640,6 +2792,85 @@
           "offset"
         ],
         "description": "Paged close summaries and first/latest closing positions for the entire WAT date range; full REC-07 evidence is fetched separately."
+      },
+      "CustomerHistoryCounts": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "integer"
+          },
+          "mandates": {
+            "type": "integer"
+          },
+          "dueItems": {
+            "type": "integer"
+          },
+          "payments": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "events",
+          "mandates",
+          "dueItems",
+          "payments"
+        ],
+        "description": "Complete counts or actual offsets for the four customer-history sections."
+      },
+      "CustomerHistory": {
+        "type": "object",
+        "properties": {
+          "customer": {
+            "$ref": "#/components/schemas/ValopayRecord"
+          },
+          "position": {
+            "$ref": "#/components/schemas/RecordData"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          },
+          "mandates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          },
+          "dueItems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          },
+          "payments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValopayRecord"
+            }
+          },
+          "totals": {
+            "$ref": "#/components/schemas/CustomerHistoryCounts"
+          },
+          "offsets": {
+            "$ref": "#/components/schemas/CustomerHistoryCounts"
+          },
+          "focusedRecord": {
+            "$ref": "#/components/schemas/ValopayRecord"
+          }
+        },
+        "required": [
+          "customer",
+          "position",
+          "events",
+          "mandates",
+          "dueItems",
+          "payments",
+          "totals",
+          "offsets"
+        ],
+        "description": "Bounded pages of customer records with balances derived from every related record, full section counts and an optional lender-scoped selected record."
       }
     }
   }

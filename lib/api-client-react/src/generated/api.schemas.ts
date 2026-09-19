@@ -510,6 +510,31 @@ export interface CloseHistoryPage {
   latest?: ValopayRecord;
 }
 
+/**
+ * Complete counts or actual offsets for the four customer-history sections.
+ */
+export interface CustomerHistoryCounts {
+  events: number;
+  mandates: number;
+  dueItems: number;
+  payments: number;
+}
+
+/**
+ * Bounded pages of customer records with balances derived from every related record, full section counts and an optional lender-scoped selected record.
+ */
+export interface CustomerHistory {
+  customer: ValopayRecord;
+  position: RecordData;
+  events: ValopayRecord[];
+  mandates: ValopayRecord[];
+  dueItems: ValopayRecord[];
+  payments: ValopayRecord[];
+  totals: CustomerHistoryCounts;
+  offsets: CustomerHistoryCounts;
+  focusedRecord?: ValopayRecord;
+}
+
 export type GetOverviewParams = {
 /**
  * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
@@ -731,6 +756,11 @@ limit?: number;
  * @maximum 2147483647
  */
 offset?: number;
+/**
+ * Literal case- and accent-insensitive customer, payment or instalment name/reference search before counting and paging. Audit sample metadata remains unfiltered.
+ * @maxLength 200
+ */
+q?: string;
 };
 
 export type ListCloseHistoryParams = {
@@ -767,5 +797,65 @@ export type GetCloseDetailParams = {
  * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
  */
 merchantId: string;
+};
+
+export type GetCustomerHistoryParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+/**
+ * Optional selected history record; must belong to this customer and lender.
+ * @maxLength 200
+ */
+record?: string;
+/**
+ * Page size; defaults to 25.
+ * @minimum 1
+ * @maximum 100
+ */
+eventsLimit?: number;
+/**
+ * Rows to skip; clamped when the result shrinks.
+ * @minimum 0
+ * @maximum 2147483647
+ */
+eventsOffset?: number;
+/**
+ * Page size; defaults to 25.
+ * @minimum 1
+ * @maximum 100
+ */
+mandatesLimit?: number;
+/**
+ * Rows to skip; clamped when the result shrinks.
+ * @minimum 0
+ * @maximum 2147483647
+ */
+mandatesOffset?: number;
+/**
+ * Page size; defaults to 25.
+ * @minimum 1
+ * @maximum 100
+ */
+dueItemsLimit?: number;
+/**
+ * Rows to skip; clamped when the result shrinks.
+ * @minimum 0
+ * @maximum 2147483647
+ */
+dueItemsOffset?: number;
+/**
+ * Page size; defaults to 25.
+ * @minimum 1
+ * @maximum 100
+ */
+paymentsLimit?: number;
+/**
+ * Rows to skip; clamped when the result shrinks.
+ * @minimum 0
+ * @maximum 2147483647
+ */
+paymentsOffset?: number;
 };
 

@@ -1,3 +1,4 @@
+import { QueueSearch } from '@/components/queue-search';
 import { QueueFreshness } from '@/components/queue-freshness';
 import { useSafePerformAction as usePerformAction } from '@/lib/safe-mutations';
 import React, { useEffect, useRef, useState } from 'react';
@@ -67,6 +68,8 @@ export default function ReconciliationPage() {
   const queryClient = useQueryClient();
   const search = useSearch();
   const searchParams = new URLSearchParams(search);
+  const q = searchParams.get('q')?.trim();
+  const searchHref = (view:string) => {const next=new URLSearchParams(searchParams);if(view==='all')next.delete('view');else next.set('view',view);return '/reconciliation?'+next;};
   const requestedView = searchParams.get('view');
   const requestedDueId = searchParams.get('dueItem');
   const sameLender = !searchParams.get('lender') || searchParams.get('lender') === merchantId;
@@ -156,6 +159,7 @@ export default function ReconciliationPage() {
           </Button>
         </div>
       </header>
+      <QueueSearch label="Search reconciliation" placeholder="Customer, payment or instalment reference" help="Current view and instalment filters still apply. Precision audit measures cover the full sample." pagePrefixes={['proposals-','duplicates-','payments-','observations-','audit-','batches-']} />
 
       <QueueFreshness key={merchantId} queries={[allPaymentsQuery, confirmedAllocationsQuery, paymentsQuery, proposalsQuery, observationsQuery, batchesQuery]} />
 
@@ -179,7 +183,7 @@ export default function ReconciliationPage() {
           { key: 'all', label: 'All reconciliation', href: '/reconciliation' },
           { key: 'review', label: 'Matches to review', href: '/reconciliation?view=review' },
           { key: 'duplicates', label: 'Possible duplicates', href: '/reconciliation?view=duplicates' },
-        ].map(item => <Button key={item.key} asChild size="sm" variant={view === item.key ? 'default' : 'outline'}><Link href={item.href} aria-current={view === item.key ? 'page' : undefined}>{item.label}</Link></Button>)}
+        ].map(item => <Button key={item.key} asChild size="sm" variant={view === item.key ? 'default' : 'outline'}><Link href={searchHref(item.key)} aria-current={view === item.key ? 'page' : undefined}>{item.label}</Link></Button>)}
       </nav>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
@@ -211,7 +215,7 @@ export default function ReconciliationPage() {
                 ) : proposalsError && !proposals ? (
                   <tr><td colSpan={6} className="p-5"><p role="alert" className="text-sm text-destructive">Proposed matches could not be loaded. Use Refresh queue above to try again.</p></td></tr>
                 ) : proposalRows.length === 0 ? (
-                  <EmptyRow colSpan={6} title="No proposed matches to review">Possible payment matches appear here when they need Finance to confirm them. Run reconciliation to check for new matches.</EmptyRow>
+                  <EmptyRow colSpan={6} title={q ? 'No results match your search' : "No proposed matches to review"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Possible payment matches appear here when they need Finance to confirm them. Run reconciliation to check for new matches.</>}</EmptyRow>
                 ) : (
                   proposalRows.map(prop => (
                     <tr key={prop.id} className="hover:bg-secondary/10">
@@ -250,7 +254,7 @@ export default function ReconciliationPage() {
           <div className="border-b p-4"><h2 className="font-semibold">Possible duplicate payments</h2><p className="mt-1 text-xs text-muted-foreground">These payments are held for Finance review and are never allocated automatically.</p></div>
           <ScrollFrame label="Possible duplicate payments" className="overflow-x-auto">
             <table className="min-w-[650px] w-full text-left text-sm"><thead className="border-b bg-secondary/30 text-muted-foreground"><tr><th className="p-4 font-medium">Payment</th><th className="p-4 font-medium">Customer</th><th className="p-4 font-medium">Reason for review</th><th className="p-4 text-right font-medium">Amount</th><th className="p-4 text-right font-medium">Next step</th></tr></thead>
-              <tbody className="divide-y">{isLoadingAllPayments ? <LoadingRow colSpan={5} what="possible duplicate payments" /> : allPaymentsError && !allPayments ? <tr><td colSpan={5} className="p-4"><p role="alert" className="text-destructive">Possible duplicate payments could not be loaded. Use Refresh queue above to try again.</p></td></tr> : duplicates.length === 0 ? <EmptyRow colSpan={5} title="No possible duplicates">Payments needing a duplicate check will appear here.</EmptyRow> : duplicates.map(payment => <tr key={payment.id}>
+              <tbody className="divide-y">{isLoadingAllPayments ? <LoadingRow colSpan={5} what="possible duplicate payments" /> : allPaymentsError && !allPayments ? <tr><td colSpan={5} className="p-4"><p role="alert" className="text-destructive">Possible duplicate payments could not be loaded. Use Refresh queue above to try again.</p></td></tr> : duplicates.length === 0 ? <EmptyRow colSpan={5} title={q ? 'No results match your search' : "No possible duplicates"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Payments needing a duplicate check will appear here.</>}</EmptyRow> : duplicates.map(payment => <tr key={payment.id}>
                 <td className="p-4"><RecordLabel record={payment} id={payment.id} /></td><td className="p-4"><RecordLabel record={customerById.get(String(payment.customerId))} id={payment.customerId} customer /></td>
                 <td className="p-4 text-xs text-muted-foreground">{String(payment.data?.explanation || 'Check the provider references and recorded evidence before deciding whether this is a separate payment.')}</td>
                 <td className="p-4 text-right font-mono">{formatKobo(payment.amountKobo)}</td><td className="p-4 text-right"><Link className="inline-flex min-h-9 items-center text-xs font-medium underline underline-offset-4" href="/exceptions?type=suspected_duplicate">Review exceptions</Link></td>
@@ -286,7 +290,7 @@ export default function ReconciliationPage() {
                 ) : paymentsError && !payments ? (
                   <tr><td colSpan={3} className="p-5"><p role="alert" className="text-sm text-destructive">Unallocated payments could not be loaded. Use Refresh queue above to try again.</p></td></tr>
                 ) : paymentRows.length === 0 ? (
-                  <EmptyRow colSpan={3} title="No unallocated payments">Unallocated payments have not yet been assigned to an instalment. There are none waiting in this list.</EmptyRow>
+                  <EmptyRow colSpan={3} title={q ? 'No results match your search' : "No unallocated payments"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Unallocated payments have not yet been assigned to an instalment. There are none waiting in this list.</>}</EmptyRow>
                 ) : (
                   paymentRows.map(pay => (
                     <tr key={pay.id} className="hover:bg-secondary/10">
@@ -334,7 +338,7 @@ export default function ReconciliationPage() {
                 ) : observationsError && !observations ? (
                   <tr><td colSpan={3} className="p-5"><p role="alert" className="text-sm text-destructive">Payment evidence could not be loaded. Use Refresh queue above to try again.</p></td></tr>
                 ) : observationRows.length === 0 ? (
-                  <EmptyRow colSpan={3} title="No unresolved payment evidence">Provider records and bank statement entries appear here when they cannot be linked to a payment or settlement batch.</EmptyRow>
+                  <EmptyRow colSpan={3} title={q ? 'No results match your search' : "No unresolved payment evidence"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Provider records and bank statement entries appear here when they cannot be linked to a payment or settlement batch.</>}</EmptyRow>
                 ) : (
                   observationRows.map(obs => (
                     <tr key={obs.id} className="hover:bg-secondary/10">
@@ -380,7 +384,7 @@ export default function ReconciliationPage() {
                 ) : auditError && !confirmedAllocations ? (
                   <tr><td colSpan={7} className="p-5"><p role="alert" className="text-sm text-destructive">The match review sample could not be loaded. Use Refresh queue above to try again.</p></td></tr>
                 ) : auditSample.length === 0 ? (
-                  <EmptyRow colSpan={7} title="No automatic matches to review yet">A daily close selects a sample from the last completed month's automatic matches rated certain. Finance can then check whether those matches are correct.</EmptyRow>
+                  <EmptyRow colSpan={7} title={q ? 'No results match your search' : "No automatic matches to review yet"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>A daily close selects a sample from the last completed month's automatic matches rated certain. Finance can then check whether those matches are correct.</>}</EmptyRow>
                 ) : (
                   auditSample.map(allocation => (
                     <tr key={allocation.id} className="hover:bg-secondary/10">
@@ -429,7 +433,7 @@ export default function ReconciliationPage() {
                 ) : batchesError && !batches ? (
                   <tr><td colSpan={6} className="p-5"><p role="alert" className="text-sm text-destructive">Settlement batches could not be loaded. Use Refresh queue above to try again.</p></td></tr>
                 ) : !batches || batches.items.length === 0 ? (
-                  <EmptyRow colSpan={6} title="No settlement batches">A batch groups payments in one provider settlement report. Add a synthetic batch or import a settlement report to see it here.</EmptyRow>
+                  <EmptyRow colSpan={6} title={q ? 'No results match your search' : "No settlement batches"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>A batch groups payments in one provider settlement report. Add a synthetic batch or import a settlement report to see it here.</>}</EmptyRow>
                 ) : (
                   batches.items.map(b => (
                     <tr key={b.id} className="hover:bg-secondary/10">

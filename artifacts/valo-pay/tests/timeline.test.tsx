@@ -32,7 +32,7 @@ describe("customer timeline", () => {
     renderApp("/customers/not-a-customer");
     expect(await screen.findByRole("heading", { level: 1, name: "Customer not found" })).toBeTruthy();
     expect(screen.getByText("not-a-customer")).toBeTruthy();
-    expect(api.calls.find((call) => call.path.endsWith("/timeline"))?.status).toBe(404);
+    expect(api.calls.find((call) => call.path.endsWith("/history"))?.status).toBe(404);
     // The sidebar stays as the way out, and each action names where it goes.
     expect(screen.getByRole("link", { name: /Audit log/ })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Back to customers" }).getAttribute("href")).toBe("/customers");

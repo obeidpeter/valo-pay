@@ -1,3 +1,4 @@
+import { useSearch } from 'wouter';
 import { QueueSearch } from '@/components/queue-search';
 import { QueueFreshness } from '@/components/queue-freshness';
 import React, { useEffect, useRef, useState } from 'react';
@@ -21,6 +22,7 @@ const exceptionViews = ['open', 'high', 'overdue', 'due-today', 'resolved'] as c
 
 export default function ExceptionsPage() {
   const { merchantId } = useWorkspace();
+  const q=new URLSearchParams(useSearch()).get('q')?.trim();
   const [selectedEx, setSelectedEx] = useState<any>(null);
   const [actionKind, setActionKind] = useState<'update' | 'resolve' | ''>('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -102,8 +104,8 @@ export default function ExceptionsPage() {
         ) : error && !data ? (
           <div role="alert" className="p-6 text-sm"><p>Exceptions could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => refetch()}>Try again</Button></div>
         ) : items.length === 0 ? (
-          <EmptyState filtered title={owner || type ? 'No exceptions match these filters' : filter === 'resolved' ? 'Nothing resolved yet' : filter === 'high' ? 'No high-severity exceptions open' : filter === 'overdue' ? 'No overdue exceptions' : filter === 'due-today' ? 'No exceptions due today' : 'All clear: no open exceptions'}>
-            {filter === 'resolved'
+          <EmptyState filtered title={q ? 'No results match your search' : owner || type ? 'No exceptions match these filters' : filter === 'resolved' ? 'Nothing resolved yet' : filter === 'high' ? 'No high-severity exceptions open' : filter === 'overdue' ? 'No overdue exceptions' : filter === 'due-today' ? 'No exceptions due today' : 'All clear: no open exceptions'}>
+            {q ? 'Try another name or reference, or clear the search. Your status, owner and type filters will stay selected.' : filter === 'resolved'
               ? 'Resolved and closed items will appear here with a record of how they were resolved.'
               : filter !== 'open' || owner || type
                 ? 'Select All open, All owners and All types to review other exceptions.'

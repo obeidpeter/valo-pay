@@ -1,3 +1,4 @@
+import { useSearch } from 'wouter';
 import { useEffect } from "react";
 import {
   useListReconciliation,
@@ -12,7 +13,9 @@ export function useReconciliationPage(
 ) {
   const { merchantId } = useWorkspace();
   const pagination = useUrlPagination(merchantId, queue + "-");
+  const q = new URLSearchParams(useSearch()).get('q') || undefined;
   const params = {
+    q,
     merchantId: merchantId!,
     dueItem,
     limit: pagination.pageSize,

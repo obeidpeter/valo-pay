@@ -1,3 +1,4 @@
+import { getCustomerHistory } from '../lib/valopay-store';
 import { listReconciliation, listCloseHistory, getCloseDetail, loadReportsView } from '../lib/valopay-store';
 import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
@@ -126,6 +127,11 @@ router.post("/v1/imports",async(req,res)=>{
  const body=S.ImportRecordsBody.parse(req.body);
   const result=await withState(req,res,(state,ctx)=>importCsv(state,ctx,body),body.commit,S.ImportRecordsResponse);
  res.json(S.ImportRecordsResponse.parse(result));
+});
+router.get('/v1/customers/:id/history',async(req,res)=>{
+ const {id}=S.GetCustomerHistoryParams.parse(req.params), query=S.GetCustomerHistoryQueryParams.parse(req.query);
+ const result=await inWorkspace(req,res,ctx=>getCustomerHistory(ctx,query.merchantId,id,query),'read');
+ res.json(S.GetCustomerHistoryResponse.parse({...result,events:result.events.map(record=>record.kind==='exports'?publicExportRecord(record):record),...(result.focusedRecord?{focusedRecord:result.focusedRecord.kind==='exports'?publicExportRecord(result.focusedRecord):result.focusedRecord}:{})}));
 });
 router.get("/v1/customers/:id/timeline",async(req,res)=>{
  const {id}=S.GetCustomerTimelineParams.parse(req.params);

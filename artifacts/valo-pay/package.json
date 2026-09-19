@@ -9,7 +9,8 @@
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "test": "vitest run --config vitest.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tests.json --noEmit",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "test:browser:database": "playwright test --config playwright.database.config.ts"
   },
   "devDependencies": {
     "@clerk/react": "^6.16.1",
