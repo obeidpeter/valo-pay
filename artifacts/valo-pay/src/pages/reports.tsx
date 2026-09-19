@@ -12,11 +12,12 @@ import { PermissionButton as Button } from '@/components/permission-button';
 import { formatKobo, formatDate, formatCount, formatNumber } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { readableLabel } from '@/components/record-label';
-import { Link } from 'wouter';
+import { Link, useSearchParams } from 'wouter';
 import { useQueryClient } from '@tanstack/react-query';
 import { LoadProblem } from '@/components/load-problem';
 import { notifyProblem, saidBy } from '@/lib/notify';
 import { useHashTarget } from '@/lib/use-hash-target';
+import { closeHistory } from '@/lib/close-history';
 
 type Unknown = Record<string, unknown> | undefined;
 const isScalar = (value: unknown) => value === null || ['string', 'number', 'boolean'].includes(typeof value);
@@ -103,6 +104,14 @@ function triggerView(value: unknown): CloseTriggerView | null {
 
 export default function ReportsPage() {
   const { merchantId } = useWorkspace();
+  const [search, setSearch] = useSearchParams();
+  const view = ['billing', 'evidence'].includes(search.get('view') || '') ? search.get('view')! : 'operations';
+  const from = search.get('from') || '', to = search.get('to') || '';
+  const setReportFilter = (name: string, value: string) => setSearch(current => {
+    const next = new URLSearchParams(current);
+    if (value) next.set(name, value); else next.delete(name);
+    return next;
+  });
   const [experimentDialog, setExperimentDialog] = useState<'create' | 'edit' | 'preregister' | null>(null);
   const [selectedExperiment, setSelectedExperiment] = useState<any>(null);
   const [invoiceDialogOpen, setInvoiceDialogOpen] = useState(false);
@@ -114,7 +123,7 @@ export default function ReportsPage() {
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, refetchInterval: 60_000, queryKey: getGetReportsQueryKey({ merchantId: merchantId! }) } }
   );
-  useHashTarget('daily-closes', !!merchantId && !!reports && !isLoading && !reportsError);
+  useHashTarget('daily-closes', view === 'operations' && !!merchantId && !!reports && !isLoading && !reportsError);
 
   const dailyClose = usePerformAction({
     mutation: {
@@ -130,16 +139,17 @@ export default function ReportsPage() {
   const { data: experiments, error: experimentsError, isLoading: loadingExperiments, isFetching: fetchingExperiments, refetch: retryExperiments } = useListRecords(
     'experiments',
     { merchantId: merchantId! },
-    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('experiments', { merchantId: merchantId! }) } }
+    { query: { enabled: !!merchantId && view === 'evidence', queryKey: getListRecordsQueryKey('experiments', { merchantId: merchantId! }) } }
   );
   const { data: policies, error: policiesError, isFetching: fetchingPolicies, refetch: retryPolicies } = useListRecords(
     'policies',
     { merchantId: merchantId! },
-    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('policies', { merchantId: merchantId! }) } }
+    { query: { enabled: !!merchantId && view === 'evidence', queryKey: getListRecordsQueryKey('policies', { merchantId: merchantId! }) } }
   );
 
 
   if (!merchantId) return null;
+  const history = closeHistory(reports?.closes || [], from, to);
   const approvedPolicyOptions = (policies?.items || [])
     .filter(policy => policy.status === 'approved')
     .map(policy => ({ label: `${policy.name} · v${String(policy.data?.version || 1)}`, value: policy.id }));
@@ -157,24 +167,28 @@ export default function ReportsPage() {
           <p className="text-sm text-muted-foreground mt-2">Review daily close records, billing and operational results.</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <ExportJobControl kind="billing" formats={['csv']} label="Export billing CSV" />
+          {view === 'billing' && <><ExportJobControl kind="billing" formats={['csv']} label="Export billing CSV" />
           <Button variant="outline" className="gap-2" action="issue_invoice" onClick={() => setInvoiceDialogOpen(true)}>
             <FileText className="h-4 w-4" /> Issue invoice
-          </Button>
-          <Button 
+          </Button></>}
+          {view === 'operations' && <Button
             className="gap-2"
             action="daily_close" onClick={() => dailyClose.mutate({ data: { action: 'daily_close' }, params: { merchantId } })}
             busy={dailyClose.isPending}
             busyLabel="Closing the day…"
           >
             <RefreshCcw className="h-4 w-4" /> Run daily close
-          </Button>
+          </Button>}
         </div>
       </header>
+      <nav aria-label="Report views" className="flex flex-wrap gap-2 rounded-xl border bg-card p-2 print:hidden">
+        {([{ key: 'operations', label: 'Operations' }, { key: 'billing', label: 'Billing' }, { key: 'evidence', label: 'Pilot evidence' }]).map(item => <Button key={item.key} variant={view === item.key ? 'default' : 'ghost'} aria-current={view === item.key ? 'page' : undefined} onClick={() => setReportFilter('view', item.key)}>{item.label}</Button>)}
+      </nav>
+      <p className="text-sm text-muted-foreground">{view === 'operations' ? 'Current operational totals and recorded daily closes. Use the date range to compare past closing positions.' : view === 'billing' ? 'Current-period charges, issued invoices and adjustments. The billing export covers the current statement.' : 'Review the evidence needed to assess a pilot. Sample data cannot establish live performance.'}</p>
       {closeResult?.merchantId === merchantId && <div role={closeResult.failed ? 'alert' : 'status'} className={`rounded-lg border p-5 text-sm ${closeResult.failed ? 'border-destructive/30 bg-destructive/5' : 'bg-card'}`}>
         <p className="font-semibold">{closeResult.failed ? 'Daily close could not be confirmed' : 'Daily close completed'}</p>
         <p className="mt-2 text-muted-foreground">{closeResult.message}</p>
-        {closeResult.failed ? <Button variant="outline" size="sm" className="mt-3" onClick={() => { void refetch(); }} busy={fetchingReports} busyLabel="Refreshing…">Refresh close records</Button> : <a href="#daily-closes" className="mt-3 inline-flex min-h-6 items-center font-medium text-primary underline">View close record</a>}
+        {closeResult.failed ? <Button variant="outline" size="sm" className="mt-3" onClick={() => { void refetch(); }} busy={fetchingReports} busyLabel="Refreshing…">Refresh close records</Button> : <Link href="/reports?view=operations#daily-closes" className="mt-3 inline-flex min-h-6 items-center font-medium text-primary underline">View close record</Link>}
       </div>}
 
       {isLoading ? (
@@ -183,8 +197,8 @@ export default function ReportsPage() {
         <LoadProblem what="reports" error={reportsError} retry={() => { void refetch(); }} busy={fetchingReports} />
       ) : (
         <div className="space-y-6">
-          <p className="text-xs text-muted-foreground">Current workspace totals{reports.operational?.asOf ? ` as at ${formatDate(String(reports.operational.asOf))}` : ''}. Billing period: {String(reports.billing?.period || 'not available')}. Accuracy sample: {String((reports.operational?.precisionAudit as any)?.month || 'completed month')}. All figures use sample data.</p>
-          <section aria-label="Operational metrics" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <p className="text-xs text-muted-foreground">{view === 'operations' ? `Current workspace totals${reports.operational?.asOf ? ` as at ${formatDate(String(reports.operational.asOf))}` : ''}.` : view === 'billing' ? `Billing period: ${String(reports.billing?.period || 'not available')}. Amounts are in Nigerian naira.` : `Accuracy sample: ${String((reports.operational?.precisionAudit as any)?.month || 'completed month')}.`} All figures use sample data.</p>
+          <section hidden={view !== 'operations'} aria-label="Operational metrics" className={view === 'operations' ? 'grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4' : ''}>
             {reports.metrics.map(metric => (
               <div key={metric.key} className="min-w-0 rounded-xl border bg-card p-5 shadow-sm">
                 <p className="text-xs font-medium text-muted-foreground">{metric.label}</p>
@@ -198,7 +212,7 @@ export default function ReportsPage() {
             ))}
           </section>
 
-          <section className="rounded-xl border bg-card" aria-labelledby="measurement-title">
+          <section hidden={view !== 'evidence'} className="rounded-xl border bg-card" aria-labelledby="measurement-title">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b px-5 py-4">
               <h2 id="measurement-title" className="text-sm font-semibold">Operational evidence</h2>
               <span className="rounded-md bg-secondary/60 px-2 py-1 text-xs text-muted-foreground">Sample data · not live evidence</span>
@@ -229,9 +243,9 @@ export default function ReportsPage() {
             </div>
           </section>
 
-          <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+          <div className="space-y-6">
             {/* Billing Statement Preview */}
-            <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
+            <section hidden={view !== 'billing'} className="bg-card border rounded-xl shadow-sm overflow-hidden">
               <div className="p-5 border-b flex items-center gap-2">
                 <FileText aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
                 <h2 className="font-semibold">Billing statement · current period</h2>
@@ -354,7 +368,7 @@ export default function ReportsPage() {
             </section>
 
             {/* Experiment Results */}
-            <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
+            <section hidden={view !== 'evidence'} className="bg-card border rounded-xl shadow-sm overflow-hidden">
               <div className="p-5 border-b flex flex-wrap gap-3 items-center justify-between">
                 <div className="flex items-center gap-2">
                   <BarChart3 aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
@@ -413,7 +427,7 @@ export default function ReportsPage() {
           </div>
 
           {/* Daily Closes */}
-          <section id="daily-closes" tabIndex={-1} aria-label="Daily close records" className="scroll-mt-6 bg-card border rounded-xl shadow-sm overflow-hidden">
+          <section hidden={view !== 'operations'} id="daily-closes" tabIndex={-1} aria-label="Daily close records" className="scroll-mt-6 bg-card border rounded-xl shadow-sm overflow-hidden">
             <div className="p-5 border-b flex flex-wrap gap-3 items-center justify-between">
               <div className="flex items-center gap-2">
                 <CheckSquare aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
@@ -421,8 +435,33 @@ export default function ReportsPage() {
               </div>
               <DailyCloseStatus value={reports.operational?.closeSchedule} showHistory />
             </div>
+            <div className="space-y-4 border-b p-5">
+              <form key={`${merchantId}:${from}:${to}`} className="flex flex-wrap items-end gap-3 print:hidden" onSubmit={event => {
+                event.preventDefault();
+                const values = new FormData(event.currentTarget);
+                setSearch(current => {
+                  const next = new URLSearchParams(current);
+                  for (const key of ['from', 'to']) { const value = String(values.get(key) || ''); if (value) next.set(key, value); else next.delete(key); }
+                  return next;
+                });
+              }}>
+                <label className="grid gap-1 text-xs font-medium">From date (WAT)<input type="date" name="from" defaultValue={from} aria-invalid={!!history.error} aria-describedby="close-range-help" className="min-h-10 rounded-md border bg-background px-3" /></label>
+                <label className="grid gap-1 text-xs font-medium">To date (WAT)<input type="date" name="to" defaultValue={to} aria-invalid={!!history.error} aria-describedby="close-range-help" className="min-h-10 rounded-md border bg-background px-3" /></label>
+                <Button type="submit" variant="outline">Apply dates</Button>
+                {(from || to) && <Button type="button" variant="ghost" onClick={() => setSearch(current => { const next = new URLSearchParams(current); next.delete('from'); next.delete('to'); return next; })}>Clear dates</Button>}
+              </form>
+              <p id="close-range-help" className="text-xs text-muted-foreground">{history.error || `Showing ${formatCount(history.items.length, 'recorded close')}${from ? ` from ${from}` : ''}${to ? ` through ${to}` : ''}. Dates include the full day in West Africa Time. Current totals above are unchanged.`}</p>
+              {history.error && <p role="alert" className="text-sm text-destructive">The close history is hidden until the date range is corrected.</p>}
+              {!history.error && <div className="rounded-lg bg-secondary/25 p-4">
+                <h3 className="text-sm font-semibold">Change between recorded closes</h3>
+                {history.items.length < 2 ? <p className="mt-2 text-xs text-muted-foreground">At least two recorded closes in this range are needed for a comparison. No change has been estimated.</p> : <>
+                  <p className="mt-2 text-xs text-muted-foreground">First: {formatDate(history.first!.createdAt)} · Latest: {formatDate(history.latest!.createdAt)}. These are closing positions, not money collected during the period.</p>
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">{history.metrics.map(metric => <div key={metric.label}><p className="text-xs text-muted-foreground">{metric.label}</p><p className="mt-1 text-lg font-semibold tabular-nums">{metric.change === null ? 'Not available' : `${metric.change > 0 ? '+' : ''}${metric.money ? formatKobo(metric.change) : formatNumber(metric.change)}`}</p><p className="mt-1 text-xs text-muted-foreground">{metric.change === null ? 'One or both closes lack this recorded measure.' : `${metric.money ? formatKobo(metric.before) : formatNumber(metric.before)} → ${metric.money ? formatKobo(metric.after) : formatNumber(metric.after)}`}</p></div>)}</div>
+                </>}
+              </div>}
+            </div>
             <ScrollFrame label="Daily close records" className="overflow-x-auto max-h-[400px]">
-              <table className="w-full text-sm text-left">
+              <table className="w-full min-w-[680px] text-sm text-left">
                 <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                   <tr>
                     <th className="px-6 py-4 font-medium">Date</th>
@@ -431,14 +470,14 @@ export default function ReportsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {reports.closes.length === 0 ? (
-                    <EmptyRow colSpan={3} title="No daily close yet">Run a daily close above to check the books. Each completed close creates a record with its results here.</EmptyRow>
+                  {history.items.length === 0 ? (
+                    <EmptyRow colSpan={3} title={history.error ? 'Check the date range' : reports.closes.length ? 'No closes in this date range' : 'No daily close yet'}>{reports.closes.length ? 'Choose another date range to view recorded closes.' : 'Run a daily close above to check the books. Each completed close creates a record with its results here.'}</EmptyRow>
                   ) : (
-                    reports.closes.map(close => (
-                      <tr key={close.id} className="hover:bg-secondary/10">
+                    history.items.map(close => (
+                      <tr key={close.id} className="report-close-row hover:bg-secondary/10">
                         <td className="px-6 py-4 tabular-nums text-xs">{formatDate(close.createdAt)}</td>
                         <td className="px-6 py-4 text-muted-foreground">{String(close.data?.summary || '')}</td>
-                        <td className="px-6 py-4 tabular-nums text-xs">
+                        <td className="min-w-72 px-6 py-4 tabular-nums text-xs"><ReportDisclosure title="View close details">
                           {close.data?.report ? closeReportChips(close.data.report).map(([label, value]) => (
                             <span key={label} className="inline-block mr-3 mb-1 bg-secondary/30 px-1.5 py-0.5 rounded border border-border/50">
                               <span className="text-muted-foreground mr-1">{label}:</span>
@@ -455,7 +494,7 @@ export default function ReportsPage() {
                               </span>
                             );
                           })()}
-                        </td>
+                        </ReportDisclosure></td>
                       </tr>
                     ))
                   )}

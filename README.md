@@ -50,7 +50,11 @@ Keep the workspace together: the frontend and API depend on shared packages.
 
 ## Prerequisites and installation
 
-The current supported environment is Replit's Linux workspace with **Node.js 24**, **pnpm 10**, PostgreSQL, managed Clerk authentication and private App Storage. `package.json` requires Node 22 or later; CI runs on Node 24 with pnpm 10.26.1.
+The current supported environment is Replit's Linux workspace with **Node.js 24**, **pnpm 10**, **PostgreSQL 16 or later**, managed Clerk authentication and private App Storage. `package.json` requires Node 22 or later; CI runs on Node 24 with pnpm 10.26.1.
+
+Reports has Operations, Billing and Pilot evidence views. Operations can filter recorded daily closes by inclusive West Africa Time dates and compare the first and latest closing positions in the range. Current totals and the current billing statement are not recalculated for that range. Missing historical measures remain unavailable; closing positions are never summed as collections.
+
+The sandbox guide starts collapsed, can be opened on every console page and keeps personal progress separately for each lender in this browser. Exceptions, Mandates and Collections use server-side priority filtering and pages of 25, 50 or 100 rows; counts cover the complete filtered queue. Linked records are scoped to the lender and the current page. Saved views keep up to ten named filter combinations per lender and queue in this browser. They contain filter preferences, not copies of customer records, and do not synchronise between browsers. Reconciliation retains its existing evidence and allocation workflow.
 
 ```sh
 pnpm install --frozen-lockfile

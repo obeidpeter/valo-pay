@@ -7,14 +7,14 @@ afterEach(()=>api.uninstall());
 describe('saved background exports',()=>{
  it('resumes a queued export after revisiting the page and offers its completed download',async()=>{
   const user=userEvent.setup();
-  const view=renderApp('/reports');
+  const view=renderApp('/reports?view=billing');
   await user.click(await screen.findByRole('button',{name:'Export billing CSV'}));
   expect(await screen.findByText('Billing CSV is queued')).toBeTruthy();
   expect(screen.getByText(/You can leave this page/)).toBeTruthy();
   expect(window.open).not.toHaveBeenCalled();
   const job=api.state().records.find(record=>record.kind==='exports')!;
   view.unmount();
-  renderApp('/reports');
+  renderApp('/reports?view=billing');
   expect(await screen.findByText('Billing CSV is queued')).toBeTruthy();
   api.mutate(state=>{const record=state.records.find(record=>record.id===job.id)!;record.status='ready';Object.assign(record.data,{checksum:'a'.repeat(64),generatedAt:api.now,byteLength:123});});
   const link=await screen.findByRole('link',{name:'Open billing CSV'},{timeout:5000});
@@ -35,7 +35,7 @@ describe('saved background exports',()=>{
   expect(api.calls.some(call=>call.path===`/v1/exports/${job.id}/retry`&&call.method==='POST')).toBe(true);
  });
  it('retains an uncertain queued request and refreshes saved jobs without creating another one',async()=>{
-  const user=userEvent.setup();renderApp('/reports');
+  const user=userEvent.setup();renderApp('/reports?view=billing');
   await user.click(await screen.findByRole('button',{name:'Export billing CSV'}));
   await screen.findByText('Billing CSV is queued');
   const job=api.state().records.find(record=>record.kind==='exports')!;

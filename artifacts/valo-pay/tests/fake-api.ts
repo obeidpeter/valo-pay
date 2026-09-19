@@ -18,6 +18,7 @@ import type { Context, DomainState, ValopayRecord } from "../../api-server/src/d
 import { seedMerchant } from "../../api-server/src/lib/valopay-seed";
 import { getGates } from "../../api-server/src/lib/valopay-readiness";
 import { pageRecords } from "../../api-server/src/lib/valopay-list";
+import { pageQueue } from '../../api-server/src/lib/valopay-queues';
 import { importCsv } from "../../api-server/src/lib/valopay-import";
 import { exportJobView, publicExportRecord, queueExport, retryExport } from '../../api-server/src/lib/export-jobs';
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../../api-server/src/lib/valopay-close-views";
@@ -132,6 +133,10 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
   const merchantOf = (query: Record<string, string>) => S.GetOverviewQueryParams.parse(query).merchantId;
 
   const routes: Array<[string, RegExp, Handler]> = [
+    ['GET', /^\/v1\/queues\/(?<queue>[^/]+)$/, (params, query) => {
+      const { queue: name } = S.ListQueueParams.parse(params), filters = S.ListQueueQueryParams.parse(query);
+      return S.ListQueueResponse.parse(withState(filters.merchantId, (state, ctx) => pageQueue(state.records, name, filters, ctx.now)));
+    }],
     ["GET", /^\/v1\/workspace$/, () => S.GetWorkspaceResponse.parse({
       name: "Valo Pay", environment: "sandbox", actor: `Sandbox ${api.role}`, role: api.role, authenticated: false,
       merchants: api.merchantIds.map((id) => states.get(id)!.merchant), roles: [...roles], productionEnabled: false,

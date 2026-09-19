@@ -263,6 +263,7 @@
 .console-content table { font-size: .8125rem; }
 .console-content th { font-size: .6875rem; letter-spacing: .025em; font-weight: 600; color: hsl(var(--muted-foreground)); }
 .console-content th, .console-content td { vertical-align: middle; }
+.console-content .report-close-row td { vertical-align: top; }
 .console-content td.text-right { font-variant-numeric: tabular-nums; }
 .console-content tbody tr { transition: background-color 120ms ease; }
 .console-content tbody tr:hover { background-color: hsl(var(--muted) / .75); }

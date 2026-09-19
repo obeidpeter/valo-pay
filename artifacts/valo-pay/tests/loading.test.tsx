@@ -18,7 +18,7 @@ describe("loading and waiting", () => {
   });
 
   it("names what a table is waiting for, in its own row", async () => {
-    const release = api.hold(/^\/v1\/records\/due-items$/);
+    const release = api.hold(/^\/v1\/queues\/collections$/);
     renderApp("/collections");
     const row = await screen.findByText("Loading collections…");
     expect(row.closest("tr")).toBeTruthy();

@@ -809,3 +809,83 @@ export const DisabledProviderWebhookParams = zod.object({
 export const DisabledProviderWebhookResponse = zod.void()
 
 
+/**
+ * Filters and priority order are applied before pagination. Counts cover the full filtered queue. Related records only support the current page and remain in the same lender. A target locates the page containing a linked record; an unavailable or filtered-out target leaves the requested page unchanged. Dates use West Africa Time and the returned asOf timestamp.
+ * @summary A priority-sorted, lender-scoped queue with complete filter counts and page-specific linked records
+ */
+export const ListQueueParams = zod.object({
+  "queue": zod.enum(['exceptions', 'mandates', 'collections']).describe('Priority queue to read: exceptions, mandates or collections.')
+})
+
+export const listQueueQueryViewMax = 200;
+
+export const listQueueQueryOwnerMax = 200;
+
+export const listQueueQueryTypeMax = 200;
+
+export const listQueueQueryRecordMax = 200;
+
+export const listQueueQueryTargetMax = 200;
+
+export const listQueueQueryLimitMax = 100;
+
+export const listQueueQueryOffsetMin = 0;
+export const listQueueQueryOffsetMax = 2147483647;
+
+
+
+export const ListQueueQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The active lender, belonging to the caller’s workspace.'),
+  "view": zod.coerce.string().max(listQueueQueryViewMax).optional().describe('A supported view for the queue. Defaults to open for exceptions and all for mandates and collections.'),
+  "owner": zod.coerce.string().max(listQueueQueryOwnerMax).optional().describe('Exact owner filter. Omit for every owner.'),
+  "type": zod.coerce.string().max(listQueueQueryTypeMax).optional().describe('Exact exception type filter. Omit for every type.'),
+  "record": zod.coerce.string().max(listQueueQueryRecordMax).optional().describe('Select this exact record in the queue instead of applying its view, within the active lender.'),
+  "target": zod.coerce.string().max(listQueueQueryTargetMax).optional().describe('Locate the page containing this record among the filtered results. Does not bypass filters.'),
+  "limit": zod.coerce.number().int().min(1).max(listQueueQueryLimitMax).optional().describe('Page size, default 25 and maximum 100.'),
+  "offset": zod.coerce.number().int().min(listQueueQueryOffsetMin).max(listQueueQueryOffsetMax).optional().describe('Rows to skip after filtering and priority ordering. Clamped to the last available page if results shrink.')
+})
+
+export const listQueueResponseTotalMin = 0;
+
+export const listQueueResponseOffsetMin = 0;
+
+export const listQueueResponseCountsMinOne = 0;
+
+
+
+export const ListQueueResponse = zod.object({
+  "items": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
+  "related": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
+  "total": zod.number().int().min(listQueueResponseTotalMin),
+  "offset": zod.number().int().min(listQueueResponseOffsetMin),
+  "counts": zod.record(zod.string(), zod.number().int().min(listQueueResponseCountsMinOne)),
+  "owners": zod.array(zod.string()),
+  "types": zod.array(zod.string()),
+  "asOf": zod.string()
+}).describe('A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states.')
+
+

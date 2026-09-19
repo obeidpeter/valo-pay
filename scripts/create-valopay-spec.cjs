@@ -139,4 +139,194 @@ const schemaDescriptions = {
   EffectiveCloseSchedule: "Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.",
 };
 for (const [name, description] of Object.entries(schemaDescriptions)) schemas[name].description = description;
+// Priority queues keep complete counts while returning only a bounded page and its linked records.
+schemas.QueuePage = {
+  "type": "object",
+  "required": [
+    "items",
+    "related",
+    "total",
+    "offset",
+    "counts",
+    "owners",
+    "types",
+    "asOf"
+  ],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/components/schemas/ValopayRecord"
+      }
+    },
+    "related": {
+      "type": "array",
+      "items": {
+        "$ref": "#/components/schemas/ValopayRecord"
+      }
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "owners": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "types": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "asOf": {
+      "type": "string"
+    }
+  },
+  "description": "A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states."
+};
+paths["/v1/queues/{queue}"] = {
+  "get": {
+    "operationId": "listQueue",
+    "tags": [
+      "valopay"
+    ],
+    "summary": "A priority-sorted, lender-scoped queue with complete filter counts and page-specific linked records",
+    "parameters": [
+      {
+        "name": "queue",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "exceptions",
+            "mandates",
+            "collections"
+          ]
+        },
+        "description": "Priority queue to read: exceptions, mandates or collections."
+      },
+      {
+        "name": "merchantId",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "The active lender, belonging to the caller’s workspace."
+      },
+      {
+        "name": "view",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "description": "A supported view for the queue. Defaults to open for exceptions and all for mandates and collections."
+      },
+      {
+        "name": "owner",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "description": "Exact owner filter. Omit for every owner."
+      },
+      {
+        "name": "type",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "description": "Exact exception type filter. Omit for every type."
+      },
+      {
+        "name": "record",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "description": "Select this exact record in the queue instead of applying its view, within the active lender."
+      },
+      {
+        "name": "target",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "description": "Locate the page containing this record among the filtered results. Does not bypass filters."
+      },
+      {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "description": "Page size, default 25 and maximum 100."
+      },
+      {
+        "name": "offset",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647
+        },
+        "description": "Rows to skip after filtering and priority ordering. Clamped to the last available page if results shrink."
+      }
+    ],
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/QueuePage"
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "Invalid request"
+      },
+      "401": {
+        "description": "Authentication required"
+      },
+      "403": {
+        "description": "Permission or readiness gate blocked"
+      },
+      "409": {
+        "description": "Conflict"
+      }
+    },
+    "description": "Filters and priority order are applied before pagination. Counts cover the full filtered queue. Related records only support the current page and remain in the same lender. A target locates the page containing a linked record; an unavailable or filtered-out target leaves the requested page unchanged. Dates use West Africa Time and the returned asOf timestamp."
+  }
+};
 fs.writeFileSync("lib/api-spec/openapi.json",JSON.stringify({openapi:"3.1.0",info:{title:"Valo Pay sandbox API",version:"1.0.0",description:"Valo Pay Stage 1 observation-first sandbox API. All monetary fields are integer kobo. Live lender data and all outbound provider instructions are blocked until production readiness is verified."},servers:[{url:"/api"}],paths,components:{schemas}},null,2));

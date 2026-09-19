@@ -98,9 +98,9 @@ describe('collection record navigation', () => {
     expect(within(table).getAllByRole('row')).toHaveLength(26);
     expect(screen.getByRole('button', { name: `Awaiting activation (${total})` })).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Next page of mandates' }));
-    expect(within(table).getAllByRole('row')).toHaveLength(total - 25 + 1);
+    await waitFor(() => expect(within(screen.getByRole('table')).getAllByRole('row')).toHaveLength(total - 25 + 1));
     await user.selectOptions(screen.getByLabelText('mandates per page'), '50');
-    expect(within(table).getAllByRole('row')).toHaveLength(total + 1);
+    await waitFor(() => expect(within(screen.getByRole('table')).getAllByRole('row')).toHaveLength(total + 1));
   });
 });
 

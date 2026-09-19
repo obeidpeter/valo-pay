@@ -16,12 +16,13 @@ import { RecordDialog } from '@/components/record-dialog';
 import { useQueryClient } from '@tanstack/react-query';
 import { activationWorkflows, mandateFrequencies } from '@workspace/valopay-schema';
 import { RecordLabel, StatusBadge, readableLabel } from '@/components/record-label';
-import { deadlineInstant, deadlineOrder, isDueToday, isDeadlineOverdue as isOverdue, useQueueFilters } from '@/lib/queue-filters';
+import { deadlineInstant, isDueToday, isDeadlineOverdue as isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { nairaToKobo } from '@/lib/money-input';
 import { MandateActionContext } from '@/components/mandate-action-context';
 import { recordDestination, safeCollectionReturnTo } from '@/lib/record-navigation';
 import { useHashTarget } from '@/lib/use-hash-target';
-import { useRecordPagination } from '@/lib/use-record-pagination';
+import { usePagedQueue } from '@/lib/use-paged-queue';
+import { SavedQueueViews } from '@/components/saved-queue-views';
 import { RecordPagination } from '@/components/record-pagination';
 
 const mandateViews = ['all', 'awaiting-activation', 'overdue', 'due-today'] as const;
@@ -70,23 +71,19 @@ export default function MandatesPage() {
   }, [merchantId]);
   const queryClient = useQueryClient();
 
-  const { data, isLoading, error, refetch } = useListRecords(
-    'mandates',
-    { merchantId: merchantId! },
-    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('mandates', { merchantId: merchantId! }) } }
-  );
+  const { data, isLoading, error, refetch, pagination } = usePagedQueue('mandates', { view, record: targetId ? wrongLender ? 'unavailable' : targetId : undefined });
   const { data: customers } = useListRecords(
     'customers',
     { merchantId: merchantId! },
-    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('customers', { merchantId: merchantId! }) } }
+    { query: { enabled: !!merchantId && isCreateOpen, queryKey: getListRecordsQueryKey('customers', { merchantId: merchantId! }) } }
   );
   useHashTarget(`record-${targetId || ''}`, !!targetId && !isLoading && !error && !wrongLender);
   const { data: policies } = useListRecords(
     'policies',
     { merchantId: merchantId! },
-    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('policies', { merchantId: merchantId! }) } }
+    { query: { enabled: !!merchantId && (isCreateOpen || isDialogOpen), queryKey: getListRecordsQueryKey('policies', { merchantId: merchantId! }) } }
   );
-  const customerById = new Map(customers?.items.map(customer => [customer.id, customer]));
+  const customerById = new Map([...(data?.related || []), ...(customers?.items || [])].filter(row => row.kind === 'customers').map(customer => [customer.id, customer]));
   const approvedVersionOptions = (policies?.items || []).filter(policy => policy.status === 'approved').map(policy => ({ value: policy.id, label: `${policy.name} · v${String(policy.data?.version || 1)}` }));
   const createMandate = useCreateRecord({
     mutation: {
@@ -155,24 +152,19 @@ export default function MandatesPage() {
     });
   };
 
-  const now = Date.now();
-  const mandates = data?.items || [];
-  const waiting = mandates.filter(mandate => mandate.status === 'pending_activation');
-  const shown = (targetId ? mandates.filter(mandate => !wrongLender && mandate.id === targetId) : view === 'all' ? mandates : waiting.filter(mandate => view === 'overdue' ? isOverdue(mandate.data?.activationDeadline, now) : view === 'due-today' ? isDueToday(mandate.data?.activationDeadline, now) : true)).slice().sort((a, b) => Number(b.status === 'pending_activation') - Number(a.status === 'pending_activation') || deadlineOrder(a.data?.activationDeadline, b.data?.activationDeadline));
-  const pagination = useRecordPagination(`${merchantId}:${view}:${targetId}`, shown.length);
-  const pagedMandates = shown.slice(pagination.offset, pagination.offset + pagination.pageSize);
-  const replacements = targetId && !wrongLender ? mandates.filter(mandate => mandate.data?.reissuedFrom === targetId) : [];
+  const now = data?.asOf ? Date.parse(data.asOf) : Date.now();
+  const shown = data?.items || [];
+  const pagedMandates = shown;
+  const replacements = targetId && !wrongLender ? (data?.related || []).filter(mandate => mandate.kind === 'mandates' && mandate.data?.reissuedFrom === targetId) : [];
   const leaveSelectedRecord = () => setSearch(current => {
     const next = new URLSearchParams(current);
     next.delete('record'); next.delete('lender');
     return next;
   });
-  const views: Array<{ key: typeof view; label: string; count: number }> = [
-    { key: 'all', label: 'All mandates', count: mandates.length },
-    { key: 'awaiting-activation', label: 'Awaiting activation', count: waiting.length },
-    { key: 'overdue', label: 'Overdue activation', count: waiting.filter(mandate => isOverdue(mandate.data?.activationDeadline, now)).length },
-    { key: 'due-today', label: 'Activation due today', count: waiting.filter(mandate => isDueToday(mandate.data?.activationDeadline, now)).length },
-  ];
+  const views: Array<{ key: typeof view; label: string; count: number | string }> = [
+    { key: 'all', label: 'All mandates' }, { key: 'awaiting-activation', label: 'Awaiting activation' },
+    { key: 'overdue', label: 'Overdue activation' }, { key: 'due-today', label: 'Activation due today' },
+  ].map(item => ({ ...item, key: item.key as typeof view, count: data?.counts[item.key] ?? '…' }));
   if (!merchantId) return null;
 
   return (
@@ -185,6 +177,8 @@ export default function MandatesPage() {
         </div>
         <Button kind="mandates" onClick={() => setIsCreateOpen(true)}>Create synthetic mandate</Button>
       </header>
+
+      <SavedQueueViews queue="mandates" views={mandateViews} fallback="all" />
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
         {targetId ? <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4"><p className="text-sm font-medium">Selected mandate</p><Button size="sm" variant="outline" onClick={leaveSelectedRecord}>View mandate queue</Button></div> : <div className="border-b p-4">
@@ -243,7 +237,7 @@ export default function MandatesPage() {
             </table>
           </ScrollFrame>
         )}
-        {!isLoading && !error && !targetId && <RecordPagination pagination={pagination} total={shown.length} label="mandates" />}
+        {!isLoading && !error && !targetId && <RecordPagination pagination={pagination} total={data?.total || 0} label="mandates" />}
       </div>
 
       {replacements.length > 0 && <section aria-label="Reissued mandates" className="rounded-xl border bg-card p-5 text-sm">

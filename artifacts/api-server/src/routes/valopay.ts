@@ -13,6 +13,7 @@ import { exportJobView, publicExportRecord, queueExport, retryExport } from '../
 import { advanceRecordVersions, assertRecordVersion, assertSettingsVersion } from "../lib/edit-versions";
 import { schedulerStatus } from "../lib/close-scheduler";
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../lib/valopay-close-views";
+import { listQueue } from '../lib/valopay-store';
 
 const router:IRouter=Router();
 const kinds=new Set<string>(recordKinds);
@@ -65,6 +66,10 @@ router.get("/v1/records/:kind",async(req,res)=>{
   return {...page,items:page.items.map(r=>r.kind==="exports"?publicExportRecord(r):r)};
  },"read");
  res.json(S.ListRecordsResponse.parse(result));
+});
+router.get('/v1/queues/:queue', async (req, res) => {
+ const { queue } = S.ListQueueParams.parse(req.params), query = S.ListQueueQueryParams.parse(req.query);
+ res.json(S.ListQueueResponse.parse(await inWorkspace(req, res, ctx => listQueue(ctx, query.merchantId, queue, query), 'read')));
 });
 router.post("/v1/records/:kind",async(req,res)=>{
  const kind=safeKind(req.params.kind),body=S.CreateRecordBody.parse(req.body);

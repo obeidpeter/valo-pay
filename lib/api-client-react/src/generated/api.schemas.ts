@@ -468,6 +468,24 @@ export interface ExportResult {
   error?: string;
 }
 
+export type QueuePageCounts = {[key: string]: number};
+
+/**
+ * A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states.
+ */
+export interface QueuePage {
+  items: ValopayRecord[];
+  related: ValopayRecord[];
+  /** @minimum 0 */
+  total: number;
+  /** @minimum 0 */
+  offset: number;
+  counts: QueuePageCounts;
+  owners: string[];
+  types: string[];
+  asOf: string;
+}
+
 export type GetOverviewParams = {
 /**
  * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
@@ -605,4 +623,48 @@ merchantId: string;
 };
 
 export type GetOpenApiDocument200 = { [key: string]: unknown };
+
+export type ListQueueParams = {
+/**
+ * The active lender, belonging to the caller’s workspace.
+ */
+merchantId: string;
+/**
+ * A supported view for the queue. Defaults to open for exceptions and all for mandates and collections.
+ * @maxLength 200
+ */
+view?: string;
+/**
+ * Exact owner filter. Omit for every owner.
+ * @maxLength 200
+ */
+owner?: string;
+/**
+ * Exact exception type filter. Omit for every type.
+ * @maxLength 200
+ */
+type?: string;
+/**
+ * Select this exact record in the queue instead of applying its view, within the active lender.
+ * @maxLength 200
+ */
+record?: string;
+/**
+ * Locate the page containing this record among the filtered results. Does not bypass filters.
+ * @maxLength 200
+ */
+target?: string;
+/**
+ * Page size, default 25 and maximum 100.
+ * @minimum 1
+ * @maximum 100
+ */
+limit?: number;
+/**
+ * Rows to skip after filtering and priority ordering. Clamped to the last available page if results shrink.
+ * @minimum 0
+ * @maximum 2147483647
+ */
+offset?: number;
+};
 
