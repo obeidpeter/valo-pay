@@ -4,6 +4,7 @@ import {
   createSyntheticCreditInput,
   CreditDomainError,
   reviewCreditAssessment,
+  syntheticCreditAccountId,
   type CreditAssessmentInput,
   type CreditContext,
   type CreditReviewInput,
@@ -12,7 +13,7 @@ import {
   creditView,
   runCreditAction,
 } from "../src/domain/connected-credit-service.js";
-import { makeRecord } from "../src/domain/records.js";
+import { assertNoRealBankDetails, makeRecord } from "../src/domain/records.js";
 import type { Context, DomainState } from "../src/domain/types.js";
 
 const now = "2026-09-21T10:00:00.000Z";
@@ -545,7 +546,7 @@ test("segment policy mismatch never borrows salaried score", () => {
   blocked(input, "SEGMENT_NOT_VALIDATED");
 });
 
-function serviceFixture() {
+function serviceFixture(customerId = "customer-a") {
   const state: DomainState = {
     merchant: {
       id: "lender-a",
@@ -564,7 +565,7 @@ function serviceFixture() {
     records: [],
   };
   const customer = makeRecord(state, "customers", {
-    id: "customer-a",
+    id: customerId,
     name: "Synthetic Applicant",
     reference: "SYN-APPLICANT",
     status: "active",
@@ -599,6 +600,38 @@ const assessAction = {
   reason: "Test the synthetic credit workflow",
   data: { customerId: "customer-a", scenario: "ready" },
 };
+test("numeric UUIDs keep synthetic account identities distinct and pass the unchanged privacy guard", () => {
+  const applicantId = "12345678-1234-4123-8123-123456789012";
+  const input = createSyntheticCreditInput({
+    tenantId: ctx.tenantId,
+    applicantId,
+    applicationRef: "SYN-NUMERIC-ID",
+    now,
+  });
+  assert.doesNotThrow(() => assertNoRealBankDetails(input));
+  assert.equal(input.requiredAccountIds[0], syntheticCreditAccountId(applicantId));
+  assert.notEqual(syntheticCreditAccountId(applicantId), syntheticCreditAccountId(applicantId.replace(/2$/, "3")));
+  assert.notEqual(syntheticCreditAccountId("customer-1"), syntheticCreditAccountId("customer-b"));
+  assert.throws(() => assertNoRealBankDetails({ accountId: "1234567890" }), /Raw financial identifiers/);
+  for (const withPermission of [true, false]) {
+    const { state, operator, finance } = serviceFixture(applicantId);
+    if (!withPermission)
+      state.records = state.records.filter((record) => record.kind !== "connected-consents");
+    const record = runCreditAction(state, operator, {
+      ...assessAction,
+      data: { ...assessAction.data, customerId: applicantId },
+    });
+    assert.equal(record.data.result.state, withPermission ? "review_pending" : "blocked");
+    assert.doesNotThrow(() => assertNoRealBankDetails(record));
+    if (withPermission) {
+      const { currentGrants: _, ...data } = reviewInput();
+      assert.doesNotThrow(() => runCreditAction(state, finance, {
+        action: "credit.review", recordId: record.id,
+        reason: "Review numeric UUID synthetic provenance", data,
+      }));
+    }
+  }
+});
 test("service uses sandbox environment, not instruction mode", () => {
   const { state, operator } = serviceFixture();
   const record = runCreditAction(state, operator, assessAction);

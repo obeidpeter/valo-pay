@@ -3,6 +3,7 @@ import {
   assessCredit,
   createSyntheticCreditInput,
   reviewCreditAssessment,
+  syntheticCreditAccountId,
   type CreditAssessmentResult,
   type CreditContext,
   type CreditGrant,
@@ -67,7 +68,7 @@ function currentGrants(state: DomainState, customerId: string): CreditGrant[] {
     )
       ? (consent.status as CreditGrant["status"])
       : "suspended",
-    accountIds: [`synthetic-account-${customerId}`],
+    accountIds: [syntheticCreditAccountId(customerId)],
     validFrom: consent.createdAt,
     expiresAt: String(consent.data.expiresAt),
     version: Number(consent.data.version),

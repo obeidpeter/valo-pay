@@ -1393,6 +1393,16 @@ export function reviewCreditAssessment(
   return freeze(record);
 }
 
+/** Reversible alphabetic encoding keeps opaque ids distinct without resembling bank numbers. */
+export function syntheticCreditAccountId(applicantId: string): string {
+  const encoded = Buffer.from(applicantId, "utf8")
+    .toString("hex")
+    .replace(/[0-9a-f]/g, (digit) =>
+      String.fromCharCode(97 + Number.parseInt(digit, 16)),
+    );
+  return `synthetic-account-${encoded}`;
+}
+
 /** Reproducible, clearly synthetic scenarios for the sandbox UI and integration tests. */
 export function createSyntheticCreditInput(options: {
   tenantId: string;
@@ -1403,7 +1413,7 @@ export function createSyntheticCreditInput(options: {
 }): CreditAssessmentInput {
   const now = stamp(options.now),
     at = (days: number) => new Date(now + days * DAY).toISOString(),
-    accountId = `synthetic-account-${options.applicantId}`;
+    accountId = syntheticCreditAccountId(options.applicantId);
   const sourceId = `synthetic-source-${options.applicantId}`;
   const input: CreditAssessmentInput = {
     mode: "synthetic",

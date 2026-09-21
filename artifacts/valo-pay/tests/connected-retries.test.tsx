@@ -2,6 +2,8 @@ import { afterEach, beforeEach, expect, it } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, waitFor } from "./harness";
 import { connectedRevision } from "../../api-server/src/domain/connected";
+import { queryClient } from "@/App";
+import type { ConnectedView } from "@/lib/connected";
 
 let api: FakeApi;
 beforeEach(() => {
@@ -9,7 +11,16 @@ beforeEach(() => {
 });
 afterEach(() => api.uninstall());
 
-it("retries the original committed request after a lost response and automatic revision refresh", async () => {
+it.each(["Meridian Credit", "Cedar Cooperative"])("retries the original committed request after a lost response and automatic revision refresh in %s", async (lenderName) => {
+  // Seed ids are random. Exercise each lender explicitly rather than letting
+  // UUID ordering decide which workspace this regression covers.
+  const merchantId = api.merchantIds.find(
+    (id) => api.state(id).merchant.name === lenderName,
+  )!;
+  api.merchantIds = [merchantId, ...api.merchantIds.filter((id) => id !== merchantId)];
+  const applicant = api.state(merchantId).records.find(
+    (record) => record.kind === "customers" && record.reference === "DEMO-C1001",
+  )!;
   const originalFetch = globalThis.fetch;
   const committed = new Map<string, Response>();
   const submissions: { key: string; body: string }[] = [];
@@ -37,6 +48,7 @@ it("retries the original committed request after a lost response and automatic r
   const user = userEvent.setup();
   renderApp("/credit-desk");
   await screen.findByRole("heading", { name: "Credit Desk", level: 1 });
+  await user.selectOptions(screen.getByLabelText("Applicant"), applicant.id);
   await user.type(
     screen.getByLabelText("Reason for this assessment"),
     "Check the synthetic evidence before reviewer handoff",
@@ -44,8 +56,19 @@ it("retries the original committed request after a lost response and automatic r
   await user.click(
     screen.getByRole("button", { name: /Run sample assessment/ }),
   );
-  await screen.findByRole("alert");
-  await screen.findByText("Score unavailable");
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "Connection lost after the server committed",
+  );
+  // Synchronize on the regression's actual precondition: React Query has
+  // applied the automatic refetch and its new revision before the retry.
+  // The score's display copy is unrelated to retry/idempotency semantics.
+  await waitFor(() => {
+    const refreshed = queryClient.getQueryData<ConnectedView>(["connected", merchantId]);
+    expect(refreshed?.revision).toBe(connectedRevision(api.state(merchantId)));
+    expect(refreshed?.revision).not.toBe(JSON.parse(submissions[0]!.body).expectedRevision);
+    expect(refreshed?.credit.assessments).toHaveLength(1);
+  });
+  await screen.findByRole("combobox", { name: "Assessment version" });
   expect(
     api
       .state()
