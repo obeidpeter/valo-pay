@@ -3,16 +3,17 @@ import { Link } from 'wouter';
 import { ArrowDownLeft, ArrowRight, Check, Clock3, Link2, Menu, ShieldCheck, Waypoints, X } from 'lucide-react';
 import { BrandLockup, BrandMark } from '@/components/brand';
 import { LandingFooter, LandingSections } from '@/components/landing-sections';
+import { ConnectedIntroduction } from '@/components/connected-introduction';
 import { Button } from '@/components/ui/button';
 import { authEnabled, useSessionUser } from '@/lib/auth';
 import { useHashTarget } from '@/lib/use-hash-target';
 import '@/public-pages.css';
 import '@/landing.css';
 
-const landingTargets = ['main', 'what', 'how', 'boundaries', 'pricing', 'pilot', 'product-tour'];
+const landingTargets = ['main', 'what', 'how', 'boundaries', 'pricing', 'pilot', 'product-tour', 'connected-banking'];
 const sectionLinks = [
   { href: '#what', label: 'What it does' },
-  { href: '#product-tour', label: 'Product tour' },
+  { href: '#connected-banking', label: 'Connected banking' },
   { href: '#how', label: 'How it works' },
   { href: '#boundaries', label: 'Our boundaries' },
   { href: '#pricing', label: 'Pricing' },
@@ -80,7 +81,7 @@ export default function LandingPage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
   useHashTarget(landingTargets, true);
-  useEffect(() => { document.title = 'Valo Pay · Collections operations layer'; }, []);
+  useEffect(() => { document.title = 'Valo Pay · Collections and connected banking'; }, []);
   const signedIn = authEnabled && Boolean(userId);
 
   return (
@@ -120,9 +121,9 @@ export default function LandingPage() {
           <div className="public-container lp-hero">
             <div className="lp-hero-copy">
               {/* Descriptor, promise and custody boundary are the first three content lines. */}
-              <p className="lp-eyebrow">A collections operations layer for lenders that collect by direct debit</p>
+              <p className="lp-eyebrow">Collections and connected banking for lenders and SMEs</p>
               <h1 id="hero-title">Know what was paid, what is due, <span>and what needs attention.</span></h1>
-              <p className="lp-hero-description">We never hold money. Valo Pay connects to your payment provider and loan software. Track mandate activation, review retries, match payments to instalments and keep one clear record for each customer.</p>
+              <p className="lp-hero-description">We never hold money. Bring collections into one clear workspace, then explore pay-by-bank, explained credit assessments and business cash planning. Try the workflows with sample data before discussing a live pilot.</p>
               <div className="lp-hero-actions">
                 <Button asChild size="lg" className="lp-primary"><Link href="/overview">Open the sandbox <ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></Button>
                 <Button asChild size="lg" variant="outline"><a href="#how">See how it works</a></Button>
@@ -138,6 +139,7 @@ export default function LandingPage() {
             <CollectionsIllustration />
           </div>
         </section>
+        <ConnectedIntroduction />
         <LandingSections signedIn={signedIn} />
       </main>
       <LandingFooter />

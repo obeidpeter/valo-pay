@@ -9,7 +9,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
-const tsx = path.join(root, "scripts", "node_modules", ".bin", process.platform === "win32" ? "tsx.cmd" : "tsx");
+const tsx = path.join(root, "scripts", "node_modules", "tsx", "dist", "cli.mjs");
 if (!existsSync(tsx)) throw new Error("tsx is missing; run pnpm install first.");
 if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
   throw new Error("Set VALOPAY_RUN_INTEGRATION=1 to run the database-backed suites; they write synthetic fixtures to DATABASE_URL.");
@@ -19,6 +19,7 @@ if (!process.env.DATABASE_URL) {
 }
 const env = { ...process.env, NODE_ENV: process.env.NODE_ENV || "development" };
 const suites = [
+  "artifacts/api-server/tests/connected-workflows.integration.test.ts",
   "artifacts/api-server/tests/record-index-migration.integration.test.ts",
   "artifacts/api-server/tests/valopay-store.integration.test.ts",
   "artifacts/api-server/tests/close-scheduler.integration.test.ts",
@@ -31,7 +32,7 @@ const suites = [
 ];
 for (const suite of suites) {
   console.log(`\n▶ ${suite}`);
-  const result = spawnSync(tsx, [suite], { cwd: root, env, stdio: "inherit" });
+  const result = spawnSync(process.execPath, [tsx,suite], { cwd: root, env, stdio: "inherit" });
   if (result.status !== 0) { console.error(`✕ ${suite} failed`); process.exit(result.status ?? 1); }
 }
 console.log("\nDatabase-backed suites passed.");

@@ -4,7 +4,7 @@ import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
 const roots = new Set([".gitignore", ".githooks/pre-push", ".npmrc", ".replit", ".replitignore", "README.md", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.base.json", "tsconfig.json", "replit.md"]);
-const docs = new Set(["docs/BUILD_STATUS.md", "docs/DATABASE_SECURITY.md", "docs/frontend-contract.md", "docs/security-review.md", "docs/observability.md", "docs/documentation-review.md", "docs/github-sync.md", "docs/design/console.md", "docs/paystack.md", "docs/pilot-security.md", "docs/pilot-database.md", "docs/operational-rehearsals.md", "docs/record-list-index-deployment.md", "docs/operator-validation.md"]);
+const docs = new Set(["docs/connected-banking.md", "docs/BUILD_STATUS.md", "docs/DATABASE_SECURITY.md", "docs/frontend-contract.md", "docs/security-review.md", "docs/observability.md", "docs/documentation-review.md", "docs/github-sync.md", "docs/design/console.md", "docs/paystack.md", "docs/pilot-security.md", "docs/pilot-database.md", "docs/operational-rehearsals.md", "docs/record-list-index-deployment.md", "docs/operator-validation.md"]);
 // Workflows execute code on GitHub. Review each file before approving its export.
 const workflows = new Set([".github/workflows/ci.yml"]);
 const sourceExtension = /\.(?:ts|tsx|js|jsx|mjs|cjs|json|yaml|yml|toml|css|html|svg|sh|md|sql)$/;

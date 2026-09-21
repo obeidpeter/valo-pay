@@ -1,4 +1,8 @@
 # Valo Pay — build status
+## Connected Banking extension · September 2026
+
+The platform now includes working synthetic Pay-by-bank, Credit Desk, Cash Desk and purpose-specific permission journeys. The new modules persist within the existing scoped transaction and audit boundary; sample payment receipts update the original reconciliation records. See [Connected Banking](connected-banking.md) for implemented behaviour, test coverage and live dependencies. Provider connectivity, production underwriting, accounting writes, tax submission and payouts remain disabled; no sample gate or permission can enable them.
+
 
 ## Delivery boundary
 

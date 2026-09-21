@@ -5,11 +5,15 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
-const tsx = path.join(root, "scripts", "node_modules", ".bin", process.platform === "win32" ? "tsx.cmd" : "tsx");
-const vitest = path.join(root, "artifacts", "valo-pay", "node_modules", ".bin", process.platform === "win32" ? "vitest.cmd" : "vitest");
+const tsx = path.join(root, "scripts", "node_modules", "tsx", "dist", "cli.mjs");
+const vitest = path.join(root, "artifacts", "valo-pay", "node_modules", "vitest", "vitest.mjs");
 if (!existsSync(tsx) || !existsSync(vitest)) throw new Error("tsx or vitest is missing; run pnpm install first.");
 const env = { ...process.env, DATABASE_URL: process.env.DATABASE_URL || "postgres://unused:unused@127.0.0.1:1/unused" };
 const steps = [
+  [tsx, ['artifacts/api-server/tests/connected-workflows.test.ts']],
+  [tsx, ['artifacts/api-server/tests/connected-credit.test.ts']],
+  [tsx, ['artifacts/api-server/tests/connected-cash.test.ts']],
+  [tsx, ['artifacts/api-server/tests/connected-cash-service.test.ts']],
   ["node", ["scripts/check-db-boundary.mjs"]],
   ["node", ["scripts/github-snapshot.test.mjs"]],
   ["node", ["scripts/check-docs.mjs"]],
@@ -39,7 +43,7 @@ const steps = [
 ];
 for (const [command, args] of steps) {
   console.log(`\n▶ ${args.join(" ")}`);
-  const result = spawnSync(command, args, { cwd: root, env, stdio: "inherit" });
+  const result = spawnSync(process.execPath, command === 'node' ? args : [command,...args], { cwd: root, env, stdio: "inherit" });
   if (result.status !== 0) { console.error(`✕ ${args.join(" ")} failed`); process.exit(result.status ?? 1); }
 }
 console.log("\nAll offline checks passed.");

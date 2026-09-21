@@ -1,0 +1,103 @@
+# Connected Banking: implemented sandbox workflows
+
+This release adds three connected workspaces to the existing collections console: **Pay-by-bank**, **Credit Desk** and **Cash Desk**. They run on synthetic data and persist their records in the selected workspace. No action in these modules connects a bank, posts to accounting software, approves a real loan, files tax or moves money.
+
+The design baseline is the September 2026 planning set: _Valo Pay Business Plan v3.0_, _Technical Requirements v2.0_, _Product Roadmap v2.0_, _Marketing and Sales Strategy v2.0_ and _Connected Banking Financial Model v1.0_. Those documents describe a broader target product. This page describes the narrower functionality implemented in the repository; it is not evidence that all planned features or external release gates are complete.
+
+## What works now
+
+| Module                  | Implemented behaviour                                                                                                                                                                                       | Deliberate boundary                                                                                         |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Permissions & readiness | Purpose-specific sample grants, named subject, entity, expiry and revocation; visible live-release gates                                                                                                    | A sample grant is not bank authority, a provider contract or regulatory approval                            |
+| Pay-by-bank             | Checkout bound to an instalment, amount and recipient; simulated authorisation, browser return and verified receipt; unknown/failure handling; collection reconciliation; reviewed refund/reversal evidence | Server simulation produces the receipt; no payment-initiation adapter is enabled                            |
+| Credit Desk             | Automatic evidence checks, cash-flow features, illustrative rule score, stressed affordability and policy recommendation; insufficient/refused/stale scenarios; versioned results and independent review    | The score is not calibrated probability of default, validated underwriting or an automated lending decision |
+| Cash Desk               | Separate sample SME entity; timestamped balances; base/downside forecast versions; accounting drafts; invoice-bank-ledger VAT schedules; approved-net-pay funding and export planning                       | Uses synthetic source fixtures; live feeds, ERP writes, tax submission and payouts remain disabled          |
+
+The original mandate, collection, reconciliation, exception, reporting and customer-history functions remain available. The new Cash Desk entity is distinct from the lender's borrower records. Existing collections work does not depend on a new account-read grant.
+
+## Try the sample journeys
+
+Use the demo role selector in **Settings** to move between maker and reviewer roles. These are labelled sandbox personas, not real identity verification or bank signatory authority.
+
+### Pay-by-bank
+
+1. Open **Pay-by-bank** and choose an open customer instalment. Review the amount; a partial payment may be used.
+2. Create a sample checkout, then **Review & authorise** it with a reason. Amount, recipient and instalment are bound to the checkout. Authorisation expires if the customer waits too long.
+3. **Simulate browser return**. The result is pending, not paid.
+4. Record a sample confirmed, failed or unknown provider outcome. An unknown result blocks another collection; query its outcome before proceeding.
+5. A confirmed sample receipt creates payment/observation records and applies the eligible amount in reconciliation. A late surplus is left for Finance review rather than over-allocated.
+6. For a refund, Admin/Operations records the request and a different Finance persona records sample refund evidence. Finance can also record reversal evidence. Affected obligations reopen for review; no refund or reversal sends money.
+
+Checkout creation/authorisation checks scheduled external instructions and existing in-flight collections. Authorisation cancels a replaceable, Valo-owned scheduled attempt. A store-level invariant prevents a checkout and another collection from being in flight for the same instalment. Already-submitted external work must be reconciled, not assumed cancelled.
+
+### Credit Desk
+
+1. In **Permissions & readiness**, grant **Read applicant accounts** and **Assess an application** to the same sample applicant. The permissions are separate.
+2. Open **Credit Desk**, select the applicant and a sample scenario. Assess as Admin or Operations.
+3. Inspect evidence quality, coverage, recurring income, commitments, affordability, score factors and policy reasons. Thin or stale evidence is shown as incomplete; missing authority blocks use.
+4. Switch to a different permitted reviewer persona: Finance, Compliance reviewer or another authorised Admin actor. Record the outcome, rationale and an explanation suitable for the applicant.
+5. Changed terms require a new assessment. Results and reviews are retained as immutable versions; a review cannot silently overwrite its predecessor.
+6. Revoke an applicant permission and revisit the desk. Historical evidence is retained, but the ordinary view restricts score/features and prevents reuse. New authority and a new assessment are required.
+
+The sample rulecard is deliberately identified as unvalidated. It does not claim bureau completeness, predictive accuracy, a credit-bureau substitute, a binding approval or funds disbursement. A sandbox reviewer persona does not satisfy future production authentication requirements.
+
+### Cash Desk
+
+1. Grant **Read business accounts** for **Sample SME · separate legal entity**. Open **Cash Desk** and choose **Set up sample Cash Desk**. Before setup, the view is a read-only preview and does not seed records merely by being opened.
+2. In **Cash & forecast**, review booked, available and pending balances separately. Source timestamps and coverage qualify the totals; stale or missing balances cannot appear as an unqualified available amount.
+3. Change the downside receipt percentage, delay and planning buffer. Save with a review note to create a new forecast version. Committed outflows remain due. Reserves are planning assumptions and do not alter bank balances.
+4. Grant **Prepare accounting drafts**. Operations/Admin prepares the sample receipt draft; a different Finance reviewer approves it and prepares the export. The draft reconciles gross receipt, evidenced fee, partial invoice payment, credit note and remaining invoice balance.
+5. In **VAT evidence**, compare approved invoice tax amounts with payment allocations and the ledger control. Loan proceeds and own-account transfers do not become taxable sales. Purchase VAT without an approved recovery decision remains excluded. Finance can save a review schedule with its unresolved gaps; downloading it does not file or pay tax.
+6. Grant **Prepare payroll funding**. Operations/Admin prepares funding from the approved sample net-pay run. A different Finance reviewer checks the account, items, date, commitments, fees and buffer before export.
+7. A payroll export remains unpaid. Finance can simulate separate item outcomes. Successful and unknown items are excluded from a new export; unknown is a reconciliation hold, not a retry instruction.
+8. If a funding snapshot is stale, refresh the sample balances and select **Refresh funding review**. A new version removes the old funding/export approval while preserving item outcomes and idempotency identities. Finance must approve again before a new export. Evidence for already-exported items can still be reconciled against their original approved identity, even if the new funding review shows a shortfall. The previous plan remains in the review history.
+
+Accounting exports are review files with content hashes, not digitally signed instructions accepted by an ERP. Payroll exports contain synthetic beneficiary references, not usable bank account details. Actual import/export formats require provider-specific acceptance work before real use.
+
+## Authority and record boundaries
+
+- The API derives workspace identity and acting role from the server session. Client-selected lender IDs are checked through the existing scoped store.
+- Applicant account reading, credit assessment, SME account reading, accounting preparation and payroll preparation have independent purposes. One-time payment authority is bound separately to its checkout.
+- Account-read or preparation permissions do not grant a right to debit accounts, initiate payments, make lending decisions, post accounting entries or file tax.
+- Permission expiry/revocation is checked again on the server when new dependent work is requested. The ordinary Cash Desk hides restricted detailed views. Finance retains a minimal item-level evidence screen for previously exported payroll work and can record synthetic outcomes without renewed preparation permission. This does not fetch bank data or allow new preparation, approval or export. Retained evidence and already-submitted outcomes are not erased to imitate cancellation.
+- Operations/Admin prepares accounting and payroll work; Finance checks it. The same actor cannot approve their own work, even if its role label changes.
+- Cash and credit amounts use integer minor units. Currencies and entities are not silently mixed. Internal transfers are excluded from consolidated income and expense; ambiguous transfer lineage requires review.
+- Accounting drafts bind external company/contact/invoice identities, versions and approved accounting/tax mappings. Period locks, changed residuals, changed mappings and an uncertain prior command block readiness.
+- Payroll approval freezes the source, beneficiaries, amounts and date. Freshness and changed source balances are checked again before approval/export. Outcome changes retire the current bank manifest so a stale whole-batch file is not offered for reuse.
+- Generic record mutation must not be used to alter internal connected workflow records. Credit assessment/review rows are also protected as immutable evidence by the store.
+
+## API and implementation map
+
+| Surface                                       | Contract                                                                                                                                                                  |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/v1/connected?merchantId=…`          | Read the selected workspace's connected views, revision, permissions and readiness gates                                                                                  |
+| `POST /api/v1/connected/actions?merchantId=…` | Submit `action`, optional `recordId`, `data`, a review `reason`, and `expectedRevision`; supply `Idempotency-Key`                                                         |
+| `consent.*`                                   | Grant/revoke scoped synthetic permissions                                                                                                                                 |
+| `payment.*`                                   | Create/authorise/cancel checkout, browser return, sample outcome, refund request/confirmation, reversal evidence                                                          |
+| `credit.*`                                    | Assess a sample application or append an independent review                                                                                                               |
+| `cash.*`                                      | Initialise/refresh sample sources, version forecasts, prepare/review/export accounting drafts, save VAT schedules, prepare/refresh/approve/export/reconcile payroll plans |
+
+Mutations use the existing transaction-scoped store: lender lock, current revision, domain checks, audit append, validated persistence and idempotency answer. Same-key/same-input replays return the stored answer. Reusing a key for different input is a conflict. A stale revision prompts a refresh rather than silently applying an old form.
+
+Source modules are `domain/connected.ts`, `connected-credit.ts`, `connected-credit-service.ts`, `connected-cash.ts` and `connected-cash-service.ts`. UI routes are `/connections`, `/pay-by-bank`, `/credit-desk` and `/cash-desk`.
+
+## External work required before live use
+
+The readiness page does not contain an “enable live” shortcut. The following gates remain external acceptance work:
+
+- **G0 / G-DATA / G-OB:** confirmed lawful role and provider contracts, bank/account coverage, corporate read authority, approved bank-authorised routes, privacy/security/retention evidence and complete feed ingestion/recovery.
+- **G-A2A:** a certified payment-initiation route, independently verified receipt semantics, real provider lookup and reconciliation, checkout/direct-debit race acceptance and operational rollback.
+- **G-CREDIT / G-MODEL / G-AUTO:** lender-owned validated policies, lawful evidence use, genuine reviewer authentication, shadow outcomes and independent validation. Predictive models and consequential automation require additional approval.
+- **G-ERP:** actual Xero company/edition access, separate write authority, approved mapping and narrow posting allowlist, durable outbound command processing, period/version rechecks and uncertain-write recovery. Odoo and other integrations need separate qualification.
+- **G-PAYOUT:** an approved corporate route debiting the SME's own bank account, signatory authority, beneficiary validation, limits/cutoffs, item-level evidence and operational recovery. A provider-balance-funded transfer route does not automatically meet this design.
+- **G-TAX:** current entity-specific tax applicability and evidence approval, authorised e-invoice/submission route and acknowledgements. A balanced review schedule alone is not a filed return or paid tax.
+
+Paystack remains the preferred first payment provider, but no supplied test secret, approved bank-initiation capability or corporate payout authority is inferred. The existing Paystack test tooling is separate from these synthetic journeys. Xero is the first accounting target; this release does not establish an Xero connection.
+
+## Verification
+
+Pure domain/service suites cover money arithmetic, evidence exclusion, tenant/entity boundaries, duplicate receipt guards, period changes, permission expiry, maker/checker separation, stale funding recovery and unknown payroll outcomes. Frontend suites exercise the actual pages against the in-memory API and domain functions. Browser tests cover navigation and sample workflows.
+
+`connected-workflows.integration.test.ts` adds real PostgreSQL persistence and concurrency coverage: internal records, twenty-way idempotent replay, competing checkout creation, checkout/collection races, revision conflicts, principal/lender isolation, immutable credit evidence and audit integrity. It requires `VALOPAY_RUN_INTEGRATION=1` and a disposable schema-initialised `DATABASE_URL`. A skipped local integration suite is not evidence of a database pass; CI must execute it before release.
+
+These tests establish the implemented synthetic behaviour. They do not validate provider connectivity, legal permissions, live financial outcomes, predictive model performance or the business plan's commercial assumptions.

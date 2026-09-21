@@ -1,6 +1,6 @@
 # Valo Pay
 
-Observation-first collections operations for Nigerian lenders. This application is a **synthetic sandbox**, not a live payment service or an approved system for real customer data.
+Observation-first collections operations and connected banking workflows for Nigerian lenders and SMEs. This application is a **synthetic sandbox**, not a live payment service or an approved system for real customer data. Pay-by-bank, Credit Desk, Cash Desk and purpose-specific permissions have working sample journeys; each live capability remains independently gated.
 
 ## Source repository
 
@@ -23,6 +23,7 @@ Keep the workspace together: the frontend and API depend on shared packages.
 | --- | --- |
 | `README.md` | This file: what the application is, how to install, run, check and change it. |
 | `docs/BUILD_STATUS.md` | What this build delivers, the deviations from the specification, the closed production gates and the verification boundary. |
+| `docs/connected-banking.md` | Connected Banking implementation, sample journeys, authority boundaries, API and remaining live dependencies. |
 | `docs/DATABASE_SECURITY.md` | The security boundary: what the scoped repository enforces, what it does not, and the publishing rules. |
 | `docs/frontend-contract.md` | The console's contract with the API: records, pages, mutations, imports and exports, and every console behaviour a page must keep. |
 | `docs/design/console.md` | The design rationale for the console, page by page and audit by audit, against the usability heuristics and interaction-design principles. |

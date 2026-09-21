@@ -1,0 +1,573 @@
+import { useState } from "react";
+import { Link } from "wouter";
+import { ArrowRight, CheckCircle2, Landmark, ShieldCheck } from "lucide-react";
+import {
+  ConnectedFrame,
+  ConnectedPanel,
+  ConnectedStatus,
+} from "@/components/connected-frame";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Loading } from "@/components/loading";
+import { LoadProblem } from "@/components/load-problem";
+import { useConnected, type ConnectedRecord } from "@/lib/connected";
+import { formatKobo, formatDate } from "@/lib/formatters";
+import { nairaToKobo, koboToNaira } from "@/lib/money-input";
+import { useWorkspace } from "@/lib/workspace-context";
+export default function PayByBank() {
+  const api = useConnected(),
+    { merchantId } = useWorkspace();
+  return <PaymentContent key={merchantId} api={api} />;
+}
+function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
+  const [dueId, setDueId] = useState(""),
+    [amount, setAmount] = useState(""),
+    [selected, setSelected] = useState(""),
+    [error, setError] = useState(""),
+    [success, setSuccess] = useState("");
+  const [review, setReview] = useState<{
+      action: string;
+      title: string;
+      record: ConnectedRecord;
+      data?: Record<string, unknown>;
+    } | null>(null),
+    [reason, setReason] = useState("");
+  const act = async (
+    action: string,
+    data: Record<string, unknown> = {},
+    recordId?: string,
+    why = "Explore the synthetic payment journey",
+  ) => {
+    setError("");
+    setSuccess("");
+    try {
+      await api.run(action, data, recordId, why);
+      setSuccess("Sample payment record updated. No money moved.");
+      setReview(null);
+      return true;
+    } catch (e) {
+      setError((e as Error).message);
+      return false;
+    }
+  };
+  if (api.isLoading) return <Loading what="pay-by-bank" />;
+  if (api.error || !api.data)
+    return (
+      <LoadProblem
+        what="pay-by-bank"
+        error={api.error}
+        retry={() => void api.refetch()}
+      />
+    );
+  const { payments } = api.data,
+    due = payments.dues.find((d) => d.id === dueId) || payments.dues[0],
+    intent =
+      payments.intents.find((i) => i.id === selected) || payments.intents[0];
+  const canPay =
+      api.canWrite &&
+      ["Admin", "Operations", "Finance"].includes(api.data.role),
+    checkoutExpired =
+      !!intent &&
+      Date.parse(intent.data.expiresAt) <= Date.parse(api.data.asOf);
+  const openReview = (
+    action: string,
+    title: string,
+    record: ConnectedRecord,
+  ) => {
+    setReason("");
+    setError("");
+    setReview({ action, title, record });
+  };
+  const create = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!due) return;
+    try {
+      const value = nairaToKobo(amount || koboToNaira(due.outstandingKobo));
+      if (
+        await act(
+          "payment.create",
+          { dueItemId: due.id, amountKobo: value },
+          undefined,
+          "Create a sample checkout for this instalment",
+        )
+      )
+        setSelected("");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  return (
+    <ConnectedFrame
+      title="Pay-by-bank"
+      description="A clear journey from bank authorisation to a verified receipt, tied to the instalment it pays."
+    >
+      <div className="connected-metrics">
+        <div className="connected-metric">
+          <span>Confirmed sample receipts</span>
+          <strong>
+            {payments.intents.filter((i) => i.status === "confirmed").length}
+          </strong>
+        </div>
+        <div className="connected-metric">
+          <span>Awaiting a verified outcome</span>
+          <strong>
+            {
+              payments.intents.filter((i) =>
+                ["authorised", "pending", "unknown"].includes(i.status),
+              ).length
+            }
+          </strong>
+        </div>
+        <div className="connected-metric">
+          <span>One instalment, one collection</span>
+          <strong className="!text-xl">Duplicate protection</strong>
+        </div>
+      </div>
+      <p className="connected-note">
+        <ShieldCheck size={16} className="inline mr-2" aria-hidden="true" />
+        This simulator uses a one-time, bank-authorised payment journey. It is
+        separate from manual transfer and direct debit. A browser return never
+        counts as proof of payment.
+      </p>
+      {error && (
+        <p role="alert" className="connected-error">
+          {error}
+        </p>
+      )}
+      {success && (
+        <p role="status" className="connected-note">
+          {success}
+        </p>
+      )}
+      <div className="connected-grid">
+        <div className="space-y-5">
+          <ConnectedPanel
+            title="Create a checkout"
+            description="The amount, recipient and instalment are fixed when the checkout is created."
+          >
+            {payments.dues.length ? (
+              <form className="space-y-4" onSubmit={(e) => void create(e)}>
+                <div>
+                  <label htmlFor="checkout-due">Customer and instalment</label>
+                  <select
+                    id="checkout-due"
+                    value={due?.id}
+                    onChange={(e) => {
+                      setDueId(e.target.value);
+                      setAmount("");
+                    }}
+                  >
+                    {payments.dues.map((d) => (
+                      <option value={d.id} key={d.id}>
+                        {d.customerName} · {d.reference}
+                        {d.blocked ? " · pending instruction" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="checkout-amount">Amount (₦)</label>
+                  <input
+                    id="checkout-amount"
+                    inputMode="decimal"
+                    value={amount || koboToNaira(due!.outstandingKobo)}
+                    onChange={(e) => setAmount(e.target.value)}
+                    required
+                  />
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Outstanding: {formatKobo(due!.outstandingKobo)}. Partial
+                    payment is supported.
+                  </p>
+                </div>
+                <Button
+                  type="submit"
+                  disabled={api.pending || !api.canWrite || due?.blocked}
+                >
+                  Create sample checkout <ArrowRight size={16} />
+                </Button>
+                {due?.blocked && (
+                  <p className="text-xs text-muted-foreground">
+                    An instruction is pending. Resolve its outcome before
+                    collecting again.
+                  </p>
+                )}
+              </form>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                There are no open instalments to collect.
+              </p>
+            )}
+          </ConnectedPanel>
+          <ConnectedPanel
+            title="Checkout history"
+            description="Select a checkout to continue its journey or review its receipt."
+          >
+            {payments.intents.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Your first checkout will appear here.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {payments.intents.map((i) => (
+                  <button
+                    key={i.id}
+                    onClick={() => setSelected(i.id)}
+                    aria-pressed={intent?.id === i.id}
+                    className={`text-left w-full connected-record focus-visible:ring-2 focus-visible:ring-ring ${intent?.id === i.id ? "bg-secondary" : ""}`}
+                  >
+                    <div className="flex justify-between gap-2">
+                      <span className="text-sm font-semibold">
+                        {formatKobo(i.amountKobo)}
+                      </span>
+                      <ConnectedStatus status={i.status} />
+                    </div>
+                    <p className="mt-2">
+                      {
+                        api.data!.customers.find((c) => c.id === i.customerId)
+                          ?.name
+                      }
+                    </p>
+                    <p>{formatDate(i.createdAt)}</p>
+                  </button>
+                ))}
+              </div>
+            )}
+          </ConnectedPanel>
+        </div>
+        <ConnectedPanel
+          title={intent ? "Checkout detail" : "Ready when you are"}
+          description={
+            intent
+              ? "Sample bank journey · NGN · no live payment instruction"
+              : "Create a checkout to explore authorisation, pending outcomes and reconciliation."
+          }
+        >
+          {intent ? (
+            <>
+              <div className="rounded-xl border p-5 bg-background">
+                <div className="flex items-center gap-3 mb-5">
+                  <span className="p-3 bg-secondary rounded-lg">
+                    <Landmark size={22} aria-hidden="true" />
+                  </span>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Pay to</p>
+                    <h3 className="font-semibold">{intent.data.beneficiary}</h3>
+                  </div>
+                  <div className="ml-auto">
+                    <ConnectedStatus status={intent.status} />
+                  </div>
+                </div>
+                <p className="text-4xl font-semibold tracking-tight">
+                  {formatKobo(intent.amountKobo)}
+                </p>
+                <p className="text-xs text-muted-foreground mt-3">
+                  {
+                    api.data.customers.find((c) => c.id === intent.customerId)
+                      ?.name
+                  }{" "}
+                  · One-time sample payment
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Authorise before {formatDate(intent.data.expiresAt)}
+                </p>
+              </div>
+              <ol
+                className="flex flex-wrap gap-3 text-xs text-muted-foreground"
+                aria-label="Payment steps"
+              >
+                <li>1. Review details</li>
+                <li>2. Bank authorisation</li>
+                <li>3. Verified receipt</li>
+              </ol>
+              <div className="flex flex-wrap gap-2">
+                {intent.status === "created" && (
+                  <>
+                    <Button
+                      disabled={api.pending || !canPay || checkoutExpired}
+                      onClick={() =>
+                        openReview(
+                          "payment.authorise",
+                          "Review sample bank authorisation",
+                          intent,
+                        )
+                      }
+                    >
+                      Review & authorise
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={api.pending || !canPay}
+                      onClick={() =>
+                        openReview(
+                          "payment.cancel",
+                          "Cancel this checkout",
+                          intent,
+                        )
+                      }
+                    >
+                      Cancel checkout
+                    </Button>
+                    {checkoutExpired && (
+                      <p className="text-sm text-muted-foreground">
+                        This checkout expired. Cancel it and create a new
+                        checkout to obtain fresh authorisation.
+                      </p>
+                    )}
+                  </>
+                )}
+                {intent.status === "authorised" && (
+                  <Button
+                    disabled={api.pending || !api.canWrite}
+                    onClick={() => void act("payment.return", {}, intent.id)}
+                  >
+                    Simulate browser return
+                  </Button>
+                )}
+                {["authorised", "pending", "unknown"].includes(
+                  intent.status,
+                ) && (
+                  <>
+                    <Button
+                      disabled={api.pending || !api.canWrite}
+                      onClick={() =>
+                        void act(
+                          "payment.outcome",
+                          { outcome: "confirmed" },
+                          intent.id,
+                          "Query sample provider and confirm its receipt",
+                        )
+                      }
+                    >
+                      {intent.status === "unknown"
+                        ? "Query again: confirmed"
+                        : "Simulate confirmed receipt"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={api.pending || !api.canWrite}
+                      onClick={() =>
+                        void act(
+                          "payment.outcome",
+                          { outcome: "unknown" },
+                          intent.id,
+                        )
+                      }
+                    >
+                      Simulate unknown outcome
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={api.pending || !api.canWrite}
+                      onClick={() =>
+                        void act(
+                          "payment.outcome",
+                          { outcome: "failed" },
+                          intent.id,
+                        )
+                      }
+                    >
+                      Simulate failure
+                    </Button>
+                  </>
+                )}
+                {intent.status === "confirmed" && (
+                  <>
+                    <Link
+                      className="text-sm font-medium underline underline-offset-4 py-2"
+                      href="/reconciliation"
+                    >
+                      View reconciliation
+                    </Link>
+                    {!intent.data.refundRequest && (
+                      <Button
+                        variant="outline"
+                        disabled={
+                          api.pending ||
+                          !api.canWrite ||
+                          !["Admin", "Operations"].includes(api.data.role)
+                        }
+                        onClick={() =>
+                          openReview(
+                            "payment.refund_request",
+                            "Request a sample refund",
+                            intent,
+                          )
+                        }
+                      >
+                        Request refund
+                      </Button>
+                    )}
+                    {intent.data.refundRequest && (
+                      <Button
+                        variant="outline"
+                        disabled={api.pending || api.data.role !== "Finance"}
+                        onClick={() =>
+                          openReview(
+                            "payment.refund_confirm",
+                            "Confirm sample refund evidence",
+                            intent,
+                          )
+                        }
+                      >
+                        Finance: confirm refund
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      disabled={api.pending || api.data.role !== "Finance"}
+                      onClick={() =>
+                        openReview(
+                          "payment.reverse",
+                          "Record sample reversal evidence",
+                          intent,
+                        )
+                      }
+                    >
+                      Finance: record reversal
+                    </Button>
+                  </>
+                )}
+              </div>
+              {intent.status === "unknown" && (
+                <p className="connected-note">
+                  The result is unknown. A new collection is blocked until a
+                  status query confirms whether this payment succeeded or
+                  failed.
+                </p>
+              )}
+              {intent.status === "confirmed" && (
+                <p className="connected-note">
+                  <CheckCircle2
+                    size={16}
+                    className="inline mr-2"
+                    aria-hidden="true"
+                  />
+                  Sample server receipt recorded. The payment and allocation are
+                  available in the customer timeline and reconciliation. This is
+                  not evidence of a live bank payment.
+                </p>
+              )}
+              {intent.data.refundRequest && (
+                <p className="connected-note">
+                  Refund requested by {intent.data.refundRequest.maker}. Switch
+                  to the Finance demo role in{" "}
+                  <Link href="/settings" className="underline">
+                    Settings
+                  </Link>{" "}
+                  to review independently. Sample refund evidence never sends
+                  funds.
+                </p>
+              )}
+              <h3 className="font-semibold text-sm pt-3">Journey history</h3>
+              <ol className="connected-timeline">
+                {intent.data.events.map(
+                  (
+                    e: { at: string; status: string; detail: string },
+                    i: number,
+                  ) => (
+                    <li key={i}>
+                      <span className="font-medium capitalize">
+                        {e.status.replaceAll("_", " ")}
+                      </span>
+                      <p className="text-muted-foreground mt-1">{e.detail}</p>
+                      <time>{formatDate(e.at)}</time>
+                    </li>
+                  ),
+                )}
+              </ol>
+            </>
+          ) : (
+            <div className="py-12 text-center text-muted-foreground">
+              <Landmark size={34} className="mx-auto mb-4" aria-hidden="true" />
+              <p className="text-sm">
+                The customer sees who they are paying,
+                <br />
+                the exact amount, and what happens next.
+              </p>
+            </div>
+          )}
+        </ConnectedPanel>
+      </div>
+      {review && (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open && !api.pending) setReview(null);
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{review.title}</DialogTitle>
+              <DialogDescription>
+                Sample data only. No funds will move. Review the amount and
+                recipient before continuing.
+              </DialogDescription>
+            </DialogHeader>
+            <form
+              className="space-y-4"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void act(
+                  review.action,
+                  review.data || {},
+                  review.record.id,
+                  reason,
+                );
+              }}
+            >
+              <div className="rounded-lg border p-4">
+                <p className="font-semibold">
+                  {formatKobo(review.record.amountKobo)}
+                </p>
+                <p className="text-sm">{review.record.data.beneficiary}</p>
+              </div>
+              <div>
+                <label
+                  htmlFor="payment-reason"
+                  className="block text-sm font-medium mb-2"
+                >
+                  Reason
+                </label>
+                <textarea
+                  id="payment-reason"
+                  className="w-full border rounded-md p-3 bg-background"
+                  required
+                  minLength={8}
+                  maxLength={500}
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  rows={3}
+                />
+              </div>
+              {error && (
+                <p role="alert" className="text-sm text-destructive">
+                  {error}
+                </p>
+              )}
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={api.pending}
+                  onClick={() => setReview(null)}
+                >
+                  Go back
+                </Button>
+                <Button type="submit" disabled={api.pending}>
+                  {api.pending ? "Saving…" : "Confirm sample action"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      )}
+    </ConnectedFrame>
+  );
+}

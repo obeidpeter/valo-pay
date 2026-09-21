@@ -1,0 +1,624 @@
+import { createHash } from "node:crypto";
+import { z } from "zod";
+import type { Context, DomainState, ValopayRecord, RecordOf } from "./types";
+import { makeRecord, recordsOf, touch } from "./records";
+import {
+  allocatePayment,
+  supersedeAllocation,
+  raiseException,
+} from "./reconciliation";
+import { creditView, runCreditAction } from "./connected-credit-service";
+import { cashView, runCashAction } from "./connected-cash-service";
+
+export const connectedActionSchema = z
+  .object({
+    action: z.string().min(1).max(80),
+    recordId: z.string().max(100).optional(),
+    reason: z
+      .string()
+      .trim()
+      .min(8, "Explain the reason in at least eight characters.")
+      .max(500),
+    data: z.record(z.string(), z.unknown()).default({}),
+    expectedRevision: z.string().max(80),
+  })
+  .strict();
+export type ConnectedAction = z.infer<typeof connectedActionSchema>;
+export const consentPurposes = [
+  "account_read",
+  "credit_assessment",
+  "merchant_account_read",
+  "erp_draft",
+  "payroll_prepare",
+] as const;
+export const purposeLabels: Record<string, string> = {
+  account_read: "Read applicant accounts",
+  credit_assessment: "Assess an application",
+  merchant_account_read: "Read business accounts",
+  erp_draft: "Prepare accounting drafts",
+  payroll_prepare: "Prepare payroll funding",
+  one_time_payment: "Authorise one payment",
+};
+const gates = [
+  [
+    "G0",
+    "Provider and legal readiness",
+    "Contracts, permitted role and approved routes",
+  ],
+  [
+    "G-DATA",
+    "Real data",
+    "Privacy assessment, retention and tenant security evidence",
+  ],
+  [
+    "G-OB",
+    "Connected accounts",
+    "Bank and account coverage, consent and data provenance",
+  ],
+  [
+    "G-A2A",
+    "Pay-by-bank",
+    "Bank authorisation, verified receipts and duplicate collection controls",
+  ],
+  [
+    "G-CREDIT",
+    "Credit assessments",
+    "Validated rules, lender ownership and independent review",
+  ],
+  [
+    "G-MODEL",
+    "Predictive credit models",
+    "Calibration, performance and model governance",
+  ],
+  [
+    "G-AUTO",
+    "Automated credit decisions",
+    "Separate legal and consequential decision approval",
+  ],
+  [
+    "G-ERP",
+    "Accounting writes",
+    "Finance approval, scoped access and closed-period controls",
+  ],
+  [
+    "G-PAYOUT",
+    "Own-account payouts",
+    "Corporate bank authority, signatories and item-level verification",
+  ],
+  ["G-TAX", "Tax submission", "Tax review and filing authority"],
+] as const;
+function reject(message: string, status = 400): never {
+  throw Object.assign(new Error(message), { status });
+}
+export function connectedRevision(state: DomainState): string {
+  // Stable over clock changes; also catches a collection or lender setting changed in another tab.
+  const rows = state.records
+    .map((r) => [
+      r.id,
+      r.updatedAt,
+      r.status,
+      r.amountKobo,
+      r.customerId,
+      r.data,
+    ])
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  return createHash("sha256")
+    .update(JSON.stringify([state.merchant, state.settings, rows]))
+    .digest("hex");
+}
+function owned<K extends string>(
+  state: DomainState,
+  id: string | undefined,
+  kind: K,
+): RecordOf<K> {
+  return (state.records.find(
+    (r) => r.id === id && r.kind === kind && r.merchantId === state.merchant.id,
+  ) ?? reject("Record not found in this workspace.", 404)) as RecordOf<K>;
+}
+function allow(ctx: Context, roles: string[]) {
+  if (!roles.includes(ctx.role))
+    reject(`This action requires ${roles.join(" or ")} role.`, 403);
+}
+function intentOpen(r: ValopayRecord) {
+  return (
+    r.kind === "connected-intents" &&
+    ["authorised", "pending", "unknown"].includes(r.status)
+  );
+}
+function externalScheduled(r: ValopayRecord) {
+  return (
+    r.kind === "attempts" &&
+    r.status === "scheduled" &&
+    r.data.source !== "valo"
+  );
+}
+export function consentActive(r: ValopayRecord, now: string) {
+  return (
+    r.status === "active" && Date.parse(r.data.expiresAt) > Date.parse(now)
+  );
+}
+function addConsent(
+  state: DomainState,
+  ctx: Context,
+  data: Record<string, unknown>,
+) {
+  allow(ctx, ["Admin", "Operations"]);
+  const input = z
+    .object({
+      purpose: z.enum(consentPurposes),
+      subjectId: z.string().min(1),
+      days: z.number().int().min(1).max(90).default(30),
+    })
+    .strict()
+    .parse(data);
+  const sme = [
+    "merchant_account_read",
+    "erp_draft",
+    "payroll_prepare",
+  ].includes(input.purpose);
+  if (
+    sme
+      ? input.subjectId !== "sme"
+      : !state.records.some(
+          (r) => r.kind === "customers" && r.id === input.subjectId,
+        )
+  )
+    reject("Select a subject that belongs to this workspace.");
+  const existing = state.records.find(
+    (r) =>
+      r.kind === "connected-consents" &&
+      r.data.subjectId === input.subjectId &&
+      r.data.purpose === input.purpose &&
+      consentActive(r, ctx.now),
+  );
+  if (existing) return existing;
+  return makeRecord(state, "connected-consents", {
+    name: purposeLabels[input.purpose],
+    status: "active",
+    createdAt: ctx.now,
+    data: {
+      ...input,
+      entityId: sme ? `${state.merchant.id}:sme` : state.merchant.id,
+      version: 1,
+      expiresAt: new Date(
+        Date.parse(ctx.now) + input.days * 86400000,
+      ).toISOString(),
+      grantedBy: ctx.actor,
+      authority: "simulated",
+      noticeVersion: "connected-2026-09",
+      source: "synthetic_permission_journey",
+    },
+  });
+}
+function paymentAction(
+  state: DomainState,
+  ctx: Context,
+  input: ConnectedAction,
+) {
+  allow(ctx, ["Admin", "Operations", "Finance"]);
+  if (input.action === "payment.create") {
+    const { dueItemId, amountKobo } = z
+      .object({
+        dueItemId: z.string().min(1),
+        amountKobo: z.number().int().positive().safe(),
+      })
+      .strict()
+      .parse(input.data);
+    const due = owned(state, dueItemId, "due-items");
+    if (
+      ["paid", "cancelled", "closed", "in_dispute"].includes(due.status) ||
+      amountKobo > Number(due.data.outstandingKobo ?? due.amountKobo)
+    )
+      reject(
+        "Choose an open instalment and an amount no higher than its outstanding balance.",
+      );
+    if (
+      state.records.some(
+        (r) =>
+          r.data.dueItemId === due.id &&
+          (intentOpen(r) ||
+            externalScheduled(r) ||
+            (r.kind === "attempts" && ["sent", "unknown"].includes(r.status))),
+      )
+    )
+      reject(
+        "Another instruction is scheduled externally, pending or has an unknown outcome. Confirm its cancellation or resolve its outcome before creating a checkout.",
+        409,
+      );
+    const draft = state.records.find(
+      (r) =>
+        r.kind === "connected-intents" &&
+        r.data.dueItemId === due.id &&
+        r.status === "created" &&
+        Date.parse(r.data.expiresAt) > Date.parse(ctx.now),
+    );
+    if (draft)
+      reject(
+        "This instalment already has an open checkout. Continue or cancel it first.",
+        409,
+      );
+    return makeRecord(state, "connected-intents", {
+      name: `Pay ${due.name}`,
+      status: "created",
+      amountKobo,
+      customerId: due.customerId,
+      createdAt: ctx.now,
+      data: {
+        dueItemId: due.id,
+        currency: "NGN",
+        beneficiary: state.merchant.name,
+        beneficiaryId: state.merchant.id,
+        rail: "simulated_bank_authorised_a2a",
+        expiresAt: new Date(Date.parse(ctx.now) + 15 * 60000).toISOString(),
+        createdBy: ctx.actor,
+        events: [{ at: ctx.now, status: "created", detail: input.reason }],
+      },
+    });
+  }
+  const intent = owned(state, input.recordId, "connected-intents");
+  const due = owned(state, String(intent.data.dueItemId), "due-items");
+  const event = (status: string, detail: string) => {
+    intent.status = status;
+    intent.data.events.push({ at: ctx.now, status, detail });
+    touch(intent, ctx.now);
+    return intent;
+  };
+  if (input.action === "payment.authorise") {
+    if (intent.status !== "created")
+      reject("Only a new checkout can be authorised.", 409);
+    if (Date.parse(intent.data.expiresAt) <= Date.parse(ctx.now))
+      reject("This checkout expired. Cancel it and create a new one.", 409);
+    if (state.merchant.killSwitch)
+      reject("The workspace emergency stop is on.", 403);
+    if (
+      intent.amountKobo > Number(due.data.outstandingKobo ?? due.amountKobo) ||
+      ["paid", "cancelled", "closed", "in_dispute"].includes(due.status)
+    )
+      reject(
+        "The instalment changed. Cancel this checkout and review the balance.",
+        409,
+      );
+    if (
+      state.records.some(
+        (r) =>
+          r.id !== intent.id &&
+          r.data.dueItemId === due.id &&
+          (intentOpen(r) ||
+            externalScheduled(r) ||
+            (r.kind === "attempts" && ["sent", "unknown"].includes(r.status))),
+      )
+    )
+      reject(
+        "Another instruction is scheduled externally or in flight. Authorisation is held until cancellation or outcome evidence prevents a duplicate collection.",
+        409,
+      );
+    for (const r of state.records.filter(
+      (r) =>
+        r.kind === "attempts" &&
+        r.data.dueItemId === due.id &&
+        r.status === "scheduled" &&
+        r.data.source === "valo",
+    )) {
+      r.status = "cancelled";
+      r.data.cancellationReason =
+        "Replaced by a separately authorised sample pay-by-bank checkout.";
+      touch(r, ctx.now);
+    }
+    const consent = makeRecord(state, "connected-consents", {
+      name: "Authorise one payment",
+      status: "active",
+      createdAt: ctx.now,
+      data: {
+        purpose: "one_time_payment",
+        subjectId: intent.customerId,
+        entityId: state.merchant.id,
+        intentId: intent.id,
+        amountKobo: intent.amountKobo,
+        currency: "NGN",
+        beneficiaryId: state.merchant.id,
+        dueItemId: due.id,
+        expiresAt: intent.data.expiresAt,
+        version: 1,
+        authority: "simulated",
+        grantedBy: ctx.actor,
+      },
+    });
+    intent.data.consentId = consent.id;
+    return event(
+      "authorised",
+      "Sample bank authorisation recorded. No money was moved.",
+    );
+  }
+  if (input.action === "payment.cancel") {
+    if (intent.status !== "created")
+      reject(
+        "Only an unauthorised checkout can be cancelled. An in-flight payment must be reconciled.",
+        409,
+      );
+    return event("cancelled", input.reason);
+  }
+  if (input.action === "payment.return") {
+    if (!["authorised", "pending"].includes(intent.status))
+      reject("Return is available only after sample authorisation.", 409);
+    return event(
+      "pending",
+      "Browser returned. Payment is not confirmed; awaiting provider evidence.",
+    );
+  }
+  if (input.action === "payment.outcome") {
+    const { outcome } = z
+      .object({ outcome: z.enum(["confirmed", "unknown", "failed"]) })
+      .strict()
+      .parse(input.data);
+    if (intent.status === "confirmed" && outcome === "confirmed") return intent;
+    if (!["authorised", "pending", "unknown"].includes(intent.status))
+      reject("This checkout is not waiting for a provider outcome.", 409);
+    if (outcome !== "confirmed")
+      return event(
+        outcome,
+        outcome === "unknown"
+          ? "Sample provider did not establish the outcome. Query again; do not retry payment."
+          : "Sample provider confirmed that payment failed.",
+      );
+    // This simulator is the ONLY receipt producer; request data cannot supply beneficiary, amount or reference.
+    // A late response may arrive after consent expires/revokes: keep recording existing in-flight evidence.
+    const reference = `SYN-A2A-${intent.id}`;
+    const payment = makeRecord(state, "payments", {
+      name: "Confirmed sample pay-by-bank receipt",
+      status: "unallocated",
+      reference,
+      customerId: intent.customerId,
+      amountKobo: intent.amountKobo,
+      createdAt: ctx.now,
+      data: {
+        channel: "transfer",
+        providerConnection: "synthetic_a2a",
+        providerReference: reference,
+        currency: "NGN",
+        collectionStatus: "received",
+        settlementStatus: "settled",
+        reversalStatus: "none",
+        refundStatus: "none",
+        allocatedKobo: 0,
+        observedAt: ctx.now,
+        connectedIntentId: intent.id,
+        paymentMethod: "pay_by_bank",
+      },
+    });
+    const observation = makeRecord(state, "observations", {
+      name: "Sample bank confirmation",
+      status: "resolved",
+      reference,
+      amountKobo: intent.amountKobo,
+      customerId: intent.customerId,
+      createdAt: ctx.now,
+      data: {
+        source: "transfer",
+        eventId: reference,
+        providerReference: reference,
+        paymentId: payment.id,
+        dueItemId: due.id,
+        provider: "synthetic_a2a",
+        currency: "NGN",
+        receiptAuthority: "server_simulator",
+      },
+    });
+    const available = Number(due.data.outstandingKobo ?? due.amountKobo);
+    if (
+      available > 0 &&
+      !["in_dispute", "cancelled", "closed"].includes(due.status)
+    )
+      allocatePayment(
+        state,
+        ctx,
+        payment,
+        due,
+        Math.min(available, payment.amountKobo),
+        "A2A-bound-intent",
+        "certain",
+        true,
+        "Server simulator confirmed the amount, beneficiary and bound instalment.",
+      );
+    if (Number(payment.data.allocatedKobo || 0) < payment.amountKobo)
+      raiseException(state, ctx, "unallocated_payment", {
+        linkedRecordId: payment.id,
+        customerId: payment.customerId,
+        amountKobo:
+          payment.amountKobo - Number(payment.data.allocatedKobo || 0),
+        notes:
+          "A late sample payment needs Finance review. Never collect the same instalment again.",
+      });
+    intent.data.paymentId = payment.id;
+    intent.data.observationId = observation.id;
+    intent.data.receiptReference = reference;
+    intent.data.confirmedAt = ctx.now;
+    return event(
+      "confirmed",
+      "Sample server receipt confirmed and added to collections reconciliation.",
+    );
+  }
+  if (input.action === "payment.refund_request") {
+    allow(ctx, ["Admin", "Operations"]);
+    if (intent.status !== "confirmed")
+      reject("Only a confirmed payment can be requested for refund.", 409);
+    if (intent.data.refundRequest)
+      reject("A refund request is already recorded.", 409);
+    intent.data.refundRequest = {
+      maker: ctx.actor,
+      reason: input.reason,
+      at: ctx.now,
+    };
+    touch(intent, ctx.now);
+    return intent;
+  }
+  if (
+    input.action === "payment.refund_confirm" ||
+    input.action === "payment.reverse"
+  ) {
+    allow(ctx, ["Finance"]);
+    if (intent.status !== "confirmed")
+      reject("Only a confirmed receipt can be adjusted.", 409);
+    if (
+      input.action === "payment.refund_confirm" &&
+      (!intent.data.refundRequest ||
+        intent.data.refundRequest.maker === ctx.actor)
+    )
+      reject("A different maker must request the refund first.", 403);
+    const payment =
+      recordsOf(state, "payments").find(
+        (r) => r.id === intent.data.paymentId,
+      ) ?? reject("Receipt not found.", 404);
+    for (const allocation of recordsOf(state, "allocations").filter(
+      (r) => r.data.paymentId === payment.id && r.status === "confirmed",
+    )) {
+      supersedeAllocation(state, ctx, allocation, input.reason);
+      const affectedDue = owned(
+        state,
+        String(allocation.data.dueItemId),
+        "due-items",
+      );
+      affectedDue.status = "in_dispute";
+      touch(affectedDue, ctx.now);
+    }
+    const refund = input.action === "payment.refund_confirm";
+    if (refund) payment.data.refundStatus = "refunded";
+    else payment.data.reversalStatus = "reversed";
+    touch(payment, ctx.now);
+    due.status = "in_dispute";
+    touch(due, ctx.now);
+    raiseException(state, ctx, "unallocated_payment", {
+      linkedRecordId: payment.id,
+      customerId: payment.customerId,
+      amountKobo: payment.amountKobo,
+      notes:
+        "Sample refund or reversal recorded. Finance must review the reopened obligation before collection.",
+    });
+    return event(
+      refund ? "refunded" : "reversed",
+      `${input.reason} (sample evidence only)`,
+    );
+  }
+  reject("Unknown payment action.");
+}
+export function runConnectedAction(
+  state: DomainState,
+  ctx: Context,
+  input: ConnectedAction,
+) {
+  if (state.settings.environment !== "sandbox")
+    reject(
+      "Connected modules currently support synthetic workspaces only.",
+      403,
+    );
+  if (ctx.role === "Read-only")
+    reject("Read-only role cannot change the workspace.", 403);
+  if (input.expectedRevision !== connectedRevision(state))
+    reject(
+      "The workspace changed. Refresh and review before trying again.",
+      409,
+    );
+  const startsNewWork = [
+    "consent.grant",
+    "payment.create",
+    "credit.assess",
+    "cash.initialize",
+    "cash.forecast",
+    "cash.erp.prepare",
+    "cash.vat.export",
+    "cash.payroll.prepare",
+  ].includes(input.action);
+  if (
+    startsNewWork &&
+    state.records.filter((r) => r.kind.startsWith("connected-")).length >= 1500
+  )
+    reject(
+      "This sample workspace reached its connected-record limit for new work. Existing permissions can still be revoked and in-flight outcomes reconciled.",
+      409,
+    );
+  if (input.action === "consent.grant")
+    return addConsent(state, ctx, input.data);
+  if (input.action === "consent.revoke") {
+    allow(ctx, ["Admin", "Operations", "Compliance reviewer"]);
+    const consent = owned(state, input.recordId, "connected-consents");
+    if (consent.status === "revoked") return consent;
+    consent.status = "revoked";
+    consent.data.revokedAt = ctx.now;
+    consent.data.revokedBy = ctx.actor;
+    consent.data.revocationReason = input.reason;
+    touch(consent, ctx.now);
+    return consent;
+  }
+  if (input.action.startsWith("payment."))
+    return paymentAction(state, ctx, input);
+  if (input.action.startsWith("credit."))
+    return runCreditAction(state, ctx, input);
+  if (input.action.startsWith("cash.")) return runCashAction(state, ctx, input);
+  reject("Unknown connected-workspace action.");
+}
+export function connectedView(state: DomainState, ctx: Context) {
+  const customers = recordsOf(state, "customers").map((r) => ({
+    id: r.id,
+    name: r.name,
+    reference: r.reference,
+  }));
+  return {
+    mode: "synthetic" as const,
+    revision: connectedRevision(state),
+    asOf: ctx.now,
+    role: ctx.role,
+    entity: {
+      id: `${state.merchant.id}:sme`,
+      name: "Sample SME · separate legal entity",
+      workspaceOwner: state.merchant.name,
+    },
+    customers,
+    consents: state.records
+      .filter((r) => r.kind === "connected-consents")
+      .map((r) => ({
+        ...r,
+        effectiveStatus: consentActive(r, ctx.now)
+          ? "active"
+          : r.status === "revoked"
+            ? "revoked"
+            : "expired",
+      })),
+    purposes: consentPurposes.map((id) => ({ id, label: purposeLabels[id] })),
+    gates: gates.map(([id, name, requires]) => ({
+      id,
+      name,
+      requires,
+      status: "not_enabled",
+      liveEnabled: false,
+    })),
+    payments: {
+      intents: state.records
+        .filter((r) => r.kind === "connected-intents")
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+      dues: recordsOf(state, "due-items")
+        .filter(
+          (r) =>
+            Number(r.data.outstandingKobo ?? r.amountKobo) > 0 &&
+            !["paid", "closed", "cancelled", "in_dispute"].includes(r.status),
+        )
+        .map((r) => ({
+          id: r.id,
+          name: r.name,
+          reference: r.reference,
+          customerId: r.customerId,
+          customerName:
+            customers.find((c) => c.id === r.customerId)?.name ?? r.name,
+          outstandingKobo: Number(r.data.outstandingKobo ?? r.amountKobo),
+          blocked: state.records.some(
+            (a) =>
+              a.data.dueItemId === r.id &&
+              (intentOpen(a) ||
+                externalScheduled(a) ||
+                (a.kind === "attempts" &&
+                  ["sent", "unknown"].includes(a.status))),
+          ),
+        })),
+    },
+    credit: creditView(state, ctx),
+    cash: cashView(state, ctx),
+  };
+}

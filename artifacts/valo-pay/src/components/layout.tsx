@@ -2,7 +2,7 @@ import React, { ReactNode, useEffect, useLayoutEffect, useRef, useState } from '
 import { Link, useLocation, useSearch } from 'wouter';
 import { useWorkspace } from '@/lib/workspace-context';
 import { AuthShow, useSignOut } from '@/lib/auth';
-import { Shield, Home, Users, FileText, ArrowRightLeft, CheckSquare, AlertTriangle, FileBarChart, HardDrive, FileCheck, Settings, Lock, LogOut, Menu, Sun, Moon, ChevronRight, Layers } from 'lucide-react';
+import { Shield, Home, Users, FileText, ArrowRightLeft, CheckSquare, AlertTriangle, FileBarChart, HardDrive, FileCheck, Settings, Lock, LogOut, Menu, Sun, Moon, ChevronRight, Layers, Landmark, Building2, ShieldCheck, Link2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from './ui/sheet';
 import { BrandLockup } from './brand';
@@ -20,6 +20,10 @@ const navItems = [
   { href: '/collections', label: 'Collections', icon: ArrowRightLeft },
   { href: '/reconciliation', label: 'Reconciliation', icon: CheckSquare },
   { href: '/exceptions', label: 'Exceptions', icon: AlertTriangle },
+  { href: '/pay-by-bank', label: 'Pay-by-bank', icon: Landmark },
+  { href: '/credit-desk', label: 'Credit Desk', icon: ShieldCheck },
+  { href: '/cash-desk', label: 'Cash Desk', icon: Building2 },
+  { href: '/connections', label: 'Permissions & readiness', icon: Link2 },
   { href: '/policies', label: 'Policies & templates', icon: Shield },
   { href: '/reports', label: 'Reports', icon: FileBarChart },
   { href: '/evidence', label: 'Evidence & readiness', icon: FileCheck },
@@ -42,7 +46,7 @@ function NavLinks({ location, spacious = false, onNavigate }: { location: string
         const active = location === item.href || location.startsWith(`${item.href}/`);
         return (
           <React.Fragment key={item.href}>
-          {[0, 6, 10].includes(index) && <p className={`nav-group-label ${index > 0 ? 'mt-2' : 'mt-0'}`}>{index === 0 ? 'Operations' : index === 6 ? 'Oversight' : 'Workspace'}</p>}
+          {[0, 6, 10, 14].includes(index) && <p className={`nav-group-label ${index > 0 ? 'mt-2' : 'mt-0'}`}>{index === 0 ? 'Collections' : index === 6 ? 'Connected banking' : index === 10 ? 'Oversight' : 'Workspace'}</p>}
           <Link href={item.href} aria-current={active ? 'page' : undefined} onClick={onNavigate} className={`console-nav-link flex items-center gap-3 px-3 rounded-lg text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${spacious ? 'py-3' : 'py-1.5'} ${active ? 'is-active' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}>
             <item.icon className="h-4 w-4" aria-hidden="true" />
             {item.label}
@@ -139,7 +143,7 @@ export function Layout({ children }: { children: ReactNode }) {
       {/* Sandbox banner: on a phone it keeps the sentence that matters and drops the restatement, so it stays one line. */}
       <div className="environment-strip px-4 py-2 text-[11px] font-medium flex items-center justify-center gap-2 border-b z-50 print:hidden">
         <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
-        <span>Sandbox · Sample data. We never hold money.<span className="hidden sm:inline"> Live collections are disabled.</span></span>
+        <span>Sandbox · Sample data. We never hold money.<span className="hidden sm:inline"> Live instructions are disabled.</span></span>
         {workspace?.environment && <span className="ml-2 hidden sm:inline-block text-[10px] uppercase tracking-wider rounded border px-2 py-0.5">Mode: {workspace.environment}</span>}
       </div>
 
@@ -222,7 +226,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 A page that stops working keeps the sidebar and the lender selector as the way out. */}
             {isLoading && !workspace
               ? <p role="status" className="text-sm text-muted-foreground">Loading your workspace…</p>
-              : <ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{!embedded && <SandboxGuide />}{children}</ErrorBoundary>}
+              : <ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{!embedded && !['/pay-by-bank','/credit-desk','/cash-desk','/connections'].includes(location) && <SandboxGuide />}{children}</ErrorBoundary>}
             <p className="hidden print:block mt-8 border-t pt-3 text-xs text-muted-foreground">Printed {printedAt} from the Valo Pay sandbox · {pageTitle}{lenderName ? ` · ${lenderName}` : ''}.</p>
           </div>
         </main>

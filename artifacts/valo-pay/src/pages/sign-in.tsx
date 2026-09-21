@@ -70,18 +70,18 @@ function Shell({ title, intro, children }: { title: string; intro: string; child
     <PublicFrame className="auth-site">
       <main id="main" tabIndex={-1} className="public-container public-auth focus:outline-none">
         <div className="auth-welcome">
-          <p className="auth-eyebrow"><span aria-hidden="true" /> Your collections workspace</p>
+          <p className="auth-eyebrow"><span aria-hidden="true" /> Your connected workspace</p>
           <h1>{title}</h1>
           <p className="auth-intro">Every payment. One clear picture.<br /> {intro}</p>
         </div>
         <div className="auth-form-area">
           {children}
-          <p className="auth-footnote"><ShieldCheck aria-hidden="true" /> Sample data only. No live collections.</p>
+          <p className="auth-footnote"><ShieldCheck aria-hidden="true" /> Sample data only. No live instructions.</p>
         </div>
         <aside aria-labelledby="context-title" className="auth-context">
           <h2 id="context-title" className="auth-eyebrow">Why sign in?</h2>
           <ul className="auth-benefits" role="list">
-            <li><span className="auth-benefit-icon"><FolderCheck aria-hidden="true" /></span><div><h3>Your work stays with you</h3><p>Keep your lenders, mandates, payment matches and settings between visits.</p></div></li>
+            <li><span className="auth-benefit-icon"><FolderCheck aria-hidden="true" /></span><div><h3>Your work stays with you</h3><p>Keep your collections, connected permissions, sample assessments and cash plans between visits.</p></div></li>
             <li><span className="auth-benefit-icon"><History aria-hidden="true" /></span><div><h3>A clear customer history</h3><p>Follow consent, payments and collection activity in one timeline.</p></div></li>
           </ul>
           <details className="auth-retention">
