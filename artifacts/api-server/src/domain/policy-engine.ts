@@ -162,6 +162,7 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
     ...(noticeRequired ? { noticeRequired } : {}),
   });
   const finalNotice: NoticeRequirement = { purpose: "final_attempt", leadHours: 0, requiredBy: null, noticeId: null, acceptedAt: null, evidenced: false };
+  if(state.records.some(r=>r.kind==='connected-intents' && r.data.dueItemId===due.id && ['authorised','pending','unknown'].includes(r.status))) return explain('blocked','in_flight','A pay-by-bank payment is pending or has an unknown outcome. Reconcile it before scheduling another collection.');
 
   // Row 1: settled by any channel, or the obligation is frozen or closed.
   const outstanding = Number.isInteger(due.data.outstandingKobo) ? Number(due.data.outstandingKobo) : due.amountKobo;

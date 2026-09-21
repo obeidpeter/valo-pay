@@ -21,7 +21,7 @@ describe("responsive layout", () => {
     expect(lenders.map((select) => select.value)).toEqual([api.merchantIds[0], api.merchantIds[0]]);
     const [sidebarPages] = screen.getAllByRole("navigation", { name: "Pages" });
     const sidebarLabels = within(sidebarPages!).getAllByRole("link").map((link) => link.textContent);
-    expect(sidebarLabels).toHaveLength(11);
+    expect(sidebarLabels).toHaveLength(15);
 
     await user.click(screen.getByRole("button", { name: "Menu" }));
     const drawer = await screen.findByRole("dialog", { name: "Menu" });

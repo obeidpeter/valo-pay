@@ -40,6 +40,10 @@ const ReportsPage: PageLoader = () => import('@/pages/reports');
 const EvidencePage: PageLoader = () => import('@/pages/evidence');
 const AuditPage: PageLoader = () => import('@/pages/audit');
 const SettingsPage: PageLoader = () => import('@/pages/settings');
+const PayByBankPage: PageLoader = () => import('@/pages/pay-by-bank');
+const CreditDeskPage: PageLoader = () => import('@/pages/credit-desk');
+const CashDeskPage: PageLoader = () => import('@/pages/cash-desk');
+const ConnectionsPage: PageLoader = () => import('@/pages/connections');
 
 type PageLoader = () => Promise<{ default: ComponentType<any> }>;
 const loadedPages = new Map<PageLoader, ComponentType<any>>();
@@ -121,6 +125,10 @@ const consoleRoutes: Array<{ path: string; load: PageLoader }> = [
   { path: '/evidence', load: EvidencePage },
   { path: '/audit', load: AuditPage },
   { path: '/settings', load: SettingsPage },
+  { path: '/pay-by-bank', load: PayByBankPage },
+  { path: '/credit-desk', load: CreditDeskPage },
+  { path: '/cash-desk', load: CashDeskPage },
+  { path: '/connections', load: ConnectionsPage },
 ];
 const consolePages = consoleRoutes.map((route) => route.load);
 const overviewOnly = [OverviewPage];

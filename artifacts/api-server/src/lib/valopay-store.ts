@@ -552,7 +552,7 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
     if (present.id !== before.id || present.merchantId !== before.merchantId || present.kind !== before.kind || present.createdAt !== before.createdAt) {
       conflict("Record identity, lender, kind, and creation time are immutable.");
     }
-    if (["audit", "exports", "reviews", "closes", "retry-decisions", "invoices"].includes(before.kind) && canonical(present) !== canonical(before)
+    if (["audit", "exports", "reviews", "closes", "retry-decisions", "invoices", "connected-credit-assessments", "connected-credit-reviews"].includes(before.kind) && canonical(present) !== canonical(before)
       && !(before.kind === "exports" && isExportRetry(before, present, now))) conflict("Evidence records are immutable.");
     if (["policies", "templates", "experiments"].includes(before.kind) && ["approved", "preregistered", "closed"].includes(before.status) && canonical(present) !== canonical(before)) {
       conflict("Approved, preregistered, and closed versions are immutable.");
@@ -648,6 +648,14 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
         allocatedPayments.set(payment.id, (allocatedPayments.get(payment.id) || 0) + record.amountKobo);
         allocatedDues.set(due.id, (allocatedDues.get(due.id) || 0) + record.amountKobo);
       }
+    }
+  }
+  for(const record of final.values()) {
+    if(record.kind==='connected-intents' && ['authorised','pending','unknown'].includes(record.status)) {
+      const due=reference(record,record.data.dueItemId,'due-items','Checkout instalment',final);
+      if(due.customerId!==record.customerId) conflict('Checkout customer must match the instalment.');
+      if(inflight.has(due.id)) conflict('A pay-by-bank checkout and another collection cannot be in flight together.');
+      inflight.add(due.id);
     }
   }
   for (const [id, amount] of allocatedPayments) if (amount > final.get(id)!.amountKobo) conflict("Allocations exceed the payment amount.");

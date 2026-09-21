@@ -1,4 +1,5 @@
 import { pageCustomerHistory } from '../../api-server/src/lib/customer-history';
+import { connectedView, connectedActionSchema, runConnectedAction } from '../../api-server/src/domain/connected';
 import { pageReconciliation, pageCloseHistory } from '../../api-server/src/lib/console-read-models';
 // An in-memory Valo Pay API for the console tests: the real domain code (seed,
 // validation, actions, reconciliation, reports, paging) behind the console's
@@ -150,6 +151,8 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
       name: "Valo Pay", environment: "sandbox", actor: `Sandbox ${api.role}`, role: api.role, authenticated: false,
       merchants: api.merchantIds.map((id) => states.get(id)!.merchant), roles: [...roles], productionEnabled: false,
     })],
+    ['GET', /^\/v1\/connected$/, (_p,query)=>withState(merchantOf(query),(state,ctx)=>connectedView(state,ctx))],
+    ['POST', /^\/v1\/connected\/actions$/, (_p,query,raw)=>{const input=connectedActionSchema.parse(raw);return withState(merchantOf(query),(state,ctx)=>({message:'Sample workspace updated.',record:runConnectedAction(state,ctx,input),mode:'synthetic',externalInstructionPerformed:false}),{action:input.action,objectId:input.recordId||'connected-workspace',summary:input.reason});}],
     ["GET", /^\/v1\/overview$/, (_p, query) => S.GetOverviewResponse.parse(withState(merchantOf(query), (state, ctx) => buildConsoleOverview(state, ctx.now, verifyAudit(state), api.scheduler)))],
     ["GET", /^\/v1\/records\/(?<kind>[^/]+)$/, (params, query) => {
       if (!kinds.has(params.kind!)) fail("Unknown resource.", 404);

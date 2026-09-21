@@ -1,0 +1,95 @@
+import { Link } from "wouter";
+import { ArrowUpRight, Landmark, ShieldCheck, Building2 } from "lucide-react";
+const modules = [
+  {
+    href: "/pay-by-bank",
+    icon: Landmark,
+    title: "Pay-by-bank",
+    text: "Follow a one-time payment from bank authorisation to a confirmed receipt. Keep it linked to the right instalment.",
+  },
+  {
+    href: "/credit-desk",
+    icon: ShieldCheck,
+    title: "Credit Desk",
+    text: "Explore evidence quality, an explained rule score and repayment capacity. A lender reviews the recommendation.",
+  },
+  {
+    href: "/cash-desk",
+    icon: Building2,
+    title: "Cash Desk",
+    text: "Bring business cash, forecasts, accounting drafts and payroll funding into one clear workspace.",
+  },
+];
+export function ConnectedIntroduction({
+  compact = false,
+}: {
+  compact?: boolean;
+}) {
+  return (
+    <section
+      id={compact ? undefined : "connected-banking"}
+      aria-labelledby={
+        compact ? "connected-preview-title" : "connected-suite-title"
+      }
+      className={
+        compact ? "rounded-xl border bg-card p-5" : "public-container py-16"
+      }
+    >
+      <div className="flex flex-wrap justify-between gap-4 items-end mb-6">
+        <div>
+          <p className="text-xs uppercase tracking-widest font-semibold text-primary mb-3">
+            Beyond the collections queue
+          </p>
+          <h2
+            id={compact ? "connected-preview-title" : "connected-suite-title"}
+            className={
+              compact
+                ? "text-lg font-semibold tracking-tight"
+                : "text-3xl font-semibold tracking-tight max-w-xl"
+            }
+          >
+            Connected payments. Clearer decisions. Better cash visibility.
+          </h2>
+        </div>
+        <span className="text-xs text-muted-foreground rounded-full border px-3 py-2">
+          Explore now with sample data
+        </span>
+      </div>
+      <div className="grid gap-4 md:grid-cols-3">
+        {modules.map((m) => (
+          <Link
+            key={m.href}
+            href={m.href}
+            className="group block rounded-xl border bg-background p-5 hover:border-brand/50 transition-colors focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            <div className="flex justify-between mb-5">
+              <span className="p-2.5 rounded-xl bg-brand/10 text-primary">
+                <m.icon size={21} aria-hidden="true" />
+              </span>
+              <ArrowUpRight
+                size={16}
+                className="text-muted-foreground group-hover:text-primary"
+                aria-hidden="true"
+              />
+            </div>
+            <h3 className="font-semibold text-base">{m.title}</h3>
+            <p className="text-sm text-muted-foreground leading-relaxed mt-3">
+              {m.text}
+            </p>
+            <span className="inline-block text-xs font-semibold mt-5 text-primary">
+              Explore {m.title}
+            </span>
+          </Link>
+        ))}
+      </div>
+      <p className="text-xs leading-relaxed text-muted-foreground mt-5">
+        These are synthetic workflows. Live bank connections, payment
+        instructions, credit use and accounting writes each require their own
+        approval. Valo Pay never holds money.{" "}
+        <Link href="/connections" className="underline underline-offset-4">
+          View permissions and readiness
+        </Link>
+      </p>
+    </section>
+  );
+}

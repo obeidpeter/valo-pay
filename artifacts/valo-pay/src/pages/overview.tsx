@@ -1,4 +1,5 @@
 import React from 'react';
+import { ConnectedIntroduction } from '@/components/connected-introduction';
 import { Link } from 'wouter';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow, EmptyState } from '@/components/empty-state';
@@ -169,6 +170,7 @@ export default function OverviewPage() {
         </ScrollFrame>
         <div className="border-t px-5 py-2.5 text-xs text-muted-foreground">{formatCount(overview.activity.length, 'recent record')} · Every change is recorded in the audit log.</div>
       </section>
+      <ConnectedIntroduction compact />
     </div>
   );
 }

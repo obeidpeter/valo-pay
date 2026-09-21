@@ -71,10 +71,10 @@ describe("landing page", () => {
   it("says what Valo Pay is and is not, with every way in a real link, and creates no sandbox", async () => {
     renderApp("/");
     expect(await screen.findByRole("heading", { level: 1, name: "Know what was paid, what is due, and what needs attention." })).toBeTruthy();
-    await waitFor(() => expect(document.title).toBe("Valo Pay · Collections operations layer"));
+    await waitFor(() => expect(document.title).toBe("Valo Pay · Collections and connected banking"));
     // The descriptor, the promise and "we never hold money" are the first three lines (marketing strategy 3.1).
     const lines = Array.from(screen.getByRole("main").querySelectorAll("p, h1")).slice(0, 3).map((node) => node.textContent ?? "");
-    expect(lines[0]).toMatch(/^A collections operations layer for lenders/);
+    expect(lines[0]).toMatch(/^Collections and connected banking for lenders/);
     expect(lines[1]).toBe("Know what was paid, what is due, and what needs attention.");
     expect(lines[2]).toMatch(/^We never hold money\./);
     // Both ways in are links to real addresses, repeated where a reader would look for them.

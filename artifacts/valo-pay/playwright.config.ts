@@ -18,10 +18,26 @@ export default defineConfig({
       name: "mobile-webkit",
       use: { ...devices["iPhone 13"], defaultBrowserType: "webkit" },
     },
-    { name: "desktop-chromium", use: { ...devices["Desktop Chrome"] } },
+    {
+      name: "desktop-chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: {
+          executablePath:
+            process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
+        },
+      },
+    },
     {
       name: "mobile-chromium",
-      use: { ...devices["Pixel 7"], defaultBrowserType: "chromium" },
+      use: {
+        ...devices["Pixel 7"],
+        defaultBrowserType: "chromium",
+        launchOptions: {
+          executablePath:
+            process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
+        },
+      },
     },
   ],
   webServer: {
