@@ -16,6 +16,8 @@ export const paymentRefunded = (payment: TypedRecord<"payments">): boolean => no
 /** Reversed or refunded: the money went back to the payer, so nothing it has not already applied can be allocated or held as credit. */
 export const paymentReturned = (payment: TypedRecord<"payments">): boolean => paymentMoneyReturned(payment.data);
 export const paymentObservedAt = (payment: TypedRecord<"payments">): number => Date.parse(String(payment.data.observedAt || payment.createdAt));
+/** When an allocation was applied (REC-07, REC-09): confirmedAt, or its creation for records written before confirmedAt was kept. A review or a reinstatement never moves it. */
+export const allocationConfirmedAt = (allocation: TypedRecord<"allocations">): string => String(allocation.data.confirmedAt || allocation.createdAt);
 
 /** The four independent status dimensions of a Payment (TRD 4.2), written in one vocabulary; legacy spellings are normalised. */
 export function paymentDimensions(payment: TypedRecord<"payments">): void {
@@ -51,9 +53,11 @@ const identityCondition = (type: ExceptionType, linkedRecordId: string): string 
  * record, it is not raised again, so a resolved exception does not come back
  * at every close. A changed condition, such as a different fee variance, is
  * new work and raises a new exception. Event-driven raises pass no condition
- * and keep the one-open-exception rule only.
+ * and keep the one-open-exception rule only. `settledBy` names other
+ * conditions that describe the same state, such as the spelling an earlier
+ * check recorded, so their resolution also holds.
  */
-export function raiseException(state: DomainState, ctx: Context, type: ExceptionType, options: { linkedRecordId?: string; customerId?: string; amountKobo?: number; notes: string; condition?: string }): TypedRecord<"exceptions"> {
+export function raiseException(state: DomainState, ctx: Context, type: ExceptionType, options: { linkedRecordId?: string; customerId?: string; amountKobo?: number; notes: string; condition?: string; settledBy?: readonly string[] }): TypedRecord<"exceptions"> {
   const definition = exceptionCatalogue[type];
   const linkedRecordId = options.linkedRecordId || "";
   const sameRecord = (item: TypedRecord<"exceptions">) => item.data.linkedRecordId === linkedRecordId && resolveExceptionType(item.data.type) === type;
@@ -61,7 +65,8 @@ export function raiseException(state: DomainState, ctx: Context, type: Exception
   if (existing) return existing;
   if (options.condition !== undefined) {
     // A resolution with no stored condition (an event-driven raise, or one recorded before conditions were stored) settles the record.
-    const settled = recordsOf(state, "exceptions").find((item) => sameRecord(item) && (item.data.condition === undefined || item.data.condition === options.condition));
+    const settles = (condition: unknown) => condition === undefined || condition === options.condition || (options.settledBy ?? []).includes(String(condition));
+    const settled = recordsOf(state, "exceptions").find((item) => sameRecord(item) && settles(item.data.condition));
     if (settled) return settled;
   }
   return makeRecord(state, "exceptions", {
@@ -139,6 +144,11 @@ function settlementBatch(state: DomainState, ctx: Context, observation: TypedRec
       data: { provider, batchReference, providerConnection: payment.data.providerConnection, lineObservationIds: [], linePaymentIds: [], grossKobo: 0, feeKobo: 0, netKobo: 0, expectedFeeKobo: 0, feeSchedule: schedule },
     });
   }
+  if (!Array.isArray(batch.data.lineObservationIds)) {
+    // A batch Finance entered by hand: the provider's lines now build its totals, and the typed totals are kept beside them.
+    batch.data.enteredTotals = { grossKobo: Number(batch.data.grossKobo || 0), feeKobo: Number(batch.data.feeKobo || 0), netKobo: Number(batch.data.netKobo || 0) };
+    Object.assign(batch.data, { lineObservationIds: [], linePaymentIds: [], grossKobo: 0, feeKobo: 0, netKobo: 0, expectedFeeKobo: 0, feeSchedule: batch.data.feeSchedule ?? schedule });
+  }
   const lineIds = batch.data.lineObservationIds as string[];
   const linePaymentIds = (batch.data.linePaymentIds ||= []) as string[];
   if (lineIds.includes(observation.id)) return;
@@ -161,46 +171,79 @@ function settlementBatch(state: DomainState, ctx: Context, observation: TypedRec
   touch(batch, ctx.now);
 }
 
-/** ING-07: a batch whose fees do not reconcile to the schedule is a variance exception, never forced. */
-function checkBatchFees(state: DomainState, ctx: Context): number {
+const STATEMENT_DIFFERS = "Statement credit differs from gross settlement lines less recorded fees.";
+const STATEMENT_MATCHED = "Statement credit matched the settlement batch net total; it was not allocated to a customer.";
+
+/**
+ * ING-03 and ING-07: what a settlement batch's current lines and linked
+ * statement credit show. It waits for its statement credit unless the fees
+ * already differ from the schedule; it is reconciled when the credit equals the
+ * net total and the fees are within tolerance, and a variance otherwise. The
+ * condition names the state a settlement_variance exception is raised for;
+ * `settledBy` is the other spelling earlier builds recorded for the same state.
+ */
+export function settlementBatchState(batch: TypedRecord<"settlement-batches">): { status: "pending" | "reconciled" | "variance"; explanation?: string; condition?: string; settledBy?: string[] } {
+  const net = Number(batch.data.netKobo || 0), variance = Number(batch.data.feeVarianceKobo || 0);
+  const feesDiffer = Math.abs(variance) > SETTLEMENT_BATCH_TOLERANCE_KOBO;
+  const feeText = `Provider fees of ${batch.data.feeKobo} kobo differ from the schedule's ${batch.data.expectedFeeKobo} kobo by ${variance} kobo.`;
+  const feeCondition = `settlement_variance:${batch.id}:fees:${batch.data.feeKobo}:${batch.data.expectedFeeKobo}`;
+  const statement = typeof batch.data.statementObservationId === "string" && Number.isSafeInteger(batch.data.statementNetKobo) ? Number(batch.data.statementNetKobo) : null;
+  if (statement === null) return feesDiffer ? { status: "variance", explanation: feeText, condition: feeCondition } : { status: "pending" };
+  const statementCondition = `settlement_variance:${batch.id}:statement:${statement}:${batch.data.netKobo}:${batch.data.feeKobo}`;
+  if (statement !== net) return { status: "variance", explanation: feesDiffer ? `${STATEMENT_DIFFERS} ${feeText}` : STATEMENT_DIFFERS, condition: statementCondition };
+  if (feesDiffer) return { status: "variance", explanation: feeText, condition: feeCondition, settledBy: [statementCondition] };
+  return { status: "reconciled", explanation: STATEMENT_MATCHED };
+}
+
+/**
+ * Every batch is re-evaluated from its current totals at every reconciliation,
+ * so a line imported after its statement credit matched, or an edit, moves it.
+ * Only what changed is written. A variance is a settlement_variance exception,
+ * never forced; an exception raised for an earlier state stays for Finance.
+ * Returns the number of batches in variance.
+ */
+function evaluateSettlementBatches(state: DomainState, ctx: Context): number {
   let variances = 0;
   for (const batch of recordsOf(state, "settlement-batches")) {
-    const variance = Number(batch.data.feeVarianceKobo || 0);
-    if (Math.abs(variance) <= SETTLEMENT_BATCH_TOLERANCE_KOBO) continue;
-    if (batch.status !== "variance") { batch.status = "variance"; touch(batch, ctx.now); }
-    batch.data.explanation = `Provider fees of ${batch.data.feeKobo} kobo differ from the schedule's ${batch.data.expectedFeeKobo} kobo by ${variance} kobo.`;
-    raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, notes: batch.data.explanation, condition: `settlement_variance:${batch.id}:fees:${batch.data.feeKobo}:${batch.data.expectedFeeKobo}` });
+    let changed = false;
+    // A batch edited by hand keeps its fee variance in step with its stated and expected fees.
+    if (Number.isSafeInteger(batch.data.feeKobo) && Number.isSafeInteger(batch.data.expectedFeeKobo)) {
+      const variance = Number(batch.data.feeKobo) - Number(batch.data.expectedFeeKobo);
+      if (batch.data.feeVarianceKobo !== variance) { batch.data.feeVarianceKobo = variance; changed = true; }
+    }
+    const next = settlementBatchState(batch);
+    const previous = batch.status;
+    if (previous !== next.status) { batch.status = next.status; changed = true; }
+    if (next.explanation !== undefined && batch.data.explanation !== next.explanation) { batch.data.explanation = next.explanation; changed = true; }
+    // Back to waiting for its statement credit: the variance explanation no longer applies.
+    if (next.explanation === undefined && previous !== next.status && batch.data.explanation !== undefined) { delete batch.data.explanation; changed = true; }
+    if (changed) touch(batch, ctx.now);
+    if (next.status !== "variance") continue;
+    raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, notes: next.explanation!, condition: next.condition, settledBy: next.settledBy });
     variances += 1;
   }
   return variances;
 }
 
-/** ING-03 (3): a statement credit whose reference matches a settlement batch resolves to the batch, never to a customer. */
-function matchSettlementStatements(state: DomainState, ctx: Context): number {
-  let matched = 0;
-  recordsOf(state, "observations").filter((item) => item.status === "unresolved" && item.data.source === "statement" && item.data.batchReference).forEach((statement) => {
-    const batch = recordsOf(state, "settlement-batches").find((item) => item.reference === statement.data.batchReference);
-    if (!batch) return; // It may arrive before the settlement file; leave it for the next close.
+/** ING-03 (3): a statement credit whose reference matches a settlement batch resolves to the batch, never to a customer; the batch is evaluated afterwards. */
+function linkSettlementStatements(state: DomainState, ctx: Context): number {
+  const statements = recordsOf(state, "observations").filter((item) => item.status === "unresolved" && item.data.source === "statement" && item.data.batchReference);
+  if (!statements.length) return 0;
+  const batches = new Map<string, TypedRecord<"settlement-batches">>();
+  for (const batch of recordsOf(state, "settlement-batches")) if (!batches.has(batch.reference)) batches.set(batch.reference, batch);
+  let linked = 0;
+  for (const statement of statements) {
+    const batch = batches.get(String(statement.data.batchReference));
+    if (!batch) continue; // It may arrive before the settlement file; leave it for the next close.
     statement.status = "resolved";
     statement.data.resolvedTo = `batch:${batch.id}`;
     statement.data.resolutionKey = "settlement_batch_net_credit";
     batch.data.statementObservationId = statement.id;
     batch.data.statementNetKobo = statement.amountKobo;
-    const feeVariance = Math.abs(Number(batch.data.feeVarianceKobo || 0)) > SETTLEMENT_BATCH_TOLERANCE_KOBO;
-    if (statement.amountKobo === Number(batch.data.netKobo) && !feeVariance) {
-      batch.status = "reconciled";
-      batch.data.explanation = "Statement credit matched the settlement batch net total; it was not allocated to a customer.";
-    } else {
-      batch.status = "variance";
-      batch.data.explanation = statement.amountKobo === Number(batch.data.netKobo)
-        ? "Statement credit matched the batch net, but the provider fees differ from the fee schedule."
-        : "Statement credit differs from gross settlement lines less recorded fees.";
-      raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, notes: batch.data.explanation, condition: `settlement_variance:${batch.id}:statement:${statement.amountKobo}:${batch.data.netKobo}:${batch.data.feeKobo}` });
-    }
     touch(statement, ctx.now); touch(batch, ctx.now);
-    matched += 1;
-  });
-  return matched;
+    linked += 1;
+  }
+  return linked;
 }
 
 export function allocatePayment(
@@ -680,8 +723,8 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
   const exceptionsBefore = recordsOf(state, "exceptions").length;
   const canonicalPayments = new CanonicalPaymentIndex(state);
   const resolved = observations.map((item) => canonicalPayment(state, ctx, item, canonicalPayments)).filter(Boolean) as TypedRecord<"payments">[];
-  const statementBatchesMatched = matchSettlementStatements(state, ctx);
-  const feeVariances = checkBatchFees(state, ctx);
+  const statementBatchesMatched = linkSettlementStatements(state, ctx);
+  const batchVariances = evaluateSettlementBatches(state, ctx);
   const allocationsBefore = new Set(recordsOf(state, "allocations").map((item) => item.id));
   // Statuses written before these rules, or by a path that did not settle the
   // payment, are re-derived first, so the rule ladder only sees whole,
@@ -732,7 +775,7 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
     message: "Reconciliation complete. Payment evidence has been checked for matches. No money was moved and no collection instruction was sent.",
     data: {
       observationsResolved: observations.filter((item) => item.status === "resolved").length, observationsBySource, canonicalPayments: resolved.length,
-      settlementStatementsMatched: statementBatchesMatched, settlementVariances: feeVariances, allocationsByRule, paymentStatusesRepaired: repaired.length, dueStatusesRepaired: duesRepaired, paymentsSkipped, attemptOutcomesConfirmed: outcomesConfirmed,
+      settlementStatementsMatched: statementBatchesMatched, settlementVariances: batchVariances, allocationsByRule, paymentStatusesRepaired: repaired.length, dueStatusesRepaired: duesRepaired, paymentsSkipped, attemptOutcomesConfirmed: outcomesConfirmed,
       proposed: recordsOf(state, "payments").filter((item) => item.status === "proposed").length,
       unallocated: recordsOf(state, "payments").filter((item) => item.status === "unallocated").length,
       possibleDuplicates: recordsOf(state, "payments").filter((item) => item.status === "possible_duplicate").length,

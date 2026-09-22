@@ -7,6 +7,8 @@ import { executeAction } from "../src/domain/actions.js";
 import { buildOverview, buildReports } from "../src/domain/reports.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
 import { addBusinessDays } from "../src/domain/calendar.js";
+import { closeReviewIssues } from "../src/domain/close-review.js";
+import { validateRecord } from "../src/domain/validation.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
 import type { DomainState, ValopayRecord } from "../src/domain/types.js";
 
@@ -151,6 +153,72 @@ function assertOnePayment(state: DomainState, due: ValopayRecord, label: string)
   void capped;
   invariant(state);
   checks += 7;
+}
+
+// ---------- Settlement batches follow their current lines and statement credit (ING-03, ING-07): a provider file split across two imports reconciles ----------
+{
+  const { state, due } = liveFixture({ withFailure: false, merchantId: "split-settlement" });
+  const big = recordsOf(state, "due-items").find((item) => item.amountKobo === 6_000_000)!;
+  const small = recordsOf(state, "due-items").find((item) => item.amountKobo === 1_500_000)!;
+  big.data.owner = "lms"; small.data.owner = "lms";
+  const BIG_FEE = 30_000, BIG_NET = 6_000_000 - BIG_FEE;
+  const linked = (id: string) => recordsOf(state, "exceptions").filter((item) => item.data.type === "settlement_variance" && item.data.linkedRecordId === id);
+  // Import 1: the first part of the provider file and the bank's credit for the whole batch.
+  addObservation(state, { reference: "SPLIT-L1", amountKobo: NET, grossAmountKobo: GROSS, feeKobo: FEE, batchReference: "B-SPLIT", source: "settlement", customerId: due.customerId, dueItemId: due.id, eventId: "split-l1", occurredAt: wat("2027-07-01T07:00:00") });
+  addObservation(state, { reference: "STMT-SPLIT", amountKobo: NET + BIG_NET, batchReference: "B-SPLIT", source: "statement", eventId: "split-st", occurredAt: wat("2027-07-01T08:00:00") });
+  reconcile(state, finance(wat("2027-07-01T09:00:00")));
+  const batch = recordsOf(state, "settlement-batches").find((item) => item.reference === "B-SPLIT")!;
+  assert.equal(batch.status, "variance", "half a file does not add up to the statement credit");
+  assert.equal(linked(batch.id).length, 1);
+  // Import 2: the rest of the file. The batch now matches the credit.
+  addObservation(state, { reference: "SPLIT-L2", amountKobo: BIG_NET, grossAmountKobo: 6_000_000, feeKobo: BIG_FEE, batchReference: "B-SPLIT", source: "settlement", customerId: big.customerId, dueItemId: big.id, eventId: "split-l2", occurredAt: wat("2027-07-02T07:00:00") });
+  const close = executeAction(state, finance(wat("2027-07-02T09:00:00")), { action: "daily_close" }).record!;
+  assert.equal(batch.data.netKobo, NET + BIG_NET);
+  assert.equal(batch.status, "reconciled", "the completed batch reconciles to the statement credit");
+  assert.equal(batch.data.explanation, "Statement credit matched the settlement batch net total; it was not allocated to a customer.", "and says so, not what the first half showed");
+  assert.equal(close.data.report.variances.count, 0, "the close lists no settlement difference");
+  assert.ok(!closeReviewIssues(close).some((issue) => issue.id === `variance:${batch.id}`), "and its review asks for no explanation of one");
+  assert.deepEqual(linked(batch.id).map((item) => item.status), ["open"], "the earlier exception waits for Finance; nothing new is raised");
+  // A later close with nothing new leaves the batch exactly as it was.
+  const settled = JSON.stringify(batch);
+  reconcile(state, finance(wat("2027-07-03T09:00:00")));
+  assert.equal(JSON.stringify(batch), settled, "an unchanged batch is not rewritten");
+  // Finance closes the earlier exception; a late line after the batch reconciled is a new difference.
+  executeAction(state, finance(wat("2027-07-03T10:00:00")), { action: "resolve_exception", recordId: linked(batch.id)[0]!.id, reason: "The provider sent the file in two parts.", data: { resolutionCode: "provider_corrected" } });
+  addObservation(state, { reference: "SPLIT-L3", amountKobo: 1_500_000 - 7_500, grossAmountKobo: 1_500_000, feeKobo: 7_500, batchReference: "B-SPLIT", source: "settlement", customerId: small.customerId, dueItemId: small.id, eventId: "split-l3", occurredAt: wat("2027-07-04T07:00:00") });
+  reconcile(state, finance(wat("2027-07-04T09:00:00")));
+  assert.equal(batch.status, "variance", "a reconciled batch that gains a line no longer matches its credit");
+  assert.equal(batch.data.explanation, "Statement credit differs from gross settlement lines less recorded fees.");
+  assert.deepEqual(linked(batch.id).map((item) => item.status), ["resolved", "open"], "and that is new work");
+  // A fee variance that a later line cancels out leaves the batch waiting for its statement credit.
+  addObservation(state, { reference: "FEE-L1", amountKobo: GROSS - (FEE + 20_000), grossAmountKobo: GROSS, feeKobo: FEE + 20_000, batchReference: "B-FEES", source: "settlement", eventId: "fee-l1", occurredAt: wat("2027-07-05T07:00:00") });
+  reconcile(state, finance(wat("2027-07-05T09:00:00")));
+  const fees = recordsOf(state, "settlement-batches").find((item) => item.reference === "B-FEES")!;
+  assert.equal(fees.status, "variance");
+  addObservation(state, { reference: "FEE-L2", amountKobo: 6_000_000 - (BIG_FEE - 20_000), grossAmountKobo: 6_000_000, feeKobo: BIG_FEE - 20_000, batchReference: "B-FEES", source: "settlement", eventId: "fee-l2", occurredAt: wat("2027-07-06T07:00:00") });
+  reconcile(state, finance(wat("2027-07-06T09:00:00")));
+  assert.deepEqual([fees.data.feeVarianceKobo, fees.status, fees.data.explanation], [0, "pending", undefined], "fees that now match the schedule are no longer a variance");
+  invariant(state);
+  checks += 14;
+}
+
+// ---------- A settlement batch Finance added by hand takes the provider's lines when they arrive (ING-03) ----------
+{
+  const { state, due } = liveFixture({ withFailure: false, merchantId: "hand-batch" });
+  const typed = { grossKobo: GROSS, feeKobo: FEE, netKobo: NET };
+  const input = { name: "Settlement batch B-HAND", reference: "B-HAND", status: "pending", data: { provider: "Sandbox Rail", batchReference: "B-HAND", ...typed } };
+  validateRecord(state, finance(wat("2027-07-01T06:00:00")), "settlement-batches", input);
+  const batch = makeRecord(state, "settlement-batches", input);
+  addObservation(state, { reference: "STMT-HAND", amountKobo: NET, batchReference: "B-HAND", source: "statement", eventId: "hand-st", occurredAt: wat("2027-07-01T06:30:00") });
+  reconcile(state, finance(wat("2027-07-01T06:45:00")));
+  assert.equal(batch.status, "reconciled", "a batch entered by hand reconciles to its statement credit");
+  addObservation(state, { reference: "HAND-L1", amountKobo: NET, grossAmountKobo: GROSS, feeKobo: FEE, batchReference: "B-HAND", source: "settlement", customerId: due.customerId, dueItemId: due.id, eventId: "hand-l1", occurredAt: wat("2027-07-01T07:00:00") });
+  assert.doesNotThrow(() => executeAction(state, finance(wat("2027-07-01T09:00:00")), { action: "daily_close" }), "the provider's line does not stop the close");
+  assert.deepEqual([batch.status, batch.data.lineObservationIds?.length, batch.data.grossKobo, batch.data.feeKobo, batch.data.netKobo, batch.data.expectedFeeKobo], ["reconciled", 1, GROSS, FEE, NET, FEE], "the provider's lines rebuild the totals");
+  assert.deepEqual(batch.data.enteredTotals, typed, "and the totals Finance typed are kept beside them");
+  assert.equal(due.status, "paid", "the line's payment is matched as usual");
+  invariant(state);
+  checks += 5;
 }
 
 // ---------- Exception catalogue (EXC-02, Appendix A): owners and business-day SLAs, so the overdue share means something ----------
@@ -410,4 +478,4 @@ for (const rule of ['R4-unique', 'R4-ambiguous', 'R5'] as const) {
   checks += 6;
 }
 
-console.log(`Reconciliation golden tests passed (${checks} checks): three-source replay in six orders, duplicate evidence, allocation ceiling, fee schedule, exception catalogue, final attempts, reversal vocabulary, precision audit, mandate operations, hand-back, stale proposal protection and safe automatic batch matching.`);
+console.log(`Reconciliation golden tests passed (${checks} checks): three-source replay in six orders, duplicate evidence, allocation ceiling, fee schedule, settlement batches that follow their lines and statement credit, hand-entered batches, exception catalogue, final attempts, reversal vocabulary, precision audit, mandate operations, hand-back, stale proposal protection and safe automatic batch matching.`);

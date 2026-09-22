@@ -1,7 +1,7 @@
 import { PLAN_GROSS_MARGIN, VARIABLE_COST_PER_COLLECTION_KOBO, experimentRules, isOpenException, measurementRules, type RecordKind } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { DomainState, Metric, Report, TypedRecord, ValopayRecord } from "./types";
-import { paymentObservedAt, paymentRefunded, paymentReversed } from "./reconciliation";
+import { allocationConfirmedAt, paymentObservedAt, paymentRefunded, paymentReversed } from "./reconciliation";
 import { buildBillingStatement, monthOf, previousMonth } from "./billing";
 import { seededSample, wilsonInterval } from "./stats";
 import type { Alert } from "./alerts";
@@ -154,7 +154,7 @@ export function timeToClose(state: DomainState, now: string): { month: string; d
  */
 export function precisionAudit(state: DomainState, now: string) {
   const month = previousMonth(now);
-  const population = recordsOf(state, "allocations").filter((item) => item.data.automatic === true && item.data.confidence === "certain" && ["confirmed", "superseded"].includes(item.status) && monthOf(String(item.data.confirmedAt || item.createdAt)) === month);
+  const population = recordsOf(state, "allocations").filter((item) => item.data.automatic === true && item.data.confidence === "certain" && ["confirmed", "superseded"].includes(item.status) && monthOf(allocationConfirmedAt(item)) === month);
   const sampleIds = seededSample(population.map((item) => item.id), `${state.merchant.id}:${month}`, measurementRules.precisionSampleSize);
   const sampled = new Set(sampleIds);
   const reviewed = population.filter((item) => sampled.has(item.id) && typeof item.data.reviewed === "boolean");

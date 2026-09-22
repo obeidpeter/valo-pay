@@ -1,7 +1,7 @@
 import { closeRules, closeTimeOf, isOpenException, nextCloseInstant, paymentUnappliedKobo, type CloseReport } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
-import { paymentObservedAt } from "./reconciliation";
+import { allocationConfirmedAt, paymentObservedAt } from "./reconciliation";
 
 const DAY_MS = 24 * 60 * 60 * 1000, MINUTE_MS = 60 * 1000;
 
@@ -153,7 +153,8 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
   }
   const paymentsResolved = new Set(received.filter((item) => item.status === "resolved" && item.data.paymentId).map((item) => item.data.paymentId)).size;
 
-  const confirmed = recordsOf(state, "allocations").filter((item) => item.status === "confirmed" && inPeriod(item.updatedAt, from, to));
+  // A match counts in the close whose period confirmed it; a later review or edit moves updatedAt, not the confirmation.
+  const confirmed = recordsOf(state, "allocations").filter((item) => item.status === "confirmed" && inPeriod(allocationConfirmedAt(item), from, to));
   const allocatedByRule: Record<string, { count: number; kobo: number; automatic: number }> = {};
   for (const allocation of confirmed) {
     const row = (allocatedByRule[String(allocation.data.rule)] ||= { count: 0, kobo: 0, automatic: 0 });

@@ -258,6 +258,24 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   equal([variances.length, variances.at(-1)!.status], [2, "open"], "a changed fee variance raises a new exception");
 }
 {
+  // A fee variance accepted once holds whether it was raised before or after the statement credit matched the batch net.
+  for (const statementFirst of [true, false]) {
+    const { state, due } = liveFixture({ withFailure: false, merchantId: `durable-variance-statement-${statementFirst}` });
+    const statement = () => addObservation(state, { reference: "STMT-FEE", amountKobo: GROSS - 30_000, batchReference: "B-FEE-STMT", source: "statement", eventId: "st", occurredAt: wat("2027-07-01T08:00:00") });
+    addObservation(state, { reference: "L1", amountKobo: GROSS - 30_000, grossAmountKobo: GROSS, feeKobo: 30_000, batchReference: "B-FEE-STMT", source: "settlement", customerId: due.customerId, dueItemId: due.id, eventId: "l1", occurredAt: wat("2027-07-01T07:00:00") });
+    if (statementFirst) statement();
+    reconcile(state, finance(wat("2027-07-01T09:00:00")));
+    const batch = recordsOf(state, "settlement-batches").find((item) => item.reference === "B-FEE-STMT")!;
+    const [variance] = exceptionsFor(state, "settlement_variance", batch.id);
+    resolve(state, variance!, wat("2027-07-01T10:00:00"), "accepted_variance");
+    if (!statementFirst) statement();
+    reconcile(state, finance(wat("2027-07-02T07:05:00")));
+    reconcile(state, finance(wat("2027-07-05T07:05:00")));
+    equal([batch.status, batch.data.statementNetKobo], ["variance", GROSS - 30_000], `the statement matched the net but the fees still differ (${statementFirst ? "statement first" : "fees first"})`);
+    equal(exceptionsFor(state, "settlement_variance", batch.id).length, 1, `the accepted fee variance is not raised again (${statementFirst ? "statement first" : "fees first"})`);
+  }
+}
+{
   const { state, due } = liveFixture({ withFailure: false, merchantId: "durable-mapping" });
   const attempt = addAttempt(state, due, { status: "failed", failureCode: "R42", occurredAt: wat("2027-06-28T06:16:00") });
   attempt.data.rawFailureCode = "R42";

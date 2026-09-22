@@ -210,6 +210,42 @@ const decisionsFor = (state: DomainState, due: ValopayRecord) => recordsOf(state
   checks += 9;
 }
 
+// ---------- REC-07: a close counts the matches confirmed in its period, not matches reviewed or edited in it ----------
+{
+  const { state, due, customer } = liveFixture({ withFailure: false, merchantId: "close-confirmed-at" });
+  const finance = (now: string) => ctxAt(now, "Finance");
+  const close = (now: string) => executeAction(state, finance(now), { action: "daily_close" }).record!.data.report;
+  addObservation(state, { reference: "PSK-CONF-1", amountKobo: due.amountKobo, source: "webhook", customerId: customer.id, dueItemId: due.id, eventId: "conf-1", occurredAt: wat("2027-06-30T06:20:00"), createdAt: wat("2027-06-30T06:20:01") });
+  close(wat("2027-06-30T07:00:00"));
+  const matched = recordsOf(state, "allocations").find((item) => item.status === "confirmed" && item.data.dueItemId === due.id)!;
+  assert.equal(matched.data.confirmedAt, wat("2027-06-30T07:00:00"), "the automatic match records when it was confirmed");
+  // A proposal made in one period and confirmed in the next counts in the period it was confirmed in.
+  const other = recordsOf(state, "due-items").find((item) => item.amountKobo === 6_000_000)!;
+  other.data.dueDate = "2027-07-01";
+  addObservation(state, { reference: "TRF-CONF-2", amountKobo: 6_000_000, source: "transfer", customerId: other.customerId, eventId: "conf-2", occurredAt: wat("2027-07-01T09:00:00"), createdAt: wat("2027-07-01T09:00:01") });
+  const proposing = close(wat("2027-07-01T10:00:00"));
+  const proposal = recordsOf(state, "allocations").find((item) => item.data.dueItemId === other.id)!;
+  assert.deepEqual([proposal.status, proposal.data.rule, proposing.allocated.count], ["proposed", "R5", 0], "a proposal is not an allocation");
+  const payment = recordsOf(state, "payments").find((item) => item.reference === "TRF-CONF-2")!;
+  executeAction(state, finance(wat("2027-07-02T09:00:00")), { action: "confirm_allocation", recordId: payment.id, reason: "Payer confirmed by phone" });
+  const confirming = close(wat("2027-07-03T07:00:00"));
+  assert.deepEqual([confirming.allocated, confirming.allocatedByRule], [{ count: 1, kobo: 6_000_000 }, { R5: { count: 1, kobo: 6_000_000, automatic: 0 } }], "the confirmation counts once, in its own period");
+  // Reviewing earlier matches changes them, but confirms nothing new.
+  executeAction(state, finance(wat("2027-07-03T09:00:00")), { action: "review_allocation", recordId: matched.id, reason: "Checked against the bank line", data: { correct: true } });
+  executeAction(state, finance(wat("2027-07-03T09:05:00")), { action: "review_allocation", recordId: proposal.id, reason: "Checked against the bank line", data: { correct: true } });
+  const reviewed = close(wat("2027-07-04T07:00:00"));
+  assert.deepEqual([reviewed.allocated, reviewed.allocatedByRule], [{ count: 0, kobo: 0 }, {}], "a review in this period is not a match confirmed in it");
+  assert.match(String(recordsOf(state, "closes").at(-1)!.data.summary), /0 allocations confirmed/);
+  // A match marked wrong and later applied again keeps its original confirmation time.
+  executeAction(state, finance(wat("2027-07-04T09:00:00")), { action: "review_allocation", recordId: matched.id, reason: "Wrong instalment", data: { correct: false } });
+  assert.equal(close(wat("2027-07-05T07:00:00")).allocated.count, 0, "a superseded match is not counted");
+  executeAction(state, finance(wat("2027-07-05T09:00:00")), { action: "review_allocation", recordId: matched.id, reason: "It was right after all", data: { correct: true } });
+  const reinstated = close(wat("2027-07-06T07:00:00"));
+  assert.equal(matched.status, "confirmed", "the reviewed match is applied again");
+  assert.equal(reinstated.allocated.count, 0, "applying it again does not count as a new confirmation");
+  checks += 8;
+}
+
 // ---------- RET-06: uplift report with the ratio-estimator interval, evaluated against the pre-registered rule ----------
 function enrolledDue(state: DomainState, experiment: ValopayRecord, arm: "engine" | "holdout", amountKobo: number, firstFailureAt: string, index: number): ValopayRecord {
   const customer = recordsOf(state, "customers")[index % 8]!;
@@ -321,4 +357,4 @@ function settle(state: DomainState, due: ValopayRecord, amountKobo: number, sett
 }
 
 void HOUR; void addAttempt;
-console.log(`Measurement golden tests passed (${checks} checks): decision records and what makes a new one, deferral deadline, arm on decision, close report, position rebuild, uplift interval and rule, billable channels, pack counts.`);
+console.log(`Measurement golden tests passed (${checks} checks): decision records and what makes a new one, deferral deadline, arm on decision, close report and the matches it counts, position rebuild, uplift interval and rule, billable channels, pack counts.`);

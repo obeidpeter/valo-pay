@@ -283,6 +283,8 @@ export const recordDataSchemas = {
     statementObservationId: z.string().optional(),
     explanation: z.string().nullable().optional(),
     reconciledAt: isoDateOrTimestamp.optional(),
+    /** Totals Finance typed for a hand-entered batch, kept when the provider's lines rebuilt them. */
+    enteredTotals: z.object({ grossKobo: kobo, feeKobo: kobo, netKobo: kobo }).optional(),
   }).passthrough(),
   exceptions: z.object({
     ...common,

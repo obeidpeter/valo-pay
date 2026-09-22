@@ -3,6 +3,7 @@
 
 Items 11 to 20 of the 22 September 2026 audit are fixed and covered by tests:
 
+- **Close report counts.** A close counts the matches confirmed in its period by their confirmation time, so reviewing an earlier match no longer reports it as confirmed again. Every reconciliation re-evaluates each settlement batch from its current lines and statement credit, so a provider file split across two imports reconciles, a batch that gains a line after it reconciled becomes a variance, a fee difference that a later line cancels is cleared, and a batch added by hand no longer stops the close when the provider's lines for it arrive.
 - **Record integrity.** An instalment's status follows an amount edit (a paid instalment whose amount is raised is part-paid again, and a part-paid one reduced to what was paid is paid), and each close repairs statuses that earlier edits left behind. A policy version is numbered after the policy's whole history, one number cannot be approved twice or edited through the record API, and a retry decision is recorded again when its notice evidence or any other input changes.
 
 ## Audit fixes · September 2026
