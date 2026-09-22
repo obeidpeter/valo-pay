@@ -3,6 +3,7 @@ import { prepareCloseReviewSchema, decideCloseReviewSchema, type PrepareCloseRev
 import type { Context, DomainState, ValopayRecord } from "./types";
 import { makeRecord, touch } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
+import { sourceCompleteness, watBusinessDate } from "./source-completeness";
 
 function refuse(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
 const canonical = (value: any): string => Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : value && typeof value === "object" ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}` : JSON.stringify(value) ?? "null";
@@ -18,14 +19,19 @@ const ofKind = (state: DomainState, kind: string) => state.records.filter(r => r
 // remain in the digest, including additions, removals and case corrections.
 const basisKinds = new Set(["customers", "mandates", "due-items", "observations", "payments", "allocations", "exceptions", "settlement-batches", "attempts", "refunds", "adjustments", "policies", "templates", "retry-decisions"]);
 export function closeReviewBasis(state: DomainState) {
-  return digest({ merchantId: state.merchant.id, records: state.records.filter(r => basisKinds.has(r.kind)).map(({ updatedAt: _, ...record }) => record).sort((a, b) => a.id.localeCompare(b.id)) });
+  const approvedCorrections = ofKind(state, "import-correction-events").filter(r => r.data.action === "approve");
+  const proposals = ofKind(state, "import-corrections").filter(r => approvedCorrections.some(event => event.data.proposalId === r.id));
+  return digest({ merchantId: state.merchant.id, records: [...state.records.filter(r => basisKinds.has(r.kind)), ...approvedCorrections, ...proposals].map(({ updatedAt: _, ...record }) => record).sort((a, b) => a.id.localeCompare(b.id)) });
 }
+const pendingFinancialCorrections = (state: DomainState) => ofKind(state, "import-corrections").filter(record => record.data.preview?.financial && !ofKind(state, "import-correction-events").some(event => event.data.proposalId === record.id));
 export interface CloseReviewIssue { id: string; label: string; detail: string; unresolved: boolean; }
 export function bindCloseReviewBasis(state: DomainState, close: ValopayRecord) {
+  const completeness = sourceCompleteness(state, close.data.sourceBusinessDate || watBusinessDate(close.data.closedAt || close.createdAt));
   close.data.reviewBasis = {
     version: 1,
     sequence: close.data.reviewBasis?.sequence || Math.max(0, ...ofKind(state, "closes").filter(record => record.id !== close.id).map(record => Number(record.data.reviewBasis?.sequence || 0))) + 1,
     inputDigest: closeReviewBasis(state),
+    sourceCompleteness: completeness,
     unresolved: state.records.filter(r => (r.kind === "exceptions" && open(r)) || (r.kind === "observations" && r.status !== "resolved") || (r.kind === "payments" && ["partial", "overpaid"].includes(r.status))).map(r => ({ id: r.id, kind: r.kind, name: r.name, reference: r.reference, status: r.status, amountKobo: r.amountKobo })),
   };
   return close;
@@ -39,17 +45,22 @@ export function closeReviewIssues(close: ValopayRecord): CloseReviewIssue[] {
     if (Number(report[key]?.count) > 0) issues.push({ id: key, label, detail: `${report[key].count} items totalling ${report[key].kobo || 0} kobo remain at this close.`, unresolved: true });
   }
   for (const item of close.data.reviewBasis?.unresolved || []) issues.push({ id: `item:${item.id}`, label: `${item.kind === "exceptions" ? "Open exception" : item.kind === "payments" ? "Unapplied payment amount" : "Unresolved payment evidence"} · ${item.name || item.reference}`, detail: `${item.reference} · ${item.status}. Record the owner, next step and why the item may remain open.`, unresolved: true });
+  for (const issue of close.data.reviewBasis?.sourceCompleteness?.issues || []) issues.push({ ...issue, unresolved: true });
   return issues;
 }
 function latestClose(state: DomainState) { return newest(ofKind(state, "closes"))[0]; }
 export function reviewIsCurrent(state: DomainState, review: ValopayRecord) {
   const close = ofKind(state, "closes").find(r => r.id === review.data.closeId);
-  return Boolean(close && latestClose(state)?.id === close.id && close.data.reviewBasis?.inputDigest === closeReviewBasis(state) && review.data.inputDigest === close.data.reviewBasis.inputDigest && review.data.snapshotDigest === digest(close) && review.data.snapshotDigest === digest(review.data.snapshot));
+  return Boolean(close && !closeReviewCurrentProblem(state, close) && review.data.inputDigest === close.data.reviewBasis.inputDigest && review.data.snapshotDigest === digest(close) && review.data.snapshotDigest === digest(review.data.snapshot));
 }
 export function closeReviewCurrentProblem(state: DomainState, close: ValopayRecord): string | null {
   if (!close.data.reviewBasis?.inputDigest) return "This older close has no recorded input fingerprint. Run a new daily close before preparing a review.";
   if (latestClose(state)?.id !== close.id) return "A newer close exists. Review the latest close; this evidence remains available for the historical record.";
+  if (pendingFinancialCorrections(state).length) return "Financial import corrections await a decision. Resolve them before preparing, approving or exporting the current close.";
   if (close.data.reviewBasis.inputDigest !== closeReviewBasis(state)) return "Records changed after this close. Run a new daily close and prepare a new review; the earlier evidence stays unchanged.";
+  const sources = close.data.reviewBasis.sourceCompleteness;
+  if (!sources?.basisDigest) return "This older close has no business-date source completeness evidence. Declare the expected files and run a new daily close.";
+  if (sources.basisDigest !== sourceCompleteness(state, sources.businessDate).basisDigest) return "Source expectations or delivered files changed after this close. Run a new daily close and prepare a new review; the earlier source evidence stays unchanged.";
   return null;
 }
 export function prepareCloseReview(state: DomainState, ctx: Context, value: PrepareCloseReviewInput, reviewers: Array<{ actor: string; role: string }>) {
@@ -82,15 +93,21 @@ export function decideCloseReview(state: DomainState, ctx: Context, id: string, 
   if (ctx.role !== "Finance" || ctx.actor !== review.data.reviewer) refuse("Only the named Finance reviewer can decide this review.", 403);
   if (principal(ctx) === review.data.preparedPrincipal || ctx.actor === review.data.preparedBy) refuse("A different person must review this close. Switching demo roles does not provide independent approval.", 403);
   if (input.action === "approve" && !reviewIsCurrent(state, review)) refuse("This close is no longer current. Run a new close and prepare a fresh review; earlier evidence is preserved.", 409);
+  if (input.action === "approve") {
+    if (pendingFinancialCorrections(state).length) refuse("Resolve the pending financial import corrections before approving this close. Return the review for changes if needed.", 409);
+    const sourceIssues = review.data.snapshot.data.reviewBasis.sourceCompleteness.issues || [];
+    const accepted = new Set(input.sourceExceptions.map(item => item.issueId));
+    if (accepted.size !== input.sourceExceptions.length || accepted.size !== sourceIssues.length || sourceIssues.some((issue:any) => !accepted.has(issue.id))) refuse("Finance must explicitly accept every source completeness issue with its own reason and supporting evidence, or return the close for changes.");
+  } else if (input.sourceExceptions.length) refuse("Source exceptions can only be accepted with an approval. Remove them when returning the review.");
   review.status = input.action === "approve" ? "approved" : "changes_requested";
-  Object.assign(review.data, { decidedBy: ctx.actor, decidedPrincipal: principal(ctx), decidedAt: ctx.now, decisionNote: input.note });
+  Object.assign(review.data, { decidedBy: ctx.actor, decidedPrincipal: principal(ctx), decidedAt: ctx.now, decisionNote: input.note, sourceExceptions: input.sourceExceptions });
   touch(review, ctx.now);
   makeRecord(state, "close-review-events", { name: input.action === "approve" ? "Finance approved this close snapshot" : "Finance requested changes", status: "recorded", createdAt: ctx.now, data: { reviewId: review.id, closeId: review.data.closeId, action: input.action, actor: ctx.actor, note: input.note, snapshotDigest: review.data.snapshotDigest } });
   return review;
 }
 export function closeReviewList(state: DomainState) {
   const reviews = newest(ofKind(state, "close-reviews"));
-  return { closes: newest(ofKind(state, "closes")).slice(0, 25).map(close => ({ close, issues: closeReviewIssues(close), problem: closeReviewCurrentProblem(state, close), reviews: reviews.filter(r => r.data.closeId === close.id).map(review => ({ ...review, current: reviewIsCurrent(state, review) })) })), total: ofKind(state, "closes").length };
+  return { closes: newest(ofKind(state, "closes")).slice(0, 25).map(close => ({ close, issues: closeReviewIssues(close), problem: closeReviewCurrentProblem(state, close), pendingFinancialCorrections: pendingFinancialCorrections(state).length, reviews: reviews.filter(r => r.data.closeId === close.id).map(review => ({ ...review, current: reviewIsCurrent(state, review) })) })), total: ofKind(state, "closes").length };
 }
 export function reviewedCloseEvidence(state: DomainState, id: string, requireCurrent = false) {
   const review = ofKind(state, 'close-reviews').find(r => r.id === id);

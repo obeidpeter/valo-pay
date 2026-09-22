@@ -3,6 +3,7 @@ import { csvAmountToKobo, sourceProfileInputSchema, type SourceProfileInput, typ
 import type { Context, DomainState, ValopayRecord } from "./types";
 import { makeRecord } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
+import { sourceCompleteness, watBusinessDate } from "./source-completeness";
 
 function refuse(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
 const writer = (ctx: Context) => { if (!["Admin", "Operations", "Finance"].includes(ctx.role)) refuse("Your role cannot change source controls.", 403); };
@@ -83,8 +84,8 @@ export function sourceDelivery(state: DomainState, profile: ValopayRecord, now: 
     lastCommittedAt: latest ? new Date(latest.at).toISOString() : null, lastBatchId: latest?.id || null };
 }
 
-export function sourceQuality(state: DomainState, now: string) {
+export function sourceQuality(state: DomainState, now: string, businessDate = watBusinessDate(now)) {
   const profiles = state.records.filter(r => r.kind === "source-profiles").map(profile => ({ ...profile, delivery: sourceDelivery(state, profile, now) }));
   const batches = state.records.filter(r => r.kind === "import-batches").sort((a,b) => b.createdAt.localeCompare(a.createdAt)).map(batch => ({ id: batch.id, name: batch.name, source: String(batch.data.source || ""), sourceBatchId: String(batch.data.sourceBatchId || ""), kind: String(batch.data.kind || ""), status: batch.status, createdAt: batch.createdAt, quality: batch.status === "committed" && batch.data.sourceQuality ? batch.data.sourceQuality : batchSourceQuality(state, batch) }));
-  return { profiles, batches, summary: { lateSources: profiles.filter(p => p.delivery.status === "late").length, duplicateRows: batches.reduce((n,b) => n + b.quality.duplicateRows, 0), conflictRows: batches.reduce((n,b) => n + b.quality.conflictRows, 0), batchesNeedingReview: batches.filter(b => b.quality.status !== "checked").length } };
+  return { profiles, batches, completeness: sourceCompleteness(state, businessDate), summary: { lateSources: profiles.filter(p => p.delivery.status === "late").length, duplicateRows: batches.reduce((n,b) => n + b.quality.duplicateRows, 0), conflictRows: batches.reduce((n,b) => n + b.quality.conflictRows, 0), batchesNeedingReview: batches.filter(b => b.quality.status !== "checked").length } };
 }

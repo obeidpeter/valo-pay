@@ -12,6 +12,7 @@ import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { positionFor, type CustomerPosition } from "../domain/close";
 import { recordsOf } from "../domain/records";
 import { verifyAudit } from "./valopay-store";
+import { collectExportBytes } from './export-download';
 
 /** One event on a customer's timeline as the pack prints it, with the versions that governed it. */
 export interface TimelineEvent {
@@ -209,21 +210,24 @@ export function packFonts(): { regular: Buffer; bold: Buffer } {
 
 /** The naira sign is spelled "NGN" so the PDF reads as the CSV does, and control characters other than line breaks are dropped; everything else is rendered by the embedded typeface. */
 function pdfSafe(value: unknown): string {
-  return text(value).replace(/₦/g, "NGN ").replace(/[\p{Cc}\p{Cf}]/gu, (character) => (character === "\n" || character === "\t" ? character : ""));
+  const source = text(value);
+  if (source.length > 50_000) throw Object.assign(new Error('A PDF field exceeds the supported layout size. Use JSON or CSV for this record.'), { exportPdfFieldTooLarge: true });
+  return source.replace(/₦/g, "NGN ").replace(/[\p{Cc}\p{Cf}]/gu, (character) => (character === "\n" || character === "\t" ? character : ""));
 }
 
 /** Rendering options; compress false for a test that reads the PDF back. */
-export interface PdfOptions { compress?: boolean }
+export interface PdfOptions { compress?: boolean; signal?: AbortSignal; timeoutMs?: number }
 
 /** A4 pack: page one is the summary, the timeline follows as a paginated table, then the governing documents; every page is numbered. */
-export function renderDisputePackPdf(pack: DisputePack, options: PdfOptions = {}): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
+export async function renderDisputePackPdf(pack: DisputePack, options: PdfOptions = {}): Promise<Buffer> {
+    options.signal?.throwIfAborted();
     const margin = 40;
     const document = new PDFDocument({ size: "A4", lang: "en-GB", margin, bufferPages: true, compress: options.compress ?? true, info: { Title: `Dispute pack ${text(pack.customer.reference)}`, Author: "Valo Pay", Subject: "AUD-02 dispute pack (synthetic sandbox)" } });
-    const chunks: Buffer[] = [];
-    document.on("data", (chunk: Buffer) => chunks.push(chunk));
-    document.on("end", () => resolve(Buffer.concat(chunks)));
-    document.on("error", reject);
+    const result = collectExportBytes(document, options.signal, 32 * 1024 * 1024, options.timeoutMs ?? 30_000);
+    void result.catch(() => {});
+    const deadline = performance.now() + (options.timeoutMs ?? 30_000);
+    const check = () => { options.signal?.throwIfAborted(); if (performance.now() > deadline) throw new Error('PDF rendering exceeded its time limit.'); };
+    try {
     const fonts = packFonts();
     document.registerFont("Sans", fonts.regular).registerFont("Sans-Bold", fonts.bold);
     const width = document.page.width - margin * 2;
@@ -258,6 +262,7 @@ export function renderDisputePackPdf(pack: DisputePack, options: PdfOptions = {}
     heading("Customer consent");
     if (!s.consent.length) document.font("Sans").fontSize(9).text("No mandate on file.");
     for (const item of s.consent as Array<{ mandate: string; evidence: string; gaps: string[]; provenance: string }>) {
+      check();
       line(item.mandate, `evidence ${item.evidence || "none"}; provenance ${item.provenance || "n/a"}${item.gaps.length ? `; GAPS: ${item.gaps.join(", ")}` : "; no gaps"}`);
     }
     heading("Versions in effect at the time (AUD-06)");
@@ -288,6 +293,7 @@ export function renderDisputePackPdf(pack: DisputePack, options: PdfOptions = {}
     document.font("Sans-Bold").fontSize(12).fillColor("#102E2A").text(`Timeline: ${counted(pack.timeline.length, "event")}, oldest first`, margin, margin, { width }).fillColor("#222222").moveDown(0.4);
     tableHeader();
     for (const event of pack.timeline) {
+      check();
       const cells: Record<string, string> = { at: watStamp(event.at), event: pdfSafe(`${event.event}${event.actor ? ` (${event.actor})` : ""}`), detail: pdfSafe(event.detail), amount: event.amountKobo ? kobo(event.amountKobo) : "", policy: event.policyVersion ? `v${event.policyVersion}` : "-" };
       const height = Math.max(...columns.map((column) => document.heightOfString(cells[column.key] || " ", { width: column.width }))) + 4;
       if (document.y + height > bottom) { document.addPage(); document.y = margin; tableHeader(); }
@@ -302,6 +308,7 @@ export function renderDisputePackPdf(pack: DisputePack, options: PdfOptions = {}
     document.font("Sans-Bold").fontSize(12).fillColor("#102E2A").text("Documents in effect at the time (AUD-06)", margin, margin, { width }).fillColor("#222222").moveDown(0.4);
     if (!pack.documents.length) document.font("Sans").fontSize(9).text("No approved policy version, template or cutover contract applied to this customer's events.", margin, document.y, { width });
     for (const item of pack.documents) {
+      check();
       const title = `${item.kind === "policies" ? "Retry policy" : item.kind === "templates" ? "Notice template" : "Cutover contract"} ${item.version ? `v${item.version} ` : ""}- ${item.name} (${item.status}); applied from ${watStamp(item.appliesFrom)}${item.appliesUntil ? ` until ${watStamp(item.appliesUntil)}` : " onwards"}`;
       const body = pdfSafe(item.text);
       const needed = document.heightOfString(title, { width }) + document.heightOfString(body, { width }) + 16;
@@ -313,11 +320,13 @@ export function renderDisputePackPdf(pack: DisputePack, options: PdfOptions = {}
     // ---- Footers ----
     const range = document.bufferedPageRange();
     for (let index = range.start; index < range.start + range.count; index++) {
+      check();
       document.switchToPage(index);
       // Writing inside the bottom margin would otherwise make pdfkit open a new page.
       document.page.margins.bottom = 0;
       document.font("Sans").fontSize(7.5).fillColor("#666666").text(pdfSafe(`Page ${index - range.start + 1} of ${range.count}  |  Valo Pay dispute pack  |  ${text(pack.customer.reference)}  |  synthetic sandbox  |  generated ${watStamp(pack.generatedAt)}`), margin, document.page.height - margin + 4, { width, align: "center", lineBreak: false });
     }
     document.end();
-  });
+    } catch (error) { document.destroy(error instanceof Error ? error : new Error(String(error))); }
+    return result;
 }

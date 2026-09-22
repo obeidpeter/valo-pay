@@ -30,6 +30,8 @@ it("prepares an exact close snapshot and prevents approving it by switching demo
   renderApp("/close-review");
   await user.selectOptions(await screen.findByLabelText("Finance reviewer"), "Sandbox Finance");
   await user.type(screen.getByLabelText("Preparation summary"), "Checked the source records and synthetic zero-activity close.");
+  await user.type(screen.getByLabelText(/Expected source files have not been declared/),"This synthetic rehearsal has no external delivery set yet.");
+  await user.type(screen.getByLabelText(/Why the unresolved items may remain open/),"Finance must confirm the limited synthetic source scope.");
   await user.click(screen.getByRole("button", { name: "Submit for Finance review" }));
   await screen.findByText(/Waiting for the named Finance reviewer/);
   const review = api.state().records.find(record => record.kind === "close-reviews")!;
@@ -46,6 +48,8 @@ it("requires an independent reviewer acknowledgement and preserves the recorded 
   emptyClose(); const user = userEvent.setup(); renderApp("/close-review");
   await user.selectOptions(await screen.findByLabelText("Finance reviewer"), "Sandbox Finance");
   await user.type(screen.getByLabelText("Preparation summary"), "Checked the complete synthetic closing report.");
+  await user.type(screen.getByLabelText(/Expected source files have not been declared/),"This synthetic rehearsal has no external delivery set yet.");
+  await user.type(screen.getByLabelText(/Why the unresolved items may remain open/),"Finance must confirm the limited synthetic source scope.");
   await user.click(screen.getByRole("button", { name: "Submit for Finance review" }));
   await screen.findByText(/Waiting for the named Finance reviewer/);
   cleanup(); queryClient.clear(); api.role = "Finance"; api.principalId = "synthetic-independent-reviewer"; renderApp("/close-review");
@@ -53,6 +57,8 @@ it("requires an independent reviewer acknowledgement and preserves the recorded 
   const button = screen.getByRole("button", { name: "Record Finance approval" }) as HTMLButtonElement;
   expect(button.disabled).toBe(true);
   await user.click(screen.getByRole("checkbox", { name: /I inspected this snapshot/ }));
+  await user.type(screen.getByLabelText(/Finance acceptance reason/),"I accept the missing declaration only for this synthetic rehearsal.");
+  await user.type(screen.getByLabelText(/Finance supporting evidence/),"Synthetic acceptance case FIN-22.");
   await user.click(button);
   await screen.findByText("Approved");
   expect(api.state().records.find(record => record.kind === "close-reviews")!.status).toBe("approved");

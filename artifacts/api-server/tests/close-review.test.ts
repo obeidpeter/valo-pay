@@ -39,7 +39,8 @@ const step = (state: DomainState, id: string) => pilotProgress(state).steps.find
   const review = prepareCloseReview(state, ops, input, reviewers), before = structuredClone(state);
   assert.equal(step(state, "close").state, "awaiting_review");
   assert.throws(() => prepareCloseReview(state, ops, input, reviewers), /already/);
-  const decision = { action: "approve" as const, expectedUpdatedAt: review.updatedAt, note: "Independently checked and accepted this exact snapshot." };
+  const decision = { action: "approve" as const, expectedUpdatedAt: review.updatedAt, note: "Independently checked and accepted this exact snapshot.", sourceExceptions: first.data.reviewBasis.sourceCompleteness.issues.map((issue:any)=>({issueId:issue.id,reason:"This synthetic rehearsal has no external source contract yet.",evidence:"Synthetic rehearsal scope, case TEST-1."})) };
+  assert.throws(() => decideCloseReview(state, finance, review.id, {...decision,sourceExceptions:[]}), /explicitly accept every source/);
   assert.throws(() => decideCloseReview(state, { ...finance, actor: "Clerk:other" }, review.id, decision), /named Finance/);
   assert.throws(() => decideCloseReview(state, { ...finance, role: "Admin" }, review.id, decision), /named Finance/);
   assert.throws(() => decideCloseReview(state, { ...finance, principalId: ops.principalId }, review.id, decision), /different person/);
@@ -75,7 +76,7 @@ function ofKind(state: DomainState, kind: string) { return state.records.filter(
   makeRecord(state, "observations", { status: "unresolved", name: "Source statement" });
   makeRecord(state, "payments", { status: "partial", amountKobo: 10000, data: { allocatedKobo: 2000 } });
   const record = close(state), input = prepareInput(record);
-  assert.equal(closeReviewIssues(record).length, 3);
+  assert.equal(closeReviewIssues(record).length, 4);
   assert.equal(step(state, "resolve").state, "blocked");
   assert.throws(() => prepareCloseReview(state, ops, { ...input, discrepancyResponses: [] }, reviewers), /Explain every/);
   assert.throws(() => prepareCloseReview(state, ops, { ...input, discrepancyResponses: [input.discrepancyResponses[0]!, input.discrepancyResponses[0]!] }, reviewers), /Explain every/);

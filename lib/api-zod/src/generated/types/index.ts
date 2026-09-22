@@ -28,6 +28,7 @@ export * from './effectiveCloseScheduleServiceIssue';
 export * from './exportInput';
 export * from './exportInputFormat';
 export * from './exportResult';
+export * from './exportResultStage';
 export * from './exportResultStatus';
 export * from './gate';
 export * from './gates';

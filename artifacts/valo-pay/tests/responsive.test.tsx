@@ -21,14 +21,16 @@ describe("responsive layout", () => {
     expect(lenders.map((select) => select.value)).toEqual([api.merchantIds[0], api.merchantIds[0]]);
     const [sidebarPages] = screen.getAllByRole("navigation", { name: "Pages" });
     const sidebarLabels = within(sidebarPages!).getAllByRole("link").map((link) => link.textContent);
-    expect(sidebarLabels).toHaveLength(23);
-    expect(sidebarLabels).toEqual(expect.arrayContaining(['My work','Sources & connections','Close review','Data retention']));
+    expect(sidebarLabels).toHaveLength(24);
+    expect(sidebarLabels).toEqual(expect.arrayContaining(['My work','Sources & connections','Close review','Data retention','Saved exports']));
+    expect(within(sidebarPages!).getByRole('link', { name: 'Saved exports' }).getAttribute('href')).toBe('/exports');
     expect(sidebarLabels).toEqual(expect.arrayContaining(['Pilot journey', 'Import batches', 'Operations', 'Team & access']));
 
     await user.click(screen.getByRole("button", { name: "Menu" }));
     const drawer = await screen.findByRole("dialog", { name: "Menu" });
     const drawerLabels = within(drawer).getAllByRole("link").map((link) => link.textContent);
     expect(drawerLabels).toEqual(sidebarLabels);
+    expect(within(drawer).getByRole('link', { name: 'Saved exports' }).getAttribute('href')).toBe('/exports');
     expect(within(drawer).getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBe("page");
     expect(within(drawer).getByRole("link", { name: "Audit log" }).getAttribute("aria-current")).toBeNull();
   });

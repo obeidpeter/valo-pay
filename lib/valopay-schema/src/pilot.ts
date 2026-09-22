@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { importKinds } from "./kinds";
+import { businessDateSchema } from "./source-quality";
 
 /** Roles granted by a provisioned pilot administrator, never a browser persona. */
 export const pilotRoleSchema = z.enum([
@@ -16,6 +17,8 @@ export const batchInputSchema = z
     kind: z.enum(importKinds),
     source: z.string().trim().min(1).max(100),
     sourceBatchId: z.string().trim().min(1).max(120),
+    businessDate: businessDateSchema.optional(),
+    sourceExpectationId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     csv: z.string().min(1).max(1_500_000),
     mapping: z.record(z.string().max(100)).default({}),
     amountUnit: z.enum(["naira", "kobo"]),

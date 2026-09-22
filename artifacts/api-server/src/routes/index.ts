@@ -10,6 +10,7 @@ import workRouter from './work';
 import staffLenderRouter from './staff-lender-access';
 import accessReadinessRouter from './access-readiness';
 import lifecycleRouter from './lifecycle';
+import importCorrectionsRouter from './import-corrections';
 
 const router: IRouter = Router();
 
@@ -24,5 +25,6 @@ router.use(workRouter);
 router.use(staffLenderRouter);
 router.use(accessReadinessRouter);
 router.use(lifecycleRouter);
+router.use(importCorrectionsRouter);
 
 export default router;

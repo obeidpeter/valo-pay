@@ -18,6 +18,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { LoadProblem } from '@/components/load-problem';
 import { notifyProblem, saidBy } from '@/lib/notify';
 import { useHashTarget } from '@/lib/use-hash-target';
+import { Input } from '@/components/ui/input';
 
 type Unknown = Record<string, unknown> | undefined;
 const isScalar = (value: unknown) => value === null || ['string', 'number', 'boolean'].includes(typeof value);
@@ -92,9 +93,10 @@ export default function ReportsPage() {
   const [experimentDialog, setExperimentDialog] = useState<'create' | 'edit' | 'preregister' | null>(null);
   const [selectedExperiment, setSelectedExperiment] = useState<any>(null);
   const [invoiceDialogOpen, setInvoiceDialogOpen] = useState(false);
+  const [sourceBusinessDate, setSourceBusinessDate] = useState('');
   const queryClient = useQueryClient();
   const [closeResult, setCloseResult] = useState<{ merchantId: string; message: string; failed: boolean } | null>(null);
-  useEffect(() => { setExperimentDialog(null); setInvoiceDialogOpen(false); }, [merchantId]);
+  useEffect(() => { setExperimentDialog(null); setInvoiceDialogOpen(false); setSourceBusinessDate(''); }, [merchantId]);
 
   const { data: reports, isLoading, error: reportsError, isFetching: fetchingReports, refetch } = useGetReports(
     { merchantId: merchantId!, includeCloses: 'false' as const },
@@ -147,14 +149,18 @@ export default function ReportsPage() {
           <Button variant="outline" className="gap-2" action="issue_invoice" onClick={() => setInvoiceDialogOpen(true)}>
             <FileText className="h-4 w-4" /> Issue invoice
           </Button></>}
-          {view === 'operations' && <Button
+          {view === 'operations' && <><div className="max-w-64 space-y-1">
+            <label htmlFor="close-source-date" className="text-xs font-medium">Source business date (optional)</label>
+            <Input id="close-source-date" type="date" value={sourceBusinessDate} onChange={event => setSourceBusinessDate(event.target.value)} disabled={dailyClose.isPending} aria-describedby="close-source-date-help" />
+            <p id="close-source-date-help" className="text-xs text-muted-foreground">Defaults to today in WAT. Checks files for this date; financial totals reflect this run.</p>
+          </div><Button
             className="gap-2"
-            action="daily_close" onClick={() => dailyClose.mutate({ data: { action: 'daily_close' }, params: { merchantId } })}
+            action="daily_close" onClick={() => dailyClose.mutate({ data: { action: 'daily_close', ...(sourceBusinessDate ? { data: { sourceBusinessDate } } : {}) }, params: { merchantId } })}
             busy={dailyClose.isPending}
             busyLabel="Closing the day…"
           >
             <RefreshCcw className="h-4 w-4" /> Run daily close
-          </Button>}
+          </Button></>}
         </div>
       </header>
       <nav aria-label="Report views" className="flex flex-wrap gap-2 rounded-xl border bg-card p-2 print:hidden">

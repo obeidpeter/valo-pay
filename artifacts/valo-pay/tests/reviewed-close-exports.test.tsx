@@ -14,7 +14,7 @@ beforeEach(() => {
     closeId = close.id; bindCloseReviewBasis(state, close);
     const reviewer = { ...ctx, actor: 'Clerk:finance-checker', principalId: 'independent-finance-person', role: 'Finance' };
     const review = prepareCloseReview(state, ctx, { closeId: close.id, expectedUpdatedAt: close.updatedAt, reviewer: reviewer.actor, preparationNote: 'Prepared and checked the synthetic close evidence.', discrepancyResponses: closeReviewIssues(close).map(issue => ({ issueId: issue.id, explanation: 'Finance will review and follow up this sample discrepancy.' })), unresolvedAcceptance: 'Named Finance staff own the remaining sample follow-up.' }, [reviewer]);
-    decideCloseReview(state, reviewer, review.id, { expectedUpdatedAt: review.updatedAt, action: 'approve', note: 'Independently inspected and accepted this sample snapshot.' });
+    decideCloseReview(state, reviewer, review.id, { expectedUpdatedAt: review.updatedAt, action: 'approve', note: 'Independently inspected and accepted this sample snapshot.', sourceExceptions: close.data.reviewBasis.sourceCompleteness.issues.map((issue: { id: string }) => ({ issueId: issue.id, reason: 'Independent documented acceptance of this sample source gap.', evidence: 'SYNTHETIC-TEST-SOURCE' })) });
     return review.id;
   });
 });

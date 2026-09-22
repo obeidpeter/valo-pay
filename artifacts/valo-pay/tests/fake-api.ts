@@ -1,5 +1,8 @@
 import { saveImportBatch, commitImportBatch, coordinateCase, batchView } from '../../api-server/src/domain/pilot-workflow';
+import { listImportCorrections, previewImportCorrection, proposeImportCorrection, decideImportCorrection, assertNoDirectImportedCorrection } from '../../api-server/src/domain/import-corrections';
+import { importCorrectionsResponseSchema, importCorrectionPreviewSchema, importCorrectionViewSchema } from '@workspace/valopay-schema';
 import { saveSourceProfile, sourceQuality } from '../../api-server/src/domain/source-quality';
+import { saveSourceManifest } from '../../api-server/src/domain/source-completeness';
 import { providerEventView, replayProviderEvent, runPaystackFixture } from '../../api-server/src/providers/paystack-inbox';
 import { pilotProgress, closeReviewList, prepareCloseReview, decideCloseReview, bindCloseReviewBasis, reviewIsCurrent } from '../../api-server/src/domain/close-review';
 import { derivePersonalWork, recordWorkReceipt } from '../../api-server/src/domain/personal-work';
@@ -154,11 +157,16 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
     ['GET', /^\/v1\/team\/readiness$/, () => ({syntheticOnly:true,canCommission:false,checkedAt:api.now,checks:[{id:'identity',name:'Staff identity',state:'not_configured',detail:'Configure a separate Clerk staging organisation and provision its first administrator.'},{id:'mfa',name:'Multi-factor authentication',state:'not_configured',detail:'Demo role changes do not verify a staff member or a second factor.'},{id:'origin',name:'Allowed staff origins',state:'not_configured',detail:'Staff changes need a configured staging address.'},{id:'database',name:'Restricted database access',state:'not_configured',detail:'The offline console test does not verify a restricted database connection.'},{id:'encryption',name:'Managed payload encryption',state:'not_configured',detail:'No external wrapping key is configured in this offline test.'}]})],
     ['GET', /^\/v1\/operations$/, () => ({items:[],total:0,offset:0})],
     ['GET', /^\/v1\/pilot\/journey$/, (_p,q) => pilotProgress(api.state(merchantOf(q)),'sandbox')],
+    ['GET', /^\/v1\/pilot\/import-corrections$/, (_p,q) => importCorrectionsResponseSchema.parse({...listImportCorrections(api.state(merchantOf(q)),context(),q.batchId!),reviewers:roster().filter(p=>p.role==='Finance')} )],
+    ['POST', /^\/v1\/pilot\/import-corrections\/preview$/, (_p,q,b) => importCorrectionPreviewSchema.parse(previewImportCorrection(api.state(merchantOf(q)),context(),b))],
+    ['POST', /^\/v1\/pilot\/import-corrections$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>importCorrectionViewSchema.parse(proposeImportCorrection(s,c,b,roster())),{action:'import.correction.propose',objectId:'imports',summary:'Propose an imported record correction'})],
+    ['POST', /^\/v1\/pilot\/import-corrections\/(?<id>[^/]+)\/decision$/, (p,q,b) => withState(merchantOf(q),(s,c)=>importCorrectionViewSchema.parse(decideImportCorrection(s,c,p.id!,b,roster())),{action:'import.correction.decide',objectId:p.id!,summary:'Record independent correction decision'})],
     ['GET', /^\/v1\/pilot\/progress$/, (_p,q) => pilotProgress(api.state(merchantOf(q)),'sandbox')],
     ['GET', /^\/v1\/pilot\/close-reviews$/, (_p,q) => ({...closeReviewList(api.state(merchantOf(q))),actor:context().actor,reviewers:roster().filter(person=>person.role==='Finance'),accessMode:'sandbox',ownPrincipal:api.principalId})],
     ['POST', /^\/v1\/pilot\/close-reviews\/prepare$/, (_p,q,b) => pilotWrite(q,(s,c)=>prepareCloseReview(s,c,prepareCloseReviewSchema.parse(b),roster()))],
     ['POST', /^\/v1\/pilot\/close-reviews\/(?<id>[^/]+)\/decision$/, (p,q,b) => pilotWrite(q,(s,c)=>decideCloseReview(s,c,p.id!,decideCloseReviewSchema.parse(b)))],
-    ['GET', /^\/v1\/sources$/, (_p,q) => {const s=api.state(merchantOf(q)), events=s.records.filter(r=>r.kind==='provider-events').sort((a,b)=>b.createdAt.localeCompare(a.createdAt));return {...sourceQuality(s,api.now),paystack:{mode:'test_only',externalConnectionVerified:false,canRunFixtures:['Admin','Operations','Finance'].includes(api.role),state:'configuration_required',message:'A Paystack account, test credentials and an operator-provisioned connection are required for an external test. Local fixture results do not verify a Paystack connection.',events:events.slice(0,50).map(providerEventView),total:events.length,quarantined:events.filter(e=>e.status==='quarantined').length,duplicates:events.reduce((sum,e)=>sum+Math.max(0,Number(e.data.deliveryCount||0)-1),0)}};}],
+    ['GET', /^\/v1\/sources$/, (_p,q) => {const s=api.state(merchantOf(q)), events=s.records.filter(r=>r.kind==='provider-events').sort((a,b)=>b.createdAt.localeCompare(a.createdAt));return {...sourceQuality(s,api.now,q.businessDate||undefined),paystack:{mode:'test_only',externalConnectionVerified:false,canRunFixtures:['Admin','Operations','Finance'].includes(api.role),state:'configuration_required',message:'A Paystack account, test credentials and an operator-provisioned connection are required for an external test. Local fixture results do not verify a Paystack connection.',events:events.slice(0,50).map(providerEventView),total:events.length,quarantined:events.filter(e=>e.status==='quarantined').length,duplicates:events.reduce((sum,e)=>sum+Math.max(0,Number(e.data.deliveryCount||0)-1),0)}};}],
+    ['POST', /^\/v1\/sources\/manifests$/, (_p,q,b) => pilotWrite(q,(s,c)=>saveSourceManifest(s,c,b as any))],
     ['POST', /^\/v1\/sources\/profiles$/, (_p,q,b) => pilotWrite(q,(s,c)=>saveSourceProfile(s,c,sourceProfileInputSchema.parse(b)))],
     ['POST', /^\/v1\/sources\/profiles\/(?<id>[^/]+)\/save$/, (p,q,b) => pilotWrite(q,(s,c)=>saveSourceProfile(s,c,sourceProfileInputSchema.parse(b),p.id))],
     ['POST', /^\/v1\/sources\/paystack\/fixtures$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>{const result=runPaystackFixture(s,c,paystackFixtureInputSchema.parse(b).scenario);return {...result,event:providerEventView(result.event)};},{action:'source.fixture',objectId:'sources',summary:'Explicit synthetic Paystack rehearsal'})],
@@ -227,7 +235,9 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
       return S.UpdateRecordResponse.parse(withState(merchantOf(query), (state, ctx) => {
         const old = state.records.find((record) => record.kind === kind && record.id === params.id);
         if (!old) fail("Record not found.", 404);
-        const input = { ...old, ...body, data: { ...old.data, ...body.data, synthetic: true } as Record<string, any>, updatedAt: ctx.now };
+        const {expectedUpdatedAt:_expected,...changes}=body;
+        const input = { ...old, ...changes, data: { ...old.data, ...body.data, synthetic: true } as Record<string, any>, updatedAt: ctx.now };
+        assertNoDirectImportedCorrection(old,input);
         if (kind === "due-items") {
           const allocated = state.records.filter((record) => record.kind === "allocations" && record.status === "confirmed" && record.data.dueItemId === old.id).reduce((sum, record) => sum + record.amountKobo, 0);
           if (input.amountKobo < allocated) fail("Due amount cannot be reduced below confirmed allocations.");

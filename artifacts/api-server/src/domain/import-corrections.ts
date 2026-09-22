@@ -1,0 +1,540 @@
+import { createHash } from "node:crypto";
+import {
+  importCorrectionPreviewInputSchema,
+  importCorrectionProposalInputSchema,
+  importCorrectionDecisionInputSchema,
+  importCorrectionPreviewSchema,
+  importCorrectionViewSchema,
+  type ImportCorrectionPreviewInput,
+  type ImportCorrectionProposalInput,
+  type ImportCorrectionDecisionInput,
+} from "@workspace/valopay-schema";
+import type { Context, DomainState, ValopayRecord } from "./types";
+import { makeRecord, assertNoRealBankDetails } from "./records";
+import { validateRecord } from "./validation";
+
+const canonical = (value: unknown) =>
+  JSON.stringify(value, (_key, item) =>
+    item && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(
+          Object.entries(item).sort(([a], [b]) => a.localeCompare(b)),
+        )
+      : item,
+  );
+const digest = (value: unknown) =>
+  createHash("sha256").update(canonical(value)).digest("hex");
+const principal = (ctx: Context) => ctx.principalId || ctx.actor;
+function refuse(message: string, status = 409): never {
+  throw Object.assign(new Error(message), { status });
+}
+function writer(ctx: Context) {
+  if (!["Admin", "Operations", "Finance"].includes(ctx.role))
+    refuse("Your role cannot propose import corrections.", 403);
+}
+const financialKinds = new Set([
+  "payments",
+  "observations",
+  "allocations",
+  "attempts",
+  "refunds",
+  "adjustments",
+  "retry-decisions",
+  "connected-intents",
+  "notifications",
+]);
+function ownedBatch(state: DomainState, id: string) {
+  const batch = state.records.find(
+    (r) =>
+      r.id === id &&
+      r.kind === "import-batches" &&
+      r.merchantId === state.merchant.id,
+  );
+  if (!batch || batch.status !== "committed")
+    refuse("Choose a committed import batch in this lender.", 404);
+  return batch;
+}
+function ownedTarget(state: DomainState, batch: ValopayRecord, id: string) {
+  const target = state.records.find(
+    (r) =>
+      r.id === id &&
+      r.merchantId === state.merchant.id &&
+      r.data.importIdentity?.batchId === batch.id,
+  );
+  if (
+    !target ||
+    target.data.importIdentity.source !== batch.data.source ||
+    target.kind !== batch.data.kind
+  )
+    refuse("This imported record does not belong to the selected batch.", 404);
+  return target;
+}
+function affectedRecords(state: DomainState, target: ValopayRecord) {
+  const customerId =
+    target.kind === "customers" ? target.id : target.customerId;
+  return state.records
+    .filter(
+      (r) =>
+        r.id !== target.id &&
+        (r.kind === "closes" ||
+          r.kind === "close-reviews" ||
+          (financialKinds.has(r.kind) &&
+            ((r.customerId === customerId && !!customerId) ||
+              [
+                r.data.dueItemId,
+                r.data.linkedRecordId,
+                r.data.originalDueItemId,
+              ].includes(target.id)))),
+    )
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+function calculate(
+  state: DomainState,
+  ctx: Context,
+  raw: ImportCorrectionPreviewInput,
+) {
+  const input = importCorrectionPreviewInputSchema.parse(raw),
+    batch = ownedBatch(state, input.batchId),
+    target = ownedTarget(state, batch, input.targetId);
+  if (target.updatedAt !== input.expectedUpdatedAt)
+    refuse(
+      "This imported record changed. Refresh it and prepare another comparison.",
+    );
+  assertNoRealBankDetails(input.changes);
+  const after = structuredClone(target),
+    differences: Array<{
+      field: "name" | "phoneMasked" | "amountKobo" | "dueDate";
+      before: string | number | null;
+      after: string | number;
+    }> = [],
+    blockers: string[] = [];
+  const supported =
+    target.kind === "customers"
+      ? ["name", "phoneMasked"]
+      : target.kind === "due-items"
+        ? ["amountKobo", "dueDate"]
+        : [];
+  if (!supported.length)
+    blockers.push(
+      "This record type cannot be amended here. Keep the original source evidence and use its existing investigation, reversal or adjustment workflow.",
+    );
+  for (const [field, value] of Object.entries(input.changes)) {
+    if (!supported.includes(field)) {
+      blockers.push(`Changing ${field} is not supported for this record type.`);
+      continue;
+    }
+    const before =
+      field === "name"
+        ? target.name
+        : field === "amountKobo"
+          ? target.amountKobo
+          : (target.data[field] ?? null);
+    if (before === value) continue;
+    differences.push({ field: field as any, before, after: value! });
+    if (field === "name") after.name = String(value);
+    else if (field === "amountKobo") after.amountKobo = Number(value);
+    else after.data[field] = value;
+  }
+  if (!differences.length)
+    blockers.push(
+      "Choose a value that differs from the current imported record.",
+    );
+  const financial = target.kind === "due-items",
+    affected = affectedRecords(state, target);
+  if (financial) {
+    if (
+      target.status !== "scheduled" ||
+      target.data.outstandingKobo !== target.amountKobo
+    )
+      blockers.push(
+        "Only an unpaid scheduled instalment with its full amount outstanding can be amended.",
+      );
+    if (affected.some((r) => financialKinds.has(r.kind)))
+      blockers.push(
+        "This amendment workflow cannot change an instalment with payment or collection history. Review its evidence in Reconciliation or Exceptions.",
+      );
+    if (target.data.experimentId || target.data.firstFailureAt)
+      blockers.push(
+        "An instalment enrolled in a recovery experiment cannot be amended here.",
+      );
+    after.data.outstandingKobo = after.amountKobo;
+  }
+  if (!blockers.length) {
+    try {
+      validateRecord(
+        state,
+        { ...ctx, role: "Admin" },
+        target.kind,
+        after,
+        true,
+      );
+    } catch (error) {
+      blockers.push(
+        error instanceof Error
+          ? error.message
+          : "The amended record is not valid.",
+      );
+    }
+  }
+  const affectedView = affected.map(
+    ({ id, kind, name, reference, status, updatedAt }) => ({
+      id,
+      kind,
+      name,
+      reference,
+      status,
+      updatedAt,
+    }),
+  );
+  const impactDigest = digest(affected),
+    previewDigest = digest({
+      batchId: batch.id,
+      before: target,
+      after,
+      impactDigest,
+    });
+  const preview = importCorrectionPreviewSchema.parse({
+    merchantId: state.merchant.id,
+    batchId: batch.id,
+    targetId: target.id,
+    targetKind: target.kind,
+    source: target.data.importIdentity.source,
+    rowId: target.data.importIdentity.rowId,
+    targetUpdatedAt: target.updatedAt,
+    financial,
+    previewDigest,
+    differences,
+    affected: affectedView,
+    blockers,
+    consequence:
+      "Approval changes the current record only. The committed file, original source identity and before/after evidence remain unchanged. Existing close approvals must be refreshed.",
+  });
+  return { input, batch, target, after, impactDigest, preview };
+}
+export function previewImportCorrection(
+  state: DomainState,
+  ctx: Context,
+  input: ImportCorrectionPreviewInput,
+) {
+  writer(ctx);
+  return calculate(state, ctx, input).preview;
+}
+function proposalOf(state: DomainState, id: string) {
+  return (
+    state.records.find(
+      (r) =>
+        r.id === id &&
+        r.kind === "import-corrections" &&
+        r.merchantId === state.merchant.id,
+    ) || refuse("Import correction not found in this lender.", 404)
+  );
+}
+function decisionOf(state: DomainState, id: string) {
+  return state.records.find(
+    (r) => r.kind === "import-correction-events" && r.data.proposalId === id,
+  );
+}
+export function importCorrectionView(
+  state: DomainState,
+  ctx: Context,
+  proposal: ValopayRecord,
+) {
+  const decision = decisionOf(state, proposal.id);
+  let current = false;
+  try {
+    current =
+      calculate(state, ctx, proposal.data.input).preview.previewDigest ===
+      proposal.data.preview.previewDigest;
+  } catch {
+    /* changed source or dependencies */
+  }
+  return importCorrectionViewSchema.parse({
+    id: proposal.id,
+    merchantId: state.merchant.id,
+    createdAt: proposal.createdAt,
+    proposedBy: proposal.data.proposedBy,
+    proposedPrincipal: proposal.data.proposedPrincipal,
+    reviewer: proposal.data.reviewer,
+    reason: proposal.data.reason,
+    evidence: proposal.data.evidence,
+    proposalDigest: proposal.data.proposalDigest,
+    status: decision
+      ? decision.data.action === "approve"
+        ? "approved"
+        : decision.data.action === "withdraw"
+          ? "withdrawn"
+          : "rejected"
+      : "awaiting_review",
+    current: !decision && current,
+    preview: proposal.data.preview,
+    decision: decision
+      ? {
+          id: decision.id,
+          action: decision.data.action,
+          actor: decision.data.actor,
+          principalId: decision.data.principalId,
+          reason: decision.data.reason,
+          at: decision.createdAt,
+        }
+      : null,
+  });
+}
+export function listImportCorrections(
+  state: DomainState,
+  ctx: Context,
+  batchId: string,
+) {
+  const batch = ownedBatch(state, batchId);
+  return {
+    batchId,
+    actor: ctx.actor,
+    ownPrincipal: principal(ctx),
+    role: ctx.role,
+    targets: state.records
+      .filter(
+        (r) =>
+          r.data.importIdentity?.batchId === batch.id &&
+          r.merchantId === state.merchant.id,
+      )
+      .map((r) => ({
+        id: r.id,
+        kind: r.kind,
+        name: r.name,
+        reference: r.reference,
+        updatedAt: r.updatedAt,
+        rowId: r.data.importIdentity.rowId,
+        amountKobo: r.amountKobo,
+        dueDate: r.data.dueDate || null,
+        phoneMasked: r.data.phoneMasked || "",
+        supported: ["customers", "due-items"].includes(r.kind),
+        status: r.status,
+      })),
+    proposals: state.records
+      .filter(
+        (r) => r.kind === "import-corrections" && r.data.batchId === batchId,
+      )
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map((r) => importCorrectionView(state, ctx, r)),
+    syntheticOnly: true as const,
+  };
+}
+export function proposeImportCorrection(
+  state: DomainState,
+  ctx: Context,
+  raw: ImportCorrectionProposalInput,
+  reviewers: Array<{ actor: string; role: string }>,
+) {
+  writer(ctx);
+  const input = importCorrectionProposalInputSchema.parse(raw);
+  const {
+    previewDigest: _digest,
+    reviewer,
+    reason,
+    evidence,
+    ...previewInput
+  } = input;
+  const checked = calculate(state, ctx, previewInput);
+  if (checked.preview.blockers.length)
+    refuse(checked.preview.blockers.join(" "));
+  if (input.previewDigest !== checked.preview.previewDigest)
+    refuse(
+      "The comparison changed. Preview it again before proposing a correction.",
+    );
+  if (
+    input.reviewer === ctx.actor ||
+    !reviewers.some((r) => r.actor === input.reviewer && r.role === "Finance")
+  )
+    refuse(
+      "Choose another active Finance reviewer with access to this lender.",
+      403,
+    );
+  if (
+    state.records.some(
+      (r) =>
+        r.kind === "import-corrections" &&
+        r.data.targetId === input.targetId &&
+        !decisionOf(state, r.id),
+    )
+  )
+    refuse(
+      "This record already has an open correction. Review or reject it before proposing another.",
+    );
+  const data = {
+    batchId: input.batchId,
+    targetId: input.targetId,
+    input: previewInput,
+    before: structuredClone(checked.target),
+    after: checked.after,
+    impactDigest: checked.impactDigest,
+    preview: checked.preview,
+    proposedBy: ctx.actor,
+    proposedPrincipal: principal(ctx),
+    reviewer,
+    reason,
+    evidence,
+    synthetic: true,
+  };
+  const proposal = makeRecord(state, "import-corrections", {
+    name: "Proposed import correction",
+    status: "recorded",
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+    data: { ...data, proposalDigest: digest(data) },
+  });
+  return importCorrectionView(state, ctx, proposal);
+}
+export function decideImportCorrection(
+  state: DomainState,
+  ctx: Context,
+  id: string,
+  raw: ImportCorrectionDecisionInput,
+  reviewers: Array<{ actor: string; role: string }>,
+) {
+  const input = importCorrectionDecisionInputSchema.parse(raw),
+    proposal = proposalOf(state, id);
+  if (input.proposalDigest !== proposal.data.proposalDigest)
+    refuse(
+      "The correction evidence does not match this decision. Refresh the proposal.",
+    );
+  if (decisionOf(state, id))
+    refuse("This correction already has a decision. Its history is preserved.");
+  if (input.action === "withdraw") {
+    writer(ctx);
+    if (principal(ctx) !== proposal.data.proposedPrincipal)
+      refuse("Only the proposer may withdraw this correction.", 403);
+  } else {
+    if (
+      ctx.role !== "Finance" ||
+      ctx.actor !== proposal.data.reviewer ||
+      !reviewers.some((r) => r.actor === ctx.actor && r.role === "Finance")
+    )
+      refuse(
+        "Only the named active Finance reviewer may decide this correction.",
+        403,
+      );
+    if (
+      principal(ctx) === proposal.data.proposedPrincipal ||
+      ctx.actor === proposal.data.proposedBy
+    )
+      refuse(
+        "A different person must review this correction. Changing demo roles does not provide independent approval.",
+        403,
+      );
+  }
+  if (input.action === "approve") {
+    const checked = calculate(state, ctx, proposal.data.input);
+    if (
+      checked.preview.blockers.length ||
+      checked.preview.previewDigest !== proposal.data.preview.previewDigest
+    )
+      refuse(
+        "The record or affected evidence changed. Reject this proposal and prepare a fresh comparison.",
+      );
+    Object.assign(checked.target, structuredClone(proposal.data.after), {
+      updatedAt: ctx.now,
+    });
+  }
+  makeRecord(state, "import-correction-events", {
+    name:
+      input.action === "approve"
+        ? "Import correction approved and applied"
+        : input.action === "withdraw"
+          ? "Import correction withdrawn"
+          : "Import correction rejected",
+    status: "recorded",
+    createdAt: ctx.now,
+    updatedAt: ctx.now,
+    data: {
+      proposalId: id,
+      targetId: proposal.data.targetId,
+      batchId: proposal.data.batchId,
+      proposalDigest: proposal.data.proposalDigest,
+      action: input.action,
+      actor: ctx.actor,
+      principalId: principal(ctx),
+      reason: input.reason,
+      synthetic: true,
+    },
+  });
+  return importCorrectionView(state, ctx, proposal);
+}
+
+/** Only a newly appended independent approval permits a controlled imported-field change. */
+export function assertImportedCorrectionChange(
+  before: ValopayRecord,
+  after: ValopayRecord,
+  snapshot: DomainState,
+  state: DomainState,
+) {
+  if (!before.data.importIdentity) return;
+  const changed =
+    before.kind === "customers"
+      ? before.name !== after.name ||
+        before.data.phoneMasked !== after.data.phoneMasked
+      : before.kind === "due-items"
+        ? before.amountKobo !== after.amountKobo ||
+          before.data.dueDate !== after.data.dueDate
+        : false;
+  if (!changed) return;
+  const event = state.records.find(
+    (r) =>
+      r.kind === "import-correction-events" &&
+      r.data.action === "approve" &&
+      r.data.targetId === before.id &&
+      !snapshot.records.some((old) => old.id === r.id),
+  );
+  const proposal =
+    event &&
+    snapshot.records.find(
+      (r) => r.id === event.data.proposalId && r.kind === "import-corrections",
+    );
+  if (
+    !proposal ||
+    decisionOf(snapshot, proposal.id) ||
+    proposal.data.proposedPrincipal === event!.data.principalId ||
+    proposal.data.reviewer !== event!.data.actor ||
+    proposal.data.proposalDigest !== event!.data.proposalDigest ||
+    canonical(proposal.data.before) !== canonical(before) ||
+    canonical({ ...proposal.data.after, updatedAt: after.updatedAt }) !==
+      canonical(after)
+  )
+    refuse(
+      "Imported fields can change only through an independently approved import correction.",
+    );
+  const { proposalDigest, ...evidence } = proposal.data;
+  if (digest(evidence) !== proposalDigest)
+    refuse("The correction proposal evidence failed its integrity check.");
+  const checked = calculate(
+    snapshot,
+    {
+      actor: event!.data.actor,
+      principalId: event!.data.principalId,
+      role: "Finance",
+      now: after.updatedAt,
+    },
+    proposal.data.input,
+  );
+  if (
+    checked.preview.blockers.length ||
+    checked.preview.previewDigest !== proposal.data.preview.previewDigest ||
+    canonical(checked.after) !== canonical(proposal.data.after) ||
+    digest(affectedRecords(state, before)) !== proposal.data.impactDigest
+  )
+    refuse("Correction dependencies changed; prepare a fresh proposal.");
+}
+/** Generic record editing cannot bypass the source amendment review. */
+export function assertNoDirectImportedCorrection(
+  before: ValopayRecord,
+  after: ValopayRecord,
+) {
+  if (!before.data.importIdentity) return;
+  // PATCH adds these envelope values itself; neither is a requested source amendment.
+  const normalised = {
+    ...after,
+    updatedAt: before.updatedAt,
+    data: { ...after.data, synthetic: before.data.synthetic },
+  };
+  if (canonical(before) !== canonical(normalised))
+    refuse(
+      "Imported source records cannot be edited directly. Open the committed import batch for a supported correction and independent Finance review. For other changes, use the dedicated mandate, Collections, Reconciliation or Exceptions action; the original source remains preserved.",
+    );
+}

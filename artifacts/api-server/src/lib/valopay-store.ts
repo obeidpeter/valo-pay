@@ -21,6 +21,7 @@ import { precisionAudit } from '../domain/reports';
 import { previousMonth } from '../domain/billing';
 import { measurementRules } from '@workspace/valopay-schema';
 import { protectStored, revealStored, protectRecordData, revealRecordData, payloadEncryptionKey, isProtectedPayload } from './protected-payloads';
+import { assertImportedCorrectionChange } from '../domain/import-corrections';
 import type { LifecycleExternalCandidate, LifecycleCandidate } from '@workspace/valopay-schema';
 import { assertLifecycleCandidate, eraseLifecycleRawCsv, recordLifecycleReceipt, lifecycleRunView } from '../domain/lifecycle';
 import { deleteRetainedExport } from './export-download';
@@ -813,7 +814,8 @@ function isExportRetry(before: ValopayRecord, after: ValopayRecord, now?: string
   if (after.status !== "queued" || !(before.status === "failed" || expired)) return false;
   const cleared = ["leaseToken", "leaseExpiresAt", "lastError"];
   if (cleared.some(key => after.data[key] !== undefined)) return false;
-  const stableData = (record: ValopayRecord) => Object.fromEntries(Object.entries(record.data).filter(([key]) => !cleared.includes(key)));
+  if (after.data.stage !== 'queued' || after.data.lastProgressAt !== now) return false;
+  const stableData = (record: ValopayRecord) => Object.fromEntries(Object.entries(record.data).filter(([key]) => ![...cleared, 'stage', 'lastProgressAt'].includes(key)));
   // A retry cannot change the request, private object identity, attempts,
   // checksum, customer or any prior evidence; it only clears the old lease/error.
   return canonical({ ...after, status: before.status, updatedAt: before.updatedAt, data: stableData(after) }) === canonical({ ...before, data: stableData(before) });
@@ -846,7 +848,7 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
       else {expected.data.fileDeletedAt=now;expected.data.fileRetentionRunId=run.id;}
       return canonical(expected)===canonical(present);
     };
-    if (["audit", "exports", "reviews", "closes", "retry-decisions", "invoices", "connected-credit-assessments", "connected-credit-reviews", "case-events", "import-revisions", "close-review-events", "work-events", "retention-policies", "retention-holds", "retention-receipts"].includes(before.kind) && canonical(present) !== canonical(before)
+    if (["audit", "exports", "reviews", "closes", "retry-decisions", "invoices", "connected-credit-assessments", "connected-credit-reviews", "case-events", "import-revisions", "import-corrections", "import-correction-events", "source-manifests", "close-review-events", "work-events", "retention-policies", "retention-holds", "retention-receipts"].includes(before.kind) && canonical(present) !== canonical(before)
       && !(before.kind === "exports" && (isExportRetry(before, present, now)||retentionChange()))) conflict("Evidence records are immutable.");
     if (["policies", "templates", "experiments"].includes(before.kind) && ["approved", "preregistered", "closed"].includes(before.status) && canonical(present) !== canonical(before)) {
       conflict("Approved, preregistered, and closed versions are immutable.");
@@ -856,11 +858,12 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
     if (before.kind === 'import-batches' && before.status === 'committed' && canonical(present) !== canonical(before)&&!retentionChange()) conflict('Committed source batches are immutable.');
     if(before.kind==='close-reviews'&&canonical(present)!==canonical(before)){
       const expected=structuredClone(before);expected.status=present.status;expected.updatedAt=present.updatedAt;
-      for(const field of ['decidedBy','decidedPrincipal','decidedAt','decisionNote'])expected.data[field]=present.data[field];
+      for(const field of ['decidedBy','decidedPrincipal','decidedAt','decisionNote','sourceExceptions'])expected.data[field]=present.data[field];
       if(before.status!=='awaiting_review'||!['approved','changes_requested'].includes(present.status)||canonical(expected)!==canonical(present))conflict('The prepared close snapshot and recorded decision are immutable.');
     }
     if(before.kind==='retention-runs'&&['candidates','previewDigest','policyRevision','expiresAt','preparedBy'].some(key=>canonical(before.data[key])!==canonical(present.data[key])))conflict('The approved retention manifest is immutable.');
     if (before.data.importIdentity && canonical(present.data.importIdentity) !== canonical(before.data.importIdentity)) conflict('Source row provenance is immutable.');
+    assertImportedCorrectionChange(before, present, snapshot, state);
   }
   const dueReferences = new Set<string>(), observations = new Set<string>(), inflight = new Set<string>();
   const allocatedPayments = new Map<string, number>(), allocatedDues = new Map<string, number>();

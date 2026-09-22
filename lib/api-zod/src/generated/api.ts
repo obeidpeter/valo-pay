@@ -699,8 +699,8 @@ export const CreateExportQueryParams = zod.object({
 })
 
 export const CreateExportBody = zod.object({
-  "kind": zod.string(),
   "closeReviewId": zod.string().optional(),
+  "kind": zod.string(),
   "customerId": zod.string().optional(),
   "format": zod.enum(['json', 'csv', 'pdf'])
 }).describe('What to export (a record kind, gate-pack, billing, dispute-pack or customer-pack with a customerId) and in which format.')
@@ -719,7 +719,12 @@ export const CreateExportResponse = zod.object({
   "generatedAt": zod.string().optional(),
   "byteLength": zod.number().int().optional(),
   "generationMs": zod.number().int().optional(),
-  "error": zod.string().optional()
+  "error": zod.string().optional(),
+  "stage": zod.enum(['queued', 'checking', 'rendering', 'uploading', 'confirming', 'ready', 'failed']).optional(),
+  "lastProgressAt": zod.string().optional(),
+  "stalled": zod.boolean().optional(),
+  "retryAllowed": zod.boolean().optional(),
+  "recoveryAt": zod.string().optional()
 }).describe('Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.')
 
 
@@ -749,7 +754,12 @@ export const GetExportJobResponse = zod.object({
   "generatedAt": zod.string().optional(),
   "byteLength": zod.number().int().optional(),
   "generationMs": zod.number().int().optional(),
-  "error": zod.string().optional()
+  "error": zod.string().optional(),
+  "stage": zod.enum(['queued', 'checking', 'rendering', 'uploading', 'confirming', 'ready', 'failed']).optional(),
+  "lastProgressAt": zod.string().optional(),
+  "stalled": zod.boolean().optional(),
+  "retryAllowed": zod.boolean().optional(),
+  "recoveryAt": zod.string().optional()
 }).describe('Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.')
 
 
@@ -779,7 +789,12 @@ export const RetryExportJobResponse = zod.object({
   "generatedAt": zod.string().optional(),
   "byteLength": zod.number().int().optional(),
   "generationMs": zod.number().int().optional(),
-  "error": zod.string().optional()
+  "error": zod.string().optional(),
+  "stage": zod.enum(['queued', 'checking', 'rendering', 'uploading', 'confirming', 'ready', 'failed']).optional(),
+  "lastProgressAt": zod.string().optional(),
+  "stalled": zod.boolean().optional(),
+  "retryAllowed": zod.boolean().optional(),
+  "recoveryAt": zod.string().optional()
 }).describe('Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.')
 
 

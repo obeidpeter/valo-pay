@@ -19,6 +19,7 @@ if (!process.env.DATABASE_URL) {
 }
 const env = { ...process.env, NODE_ENV: process.env.NODE_ENV || "development" };
 const suites = [
+  'artifacts/api-server/tests/source-close-controls.integration.test.ts',
   'artifacts/api-server/tests/staff-lender-access.integration.test.ts',
   'artifacts/api-server/tests/runtime-isolation.integration.test.ts',
   'artifacts/api-server/tests/operations-controls.integration.test.ts',

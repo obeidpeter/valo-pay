@@ -1,6 +1,35 @@
 import {test,expect} from "@playwright/test";
 import path from "node:path";
 test.beforeEach(async({request})=>{await request.post("/__test/reset");});
+test("a dated declaration becomes complete only after its matching source file is committed",async({page},testInfo)=>{
+  await page.goto("/sources?businessDate=2026-09-18");
+  await expect(page.getByLabel("Business date (WAT)",{exact:true})).toHaveValue("2026-09-18");
+  await page.getByRole("button",{name:"Add expected file",exact:true}).click();
+  await page.getByLabel("Expected file source 1",{exact:true}).fill("browser-source");
+  await page.getByLabel("Expected source batch ID 1",{exact:true}).fill("customer-file-18");
+  await page.getByLabel("Declared row count 1",{exact:true}).fill("1");
+  await page.getByLabel("Declaration reason",{exact:true}).fill("The synthetic source owner confirms the complete customer file list.");
+  await page.getByLabel("Supporting source evidence",{exact:true}).fill("Synthetic control report SOURCE-18.");
+  await page.getByRole("button",{name:"Save source declaration",exact:true}).click();
+  await expect(page.getByText(/0 of 1 expected files complete/)).toBeVisible();
+  await page.getByRole("link",{name:"Import expected file",exact:true}).click();
+  await expect(page.getByLabel("Business date (WAT)",{exact:true})).toHaveValue("2026-09-18");
+  await expect(page.getByLabel("Source batch ID",{exact:true})).toHaveValue("customer-file-18");
+  await page.getByLabel("Batch name",{exact:true}).fill("Late customer source file");
+  await page.getByLabel("CSV content",{exact:true}).fill("source_row_id,name,reference,consentProvenance\nsource-1,Synthetic browser customer,BROWSER-SOURCE-1,Synthetic consent evidence");
+  await page.getByRole("button",{name:"Save and check batch",exact:true}).click();
+  await page.getByRole("button",{name:"Commit checked batch",exact:true}).click();
+  await expect(page.getByRole("heading",{name:"Import complete",exact:true})).toBeVisible();
+  await page.goto("/sources?businessDate=2026-09-18");
+  await expect(page.getByText(/1 of 1 expected files complete/)).toBeVisible();
+  await expect(page.getByText("Every declared file is committed and its source totals agree.",{exact:true})).toBeVisible();
+  await page.reload();
+  await expect(page.getByText(/1 of 1 expected files complete/)).toBeVisible();
+  await page.addScriptTag({path:path.resolve("node_modules/axe-core/axe.min.js")});
+  expect(await page.evaluate(async()=> (await (window as any).axe.run(document.getElementById("main"),{runOnly:{type:"tag",values:["wcag2a","wcag2aa","wcag21aa"]}})).violations.map((v:any)=>({id:v.id,nodes:v.nodes.map((n:any)=>n.target)})))).toEqual([]);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBeTruthy();
+  await page.screenshot({path:testInfo.outputPath("source-date-complete.png"),fullPage:true});
+});
 test("source schedules and signed fixture receipts stay clear and usable on small screens",async({page},testInfo)=>{
   await page.goto("/sources");
   await expect(page.getByRole("heading",{name:"Sources & connections",exact:true})).toBeVisible();

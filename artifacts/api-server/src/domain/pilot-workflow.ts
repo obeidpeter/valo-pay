@@ -10,6 +10,7 @@ import { makeRecord } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
 import { importCsv } from "../lib/valopay-import";
 import { batchSourceQuality, assertSourceBatchReady } from './source-quality';
+import { assertSourceExpectation } from './source-completeness';
 
 function refuse(message: string, status = 400): never {
   throw Object.assign(new Error(message), { status });
@@ -26,6 +27,8 @@ export function batchView(batch: ValopayRecord, detail = false) {
       : {
           source: batch.data.source,
           sourceBatchId: batch.data.sourceBatchId,
+          businessDate: batch.data.businessDate,
+          sourceExpectationId: batch.data.sourceExpectationId,
           kind: batch.data.kind,
           revision: batch.data.revision,
           checkedAt: batch.data.checkedAt,
@@ -78,6 +81,7 @@ export function saveImportBatch(
 ) {
   writer(ctx);
   input = batchInputSchema.parse(input);
+  assertSourceExpectation(state, input);
   const old = id
     ? state.records.find((r) => r.id === id && r.kind === "import-batches")
     : undefined;
@@ -195,6 +199,8 @@ export function commitImportBatch(
         "kind",
         "source",
         "sourceBatchId",
+        "businessDate",
+        "sourceExpectationId",
         "csv",
         "mapping",
         "amountUnit",

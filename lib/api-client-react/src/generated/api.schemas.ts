@@ -465,6 +465,19 @@ export const ExportResultStatus = {
   failed: 'failed',
 } as const;
 
+export type ExportResultStage = typeof ExportResultStage[keyof typeof ExportResultStage];
+
+
+export const ExportResultStage = {
+  queued: 'queued',
+  checking: 'checking',
+  rendering: 'rendering',
+  uploading: 'uploading',
+  confirming: 'confirming',
+  ready: 'ready',
+  failed: 'failed',
+} as const;
+
 /**
  * Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.
  */
@@ -483,6 +496,11 @@ export interface ExportResult {
   byteLength?: number;
   generationMs?: number;
   error?: string;
+  stage?: ExportResultStage;
+  lastProgressAt?: string;
+  stalled?: boolean;
+  retryAllowed?: boolean;
+  recoveryAt?: string;
 }
 
 export type QueuePageCounts = {[key: string]: number};

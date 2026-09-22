@@ -1,6 +1,7 @@
 // Disposable PostgreSQL only; no object-storage credentials or external calls.
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { Server } from 'node:http';
 import type { ExportArtifact, ExportJobStorage } from '../src/lib/export-jobs';
 if(process.env.VALOPAY_RUN_INTEGRATION!=='1'){console.log('Set VALOPAY_RUN_INTEGRATION=1 to run durable export database checks.');process.exit(0);}
@@ -67,6 +68,26 @@ try{
  const ready=await api(`/exports/${target.id}`);assert.equal(ready.body.status,'ready');assert.match(ready.body.checksum,/^[a-f0-9]{64}$/);
  const readyRetry=await api(`/exports/${target.id}/retry`,{method:'POST',body:{},key:'ready-retry'});assert.equal(readyRetry.body.status,'ready');
  assert.equal(await processExportJob(repository,storage,generateExportArtifact,target),'skipped');
+
+ // Reproduce the observed completion contention: the file and confirming
+ // checkpoint are saved, then a brief reader holds the lender share lock.
+ const contended=await api('/exports',{method:'POST',body:input,key:'contended-export'});
+ const contendedTarget={merchantId,id:contended.body.id},reachedFinish=gate(),releaseCompletion=gate();
+ const holder=await pool.connect();let completionCalls=0;
+ const beforeContentionUploads=uploads,started=performance.now();
+ const completion=processExportJob({...repository,finish:async(claim,artifact)=>{
+  completionCalls++;
+  if(completionCalls===1){await holder.query('BEGIN');await holder.query('SELECT id FROM valopay_merchants WHERE id=$1 FOR SHARE',[merchantId]);reachedFinish.resolve();await releaseCompletion.promise;}
+  return repository.finish(claim,artifact);
+ }},storage,generateExportArtifact,contendedTarget);
+ try{await within(reachedFinish.promise);releaseCompletion.resolve();await delay(350);await holder.query('COMMIT');}
+ finally{releaseCompletion.resolve();await holder.query('ROLLBACK');holder.release();}
+ assert.equal(await completion,'ready');assert.ok(completionCalls>=2,'real SKIP LOCKED contention is retried');
+ assert.ok(performance.now()-started<6000,'brief contention does not wait for the old five-minute lease');
+ assert.equal(uploads,beforeContentionUploads+1,'completion retries must never generate a second object');
+ const contentionRecord=(await read()).records.find(record=>record.id===contendedTarget.id)!;
+ assert.equal(contentionRecord.data.attempts,1);assert.equal(contentionRecord.data.stage,'ready');
+ assert.equal([...objects.keys()].filter(key=>key.includes(contendedTarget.id)).length,1);
 
  // A committed object outlives both a failed completion and a failed failure
  // write. Restart recovery adopts the exact key/bytes after the lease expires.

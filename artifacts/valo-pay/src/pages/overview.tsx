@@ -17,6 +17,7 @@ const queueDestinations: Record<string, string> = {
 };
 
 function alertDestination(key: string): { href: string; label: string } {
+  if (key.includes('export')) return { href: '/exports', label: 'Check saved exports' };
   if (key.includes('close')) return { href: '/reports', label: 'View daily closes' };
   if (key.includes('audit')) return { href: '/audit', label: 'Review audit log' };
   if (key.includes('exception')) return { href: '/exceptions?view=overdue', label: 'Review exceptions' };

@@ -11,6 +11,7 @@ import { paymentObservedAt } from "./reconciliation";
 import { closeSchedule, positionMismatches } from "./close";
 import { attemptTime } from "./policy-engine";
 import { monthOf } from "./billing";
+import { exportHealth } from '../lib/export-jobs';
 
 const DAY_MS = 24 * 60 * 60 * 1000, HOUR_MS = 60 * 60 * 1000;
 
@@ -34,6 +35,8 @@ const setting = (state: DomainState, key: string, fallback: number): number => {
 export function buildAlerts(state: DomainState, now: string, audit?: AuditVerification | null): Alert[] {
   const alerts: Alert[] = [];
   const nowMs = Date.parse(now);
+  const stalledExports = recordsOf(state, 'exports').filter(record => exportHealth(record, now).stalled);
+  if (stalledExports.length) alerts.push({ key: 'exports_stalled', severity: 'medium', title: 'Exports need a status check', detail: `${counted(stalledExports.length, 'saved export has', 'saved exports have')} stopped reporting progress or reached a recovery deadline. Open saved exports to check its stage and retry the same job when available. Do not create another export to replace an uncertain request.`, count: stalledExports.length, linkedRecordId: stalledExports[0]!.id, since: exportHealth(stalledExports[0]!, now).lastProgressAt });
   if (audit && !audit.valid) {
     alerts.push({ key: "audit_chain_broken", severity: "critical", title: "Audit log verification failed", detail: `The check stopped at entry ${audit.count + 1} because its order or verification hash did not match. Ask an administrator to investigate.`, count: audit.count });
   }

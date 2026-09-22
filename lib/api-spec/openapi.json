@@ -2023,8 +2023,18 @@
       "Workspace": {
         "type": "object",
         "properties": {
-          "accessMode": { "type": "string", "enum": ["sandbox", "staff"], "description": "Whether the server authorises a demo persona or a provisioned staff membership." },
-          "viewerScope": { "type": "string", "description": "Opaque workspace/user scope for browser preferences; never an authorisation credential." },
+          "accessMode": {
+            "type": "string",
+            "enum": [
+              "sandbox",
+              "staff"
+            ],
+            "description": "Whether the server authorises a demo persona or a provisioned staff membership."
+          },
+          "viewerScope": {
+            "type": "string",
+            "description": "Opaque workspace/user scope for browser preferences; never an authorisation credential."
+          },
           "name": {
             "type": "string"
           },
@@ -2612,7 +2622,9 @@
       "ExportInput": {
         "type": "object",
         "properties": {
-          "closeReviewId": { "type": "string" },
+          "closeReviewId": {
+            "type": "string"
+          },
           "kind": {
             "type": "string"
           },
@@ -2637,7 +2649,9 @@
       "ExportResult": {
         "type": "object",
         "properties": {
-          "expiredAt": { "type": "string" },
+          "expiredAt": {
+            "type": "string"
+          },
           "id": {
             "type": "string"
           },
@@ -2681,6 +2695,30 @@
             "type": "integer"
           },
           "error": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "checking",
+              "rendering",
+              "uploading",
+              "confirming",
+              "ready",
+              "failed"
+            ]
+          },
+          "lastProgressAt": {
+            "type": "string"
+          },
+          "stalled": {
+            "type": "boolean"
+          },
+          "retryAllowed": {
+            "type": "boolean"
+          },
+          "recoveryAt": {
             "type": "string"
           }
         },

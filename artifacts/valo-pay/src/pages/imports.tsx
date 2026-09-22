@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { formatDate, formatKobo } from "@/lib/formatters";
 import { ScrollFrame } from "@/components/scroll-frame";
 import { readableLabel } from "@/components/record-label";
+import { ImportCorrections } from "@/components/import-corrections";
 
 const types = {
   customers: "Customers",
@@ -85,6 +86,10 @@ const empty = (): BatchInput => ({
   kind: "customers",
   source: "",
   sourceBatchId: "",
+  businessDate: new Date(Date.now() + 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10),
+  sourceExpectationId: undefined,
   identityColumn: "source_row_id",
   amountUnit: "naira",
   mapping: {},
@@ -101,7 +106,9 @@ function LenderImports() {
   const { merchantId } = useWorkspace(),
     [offset, setOffset] = useState(0),
     list = usePilotQuery(`/pilot/batches?offset=${offset}`);
-  const [selected, setSelected] = useState<string | null>(() => search.get("batch")),
+  const [selected, setSelected] = useState<string | null>(() =>
+      search.get("batch"),
+    ),
     [editor, setEditor] = useState(0);
   return (
     <div className="space-y-6">
@@ -119,6 +126,8 @@ function LenderImports() {
           key={`${merchantId}:${selected || editor}`}
           id={selected}
           initialProfile={search.get("profile")}
+          initialDate={search.get("businessDate")}
+          initialExpectation={search.get("expectation")}
           onSaved={(id) => setSelected(id)}
           onNew={() => {
             setSelected(null);
@@ -186,7 +195,12 @@ function LenderImports() {
           </div>
         )}
       </PilotPanel>
-      <Link href="/sources" className="inline-block text-sm text-primary underline">Manage source schedules, mappings and totals</Link>
+      <Link
+        href="/sources"
+        className="inline-block text-sm text-primary underline"
+      >
+        Manage source schedules, mappings and totals
+      </Link>
       <Link
         href="/pilot"
         className="inline-block text-sm text-primary underline"
@@ -199,16 +213,19 @@ function LenderImports() {
 function BatchEditor({
   id,
   initialProfile,
+  initialDate,
+  initialExpectation,
   onSaved,
   onNew,
 }: {
   id: string | null;
   initialProfile: string | null;
+  initialDate: string | null;
+  initialExpectation: string | null;
   onSaved(id: string): void;
   onNew(): void;
 }) {
   const { merchantId, workspace } = useWorkspace();
-  const sources = usePilotQuery("/sources");
   const [selectedProfile, setSelectedProfile] = useState(initialProfile || "");
   const initialProfileApplied = useRef(false);
   const detail = useQuery<any>({
@@ -217,20 +234,66 @@ function BatchEditor({
     queryFn: ({ signal }) =>
       pilotRequest(lenderPath(`/pilot/batches/${id}`, merchantId), { signal }),
   });
-  const [form, setForm] = useState<BatchInput>(empty),
+  const [form, setForm] = useState<BatchInput>(() => ({
+      ...empty(),
+      ...(initialDate ? { businessDate: initialDate } : {}),
+    })),
     [batch, setBatch] = useState<any>(null),
     [saved, setSaved] = useState(""),
     [fileError, setFileError] = useState(""),
     [reading, setReading] = useState(false);
+  const sources = usePilotQuery(
+    `/sources${form.businessDate ? `?businessDate=${encodeURIComponent(form.businessDate)}` : ""}`,
+  );
+  const expectationApplied = useRef(false);
+  const applyExpectation = (expectation: any) => {
+    setForm((current) =>
+      expectation
+        ? {
+            ...current,
+            sourceExpectationId: expectation.id,
+            source: expectation.source,
+            sourceBatchId: expectation.sourceBatchId,
+            kind: expectation.kind,
+            mapping: current.kind === expectation.kind ? current.mapping : {},
+          }
+        : { ...current, sourceExpectationId: undefined },
+    );
+    setSelectedProfile("");
+  };
+  useEffect(() => {
+    if (
+      id ||
+      expectationApplied.current ||
+      !sources.data ||
+      !initialExpectation
+    )
+      return;
+    expectationApplied.current = true;
+    const expected = sources.data.completeness?.files.find(
+      (file: any) => file.id === initialExpectation,
+    );
+    if (expected) applyExpectation(expected);
+  }, [id, initialExpectation, sources.data]);
   const applyProfile = (profile: any) => {
     setSelectedProfile(profile?.id || "");
     if (!profile) return;
-    setForm(current => ({ ...current, source: profile.data.source, kind: profile.data.kind, mapping: { ...profile.data.mapping }, amountUnit: profile.data.amountUnit, identityColumn: profile.data.identityColumn }));
+    setForm((current) => ({
+      ...current,
+      sourceExpectationId: undefined,
+      source: profile.data.source,
+      kind: profile.data.kind,
+      mapping: { ...profile.data.mapping },
+      amountUnit: profile.data.amountUnit,
+      identityColumn: profile.data.identityColumn,
+    }));
   };
   useEffect(() => {
     if (id || initialProfileApplied.current || !sources.data) return;
     initialProfileApplied.current = true;
-    const profile = sources.data.profiles.find((p: any) => p.id === initialProfile);
+    const profile = sources.data.profiles.find(
+      (p: any) => p.id === initialProfile,
+    );
     if (profile) applyProfile(profile);
   }, [id, initialProfile, sources.data]);
   const loaded = useRef(false),
@@ -247,7 +310,11 @@ function BatchEditor({
       ...Object.fromEntries(
         Object.keys(empty()).map((key) => [
           key,
-          key === "name" ? record.name : key === "csv" ? record.data.csv || "" : record.data[key],
+          key === "name"
+            ? record.name
+            : key === "csv"
+              ? record.data.csv || ""
+              : record.data[key],
         ]),
       ),
       expectedUpdatedAt: record.updatedAt,
@@ -275,7 +342,13 @@ function BatchEditor({
     workspace?.role || "",
   );
   const set = <K extends keyof BatchInput>(key: K, value: BatchInput[K]) =>
-    setForm((current) => ({ ...current, [key]: value }));
+    setForm((current) => ({
+      ...current,
+      ...(["source", "sourceBatchId", "kind", "businessDate"].includes(key)
+        ? { sourceExpectationId: undefined }
+        : {}),
+      [key]: value,
+    }));
   const check = batch?.data.check;
   const readFile = async (file?: File) => {
     if (!file || !confirmDiscard()) return;
@@ -325,7 +398,13 @@ function BatchEditor({
         row ID that stays the same when you correct or upload it again. Two
         separate payments must have different IDs, even if their amounts match.
       </p>
-      {batch?.data.rawCsvRemovedAt && <p className="rounded-lg border bg-secondary/30 p-3 text-sm">The original CSV expired under this lender's retention policy on {formatDate(batch.data.rawCsvRemovedAt)}. Imported records, source row identities and saved checks remain available.</p>}
+      {batch?.data.rawCsvRemovedAt && (
+        <p className="rounded-lg border bg-secondary/30 p-3 text-sm">
+          The original CSV expired under this lender's retention policy on{" "}
+          {formatDate(batch.data.rawCsvRemovedAt)}. Imported records, source row
+          identities and saved checks remain available.
+        </p>
+      )}
       <form
         className="space-y-5"
         onSubmit={(event) => {
@@ -336,11 +415,106 @@ function BatchEditor({
           });
         }}
       >
-        {!id && <div className="space-y-2"><label className="block space-y-1 text-sm font-medium">Reusable source mapping<select className={pilotField} disabled={locked || denied || sources.isLoading} value={selectedProfile} onChange={event => { if (!confirmDiscard()) return; applyProfile(sources.data?.profiles.find((p: any) => p.id === event.target.value)); }}><option value="">Start without a saved mapping</option>{sources.data?.profiles.map((profile: any) => <option key={profile.id} value={profile.id}>{profile.name} · {types[profile.data.kind as keyof typeof types]}</option>)}</select></label><p className="text-xs text-muted-foreground">A profile fills the source, record type, row identity, units and column mapping. Its active expectations are checked again before commit.</p>{initialProfile && sources.data && !sources.data.profiles.some((p: any) => p.id === initialProfile) && <p role="alert" className="text-sm text-destructive">This source profile is not available in the selected lender. Choose a profile below or return to Sources.</p>}<PilotError error={sources.error}/></div>}
+        {!id && (
+          <div className="space-y-2">
+            <label className="block space-y-1 text-sm font-medium">
+              Reusable source mapping
+              <select
+                className={pilotField}
+                disabled={locked || denied || sources.isLoading}
+                value={selectedProfile}
+                onChange={(event) => {
+                  if (!confirmDiscard()) return;
+                  applyProfile(
+                    sources.data?.profiles.find(
+                      (p: any) => p.id === event.target.value,
+                    ),
+                  );
+                }}
+              >
+                <option value="">Start without a saved mapping</option>
+                {sources.data?.profiles.map((profile: any) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name} ·{" "}
+                    {types[profile.data.kind as keyof typeof types]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="text-xs text-muted-foreground">
+              A profile fills the source, record type, row identity, units and
+              column mapping. Its active expectations are checked again before
+              commit.
+            </p>
+            {initialProfile &&
+              sources.data &&
+              !sources.data.profiles.some(
+                (p: any) => p.id === initialProfile,
+              ) && (
+                <p role="alert" className="text-sm text-destructive">
+                  This source profile is not available in the selected lender.
+                  Choose a profile below or return to Sources.
+                </p>
+              )}
+            <PilotError error={sources.error} />
+          </div>
+        )}
         <fieldset
           disabled={locked || denied}
           className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
         >
+          <label className="space-y-1 text-sm font-medium">
+            Business date (WAT)
+            <input
+              className={pilotField}
+              type="date"
+              required={!id || !!form.businessDate}
+              disabled={!!id}
+              value={form.businessDate || ""}
+              onChange={(e) => set("businessDate", e.target.value)}
+            />
+            <span className="block text-xs text-muted-foreground">
+              The date this file belongs to, rather than its upload date. Saved
+              batches keep this date.
+            </span>
+          </label>
+          {!id && (
+            <label className="space-y-1 text-sm font-medium">
+              Expected source file
+              <select
+                className={pilotField}
+                value={form.sourceExpectationId || ""}
+                disabled={sources.isLoading}
+                onChange={(e) => {
+                  if (confirmDiscard())
+                    applyExpectation(
+                      sources.data?.completeness?.files.find(
+                        (file: any) => file.id === e.target.value,
+                      ),
+                    );
+                }}
+              >
+                <option value="">
+                  Choose an expected file, or enter details below
+                </option>
+                {sources.data?.completeness?.files.map((file: any) => (
+                  <option key={file.id} value={file.id}>
+                    {file.source} · {file.sourceBatchId} ·{" "}
+                    {types[file.kind as keyof typeof types]}
+                  </option>
+                ))}
+              </select>
+              <span className="block text-xs text-muted-foreground">
+                Declarations for {form.businessDate || "the selected date"}.{" "}
+                <Link
+                  className="text-primary underline"
+                  href={`/sources?businessDate=${form.businessDate || ""}`}
+                >
+                  Review expected files
+                </Link>
+              </span>
+            </label>
+          )}
           <label className="space-y-1 text-sm font-medium">
             Batch name
             <input
@@ -365,6 +539,7 @@ function BatchEditor({
                     kind: e.target.value as BatchInput["kind"],
                     name: form.name,
                     source: form.source,
+                    businessDate: form.businessDate,
                   });
               }}
             >
@@ -536,8 +711,9 @@ function BatchEditor({
                   locked ||
                   dirty ||
                   !batch ||
-                  batch.status !== "ready"
-                  || (batch.data.sourceQuality && batch.data.sourceQuality.status !== "checked")
+                  batch.status !== "ready" ||
+                  (batch.data.sourceQuality &&
+                    batch.data.sourceQuality.status !== "checked")
                 }
                 onClick={() =>
                   mutation.mutate({
@@ -568,6 +744,24 @@ function BatchEditor({
           </p>
         )}
       </form>
+      {id && !form.businessDate && (
+        <p className="rounded-lg border p-3 text-sm">
+          This older batch has no recorded business date. It remains visible as
+          unresolved source evidence; Finance must explicitly account for it
+          during close review.
+        </p>
+      )}
+      {initialExpectation &&
+        sources.data &&
+        !sources.data.completeness?.files.some(
+          (file: any) => file.id === initialExpectation,
+        ) && (
+          <p role="alert" className="text-sm text-destructive">
+            The linked expected file is not part of this lender’s current
+            declaration for the selected date. Review Sources before saving this
+            batch.
+          </p>
+        )}
       {check && (
         <section
           className="space-y-3 border-t pt-5"
@@ -584,7 +778,35 @@ function BatchEditor({
             {check.imported} imported · {check.skipped} already present ·{" "}
             {check.invalid} to fix · {check.valid} valid
           </p>
-          {batch.data.sourceQuality && <div className="rounded-lg border p-3 text-sm space-y-2"><h4 className="font-medium">Source quality checks</h4><p>{batch.data.sourceQuality.sourceRows} source rows · {batch.data.sourceQuality.sourceAmountKobo == null ? "Source total unavailable" : formatKobo(batch.data.sourceQuality.sourceAmountKobo)} source total</p><p>{batch.data.sourceQuality.importedRows} newly imported rows · {batch.data.sourceQuality.importedAmountKobo == null ? "Imported total unavailable" : formatKobo(batch.data.sourceQuality.importedAmountKobo)} newly imported total</p>{batch.data.sourceQuality.issues.map((issue: string) => <p key={issue} className="text-destructive">{issue}</p>)}<Link href="/sources" className="text-primary underline">Review source profile and delivery schedule</Link></div>}
+          {batch.data.sourceQuality && (
+            <div className="rounded-lg border p-3 text-sm space-y-2">
+              <h4 className="font-medium">Source quality checks</h4>
+              <p>
+                {batch.data.sourceQuality.sourceRows} source rows ·{" "}
+                {batch.data.sourceQuality.sourceAmountKobo == null
+                  ? "Source total unavailable"
+                  : formatKobo(batch.data.sourceQuality.sourceAmountKobo)}{" "}
+                source total
+              </p>
+              <p>
+                {batch.data.sourceQuality.importedRows} newly imported rows ·{" "}
+                {batch.data.sourceQuality.importedAmountKobo == null
+                  ? "Imported total unavailable"
+                  : formatKobo(
+                      batch.data.sourceQuality.importedAmountKobo,
+                    )}{" "}
+                newly imported total
+              </p>
+              {batch.data.sourceQuality.issues.map((issue: string) => (
+                <p key={issue} className="text-destructive">
+                  {issue}
+                </p>
+              ))}
+              <Link href="/sources" className="text-primary underline">
+                Review source profile and delivery schedule
+              </Link>
+            </div>
+          )}
           {batch.status !== "committed" && (
             <p className="text-sm text-muted-foreground">
               Your source and mapping are saved. No business records are
@@ -619,8 +841,9 @@ function BatchEditor({
           )}
           {!!batch.data.recordIds?.length && (
             <p className="text-sm text-muted-foreground">
-              {batch.data.recordIds.length} {batch.data.recordIds.length === 1 ? 'record is' : 'records are'} linked to this batch.
-              Continue in{" "}
+              {batch.data.recordIds.length}{" "}
+              {batch.data.recordIds.length === 1 ? "record is" : "records are"}{" "}
+              linked to this batch. Continue in{" "}
               <Link className="text-primary underline" href="/reconciliation">
                 Reconciliation
               </Link>
@@ -643,6 +866,9 @@ function BatchEditor({
             ))}
           </ol>
         </details>
+      )}
+      {batch?.status === "committed" && (
+        <ImportCorrections batchId={batch.id} />
       )}
     </PilotPanel>
   );

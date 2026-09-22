@@ -54,6 +54,7 @@ const CloseReviewPage: PageLoader = () => import('@/pages/close-review');
 const SourcesPage: PageLoader = () => import('@/pages/sources');
 const WorkPage: PageLoader = () => import('@/pages/work');
 const LifecyclePage: PageLoader = () => import('@/pages/lifecycle');
+const ExportsPage: PageLoader = () => import('@/pages/exports');
 
 type PageLoader = () => Promise<{ default: ComponentType<any> }>;
 const loadedPages = new Map<PageLoader, ComponentType<any>>();
@@ -148,6 +149,7 @@ const consoleRoutes: Array<{ path: string; load: PageLoader }> = [
   { path: '/sources', load: SourcesPage },
   { path: '/work', load: WorkPage },
   { path: '/lifecycle', load: LifecyclePage },
+  { path: '/exports', load: ExportsPage },
 ];
 const consolePages = consoleRoutes.map((route) => route.load);
 const overviewOnly = [OverviewPage];

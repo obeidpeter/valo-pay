@@ -140,6 +140,8 @@ Modified dialogs, import drafts and Settings participate in the unsaved-change g
 
 ## Imports & exports
 
+`/exports` lists saved evidence jobs for the selected lender, including processing stage, recovery status, permitted retry and private download. Stalled-export alerts lead here. The Sources business-date declaration and Import batches correction workbench preserve original evidence and require named Finance review for accepted source gaps and committed-record amendments.
+
 The CSV console requires an explicit source amount unit for monetary record types. Naira accepts at most two decimal places (including correctly grouped quoted commas); kobo requires whole digits. Conversion uses decimal integer arithmetic and rejects negative, ambiguous or unsafe amounts. The server performs the same conversion for preview and commit. The first ten parsed rows include the converted naira amount, and changing the unit or mapping invalidates the checked preview. Existing API clients that omit `amountUnit` retain integer-kobo semantics. The generic source header `amount` maps to the canonical amount field; custom headers use the existing mapping control. Sample files use the selected unit. Error-free all-or-nothing validation remains required.
 
 Imports expose source columns, a bounded parsed row preview and the skipped count alongside validation/import totals. Mapping remains explicit, and a changed file, mapping or kind requires a fresh preview. Downloaded errors escape spreadsheet formula prefixes. Files remain synthetic-only, up to 500 rows and 1.5 MB, with all-or-nothing commits.

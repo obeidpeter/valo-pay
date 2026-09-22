@@ -7,6 +7,7 @@ import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords
 import { customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
 import { bindCloseReviewBasis } from '../domain/close-review';
+import { assertNoDirectImportedCorrection } from '../domain/import-corrections';
 import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, isCloseTime, recordKinds } from "@workspace/valopay-schema";
 import type { DomainState } from "../domain/types";
 import { getGates } from "../lib/valopay-readiness";
@@ -97,6 +98,7 @@ router.patch("/v1/records/:kind/:id",async(req,res)=>{
   assertRecordVersion(old,body.expectedUpdatedAt);
   const {expectedUpdatedAt: _version,...changes}=body;
   const input={...old,...changes,data:{...old.data,...body.data,synthetic:true} as Record<string,any>,updatedAt:ctx.now};
+  assertNoDirectImportedCorrection(old,input);
   if(kind==="due-items"){
    const allocated=state.records.filter(r=>r.kind==="allocations"&&r.status==="confirmed"&&r.data.dueItemId===old.id).reduce((s,r)=>s+r.amountKobo,0);
    if(input.amountKobo<allocated)fail("Due amount cannot be reduced below confirmed allocations.");

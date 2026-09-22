@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { seedMerchant } from '../src/lib/valopay-seed';
-import { queueExport, retryExport, exportJobView, exportIsClaimable, processExportJob, EXPORT_LEASE_MS, MAX_EXPORT_BYTES, type ClaimedExport, type ExportArtifact, type ExportJobRepository, type ExportJobStorage } from '../src/lib/export-jobs';
+import { queueExport, retryExport, exportJobView, exportHealth, exportIsClaimable, processExportJob, retryExportWrite, EXPORT_WRITE_ATTEMPTS, EXPORT_LEASE_MS, EXPORT_STALL_MS, EXPORT_CONFIRM_LEASE_MS, MAX_EXPORT_BYTES, type ClaimedExport, type ExportArtifact, type ExportJobRepository, type ExportJobStorage } from '../src/lib/export-jobs';
 import type { DomainState } from '../src/domain/types';
 // Imports initialize the shared pool, but this suite never connects to it.
 process.env.DATABASE_URL ||= 'postgres://unused:unused@127.0.0.1:1/unused';
 const {generateExportArtifact,exportDescriptor}=await import('../src/lib/valopay-exports');
-const {runExportPass}=await import('../src/lib/export-worker');
+const {runExportPass,startExportWorker}=await import('../src/lib/export-worker');
 
 let checks = 0;
 const now = '2026-09-18T10:00:00.000Z';
@@ -32,14 +32,21 @@ const repository: ExportJobRepository = {
   async finish(claim, artifact) {
     if (failFinish) throw new Error('Commit failed');
     const record = state.records.find(record => record.id === claim.id)!;
-    if (record.data.leaseToken !== claim.token) return false;
-    record.status = 'ready'; Object.assign(record.data, artifact); delete record.data.leaseToken; return true;
+    if (record.data.leaseToken !== claim.token) return 'lost';
+    record.status = 'ready'; Object.assign(record.data, artifact, {stage:'ready',lastProgressAt:new Date(clock).toISOString()}); delete record.data.leaseToken; return 'saved';
   },
   async fail(claim, message) {
     if (failFailure) throw new Error('Database unavailable');
     const record = state.records.find(record => record.id === claim.id)!;
-    if (record.data.leaseToken !== claim.token) return false;
-    record.status = 'failed'; record.data.lastError = message; delete record.data.leaseToken; return true;
+    if (record.data.leaseToken !== claim.token) return 'lost';
+    record.status = 'failed'; record.data.lastError = message; delete record.data.leaseToken; return 'saved';
+  },
+  async progress(claim,stage) {
+    const record=state.records.find(record=>record.id===claim.id)!;
+    if(record.data.leaseToken!==claim.token)return 'lost';
+    record.data.stage=stage;record.data.lastProgressAt=new Date(clock).toISOString();
+    if(stage==='confirming')record.data.leaseExpiresAt=new Date(clock+EXPORT_CONFIRM_LEASE_MS).toISOString();
+    return 'saved';
   },
 };
 const storage: ExportJobStorage = {
@@ -85,8 +92,8 @@ const old = (await repository.claim(target.merchantId, fourth.id))!;
 clock += EXPORT_LEASE_MS + 1;
 const newer = (await repository.claim(target.merchantId, fourth.id))!;
 assert.notEqual(old.token, newer.token); checks++;
-assert.equal(await repository.finish(old, [...objects.values()][0]!.artifact), false); checks++;
-assert.equal(await repository.finish(newer, [...objects.values()][0]!.artifact), true); checks++;
+assert.equal(await repository.finish(old, [...objects.values()][0]!.artifact), 'lost'); checks++;
+assert.equal(await repository.finish(newer, [...objects.values()][0]!.artifact), 'saved'); checks++;
 
 const failed = queueExport(state, ctx, { kind: 'customers', format: 'json' }, '/private/test');
 failUpload = true;
@@ -133,5 +140,64 @@ const customerId=metricsState.records.find(record=>record.kind==='customers')!.i
 const pendingPack=queueExport(metricsState,ctx,{kind:'dispute-pack',customerId,format:'json'},'/private/test');
 const pack=metricsState.records.find(record=>record.id===pendingPack.id)!;
 assert.equal(buildReports(metricsState,now).operational.disputePacksGenerated,0);pack.status='failed';assert.equal(buildReports(metricsState,now).operational.packsGenerated,0);pack.status='ready';assert.equal(buildReports(metricsState,now).operational.disputePacksGenerated,1);checks+=3;
+
+// A transient merchant-lock conflict after upload is retried in this attempt,
+// without another render, upload, claim or five-minute lease wait.
+const contention=queueExport(state,ctx,{kind:'customers',format:'json'},'/private/test');
+let finishes=0;
+const beforeContention={uploads,generations};
+assert.equal(await processExportJob({...repository,finish:async(claim,artifact)=>++finishes<3?'busy':repository.finish(claim,artifact)},storage,generate,{...target,id:contention.id},{backoffMs:0}),'ready');
+assert.equal(finishes,3);assert.equal(uploads,beforeContention.uploads+1);assert.equal(generations,beforeContention.generations+1);checks+=4;
+const stages:string[]=[];
+const stuck=queueExport(state,ctx,{kind:'customers',format:'json'},'/private/test');
+assert.equal(await processExportJob({...repository,progress:async(claim,stage)=>{stages.push(stage);return repository.progress!(claim,stage);},finish:async()=> 'busy'},storage,generate,{...target,id:stuck.id},{backoffMs:0}),'skipped');
+const stuckRow=state.records.find(record=>record.id===stuck.id)!;
+assert.deepEqual(stages,['rendering','uploading','confirming']);assert.equal(stuckRow.data.stage,'confirming');
+assert.equal(Date.parse(stuckRow.data.leaseExpiresAt)-clock,EXPORT_CONFIRM_LEASE_MS);
+assert.equal(exportHealth(stuckRow,new Date(clock+EXPORT_CONFIRM_LEASE_MS+1).toISOString()).retryAllowed,true);
+const uploadedBeforeAdoption=uploads;
+clock+=EXPORT_CONFIRM_LEASE_MS+1;
+assert.equal(await processExportJob(repository,storage,async()=>{throw new Error('Must recover immutable file.');},{...target,id:stuck.id}),'ready');
+assert.equal(uploads,uploadedBeforeAdoption);checks+=7;
+let writes=0;
+assert.equal(await retryExportWrite(async()=>{writes++;return 'busy';},undefined,0),'busy');assert.equal(writes,EXPORT_WRITE_ATTEMPTS);
+writes=0;assert.equal(await retryExportWrite(async()=>{writes++;return 'lost';},undefined,0),'lost');assert.equal(writes,1);checks+=4;
+const stalled=queueExport(state,ctx,{kind:'customers',format:'json'},'/private/test'),stalledRow=state.records.find(record=>record.id===stalled.id)!;
+assert.equal(exportJobView(stalledRow,ctx.now).stalled,false);
+const later=new Date(Date.parse(ctx.now)+EXPORT_STALL_MS).toISOString();
+assert.equal(exportJobView(stalledRow,later).stalled,true);assert.equal(exportJobView(stalledRow,later).retryAllowed,false);
+const {buildAlerts}=await import('../src/domain/alerts');
+assert.ok(buildAlerts(state,later).some(alert=>alert.key==='exports_stalled'&&alert.linkedRecordId===stalled.id));checks+=4;
+
+// Timeout reaches the actual blocked I/O, which unwinds before process returns.
+const blocked=queueExport(state,ctx,{kind:'customers',format:'json'},'/private/test');
+let cancelled=false,writeAfterCancellation=false;
+const blockedStorage:ExportJobStorage={existing:async(_claim,signal)=>new Promise((_resolve,reject)=>{
+  const abort=()=>{cancelled=true;reject(signal!.reason);};signal!.addEventListener('abort',abort,{once:true});if(signal!.aborted)abort();
+}),put:async()=>{writeAfterCancellation=true;}};
+assert.equal(await processExportJob(repository,blockedStorage,generate,{...target,id:blocked.id},{timeoutMs:10,backoffMs:0}),'failed');
+assert.equal(cancelled,true);assert.equal(writeAfterCancellation,false);checks+=3;
+const cancelledSignal=AbortSignal.abort(new Error('stop'));
+await assert.rejects(generateExportArtifact(volumeClaim,cancelledSignal),/stop/);checks++;
+
+// Shutdown cancels the two active reads and waits for their cleanup before
+// releasing the pass; a third queued job cannot start after stop.
+const stopTargets=Array.from({length:3},()=>({...target,id:queueExport(state,ctx,{kind:'customers',format:'json'},'/private/test').id}));
+let stopClaims=0,activeReads=0;
+let reachedTwo!:()=>void;
+const twoReading=new Promise<void>(resolve=>{reachedTwo=resolve;});
+const stopping=startExportWorker({intervalMs:60_000,repository:{...repository,candidates:async()=>stopTargets,claim:async(...args)=>{stopClaims++;return repository.claim(...args);}},storage:{existing:async(_claim,signal)=>new Promise((_resolve,reject)=>{
+ activeReads++;if(activeReads===2)reachedTwo();
+ const abort=()=>{setTimeout(()=>{activeReads--;reject(signal!.reason);},5);};
+ signal!.addEventListener('abort',abort,{once:true});if(signal!.aborted)abort();
+}),put:async()=>{throw new Error('Stopped reads must never upload.');}},generate});
+await twoReading;stopping.stop();await stopping.settle();
+assert.equal(activeReads,0);assert.equal(stopClaims,2);await stopping.tick();assert.equal(stopClaims,2);checks+=3;
+const {renderDisputePackPdf,buildDisputePack}=await import('../src/lib/valopay-packs');
+const renderState=seedMerchant('bounded-pack');
+const renderCustomer=renderState.records.find(record=>record.kind==='customers')!;
+await assert.rejects(renderDisputePackPdf(buildDisputePack(renderState,ctx,renderCustomer.id),{timeoutMs:0}),/time limit|timed out/);checks++;
+const oversizedField=buildDisputePack(renderState,ctx,renderCustomer.id);oversizedField.note='x'.repeat(50_001);
+await assert.rejects(renderDisputePackPdf(oversizedField),(error:any)=>error.exportPdfFieldTooLarge===true);checks++;
 console.log(JSON.stringify({benchmark:'synthetic-export-volume',rows:10000,bytes:volume.bytes.length,generationMs:volume.artifact.generationMs,limitBytes:MAX_EXPORT_BYTES}));
 console.log(`Export job tests passed (${checks} checks): durable queue, no I/O in a transaction, upload acknowledgement recovery, commit failure, expired leases, fencing, safe failures, tenant denial and two-worker bound.`);

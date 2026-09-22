@@ -30,8 +30,8 @@ const schemas = {
   Timeline: obj({ customer: ref("ValopayRecord"), position: ref("RecordData"), events: arr("ValopayRecord"), mandates: arr("ValopayRecord"), dueItems: arr("ValopayRecord"), payments: arr("ValopayRecord") }),
   Settings: obj({ merchant: ref("Merchant"), settings: ref("RecordData"), permissions: ref("RecordData"), integrations: arr("ValopayRecord"), members: arr("ValopayRecord"), calendar: arr("ValopayRecord") }),
   SettingsInput: obj({ executionStart: num, executionEnd: num, authorisationMode: str, contactRoute: str, minimumTicketKobo:num, defaultOwner: str, policyChangeRequiresConsent: bool, unallocatedAlertThreshold: num, notificationCostAlertKobo: num, closeTime: str, scheduledCloseEnabled: bool }, []),
-  ExportInput: obj({ kind: str, customerId: str, format: {type:"string", enum:["json","csv","pdf"]} }, ["kind","format"]),
-  ExportResult: obj({ id:str, downloadUrl: str, status:{type:'string',enum:['queued','running','ready','failed']}, kind:str, format:str, customerId:str, requestedAt:str, attempts:num, checksum:str, generatedAt:str, byteLength:num, generationMs:num, error:str }, ['id','downloadUrl']),
+  ExportInput: obj({ kind: str, customerId: str, closeReviewId: str, format: {type:"string", enum:["json","csv","pdf"]} }, ["kind","format"]),
+  ExportResult: obj({ id:str, downloadUrl: str, status:{type:'string',enum:['queued','running','ready','failed']}, stage:{type:'string',enum:['queued','checking','rendering','uploading','confirming','ready','failed']}, lastProgressAt:str, stalled:bool, retryAllowed:bool, recoveryAt:str, expiredAt:str, kind:str, format:str, customerId:str, requestedAt:str, attempts:num, checksum:str, generatedAt:str, byteLength:num, generationMs:num, error:str }, ['id','downloadUrl']),
   EffectiveCloseSchedule: obj({
     time: str, enabled: bool, automatic: bool, nextAt: { type: ["string", "null"] },
     runtimeState: { type: "string", enum: ["not_started", "running", "off", "stopped"] },

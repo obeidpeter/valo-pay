@@ -1,12 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, within } from "./harness";
+import { fireEvent } from '@testing-library/react';
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
 afterEach(() => { api.uninstall(); vi.restoreAllMocks(); });
 
 describe("reports", () => {
+  it('checks a selected source business date without backdating the financial close', async () => {
+    const user = userEvent.setup();
+    renderApp('/reports');
+    await screen.findByText('No daily close yet');
+    fireEvent.change(screen.getByLabelText('Source business date (optional)'), { target: { value: '2020-01-02' } });
+    await user.click(screen.getByRole('button', { name: 'Run daily close' }));
+    await screen.findByText('Daily close completed');
+    const close = api.state().records.find(record => record.kind === 'closes')!;
+    expect(close.data.sourceBusinessDate).toBe('2020-01-02');
+    expect(close.data.closedAt.slice(0, 10)).not.toBe('2020-01-02');
+    expect(close.data.reviewBasis.sourceCompleteness.businessDate).toBe('2020-01-02');
+  });
   it("runs a daily close from the page and shows the REC-07 chips, the trigger and the schedule", async () => {
     const user = userEvent.setup();
     renderApp("/reports");

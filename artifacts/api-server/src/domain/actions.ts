@@ -1,5 +1,5 @@
 import {
-  counted,
+  counted, businessDateSchema,
   DEFAULT_ACTIVATION_WINDOW_DAYS, PLATFORM_OWNER, activationReminderCaps, closeRules, failureCodeList, isHandBackOwner, isKnownFailureCode,
   nextCloseInstant, normaliseFailureCode, normaliseOwner, passRuleText, resolutionCodesFor, resolveExceptionType, withinQuietHours, templateTextProblems,
   type CloseTrigger,
@@ -252,7 +252,11 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
   }
   if (input.action === "daily_close") {
     assertActionRole(ctx, ["Admin", "Operations", "Finance"]);
-    return runDailyClose(state, ctx, "manual");
+    const sourceDate = data.sourceBusinessDate === undefined ? undefined : businessDateSchema.parse(data.sourceBusinessDate);
+    if (sourceDate && sourceDate > new Date(Date.parse(ctx.now) + 3600000).toISOString().slice(0, 10)) throw new Error('Choose today or an earlier source business date. Future source coverage cannot be closed.');
+    const closed = runDailyClose(state, ctx, "manual");
+    if (sourceDate && closed.record) closed.record.data.sourceBusinessDate = sourceDate;
+    return closed;
   }
   if (["confirm_allocation", "reject_allocation", "manual_allocate"].includes(input.action)) {
     assertActionRole(ctx, ["Admin", "Finance"]);

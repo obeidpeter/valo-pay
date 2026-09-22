@@ -42,9 +42,10 @@ try {
   assert.equal(ok(await call(`/v1/pilot/close-reviews?merchantId=${a.id}`)).reviewers.length, 1);
   assert.equal(ok(await call(`/v1/pilot/close-reviews?merchantId=${b.id}`)).reviewers.length, 0, "Finance cannot be assigned to a close for an unpermitted lender.");
   ok(await call(`/v1/actions?merchantId=${a.id}`, "admin", "POST", { action: "daily_close" }));
-  const savedClose = ok(await call(`/v1/pilot/close-reviews?merchantId=${a.id}`)).closes[0].close;
-  const review = ok(await call(`/v1/pilot/close-reviews/prepare?merchantId=${a.id}`, "admin", "POST", { closeId: savedClose.id, expectedUpdatedAt: savedClose.updatedAt, reviewer: `Clerk:${finance}`, preparationNote: "Verified the synthetic zero-activity close and its source scope.", discrepancyResponses: [], unresolvedAcceptance: "" }));
-  const decisions = await Promise.all(["First independent check.", "Second concurrent check."].map(note => call(`/v1/pilot/close-reviews/${review.id}/decision?merchantId=${a.id}`, "finance", "POST", { action: "approve", expectedUpdatedAt: review.updatedAt, note })));
+  const savedItem = ok(await call(`/v1/pilot/close-reviews?merchantId=${a.id}`)).closes[0], savedClose = savedItem.close;
+  const review = ok(await call(`/v1/pilot/close-reviews/prepare?merchantId=${a.id}`, "admin", "POST", { closeId: savedClose.id, expectedUpdatedAt: savedClose.updatedAt, reviewer: `Clerk:${finance}`, preparationNote: "Verified the synthetic zero-activity close and its source scope.", discrepancyResponses: savedItem.issues.map((issue:any)=>({issueId:issue.id,explanation:"This synthetic access rehearsal has no external source deliveries."})), unresolvedAcceptance: "Finance will record the limited scope of this synthetic access rehearsal." }));
+  const sourceExceptions = savedClose.data.reviewBasis.sourceCompleteness.issues.map((issue:any)=>({issueId:issue.id,reason:"The synthetic zero-activity access rehearsal has no external source deliveries.",evidence:"Access rehearsal scope TEST-1."}));
+  const decisions = await Promise.all(["First independent check.", "Second concurrent check."].map(note => call(`/v1/pilot/close-reviews/${review.id}/decision?merchantId=${a.id}`, "finance", "POST", { action: "approve", expectedUpdatedAt: review.updatedAt, note, sourceExceptions })));
   assert.deepEqual(decisions.map(r => r.status).sort(), [200, 409], "The lender lock permits exactly one independent decision.");
   assert.equal(ok(await call(`/v1/pilot/progress?merchantId=${a.id}`, "finance")).steps.find((step: any) => step.id === "close").state, "completed");
   let release!: () => void, entered!: () => void;

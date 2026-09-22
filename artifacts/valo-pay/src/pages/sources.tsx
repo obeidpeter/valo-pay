@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "wouter";
+import { Link, useSearchParams } from "wouter";
 import type { SourceProfileInput } from "@workspace/valopay-schema";
 import { useWorkspace } from "@/lib/workspace-context";
 import { usePilotMutation, usePilotQuery } from "@/lib/pilot";
@@ -9,13 +9,16 @@ import { Button } from "@/components/ui/button";
 import { ScrollFrame } from "@/components/scroll-frame";
 import { formatDate, formatKobo } from "@/lib/formatters";
 import { readableLabel } from "@/components/record-label";
+import { SourceCompletenessPanel, SourceManifestEditor } from "@/components/source-manifest-editor";
 
 const kinds = { customers: "Customers", mandates: "Mandates", "due-items": "Instalments", attempts: "Collection attempts", observations: "Payment evidence" };
 const wat = (iso: string) => new Date(Date.parse(iso) + 3600000).toISOString().slice(0,16);
 const blank = (): SourceProfileInput => ({ name: "", source: "", kind: "customers", mapping: {}, identityColumn: "source_row_id", amountUnit: "naira", firstExpectedAt: new Date(Date.now()+86400000).toISOString(), cadenceHours: 24, graceMinutes: 60, expectedRows: null, expectedAmountKobo: null, status: "active", syntheticOnly: true });
 export default function SourcesPage() { const { merchantId } = useWorkspace(); return <Sources key={merchantId || "none"} />; }
 function Sources() {
-  const { workspace } = useWorkspace(), query = usePilotQuery("/sources");
+  const { workspace } = useWorkspace(), [params] = useSearchParams();
+  const [businessDate,setBusinessDate] = useState(params.get("businessDate") || new Date(Date.now()+3600000).toISOString().slice(0,10));
+  const query = usePilotQuery(`/sources?businessDate=${encodeURIComponent(businessDate)}`);
   const [selected, setSelected] = useState<any>(null), [revision, setRevision] = useState(0), [message, setMessage] = useState("");
   const fixture = usePilotMutation(result => setMessage(result.event.message));
   const canWrite = ["Admin", "Operations", "Finance"].includes(workspace?.role || "");
@@ -24,6 +27,9 @@ function Sources() {
     <PilotHeading title="Sources & connections">Check what arrived, what is missing and whether every source row is accounted for. All records in this pilot remain synthetic.</PilotHeading>
     <PilotError error={query.error} retry={() => { void query.refetch(); }} />
     {query.isLoading && <p role="status">Loading source controls…</p>}
+    <label className="block max-w-xs text-sm font-medium">Business date (WAT)<input type="date" required className={pilotField} value={businessDate} onChange={event=>{if(event.target.value&&confirmUnsavedChanges())setBusinessDate(event.target.value);}}/></label>
+    {query.data?.completeness && <SourceCompletenessPanel completeness={query.data.completeness}/>}
+    {query.data?.completeness && canWrite && <SourceManifestEditor key={`${businessDate}:${query.data.completeness.manifest?.id || 'new'}`} completeness={query.data.completeness}/>}
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[["Late sources", query.data?.summary.lateSources], ["Batches to review", query.data?.summary.batchesNeedingReview], ["Duplicate source rows", query.data?.summary.duplicateRows], ["Conflicting source rows", query.data?.summary.conflictRows]].map(([label,value]) => <div key={label} className="rounded-xl border bg-card p-5"><p className="text-sm text-muted-foreground">{label}</p><p className="mt-2 text-3xl font-semibold tabular-nums">{value ?? "—"}</p></div>)}</div>
     <PilotPanel title="Delivery schedules & reusable mappings">
       <p className="text-sm text-muted-foreground">Each source profile belongs to this lender and one record type. Expected totals are checked before a batch can be committed. A missed delivery remains visible even if a later delivery arrives.</p>

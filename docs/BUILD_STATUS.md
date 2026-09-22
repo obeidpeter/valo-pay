@@ -17,6 +17,10 @@ The [22 September usability candidate](usability/README.md) adds operational rev
 
 ## Available in this build
 
+- Business-date source declarations with file/control-total coverage frozen into close evidence, explicit independent Finance acceptance of missing sources, and stale approval detection after source changes.
+- Controlled committed-import amendments with before/after comparisons, affected-record review, named Finance decisions and immutable original provenance. Changes with financial dependencies remain blocked.
+- Export stage and stalled-job visibility, bounded completion contention retries, lease fencing and reuse of the original private file during recovery.
+
 - Two isolated sample lenders per browser sandbox or signed-in workspace.
 - Customer records, masked sample identifiers, obligations and timeline.
 - Mandate tracking with imported consent provenance and provider-specific activation workflow.

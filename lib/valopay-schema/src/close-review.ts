@@ -16,11 +16,12 @@ export const decideCloseReviewSchema = z.object({
   expectedUpdatedAt: z.string().datetime(),
   action: z.enum(["approve", "return"]),
   note,
+  sourceExceptions: z.array(z.object({ issueId: z.string().min(1).max(200), reason: note, evidence: z.string().trim().min(5).max(1000) }).strict()).max(500).default([]),
 }).strict();
 /** Validated close preparation fields. */
 export type PrepareCloseReviewInput = z.infer<typeof prepareCloseReviewSchema>;
 /** Validated approval or request-for-changes fields. */
-export type DecideCloseReviewInput = z.infer<typeof decideCloseReviewSchema>;
+export type DecideCloseReviewInput = z.input<typeof decideCloseReviewSchema>;
 
 /** Progress states distinguish evidence, missing work and blocked decisions. */
 export const pilotProgressStates = ["not_started", "in_progress", "awaiting_review", "completed", "blocked"] as const;
