@@ -16,11 +16,12 @@ import { advanceRecordVersions, assertRecordVersion, assertSettingsVersion } fro
 import { schedulerStatus } from "../lib/close-scheduler";
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../lib/valopay-close-views";
 import { listQueue } from '../lib/valopay-store';
+import { completeOperation, viewerScope } from '../lib/valopay-store';
 
 const router:IRouter=Router();
 const kinds=new Set<string>(recordKinds);
 function safeKind(value:unknown):string { const kind=z.string().parse(value);if(!kinds.has(kind))fail("Unknown resource.",404);return kind; }
-async function withState<T>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>Promise<T>|T,mutating=false,responseSchema?:z.ZodTypeAny){
+export async function withState<T>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>Promise<T>|T,mutating=false,responseSchema?:z.ZodTypeAny){
  const {merchantId}=S.GetOverviewQueryParams.parse(req.query);
  return inWorkspace(req,res,async ctx=>{
   // A read takes a share lock so it never queues behind other reads; a mutation takes the exclusive lock.
@@ -35,7 +36,7 @@ async function withState<T>(req:Request,res:Response,operation:(state:DomainStat
   if(mutating&&key){
    if(key.length>200)fail("Idempotency-Key must be at most 200 characters.");
     const found=await findIdempotency(ctx,idempotencyKey!);
-    if(found){if(found.request_hash!==fingerprint)fail("This idempotency key was used with different input.",409);return responseSchema?responseSchema.parse(found.response):found.response;}
+    if(found){if(found.request_hash!==fingerprint)fail("This idempotency key was used with different input.",409);const receipt=responseSchema?responseSchema.parse(found.response):found.response;await completeOperation(ctx,receipt);return receipt;}
   }
    const rawResult=await operation(state,ctx);
    if(mutating){enrolEligibleFailures(state,ctx);advanceRecordVersions(before!,state,ctx.now);}
@@ -52,7 +53,7 @@ async function withState<T>(req:Request,res:Response,operation:(state:DomainStat
 router.get("/v1/workspace",async(req,res)=>{
  const result=await inWorkspace(req,res,async ctx=>({
   name:"Valo Pay",environment:"sandbox",actor:ctx.actor,role:ctx.role,authenticated:ctx.authenticated,
-   merchants:await listMerchants(ctx),roles,productionEnabled:false
+   merchants:await listMerchants(ctx),roles,productionEnabled:false,accessMode:ctx.accessMode,viewerScope:viewerScope(ctx)
  }),"read");
  res.json(S.GetWorkspaceResponse.parse(result));
 });
@@ -90,6 +91,8 @@ router.patch("/v1/records/:kind/:id",async(req,res)=>{
  const kind=safeKind(req.params.kind),{id}=S.UpdateRecordParams.parse(req.params),body=S.UpdateRecordBody.parse(req.body);
  const result=await withState(req,res,(state,ctx)=>{
   const old=state.records.find(r=>r.kind===kind&&r.id===id);if(!old)fail("Record not found.",404);
+  if (kind === 'exceptions' && old.data.case && !body.expectedUpdatedAt) fail('Refresh this coordinated case before editing it.',409);
+  if (kind === 'exceptions' && old.data.case?.assignee && old.data.case.assignee !== ctx.actor && ctx.role !== 'Admin') fail('Ask the case assignee or an administrator to make this change.',403);
   assertRecordVersion(old,body.expectedUpdatedAt);
   const {expectedUpdatedAt: _version,...changes}=body;
   const input={...old,...changes,data:{...old.data,...body.data,synthetic:true} as Record<string,any>,updatedAt:ctx.now};
@@ -108,6 +111,7 @@ router.patch("/v1/records/:kind/:id",async(req,res)=>{
 router.post("/v1/actions",async(req,res)=>{
  const body=S.PerformActionBody.parse(req.body);
  const result=await withState(req,res,async(state,ctx)=>{
+  if (body.action === 'resolve_exception' && state.records.find(r=>r.id===body.recordId)?.data.case && !body.expectedUpdatedAt) fail('Refresh this coordinated case before resolving it.',409);
   if(body.expectedUpdatedAt!==undefined){
    const record=state.records.find(r=>r.id===body.recordId);if(!record)fail("Record not found.",404);
    assertRecordVersion(record,body.expectedUpdatedAt);

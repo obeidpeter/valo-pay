@@ -17,10 +17,10 @@ export const clerkPublishableKey = signInWanted ? publishableKeyFromHost(window.
 /** True only when a ClerkProvider will be mounted, so the Clerk hooks below are never used without one. */
 export const authEnabled = Boolean(clerkPublishableKey);
 
-type SessionUser = { userId: string | null; isLoaded: boolean };
+type SessionUser = { userId: string | null; orgId?: string | null; isLoaded: boolean };
 function useClerkSessionUser(): SessionUser {
-  const { userId, isLoaded } = useAuth();
-  return { userId: userId ?? null, isLoaded };
+  const { userId, orgId, isLoaded } = useAuth();
+  return { userId: userId ?? null, orgId, isLoaded };
 }
 function useAnonymousSessionUser(): SessionUser {
   return { userId: null, isLoaded: true };

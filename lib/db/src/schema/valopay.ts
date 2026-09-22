@@ -52,3 +52,40 @@ export const idempotency = pgTable("valopay_idempotency", {
 },t=>[uniqueIndex("valopay_idempotency_tenant_key").on(t.merchantId,t.id)]);
 export const insertValopayRecordSchema = createInsertSchema(records);
 export type ValopayRecordRow = typeof records.$inferSelect;
+
+/** Private recovery requests are never exposed through the generic records API. */
+export const operations = pgTable('valopay_operations', {
+  id: text('id').primaryKey(), merchantId: text('merchant_id').notNull().references(() => merchants.id, { onDelete: 'cascade' }),
+  owner: text('owner').notNull(), actor: text('actor').notNull(), role: text('role').notNull(),
+  requestKey: text('request_key').notNull(), requestHash: text('request_hash').notNull(), request: jsonb('request').notNull(),
+  label: text('label').notNull(), status: text('status').notNull().default('pending'), receipt: jsonb('receipt'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [index('valopay_operations_owner_page').on(t.merchantId, t.owner, t.createdAt, t.id),
+  check('valopay_operation_status', sql`${t.status} IN ('pending','completed','cancelled')`)]);
+
+export const teams = pgTable('valopay_teams', {
+  workspaceId: text('workspace_id').primaryKey().references(() => workspaces.id),
+  organizationId: text('organization_id').notNull().unique(), name: text('name').notNull(),
+});
+export const staffMemberships = pgTable('valopay_staff_memberships', {
+  id: text('id').primaryKey(), workspaceId: text('workspace_id').notNull().references(() => teams.workspaceId),
+  userId: text('user_id').notNull(), displayName: text('display_name').notNull(), role: text('role').notNull(),
+  status: text('status').notNull().default('active'), expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [uniqueIndex('valopay_staff_workspace_user').on(t.workspaceId, t.userId),
+  check('valopay_staff_status', sql`${t.status} IN ('active','suspended','revoked')`),
+  check('valopay_staff_role', sql`${t.role} IN ('Admin','Operations','Finance','Compliance reviewer','Read-only')`)]);
+export const staffInvitations = pgTable('valopay_staff_invitations', {
+  id: text('id').primaryKey(), workspaceId: text('workspace_id').notNull().references(() => teams.workspaceId),
+  email: text('email').notNull(), role: text('role').notNull(), tokenHash: text('token_hash').notNull().unique(),
+  invitedBy: text('invited_by').notNull(), status: text('status').notNull().default('pending'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, t => [check('valopay_invitation_status', sql`${t.status} IN ('pending','accepted','revoked')`)]);
+export const staffEvents = pgTable('valopay_staff_events', {
+  id: text('id').primaryKey(), workspaceId: text('workspace_id').notNull().references(() => teams.workspaceId),
+  actor: text('actor').notNull(), action: text('action').notNull(), subject: text('subject').notNull(), detail: jsonb('detail').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});

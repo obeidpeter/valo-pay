@@ -106,6 +106,9 @@ export function validateRecord(
   }
   const data: Record<string, any> = input.data || (input.data = {});
   const existing = isUpdate && input.id ? findRecord(state, input.id, kind) : undefined;
+  for (const field of ['case', 'importIdentity']) {
+    if (JSON.stringify(data[field]) !== JSON.stringify(existing?.data[field])) throw new Error(`Use the dedicated workflow to change ${field === 'case' ? 'case coordination' : 'import provenance'}.`);
+  }
   if (isUpdate && !existing) throw new Error("An update requires the existing record id.");
   if (existing?.status === "approved" && (kind === "policies" || kind === "templates")) {
     throw new Error("Approved versions cannot be edited. Create a new draft version instead.");

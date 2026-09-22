@@ -59,6 +59,8 @@ export const ReadinessCheckResponse = zod.object({
  * @summary The caller's workspace: its lenders, roles and actor
  */
 export const GetWorkspaceResponse = zod.object({
+  "accessMode": zod.enum(['sandbox', 'staff']).optional().describe('Whether the server authorises a demo persona or a provisioned staff membership.'),
+  "viewerScope": zod.string().optional().describe('Opaque workspace/user scope for browser preferences; never an authorisation credential.'),
   "name": zod.string(),
   "environment": zod.string(),
   "actor": zod.string(),

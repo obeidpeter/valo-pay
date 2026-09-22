@@ -1,4 +1,4 @@
-import { useSearch } from 'wouter';
+import { Link, useSearch } from 'wouter';
 import { QueueSearch } from '@/components/queue-search';
 import { QueueFreshness } from '@/components/queue-freshness';
 import React, { useEffect, useRef, useState } from 'react';
@@ -147,6 +147,7 @@ export default function ExceptionsPage() {
                     </td>
                     <td className="px-6 py-4">
                       <StatusBadge status={exception.status} />
+                      {!!exception.data?.case && <p className="mt-2 text-xs font-medium">Assigned to {String((exception.data.case as any).assigneeName)}</p>}
                       <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
                         <User className="h-3 w-3" /> {String(exception.data?.owner || 'Unassigned')}
                       </div>
@@ -161,6 +162,7 @@ export default function ExceptionsPage() {
                       )}
                     </td>
                     <td className="px-6 py-4 text-right space-x-2">
+                      <Link href={`/cases/${exception.id}`} className="mb-2 inline-flex min-h-9 items-center text-xs font-medium text-primary underline">Case & handover</Link>
                       {exception.status !== 'resolved' && exception.status !== 'closed' ? (
                         <div className="flex justify-end gap-2">
                           <Button size="sm" variant="ghost" className="text-xs" kind="exceptions" record={exception} onClick={() => handleAction(exception, 'update')}>

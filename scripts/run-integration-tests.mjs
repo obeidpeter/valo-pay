@@ -19,6 +19,7 @@ if (!process.env.DATABASE_URL) {
 }
 const env = { ...process.env, NODE_ENV: process.env.NODE_ENV || "development" };
 const suites = [
+  "artifacts/api-server/tests/pilot-workflow.integration.test.ts",
   "artifacts/api-server/tests/connected-workflows.integration.test.ts",
   "artifacts/api-server/tests/record-index-migration.integration.test.ts",
   "artifacts/api-server/tests/valopay-store.integration.test.ts",

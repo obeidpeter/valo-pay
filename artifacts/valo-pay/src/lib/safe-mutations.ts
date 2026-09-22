@@ -43,7 +43,7 @@ const exportReceipt = (value: Awaited<ReturnType<typeof createExport>>) => Boole
  * Keep it when a response is lost: the server can replay its already committed result.
  * A changed submission is allowed only after a confirmed outcome. Nothing is persisted locally.
  */
-function useSafeMutation<Result, Variables>(send: (variables: Variables, request: RequestOptions) => Promise<Result>, options: Options<Result, Variables> = {}, scope?: unknown, writes: (variables: Variables) => boolean = () => true) {
+export function useSafeMutation<Result, Variables>(send: (variables: Variables, request: RequestOptions) => Promise<Result>, options: Options<Result, Variables> = {}, scope?: unknown, writes: (variables: Variables) => boolean = () => true) {
   const attempt = useRef<{ fingerprint: string; key: string; variables: Variables; pending: boolean; unconfirmed: boolean } | null>(null);
   const previousScope = useRef(scope);
   if (previousScope.current !== scope) { previousScope.current = scope; attempt.current = null; }

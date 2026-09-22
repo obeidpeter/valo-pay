@@ -80,3 +80,4 @@ export * from './updateRecordParams';
 export * from './updateSettingsParams';
 export * from './valopayRecord';
 export * from './workspace';
+export * from './workspaceAccessMode';

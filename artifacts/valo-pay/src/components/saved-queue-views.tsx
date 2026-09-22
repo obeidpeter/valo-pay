@@ -14,8 +14,9 @@ function readViews(key: string, views: readonly string[]): SavedView[] {
 }
 
 export function SavedQueueViews({ queue, views, fallback }: { queue: string; views: readonly string[]; fallback: string }) {
-  const { merchantId } = useWorkspace();
-  return merchantId ? <SavedViews key={`${merchantId}:${queue}`} storageKey={`valopay-queue-views-v1:${merchantId}:${queue}`} views={views} fallback={fallback} /> : null;
+  const { merchantId, workspace } = useWorkspace();
+  const scope = workspace?.viewerScope || workspace?.actor || 'anonymous';
+  return merchantId ? <SavedViews key={`${scope}:${merchantId}:${queue}`} storageKey={`valopay-queue-views-v2:${scope}:${merchantId}:${queue}`} views={views} fallback={fallback} /> : null;
 }
 
 function SavedViews({ storageKey, views, fallback }: { storageKey: string; views: readonly string[]; fallback: string }) {
@@ -29,7 +30,7 @@ function SavedViews({ storageKey, views, fallback }: { storageKey: string; views
   return <details className="rounded-xl border bg-card print:hidden">
     <summary className="flex min-h-11 cursor-pointer items-center gap-2 px-4 py-3 text-sm font-medium"><Bookmark aria-hidden="true" className="h-4 w-4 text-muted-foreground" />Saved views<span className="text-xs font-normal text-muted-foreground">{saved.length ? `${saved.length} saved` : 'Keep your usual filters'}</span></summary>
     <div className="space-y-3 border-t p-4">
-      <p className="text-xs text-muted-foreground">Saved for this lender and queue in this browser. Each view keeps the selected status, owner, type and search filters; results update when opened.</p>
+      <p className="text-xs text-muted-foreground">Saved for your user, lender and queue in this browser. Views keep status, owner and type; search text is not stored. Results update when opened.</p>
       {saved.length > 0 && <ul className="flex flex-wrap gap-2">{saved.map(item => <li key={item.name} className="flex max-w-full min-w-0 items-center rounded-lg border">
         <Button variant="ghost" size="sm" className="min-w-0 flex-1" title={item.name} onClick={() => {
           setSearch(current => {
@@ -49,7 +50,7 @@ function SavedViews({ storageKey, views, fallback }: { storageKey: string; views
         if (saved.some(item => item.name.toLowerCase() === trimmed.toLowerCase())) { setError('That name is already saved. Choose a different name or delete the existing view.'); return; }
         if (saved.length >= 10) { setError('You can save up to 10 views per queue. Delete a view before adding another.'); return; }
         const candidate = search.get('view') || fallback;
-        if (persist([...saved, { name: trimmed, view: views.includes(candidate) ? candidate : fallback, owner: search.get('owner') || '', type: search.get('type') || '', q: search.get('q') || '' }])) { setName(''); setMessage(`Saved ${trimmed}.`); }
+        if (persist([...saved, { name: trimmed, view: views.includes(candidate) ? candidate : fallback, owner: search.get('owner') || '', type: search.get('type') || '' }])) { setName(''); setMessage(`Saved ${trimmed}.`); }
       }}>
         <label className="grid gap-1 text-xs font-medium">View name<input value={name} maxLength={40} onChange={event => setName(event.target.value)} className="min-h-10 max-w-full rounded-md border bg-background px-3 text-sm" placeholder="For example, overdue Finance" /></label>
         <Button type="submit" variant="outline">Save current view</Button>

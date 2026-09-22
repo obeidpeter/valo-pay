@@ -6,6 +6,7 @@ import { PublicFrame } from '@/components/public-frame';
 import { AuthShow } from '@/lib/auth';
 import { formatDate } from '@/lib/formatters';
 import { referenceOf } from '@/lib/notify';
+import { StaffSession } from './staff-session';
 
 /**
  * Shown in place of the console when the workspace request fails. Nothing
@@ -56,6 +57,7 @@ export function WorkspaceUnavailable({ error, retry, busy }: { error: unknown; r
             ? <p>When reporting the problem, include this time and support reference: <LookedFor>{formatDate(at)}</LookedFor>, <LookedFor>{reference}</LookedFor>.</p>
             : <p>When reporting the problem, include this time: <LookedFor>{formatDate(at)}</LookedFor>.</p>)}
           <p>No lender data has been changed.</p>
+          {[401,403].includes(Number((error as { status?: number })?.status)) && <StaffSession />}
         </Notice>
       </main>
     </PublicFrame>

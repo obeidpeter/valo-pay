@@ -30,6 +30,10 @@ const navItems = [
   { href: '/evidence', label: 'Evidence & readiness', icon: FileCheck },
   { href: '/audit', label: 'Audit log', icon: HardDrive },
   { href: '/settings', label: 'Settings', icon: Settings },
+  { href: '/pilot', label: 'Pilot journey', icon: CheckSquare },
+  { href: '/imports', label: 'Import batches', icon: FileText },
+  { href: '/operations', label: 'Operations', icon: HardDrive },
+  { href: '/team', label: 'Team & access', icon: Users },
 ];
 
 /** The breakpoint at which the sidebar replaces the phone bar; the same value as Tailwind's `md`. */
@@ -208,7 +212,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <main ref={mainRef} id="main" tabIndex={-1} className="min-w-0 flex-1 overflow-auto bg-background focus:outline-none print:overflow-visible">
           <div className="workspace-bar flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 md:px-8 print:hidden">
             <div className="hidden md:flex items-center gap-2 text-xs"><span className="text-muted-foreground">Workspace</span><ChevronRight className="h-3 w-3 text-muted-foreground" aria-hidden="true" /><span className="font-medium">{pageTitle}</span></div>
-            <p aria-live="polite" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs"><span>{workspace?.authenticated ? 'Role' : 'Demo role'}: <strong className="font-semibold">{workspace?.role || 'Loading…'}</strong></span>{lender?.mode && <span>Mode: <strong className="font-semibold">{lender.mode}</strong></span>}<span className="text-muted-foreground">Times in WAT</span></p>
+            <p aria-live="polite" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs"><span>{workspace?.accessMode === 'staff' ? 'Role' : 'Demo role'}: <strong className="font-semibold">{workspace?.role || 'Loading…'}</strong></span>{lender?.mode && <span>Mode: <strong className="font-semibold">{lender.mode}</strong></span>}<span className="text-muted-foreground">Times in WAT</span></p>
           </div>
           <div className="console-content p-4 sm:p-6 md:p-8 max-w-[1440px] mx-auto print:max-w-none print:p-0" aria-busy={isLoading && !workspace}>
             {/* Print only: the provenance the screen's banner and sidebar carried. */}

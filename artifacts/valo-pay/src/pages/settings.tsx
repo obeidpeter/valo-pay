@@ -169,8 +169,8 @@ export default function SettingsPage() {
         <p className="text-sm text-muted-foreground mt-2">This sandbox uses sample records. No Paystack payments or mandates are created here. Direct-debit support must also be confirmed for your Paystack account.</p>
       </section>
 
-      {/* Role Persona Switcher */}
-      <section className="bg-card border rounded-xl shadow-sm p-6">
+      {/* Staff roles are assigned through Team & access, never this demo switch. */}
+      {workspace?.accessMode !== 'staff' && <section className="bg-card border rounded-xl shadow-sm p-6">
         <div className="flex items-center gap-2 mb-4">
           <Shield className="h-5 w-5 text-primary" />
           <h2 className="font-semibold text-lg">Demo role</h2>
@@ -215,7 +215,7 @@ export default function SettingsPage() {
         {updateRole.hasUnconfirmedOutcome && <p role="alert" className="text-sm mt-3">The role-change response is unconfirmed. Retry the original request before selecting another role.</p>}
         {requestInstruction.hasUnconfirmedOutcome && <p role="alert" className="text-sm mt-3">The block-test response is unconfirmed. Retry the original test to recover its result. This does not enable live instructions.</p>}
         {otherOutcomeUnconfirmed && <p className="text-sm text-muted-foreground mt-3">Resolve the unconfirmed settings or control request before changing roles.</p>}
-      </section>
+      </section>}
 
       {/* Collection settings */}
       {isLoading ? (

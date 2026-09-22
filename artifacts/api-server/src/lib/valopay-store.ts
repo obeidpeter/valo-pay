@@ -1,6 +1,8 @@
 import { historySections, historyKind, positionNote, type CustomerHistoryQuery, type HistorySection } from './customer-history';
 import { pool, type PoolClient } from "@workspace/db";
-import { getAuth } from "@clerk/express";
+import { getAuth, clerkClient } from "@clerk/express";
+import { staffMode, verifyStaff } from './staff-access';
+import type { VerifiedClerkSession } from './pilot-access';
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
 import { closeTimeOf, nextCloseInstant } from "@workspace/valopay-schema";
@@ -38,6 +40,7 @@ type Session = {
   client: PoolClient; workspace: WorkspaceRow; principal: string; active: boolean;
   access: WorkspaceAccess;
   lockedMerchantId?: string; snapshot?: DomainState;
+  owner?: string; operationId?: string; userId?: string; organizationId?: string;
 };
 
 /**
@@ -47,8 +50,11 @@ type Session = {
  */
 export interface StoreContext extends Context {
   readonly authenticated: boolean;
+  readonly accessMode?: 'sandbox' | 'staff';
 }
 const sessions = new WeakMap<StoreContext, Session>();
+const requestOperations = new WeakMap<Request, string>();
+export function bindOperation(req: Request, id: string) { requestOperations.set(req, id); }
 const databaseConflictCodes = new Set(["23503", "23505", "23514", "P0001"]);
 
 /** Throws an error carrying the HTTP status the error handler answers with (400 unless given). */
@@ -72,8 +78,188 @@ const legacySandboxCookieName = "valo_sandbox";
 const cookieValue = (cookies: string, name: string) => cookies.split(";").map((cookie) => cookie.trim()).find((cookie) => cookie.startsWith(`${name}=`))?.slice(name.length + 1);
 const isSandboxToken = (value: string | undefined): value is string => !!value && /^[a-f0-9]{64}$/.test(value);
 
+export interface StoredRequest { method: 'POST' | 'PATCH'; path: string; body: unknown; }
+type OperationRow = { id: string; merchant_id: string; owner: string; actor: string; role: string; request_key: string; request_hash: string; request: StoredRequest; label: string; status: string; receipt: any; created_at: Date; updated_at: Date };
+const operationView = (row: OperationRow) => ({ id: row.id, label: row.label, actor: row.actor, role: row.role, status: row.status,
+  createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString(),
+  message: row.status === 'completed' ? 'The service saved this request.' : row.status === 'cancelled' ? 'Cancelled before completion. This request cannot run again.' : 'Completion has not been confirmed. Check the original request.',
+  // Only a compact result reference. Original payloads and export locations stay private.
+  recordId: row.receipt?.record?.id || row.receipt?.id || null,
+  recordKind: row.receipt?.record?.kind || row.receipt?.kind || null });
+
+export async function prepareOperation(ctx: StoreContext, merchantId: string, key: string, request: StoredRequest) {
+  const session = sessionFor(ctx); await readMerchant(ctx, merchantId, 'update');
+  const owner = session.owner || session.principal, id = digest(`operation:${merchantId}:${owner}:${key}`);
+  const hash = digest(canonical(request));
+  const prior = (await session.client.query<OperationRow>('SELECT * FROM valopay_operations WHERE id=$1 AND merchant_id=$2 AND owner=$3', [id, merchantId, owner])).rows[0];
+  if (prior) {
+    if (prior.request_hash !== hash) fail('This request key belongs to a different request. Recover the original request first.', 409);
+    if (prior.actor !== ctx.actor || prior.role !== ctx.role) fail('Return to the original role before checking this request.', 403);
+    if (prior.status === 'cancelled') fail('This request was cancelled and cannot run again.', 409);
+    return prior.id;
+  }
+  if (ctx.role === 'Read-only') fail('Your read-only role cannot submit operations.', 403);
+  const count = Number((await session.client.query<{ count: string }>("SELECT count(*) FROM valopay_operations WHERE merchant_id=$1 AND owner=$2 AND status='pending'", [merchantId, owner])).rows[0]!.count);
+  if (count >= 100) fail('Review your pending operations before submitting more requests.', 409);
+  const label = request.path.includes('/actions') && request.body && typeof request.body === 'object'
+    ? String((request.body as { action?: unknown }).action || 'Workspace action').replaceAll('_', ' ').slice(0, 100)
+    : `${request.method === 'PATCH' ? 'Update' : 'Save'} ${request.path.split('/').filter(Boolean).slice(1, 3).join(' ').replaceAll('-', ' ')}`;
+  await session.client.query(`INSERT INTO valopay_operations(id,merchant_id,owner,actor,role,request_key,request_hash,request,label,created_at,updated_at)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`, [id, merchantId, owner, ctx.actor, ctx.role, key, hash, request, label, ctx.now]);
+  return id;
+}
+export async function listOperations(ctx: StoreContext, merchantId: string, offset = 0) {
+  const session = sessionFor(ctx); await readMerchant(ctx, merchantId);
+  const scope = [merchantId, session.owner || session.principal];
+  const total = Number((await session.client.query<{ count: string }>('SELECT count(*) FROM valopay_operations WHERE merchant_id=$1 AND owner=$2', scope)).rows[0]!.count);
+  const items = (await session.client.query<OperationRow>('SELECT * FROM valopay_operations WHERE merchant_id=$1 AND owner=$2 ORDER BY created_at DESC,id DESC LIMIT 25 OFFSET $3', [...scope, offset])).rows.map(operationView);
+  return { items, total, offset };
+}
+export async function readOperation(ctx: StoreContext, merchantId: string, id: string) {
+  const session = sessionFor(ctx); await readMerchant(ctx, merchantId);
+  const row = (await session.client.query<OperationRow>('SELECT * FROM valopay_operations WHERE id=$1 AND merchant_id=$2 AND owner=$3', [id, merchantId, session.owner || session.principal])).rows[0];
+  if (!row) fail('Request not found in your lender history.', 404);
+  if (row.actor !== ctx.actor || row.role !== ctx.role) fail('This request was submitted under a different role. Your current role cannot repeat it.', 403);
+  return row;
+}
+export async function cancelOperation(ctx: StoreContext, merchantId: string, id: string) {
+  const session = sessionFor(ctx); await readMerchant(ctx, merchantId, 'update');
+  const row = await readOperation(ctx, merchantId, id);
+  if (row.status === 'completed') fail('This request already completed. Refresh Operations to see its saved result.', 409);
+  const legacy = await session.client.query('SELECT 1 FROM valopay_idempotency WHERE merchant_id=$1 AND id=ANY($2::text[])', [merchantId, [digest(`${merchantId}:${row.request_key}`), digest(`connected:${merchantId}:${row.request_key}`)]]);
+  if (legacy.rows.length) fail('A receipt already exists for this request. Check the original request to recover it.', 409);
+  await session.client.query("UPDATE valopay_operations SET status='cancelled',updated_at=$4 WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND status='pending'", [id, merchantId, session.owner || session.principal, ctx.now]);
+  return { message: 'The server confirmed this request has not completed and cancelled it. It cannot run again.' };
+}
+/** Receipt and domain writes commit together. A process crash cannot leave a
+ * completed journal entry without the corresponding business write. */
+export async function completeOperation(ctx: StoreContext, receipt: unknown) {
+  const session = sessionFor(ctx);
+  if (!session.operationId) return;
+  const merchantId = lockedMerchant(session);
+  const result = await session.client.query(`UPDATE valopay_operations SET status='completed',receipt=$5,updated_at=$6
+    WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND actor=$4`, [session.operationId, merchantId, session.owner || session.principal, ctx.actor, receipt, ctx.now]);
+  if (!rowsAffected(result)) fail('The recovery request no longer belongs to this session.', 409);
+}
+
+type StaffRow = { id: string; workspace_id: string; user_id: string; display_name: string; role: string; status: 'active' | 'suspended' | 'revoked'; expires_at: Date; created_at: Date; updated_at: Date };
+const staffProvision = (row: StaffRow, organizationId: string) => ({ id: row.id, userId: row.user_id, organizationId, tenantId: row.workspace_id, role: row.role, status: row.status, validFrom: row.created_at.toISOString(), expiresAt: row.expires_at.toISOString() });
+const staffView = (row: StaffRow) => ({ id: row.id, actor: `Clerk:${row.user_id}`, name: row.display_name, role: row.role, status: row.status, expiresAt: row.expires_at.toISOString(), updatedAt: row.updated_at.toISOString() });
+export async function caseAssignees(ctx: StoreContext) {
+  const session = sessionFor(ctx);
+  if (ctx.accessMode !== 'staff') return roles.filter(role => role !== 'Read-only').map(role => ({ actor: `Sandbox ${role}`, name: `Demo ${role}`, role }));
+  return (await session.client.query<StaffRow>("SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND status='active' AND expires_at>$2 AND role<>'Read-only' ORDER BY display_name,id", [session.workspace.id, ctx.now])).rows.map(staffView);
+}
+export async function staffDirectory(ctx: StoreContext) {
+  const session = sessionFor(ctx);
+  if (ctx.accessMode !== 'staff') return { mode: 'sandbox', actor: ctx.actor, members: [], invitations: [], events: [], message: 'Real staff access is not enabled on this host. Demo roles are for practice only.' };
+  const members = (await session.client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 ORDER BY display_name,id', [session.workspace.id])).rows.map(staffView);
+  const invitations = ctx.role === 'Admin' ? (await session.client.query('SELECT id,email,role,status,expires_at AS "expiresAt" FROM valopay_staff_invitations WHERE workspace_id=$1 ORDER BY created_at DESC LIMIT 100', [session.workspace.id])).rows : [];
+  const events = ctx.role === 'Admin' ? (await session.client.query('SELECT id,actor,action,subject,detail,created_at AS "createdAt" FROM valopay_staff_events WHERE workspace_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100', [session.workspace.id])).rows : [];
+  return { mode: 'staff', actor: ctx.actor, members, invitations, events, message: 'Verified staff access. Membership and MFA are checked for every request. Financial records remain synthetic.' };
+}
+export function viewerScope(ctx: StoreContext) { const session = sessionFor(ctx); return digest(`viewer:${session.workspace.id}:${session.owner || session.principal}`); }
+function teamAdmin(ctx: StoreContext) {
+  const session = sessionFor(ctx);
+  if (ctx.accessMode !== 'staff' || ctx.role !== 'Admin' || session.access !== 'team') fail('A verified pilot administrator with recent MFA is required.', 403);
+  return session;
+}
+async function staffEvent(client: PoolClient, workspaceId: string, actor: string, action: string, subject: string, detail: unknown) {
+  await client.query('INSERT INTO valopay_staff_events(id,workspace_id,actor,action,subject,detail) VALUES($1,$2,$3,$4,$5,$6)', [randomUUID(), workspaceId, actor, action, subject, detail]);
+}
+export async function inviteStaff(ctx: StoreContext, email: string, role: string) {
+  const session = teamAdmin(ctx);
+  const token = randomBytes(32).toString('hex'), id = randomUUID();
+  await session.client.query("UPDATE valopay_staff_invitations SET status='revoked' WHERE workspace_id=$1 AND email=$2 AND status='pending'", [session.workspace.id, email]);
+  await session.client.query(`INSERT INTO valopay_staff_invitations(id,workspace_id,email,role,token_hash,invited_by,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, [id, session.workspace.id, email, role, digest(token), ctx.actor, new Date(Date.parse(ctx.now) + 7 * 86400000)]);
+  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.invited', id, { email, role });
+  return { id, token, message: 'Invitation created. Share the link directly with this person; no email has been sent. It expires in seven days.' };
+}
+export async function updateStaff(ctx: StoreContext, id: string, input: { role: string; status: string; expectedUpdatedAt: string; reason: string }) {
+  const session = teamAdmin(ctx);
+  const row = (await session.client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [session.workspace.id, id])).rows[0];
+  if (!row) fail('Staff membership not found.', 404);
+  if (row.user_id === session.userId) fail('Ask another administrator to change your membership.', 403);
+  if (row.updated_at.toISOString() !== input.expectedUpdatedAt) fail('This membership changed. Refresh the team and review it again.', 409);
+  if (row.status === 'revoked' && input.status !== 'revoked') fail('A revoked person must accept a new invitation before access is restored.', 409);
+  const result = await session.client.query<StaffRow>(`UPDATE valopay_staff_memberships SET role=$3,status=$4,updated_at=greatest(now(),updated_at+interval '1 millisecond') WHERE workspace_id=$1 AND id=$2 RETURNING *`, [session.workspace.id, id, input.role, input.status]);
+  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.changed', id, { before: { role: row.role, status: row.status }, after: { role: input.role, status: input.status }, reason: input.reason });
+  return staffView(result.rows[0]!);
+}
+export async function revokeInvitation(ctx: StoreContext, id: string) {
+  const session = teamAdmin(ctx);
+  const result = await session.client.query("UPDATE valopay_staff_invitations SET status='revoked' WHERE workspace_id=$1 AND id=$2 AND status='pending'", [session.workspace.id, id]);
+  if (!rowsAffected(result)) fail('This invitation is no longer pending.', 409);
+  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.invitation_revoked', id, {});
+  return { message: 'Invitation revoked.' };
+}
+
+/** Acceptance has no existing membership. Clerk supplies the verified email;
+ * the browser supplies only the invitation token, never an email or role. */
+export async function acceptStaffInvitation(req: Request, token: string) {
+  if (!staffMode()) fail('Staff access is not enabled on this host.', 403);
+  const auth = getAuth(req) as unknown as VerifiedClerkSession;
+  const now = new Date().toISOString();
+  verifyStaff(auth, { id: 'invitation-check', userId: auth.userId || '', organizationId: auth.orgId || '', tenantId: 'invitation-check', role: 'Read-only', status: 'active', validFrom: '2020-01-01T00:00:00.000Z', expiresAt: '2100-01-01T00:00:00.000Z' }, true, now);
+  const user = await clerkClient.users.getUser(auth.userId!);
+  const emails = user.emailAddresses.filter(address => address.verification?.status === 'verified').map(address => address.emailAddress.toLowerCase());
+  return acceptVerifiedInvitation(auth, token, emails);
+}
+async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: string, verifiedEmails: string[]) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const team = (await client.query<{ workspace_id: string }>(`SELECT t.workspace_id FROM valopay_teams t JOIN valopay_workspaces w ON w.id=t.workspace_id WHERE t.organization_id=$1 FOR UPDATE OF w`, [auth.orgId])).rows[0];
+    if (!team) fail('Select the organisation named in your invitation.', 403);
+    const checkedAt = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();
+    verifyStaff(auth, { id: 'invitation-check', userId: auth.userId || '', organizationId: auth.orgId || '', tenantId: 'invitation-check', role: 'Read-only', status: 'active', validFrom: '2020-01-01T00:00:00.000Z', expiresAt: '2100-01-01T00:00:00.000Z' }, true, checkedAt);
+    const invite = (await client.query<{ id: string; email: string; role: string }>(`SELECT id,email,role FROM valopay_staff_invitations WHERE workspace_id=$1 AND token_hash=$2 AND status='pending' AND expires_at>clock_timestamp() FOR UPDATE`, [team.workspace_id, digest(token)])).rows[0];
+    if (!invite || !verifiedEmails.includes(invite.email)) fail('This invitation is expired, used, revoked or belongs to another verified email address.', 403);
+    const existing = (await client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND user_id=$2 FOR UPDATE', [team.workspace_id, auth.userId])).rows[0];
+    if (existing?.status === 'active' && existing.expires_at > new Date(checkedAt)) fail('You already have an active membership. Ask an administrator to change its role.', 409);
+    await client.query(`INSERT INTO valopay_staff_memberships(id,workspace_id,user_id,display_name,role,status,expires_at) VALUES($1,$2,$3,$4,$5,'active',now()+interval '90 days')
+      ON CONFLICT(workspace_id,user_id) DO UPDATE SET display_name=EXCLUDED.display_name,role=EXCLUDED.role,status='active',expires_at=EXCLUDED.expires_at,updated_at=greatest(now(),valopay_staff_memberships.updated_at+interval '1 millisecond')`, [randomUUID(), team.workspace_id, auth.userId, invite.email, invite.role]);
+    await client.query("UPDATE valopay_staff_invitations SET status='accepted' WHERE id=$1 AND workspace_id=$2", [invite.id, team.workspace_id]);
+    await staffEvent(client, team.workspace_id, `Clerk:${auth.userId}`, 'staff.accepted', invite.id, { role: invite.role });
+    await client.query('COMMIT'); return { message: 'Invitation accepted. Your pilot membership lasts 90 days.', role: invite.role };
+  } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+}
+
+/** Operator-only bootstrap; never called by an HTTP route. */
+export async function provisionStaffWorkspace(organizationId: string, userId: string, name: string) {
+  if (!staffMode() || !/^org_[A-Za-z0-9]+$/.test(organizationId) || !/^user_[A-Za-z0-9]+$/.test(userId) || !name.trim() || name.length > 100) fail('Provide a staging organisation, administrator user ID and workspace name.');
+  const client = await pool.connect(), workspaceId = randomUUID();
+  try {
+    await client.query('BEGIN');
+    await client.query("INSERT INTO valopay_workspaces(id,principal_hash,role) VALUES($1,$2,'Read-only')", [workspaceId, digest(`staff-org:${organizationId}`)]);
+    await client.query('INSERT INTO valopay_teams(workspace_id,organization_id,name) VALUES($1,$2,$3)', [workspaceId, organizationId, name]);
+    await client.query("INSERT INTO valopay_staff_memberships(id,workspace_id,user_id,display_name,role,expires_at) VALUES($1,$2,$3,$4,'Admin',now()+interval '90 days')", [randomUUID(), workspaceId, userId, 'Pilot administrator']);
+    await staffEvent(client, workspaceId, 'System · operator provisioning', 'staff.provisioned', userId, { organizationId });
+    await client.query('COMMIT'); return { workspaceId };
+  } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+}
+
+export async function createPilotLender(ctx: StoreContext, input: { name: string; segment: string }, key: string) {
+  const session = sessionFor(ctx);
+  if (ctx.role !== 'Admin' || session.access !== 'team') fail('An administrator must set up a lender.', 403);
+  // Workspace lock and deterministic ID make a repeated onboarding request safe.
+  const id = digest(`onboarding:${session.workspace.id}:${session.owner}:${key}`), fingerprint = digest(canonical(input));
+  const found = (await session.client.query<MerchantRow>('SELECT id,info,settings FROM valopay_merchants WHERE workspace_id=$1 AND id=$2', [session.workspace.id, id])).rows[0];
+  if (found) { if (found.settings.onboardingFingerprint !== fingerprint) fail('This setup request was already used for different details.', 409); return found.info; }
+  const state = seedMerchant(id, true);
+  state.records = [];
+  Object.assign(state.merchant, { name: input.name, shortName: input.name, segment: input.segment, provider: 'Paystack', mode: 'sandbox', status: 'onboarding', killSwitch: true, preDataReady: false, preLiveReady: false });
+  Object.assign(state.settings, { onboardingFingerprint: fingerprint, scheduledCloseEnabled: false, anonymousWorkspace: !ctx.authenticated, nextCloseAt: null });
+  await session.client.query('INSERT INTO valopay_merchants(id,workspace_id,info,settings) VALUES($1,$2,$3,$4)', [id, session.workspace.id, state.merchant, state.settings]);
+  await loadState(ctx, id, 'update');
+  appendAudit(state, ctx, 'lender.created', id, 'Created an empty synthetic lender for pilot rehearsal.');
+  await saveState(ctx, state);
+  return state.merchant;
+}
+
 function principalFor(req: Request, res: Response) {
   const auth = getAuth(req);
+  if (staffMode() && !auth.userId) fail('Sign in with your pilot staff account. Anonymous access is unavailable in this environment.', 401);
   if (auth.userId) return { principal: digest(`clerk:${auth.userId}`), authenticated: true, address: req.ip || "unknown" };
   const cookies = req.headers.cookie || "";
   const currentToken = cookieValue(cookies, sandboxCookieName);
@@ -99,7 +285,7 @@ function rowToRecord(row: RecordRow): ValopayRecord {
 }
 /** Row lock a load takes on the merchant: exclusive for a mutation, shared for a read so reads never queue behind each other. */
 export type MerchantLock = "update" | "share" | "none";
-export type WorkspaceAccess = "read" | "write" | "persona";
+export type WorkspaceAccess = "read" | "write" | "persona" | 'team';
 function scopedMerchantQuery(lock: MerchantLock = "none") {
   return `SELECT m.id,m.info,m.settings FROM valopay_merchants m
     JOIN valopay_workspaces w ON w.id=m.workspace_id
@@ -116,10 +302,24 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
   try {
     await client.query("BEGIN");
     // Single source of time: the database clock, read once per transaction.
-    const now = (await client.query<{ now: Date }>("SELECT now() AS now")).rows[0]!.now.toISOString();
-    const workspaceQuery = `SELECT id,principal_hash,role FROM valopay_workspaces WHERE principal_hash=$1 FOR ${access === "persona" ? "UPDATE" : "SHARE"}`;
-    let workspace = (await client.query<WorkspaceRow>(workspaceQuery, [identity.principal])).rows[0];
-    if (!workspace) {
+    let now = (await client.query<{ now: Date }>("SELECT now() AS now")).rows[0]!.now.toISOString();
+    const workspaceQuery = `SELECT id,principal_hash,role FROM valopay_workspaces WHERE principal_hash=$1 FOR ${access === "persona" || access === 'team' ? "UPDATE" : "SHARE"}`;
+    let workspace: WorkspaceRow | undefined;
+    let staff: StaffRow | undefined;
+    let auth: VerifiedClerkSession | undefined;
+    if (staffMode()) {
+      auth = getAuth(req) as unknown as VerifiedClerkSession;
+      if (access === 'persona') fail('Staff roles are assigned by an administrator. Demo role switching is unavailable.', 403);
+      // Lock the organisation before its membership, consistently with team
+      // changes. A revocation waits for in-flight work and blocks later work.
+      workspace = (await client.query<WorkspaceRow>(`SELECT w.id,w.principal_hash,w.role FROM valopay_workspaces w JOIN valopay_teams t ON t.workspace_id=w.id WHERE t.organization_id=$1 FOR ${access === 'team' ? 'UPDATE' : 'SHARE'} OF w`, [auth.orgId || ''])).rows[0];
+      if (!workspace) fail('This organisation has not been provisioned for the pilot.', 403);
+      staff = (await client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE', [workspace.id, auth.userId])).rows[0];
+      if (!staff) fail('An active staff membership is required. Accept an invitation or contact your administrator.', 403);
+      now = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();
+      verifyStaff(auth, staffProvision(staff, auth.orgId!), access !== 'read', now);
+    } else workspace = (await client.query<WorkspaceRow>(workspaceQuery, [identity.principal])).rows[0];
+    if (!workspace && !staffMode()) {
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [identity.principal]);
       // Another first visit may have finished seeding while we waited.
       workspace = (await client.query<WorkspaceRow>(workspaceQuery, [identity.principal])).rows[0];
@@ -146,10 +346,11 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       }
     }
     context = Object.freeze({
-      authenticated: identity.authenticated, role: workspace.role,
-      actor: `Sandbox ${workspace.role}`, now,
+      authenticated: identity.authenticated, role: staff?.role || workspace.role,
+      actor: staff ? `Clerk:${staff.user_id}` : `Sandbox ${workspace.role}`, now, accessMode: staff ? 'staff' : 'sandbox',
     });
-    sessions.set(context, { client, workspace, principal: identity.principal, active: true, access });
+    sessions.set(context, { client, workspace, principal: workspace.principal_hash, owner: identity.principal, active: true, access,
+      operationId: requestOperations.get(req), userId: staff?.user_id, organizationId: auth?.orgId || undefined });
     const result = await fn(context);
     const committed = await client.query("COMMIT");
     // PostgreSQL accepts COMMIT after a caught statement error by returning
@@ -198,6 +399,10 @@ async function readMerchant(context: StoreContext, merchantId: string, lock: Exc
     [merchantId, session.workspace.id, session.principal],
   )).rows[0];
   if (!merchant) fail("Lender not found in this workspace.", 404);
+  if (session.operationId && lock === 'update') {
+    const operation = (await session.client.query<OperationRow>('SELECT * FROM valopay_operations WHERE id=$1 AND merchant_id=$2 AND owner=$3', [session.operationId, merchantId, session.owner || session.principal])).rows[0];
+    if (!operation || operation.actor !== context.actor || operation.role !== context.role || operation.status === 'cancelled') fail('This request has been cancelled or your authority changed. Refresh Operations.', 409);
+  }
   session.lockedMerchantId = merchantId;
   if (merchant.info.id !== merchantId) conflict("Lender identity does not match its stored scope.");
   return merchant;
@@ -494,6 +699,7 @@ export async function saveIdempotency(context: StoreContext, id: string, request
       [id, merchantId, requestHash, response, session.workspace.id, session.principal],
     );
     if (!rowsAffected(inserted)) fail("Lender not found in this workspace.", 404);
+    await completeOperation(context, response);
   } catch (error: any) {
     if (error?.code === "23505") conflict("This idempotency key is already in use.");
     throw error;
@@ -502,6 +708,7 @@ export async function saveIdempotency(context: StoreContext, id: string, request
 /** Switches the workspace's demo persona. */
 export async function changeRole(context: StoreContext, role: string) {
   const session = sessionFor(context);
+  if (context.accessMode === 'staff') fail('Staff cannot switch demo personas.', 403);
   if (session.access !== "persona") conflict("A persona change requires an exclusive workspace transaction.");
   if (!roles.includes(role)) fail("Unknown sandbox persona.");
   const result = await session.client.query(
@@ -552,11 +759,13 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
     if (present.id !== before.id || present.merchantId !== before.merchantId || present.kind !== before.kind || present.createdAt !== before.createdAt) {
       conflict("Record identity, lender, kind, and creation time are immutable.");
     }
-    if (["audit", "exports", "reviews", "closes", "retry-decisions", "invoices", "connected-credit-assessments", "connected-credit-reviews"].includes(before.kind) && canonical(present) !== canonical(before)
+    if (["audit", "exports", "reviews", "closes", "retry-decisions", "invoices", "connected-credit-assessments", "connected-credit-reviews", "case-events", "import-revisions"].includes(before.kind) && canonical(present) !== canonical(before)
       && !(before.kind === "exports" && isExportRetry(before, present, now))) conflict("Evidence records are immutable.");
     if (["policies", "templates", "experiments"].includes(before.kind) && ["approved", "preregistered", "closed"].includes(before.status) && canonical(present) !== canonical(before)) {
       conflict("Approved, preregistered, and closed versions are immutable.");
     }
+    if (before.kind === 'import-batches' && before.status === 'committed' && canonical(present) !== canonical(before)) conflict('Committed source batches are immutable.');
+    if (before.data.importIdentity && canonical(present.data.importIdentity) !== canonical(before.data.importIdentity)) conflict('Source row provenance is immutable.');
   }
   const dueReferences = new Set<string>(), observations = new Set<string>(), inflight = new Set<string>();
   const allocatedPayments = new Map<string, number>(), allocatedDues = new Map<string, number>();

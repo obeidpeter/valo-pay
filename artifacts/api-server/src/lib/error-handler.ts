@@ -1,5 +1,6 @@
 import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
+import { PilotAccessError } from './pilot-access';
 
 /**
  * One place that turns a thrown error into an HTTP answer.
@@ -14,10 +15,11 @@ import { ZodError } from "zod";
  */
 const programmingErrors = [TypeError, RangeError, ReferenceError, SyntaxError, URIError, EvalError];
 const databaseCodes = ["23503", "23505", "23514", "P0001"];
-const GENERAL_FAILURE = "We could not complete this action. No changes were saved. Try again.";
+const GENERAL_FAILURE = "We could not confirm this action. Check Operations or retry the same request before submitting a new one.";
 
 export const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
   if (res.headersSent) return;
+  if (error instanceof PilotAccessError) { res.status(error.status).json({ error: error.message, code: error.code, requestId: req.id }); return; }
   // Every error body carries the request id, so the reference a person quotes finds the request's log lines.
   const requestId = req.id;
   if (error instanceof ZodError) {

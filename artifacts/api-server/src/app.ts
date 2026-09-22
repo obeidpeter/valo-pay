@@ -7,6 +7,7 @@ import { logger } from "./lib/logger";
 import { clerkMiddleware } from "@clerk/express";
 import { publishableKeyFromHost } from "@clerk/shared/keys";
 import { errorHandler } from "./lib/error-handler";
+import { staffMode, staffPolicy } from './lib/staff-access';
 import { CLERK_PROXY_PATH,clerkProxyMiddleware,getClerkProxyHost } from "./middlewares/clerkProxyMiddleware";
 
 const app: Express = express();
@@ -54,6 +55,7 @@ app.use(express.json({limit:"2mb"}));
 app.use(express.urlencoded({ extended: false,limit:"2mb" }));
 app.use(clerkMiddleware((req)=>({
   publishableKey:publishableKeyFromHost(getClerkProxyHost(req)??"",process.env.CLERK_PUBLISHABLE_KEY),
+  ...(staffMode() ? { authorizedParties: [...staffPolicy().authorisedParties] } : {}),
 })));
 const limits=new Map<string,{count:number;reset:number}>();
 app.use("/api/v1",(req,res,next)=>{
@@ -64,6 +66,7 @@ app.use("/api/v1",(req,res,next)=>{
   res.setHeader("X-Frame-Options","DENY");
   res.setHeader("Cross-Origin-Resource-Policy","same-origin");
   const origin=req.get("Origin"),host=getClerkProxyHost(req);
+  if (staffMode() && !['GET','HEAD','OPTIONS'].includes(req.method) && (!origin || !staffPolicy().authorisedParties.includes(origin))) { res.status(403).json({error:'Use the configured pilot origin for staff changes.',requestId:req.id}); return; }
   if(origin){
     try{if(new URL(origin).host!==host){req.log.warn({event:"request.refused",reason:"origin"},"Cross-origin request refused");res.status(403).json({error:"Cross-origin requests are not permitted.",requestId:req.id});return;}}
     catch{req.log.warn({event:"request.refused",reason:"origin_malformed"},"Malformed request origin refused");res.status(403).json({error:"Invalid request origin.",requestId:req.id});return;}

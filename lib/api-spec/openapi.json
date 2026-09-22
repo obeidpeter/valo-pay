@@ -2023,6 +2023,8 @@
       "Workspace": {
         "type": "object",
         "properties": {
+          "accessMode": { "type": "string", "enum": ["sandbox", "staff"], "description": "Whether the server authorises a demo persona or a provisioned staff membership." },
+          "viewerScope": { "type": "string", "description": "Opaque workspace/user scope for browser preferences; never an authorisation credential." },
           "name": {
             "type": "string"
           },

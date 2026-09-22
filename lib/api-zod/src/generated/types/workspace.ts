@@ -6,11 +6,16 @@
  * OpenAPI spec version: 1.1.0
  */
 import type { Merchant } from './merchant';
+import type { WorkspaceAccessMode } from './workspaceAccessMode';
 
 /**
  * The caller's workspace: who is acting, in which role, whether they signed in, and the lenders and roles available.
  */
 export interface Workspace {
+  /** Whether the server authorises a demo persona or a provisioned staff membership. */
+  accessMode?: WorkspaceAccessMode;
+  /** Opaque workspace/user scope for browser preferences; never an authorisation credential. */
+  viewerScope?: string;
   name: string;
   environment: string;
   actor: string;

@@ -404,6 +404,7 @@ export default function ReportsPage() {
 
           {/* Daily Closes */}
           <section hidden={view !== 'operations'} id="daily-closes" tabIndex={-1} aria-label="Daily close records" className="scroll-mt-6 bg-card border rounded-xl shadow-sm overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4"><p className="text-sm text-muted-foreground">Export saved closing snapshots and their reconciliation evidence.</p><ExportJobControl kind="closes" formats={['json','csv']} label="Export close evidence" /></div>
             <div className="p-5 border-b flex flex-wrap gap-3 items-center justify-between">
               <div className="flex items-center gap-2">
                 <CheckSquare aria-hidden="true" className="h-4 w-4 text-muted-foreground" />

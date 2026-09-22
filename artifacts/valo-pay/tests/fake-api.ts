@@ -1,3 +1,5 @@
+import { saveImportBatch, commitImportBatch, coordinateCase, batchView } from '../../api-server/src/domain/pilot-workflow';
+import { advanceRecordVersions } from '../../api-server/src/lib/edit-versions';
 import { pageCustomerHistory } from '../../api-server/src/lib/customer-history';
 import { connectedView, connectedActionSchema, runConnectedAction } from '../../api-server/src/domain/connected';
 import { pageReconciliation, pageCloseHistory } from '../../api-server/src/lib/console-read-models';
@@ -135,7 +137,19 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
   }
   const merchantOf = (query: Record<string, string>) => S.GetOverviewQueryParams.parse(query).merchantId;
 
+  const roster = () => roles.filter(role => role !== 'Read-only').map(role => ({ actor: 'Sandbox ' + role, name: 'Demo ' + role, role }));
+  const pilotWrite = (q: Record<string,string>, fn: (s: DomainState,c: Context)=>ValopayRecord) => withState(merchantOf(q), (state,ctx) => { const before=structuredClone(state); const result=fn(state,ctx); advanceRecordVersions(before,state,ctx.now); return S.CreateRecordResponse.parse(result); }, { action:'pilot.change',objectId:'workspace',summary:'Synthetic pilot workflow' });
   const routes: Array<[string, RegExp, Handler]> = [
+    ['GET', /^\/v1\/team$/, () => ({mode:'sandbox', message:'Demo personas are active.',members:[],invitations:[],events:[]})],
+    ['GET', /^\/v1\/operations$/, () => ({items:[],total:0,offset:0})],
+    ['GET', /^\/v1\/pilot\/journey$/, (_p,q) => { const s=api.state(merchantOf(q));return {lender:s.merchant,counts:{customers:s.records.filter(r=>r.kind==='customers').length,batches:0,receipts:4,openCases:4,unassignedCases:4,closes:0,exports:0},syntheticOnly:true}; }],
+    ['GET', /^\/v1\/pilot\/batches$/, (_p,q)=>{const all=api.state(merchantOf(q)).records.filter(r=>r.kind==='import-batches');return {items:all.slice(Number(q.offset||0),Number(q.offset||0)+25).map(r=>batchView(r)),total:all.length,offset:Number(q.offset||0)};}],
+    ['GET', /^\/v1\/pilot\/batches\/(?<id>[^/]+)$/, (p,q)=>{const s=api.state(merchantOf(q)), batch=s.records.find(r=>r.kind==='import-batches'&&r.id===p.id);if(!batch)fail('Batch not found.',404);if(!['Admin','Operations','Finance'].includes(api.role))fail('An import operator role is required.',403);return {batch,revisions:s.records.filter(r=>r.kind==='import-revisions'&&r.data.batchId===p.id)};}],
+    ['POST', /^\/v1\/pilot\/batches$/, (_p,q,b)=>pilotWrite(q,(s,c)=>saveImportBatch(s,c,b))],
+    ['POST', /^\/v1\/pilot\/batches\/(?<id>[^/]+)\/save$/, (p,q,b)=>pilotWrite(q,(s,c)=>saveImportBatch(s,c,b,p.id))],
+    ['POST', /^\/v1\/pilot\/batches\/(?<id>[^/]+)\/commit$/, (p,q,b)=>pilotWrite(q,(s,c)=>commitImportBatch(s,c,p.id!,b.expectedUpdatedAt))],
+    ['GET', /^\/v1\/pilot\/cases\/(?<id>[^/]+)$/, (p,q)=>{const s=api.state(merchantOf(q)),record=s.records.find(r=>r.kind==='exceptions'&&r.id===p.id);if(!record)fail('Exception not found.',404);return {record,assignees:roster(),events:s.records.filter(r=>r.kind==='case-events'&&r.data.exceptionId===p.id),evidence:s.records.filter(r=>r.kind==='payments')};}],
+    ['POST', /^\/v1\/pilot\/cases\/(?<id>[^/]+)$/, (p,q,b)=>pilotWrite(q,(s,c)=>coordinateCase(s,c,p.id!,b,roster()))],
     ['GET', /^\/v1\/customers\/(?<id>[^/]+)\/history$/, (params,query)=>{const parsed=S.GetCustomerHistoryQueryParams.parse(query);return S.GetCustomerHistoryResponse.parse(withState(parsed.merchantId,state=>pageCustomerHistory(state,params.id!,parsed)));}],
     ['GET', /^\/v1\/reconciliation\/(?<queue>[^/]+)$/, (params,query)=>{
       const {queue:name}=S.ListReconciliationParams.parse(params), parsed=S.ListReconciliationQueryParams.parse(query);

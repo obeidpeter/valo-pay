@@ -18,7 +18,7 @@ export function ExportJobControl({ kind, customerId, formats = ['pdf'], label }:
   if (visit.current.scope !== scope) visit.current = { scope };
   const [selected, setSelected] = useState<{ scope: string; job: ExportResult } | null>(null);
   const [problem, setProblem] = useState<{ scope: string; message: string } | null>(null);
-  const title = kind === 'billing' ? 'Billing CSV' : kind === 'gate-pack' ? 'Evidence pack' : 'Dispute pack';
+  const title = kind === 'billing' ? 'Billing CSV' : kind === 'gate-pack' ? 'Evidence pack' : kind === 'closes' ? 'Close evidence' : 'Dispute pack';
   const openLabel = kind === 'billing' ? 'Open billing CSV' : `Open ${title.toLowerCase()}`;
   const params = { merchantId: merchantId!, customerId, search: kind, limit: 5 };
   const recent = useListRecords('exports', params, { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('exports', params), refetchInterval: 5000 } });

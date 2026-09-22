@@ -22,7 +22,7 @@ describe('console efficiency', () => {
     await user.click(screen.getByRole('button', { name: 'Finance follow-up' }));
     await waitFor(() => expect((screen.getByLabelText('Filter exceptions by owner') as HTMLSelectElement).value).toBe('Finance'));
     expect(Object.fromEntries(new URLSearchParams(window.location.search))).toMatchObject({ view: 'overdue', owner: 'Finance', type: 'unallocated_payment' });
-    expect(localStorage.getItem(`valopay-queue-views-v1:${api.merchantIds[0]}:exceptions`)).not.toContain('customerId');
+    expect(localStorage.getItem(`valopay-queue-views-v2:Sandbox Admin:${api.merchantIds[0]}:exceptions`)).not.toContain('customerId');
     await user.selectOptions(screen.getByLabelText('Active lender', { selector: '#lender-sidebar' }), api.merchantIds[1]!);
     await user.click(screen.getByText('Saved views'));
     expect(screen.queryByRole('button', { name: 'Finance follow-up' })).toBeNull();

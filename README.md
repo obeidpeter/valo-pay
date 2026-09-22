@@ -87,6 +87,9 @@ Provide credentials through your environment's secret manager, never through com
 | `LOG_FORMAT` | Optional; `pretty` prints the server log for a person (the default with `NODE_ENV=development`); otherwise lines are JSON for the host to collect |
 | `LOG_FILE` | Optional; writes the server log synchronously to this file instead of stdout, for a test or a local run that reads it back |
 | `VALOPAY_CLOSE_SCHEDULER` | Optional; `off` stops this API process from running the scheduled daily close, so closes must be triggered by hand |
+| `VALOPAY_STAFF_ACCESS` | Unset or `off` keeps demo access; `staging` requires a provisioned organisation, named membership and verified MFA. Financial data remains synthetic. |
+| `VALOPAY_STAFF_ISSUER` | Exact HTTPS Clerk issuer for staging staff sessions; required in staff mode |
+| `VALOPAY_STAFF_ORIGINS` | Comma-separated HTTPS application origins allowed to use staging staff sessions; required in staff mode |
 | `VALOPAY_EXPIRED_WORKSPACE_CLEANUP` | Optional; `on` allows new anonymous workspace bootstrap to delete a small batch of expired anonymous workspaces; unset or any other value keeps automatic cleanup off |
 
 The storage client obtains credentials from a **Replit sidecar**. Supplying storage paths alone will not make exports work outside Replit. External hosting requires a reviewed storage-authentication adapter, Clerk setup, PostgreSQL provisioning and same-origin routing for `/api/*` versus frontend assets; these are not implemented by this source transfer.

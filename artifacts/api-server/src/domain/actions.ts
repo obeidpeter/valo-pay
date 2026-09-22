@@ -293,6 +293,7 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
   if (input.action === "resolve_exception") {
     assertActionRole(ctx, ["Admin", "Finance", "Operations"]);
     const item = findRecord(state, String(input.recordId), "exceptions");
+    if (item.data.case?.assignee && item.data.case.assignee !== ctx.actor && ctx.role !== 'Admin') throw Object.assign(new Error('Ask the case assignee or an administrator to record the resolution. Financial review remains a separate action.'), { status: 409 });
     if (["resolved", "closed"].includes(item.status)) throw new Error("This exception is already resolved.");
     const allowed = resolutionCodesFor(item.data.type);
     if (!allowed.includes(String(data.resolutionCode))) throw new Error(`Resolution code must be one of: ${allowed.join(", ")}.`);

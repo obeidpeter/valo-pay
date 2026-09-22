@@ -16,22 +16,23 @@ const WorkspaceContext = createContext<WorkspaceContextType | null>(null);
 
 /** Loads the caller's workspace and provides it to the console; shows the failure notice while it cannot be loaded. */
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  const {userId,isLoaded:authLoaded}=useSessionUser();
+  const {userId,orgId,isLoaded:authLoaded}=useSessionUser();
+  const identity = `${userId || 'sandbox'}:${orgId || 'personal'}`;
   // Never hold the anonymous sandbox hostage to a slow or unreachable sign-in service.
   const [authTimedOut,setAuthTimedOut]=useState(false);
   useEffect(()=>{if(authLoaded)return;const timer=setTimeout(()=>setAuthTimedOut(true),5000);return()=>clearTimeout(timer);},[authLoaded]);
   const isLoaded=authLoaded||authTimedOut;
   const queryClient=useQueryClient();
   const previousUser=useRef<string|null|undefined>(undefined);
-  const { data: workspace, isLoading,isFetching,error,refetch } = useGetWorkspace({query:{queryKey:["workspace",userId||"sandbox"],enabled:isLoaded,refetchInterval:30000}});
+  const { data: workspace, isLoading,isFetching,error,refetch } = useGetWorkspace({query:{queryKey:["workspace",identity],enabled:isLoaded,refetchInterval:30000}});
   const [selectedMerchant, setMerchantId] = useState<string | null>(null);
   const merchantId=workspace?.merchants.some(m=>m.id===selectedMerchant)?selectedMerchant:workspace?.merchants[0]?.id||null;
 
   useEffect(() => {
     if(!isLoaded)return;
-    if(previousUser.current!==undefined&&previousUser.current!==(userId||null)){queryClient.clear();setMerchantId(null);}
-    previousUser.current=userId||null;
-  },[userId,isLoaded,queryClient]);
+    if(previousUser.current!==undefined&&previousUser.current!==identity){queryClient.clear();setMerchantId(null);window.history.replaceState(null, '', window.location.pathname);}
+    previousUser.current=identity;
+  },[identity,isLoaded,queryClient]);
 
   return (
     <WorkspaceContext.Provider value={{ merchantId, setMerchantId: id => { if (id === merchantId || confirmUnsavedChanges()) setMerchantId(id); }, workspace, isLoading:isLoading||!isLoaded }}>

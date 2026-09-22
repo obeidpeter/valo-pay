@@ -69,6 +69,14 @@ Every kind's data fields, including the ones the platform sets, are declared wit
 - members: read-only demo role identities.
 
 ## Pages
+- `/pilot` connects lender setup to the six-step synthetic pilot journey. Counts report saved records, not approval or operational readiness.
+- `/imports` saves source batches and mapping, checks row identities, allows versioned correction and atomically commits valid rows. Source rows are restricted to import operators.
+- `/operations` lists this caller's received requests for the selected lender. Replays use the stored original request under current permissions. Cancellation blocks later execution only when no completion receipt exists.
+- `/cases/:id` claims, hands over and records the next action on an existing exception, with a version check and immutable event history. Financial resolution remains a separate controlled action.
+- `/team` shows the access mode. In staff staging, administrators invite, suspend and revoke named memberships; fresh server membership and MFA are required for every transaction.
+- `/team-invite` is outside workspace bootstrap so an invited user can accept a token after signing in, selecting the provisioned organisation and verifying MFA. The token stays in the URL fragment until accepted and is not sent to analytics or request logs.
+
+The pilot workflow and staff API supplement is documented in `docs/pilot-workflow-release.md`. Workspace responses include optional `accessMode` and an opaque `viewerScope` for local filter preferences. Browser storage excludes source rows, request bodies and customer search text. Staff mode keys query state by signed-in user and selected organisation; changing either clears the previous workspace.
 - `/pay-by-bank` provides bound sample checkouts, separate authorisation, pending/unknown outcomes, canonical reconciliation and independently reviewed refund evidence. Browser return is never a receipt.
 - `/credit-desk` provides synthetic evidence checks, explained rule scores and repayment capacity, immutable versions and separate reasoned lender reviews. A rule score is not a probability of default.
 - `/cash-desk` provides an independent sample SME entity, multi-account cash positions, scenario forecasts, accounting drafts, VAT evidence and approved-net-pay funding with separate Finance review. Exports never imply a bank payment or ERP write.

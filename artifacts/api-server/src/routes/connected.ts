@@ -10,6 +10,7 @@ import {
   digest,
   canonical,
   fail,
+  completeOperation,
 } from "../lib/valopay-store";
 import {
   connectedActionSchema,
@@ -48,6 +49,7 @@ router.post("/v1/connected/actions", async (req, res) => {
         if (prior) {
           if (prior.request_hash !== fingerprint)
             fail("This request key was already used for different input.", 409);
+          await completeOperation(ctx, prior.response);
           return prior.response;
         }
         const before = digest(canonical(state));

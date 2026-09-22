@@ -44,6 +44,12 @@ const PayByBankPage: PageLoader = () => import('@/pages/pay-by-bank');
 const CreditDeskPage: PageLoader = () => import('@/pages/credit-desk');
 const CashDeskPage: PageLoader = () => import('@/pages/cash-desk');
 const ConnectionsPage: PageLoader = () => import('@/pages/connections');
+const PilotPage: PageLoader = () => import('@/pages/pilot');
+const ImportsPage: PageLoader = () => import('@/pages/imports');
+const OperationsPage: PageLoader = () => import('@/pages/operations');
+const CasePage: PageLoader = () => import('@/pages/case');
+const TeamPage: PageLoader = () => import('@/pages/team');
+const TeamInvitePage: PageLoader = () => import('@/pages/team-invite');
 
 type PageLoader = () => Promise<{ default: ComponentType<any> }>;
 const loadedPages = new Map<PageLoader, ComponentType<any>>();
@@ -129,6 +135,11 @@ const consoleRoutes: Array<{ path: string; load: PageLoader }> = [
   { path: '/credit-desk', load: CreditDeskPage },
   { path: '/cash-desk', load: CashDeskPage },
   { path: '/connections', load: ConnectionsPage },
+  { path: '/pilot', load: PilotPage },
+  { path: '/imports', load: ImportsPage },
+  { path: '/operations', load: OperationsPage },
+  { path: '/cases/:id', load: CasePage },
+  { path: '/team', load: TeamPage },
 ];
 const consolePages = consoleRoutes.map((route) => route.load);
 const overviewOnly = [OverviewPage];
@@ -192,6 +203,7 @@ function ClerkProviderWithRoutes() {
               <Route path="/">{() => <><LandingPage /><Prefetch pages={overviewOnly} /></>}</Route>
               <Route path="/sign-in/*?">{(params) => <LazyPage load={SignInPage} params={params} />}</Route>
               <Route path="/sign-up/*?">{(params) => <LazyPage load={SignUpPage} params={params} />}</Route>
+              <Route path="/team-invite">{() => <LazyPage load={TeamInvitePage} />}</Route>
               <Route component={Console} />
             </Switch>
           </RoutedErrorBoundary>
