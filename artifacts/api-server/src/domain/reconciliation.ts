@@ -387,12 +387,13 @@ const rejectedMatches = (payment: TypedRecord<"payments">): Set<string> => new S
 /**
  * Payments whose status contradicts their records: "unallocated" with money
  * applied, "proposed" with no live proposal, or money returned while still
- * waiting in an allocation queue or carrying a proposal.
+ * waiting in an allocation queue, carrying a proposal, or shown as holding
+ * unapplied money ("partial" or "overpaid" after a refund).
  */
 function paymentsToSettle(state: DomainState): TypedRecord<"payments">[] {
   const proposed = new Set(recordsOf(state, "allocations").filter((item) => item.status === "proposed").map((item) => String(item.data.paymentId)));
   return recordsOf(state, "payments").filter((payment) => {
-    if (paymentReturned(payment)) return ["unallocated", "proposed", "possible_duplicate"].includes(payment.status) || proposed.has(payment.id);
+    if (paymentReturned(payment)) return ["unallocated", "proposed", "possible_duplicate", "partial", "overpaid"].includes(payment.status) || proposed.has(payment.id);
     if (payment.status === "unallocated") return Number(payment.data.allocatedKobo || 0) > 0 || proposed.has(payment.id);
     return payment.status === "proposed" && !proposed.has(payment.id);
   });

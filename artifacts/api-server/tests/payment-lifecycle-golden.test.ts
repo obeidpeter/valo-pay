@@ -137,9 +137,15 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   due.data.outstandingKobo = 0; due.status = "paid";
   const stuck = makeRecord(state, "payments", { name: "legacy", status: "proposed", reference: "LEG-STUCK", customerId: due.customerId, amountKobo: 777_700, data: { allocatedKobo: 0, observedAt: wat("2027-07-01T09:00:00"), channel: "transfer", proposedDueItemId: due.id } });
   const reversed = makeRecord(state, "payments", { name: "legacy", status: "unallocated", reference: "LEG-REVERSED", customerId: due.customerId, amountKobo: 500_000, data: { allocatedKobo: 0, observedAt: wat("2027-07-01T09:00:00"), channel: "transfer", reversalStatus: "reversed" } });
+  // An overpayment whose excess an earlier build recorded as refunded, in the legacy spelling, still showed as holding it.
+  const second = secondInstalment(state, due);
+  const refundedExcess = makeRecord(state, "payments", { name: "legacy", status: "overpaid", reference: "LEG-REFUNDED", customerId: due.customerId, amountKobo: 3_000_000, data: { allocatedKobo: GROSS, observedAt: wat("2027-07-01T09:00:00"), channel: "transfer" } });
+  Object.assign(refundedExcess.data, { refundStatus: "recorded_externally" });
+  makeRecord(state, "allocations", { name: "Allocation R7", status: "confirmed", customerId: due.customerId, amountKobo: GROSS, data: { paymentId: refundedExcess.id, dueItemId: second.id, rule: "R7", confidence: "manual", automatic: false, reviewed: null } });
+  second.data.outstandingKobo = 0; second.status = "paid";
   const run = reconcile(state, finance(wat("2027-07-02T07:00:00")));
-  equal([applied.status, stuck.status, reversed.status], ["allocated", "unallocated", "returned"], "each status now matches its records");
-  equal(run.data.paymentStatusesRepaired, 3, "the close reports the repairs");
+  equal([applied.status, stuck.status, reversed.status, refundedExcess.status], ["allocated", "unallocated", "returned", "allocated"], "each status now matches its records");
+  equal(run.data.paymentStatusesRepaired, 4, "the close reports the repairs");
   equal(stuck.data.proposedDueItemId, undefined, "the dead proposal pointer is cleared");
   invariant(state);
 }
