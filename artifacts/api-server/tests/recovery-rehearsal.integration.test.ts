@@ -28,7 +28,7 @@ const runPg = (command: string, args: string[], database: string) => {
   const result = spawnSync(command, args, { env: pgEnv(database), encoding: 'utf8', timeout: 60_000 });
   if (result.error || result.status !== 0) throw new Error(`${command} failed during the disposable recovery rehearsal; no connection details are logged.`);
 };
-const tables = ['valopay_workspaces', 'valopay_merchants', 'valopay_records', 'valopay_idempotency'];
+const tables = ['valopay_workspaces', 'valopay_merchants', 'valopay_records', 'valopay_idempotency', 'valopay_operations', 'valopay_teams', 'valopay_staff_memberships', 'valopay_staff_invitations', 'valopay_staff_events'];
 let source: InstanceType<typeof Pool> | undefined, target: InstanceType<typeof Pool> | undefined;
 let sourceCreated = false, targetCreated = false;
 const directory = await mkdtemp(join(tmpdir(), 'valopay-recovery-'));
@@ -57,6 +57,11 @@ try {
     await source.query('INSERT INTO valopay_merchants(id,workspace_id,info,settings) VALUES($1,$2,$3,$4)', [merchant.id, `workspace-${index}`, merchant, state.settings]);
     for (const item of state.records) await source.query('INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)', [item.id, merchant.id, item.kind, item.name, item.status, item.reference, item.amountKobo, item.customerId, item.data, item.createdAt, item.updatedAt]);
     await source.query('INSERT INTO valopay_idempotency(id,merchant_id,request_hash,response) VALUES($1,$2,$3,$4)', [`key-${index}`, merchant.id, 'synthetic-fingerprint', { completed: true, recordId: record.id }]);
+    await source.query('INSERT INTO valopay_operations(id,merchant_id,owner,actor,role,request_key,request_hash,request,label,status,receipt) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)', [`operation-${index}`,merchant.id,`principal-${index}`,ctx.actor,'Admin',`key-${index}`,'synthetic-fingerprint',{method:'POST',path:'/v1/records/customers',body:{name:'Synthetic restoration fixture'}},'Save customers',index===1?'completed':'pending',index===1?{id:record.id}:null]);
+    await source.query('INSERT INTO valopay_teams(workspace_id,organization_id,name) VALUES($1,$2,$3)',[`workspace-${index}`,`org_restore${index}`,`Synthetic team ${index}`]);
+    await source.query('INSERT INTO valopay_staff_memberships(id,workspace_id,user_id,display_name,role,status,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)',[`member-${index}`,`workspace-${index}`,`user_restore${index}`,'Synthetic staff','Admin',index===1?'active':'revoked','2030-01-01']);
+    await source.query('INSERT INTO valopay_staff_invitations(id,workspace_id,email,role,token_hash,invited_by,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)',[`invite-${index}`,`workspace-${index}`,`restore${index}@example.test`,'Finance',createHash('sha256').update(`unusable-fixture-${index}`).digest('hex'),ctx.actor,'2030-01-01']);
+    await source.query('INSERT INTO valopay_staff_events(id,workspace_id,actor,action,subject,detail) VALUES($1,$2,$3,$4,$5,$6)',[`staff-event-${index}`,`workspace-${index}`,ctx.actor,'staff.changed',`member-${index}`,{reason:'Synthetic restore rehearsal'}]);
     expectedStates.push(state);
   }
   const sourceExport = Buffer.from('Synthetic export\nNo customer data\n');
@@ -71,8 +76,9 @@ try {
   const restoreMs = Math.round(performance.now() - restoreStart);
   const counts: Record<string, number> = {};
   for (const table of tables) {
-    const sourceRows: Record<string, any>[] = (await source.query(`SELECT * FROM ${table} ORDER BY id`)).rows;
-    const restoredRows: Record<string, any>[] = (await target.query(`SELECT * FROM ${table} ORDER BY id`)).rows;
+    const key = table === 'valopay_teams' ? 'workspace_id' : 'id';
+    const sourceRows: Record<string, any>[] = (await source.query(`SELECT * FROM ${table} ORDER BY ${key}`)).rows;
+    const restoredRows: Record<string, any>[] = (await target.query(`SELECT * FROM ${table} ORDER BY ${key}`)).rows;
     assert.deepEqual(restoredRows, sourceRows, `${table}: every restored value matches the snapshot`);
     counts[table] = restoredRows.length;
   }

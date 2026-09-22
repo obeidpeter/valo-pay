@@ -596,7 +596,7 @@ function BatchEditor({
           )}
           {!!batch.data.recordIds?.length && (
             <p className="text-sm text-muted-foreground">
-              {batch.data.recordIds.length} records are linked to this batch.
+              {batch.data.recordIds.length} {batch.data.recordIds.length === 1 ? 'record is' : 'records are'} linked to this batch.
               Continue in{" "}
               <Link className="text-primary underline" href="/reconciliation">
                 Reconciliation

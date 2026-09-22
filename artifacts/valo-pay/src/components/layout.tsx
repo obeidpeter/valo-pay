@@ -100,7 +100,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
   // The title names the page, or says the page stopped working while the boundary below shows its notice.
   const [pageError,setPageError]=useState<Error|null>(null);
-  useEffect(()=>{document.title=`${pageError?"Page error":navItems.find(n=>n.href===location)?.label||"Customer timeline"} · Valo Pay`;},[location,pageError]);
+  useEffect(()=>{document.title=`${pageError?"Page error":navItems.find(n=>n.href===location)?.label||(location.startsWith("/cases/")?"Case handling":"Customer timeline")} · Valo Pay`;},[location,pageError]);
 
   // The phone drawer. It opens with focus on the first page, closes when a page is chosen in it or the
   // address changes (the browser's back), and then focus goes to the page content as it does after the
@@ -122,7 +122,7 @@ export function Layout({ children }: { children: ReactNode }) {
   // The time is taken again as the print dialog opens, since a page can sit open for a day before it is printed.
   const lender = workspace?.merchants.find(m => m.id === merchantId);
   const lenderName = lender?.name;
-  const pageTitle = navItems.find(n => n.href === location)?.label || 'Customer timeline';
+  const pageTitle = navItems.find(n => n.href === location)?.label || (location.startsWith('/cases/') ? 'Case handling' : 'Customer timeline');
   const [printedAt, setPrintedAt] = useState(() => formatDate(new Date().toISOString()));
   useEffect(() => {
     const stamp = () => setPrintedAt(formatDate(new Date().toISOString()));
@@ -227,7 +227,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 A page that stops working keeps the sidebar and the lender selector as the way out. */}
             {isLoading && !workspace
               ? <p role="status" className="text-sm text-muted-foreground">Loading your workspace…</p>
-              : <ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{!embedded && !['/pay-by-bank','/credit-desk','/cash-desk','/connections'].includes(location) && <SandboxGuide />}{children}</ErrorBoundary>}
+              : <ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{!embedded && !location.startsWith('/cases/') && !['/pilot','/imports','/operations','/team','/pay-by-bank','/credit-desk','/cash-desk','/connections'].includes(location) && <SandboxGuide />}{children}</ErrorBoundary>}
             <p className="hidden print:block mt-8 border-t pt-3 text-xs text-muted-foreground">Printed {printedAt} from the Valo Pay sandbox · {pageTitle}{lenderName ? ` · ${lenderName}` : ''}.</p>
           </div>
         </main>

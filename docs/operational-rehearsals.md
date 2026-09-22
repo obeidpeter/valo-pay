@@ -8,7 +8,7 @@ The shipped sandbox remains synthetic. These checks exercise recovery, alert del
 
 Run `pnpm run check:operations` with `VALOPAY_MONITOR_ORIGIN` set to the HTTPS service origin. The default is a dry run: it prints only the service origin, check time and fixed failure codes. It reads no customer records and sends no alerts.
 
-External delivery requires a configured service. The selected email recipient is **obeidpeter1@gmail.com**. The optional Resend adapter follows the [send-email API](https://resend.com/docs/api-reference/emails/send-email); a verified sender and a provider key are required. Provider acceptance is not proof that a message reached the inbox. Confirm receipt during the host commissioning exercise.
+External delivery requires a configured service. The selected email recipient is **the configured alert recipient**. The optional Resend adapter follows the [send-email API](https://resend.com/docs/api-reference/emails/send-email); a verified sender and a provider key are required. Provider acceptance is not proof that a message reached the inbox. Confirm receipt during the host commissioning exercise.
 
 | Variable | Meaning |
 | --- | --- |
@@ -30,7 +30,7 @@ On 18 September 2026 the Replit configuration check found no outbound email serv
 
 `artifacts/api-server/tests/recovery-rehearsal.integration.test.ts` runs only with both `VALOPAY_RUN_INTEGRATION=1` and `VALOPAY_RUN_RECOVERY=1`, against the local disposable CI database named `valopay`. It creates distinct, uniquely named source and empty restore databases, seeds two synthetic lenders and performs a real PostgreSQL custom-format dump and restore. Credentials are passed to the PostgreSQL tools through environment variables, never command arguments or evidence output.
 
-It compares every row in the four application tables, lender settings, outstanding amounts, allocations, close snapshots, idempotency responses and audit chains. It checks decryption with retained test keys, key rotation, refusal with missing/wrong keys, and a local synthetic export checksum. Cleanup is restricted to the databases and temporary files created by that run.
+It compares every row in the nine application tables, including pending/completed recovery requests, teams, active/revoked memberships, invitation hashes and access events, alongside lender settings, outstanding amounts, allocations, close snapshots, idempotency responses and audit chains. It checks decryption with retained test keys, key rotation, refusal with missing/wrong keys, and a local synthetic export checksum. Cleanup is restricted to the databases and temporary files created by that run.
 
 CI retains the report for 14 days. It includes snapshot time, backup and restore durations, row counts and verification scope, with no database URLs, secret keys, record payloads or customer identifiers. `VALOPAY_REHEARSAL_REPORT` selects its output path. This proves a disposable logical recovery, not production point-in-time recovery, App Storage restoration, real key custody, production roles/grants or an agreed recovery-time/data-loss target. Those require a separate host rehearsal.
 
