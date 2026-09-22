@@ -9,6 +9,7 @@ import type { Context, DomainState, ValopayRecord } from "./types";
 import { makeRecord } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
 import { importCsv } from "../lib/valopay-import";
+import { batchSourceQuality, assertSourceBatchReady } from './source-quality';
 
 function refuse(message: string, status = 400): never {
   throw Object.assign(new Error(message), { status });
@@ -30,6 +31,7 @@ export function batchView(batch: ValopayRecord, detail = false) {
           checkedAt: batch.data.checkedAt,
           committedAt: batch.data.committedAt,
           synthetic: true,
+          sourceQuality: batch.data.sourceQuality,
           check: {
             valid: batch.data.check?.valid,
             invalid: batch.data.check?.invalid,
@@ -154,6 +156,7 @@ export function saveImportBatch(
     synthetic: true,
   };
   delete current.data.expectedUpdatedAt;
+  current.data.sourceQuality = batchSourceQuality(state, current);
   makeRecord(state, "import-revisions", {
     name: `Import revision ${revision}`,
     status: "recorded",
@@ -184,6 +187,7 @@ export function commitImportBatch(
   if (!batch) refuse("Import batch not found in this lender.", 404);
   assertRecordVersion(batch, expectedUpdatedAt);
   if (batch.status === "committed") return batch;
+  assertSourceBatchReady(state, batch);
   const input = batchInputSchema.parse({
     ...Object.fromEntries(
       [
@@ -222,6 +226,7 @@ export function commitImportBatch(
         .filter((r) => !before.has(r.id))
         .map((r) => r.id),
     });
+  saved.data.sourceQuality = batchSourceQuality(state, saved);
   return saved;
 }
 export function coordinateCase(
@@ -302,7 +307,7 @@ export function coordinateCase(
   };
   record.data.case = next;
   record.status = "in_progress";
-  makeRecord(state, "case-events", {
+  const event = makeRecord(state, "case-events", {
     name: `${input.action === "claim" ? "Case claimed" : input.action === "handover" ? "Case handed over" : "Next action updated"}`,
     status: "recorded",
     customerId: record.customerId,
@@ -316,5 +321,6 @@ export function coordinateCase(
       after: next,
     },
   });
+  record.data.case = { ...next, eventId: event.id, handoverEventId: input.action === 'update' ? prior.handoverEventId : event.id };
   return record;
 }

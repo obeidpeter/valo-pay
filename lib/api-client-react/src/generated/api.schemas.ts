@@ -449,6 +449,7 @@ export const ExportInputFormat = {
  * What to export (a record kind, gate-pack, billing, dispute-pack or customer-pack with a customerId) and in which format.
  */
 export interface ExportInput {
+  closeReviewId?: string;
   kind: string;
   customerId?: string;
   format: ExportInputFormat;
@@ -468,6 +469,7 @@ export const ExportResultStatus = {
  * Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.
  */
 export interface ExportResult {
+  expiredAt?: string;
   id: string;
   downloadUrl: string;
   status?: ExportResultStatus;
@@ -947,4 +949,3 @@ export type PerformConnectedActionParams = {
  */
 merchantId: string;
 };
-

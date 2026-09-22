@@ -50,6 +50,10 @@ const OperationsPage: PageLoader = () => import('@/pages/operations');
 const CasePage: PageLoader = () => import('@/pages/case');
 const TeamPage: PageLoader = () => import('@/pages/team');
 const TeamInvitePage: PageLoader = () => import('@/pages/team-invite');
+const CloseReviewPage: PageLoader = () => import('@/pages/close-review');
+const SourcesPage: PageLoader = () => import('@/pages/sources');
+const WorkPage: PageLoader = () => import('@/pages/work');
+const LifecyclePage: PageLoader = () => import('@/pages/lifecycle');
 
 type PageLoader = () => Promise<{ default: ComponentType<any> }>;
 const loadedPages = new Map<PageLoader, ComponentType<any>>();
@@ -140,6 +144,10 @@ const consoleRoutes: Array<{ path: string; load: PageLoader }> = [
   { path: '/operations', load: OperationsPage },
   { path: '/cases/:id', load: CasePage },
   { path: '/team', load: TeamPage },
+  { path: '/close-review', load: CloseReviewPage },
+  { path: '/sources', load: SourcesPage },
+  { path: '/work', load: WorkPage },
+  { path: '/lifecycle', load: LifecyclePage },
 ];
 const consolePages = consoleRoutes.map((route) => route.load);
 const overviewOnly = [OverviewPage];

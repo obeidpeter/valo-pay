@@ -1,4 +1,4 @@
-import { pgTable, text, jsonb, timestamp, bigint, uniqueIndex, index, check } from "drizzle-orm/pg-core";
+import { pgTable, text, jsonb, timestamp, bigint, uniqueIndex, index, check, primaryKey } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 
@@ -89,3 +89,12 @@ export const staffEvents = pgTable('valopay_staff_events', {
   actor: text('actor').notNull(), action: text('action').notNull(), subject: text('subject').notNull(), detail: jsonb('detail').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/** An active non-administrator membership has access only to named lenders. */
+export const staffLenderAccess = pgTable('valopay_staff_lender_access', {
+  membershipId: text('membership_id').notNull().references(() => staffMemberships.id, { onDelete: 'cascade' }),
+  merchantId: text('merchant_id').notNull().references(() => merchants.id, { onDelete: 'cascade' }),
+  grantedBy: text('granted_by').notNull(),
+  grantedAt: timestamp('granted_at', { withTimezone: true }).notNull().defaultNow(),
+}, table => [primaryKey({ columns: [table.membershipId, table.merchantId] }),
+  index('valopay_staff_lender_access_lender').on(table.merchantId, table.membershipId)]);

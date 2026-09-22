@@ -270,7 +270,7 @@ export const recordDataSchemas = {
   }).passthrough(),
   exceptions: z.object({
     ...common,
-    case: z.object({ assignee: z.string(), assigneeName: z.string(), nextAction: z.string(), nextActionAt: isoDateOrTimestamp, evidenceIds: z.array(z.string()) }).optional(),
+    case: z.object({ assignee: z.string(), assigneeName: z.string(), nextAction: z.string(), nextActionAt: isoDateOrTimestamp, evidenceIds: z.array(z.string()),eventId:z.string().optional(),handoverEventId:z.string().optional() }).optional(),
     type: z.string().min(1),
     severity: z.enum(exceptionSeverities).optional(),
     owner: z.string().optional(),

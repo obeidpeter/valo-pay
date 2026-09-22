@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "wouter";
+import { Link, useSearch } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import type { BatchInput } from "@workspace/valopay-schema";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -97,10 +97,11 @@ export default function ImportsPage() {
   return <LenderImports key={merchantId || "no-lender"} />;
 }
 function LenderImports() {
+  const search = new URLSearchParams(useSearch());
   const { merchantId } = useWorkspace(),
     [offset, setOffset] = useState(0),
     list = usePilotQuery(`/pilot/batches?offset=${offset}`);
-  const [selected, setSelected] = useState<string | null>(null),
+  const [selected, setSelected] = useState<string | null>(() => search.get("batch")),
     [editor, setEditor] = useState(0);
   return (
     <div className="space-y-6">
@@ -117,6 +118,7 @@ function LenderImports() {
         <BatchEditor
           key={`${merchantId}:${selected || editor}`}
           id={selected}
+          initialProfile={search.get("profile")}
           onSaved={(id) => setSelected(id)}
           onNew={() => {
             setSelected(null);
@@ -184,6 +186,7 @@ function LenderImports() {
           </div>
         )}
       </PilotPanel>
+      <Link href="/sources" className="inline-block text-sm text-primary underline">Manage source schedules, mappings and totals</Link>
       <Link
         href="/pilot"
         className="inline-block text-sm text-primary underline"
@@ -195,14 +198,19 @@ function LenderImports() {
 }
 function BatchEditor({
   id,
+  initialProfile,
   onSaved,
   onNew,
 }: {
   id: string | null;
+  initialProfile: string | null;
   onSaved(id: string): void;
   onNew(): void;
 }) {
   const { merchantId, workspace } = useWorkspace();
+  const sources = usePilotQuery("/sources");
+  const [selectedProfile, setSelectedProfile] = useState(initialProfile || "");
+  const initialProfileApplied = useRef(false);
   const detail = useQuery<any>({
     queryKey: ["pilot", "batch", merchantId, workspace?.actor, id],
     enabled: !!id,
@@ -214,6 +222,17 @@ function BatchEditor({
     [saved, setSaved] = useState(""),
     [fileError, setFileError] = useState(""),
     [reading, setReading] = useState(false);
+  const applyProfile = (profile: any) => {
+    setSelectedProfile(profile?.id || "");
+    if (!profile) return;
+    setForm(current => ({ ...current, source: profile.data.source, kind: profile.data.kind, mapping: { ...profile.data.mapping }, amountUnit: profile.data.amountUnit, identityColumn: profile.data.identityColumn }));
+  };
+  useEffect(() => {
+    if (id || initialProfileApplied.current || !sources.data) return;
+    initialProfileApplied.current = true;
+    const profile = sources.data.profiles.find((p: any) => p.id === initialProfile);
+    if (profile) applyProfile(profile);
+  }, [id, initialProfile, sources.data]);
   const loaded = useRef(false),
     fileSequence = useRef(0);
   useEffect(
@@ -228,7 +247,7 @@ function BatchEditor({
       ...Object.fromEntries(
         Object.keys(empty()).map((key) => [
           key,
-          key === "name" ? record.name : record.data[key],
+          key === "name" ? record.name : key === "csv" ? record.data.csv || "" : record.data[key],
         ]),
       ),
       expectedUpdatedAt: record.updatedAt,
@@ -273,7 +292,7 @@ function BatchEditor({
         setForm((current) => ({
           ...current,
           csv,
-          mapping: {},
+          mapping: selectedProfile ? current.mapping : {},
           name: current.name || file.name,
         }));
     } catch {
@@ -306,6 +325,7 @@ function BatchEditor({
         row ID that stays the same when you correct or upload it again. Two
         separate payments must have different IDs, even if their amounts match.
       </p>
+      {batch?.data.rawCsvRemovedAt && <p className="rounded-lg border bg-secondary/30 p-3 text-sm">The original CSV expired under this lender's retention policy on {formatDate(batch.data.rawCsvRemovedAt)}. Imported records, source row identities and saved checks remain available.</p>}
       <form
         className="space-y-5"
         onSubmit={(event) => {
@@ -316,6 +336,7 @@ function BatchEditor({
           });
         }}
       >
+        {!id && <div className="space-y-2"><label className="block space-y-1 text-sm font-medium">Reusable source mapping<select className={pilotField} disabled={locked || denied || sources.isLoading} value={selectedProfile} onChange={event => { if (!confirmDiscard()) return; applyProfile(sources.data?.profiles.find((p: any) => p.id === event.target.value)); }}><option value="">Start without a saved mapping</option>{sources.data?.profiles.map((profile: any) => <option key={profile.id} value={profile.id}>{profile.name} · {types[profile.data.kind as keyof typeof types]}</option>)}</select></label><p className="text-xs text-muted-foreground">A profile fills the source, record type, row identity, units and column mapping. Its active expectations are checked again before commit.</p>{initialProfile && sources.data && !sources.data.profiles.some((p: any) => p.id === initialProfile) && <p role="alert" className="text-sm text-destructive">This source profile is not available in the selected lender. Choose a profile below or return to Sources.</p>}<PilotError error={sources.error}/></div>}
         <fieldset
           disabled={locked || denied}
           className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
@@ -516,6 +537,7 @@ function BatchEditor({
                   dirty ||
                   !batch ||
                   batch.status !== "ready"
+                  || (batch.data.sourceQuality && batch.data.sourceQuality.status !== "checked")
                 }
                 onClick={() =>
                   mutation.mutate({
@@ -562,6 +584,7 @@ function BatchEditor({
             {check.imported} imported · {check.skipped} already present ·{" "}
             {check.invalid} to fix · {check.valid} valid
           </p>
+          {batch.data.sourceQuality && <div className="rounded-lg border p-3 text-sm space-y-2"><h4 className="font-medium">Source quality checks</h4><p>{batch.data.sourceQuality.sourceRows} source rows · {batch.data.sourceQuality.sourceAmountKobo == null ? "Source total unavailable" : formatKobo(batch.data.sourceQuality.sourceAmountKobo)} source total</p><p>{batch.data.sourceQuality.importedRows} newly imported rows · {batch.data.sourceQuality.importedAmountKobo == null ? "Imported total unavailable" : formatKobo(batch.data.sourceQuality.importedAmountKobo)} newly imported total</p>{batch.data.sourceQuality.issues.map((issue: string) => <p key={issue} className="text-destructive">{issue}</p>)}<Link href="/sources" className="text-primary underline">Review source profile and delivery schedule</Link></div>}
           {batch.status !== "committed" && (
             <p className="text-sm text-muted-foreground">
               Your source and mapping are saved. No business records are

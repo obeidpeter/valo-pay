@@ -2612,6 +2612,7 @@
       "ExportInput": {
         "type": "object",
         "properties": {
+          "closeReviewId": { "type": "string" },
           "kind": {
             "type": "string"
           },
@@ -2636,6 +2637,7 @@
       "ExportResult": {
         "type": "object",
         "properties": {
+          "expiredAt": { "type": "string" },
           "id": {
             "type": "string"
           },

@@ -10,6 +10,7 @@ import { verifyAudit } from "./valopay-store";
 import { EXPORT_STORAGE_TIMEOUT_MS, readExportBytes, readExportMetadata } from "./export-download";
 import { buildDisputePack, disputePackCsv, packFonts, renderDisputePackPdf, type DisputePack } from "./valopay-packs";
 import { MAX_EXPORT_BYTES, publicExportRecord, type ClaimedExport, type ExportArtifact, type ExportJobStorage } from './export-jobs';
+import { reviewedCloseEvidence } from '../domain/close-review';
 
 /** CSV downloads are UTF-8 and start with the byte order mark, which is what spreadsheet programs look for before they read accented letters correctly on opening; the importer skips it (csv-parse `bom`). */
 const CSV_BOM="\uFEFF";
@@ -35,9 +36,9 @@ async function pdfBytes(title:string,data:unknown):Promise<Buffer>{
 /** The export kinds that are a customer's dispute pack (customer-pack is the older name). */
 export const packKinds=["customer-pack","dispute-pack"] as const;
 /** The export kinds that are not a record kind. */
-export const exportKinds=["gate-pack","billing",...packKinds] as const;
+export const exportKinds=["gate-pack","billing","reviewed-close",...packKinds] as const;
 /** What to export and in which format. */
-export interface ExportInput{kind:string;customerId?:string;format:"json"|"csv"|"pdf"}
+export interface ExportInput{kind:string;customerId?:string;closeReviewId?:string;format:"json"|"csv"|"pdf"}
 /** The file for an export request and the payload it was made from. */
 export interface ExportBytes{bytes:Buffer;contentType:string;payload:unknown;pack?:DisputePack}
 
@@ -68,7 +69,7 @@ export async function buildExportBytes(state:DomainState,ctx:Context,input:Expor
  }
  const reports=input.kind==="gate-pack"||input.kind==="billing"?buildReports(state,ctx.now):undefined;
  // MEA-02 and RET-06: the gate pack carries the uplift report with the pre-registered rule and its result, frozen at generation.
- const payload=input.kind==="gate-pack"?{...getGates(state),upliftReport:reports!.experiment,operational:reports!.operational,billing:reports!.billing}:input.kind==="billing"?reports!.billing:state.records.filter(r=>r.kind===input.kind).map(record=>record.kind==='exports'?publicExportRecord(record):record);
+ const payload=input.kind==='reviewed-close'?reviewedCloseEvidence(state,input.closeReviewId||''):input.kind==="gate-pack"?{...getGates(state),upliftReport:reports!.experiment,operational:reports!.operational,billing:reports!.billing}:input.kind==="billing"?reports!.billing:state.records.filter(r=>r.kind===input.kind).map(record=>record.kind==='exports'?publicExportRecord(record):record);
  const snapshot={merchant:state.merchant.name,environment:"synthetic_sandbox",generatedAt,generatedBy:ctx.actor,auditVerification:verifyAudit(state),data:payload};
  assertPayloadSize(snapshot);
  if(input.format==="pdf")return {bytes:await pdfBytes(input.kind,snapshot),contentType:"application/pdf",payload:snapshot};
@@ -118,6 +119,7 @@ export function exportDescriptor(state:DomainState,id:string):ExportDescriptor{
  return exportDescriptorForRecord(record);
 }
 export function exportDescriptorForRecord(record:ValopayRecord):ExportDescriptor{
+ if(record.data.fileDeletedAt)throw Object.assign(new Error('This export file expired under the lender retention policy. Its checksum and deletion receipt are retained.'),{status:410});
  if(record.status!=="ready")throw Object.assign(new Error("This export is not ready. Check its saved status or retry it from the console."),{status:409});
  return {id:record.id,bucket:String(record.data.bucket),objectName:String(record.data.objectName),checksum:String(record.data.checksum),contentType:String(record.data.contentType),filename:`valopay-${record.data.kind}-${record.id}.${record.data.format}`};
 }

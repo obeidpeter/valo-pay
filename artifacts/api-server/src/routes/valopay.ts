@@ -6,6 +6,7 @@ import { z } from "zod";
 import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, roles, fail, appendAudit, verifyAudit, digest, canonical, listMerchants, findIdempotency, saveIdempotency, changeRole, type StoreContext } from "../lib/valopay-store";
 import { customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
+import { bindCloseReviewBasis } from '../domain/close-review';
 import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, isCloseTime, recordKinds } from "@workspace/valopay-schema";
 import type { DomainState } from "../domain/types";
 import { getGates } from "../lib/valopay-readiness";
@@ -39,7 +40,7 @@ export async function withState<T>(req:Request,res:Response,operation:(state:Dom
     if(found){if(found.request_hash!==fingerprint)fail("This idempotency key was used with different input.",409);const receipt=responseSchema?responseSchema.parse(found.response):found.response;await completeOperation(ctx,receipt);return receipt;}
   }
    const rawResult=await operation(state,ctx);
-   if(mutating){enrolEligibleFailures(state,ctx);advanceRecordVersions(before!,state,ctx.now);}
+   if(mutating){enrolEligibleFailures(state,ctx);for(const close of state.records.filter(r=>r.kind==='closes'&&!before!.records.some(old=>old.id===r.id)))bindCloseReviewBasis(state,close);advanceRecordVersions(before!,state,ctx.now);}
    // Validate before committing: an invalid response must not leave durable writes.
    const result=responseSchema?responseSchema.parse(rawResult):rawResult;
   if(mutating){

@@ -1,5 +1,7 @@
 # Valo Pay console contract
 
+The pilot operations release adds `/sources` (versioned mappings, delivery checks and Paystack fixtures), `/work` (personal assignments and supervisor workload), `/close-review` (independent Finance decisions and exact-snapshot exports), and `/lifecycle` (administrator retention policies, holds, deletion previews and receipts). `/team` also shows explicit lender grants and host commissioning status. See [pilot operations controls](pilot-operations-controls.md) for the persistence, authorisation and external-configuration boundaries.
+
 All data is a persistent, isolated **synthetic sandbox**. No payment or SMS is actually sent. No live data upload is permitted. Use British spelling, NGN (kobo / 100) and Africa/Lagos dates. Always say “We never hold money”. Keep a visible “Sandbox · synthetic data” label and current Observation mode. No claims of compliance, live success, or gate passes from seed data.
 
 ## Workflow guidance and task queues

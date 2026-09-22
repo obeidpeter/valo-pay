@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { Context, DomainState, ValopayRecord } from '../domain/types';
 import { canonical, digest, SYSTEM_ACTOR_PREFIX } from './valopay-store';
 import { EXPORT_LEASE_MS, exportIsClaimable, type ClaimedExport, type ExportArtifact, type ExportJobRepository } from './export-jobs';
+import { bindRuntimeService, runtimeIsolationEnabled, runtimeServiceRead, runtimeExportRequesterAllowed } from './runtime-isolation';
 
 type Scope = { id: string; workspace_id: string; principal_hash: string; info: DomainState['merchant']; settings: DomainState['settings']; now: Date };
 type Row = { id: string; merchant_id: string; kind: string; name: string; status: string; reference: string; amount_kobo: number | string; customer_id: string; data: Record<string, any>; created_at: Date; updated_at: Date };
@@ -15,6 +16,7 @@ async function transaction<T>(merchantId: string, work: (client: PoolClient, sco
   const client = await pool.connect();
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+    await bindRuntimeService(client);
     const scope = (await client.query<Scope>(`SELECT m.id,m.workspace_id,w.principal_hash,m.info,m.settings,now() AS now
       FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id WHERE m.id=$1 FOR UPDATE OF m SKIP LOCKED`, [merchantId])).rows[0];
     if (!scope) { await client.query('ROLLBACK'); return null; }
@@ -51,6 +53,9 @@ async function complete(claim: ClaimedExport, artifact?: ExportArtifact, message
       [scope.id, scope.workspace_id, scope.principal_hash, claim.id])).rows[0];
     if (!row || row.status !== 'running' || row.data.leaseToken !== claim.token) return false;
     const job = recordOf(row);
+    if (artifact && !await runtimeExportRequesterAllowed(client, scope.workspace_id, scope.id, job.data.requestedBy, job.data.requestedRole)) {
+      artifact = undefined; message = 'The original requester authority changed during export generation. Request new evidence after access is reviewed.';
+    }
     job.status = artifact ? 'ready' : 'failed';
     if (artifact) Object.assign(job.data, artifact);
     else job.data.lastError = message;
@@ -64,6 +69,9 @@ async function complete(claim: ClaimedExport, artifact?: ExportArtifact, message
 
 export const exportJobRepository: ExportJobRepository = {
   async candidates(limit) {
+    if (runtimeIsolationEnabled()) return runtimeServiceRead(async client => (await client.query<{ merchantId: string; id: string }>(`SELECT merchant_id AS "merchantId",id FROM valopay_records
+      WHERE kind='exports' AND (status='queued' OR (status='running' AND COALESCE(data->>'leaseExpiresAt','') <= to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')))
+      ORDER BY created_at,id LIMIT $1`, [Math.max(1, Math.min(20, limit))])).rows);
     // An indexable status/kind scan returns identifiers only. Claims re-check eligibility while holding the merchant lock.
     return (await pool.query<{ merchantId: string; id: string }>(`SELECT merchant_id AS "merchantId",id FROM valopay_records
       WHERE kind='exports' AND (status='queued' OR (status='running' AND COALESCE(data->>'leaseExpiresAt','') <= to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')))
@@ -76,6 +84,12 @@ export const exportJobRepository: ExportJobRepository = {
       if (!row) return null;
       const job = recordOf(row), now = scope.now.toISOString();
       if (!exportIsClaimable(job, now)) return null;
+      if (!await runtimeExportRequesterAllowed(client, scope.workspace_id, scope.id, job.data.requestedBy, job.data.requestedRole)) {
+        job.status = 'failed'; job.data.lastError = 'The original requester no longer has the required lender access or role. Request new evidence after access is reviewed.';
+        delete job.data.leaseToken; delete job.data.leaseExpiresAt;
+        await writeJob(client, scope, job); await audit(client, scope, job, 'export.access_changed', 'Export refused because its original requester authority changed.');
+        return null;
+      }
       const token = randomUUID();
       job.status = 'running'; Object.assign(job.data, { leaseToken: token, leaseExpiresAt: new Date(scope.now.getTime() + EXPORT_LEASE_MS).toISOString(), startedAt: now, attempts: Number(job.data.attempts || 0) + 1 });
       delete job.data.lastError;
@@ -84,7 +98,7 @@ export const exportJobRepository: ExportJobRepository = {
       const records = (await client.query<Row>(`SELECT r.* FROM valopay_records r WHERE r.merchant_id=$1 AND ${ownership}`, [scope.id, scope.workspace_id, scope.principal_hash])).rows.map(recordOf);
       const context: Context = { actor: String(job.data.requestedBy || actor), role: String(job.data.requestedRole || 'Read-only'), now };
       return { merchantId, id, token, state: { merchant: scope.info, settings: scope.settings, records }, context,
-        input: { kind: String(job.data.kind), customerId: job.customerId || undefined, format: String(job.data.format) as 'pdf' | 'json' | 'csv' },
+        input: { kind: String(job.data.kind), customerId: job.customerId || undefined, closeReviewId:job.data.closeReviewId, format: String(job.data.format) as 'pdf' | 'json' | 'csv' },
         location: { bucket: String(job.data.bucket), objectName: String(job.data.objectName) } };
     });
   },

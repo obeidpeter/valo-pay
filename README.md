@@ -90,6 +90,16 @@ Provide credentials through your environment's secret manager, never through com
 | `VALOPAY_STAFF_ACCESS` | Unset or `off` keeps demo access; `staging` requires a provisioned organisation, named membership and verified MFA. Financial data remains synthetic. |
 | `VALOPAY_STAFF_ISSUER` | Exact HTTPS Clerk issuer for staging staff sessions; required in staff mode |
 | `VALOPAY_STAFF_ORIGINS` | Comma-separated HTTPS application origins allowed to use staging staff sessions; required in staff mode |
+| `VALOPAY_RUNTIME_ISOLATION` | `staging` opts into the separately commissioned restricted database; unset or `off` leaves it disabled. |
+| `VALOPAY_RUNTIME_SCHEMA` | Dedicated `valopay_runtime_staging_*` schema; public schemas are refused. |
+| `VALOPAY_RUNTIME_ROLE` | Actual restricted database login expected by the runtime; elevated connections are refused. |
+| `VALOPAY_RUNTIME_SERVICE_ORG` | Explicitly provisioned organisation for the background worker in isolated staging. |
+| `VALOPAY_RUNTIME_SERVICE_USER` | Active service member whose lender grants constrain background work. |
+| `VALOPAY_PAYLOAD_ENCRYPTION` | `kms` protects stored raw import and recovery payloads; unset or `off` retains legacy synthetic storage. |
+| `VALOPAY_KMS_KEY` | Google Cloud KMS CryptoKey resource name; Application Default Credentials supply key access. |
+| `VALOPAY_KMS_PREVIOUS_KEYS` | Comma-separated prior CryptoKey names permitted to open historical envelopes. |
+| `VALOPAY_PAYSTACK_INGRESS` | `test` enables signed test-event ingress after credentials and an operator mapping exist; otherwise disabled. |
+| `VALOPAY_PAYSTACK_CONNECTIONS` | Server-only JSON mapping from opaque 64-character hex connection IDs to existing workspace/lender IDs. |
 | `VALOPAY_EXPIRED_WORKSPACE_CLEANUP` | Optional; `on` allows new anonymous workspace bootstrap to delete a small batch of expired anonymous workspaces; unset or any other value keeps automatic cleanup off |
 
 The storage client obtains credentials from a **Replit sidecar**. Supplying storage paths alone will not make exports work outside Replit. External hosting requires a reviewed storage-authentication adapter, Clerk setup, PostgreSQL provisioning and same-origin routing for `/api/*` versus frontend assets; these are not implemented by this source transfer.

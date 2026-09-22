@@ -91,6 +91,7 @@ try {
   );
   await pool.query(migration);
   await pool.query(migration);
+  await pool.query(await readFile(new URL("../../../lib/db/migrations/004_staff_lender_access.sql", import.meta.url), "utf8"));
   const workspace = ok(await call("/v1/workspace"));
   const lender = workspace.merchants[0].id,
     other = workspace.merchants[1].id;
@@ -570,6 +571,10 @@ try {
     403,
     "Invitation tokens are single-use.",
   );
+  const unassignedStaff = ok(await call("/v1/workspace", "GET", undefined, undefined, "finance"));
+  assert.equal(unassignedStaff.merchants.length, 0, "Accepted non-administrator staff start without lender access.");
+  const invitedMember = ok(await call("/v1/team", "GET", undefined, undefined, "admin")).members.find((row: any) => row.actor === `Clerk:${finance}`);
+  ok(await call(`/v1/team/members/${invitedMember.id}/lenders`, "PATCH", { expectedUpdatedAt: invitedMember.updatedAt, lenderIds: [pilot.id], reason: "Assign Finance to the synthetic lender rehearsal." }, undefined, "admin"));
   const staff = ok(
     await call("/v1/workspace", "GET", undefined, undefined, "finance"),
   );

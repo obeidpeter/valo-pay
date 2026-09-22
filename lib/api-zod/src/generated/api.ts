@@ -700,11 +700,13 @@ export const CreateExportQueryParams = zod.object({
 
 export const CreateExportBody = zod.object({
   "kind": zod.string(),
+  "closeReviewId": zod.string().optional(),
   "customerId": zod.string().optional(),
   "format": zod.enum(['json', 'csv', 'pdf'])
 }).describe('What to export (a record kind, gate-pack, billing, dispute-pack or customer-pack with a customerId) and in which format.')
 
 export const CreateExportResponse = zod.object({
+  "expiredAt": zod.string().optional(),
   "id": zod.string(),
   "downloadUrl": zod.string(),
   "status": zod.enum(['queued', 'running', 'ready', 'failed']).optional(),
@@ -734,6 +736,7 @@ export const GetExportJobQueryParams = zod.object({
 })
 
 export const GetExportJobResponse = zod.object({
+  "expiredAt": zod.string().optional(),
   "id": zod.string(),
   "downloadUrl": zod.string(),
   "status": zod.enum(['queued', 'running', 'ready', 'failed']).optional(),
@@ -763,6 +766,7 @@ export const RetryExportJobQueryParams = zod.object({
 })
 
 export const RetryExportJobResponse = zod.object({
+  "expiredAt": zod.string().optional(),
   "id": zod.string(),
   "downloadUrl": zod.string(),
   "status": zod.enum(['queued', 'running', 'ready', 'failed']).optional(),
@@ -1270,5 +1274,3 @@ export const PerformConnectedActionResponse = zod.object({
   "mode": zod.enum(['synthetic']),
   "externalInstructionPerformed": zod.literal(false)
 }).describe('Committed sample operation. Cash actions include their record and outcome inside record; use the refreshed workspace view for display. A receipt is evidence from the server simulator only.')
-
-

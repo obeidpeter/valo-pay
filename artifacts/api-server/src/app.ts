@@ -9,6 +9,8 @@ import { publishableKeyFromHost } from "@clerk/shared/keys";
 import { errorHandler } from "./lib/error-handler";
 import { staffMode, staffPolicy } from './lib/staff-access';
 import { CLERK_PROXY_PATH,clerkProxyMiddleware,getClerkProxyHost } from "./middlewares/clerkProxyMiddleware";
+import { createPaystackIngress } from './routes/sources';
+import { paystackConnectionTransaction } from './lib/paystack-connection';
 
 const app: Express = express();
 app.set("trust proxy",1);
@@ -51,6 +53,16 @@ app.use(
 );
 app.use((req,res,next)=>{res.setHeader("X-Request-Id",String(req.id));next();});
 app.use(CLERK_PROXY_PATH,clerkProxyMiddleware());
+const webhookLimits=new Map<string,{count:number;until:number}>();
+app.use('/api/v1/providers/paystack',(req,res,next)=>{
+  res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');
+  const now=Date.now(),key=req.ip||'unknown',old=webhookLimits.get(key);
+  if(webhookLimits.size>10000)for(const [ip,value]of webhookLimits)if(value.until<now)webhookLimits.delete(ip);
+  if(!old||old.until<now)webhookLimits.set(key,{count:1,until:now+60000});
+  else if(++old.count>120){res.setHeader('Retry-After','60');res.status(429).json({error:'Test event delivery limit reached.',requestId:req.id});return;}
+  next();
+});
+app.use('/api',createPaystackIngress(paystackConnectionTransaction));
 app.use(express.json({limit:"2mb"}));
 app.use(express.urlencoded({ extended: false,limit:"2mb" }));
 app.use(clerkMiddleware((req)=>({

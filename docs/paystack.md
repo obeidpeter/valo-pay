@@ -1,6 +1,6 @@
 # Paystack test adapter
 
-Status: **adapter tested offline; external account connection not verified**. No Paystack test key was supplied for this change. Public webhook ingestion and all debit instructions remain disabled. This module is not imported by a production route or scheduler.
+Status: **adapter and durable test inbox tested offline; external account connection not verified**. No Paystack account or test key is available. The optional signed test ingress remains disabled until an operator configures a test key and a server-only workspace/lender mapping. All debit instructions remain disabled. See [pilot operations controls](pilot-operations-controls.md) for fixtures, duplicate receipts, conflict quarantine and the exact raw-byte ingress boundary.
 
 ## What is implemented
 

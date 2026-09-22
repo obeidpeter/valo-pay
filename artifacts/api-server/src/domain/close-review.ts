@@ -1,0 +1,124 @@
+import { createHash } from "node:crypto";
+import { prepareCloseReviewSchema, decideCloseReviewSchema, type PrepareCloseReviewInput, type DecideCloseReviewInput, type PilotProgressStep } from "@workspace/valopay-schema";
+import type { Context, DomainState, ValopayRecord } from "./types";
+import { makeRecord, touch } from "./records";
+import { assertRecordVersion } from "../lib/edit-versions";
+
+function refuse(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
+const canonical = (value: any): string => Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : value && typeof value === "object" ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}` : JSON.stringify(value) ?? "null";
+const digest = (value: unknown) => createHash("sha256").update(canonical(value)).digest("hex");
+const principal = (ctx: Context & { principalId?: string }) => ctx.principalId || (ctx.actor.startsWith("Sandbox ") ? "unidentified-demo-person" : ctx.actor);
+const open = (record: ValopayRecord) => !["resolved", "closed"].includes(record.status);
+const newest = (records: ValopayRecord[]) => [...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || Number(b.data.reviewNumber || b.data.reviewBasis?.sequence || 0) - Number(a.data.reviewNumber || a.data.reviewBasis?.sequence || 0) || b.id.localeCompare(a.id));
+const ofKind = (state: DomainState, kind: string) => state.records.filter(r => r.kind === kind);
+
+// A close's inputs exclude UI preferences, audit bookkeeping, exports and review
+// records. Revision timestamps are excluded because the store advances them after
+// the domain transaction. Financial values, statuses and source/evidence content
+// remain in the digest, including additions, removals and case corrections.
+const basisKinds = new Set(["customers", "mandates", "due-items", "observations", "payments", "allocations", "exceptions", "settlement-batches", "attempts", "refunds", "adjustments", "policies", "templates", "retry-decisions"]);
+export function closeReviewBasis(state: DomainState) {
+  return digest({ merchantId: state.merchant.id, records: state.records.filter(r => basisKinds.has(r.kind)).map(({ updatedAt: _, ...record }) => record).sort((a, b) => a.id.localeCompare(b.id)) });
+}
+export interface CloseReviewIssue { id: string; label: string; detail: string; unresolved: boolean; }
+export function bindCloseReviewBasis(state: DomainState, close: ValopayRecord) {
+  close.data.reviewBasis = {
+    version: 1,
+    sequence: close.data.reviewBasis?.sequence || Math.max(0, ...ofKind(state, "closes").filter(record => record.id !== close.id).map(record => Number(record.data.reviewBasis?.sequence || 0))) + 1,
+    inputDigest: closeReviewBasis(state),
+    unresolved: state.records.filter(r => (r.kind === "exceptions" && open(r)) || (r.kind === "observations" && r.status !== "resolved") || (r.kind === "payments" && ["partial", "overpaid"].includes(r.status))).map(r => ({ id: r.id, kind: r.kind, name: r.name, reference: r.reference, status: r.status, amountKobo: r.amountKobo })),
+  };
+  return close;
+}
+export function closeReviewIssues(close: ValopayRecord): CloseReviewIssue[] {
+  const report = close.data.report || {}, issues: CloseReviewIssue[] = [];
+  for (const batch of report.variances?.batches || []) issues.push({ id: `variance:${batch.batchId}`, label: `Settlement difference · ${batch.reference || batch.batchId}`, detail: `Fee difference: ${batch.feeVarianceKobo || 0} kobo. Compare the provider and statement totals.`, unresolved: false });
+  if (report.variances?.count && !report.variances.batches?.length) issues.push({ id: "settlement-variance", label: "Settlement differences", detail: `${report.variances.count} differences were recorded.`, unresolved: false });
+  for (const mismatch of report.positionRebuild?.mismatches || []) issues.push({ id: `position:${mismatch.dueItemId}`, label: `Customer total difference · ${mismatch.reference || mismatch.dueItemId}`, detail: `Stored outstanding: ${mismatch.storedOutstandingKobo} kobo; rebuilt: ${mismatch.rebuiltOutstandingKobo} kobo.`, unresolved: false });
+  for (const [key, label] of [["unallocated", "Unallocated payments"], ["proposed", "Payment matches awaiting confirmation"], ["possibleDuplicates", "Possible duplicate payments"]]) {
+    if (Number(report[key]?.count) > 0) issues.push({ id: key, label, detail: `${report[key].count} items totalling ${report[key].kobo || 0} kobo remain at this close.`, unresolved: true });
+  }
+  for (const item of close.data.reviewBasis?.unresolved || []) issues.push({ id: `item:${item.id}`, label: `${item.kind === "exceptions" ? "Open exception" : item.kind === "payments" ? "Unapplied payment amount" : "Unresolved payment evidence"} · ${item.name || item.reference}`, detail: `${item.reference} · ${item.status}. Record the owner, next step and why the item may remain open.`, unresolved: true });
+  return issues;
+}
+function latestClose(state: DomainState) { return newest(ofKind(state, "closes"))[0]; }
+export function reviewIsCurrent(state: DomainState, review: ValopayRecord) {
+  const close = ofKind(state, "closes").find(r => r.id === review.data.closeId);
+  return Boolean(close && latestClose(state)?.id === close.id && close.data.reviewBasis?.inputDigest === closeReviewBasis(state) && review.data.inputDigest === close.data.reviewBasis.inputDigest && review.data.snapshotDigest === digest(close) && review.data.snapshotDigest === digest(review.data.snapshot));
+}
+export function closeReviewCurrentProblem(state: DomainState, close: ValopayRecord): string | null {
+  if (!close.data.reviewBasis?.inputDigest) return "This older close has no recorded input fingerprint. Run a new daily close before preparing a review.";
+  if (latestClose(state)?.id !== close.id) return "A newer close exists. Review the latest close; this evidence remains available for the historical record.";
+  if (close.data.reviewBasis.inputDigest !== closeReviewBasis(state)) return "Records changed after this close. Run a new daily close and prepare a new review; the earlier evidence stays unchanged.";
+  return null;
+}
+export function prepareCloseReview(state: DomainState, ctx: Context, value: PrepareCloseReviewInput, reviewers: Array<{ actor: string; role: string }>) {
+  if (!["Admin", "Operations", "Finance"].includes(ctx.role)) refuse("An operations or Finance role is required to prepare the close.", 403);
+  const input = prepareCloseReviewSchema.parse(value);
+  const close = ofKind(state, "closes").find(r => r.id === input.closeId);
+  if (!close) refuse("Close not found in this lender.", 404);
+  assertRecordVersion(close, input.expectedUpdatedAt);
+  const problem = closeReviewCurrentProblem(state, close);
+  if (problem) refuse(problem, 409);
+  if (!reviewers.some(r => r.actor === input.reviewer && r.role === "Finance")) refuse("Choose an active Finance reviewer with access to this lender.", 403);
+  if (input.reviewer === ctx.actor) refuse("Choose a different person to review the close. The preparer cannot approve their own work.", 403);
+  if (ofKind(state, "close-reviews").some(r => r.data.closeId === close.id && ["awaiting_review", "approved"].includes(r.status))) refuse("This close already has a submitted or approved review. Open that review instead.", 409);
+  const issues = closeReviewIssues(close), responses = new Map(input.discrepancyResponses.map(r => [r.issueId, r.explanation]));
+  if (responses.size !== input.discrepancyResponses.length || responses.size !== issues.length || issues.some(issue => !responses.has(issue.id))) refuse("Explain every listed discrepancy and unresolved item. Refresh the close if the list has changed.");
+  if (issues.some(issue => issue.unresolved) && input.unresolvedAcceptance.length < 10) refuse("Record why the unresolved items may remain open, with their owners and next steps.");
+  const review = makeRecord(state, "close-reviews", { name: `Finance review · ${close.name}`, status: "awaiting_review", createdAt: ctx.now, data: {
+    closeId: close.id, reviewNumber: ofKind(state, "close-reviews").filter(record => record.data.closeId === close.id).length + 1, preparedBy: ctx.actor, preparedPrincipal: principal(ctx), preparedAt: ctx.now, reviewer: input.reviewer,
+    snapshot: structuredClone(close), snapshotDigest: digest(close), inputDigest: close.data.reviewBasis.inputDigest,
+    preparationNote: input.preparationNote, discrepancyResponses: input.discrepancyResponses, unresolvedAcceptance: input.unresolvedAcceptance,
+  } });
+  makeRecord(state, "close-review-events", { name: "Close prepared for independent Finance review", status: "recorded", createdAt: ctx.now, data: { reviewId: review.id, closeId: close.id, action: "prepared", actor: ctx.actor, reviewer: input.reviewer, snapshotDigest: review.data.snapshotDigest } });
+  return review;
+}
+export function decideCloseReview(state: DomainState, ctx: Context, id: string, value: DecideCloseReviewInput) {
+  const input = decideCloseReviewSchema.parse(value), review = ofKind(state, "close-reviews").find(r => r.id === id);
+  if (!review) refuse("Close review not found in this lender.", 404);
+  assertRecordVersion(review, input.expectedUpdatedAt);
+  if (review.status !== "awaiting_review") refuse("This review already has a decision. Refresh to read it.", 409);
+  if (ctx.role !== "Finance" || ctx.actor !== review.data.reviewer) refuse("Only the named Finance reviewer can decide this review.", 403);
+  if (principal(ctx) === review.data.preparedPrincipal || ctx.actor === review.data.preparedBy) refuse("A different person must review this close. Switching demo roles does not provide independent approval.", 403);
+  if (input.action === "approve" && !reviewIsCurrent(state, review)) refuse("This close is no longer current. Run a new close and prepare a fresh review; earlier evidence is preserved.", 409);
+  review.status = input.action === "approve" ? "approved" : "changes_requested";
+  Object.assign(review.data, { decidedBy: ctx.actor, decidedPrincipal: principal(ctx), decidedAt: ctx.now, decisionNote: input.note });
+  touch(review, ctx.now);
+  makeRecord(state, "close-review-events", { name: input.action === "approve" ? "Finance approved this close snapshot" : "Finance requested changes", status: "recorded", createdAt: ctx.now, data: { reviewId: review.id, closeId: review.data.closeId, action: input.action, actor: ctx.actor, note: input.note, snapshotDigest: review.data.snapshotDigest } });
+  return review;
+}
+export function closeReviewList(state: DomainState) {
+  const reviews = newest(ofKind(state, "close-reviews"));
+  return { closes: newest(ofKind(state, "closes")).slice(0, 25).map(close => ({ close, issues: closeReviewIssues(close), problem: closeReviewCurrentProblem(state, close), reviews: reviews.filter(r => r.data.closeId === close.id).map(review => ({ ...review, current: reviewIsCurrent(state, review) })) })), total: ofKind(state, "closes").length };
+}
+export function reviewedCloseEvidence(state: DomainState, id: string, requireCurrent = false) {
+  const review = ofKind(state, 'close-reviews').find(r => r.id === id);
+  if (!review || review.status !== 'approved') refuse('Choose an approved Finance close review in this lender.', 409);
+  if (!review.data.snapshot || digest(review.data.snapshot) !== review.data.snapshotDigest) refuse('The reviewed close snapshot failed its integrity check.', 409);
+  if (requireCurrent && !reviewIsCurrent(state, review)) refuse('This review is no longer current. Prepare and approve the latest close before exporting its evidence.', 409);
+  return structuredClone(review);
+}
+export function pilotProgress(state: DomainState, accessMode = "sandbox") {
+  const customers = ofKind(state, "customers"), batches = ofKind(state, "import-batches"), committed = batches.filter(r => r.status === "committed");
+  const payments = ofKind(state, "payments"), allocations = ofKind(state, "allocations"), observations = ofKind(state, "observations");
+  const unsettled = payments.filter(r => ["unallocated", "proposed", "possible_duplicate", "partial", "overpaid"].includes(r.status));
+  const pendingAllocations = allocations.filter(r => r.status === "proposed"), confirmed = allocations.filter(r => r.status === "confirmed");
+  const unresolvedObservations = observations.filter(r => r.status !== "resolved");
+  const cases = ofKind(state, "exceptions"), openCases = cases.filter(open), unowned = openCases.filter(r => !r.data.case?.assignee), resolved = cases.filter(r => !open(r));
+  const close = latestClose(state), reviews = newest(ofKind(state, "close-reviews")), currentReview = reviews.find(r => r.data.closeId === close?.id && reviewIsCurrent(state, r)), approved = currentReview?.status === "approved" ? currentReview : undefined;
+  const readyExports = ofKind(state, "exports").filter(r => r.status === "ready" && !!r.data.checksum);
+  // Root export integration stamps the immutable review ID and digest on the
+  // receipt. Timestamp proximity or a customer pack is never enough evidence.
+  const reviewedExports = approved ? readyExports.filter(r => r.data.closeReviewId === approved.id && r.data.closeSnapshotDigest === approved.data.snapshotDigest) : [];
+  const reconciled = confirmed.length > 0 && !unsettled.length && !pendingAllocations.length && !unresolvedObservations.length;
+  const steps: PilotProgressStep[] = [
+    { id: "onboard", name: "Onboard a lender", href: "/team", state: state.merchant.name?.trim() ? "completed" : "not_started", evidence: [state.merchant.name || "No lender selected", "Synthetic lender workspace; live instructions remain disabled."], missing: state.merchant.name?.trim() ? [] : ["Name and create the lender."] },
+    { id: "ingest", name: "Ingest records", href: "/imports", state: batches.some(r => r.status === "needs_correction") ? "blocked" : committed.length && customers.length ? "completed" : batches.length ? "in_progress" : "not_started", evidence: [`${committed.length} committed import batches; ${customers.length} customer records.`], missing: [...(!committed.length ? ["Save, validate and commit a source batch."] : []), ...(!customers.length ? ["Import the sample customer records."] : []), ...(batches.some(r => r.status === "needs_correction") ? ["Correct the saved batches with invalid source rows."] : [])] },
+    { id: "reconcile", name: "Reconcile payments", href: "/reconciliation", state: reconciled ? "completed" : pendingAllocations.length ? "awaiting_review" : payments.length || observations.length ? "in_progress" : "not_started", evidence: [`${confirmed.length} confirmed allocations; ${payments.length} payment records.`, `${unsettled.length} payments need a match; ${unresolvedObservations.length} evidence records remain unresolved.`], missing: [...(!confirmed.length ? ["Confirm at least one payment allocation against an instalment."] : []), ...(pendingAllocations.length ? ["Finance must decide the proposed payment matches."] : []), ...(unsettled.length || unresolvedObservations.length ? ["Resolve the remaining payment and evidence records."] : [])] },
+    { id: "resolve", name: "Resolve exceptions", href: "/exceptions", state: unowned.length ? "blocked" : openCases.length ? "in_progress" : resolved.length || reconciled ? "completed" : "not_started", evidence: [`${resolved.length} resolved cases; ${openCases.length} open; ${unowned.length} without an assignee.`], missing: openCases.length ? [`Resolve ${openCases.length} open cases; a handover alone does not resolve a case.`] : !resolved.length && !reconciled ? ["Reconcile the ingested payments before concluding that there are no exceptions."] : [] },
+    { id: "close", name: "Review the close", href: "/close-review", state: approved ? "completed" : close && closeReviewCurrentProblem(state, close) ? "blocked" : currentReview?.status === "awaiting_review" ? "awaiting_review" : close ? "in_progress" : "not_started", evidence: close ? [close.name, approved ? `Approved by ${approved.data.decidedBy}; exact snapshot ${approved.data.snapshotDigest}.` : "A recorded close is not yet an approved close."] : [], missing: approved ? [] : close ? [closeReviewCurrentProblem(state, close) || (currentReview?.status === "awaiting_review" ? "The named independent Finance reviewer must record a decision." : "Prepare this close with explanations and an independent Finance reviewer.")] : ["Run a daily close after reconciling and handling the exceptions."] },
+    { id: "export", name: "Export evidence", href: "/close-review", state: reviewedExports.length ? "completed" : readyExports.length ? "blocked" : approved ? "in_progress" : "not_started", evidence: [`${reviewedExports.length} ready exports reference the current approved close and its exact snapshot.`], missing: reviewedExports.length ? [] : [approved ? "Generate an evidence export for this approved review and wait for its checksum confirmation." : "Approve the current close before generating its reviewed evidence."] },
+  ];
+  return { lender: state.merchant, syntheticOnly: true, access: { mode: accessMode, state: accessMode === "staff" ? "configured" : "not_configured", message: accessMode === "staff" ? "Staff access is enabled for this synthetic rehearsal. Real-data readiness requires separate acceptance testing." : "Real staff access is not enabled. Demo progress does not establish independent staff approval or real-data readiness." }, steps };
+}

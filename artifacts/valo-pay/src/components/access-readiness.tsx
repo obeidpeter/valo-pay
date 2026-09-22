@@ -1,0 +1,13 @@
+import { useState } from 'react';
+import { usePilotQuery, usePilotMutation } from '@/lib/pilot';
+import { PilotPanel, PilotError, RecoveryNotice } from './pilot-ui';
+import { Button } from './ui/button';
+export function AccessReadiness(){
+  const query=usePilotQuery('/team/readiness',false),[message,setMessage]=useState('');
+  const mutation=usePilotMutation(result=>setMessage(result.message));
+  return <PilotPanel title="Staff pilot setup"><p className="text-sm text-muted-foreground">These checks describe this host. Local rehearsals do not establish that a live identity service, database role or managed key is configured.</p><PilotError error={query.error} retry={()=>void query.refetch()}/>
+    <dl className="divide-y">{query.data?.checks.map((check:any)=><div className="grid gap-2 py-3 sm:grid-cols-[1fr_2fr]" key={check.id}><dt className="text-sm font-semibold">{check.name}<span className="block text-xs font-normal text-muted-foreground">{check.state==='verified_this_request'?'Verified for this request':check.state==='configured_not_verified'?'Configured · verification needed':check.state==='configured'?'Configured':'Setup needed'}</span></dt><dd className="text-sm text-muted-foreground">{check.detail}</dd></div>)}</dl>
+    {query.data?.canCommission && <div className="flex flex-wrap gap-2"><Button variant="outline" disabled={mutation.isPending||mutation.hasUnconfirmedOutcome||!query.data.checks.some((c:any)=>c.id==='encryption'&&c.state==='configured_not_verified')} onClick={()=>mutation.mutate({path:'/team/readiness/encryption',lender:false})}>Verify encryption access</Button><Button variant="outline" disabled={mutation.isPending||mutation.hasUnconfirmedOutcome||!query.data.checks.some((c:any)=>c.id==='encryption'&&c.state==='configured_not_verified')} onClick={()=>mutation.mutate({path:'/team/readiness/protect',lender:false})}>Protect existing payloads</Button></div>}
+    <RecoveryNotice mutation={mutation} persistent={false}/>{message&&<p role="status" className="text-sm">{message}</p>}
+  </PilotPanel>;
+}

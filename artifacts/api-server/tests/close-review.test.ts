@@ -1,0 +1,106 @@
+import assert from "node:assert/strict";
+import { seedMerchant } from "../src/lib/valopay-seed";
+import { makeRecord } from "../src/domain/records";
+import { advanceRecordVersions } from "../src/lib/edit-versions";
+import { bindCloseReviewBasis, closeReviewBasis, closeReviewIssues, closeReviewCurrentProblem, decideCloseReview, pilotProgress, prepareCloseReview, reviewIsCurrent } from "../src/domain/close-review";
+import type { Context, DomainState } from "../src/domain/types";
+
+const ops = { actor: "Clerk:operator", principalId: "person-1", role: "Operations", now: "2026-09-22T10:00:00.000Z" };
+const finance = { actor: "Clerk:finance", principalId: "person-2", role: "Finance", now: "2026-09-22T10:05:00.000Z" };
+const reviewers = [finance];
+function empty() { const state = seedMerchant("close-review-test", true); state.records = []; return state; }
+function close(state: DomainState, at = ops.now) {
+  const record = makeRecord(state, "closes" as string, { status: "completed", createdAt: at, name: "Synthetic close", data: { closedAt: at, summary: "Synthetic close checks", report: { variances: { count: 0, batches: [] }, positionRebuild: { mismatches: [] }, unallocated: { count: 0 }, proposed: { count: 0 }, possibleDuplicates: { count: 0 } } } });
+  bindCloseReviewBasis(state, record); return record;
+}
+function prepareInput(record: ReturnType<typeof close>) { return { closeId: record.id, expectedUpdatedAt: record.updatedAt, reviewer: finance.actor, preparationNote: "Checked all synthetic source records.", discrepancyResponses: closeReviewIssues(record).map(issue => ({ issueId: issue.id, explanation: "Finance owns the follow-up and will investigate tomorrow." })), unresolvedAcceptance: "Finance owns the outstanding items and will inspect them tomorrow." }; }
+const step = (state: DomainState, id: string) => pilotProgress(state).steps.find(s => s.id === id)!;
+
+{
+  const state = empty();
+  assert.equal(step(state, "resolve").state, "not_started", "An empty lender must not appear to have completed exception handling.");
+  makeRecord(state, "payments", { status: "unallocated", amountKobo: 10000 });
+  assert.equal(step(state, "reconcile").state, "in_progress", "A payment record is not reconciliation evidence.");
+  const first = close(state);
+  assert.equal(step(state, "close").state, "in_progress", "A close without a Finance decision is not reviewed.");
+  makeRecord(state, "exports", { status: "ready", data: { checksum: "a".repeat(64) } });
+  assert.equal(step(state, "export").state, "blocked", "An unrelated ready export cannot satisfy reviewed evidence.");
+  delete first.data.reviewBasis;
+  assert.match(closeReviewCurrentProblem(state, first)!, /older close/);
+}
+{
+  const state = empty(), first = close(state), snapshot = JSON.stringify(first), input = prepareInput(first);
+  assert.throws(() => prepareCloseReview(state, { ...ops, role: "Read-only" }, input, reviewers), /role/);
+  assert.throws(() => prepareCloseReview(state, ops, { ...input, closeId: "another-lender-close" }, reviewers), /not found/);
+  assert.throws(() => prepareCloseReview(state, ops, { ...input, expectedUpdatedAt: "2026-09-21T10:00:00.000Z" }, reviewers), /changed/);
+  assert.throws(() => prepareCloseReview(state, ops, { ...input, reviewer: "not-active" }, reviewers), /active Finance/);
+  assert.throws(() => prepareCloseReview(state, ops, { ...input, preparationNote: "ok" }, reviewers));
+  assert.throws(() => prepareCloseReview(state, ops, { ...input, fabricated: true } as any, reviewers));
+  const review = prepareCloseReview(state, ops, input, reviewers), before = structuredClone(state);
+  assert.equal(step(state, "close").state, "awaiting_review");
+  assert.throws(() => prepareCloseReview(state, ops, input, reviewers), /already/);
+  const decision = { action: "approve" as const, expectedUpdatedAt: review.updatedAt, note: "Independently checked and accepted this exact snapshot." };
+  assert.throws(() => decideCloseReview(state, { ...finance, actor: "Clerk:other" }, review.id, decision), /named Finance/);
+  assert.throws(() => decideCloseReview(state, { ...finance, role: "Admin" }, review.id, decision), /named Finance/);
+  assert.throws(() => decideCloseReview(state, { ...finance, principalId: ops.principalId }, review.id, decision), /different person/);
+  decideCloseReview(state, finance, review.id, decision);
+  advanceRecordVersions(before, state, finance.now);
+  assert.equal(step(state, "close").state, "completed");
+  assert.equal(review.status, "approved");
+  assert.equal(review.data.decidedBy, finance.actor);
+  assert.equal(JSON.stringify(first), snapshot, "Approval never edits the close snapshot.");
+  assert.throws(() => decideCloseReview(state, finance, review.id, decision), /changed/);
+  assert.throws(() => decideCloseReview(state, finance, review.id, { ...decision, expectedUpdatedAt: review.updatedAt }), /already has a decision/);
+  makeRecord(state, "exports", { status: "ready", data: { checksum: "b".repeat(64), closeReviewId: review.id, closeSnapshotDigest: review.data.snapshotDigest } });
+  assert.equal(step(state, "export").state, "completed");
+  makeRecord(state, "customers", { status: "active", name: "Later correction" });
+  assert.equal(reviewIsCurrent(state, review), false);
+  assert.equal(step(state, "close").state, "blocked");
+  assert.equal(step(state, "export").state, "blocked", "Old approved exports cannot satisfy a changed current state.");
+  assert.equal(review.status, "approved", "Historical approval stays immutable when inputs change.");
+  assert.equal(JSON.stringify(first), snapshot);
+  const next = close(state, "2026-09-22T11:00:00.000Z");
+  const fresh = prepareCloseReview(state, { ...ops, now: next.createdAt }, prepareInput(next), reviewers);
+  assert.equal(reviewIsCurrent(state, fresh), true);
+  assert.equal(ofKind(state, "close-reviews").length, 2);
+}
+function ofKind(state: DomainState, kind: string) { return state.records.filter(r => r.kind === kind); }
+{
+  const state = empty();
+  makeRecord(state, "exceptions", { status: "open", name: "Unidentified synthetic payment" });
+  makeRecord(state, "observations", { status: "unresolved", name: "Source statement" });
+  makeRecord(state, "payments", { status: "partial", amountKobo: 10000, data: { allocatedKobo: 2000 } });
+  const record = close(state), input = prepareInput(record);
+  assert.equal(closeReviewIssues(record).length, 3);
+  assert.equal(step(state, "resolve").state, "blocked");
+  assert.throws(() => prepareCloseReview(state, ops, { ...input, discrepancyResponses: [] }, reviewers), /Explain every/);
+  assert.throws(() => prepareCloseReview(state, ops, { ...input, discrepancyResponses: [input.discrepancyResponses[0]!, input.discrepancyResponses[0]!] }, reviewers), /Explain every/);
+  assert.throws(() => prepareCloseReview(state, ops, { ...input, unresolvedAcceptance: "" }, reviewers), /unresolved items/);
+  const review = prepareCloseReview(state, ops, input, reviewers);
+  // A later close makes an awaiting review stale without changing its immutable snapshot.
+  close(state, "2026-09-22T11:00:00.000Z");
+  assert.equal(reviewIsCurrent(state, review), false);
+  assert.throws(() => decideCloseReview(state, finance, review.id, { action: "approve", expectedUpdatedAt: review.updatedAt, note: "Checked all recorded explanations." }), /no longer current/);
+  decideCloseReview(state, finance, review.id, { action: "return", expectedUpdatedAt: review.updatedAt, note: "Run another close to include the new source records." });
+  assert.equal(review.status, "changes_requested");
+}
+{
+  const state = empty(), record = close(state), input = { ...prepareInput(record), reviewer: "Sandbox Finance" };
+  const review = prepareCloseReview(state, { actor: "Sandbox Admin", role: "Admin", now: ops.now }, input, [{ actor: "Sandbox Finance", role: "Finance" }]);
+  assert.throws(() => decideCloseReview(state, { actor: "Sandbox Finance", role: "Finance", now: finance.now }, review.id, { action: "approve", expectedUpdatedAt: review.updatedAt, note: "The same browser changed its demo persona." }), /different person/, "Missing principal metadata must fail closed for demo identity.");
+}
+{
+  const state = empty();
+  const payment = makeRecord(state, "payments", { status: "allocated", amountKobo: 10000, data: { allocatedKobo: 10000 } });
+  makeRecord(state, "allocations", { status: "confirmed", amountKobo: 10000, data: { paymentId: payment.id } });
+  assert.equal(step(state, "reconcile").state, "completed");
+  assert.equal(step(state, "resolve").state, "completed", "A reconciled nonempty journey can have no exceptions.");
+  const basis = closeReviewBasis(state), record = close(state), review = prepareCloseReview(state, ops, prepareInput(record), reviewers);
+  payment.updatedAt = finance.now;
+  assert.equal(closeReviewBasis(state), basis, "Transaction revision bookkeeping must not invalidate a just-created close.");
+  makeRecord(state, "work-events", { status: "recorded" });
+  assert.equal(reviewIsCurrent(state, review), true, "Work-queue acknowledgements do not change financial evidence.");
+  review.data.snapshot.data.summary = "tampered";
+  assert.equal(reviewIsCurrent(state, review), false);
+}
+console.log("Close review: independent approval, exact snapshots, discrepancies, stale edits and evidence-led progress passed.");

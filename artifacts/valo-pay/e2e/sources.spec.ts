@@ -1,0 +1,24 @@
+import {test,expect} from "@playwright/test";
+import path from "node:path";
+test.beforeEach(async({request})=>{await request.post("/__test/reset");});
+test("source schedules and signed fixture receipts stay clear and usable on small screens",async({page},testInfo)=>{
+  await page.goto("/sources");
+  await expect(page.getByRole("heading",{name:"Sources & connections",exact:true})).toBeVisible();
+  await page.getByLabel("Profile name",{exact:true}).fill("Scheduled loan feed");
+  await page.getByLabel("Source name",{exact:true}).fill("synthetic-loan-feed");
+  await page.getByRole("button",{name:"Save source profile",exact:true}).click();
+  await expect(page.getByRole("button",{name:"Edit Scheduled loan feed",exact:true})).toBeVisible();
+  await page.getByRole("button",{name:"Receive sample payment",exact:true}).click();
+  await expect(page.getByText(/Synthetic fixture.*Awaiting verification/i)).toBeVisible();
+  await page.getByRole("button",{name:"Rehearse amount conflict",exact:true}).click();
+  await expect(page.getByText(/Synthetic fixture.*Quarantined/i)).toBeVisible();
+  await expect(page.getByText("External connection not verified",{exact:true})).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button",{name:"Edit Scheduled loan feed",exact:true})).toBeVisible();
+  await page.addScriptTag({path:path.resolve("node_modules/axe-core/axe.min.js")});
+  expect(await page.evaluate(async()=> (await (window as any).axe.run(document.getElementById("main"),{runOnly:{type:"tag",values:["wcag2a","wcag2aa","wcag21aa"]}})).violations.map((v:any)=>({id:v.id,nodes:v.nodes.map((n:any)=>n.target)})))).toEqual([]);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBeTruthy();
+  await page.screenshot({path:testInfo.outputPath("sources-and-connections.png"),fullPage:true});
+  await page.getByRole("link",{name:"Use mapping",exact:true}).click();
+  await expect(page.getByLabel("Source name",{exact:true})).toHaveValue("synthetic-loan-feed");
+});

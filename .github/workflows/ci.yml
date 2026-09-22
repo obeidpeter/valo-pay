@@ -52,6 +52,8 @@ jobs:
 
       - name: Run pure tests
         run: pnpm run test:pure
+      - name: Check pilot operations, evidence and retention controls
+        run: pnpm run test:operations
 
       - name: Rehearse operational incident and recovery delivery locally
         run: |

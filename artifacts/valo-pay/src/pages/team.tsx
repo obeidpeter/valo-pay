@@ -12,6 +12,7 @@ import {
 import { StaffSession } from "@/components/staff-session";
 import { Button } from "@/components/ui/button";
 import { formatDate } from "@/lib/formatters";
+import { AccessReadiness } from '@/components/access-readiness';
 
 const roles = [
   "Admin",
@@ -64,13 +65,16 @@ export default function TeamPage() {
       </PilotPanel>
       {query.data?.mode === "staff" && (
         <>
+          {workspace?.role !== "Admin" && !workspace?.merchants.length && <PilotPanel title="Waiting for lender access"><p className="text-sm text-muted-foreground">Your staff account is active. An administrator must assign the lenders you may work on before their records appear here.</p></PilotPanel>}
           <PilotPanel title="Staff members">
+            <p className="text-sm text-muted-foreground">Administrators manage every lender in this workspace. Other roles need explicit lender access. New invitations and role changes start with no lender grants.</p>
             <div className="space-y-3">
               {query.data.members.map((member: any) => (
                 <Member
                   key={`${member.id}:${member.updatedAt}`}
                   member={member}
                   editable={admin && member.actor !== workspace?.actor}
+                  lenders={query.data.lenders || []}
                 />
               ))}
             </div>
@@ -82,6 +86,7 @@ export default function TeamPage() {
                 service. Their Valo Pay invitation requires the same verified
                 email and both authentication factors. Invitations last seven
                 days; accepted pilot membership lasts 90 days.
+                After acceptance, assign the lenders a non-administrator may access.
               </p>
               <form
                 className="grid items-end gap-3 sm:grid-cols-[1fr_1fr_auto]"
@@ -194,6 +199,7 @@ export default function TeamPage() {
           )}
         </>
       )}
+      <AccessReadiness />
       <Link
         href="/pilot"
         className="inline-block text-sm text-primary underline"
@@ -203,7 +209,7 @@ export default function TeamPage() {
     </div>
   );
 }
-function Member({ member, editable }: { member: any; editable: boolean }) {
+function Member({ member, editable, lenders }: { member: any; editable: boolean; lenders: any[] }) {
   const [role, setRole] = useState(member.role),
     [status, setStatus] = useState(member.status),
     [reason, setReason] = useState("");
@@ -217,6 +223,7 @@ function Member({ member, editable }: { member: any; editable: boolean }) {
           {formatDate(member.expiresAt)}
         </p>
       </div>
+      <p className="text-sm text-muted-foreground">{member.role === "Admin" ? "All lenders in this workspace" : `${member.lenderIds?.length || 0} permitted lenders`}</p>
       {editable && (
         <form
           className="space-y-3"
@@ -286,6 +293,19 @@ function Member({ member, editable }: { member: any; editable: boolean }) {
           <RecoveryNotice mutation={mutation} persistent={false} />
         </form>
       )}
+      {editable && member.role !== "Admin" && member.status === "active" && <LenderGrants key={member.updatedAt} member={member} lenders={lenders} />}
     </article>
   );
+}
+
+function LenderGrants({ member, lenders }: { member: any; lenders: any[] }) {
+  const [selected, setSelected] = useState<string[]>(member.lenderIds || []), [reason, setReason] = useState("");
+  const mutation = usePilotMutation(() => setReason("")), busy = mutation.isPending || mutation.hasUnconfirmedOutcome;
+  return <form className="space-y-3 border-t pt-4" onSubmit={event => { event.preventDefault(); mutation.mutate({ path: `/team/members/${member.id}/lenders`, lender: false, method: "PATCH", data: { expectedUpdatedAt: member.updatedAt, lenderIds: selected, reason } }); }}>
+    <fieldset disabled={busy} className="space-y-2"><legend className="mb-2 text-sm font-semibold">Lenders available to {member.name}</legend>{lenders.length ? lenders.map(lender => <label key={lender.id} className="flex min-h-11 items-center gap-3 text-sm"><input type="checkbox" checked={selected.includes(lender.id)} onChange={event => setSelected(current => event.target.checked ? [...current, lender.id] : current.filter(id => id !== lender.id))} />{lender.name}</label>) : <p className="text-sm text-muted-foreground">Create a lender from the pilot journey before assigning access.</p>}
+      <label className="block space-y-1 text-sm">Reason for lender access change for {member.name}<textarea className={pilotField} required minLength={10} maxLength={1000} rows={2} value={reason} onChange={event => setReason(event.target.value)} /></label>
+      <p className="text-xs text-muted-foreground">Clearing every selection removes lender access. Saved sessions are checked again on the next request.</p>
+      <Button type="submit" variant="outline" busy={mutation.isPending}>Save lender access</Button>
+    </fieldset><RecoveryNotice mutation={mutation} persistent={false} />{mutation.isSuccess && <p role="status" className="text-sm">Lender access saved.</p>}
+  </form>;
 }

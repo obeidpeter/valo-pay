@@ -111,3 +111,23 @@ export function readExportBytes(file:File,signal?:AbortSignal,maxBytes?:number,t
 export async function readExportMetadata(file:File,signal?:AbortSignal,timeoutMs?:number):Promise<Record<string,any>>{
  return JSON.parse((await readStorageObject(file,false,signal,256*1024,timeoutMs)).toString('utf8'));
 }
+/** Delete only the observed generation of this lender's immutable export.
+ * A timed-out/lost acknowledgement is retried by reading metadata first. */
+export async function deleteRetainedExport(file:File,expected:{id:string;merchantId:string;checksum?:string}):Promise<'deleted'|'already_absent'>{
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);
+ try{
+  let metadata:Record<string,any>;
+  try{metadata=await readExportMetadata(file,controller.signal,8000);}catch(error){if((error as any).statusCode===404)return 'already_absent';throw error;}
+  const custom=metadata.metadata||{};
+  if(custom.valopayExportId!==expected.id||custom.valopayMerchantId!==expected.merchantId||!/^\d+$/.test(String(metadata.generation)))throw new Error('Export ownership or generation could not be verified.');
+  if(expected.checksum){let artifact;try{artifact=JSON.parse(String(custom.valopayArtifact));}catch{throw new Error('Export artifact metadata is invalid.');}if(artifact?.checksum!==expected.checksum)throw new Error('Export checksum metadata changed.');}
+  const url=new URL(`/storage/v1/b/${encodeURIComponent(file.bucket.name)}/o/${encodeURIComponent(file.name)}`,file.storage.apiEndpoint);
+  url.searchParams.set('ifGenerationMatch',String(metadata.generation));
+  const headers=await beforeAbort(file.storage.authClient.getRequestHeaders(url.toString()),controller.signal);
+  const response=await globalThis.fetch(url,{method:'DELETE',headers,signal:controller.signal,redirect:'error'});
+  await response.body?.cancel();
+  if(response.status===404)return 'already_absent';
+  if(!response.ok)throw new Error('The export generation could not be deleted.');
+  return 'deleted';
+ }finally{clearTimeout(timer);controller.abort();}
+}

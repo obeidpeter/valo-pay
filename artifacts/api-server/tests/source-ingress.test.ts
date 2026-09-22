@@ -1,0 +1,42 @@
+import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
+import express from "express";
+import { seedMerchant } from "../src/lib/valopay-seed";
+process.env.DATABASE_URL ||= "postgres://unused:unused@127.0.0.1:1/unused";
+const { createPaystackIngress } = await import("../src/routes/sources");
+const key = ["sk", "test", "OFFLINE", "0".repeat(20)].join("_");
+const connectionId = "a".repeat(64), wrongConnection = "b".repeat(64);
+let state = seedMerchant("mapped-lender", true); state.records = [];
+const ctx = { actor: "System · Paystack test ingress", role: "Admin", now: "2026-09-22T12:00:00.000Z" };
+const app = express();
+app.use(createPaystackIngress(async (id, apply) => {
+  if (id !== connectionId) throw Object.assign(new Error("Test connection is not available."), { status: 404 });
+  const copy = structuredClone(state), result = await apply({ state: copy, context: ctx, secretKey: key });
+  state = copy; return result;
+}));
+app.use(express.json());
+app.use((error: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => { res.status(error.status || 400).json({ error: error.message }); });
+const server = app.listen(0, "127.0.0.1");
+await new Promise<void>(resolve => server.once("listening", resolve));
+const address = server.address(); assert.ok(address && typeof address !== "string");
+const base = `http://127.0.0.1:${address.port}`;
+const body = JSON.stringify({ event: "charge.success", data: { domain: "test", id: "800001", status: "success", amount: 10000, currency: "NGN", reference: "INGRESS-SYNTHETIC-001", channel: "direct_debit" } });
+const signature = createHmac("sha512", key).update(body).digest("hex");
+const send = (raw = body, sig = signature, id = connectionId, contentType = "application/json") => fetch(`${base}/v1/providers/paystack/${id}/events?merchantId=attacker-chosen-lender`, { method: "POST", headers: { "content-type": contentType, "x-paystack-signature": sig }, body: raw });
+try {
+  assert.equal((await send(`${body} `)).status, 401);
+  assert.equal(state.records.length, 0, "Tampering leaves no durable receipt.");
+  assert.equal((await send(body, signature, wrongConnection)).status, 404);
+  assert.equal(state.records.length, 0, "Unknown connections do not bootstrap lenders.");
+  assert.equal((await send(body, signature, connectionId, "text/plain")).status, 400);
+  const first = await send(); assert.equal(first.status, 200); assert.deepEqual(await first.json(), { accepted: true, duplicate: false });
+  assert.equal(state.records.length, 1); assert.equal(state.records[0]!.merchantId, "mapped-lender");
+  assert.equal(state.records[0]!.data.mode, "test");
+  const repeated = await send(); assert.equal(repeated.status, 200); assert.deepEqual(await repeated.json(), { accepted: true, duplicate: true });
+  assert.equal(state.records.length, 1); assert.equal(state.records[0]!.data.deliveryCount, 2);
+  assert.equal(state.records[0]!.status, "awaiting_verification");
+  const live = body.replace('"domain":"test"', '"domain":"live"');
+  assert.equal((await send(live, createHmac("sha512",key).update(live).digest("hex"))).status,400);
+  assert.equal(state.records.length,1);
+  console.log("Raw Paystack ingress checks passed: exact-byte authentication, mapped-lender isolation, duplicate acknowledgement and test-only boundary.");
+} finally { await new Promise<void>((resolve,reject) => server.close(error=>error?reject(error):resolve())); }

@@ -1,4 +1,10 @@
 import { saveImportBatch, commitImportBatch, coordinateCase, batchView } from '../../api-server/src/domain/pilot-workflow';
+import { saveSourceProfile, sourceQuality } from '../../api-server/src/domain/source-quality';
+import { providerEventView, replayProviderEvent, runPaystackFixture } from '../../api-server/src/providers/paystack-inbox';
+import { pilotProgress, closeReviewList, prepareCloseReview, decideCloseReview, bindCloseReviewBasis, reviewIsCurrent } from '../../api-server/src/domain/close-review';
+import { derivePersonalWork, recordWorkReceipt } from '../../api-server/src/domain/personal-work';
+import { lifecycleView, lifecycleRunView, saveLifecyclePolicy, setLifecycleHold, lifecyclePreview, approveLifecycleRun, assertLifecycleCandidate, eraseLifecycleRawCsv, recordLifecycleReceipt } from '../../api-server/src/domain/lifecycle';
+import { sourceProfileInputSchema, paystackFixtureInputSchema, providerReplayInputSchema, prepareCloseReviewSchema, decideCloseReviewSchema, personalWorkQuerySchema, personalWorkViewSchema, workReceiptInputSchema, workReceiptSchema } from '@workspace/valopay-schema';
 import { advanceRecordVersions } from '../../api-server/src/lib/edit-versions';
 import { pageCustomerHistory } from '../../api-server/src/lib/customer-history';
 import { connectedView, connectedActionSchema, runConnectedAction } from '../../api-server/src/domain/connected';
@@ -35,6 +41,8 @@ export interface FakeApi {
   merchantIds: string[];
   /** The persona every request runs as; set_role changes it like the server does. */
   role: string;
+  /** One browser person remains the same when demo personas switch. Tests may set a second synthetic person explicitly. */
+  principalId: string;
   /** The instant every request sees, fixed at install unless setNow is called. */
   now: string;
   scheduler: CloseRuntime;
@@ -53,7 +61,7 @@ export interface FakeApi {
 
 const kinds = new Set<string>(recordKinds);
 const packKinds = ["dispute-pack", "customer-pack"];
-const exportKinds = ["gate-pack", "billing", ...packKinds];
+const exportKinds = ["gate-pack", "billing", "reviewed-close", ...packKinds];
 /** A declared function returning never, so a check such as `if (!old) fail(...)` narrows the way the server's does. */
 function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
 
@@ -96,7 +104,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
   const failures: Array<{ pattern: RegExp; method?: string; failure: { status: number; error: string; details?: Array<{ field: string; message: string }> } | "offline" }> = [];
   const holds: Array<{ pattern: RegExp; promise: Promise<void> }> = [];
   const api: FakeApi = {
-    merchantIds: [], role: options.role ?? "Admin", now: options.now ?? new Date().toISOString(), calls: [],
+    merchantIds: [], role: options.role ?? "Admin", principalId: 'synthetic-console-person-1', now: options.now ?? new Date().toISOString(), calls: [],
     scheduler: { state: 'running', intervalMs: 60_000, lastTickAt: options.now ?? new Date().toISOString(), lastSuccessAt: options.now ?? new Date().toISOString(), lastErrorAt: null },
     state(merchantId) { const id = merchantId ?? api.merchantIds[0]!; return states.get(id) ?? fail("Lender not found in this workspace.", 404); },
     mutate(fn, merchantId) { return withState(merchantId ?? api.merchantIds[0]!, fn, { action: "test.mutation", objectId: "workspace", summary: "Arranged by a console test" }); },
@@ -110,7 +118,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
     },
     uninstall() { globalThis.fetch = originalFetch; },
   };
-  const context = (): Context => ({ actor: `Sandbox ${api.role}`, role: api.role, now: api.now });
+  const context = (): Context => ({ actor: `Sandbox ${api.role}`, role: api.role, now: api.now, principalId: api.principalId });
 
   // Two lenders, as the repository seeds a workspace, each with its first close cursor.
   for (const smaller of [false, true]) {
@@ -131,6 +139,8 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
     const before = digest(canonical(draft));
     const result = fn(draft, ctx);
     enrolEligibleFailures(draft, ctx);
+    for (const close of draft.records.filter(r => r.kind === 'closes' && !current.records.some(old => old.id === r.id))) bindCloseReviewBasis(draft, close);
+    advanceRecordVersions(current, draft, ctx.now);
     appendAudit(draft, ctx, audit.action, audit.objectId, audit.summary, { beforeDigest: before, afterDigest: digest(canonical(draft)) });
     states.set(merchantId, draft);
     return result;
@@ -141,8 +151,28 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
   const pilotWrite = (q: Record<string,string>, fn: (s: DomainState,c: Context)=>ValopayRecord) => withState(merchantOf(q), (state,ctx) => { const before=structuredClone(state); const result=fn(state,ctx); advanceRecordVersions(before,state,ctx.now); return S.CreateRecordResponse.parse(result); }, { action:'pilot.change',objectId:'workspace',summary:'Synthetic pilot workflow' });
   const routes: Array<[string, RegExp, Handler]> = [
     ['GET', /^\/v1\/team$/, () => ({mode:'sandbox', message:'Demo personas are active.',members:[],invitations:[],events:[]})],
+    ['GET', /^\/v1\/team\/readiness$/, () => ({syntheticOnly:true,canCommission:false,checkedAt:api.now,checks:[{id:'identity',name:'Staff identity',state:'not_configured',detail:'Configure a separate Clerk staging organisation and provision its first administrator.'},{id:'mfa',name:'Multi-factor authentication',state:'not_configured',detail:'Demo role changes do not verify a staff member or a second factor.'},{id:'origin',name:'Allowed staff origins',state:'not_configured',detail:'Staff changes need a configured staging address.'},{id:'database',name:'Restricted database access',state:'not_configured',detail:'The offline console test does not verify a restricted database connection.'},{id:'encryption',name:'Managed payload encryption',state:'not_configured',detail:'No external wrapping key is configured in this offline test.'}]})],
     ['GET', /^\/v1\/operations$/, () => ({items:[],total:0,offset:0})],
-    ['GET', /^\/v1\/pilot\/journey$/, (_p,q) => { const s=api.state(merchantOf(q));return {lender:s.merchant,counts:{customers:s.records.filter(r=>r.kind==='customers').length,batches:0,receipts:4,openCases:4,unassignedCases:4,closes:0,exports:0},syntheticOnly:true}; }],
+    ['GET', /^\/v1\/pilot\/journey$/, (_p,q) => pilotProgress(api.state(merchantOf(q)),'sandbox')],
+    ['GET', /^\/v1\/pilot\/progress$/, (_p,q) => pilotProgress(api.state(merchantOf(q)),'sandbox')],
+    ['GET', /^\/v1\/pilot\/close-reviews$/, (_p,q) => ({...closeReviewList(api.state(merchantOf(q))),actor:context().actor,reviewers:roster().filter(person=>person.role==='Finance'),accessMode:'sandbox',ownPrincipal:api.principalId})],
+    ['POST', /^\/v1\/pilot\/close-reviews\/prepare$/, (_p,q,b) => pilotWrite(q,(s,c)=>prepareCloseReview(s,c,prepareCloseReviewSchema.parse(b),roster()))],
+    ['POST', /^\/v1\/pilot\/close-reviews\/(?<id>[^/]+)\/decision$/, (p,q,b) => pilotWrite(q,(s,c)=>decideCloseReview(s,c,p.id!,decideCloseReviewSchema.parse(b)))],
+    ['GET', /^\/v1\/sources$/, (_p,q) => {const s=api.state(merchantOf(q)), events=s.records.filter(r=>r.kind==='provider-events').sort((a,b)=>b.createdAt.localeCompare(a.createdAt));return {...sourceQuality(s,api.now),paystack:{mode:'test_only',externalConnectionVerified:false,canRunFixtures:['Admin','Operations','Finance'].includes(api.role),state:'configuration_required',message:'A Paystack account, test credentials and an operator-provisioned connection are required for an external test. Local fixture results do not verify a Paystack connection.',events:events.slice(0,50).map(providerEventView),total:events.length,quarantined:events.filter(e=>e.status==='quarantined').length,duplicates:events.reduce((sum,e)=>sum+Math.max(0,Number(e.data.deliveryCount||0)-1),0)}};}],
+    ['POST', /^\/v1\/sources\/profiles$/, (_p,q,b) => pilotWrite(q,(s,c)=>saveSourceProfile(s,c,sourceProfileInputSchema.parse(b)))],
+    ['POST', /^\/v1\/sources\/profiles\/(?<id>[^/]+)\/save$/, (p,q,b) => pilotWrite(q,(s,c)=>saveSourceProfile(s,c,sourceProfileInputSchema.parse(b),p.id))],
+    ['POST', /^\/v1\/sources\/paystack\/fixtures$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>{const result=runPaystackFixture(s,c,paystackFixtureInputSchema.parse(b).scenario);return {...result,event:providerEventView(result.event)};},{action:'source.fixture',objectId:'sources',summary:'Explicit synthetic Paystack rehearsal'})],
+    ['POST', /^\/v1\/sources\/events\/(?<id>[^/]+)\/replay$/, (p,q,b) => withState(merchantOf(q),(s,c)=>{const input=providerReplayInputSchema.parse(b);return providerEventView(replayProviderEvent(s,c,p.id!,input.expectedUpdatedAt,input.reason));},{action:'source.replay',objectId:p.id!,summary:'Recheck saved provider evidence'})],
+    ['GET', /^\/v1\/work$/, (_p,q) => personalWorkViewSchema.parse(derivePersonalWork(api.state(merchantOf(q)),context(),roster(),personalWorkQuerySchema.parse(q)))],
+    ['POST', /^\/v1\/work\/notifications\/read$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>workReceiptSchema.parse(recordWorkReceipt(s,c,roster(),'read',workReceiptInputSchema.parse(b))),{action:'work.read',objectId:'work',summary:'Read in-app notification'})],
+    ['POST', /^\/v1\/work\/handovers\/acknowledge$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>workReceiptSchema.parse(recordWorkReceipt(s,c,roster(),'acknowledge',workReceiptInputSchema.parse(b))),{action:'work.acknowledge',objectId:'work',summary:'Acknowledge case handover'})],
+    ['GET', /^\/v1\/lifecycle$/, (_p,q) => lifecycleView(api.state(merchantOf(q)),context(),[],Number(q.offset||0))],
+    ['GET', /^\/v1\/lifecycle\/runs\/(?<id>[^/]+)$/, (p,q) => {if(api.role!=='Admin')fail('An administrator is required.',403);const s=api.state(merchantOf(q)),r=s.records.find(r=>r.kind==='retention-runs'&&r.id===p.id);if(!r)fail('Retention run not found.',404);return lifecycleRunView(s,r);}],
+    ['POST', /^\/v1\/lifecycle\/policy$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>{saveLifecyclePolicy(s,c,b);return lifecycleView(s,c);},{action:'retention.policy',objectId:'retention',summary:'Save synthetic retention policy'})],
+    ['POST', /^\/v1\/lifecycle\/holds$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>{setLifecycleHold(s,c,b);return lifecycleView(s,c);},{action:'retention.hold',objectId:'retention',summary:'Change preservation hold'})],
+    ['POST', /^\/v1\/lifecycle\/runs$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>lifecyclePreview(s,c,b),{action:'retention.preview',objectId:'retention',summary:'Save bounded deletion preview'})],
+    ['POST', /^\/v1\/lifecycle\/runs\/(?<id>[^/]+)\/approve$/, (p,q,b) => withState(merchantOf(q),(s,c)=>approveLifecycleRun(s,c,p.id!,b),{action:'retention.approve',objectId:p.id!,summary:'Approve exact retention preview'})],
+    ['POST', /^\/v1\/lifecycle\/runs\/(?<id>[^/]+)\/execute$/, (p,q,b) => withState(merchantOf(q),(s,c)=>{if(c.role!=='Admin')fail('An administrator is required.',403);const run=s.records.find(r=>r.kind==='retention-runs'&&r.id===p.id);if(!run||run.data.previewDigest!==b.previewDigest)fail('The approved preview does not match.',409);for(const candidate of run.data.candidates){try{if(!assertLifecycleCandidate(s,c,run.id,candidate))continue;if(candidate.kind==='raw_csv'){eraseLifecycleRawCsv(s,c,run.id,candidate);recordLifecycleReceipt(s,c,run.id,candidate,'deleted','Raw synthetic CSV removed; imported records and audit retained.');}else recordLifecycleReceipt(s,c,run.id,candidate,'blocked','External storage deletion is not simulated.');}catch(error){recordLifecycleReceipt(s,c,run.id,candidate,'blocked',error instanceof Error?error.message:'Source check failed.');}}return lifecycleRunView(s,run);},{action:'retention.execute',objectId:p.id!,summary:'Execute approved synthetic raw CSV cleanup'})],
     ['GET', /^\/v1\/pilot\/batches$/, (_p,q)=>{const all=api.state(merchantOf(q)).records.filter(r=>r.kind==='import-batches');return {items:all.slice(Number(q.offset||0),Number(q.offset||0)+25).map(r=>batchView(r)),total:all.length,offset:Number(q.offset||0)};}],
     ['GET', /^\/v1\/pilot\/batches\/(?<id>[^/]+)$/, (p,q)=>{const s=api.state(merchantOf(q)), batch=s.records.find(r=>r.kind==='import-batches'&&r.id===p.id);if(!batch)fail('Batch not found.',404);if(!['Admin','Operations','Finance'].includes(api.role))fail('An import operator role is required.',403);return {batch,revisions:s.records.filter(r=>r.kind==='import-revisions'&&r.data.batchId===p.id)};}],
     ['POST', /^\/v1\/pilot\/batches$/, (_p,q,b)=>pilotWrite(q,(s,c)=>saveImportBatch(s,c,b))],
@@ -255,8 +285,10 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
       return S.CreateExportResponse.parse(withState(merchantId, (state, ctx) => {
         if(options.queuedExports)return queueExport(state,ctx,body,'/private/test');
         if (body.customerId && !state.records.some((record) => record.kind === "customers" && record.id === body.customerId)) fail("Customer not found.", 404);
+        const review = body.kind === 'reviewed-close' ? state.records.find(r=>r.kind==='close-reviews'&&r.id===(body as any).closeReviewId) : undefined;
+        if(body.kind==='reviewed-close'&&(!review||review.status!=='approved'||!reviewIsCurrent(state,review)))fail('An approved, current close review is required.',409);
         const checksum = digest(canonical({ kind: body.kind, format: body.format, customerId: body.customerId ?? null, at: ctx.now, records: state.records.length }));
-        const record = makeRecord(state, "exports", { name: `${body.kind} ${body.format}`, status: "ready", customerId: body.customerId ?? "", createdAt: ctx.now, data: { kind: body.kind, format: body.format, checksum, usedInRealCase: false, byteLength: 0, generationMs: 0, synthetic: true } });
+        const record = makeRecord(state, "exports", { name: `${body.kind} ${body.format}`, status: "ready", customerId: body.customerId ?? "", createdAt: ctx.now, data: { kind: body.kind, format: body.format, checksum, usedInRealCase: false, byteLength: 0, generationMs: 0, synthetic: true,...(review?{closeReviewId:review.id,closeSnapshotDigest:review.data.snapshotDigest}:{}) } });
         return { id: record.id, downloadUrl: `/api/v1/exports/${record.id}/download?merchantId=${merchantId}`, checksum, generatedAt: ctx.now };
       }, { action: "post.exports", objectId: "workspace", summary: "Synthetic workspace operation" }));
     }],

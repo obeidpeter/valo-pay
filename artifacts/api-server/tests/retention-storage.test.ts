@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import { deleteRetainedExport } from '../src/lib/export-download';
+process.env.DATABASE_URL||='postgres://unused:unused@127.0.0.1:1/unused';
+const {assertFinalState}=await import('../src/lib/valopay-store');
+const {seedMerchant}=await import('../src/lib/valopay-seed');
+const {makeRecord}=await import('../src/domain/records');
+const {saveLifecyclePolicy,lifecyclePolicy,lifecyclePreview,approveLifecycleRun,eraseLifecycleRawCsv,recordLifecycleReceipt}=await import('../src/domain/lifecycle');
+const originalFetch=globalThis.fetch;
+const file={bucket:{name:'private-bucket'},name:'exports/lender/file?not-a-query.json',storage:{apiEndpoint:'https://storage.googleapis.com',authClient:{getRequestHeaders:async()=>new Headers()}}} as any;
+const expected={id:'export-1',merchantId:'lender',checksum:'a'.repeat(64)};
+let gets=0,deletes=0,mode='ok';
+globalThis.fetch=async(input,options)=>{
+ const url=new URL(String(input));assert.equal(url.host,'storage.googleapis.com');assert.ok(url.pathname.includes('%3F'));
+ if(options?.method==='DELETE'){deletes++;assert.equal(url.searchParams.get('ifGenerationMatch'),'12345678901234567890');return new Response(null,{status:mode==='changed'?412:204});}
+ gets++;return mode==='absent'?new Response(null,{status:404}):new Response(JSON.stringify({generation:'12345678901234567890',metadata:{valopayExportId:mode==='other'?'export-other':expected.id,valopayMerchantId:expected.merchantId,valopayArtifact:JSON.stringify({checksum:mode==='corrupt'?'b'.repeat(64):expected.checksum})}}));
+};
+try{
+ assert.equal(await deleteRetainedExport(file,expected),'deleted');assert.equal(deletes,1);
+ mode='absent';assert.equal(await deleteRetainedExport(file,expected),'already_absent');assert.equal(deletes,1);
+ for(const scenario of ['other','corrupt']){mode=scenario;await assert.rejects(()=>deleteRetainedExport(file,expected));assert.equal(deletes,1);}
+ mode='changed';await assert.rejects(()=>deleteRetainedExport(file,expected),/could not be deleted/);assert.equal(deletes,2);
+}finally{globalThis.fetch=originalFetch;}
+const state=seedMerchant('retention-lender'),ctx={actor:'Sandbox Admin',role:'Admin',now:'2030-02-02T00:00:00.000Z'};
+const batch=makeRecord(state,'import-batches',{status:'committed',createdAt:'2029-01-01T00:00:00.000Z',data:{csv:'SYNTHETIC ONLY',committedAt:'2029-01-01T00:00:00.000Z',check:{preview:[{synthetic:true}]}}});
+saveLifecyclePolicy(state,ctx,{policy:{rawCsvDays:1,journalPayloadDays:null,exportFileDays:null,auditTrail:'retain'},expectedRevision:lifecyclePolicy(state).revision,reason:'Synthetic retention rehearsal policy.'});
+const preview=lifecyclePreview(state,ctx,{expectedPolicyRevision:lifecyclePolicy(state).revision});
+approveLifecycleRun(state,ctx,preview.id,{expectedUpdatedAt:preview.updatedAt,previewDigest:preview.previewDigest,reason:'Reviewed the one exact synthetic source.'});
+const snapshot=structuredClone(state),candidate=preview.candidates[0];
+eraseLifecycleRawCsv(state,ctx,preview.id,candidate);recordLifecycleReceipt(state,ctx,preview.id,candidate,'deleted','Synthetic raw CSV removed.');
+assert.doesNotThrow(()=>assertFinalState(snapshot,state,state.merchant.id,ctx.now));
+const forged=structuredClone(snapshot);delete forged.records.find(r=>r.id===batch.id)!.data.csv;
+assert.throws(()=>assertFinalState(snapshot,forged,state.merchant.id,ctx.now),/immutable/);
+state.records.find(r=>r.id===batch.id)!.name='Unrelated hidden change';
+assert.throws(()=>assertFinalState(snapshot,state,state.merchant.id,ctx.now),/immutable/);
+console.log('Retention storage checks passed: ownership, checksum, generation fence, absent-file retry and narrow immutable-record exception.');

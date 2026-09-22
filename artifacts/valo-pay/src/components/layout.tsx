@@ -34,6 +34,10 @@ const navItems = [
   { href: '/imports', label: 'Import batches', icon: FileText },
   { href: '/operations', label: 'Operations', icon: HardDrive },
   { href: '/team', label: 'Team & access', icon: Users },
+  { href: '/work', label: 'My work', icon: CheckSquare },
+  { href: '/sources', label: 'Sources & connections', icon: Link2 },
+  { href: '/close-review', label: 'Close review', icon: FileCheck },
+  { href: '/lifecycle', label: 'Data retention', icon: HardDrive },
 ];
 
 /** The breakpoint at which the sidebar replaces the phone bar; the same value as Tailwind's `md`. */

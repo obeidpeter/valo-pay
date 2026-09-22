@@ -7,6 +7,7 @@ const roots = new Set([".gitignore", ".githooks/pre-push", ".npmrc", ".replit", 
 const docs = new Set(["docs/pilot-workflow-release.md", "docs/connected-banking.md", "docs/BUILD_STATUS.md", "docs/DATABASE_SECURITY.md", "docs/frontend-contract.md", "docs/security-review.md", "docs/observability.md", "docs/documentation-review.md", "docs/github-sync.md", "docs/design/console.md", "docs/paystack.md", "docs/pilot-security.md", "docs/pilot-database.md", "docs/operational-rehearsals.md", "docs/record-list-index-deployment.md", "docs/operator-validation.md"]);
 // Reviewed usability guidance and an empty measurement plan; no participant data.
 for (const name of ['README.md', 'audit.md', 'role-task-map.md', 'core-findings.md', 'import-findings.md', 'connected-findings.md', 'research-kit.md', 'release.md', 'measurement-template.csv']) docs.add(`docs/usability/${name}`);
+docs.add('docs/pilot-operations-controls.md');
 // Workflows execute code on GitHub. Review each file before approving its export.
 const workflows = new Set([".github/workflows/ci.yml"]);
 const sourceExtension = /\.(?:ts|tsx|js|jsx|mjs|cjs|json|yaml|yml|toml|css|html|svg|sh|md|sql)$/;

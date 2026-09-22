@@ -52,6 +52,7 @@ export interface DomainState {
 /** Who is acting, in which role, and when (the database clock at the start of the transaction). */
 export interface Context {
   actor: string;
+  principalId?: string;
   role: string;
   now: string;
 }

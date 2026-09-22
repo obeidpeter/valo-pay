@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Context, DomainState, ValopayRecord } from '../domain/types';
 import { makeRecord } from '../domain/records';
 import type { ExportInput } from './valopay-exports';
+import { reviewedCloseEvidence } from '../domain/close-review';
 
 export const EXPORT_LEASE_MS = 5 * 60_000;
 export const MAX_EXPORT_BYTES = 32 * 1024 * 1024;
@@ -13,6 +14,7 @@ export interface ExportArtifact {
 }
 export type ExportJobStatus = 'queued' | 'running' | 'ready' | 'failed';
 export interface ExportJobView {
+  expiredAt?: string;
   id: string; status: ExportJobStatus; kind: string; format: string; customerId: string; requestedAt: string;
   attempts: number; downloadUrl: string; checksum?: string; generatedAt?: string; byteLength?: number; generationMs?: number; error?: string;
 }
@@ -31,6 +33,7 @@ export function exportJobView(record: ValopayRecord): ExportJobView {
   return {
     id: record.id, status: record.status as ExportJobStatus, kind: String(record.data.kind), format: String(record.data.format), customerId: record.customerId,
     requestedAt: record.createdAt, attempts: Number(record.data.attempts || 0),
+    ...(record.data.fileDeletedAt ? {expiredAt:String(record.data.fileDeletedAt)} : {}),
     downloadUrl: `/api/v1/exports/${record.id}/download?merchantId=${encodeURIComponent(record.merchantId)}`,
     ...(ready ? { checksum: String(record.data.checksum), generatedAt: String(record.data.generatedAt || record.createdAt), byteLength: Number(record.data.byteLength || 0), generationMs: Number(record.data.generationMs || 0) } : {}),
     ...(record.status === 'failed' ? { error: String(record.data.lastError || 'Export generation could not finish. Retry this export.') } : {}),
@@ -38,19 +41,23 @@ export function exportJobView(record: ValopayRecord): ExportJobView {
 }
 /** Queueing writes metadata only; no rendering, object-storage calls or credentials belong in this transaction. */
 export function queueExport(state: DomainState, ctx: Context, input: ExportInput, privateDirectory: string): ExportJobView {
+  if(ctx.role==='Read-only')fail('Your read-only role may download existing exports. Ask a colleague to generate new evidence.',403);
+  const review = input.kind === 'reviewed-close' ? reviewedCloseEvidence(state, input.closeReviewId || '', true) : undefined;
   if (!privateDirectory || !/^\/?[^/]+\/.+/.test(privateDirectory)) fail('Private export storage is not configured. Contact the workspace administrator.', 503);
   if (input.customerId && !state.records.some(record => record.kind === 'customers' && record.id === input.customerId)) fail('Customer not found in this lender.', 404);
   if (state.records.filter(record => record.kind === 'exports' && ['queued', 'running'].includes(record.status)).length >= 10) fail('Ten exports are already waiting or running for this lender. Wait for one to finish before starting another.', 429);
   const id = randomUUID(), parts = privateDirectory.replace(/^\//, '').replace(/\/+$/, '').split('/'), bucket = parts.shift()!;
   const objectName = `${parts.join('/')}/exports/${state.merchant.id}/${id}.${input.format}`;
   return exportJobView(makeRecord(state, 'exports', { id, name: `${input.kind} · ${input.format.toUpperCase()}`, status: 'queued', customerId: input.customerId || '', createdAt: ctx.now, updatedAt: ctx.now,
-    data: { kind: input.kind, format: input.format, usedInRealCase: false, requestedBy: ctx.actor, requestedRole: ctx.role, attempts: 0, bucket, objectName } }));
+    data: { kind: input.kind, format: input.format, usedInRealCase: false, requestedBy: ctx.actor, requestedRole: ctx.role, attempts: 0, bucket, objectName,
+      ...(review ? {closeReviewId:review.id,closeSnapshotDigest:review.data.snapshotDigest} : {}) } }));
 }
 export function exportIsClaimable(record: ValopayRecord, now: string): boolean {
   return record.status === 'queued' || (record.status === 'running' && (!record.data.leaseExpiresAt || Date.parse(record.data.leaseExpiresAt) <= Date.parse(now)));
 }
 export function retryExport(state: DomainState, ctx: Context, id: string): ExportJobView {
   const record = findExportJob(state, id);
+  if(record.data.fileDeletedAt)fail('This export file expired under the retention policy. Start a new export if current evidence is needed.',410);
   if (record.status === 'ready' || record.status === 'queued') return exportJobView(record);
   if (record.status === 'running' && !exportIsClaimable(record, ctx.now)) return exportJobView(record);
   record.status = 'queued'; record.updatedAt = ctx.now;

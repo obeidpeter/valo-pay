@@ -2,6 +2,9 @@ import { historySections, historyKind, positionNote, type CustomerHistoryQuery, 
 import { pool, type PoolClient } from "@workspace/db";
 import { getAuth, clerkClient } from "@clerk/express";
 import { staffMode, verifyStaff } from './staff-access';
+import { validateLenderAccessChange } from './staff-lender-access';
+import { bindRuntimeIdentity, bindRuntimeService, clearRuntimeInviteeGrants, runtimeIsolationEnabled, runtimeServiceRead } from './runtime-isolation';
+import type { StaffLenderAccessInput } from '@workspace/valopay-schema';
 import type { VerifiedClerkSession } from './pilot-access';
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
@@ -17,6 +20,12 @@ import { validateCloseRange, pageOffset, type ReadPageQuery, type Reconciliation
 import { precisionAudit } from '../domain/reports';
 import { previousMonth } from '../domain/billing';
 import { measurementRules } from '@workspace/valopay-schema';
+import { protectStored, revealStored, protectRecordData, revealRecordData, payloadEncryptionKey, isProtectedPayload } from './protected-payloads';
+import type { LifecycleExternalCandidate, LifecycleCandidate } from '@workspace/valopay-schema';
+import { assertLifecycleCandidate, eraseLifecycleRawCsv, recordLifecycleReceipt, lifecycleRunView } from '../domain/lifecycle';
+import { deleteRetainedExport } from './export-download';
+import { objectStorageClient } from './objectStorage';
+import { assertProviderEventChange } from '../providers/paystack-inbox';
 
 /** The demo persona roles, the same list as the shared schema's. */
 export const roles = ["Admin", "Operations", "Finance", "Compliance reviewer", "Read-only"];
@@ -105,7 +114,7 @@ export async function prepareOperation(ctx: StoreContext, merchantId: string, ke
     ? String((request.body as { action?: unknown }).action || 'Workspace action').replaceAll('_', ' ').slice(0, 100)
     : `${request.method === 'PATCH' ? 'Update' : 'Save'} ${request.path.split('/').filter(Boolean).slice(1, 3).join(' ').replaceAll('-', ' ')}`;
   await session.client.query(`INSERT INTO valopay_operations(id,merchant_id,owner,actor,role,request_key,request_hash,request,label,created_at,updated_at)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`, [id, merchantId, owner, ctx.actor, ctx.role, key, hash, request, label, ctx.now]);
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`, [id, merchantId, owner, ctx.actor, ctx.role, key, hash, await protectStored(request,{lender:merchantId,record:id,field:'request'}), label, ctx.now]);
   return id;
 }
 export async function listOperations(ctx: StoreContext, merchantId: string, offset = 0) {
@@ -120,7 +129,8 @@ export async function readOperation(ctx: StoreContext, merchantId: string, id: s
   const row = (await session.client.query<OperationRow>('SELECT * FROM valopay_operations WHERE id=$1 AND merchant_id=$2 AND owner=$3', [id, merchantId, session.owner || session.principal])).rows[0];
   if (!row) fail('Request not found in your lender history.', 404);
   if (row.actor !== ctx.actor || row.role !== ctx.role) fail('This request was submitted under a different role. Your current role cannot repeat it.', 403);
-  return row;
+  if((row.request as any)?.purged)fail('This terminal request payload expired under the lender retention policy. Its identity and completion history are retained; it cannot run again.',410);
+  return {...row, request:await revealStored(row.request,{lender:merchantId,record:id,field:'request'}), receipt:await revealStored(row.receipt,{lender:merchantId,record:id,field:'receipt'})};
 }
 export async function cancelOperation(ctx: StoreContext, merchantId: string, id: string) {
   const session = sessionFor(ctx); await readMerchant(ctx, merchantId, 'update');
@@ -138,7 +148,7 @@ export async function completeOperation(ctx: StoreContext, receipt: unknown) {
   if (!session.operationId) return;
   const merchantId = lockedMerchant(session);
   const result = await session.client.query(`UPDATE valopay_operations SET status='completed',receipt=$5,updated_at=$6
-    WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND actor=$4`, [session.operationId, merchantId, session.owner || session.principal, ctx.actor, receipt, ctx.now]);
+    WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND actor=$4`, [session.operationId, merchantId, session.owner || session.principal, ctx.actor, await protectStored(receipt,{lender:merchantId,record:session.operationId,field:'receipt'}), ctx.now]);
   if (!rowsAffected(result)) fail('The recovery request no longer belongs to this session.', 409);
 }
 
@@ -148,15 +158,22 @@ const staffView = (row: StaffRow) => ({ id: row.id, actor: `Clerk:${row.user_id}
 export async function caseAssignees(ctx: StoreContext) {
   const session = sessionFor(ctx);
   if (ctx.accessMode !== 'staff') return roles.filter(role => role !== 'Read-only').map(role => ({ actor: `Sandbox ${role}`, name: `Demo ${role}`, role }));
-  return (await session.client.query<StaffRow>("SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND status='active' AND expires_at>$2 AND role<>'Read-only' ORDER BY display_name,id", [session.workspace.id, ctx.now])).rows.map(staffView);
+  if (!session.lockedMerchantId) fail('Select a lender before looking up available assignees.', 409);
+  return (await session.client.query<StaffRow>(`SELECT member.* FROM valopay_staff_memberships member
+    WHERE member.workspace_id=$1 AND member.status='active' AND member.expires_at>$2 AND member.role<>'Read-only'
+      AND (member.role='Admin' OR EXISTS (SELECT 1 FROM valopay_staff_lender_access grant_row WHERE grant_row.membership_id=member.id AND grant_row.merchant_id=$3))
+    ORDER BY member.display_name,member.id`, [session.workspace.id, ctx.now, session.lockedMerchantId])).rows.map(staffView);
 }
 export async function staffDirectory(ctx: StoreContext) {
   const session = sessionFor(ctx);
   if (ctx.accessMode !== 'staff') return { mode: 'sandbox', actor: ctx.actor, members: [], invitations: [], events: [], message: 'Real staff access is not enabled on this host. Demo roles are for practice only.' };
-  const members = (await session.client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 ORDER BY display_name,id', [session.workspace.id])).rows.map(staffView);
+  const memberRows = (await session.client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 ORDER BY display_name,id', [session.workspace.id])).rows;
+  const grants = (await session.client.query<{ membership_id: string; merchant_id: string }>(`SELECT grant_row.membership_id,grant_row.merchant_id FROM valopay_staff_lender_access grant_row JOIN valopay_staff_memberships member ON member.id=grant_row.membership_id JOIN valopay_merchants lender ON lender.id=grant_row.merchant_id WHERE member.workspace_id=$1 AND lender.workspace_id=$1 ORDER BY grant_row.merchant_id`, [session.workspace.id])).rows;
+  const members = memberRows.map(row => ({ ...staffView(row), lenderIds: row.role === 'Admin' ? [] : grants.filter(grant => grant.membership_id === row.id).map(grant => grant.merchant_id), allLenders: row.role === 'Admin' }));
+  const lenders = ctx.role === 'Admin' ? await listMerchants(ctx) : [];
   const invitations = ctx.role === 'Admin' ? (await session.client.query('SELECT id,email,role,status,expires_at AS "expiresAt" FROM valopay_staff_invitations WHERE workspace_id=$1 ORDER BY created_at DESC LIMIT 100', [session.workspace.id])).rows : [];
   const events = ctx.role === 'Admin' ? (await session.client.query('SELECT id,actor,action,subject,detail,created_at AS "createdAt" FROM valopay_staff_events WHERE workspace_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100', [session.workspace.id])).rows : [];
-  return { mode: 'staff', actor: ctx.actor, members, invitations, events, message: 'Verified staff access. Membership and MFA are checked for every request. Financial records remain synthetic.' };
+  return { mode: 'staff', actor: ctx.actor, members, lenders, invitations, events, message: 'Verified staff access. Membership, lender access and MFA are checked for every request. Financial records remain synthetic.' };
 }
 export function viewerScope(ctx: StoreContext) { const session = sessionFor(ctx); return digest(`viewer:${session.workspace.id}:${session.owner || session.principal}`); }
 function teamAdmin(ctx: StoreContext) {
@@ -183,8 +200,25 @@ export async function updateStaff(ctx: StoreContext, id: string, input: { role: 
   if (row.updated_at.toISOString() !== input.expectedUpdatedAt) fail('This membership changed. Refresh the team and review it again.', 409);
   if (row.status === 'revoked' && input.status !== 'revoked') fail('A revoked person must accept a new invitation before access is restored.', 409);
   const result = await session.client.query<StaffRow>(`UPDATE valopay_staff_memberships SET role=$3,status=$4,updated_at=greatest(now(),updated_at+interval '1 millisecond') WHERE workspace_id=$1 AND id=$2 RETURNING *`, [session.workspace.id, id, input.role, input.status]);
+  if (input.status === 'revoked' || input.role !== row.role) await session.client.query('DELETE FROM valopay_staff_lender_access WHERE membership_id=$1', [id]);
   await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.changed', id, { before: { role: row.role, status: row.status }, after: { role: input.role, status: input.status }, reason: input.reason });
   return staffView(result.rows[0]!);
+}
+/** The workspace's exclusive team lock serialises grant changes with every
+ * read/write transaction, so removing a grant blocks later requests using an
+ * already-issued session token after current authorised work completes. */
+export async function updateStaffLenders(ctx: StoreContext, id: string, input: StaffLenderAccessInput) {
+  const session = teamAdmin(ctx);
+  const member = (await session.client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [session.workspace.id, id])).rows[0];
+  if (!member) fail('Staff membership not found.', 404);
+  const available = await listMerchants(ctx);
+  const checked = validateLenderAccessChange(input, { userId: member.user_id, role: member.role, status: member.status, updatedAt: member.updated_at.toISOString(), expiresAt: member.expires_at.toISOString() }, session.userId || '', available.map(lender => lender.id), ctx.now);
+  const before = (await session.client.query<{ merchant_id: string }>('SELECT merchant_id FROM valopay_staff_lender_access WHERE membership_id=$1 ORDER BY merchant_id', [id])).rows.map(row => row.merchant_id);
+  await session.client.query('DELETE FROM valopay_staff_lender_access WHERE membership_id=$1', [id]);
+  for (const merchantId of checked.lenderIds) await session.client.query('INSERT INTO valopay_staff_lender_access(membership_id,merchant_id,granted_by,granted_at) VALUES($1,$2,$3,$4)', [id, merchantId, ctx.actor, ctx.now]);
+  const updated = (await session.client.query<StaffRow>(`UPDATE valopay_staff_memberships SET updated_at=greatest(now(),updated_at+interval '1 millisecond') WHERE id=$1 AND workspace_id=$2 RETURNING *`, [id, session.workspace.id])).rows[0]!;
+  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.lender_access_changed', id, { before, after: [...checked.lenderIds].sort(), reason: checked.reason });
+  return { ...staffView(updated), lenderIds: checked.lenderIds, allLenders: false, message: 'Lender access saved. Existing sessions must pass these permissions on their next request.' };
 }
 export async function revokeInvitation(ctx: StoreContext, id: string) {
   const session = teamAdmin(ctx);
@@ -209,6 +243,7 @@ async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: strin
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await bindRuntimeIdentity(client, { organizationId: auth.orgId || '', userId: auth.userId || '' }, { token, verifiedEmails });
     const team = (await client.query<{ workspace_id: string }>(`SELECT t.workspace_id FROM valopay_teams t JOIN valopay_workspaces w ON w.id=t.workspace_id WHERE t.organization_id=$1 FOR UPDATE OF w`, [auth.orgId])).rows[0];
     if (!team) fail('Select the organisation named in your invitation.', 403);
     const checkedAt = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();
@@ -217,6 +252,10 @@ async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: strin
     if (!invite || !verifiedEmails.includes(invite.email)) fail('This invitation is expired, used, revoked or belongs to another verified email address.', 403);
     const existing = (await client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND user_id=$2 FOR UPDATE', [team.workspace_id, auth.userId])).rows[0];
     if (existing?.status === 'active' && existing.expires_at > new Date(checkedAt)) fail('You already have an active membership. Ask an administrator to change its role.', 409);
+    if(existing) {
+      if (runtimeIsolationEnabled()) await clearRuntimeInviteeGrants(client);
+      else await client.query('DELETE FROM valopay_staff_lender_access WHERE membership_id=$1',[existing.id]);
+    }
     await client.query(`INSERT INTO valopay_staff_memberships(id,workspace_id,user_id,display_name,role,status,expires_at) VALUES($1,$2,$3,$4,$5,'active',now()+interval '90 days')
       ON CONFLICT(workspace_id,user_id) DO UPDATE SET display_name=EXCLUDED.display_name,role=EXCLUDED.role,status='active',expires_at=EXCLUDED.expires_at,updated_at=greatest(now(),valopay_staff_memberships.updated_at+interval '1 millisecond')`, [randomUUID(), team.workspace_id, auth.userId, invite.email, invite.role]);
     await client.query("UPDATE valopay_staff_invitations SET status='accepted' WHERE id=$1 AND workspace_id=$2", [invite.id, team.workspace_id]);
@@ -227,6 +266,7 @@ async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: strin
 
 /** Operator-only bootstrap; never called by an HTTP route. */
 export async function provisionStaffWorkspace(organizationId: string, userId: string, name: string) {
+  if (runtimeIsolationEnabled()) fail('Provision isolated staff workspaces through the separate migration-owner connection before starting the restricted runtime.', 503);
   if (!staffMode() || !/^org_[A-Za-z0-9]+$/.test(organizationId) || !/^user_[A-Za-z0-9]+$/.test(userId) || !name.trim() || name.length > 100) fail('Provide a staging organisation, administrator user ID and workspace name.');
   const client = await pool.connect(), workspaceId = randomUUID();
   try {
@@ -275,6 +315,32 @@ function sessionFor(context: StoreContext): Session {
   if (!session || !session.active) fail("This workspace transaction is no longer available.", 409);
   return session;
 }
+export function systemWorkspaceMatches(context:StoreContext,workspaceId:string):boolean {return context.actor.startsWith(SYSTEM_ACTOR_PREFIX)&&sessionFor(context).workspace.id===workspaceId;}
+export async function verifyWorkspaceEncryption(context:StoreContext) {
+  const session=teamAdmin(context);
+  if(!payloadEncryptionKey())fail('Configure managed payload encryption before running this check.',503);
+  const scope={lender:session.workspace.id,record:randomUUID(),field:'synthetic-key-check'},value={synthetic:true,nonce:randomUUID()};
+  const sealed=await protectStored(value,scope),opened=await revealStored(sealed,scope);
+  if(canonical(value)!==canonical(opened))fail('The encryption check failed.',503);
+  await staffEvent(session.client,session.workspace.id,context.actor,'encryption.verified','workspace',{synthetic:true,checkedAt:context.now});
+  return {message:'Managed encryption and decryption succeeded for a synthetic payload.',checkedAt:context.now,verified:true};
+}
+/** Bounded, repeatable protection of legacy payloads. Metadata and request
+ * fingerprints remain stable; no recovery key is erased or reused. */
+export async function protectWorkspacePayloads(context:StoreContext) {
+  const session=teamAdmin(context);
+  if(!payloadEncryptionKey())fail('Configure managed payload encryption first.',503);
+  // One record per request bounds managed-key calls and keeps progress restartable.
+  const batch=1;let protectedCount=0;
+  const imports=(await session.client.query<RecordRow>(`SELECT r.* FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id WHERE m.workspace_id=$1 AND r.kind='import-batches' AND (r.data ? 'csv' AND NOT (jsonb_typeof(r.data->'csv')='object' AND r.data->'csv' ? 'protectedPayload')) ORDER BY r.id LIMIT $2 FOR UPDATE OF r`,[session.workspace.id,batch])).rows;
+  for(const row of imports){const record=await revealRecordData(rowToRecord(row));await session.client.query('UPDATE valopay_records SET data=$3 WHERE id=$1 AND merchant_id=$2',[row.id,row.merchant_id,await protectRecordData(record)]);protectedCount++;}
+  const operations=(await session.client.query<OperationRow>(`SELECT o.* FROM valopay_operations o JOIN valopay_merchants m ON m.id=o.merchant_id WHERE m.workspace_id=$1 AND ((NOT(o.request ? 'protectedPayload') AND NOT(o.request ? 'purged')) OR (o.receipt IS NOT NULL AND NOT(o.receipt ? 'protectedPayload') AND NOT(o.receipt ? 'purged'))) ORDER BY o.id LIMIT $2 FOR UPDATE OF o`,[session.workspace.id,batch])).rows;
+  for(const row of operations){if(protectedCount)break;const scope={lender:row.merchant_id,record:row.id};const request=isProtectedPayload(row.request)?row.request:await protectStored(row.request,{...scope,field:'request'});const receipt=row.receipt===null||isProtectedPayload(row.receipt)?row.receipt:await protectStored(row.receipt,{...scope,field:'receipt'});await session.client.query('UPDATE valopay_operations SET request=$3,receipt=$4 WHERE id=$1 AND merchant_id=$2',[row.id,row.merchant_id,request,receipt]);protectedCount++;}
+  const receipts=(await session.client.query<{id:string;merchant_id:string;response:unknown}>(`SELECT i.* FROM valopay_idempotency i JOIN valopay_merchants m ON m.id=i.merchant_id WHERE m.workspace_id=$1 AND NOT(i.response ? 'protectedPayload') AND NOT(i.response ? 'purged') ORDER BY i.id LIMIT $2 FOR UPDATE OF i`,[session.workspace.id,batch])).rows;
+  for(const row of receipts){if(protectedCount)break;await session.client.query('UPDATE valopay_idempotency SET response=$3 WHERE id=$1 AND merchant_id=$2',[row.id,row.merchant_id,await protectStored(row.response,{lender:row.merchant_id,record:row.id,field:'response'})]);protectedCount++;}
+  await staffEvent(session.client,session.workspace.id,context.actor,'encryption.protected','workspace',{protectedCount,at:context.now});
+  return {message:protectedCount?'Protected another batch of stored payloads. Run again until no payloads remain.':'No unprotected import or recovery payloads remain in this workspace.',protectedCount,mayHaveMore:protectedCount>0};
+}
 function rowsAffected(result: { rowCount: number | null }): boolean { return (result.rowCount || 0) === 1; }
 function rowToRecord(row: RecordRow): ValopayRecord {
   return {
@@ -300,7 +366,11 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
   const client = await pool.connect();
   let context: StoreContext | undefined;
   try {
-    await client.query("BEGIN");
+    await client.query(runtimeIsolationEnabled() && access === 'read' ? 'BEGIN ISOLATION LEVEL REPEATABLE READ' : 'BEGIN');
+    if (runtimeIsolationEnabled()) {
+      const verified = getAuth(req) as unknown as VerifiedClerkSession;
+      await bindRuntimeIdentity(client, { organizationId: verified.orgId || '', userId: verified.userId || '' });
+    }
     // Single source of time: the database clock, read once per transaction.
     let now = (await client.query<{ now: Date }>("SELECT now() AS now")).rows[0]!.now.toISOString();
     const workspaceQuery = `SELECT id,principal_hash,role FROM valopay_workspaces WHERE principal_hash=$1 FOR ${access === "persona" || access === 'team' ? "UPDATE" : "SHARE"}`;
@@ -346,7 +416,7 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       }
     }
     context = Object.freeze({
-      authenticated: identity.authenticated, role: staff?.role || workspace.role,
+      authenticated: identity.authenticated, role: staff?.role || workspace.role, principalId: identity.principal,
       actor: staff ? `Clerk:${staff.user_id}` : `Sandbox ${workspace.role}`, now, accessMode: staff ? 'staff' : 'sandbox',
     });
     sessions.set(context, { client, workspace, principal: workspace.principal_hash, owner: identity.principal, active: true, access,
@@ -377,8 +447,9 @@ export async function listMerchants(context: StoreContext) {
   const session = sessionFor(context);
   return (await session.client.query<{ info: DomainState["merchant"] }>(
     `SELECT m.info FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id
-     WHERE m.workspace_id=$1 AND w.id=$1 AND w.principal_hash=$2 ORDER BY m.id`,
-    [session.workspace.id, session.principal],
+     WHERE m.workspace_id=$1 AND w.id=$1 AND w.principal_hash=$2
+       AND ($3::boolean OR EXISTS (SELECT 1 FROM valopay_staff_lender_access grant_row JOIN valopay_staff_memberships member ON member.id=grant_row.membership_id WHERE grant_row.merchant_id=m.id AND member.workspace_id=$1 AND member.user_id=$4 AND member.status='active' AND member.expires_at>clock_timestamp())) ORDER BY m.id`,
+    [session.workspace.id, session.principal, context.accessMode !== 'staff' || context.role === 'Admin', session.userId || ''],
   )).rows.map((row) => row.info);
 }
 
@@ -395,10 +466,14 @@ async function readMerchant(context: StoreContext, merchantId: string, lock: Exc
   if (session.access === "read" && lock === "update") conflict("A read transaction cannot acquire a lender write lock.");
   if (session.lockedMerchantId && session.lockedMerchantId !== merchantId) conflict("A transaction may operate on only one lender.");
   const merchant = (await session.client.query<MerchantRow>(
-    scopedMerchantQuery(lock),
+    scopedMerchantQuery(runtimeIsolationEnabled() && context.role === 'Read-only' && lock === 'share' ? 'none' : lock),
     [merchantId, session.workspace.id, session.principal],
   )).rows[0];
   if (!merchant) fail("Lender not found in this workspace.", 404);
+  if (context.accessMode === 'staff' && context.role !== 'Admin') {
+    const grant = (await session.client.query(`SELECT 1 FROM valopay_staff_lender_access grant_row JOIN valopay_staff_memberships member ON member.id=grant_row.membership_id WHERE grant_row.merchant_id=$1 AND member.workspace_id=$2 AND member.user_id=$3 AND member.status='active' AND member.expires_at>clock_timestamp()`, [merchantId, session.workspace.id, session.userId])).rows[0];
+    if (!grant) fail('Lender not found in your permitted workspace access.', 404);
+  }
   if (session.operationId && lock === 'update') {
     const operation = (await session.client.query<OperationRow>('SELECT * FROM valopay_operations WHERE id=$1 AND merchant_id=$2 AND owner=$3', [session.operationId, merchantId, session.owner || session.principal])).rows[0];
     if (!operation || operation.actor !== context.actor || operation.role !== context.role || operation.status === 'cancelled') fail('This request has been cancelled or your authority changed. Refresh Operations.', 409);
@@ -418,7 +493,7 @@ export async function loadState(context: StoreContext, merchantId: string, lock:
      WHERE r.merchant_id=$1 AND m.workspace_id=$2 AND w.id=$2 AND w.principal_hash=$3 ORDER BY r.created_at,r.id`,
     [merchantId, session.workspace.id, session.principal],
   )).rows.map(rowToRecord);
-  const state: DomainState = { merchant: merchant.info, settings: merchant.settings, records };
+  const state: DomainState = { merchant: merchant.info, settings: merchant.settings, records:await Promise.all(records.map(revealRecordData)) };
   if (state.merchant.id !== merchantId) conflict("Lender identity does not match its stored scope.");
   // A shared load is read-only, even in an otherwise write-capable context.
   // Avoid cloning the entire history just to serve a dashboard or export lookup.
@@ -677,12 +752,14 @@ export async function loadSettingsView(context: StoreContext, merchantId: string
 export async function findIdempotency(context: StoreContext, id: string) {
   const session = sessionFor(context);
   const merchantId = lockedMerchant(session);
-  return (await session.client.query<{ request_hash: string; response: any }>(
+  const found = (await session.client.query<{ request_hash: string; response: any }>(
     `SELECT i.request_hash,i.response FROM valopay_idempotency i JOIN valopay_merchants m ON m.id=i.merchant_id
      JOIN valopay_workspaces w ON w.id=m.workspace_id
      WHERE i.id=$1 AND i.merchant_id=$2 AND m.workspace_id=$3 AND w.id=$3 AND w.principal_hash=$4`,
     [id, merchantId, session.workspace.id, session.principal],
   )).rows[0];
+  if(found?.response?.purged)fail('This request already completed and its retained payload has expired. It cannot run again.',410);
+  return found ? {...found,response:await revealStored(found.response,{lender:merchantId,record:id,field:'response'})} : undefined;
 }
 /** Stores the answer under the key with the request's fingerprint, so a replay with different input is refused. */
 export async function saveIdempotency(context: StoreContext, id: string, requestHash: string, response: unknown) {
@@ -696,7 +773,7 @@ export async function saveIdempotency(context: StoreContext, id: string, request
        SELECT $1,$2,$3,$4 WHERE EXISTS (
          SELECT 1 FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id
          WHERE m.id=$2 AND m.workspace_id=$5 AND w.id=$5 AND w.principal_hash=$6)`,
-      [id, merchantId, requestHash, response, session.workspace.id, session.principal],
+      [id, merchantId, requestHash, await protectStored(response,{lender:merchantId,record:id,field:'response'}), session.workspace.id, session.principal],
     );
     if (!rowsAffected(inserted)) fail("Lender not found in this workspace.", 404);
     await completeOperation(context, response);
@@ -759,12 +836,30 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
     if (present.id !== before.id || present.merchantId !== before.merchantId || present.kind !== before.kind || present.createdAt !== before.createdAt) {
       conflict("Record identity, lender, kind, and creation time are immutable.");
     }
-    if (["audit", "exports", "reviews", "closes", "retry-decisions", "invoices", "connected-credit-assessments", "connected-credit-reviews", "case-events", "import-revisions"].includes(before.kind) && canonical(present) !== canonical(before)
-      && !(before.kind === "exports" && isExportRetry(before, present, now))) conflict("Evidence records are immutable.");
+    const retentionChange=()=>{
+      const kind=before.kind==='exports'?'export_file':'raw_csv';
+      const receipt=[...final.values()].find(r=>r.kind==='retention-receipts'&&!original.has(r.id)&&r.data.sourceId===before.id&&r.data.kind===kind&&['deleted','already_absent'].includes(r.data.result));
+      const run=receipt&&original.get(receipt.data.runId);
+      if(!run||run.kind!=='retention-runs'||!['approved','running','attention'].includes(run.status)||!run.data.candidates.some((c:any)=>c.sourceId===before.id&&c.kind===kind&&c.version===before.updatedAt))return false;
+      const expected=structuredClone(before);expected.updatedAt=present.updatedAt;
+      if(kind==='raw_csv'){delete expected.data.csv;if(expected.data.check)delete expected.data.check.preview;expected.data.rawCsvRemovedAt=now;expected.data.rawCsvRetentionRunId=run.id;}
+      else {expected.data.fileDeletedAt=now;expected.data.fileRetentionRunId=run.id;}
+      return canonical(expected)===canonical(present);
+    };
+    if (["audit", "exports", "reviews", "closes", "retry-decisions", "invoices", "connected-credit-assessments", "connected-credit-reviews", "case-events", "import-revisions", "close-review-events", "work-events", "retention-policies", "retention-holds", "retention-receipts"].includes(before.kind) && canonical(present) !== canonical(before)
+      && !(before.kind === "exports" && (isExportRetry(before, present, now)||retentionChange()))) conflict("Evidence records are immutable.");
     if (["policies", "templates", "experiments"].includes(before.kind) && ["approved", "preregistered", "closed"].includes(before.status) && canonical(present) !== canonical(before)) {
       conflict("Approved, preregistered, and closed versions are immutable.");
     }
-    if (before.kind === 'import-batches' && before.status === 'committed' && canonical(present) !== canonical(before)) conflict('Committed source batches are immutable.');
+    if (before.kind === 'provider-events') assertProviderEventChange(before,present);
+    if (before.kind === 'source-profiles' && ['source','kind'].some(key=>canonical(before.data[key])!==canonical(present.data[key]))) conflict('A source profile cannot change its source or record type.');
+    if (before.kind === 'import-batches' && before.status === 'committed' && canonical(present) !== canonical(before)&&!retentionChange()) conflict('Committed source batches are immutable.');
+    if(before.kind==='close-reviews'&&canonical(present)!==canonical(before)){
+      const expected=structuredClone(before);expected.status=present.status;expected.updatedAt=present.updatedAt;
+      for(const field of ['decidedBy','decidedPrincipal','decidedAt','decisionNote'])expected.data[field]=present.data[field];
+      if(before.status!=='awaiting_review'||!['approved','changes_requested'].includes(present.status)||canonical(expected)!==canonical(present))conflict('The prepared close snapshot and recorded decision are immutable.');
+    }
+    if(before.kind==='retention-runs'&&['candidates','previewDigest','policyRevision','expiresAt','preparedBy'].some(key=>canonical(before.data[key])!==canonical(present.data[key])))conflict('The approved retention manifest is immutable.');
     if (before.data.importIdentity && canonical(present.data.importIdentity) !== canonical(before.data.importIdentity)) conflict('Source row provenance is immutable.');
   }
   const dueReferences = new Set<string>(), observations = new Set<string>(), inflight = new Set<string>();
@@ -887,7 +982,7 @@ export async function saveState(context: StoreContext, state: DomainState): Prom
   });
   for (const record of sorted) {
     if (old.get(record.id) === canonical(record)) continue;
-    const values = [record.id, merchantId, record.kind, record.name, record.status, record.reference, record.amountKobo, record.customerId, record.data, record.createdAt, record.updatedAt];
+    const values = [record.id, merchantId, record.kind, record.name, record.status, record.reference, record.amountKobo, record.customerId, await protectRecordData(record), record.createdAt, record.updatedAt];
     if (old.has(record.id)) {
       const result = await session.client.query(
         `UPDATE valopay_records SET name=$4,status=$5,reference=$6,amount_kobo=$7,customer_id=$8,data=$9,updated_at=$11
@@ -917,6 +1012,53 @@ export async function saveState(context: StoreContext, state: DomainState): Prom
   // A subsequent repository save in this transaction validates against this
   // fresh authoritative snapshot, never a caller-supplied "previous" array.
   session.snapshot = structuredClone(state);
+}
+
+export async function lifecycleInventory(context:StoreContext,state:DomainState):Promise<LifecycleExternalCandidate[]> {
+ const session=sessionFor(context),merchantId=lockedMerchant(session);
+ if(context.role!=='Admin'||state.merchant.id!==merchantId)fail('An administrator in this lender is required.',403);
+ const rows=(await session.client.query<OperationRow>("SELECT * FROM valopay_operations WHERE merchant_id=$1 AND status IN ('completed','cancelled') AND NOT(request ? 'purged') ORDER BY updated_at,id",[merchantId])).rows;
+ return [
+  ...rows.map(row=>({kind:'journal_payload' as const,merchantId,sourceId:row.id,version:row.updated_at.toISOString(),createdAt:row.updated_at.toISOString(),label:'Terminal operation payload',digest:digest(canonical({request:row.request,receipt:row.receipt,key:row.request_key,hash:row.request_hash,status:row.status})),status:row.status as 'completed'|'cancelled'})),
+  ...state.records.filter(r=>r.kind==='exports'&&['ready','failed'].includes(r.status)&&!r.data.fileDeletedAt&&r.data.bucket&&r.data.objectName).map(r=>({kind:'export_file' as const,merchantId,sourceId:r.id,version:r.updatedAt,createdAt:String(r.data.generatedAt||r.updatedAt),label:'Private export file',digest:digest(canonical({id:r.id,status:r.status,data:r.data})),status:r.status as 'ready'|'failed'})),
+ ];
+}
+/** One candidate per request bounds external work and makes progress resumable.
+ * The lender lock prevents a hold or retry being introduced during deletion. */
+export async function executeLifecycleRun(context:StoreContext,state:DomainState,id:string) {
+ const session=sessionFor(context),merchantId=lockedMerchant(session);
+ if(context.role!=='Admin'||session.access!=='write'||state.merchant.id!==merchantId)fail('An administrator in this lender is required.',403);
+ const run=state.records.find(r=>r.id===id&&r.kind==='retention-runs');if(!run)fail('Retention run not found.',404);
+ if(run.status==='completed')return lifecycleRunView(state,run);
+ const external=await lifecycleInventory(context,state);
+ const attempted=new Set(state.records.filter(r=>r.kind==='retention-receipts'&&r.data.runId===id).map(r=>`${r.data.kind}:${r.data.sourceId}`));
+ const candidates=[...run.data.candidates as LifecycleCandidate[]].sort((a,b)=>Number(attempted.has(`${a.kind}:${a.sourceId}`))-Number(attempted.has(`${b.kind}:${b.sourceId}`)));
+ for(const candidate of candidates){
+  try{
+   if(!assertLifecycleCandidate(state,context,id,candidate,external))continue;
+  }catch{return recordLifecycleReceipt(state,context,id,candidate,'blocked','This source changed, is held or no longer meets the approved policy. Review the source and prepare a fresh preview.');}
+  try{
+   let result:'deleted'|'already_absent'='deleted';
+   if(candidate.kind==='raw_csv')eraseLifecycleRawCsv(state,context,id,candidate);
+   else if(candidate.kind==='journal_payload'){
+    const row=(await session.client.query<OperationRow>('SELECT * FROM valopay_operations WHERE merchant_id=$1 AND id=$2 FOR UPDATE',[merchantId,candidate.sourceId])).rows[0];
+    if(!row||!['completed','cancelled'].includes(row.status))fail('The terminal request is no longer eligible.',409);
+    const tombstone={purged:true,at:context.now,retentionRunId:id};
+    await session.client.query("UPDATE valopay_operations SET request=$3,receipt=$3 WHERE merchant_id=$1 AND id=$2 AND status IN ('completed','cancelled')",[merchantId,row.id,tombstone]);
+    await session.client.query('UPDATE valopay_idempotency SET response=$3 WHERE merchant_id=$1 AND id=ANY($2::text[])',[merchantId,[digest(`${merchantId}:${row.request_key}`),digest(`connected:${merchantId}:${row.request_key}`)],tombstone]);
+   }else{
+    const record=state.records.find(r=>r.id===candidate.sourceId&&r.kind==='exports')!;
+    result=await deleteRetainedExport(objectStorageClient.bucket(record.data.bucket).file(record.data.objectName),{id:record.id,merchantId,checksum:record.data.checksum});
+    record.data.fileDeletedAt=context.now;record.data.fileRetentionRunId=id;
+   }
+   return recordLifecycleReceipt(state,context,id,candidate,result,'Retention action completed. Financial records, provenance, request identities and audit history were retained.');
+  }catch(error){
+   // A SQL error aborts the whole transaction; never mask it as a receipt.
+   if(typeof (error as any)?.code==='string'&&/^[A-Z0-9]{5}$/.test((error as any).code))throw error;
+   return recordLifecycleReceipt(state,context,id,candidate,'failed','Deletion could not be confirmed. Resume this saved run to check the same source; do not create a replacement export.');
+  }
+ }
+ return lifecycleRunView(state,run);
 }
 
 /**
@@ -987,6 +1129,7 @@ export async function inMerchantAsSystem<T>(merchantId: string, actor: string, f
   let context: StoreContext | undefined;
   try {
     await client.query("BEGIN");
+    await bindRuntimeService(client);
     const scope = (await client.query<{ id: string; workspace_id: string; principal_hash: string; role: string }>(
       `SELECT m.id,m.workspace_id,w.principal_hash,w.role FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id
        WHERE m.id=$1 FOR UPDATE OF m SKIP LOCKED`,
@@ -1017,6 +1160,11 @@ export async function inMerchantAsSystem<T>(merchantId: string, actor: string, f
  * A plain read: the caller re-checks under the merchant lock before closing.
  */
 export async function dueScheduledCloses(limit: number): Promise<string[]> {
+  if (runtimeIsolationEnabled()) return runtimeServiceRead(async client => (await client.query<{ id: string }>(
+    `SELECT m.id FROM valopay_merchants m WHERE COALESCE(m.settings->>'scheduledCloseEnabled','true') <> 'false'
+      AND (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END)<=now()
+      ORDER BY (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END),m.id LIMIT $1`,
+    [limit, ISO_INSTANT_PATTERN])).rows.map(row => row.id));
   return (await pool.query<{ id: string }>(
     `SELECT m.id FROM valopay_merchants m
      WHERE COALESCE(m.settings->>'scheduledCloseEnabled','true') <> 'false'
@@ -1033,6 +1181,11 @@ export async function dueScheduledCloses(limit: number): Promise<string[]> {
  * first scheduled close comes at its time rather than at the next tick.
  */
 export async function initialiseCloseCursors(): Promise<number> {
+  if (runtimeIsolationEnabled()) return runtimeServiceRead(async client => {
+    const rows = (await client.query<{ id: string; settings: Record<string, unknown>; now: Date }>("SELECT m.id,m.settings,now() AS now FROM valopay_merchants m WHERE m.settings->>'nextCloseAt' IS NULL FOR UPDATE", [])).rows;
+    for (const row of rows) await client.query("UPDATE valopay_merchants SET settings=settings || jsonb_build_object('nextCloseAt',$2::text) WHERE id=$1 AND settings->>'nextCloseAt' IS NULL", [row.id, nextCloseInstant(row.now.toISOString(), closeTimeOf(row.settings))]);
+    return rows.length;
+  });
   const rows = (await pool.query<{ id: string; settings: Record<string, unknown>; now: Date }>(
     "SELECT m.id,m.settings,now() AS now FROM valopay_merchants m WHERE m.settings->>'nextCloseAt' IS NULL",
   )).rows;

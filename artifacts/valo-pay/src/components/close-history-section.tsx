@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "wouter";
+import { Link, useSearchParams } from "wouter";
 import {
   useListCloseHistory,
   getListCloseHistoryQueryKey,
@@ -174,6 +174,7 @@ export function CloseHistorySection({ active }: { active: boolean }) {
   return (
     <>
       <div className="space-y-4 border-b p-5">
+        <Link href="/close-review" className="inline-flex min-h-11 items-center text-sm font-medium text-primary underline print:hidden">Prepare and review a close with Finance</Link>
         <form
           key={`${merchantId}:${from}:${to}`}
           className="flex flex-wrap items-end gap-3 print:hidden"
@@ -305,10 +306,7 @@ export function CloseHistorySection({ active }: { active: boolean }) {
                   <p className="min-w-0 text-sm leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
                     {String(close.data.summary || "Recorded daily close")}
                   </p>
-                  <CloseEvidence
-                    key={`${merchantId}:${close.id}`}
-                    close={close}
-                  />
+                  <div className="min-w-0 space-y-2"><CloseEvidence key={`${merchantId}:${close.id}`} close={close} /><Link href={`/close-review?close=${encodeURIComponent(close.id)}`} className="inline-flex min-h-11 items-center text-sm text-primary underline print:hidden">View Finance review</Link></div>
                 </li>
               ))}
             </ol>

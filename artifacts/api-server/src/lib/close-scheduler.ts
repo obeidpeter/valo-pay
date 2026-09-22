@@ -14,6 +14,7 @@ import { SYSTEM_ACTOR_PREFIX, appendAudit, canonical, digest, dueScheduledCloses
 import { runDailyClose } from "../domain/actions";
 import { scheduledCloseDue } from "../domain/close";
 import { enrolEligibleFailures } from "../domain/policy-engine";
+import { bindCloseReviewBasis } from '../domain/close-review';
 
 /** The system actor recorded on a scheduled close. */
 export const SCHEDULED_CLOSE_ACTOR = `${SYSTEM_ACTOR_PREFIX}scheduled close`;
@@ -66,6 +67,7 @@ export async function runDueCloses(options: { batchSize?: number; log?: Logger }
         const before = structuredClone(state);
         const result = runDailyClose(state, ctx, "scheduled");
         enrolEligibleFailures(state, ctx);
+        if(result.record?.kind==='closes')bindCloseReviewBasis(state,result.record);
         appendAudit(state, ctx, "daily_close", result.record!.id, result.message, { beforeDigest: digest(canonical(before)), afterDigest: digest(canonical(state)) });
         await saveState(ctx, state);
         const schedule = result.data.schedule as { late?: boolean; delayMinutes?: number | null } | undefined;

@@ -2,6 +2,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "./workspace-context";
 import { useSafeMutation } from "./safe-mutations";
 import { CreateRecordResponse } from "@workspace/api-zod";
+import { workReceiptSchema, lifecycleRunViewSchema, lifecycleViewSchema } from '@workspace/valopay-schema';
+import { z } from 'zod';
 export async function pilotRequest<T = any>(
   path: string,
   options: RequestInit = {},
@@ -64,6 +66,12 @@ export function usePilotMutation(onSuccess?: (data: any) => void) {
           body: JSON.stringify(v.data || {}),
         },
       );
+      const expectedKind = /^\/pilot\/close-reviews\//.test(v.path) ? 'close-reviews' : /^\/sources\/profiles(?:\/|$)/.test(v.path) ? 'source-profiles' : undefined;
+      if(expectedKind && (!CreateRecordResponse.safeParse(result).success || result.kind !== expectedKind || result.merchantId !== merchantId || !result.id))throw new Error('The service returned an incomplete confirmation. Check Operations before submitting again.');
+      if(v.path.startsWith('/work/')) {const receipt=workReceiptSchema.parse(result);if(receipt.merchantId!==merchantId||receipt.actor!==workspace?.actor)throw new Error('The confirmation belongs to another workspace. Refresh Operations.');}
+      if(v.path.startsWith('/lifecycle/')){const receipt=v.path.startsWith('/lifecycle/runs')?lifecycleRunViewSchema.parse(result):lifecycleViewSchema.parse(result);if(receipt.merchantId!==merchantId)throw new Error('The retention confirmation belongs to another lender. Refresh Operations.');}
+      if(v.path==='/sources/paystack/fixtures') z.object({accepted:z.boolean(),duplicate:z.boolean(),event:z.object({id:z.string().min(1),mode:z.literal('fixture'),financialRecordsCreated:z.literal(0)})}).parse(result);
+      if(/^\/sources\/events\//.test(v.path))z.object({id:z.string().min(1),mode:z.enum(['fixture','test']),financialRecordsCreated:z.literal(0)}).parse(result);
       if (
         /^\/pilot\/(batches|cases)/.test(v.path) &&
         (!CreateRecordResponse.safeParse(result).success ||

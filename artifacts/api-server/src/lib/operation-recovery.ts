@@ -30,7 +30,11 @@ export function recoverableRequest(
     path === "/v1/exports" ||
     /^\/v1\/exports\/[^/]+\/retry$/.test(path) ||
     /^\/v1\/pilot\/batches(?:\/[^/]+\/(?:save|commit))?$/.test(path) ||
-    /^\/v1\/pilot\/cases\/[^/]+$/.test(path)
+    /^\/v1\/pilot\/cases\/[^/]+$/.test(path) ||
+    /^\/v1\/pilot\/close-reviews\/(?:prepare|[^/]+\/decision)$/.test(path) ||
+    /^\/v1\/sources\/(?:profiles(?:\/[^/]+\/save)?|paystack\/fixtures|events\/[^/]+\/replay)$/.test(path) ||
+    /^\/v1\/work\/(?:notifications\/read|handovers\/acknowledge)$/.test(path) ||
+    /^\/v1\/lifecycle\/(?:policy|holds|runs(?:\/[^/]+\/(?:approve|execute))?)$/.test(path)
   );
 }
 const query = z.object({ merchantId: z.string().min(1).max(100) });
