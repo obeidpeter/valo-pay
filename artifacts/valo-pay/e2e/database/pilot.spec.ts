@@ -15,8 +15,10 @@ test("onboards an empty lender, persists imports and discovers a lost acknowledg
     ),
   ).toBeVisible();
   const select = page.locator('select[id^="lender-"]:visible');
-  const lender = await select.inputValue();
+  // The selector switches to the new lender once the workspace list refreshes,
+  // which can land after the notice; read its value only when it has.
   await expect(select.locator("option:checked")).toHaveText(name);
+  const lender = await select.inputValue();
   await page.goto("/imports");
   await expect(select).toHaveValue(lender);
   await page.getByRole("button", { name: "Use sample", exact: true }).click();
