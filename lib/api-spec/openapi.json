@@ -1029,7 +1029,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Provider name; every provider's ingress is disabled in the sandbox."
+            "description": "Provider name; this generic address refuses every provider (the Paystack test ingress has its own address)."
           }
         ],
         "responses": {
@@ -1037,8 +1037,8 @@
             "description": "Disabled until a provider-specific signed adapter is configured. No events are processed."
           }
         },
-        "summary": "Provider webhook ingress, disabled in the sandbox",
-        "description": "Always 403: no provider adapter is configured and no event is processed."
+        "summary": "Generic provider webhook address, always refused",
+        "description": "Always 403: no event is processed here. Paystack test events go to POST /v1/providers/paystack/{connectionId}/events."
       }
     },
     "/v1/queues/{queue}": {
@@ -3676,6 +3676,84 @@
         },
         "summary": "Replay a stored provider event",
         "description": "Re-processes the event with the reason recorded; duplicates are recognised and counted."
+      }
+    },
+    "/v1/providers/paystack/{connectionId}/events": {
+      "post": {
+        "operationId": "receivePaystackTestEvent",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "connectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "description": "The opaque ID an operator mapped to one synthetic lender in VALOPAY_PAYSTACK_CONNECTIONS; it alone selects the lender, and it is not a credential."
+          },
+          {
+            "name": "x-paystack-signature",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{128}$"
+            },
+            "description": "HMAC-SHA512 of the exact request bytes under the configured test secret key, in hexadecimal."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaystackDeliveryReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not JSON bytes, the connection ID is malformed, or the signed event is inconsistent or from live mode"
+          },
+          "401": {
+            "description": "The signature does not match the exact bytes under the configured test key; nothing was locked, read or saved"
+          },
+          "403": {
+            "description": "The mapped lender is not a synthetic lender in sandbox or observation mode with its kill switch on, or the mapping names another workspace"
+          },
+          "404": {
+            "description": "No lender is mapped to this connection ID"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "413": {
+            "description": "The body is larger than 256 KiB"
+          },
+          "429": {
+            "description": "More than 120 deliveries a minute from this client address; retry after the Retry-After seconds"
+          },
+          "503": {
+            "description": "The ingress is off or misconfigured, or the lender is busy; Paystack delivers again"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaystackTestEvent"
+              }
+            }
+          }
+        },
+        "summary": "Receive a signed Paystack test event",
+        "description": "The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key, and at most 120 deliveries a minute per client address."
       }
     },
     "/v1/work": {
@@ -8813,6 +8891,41 @@
           "event"
         ],
         "description": "Whether the fixture was accepted or recognised as a duplicate, and the stored event."
+      },
+      "PaystackTestEvent": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "The event's payload as Paystack sent it."
+          }
+        },
+        "required": [
+          "event",
+          "data"
+        ],
+        "description": "A Paystack test event exactly as Paystack signed it. The signature covers these bytes, so the body is authenticated before it is parsed. charge.success and the two direct-debit authorisation events are recorded; any other signed event is acknowledged and recorded as ignored."
+      },
+      "PaystackDeliveryReceipt": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "const": true
+          },
+          "duplicate": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accepted",
+          "duplicate"
+        ],
+        "description": "The acknowledgement Paystack receives: the signed event is saved in the mapped lender's inbox, or recognised as a repeat delivery of one already saved."
       },
       "PersonalWorkView": {
         "type": "object",

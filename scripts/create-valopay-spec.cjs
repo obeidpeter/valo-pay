@@ -57,7 +57,7 @@ function add(path, method, id, response, body, params = []) {
  if(body)op.requestBody={required:true,content:{"application/json":{schema:ref(body)}}};
  (paths[path]??={})[method]=op;
 }
-const pathDescriptions = { kind: "Record kind: one of the shared schema's recordKinds (customers, mandates, due-items, attempts, observations, payments, ...).", id: "The record's id.", provider: "Provider name; every provider's ingress is disabled in the sandbox." };
+const pathDescriptions = { kind: "Record kind: one of the shared schema's recordKinds (customers, mandates, due-items, attempts, observations, payments, ...).", id: "The record's id.", provider: "Provider name; this generic address refuses every provider (the Paystack test ingress has its own address)." };
 const pathParam = (name) => ({name,in:"path",required:true,schema:str,description:pathDescriptions[name]});
 const merchant = {name:"merchantId",in:"query",required:true,schema:str,description:"The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."};
 const search = {name:"search",in:"query",schema:str,description:"Text matched, ignoring case and accents, against the name, reference, status and data."};
@@ -108,7 +108,7 @@ describe('/v1/exports/{id}','get','Check a saved export','Tenant-authorised stat
 describe('/v1/exports/{id}/retry','post','Retry a saved export','Requeues a failed or expired job while preserving its identity and private object key. Running and ready jobs are returned unchanged; retries cannot overwrite a completed file.');
 describe("/v1/exports/{id}/download","get","Download an export","The bytes are read from private storage and checked against the recorded SHA-256 before any are sent.");
 describe("/v1/openapi.json","get","This specification","The versioned public contract the console and the generated clients are built from.");
-describe("/v1/webhooks/{provider}","post","Provider webhook ingress, disabled in the sandbox","Always 403: no provider adapter is configured and no event is processed.");
+describe("/v1/webhooks/{provider}","post","Generic provider webhook address, always refused","Always 403: no event is processed here. Paystack test events go to POST /v1/providers/paystack/{connectionId}/events.");
 const schemaDescriptions = {
   HealthStatus: "The liveness answer: the build, when the process started, its uptime and what the close scheduler is doing.",
   SchedulerRun: "The last scheduler pass that found work: its id, when it ran, how long it took and what it did.",
@@ -546,6 +546,21 @@ operation("/v1/sources/profiles/{id}/save", "post", "saveSourceProfile", "Valopa
 operation("/v1/sources/manifests", "post", "saveSourceManifest", "ValopayRecord", "SourceManifestInput", [merchant, keyHeader], "Declare the expected source files", "Records what must arrive for a business date. A revision must name the current declaration; a source batch declared for another date is refused.");
 operation("/v1/sources/paystack/fixtures", "post", "runPaystackFixture", "PaystackFixtureResult", "PaystackFixtureInput", [merchant, keyHeader], "Deliver a recorded Paystack scenario", "Runs a test-only fixture through the inbox. No external call is made and no financial record is created.");
 operation("/v1/sources/events/{id}/replay", "post", "replayProviderEvent", "ProviderEvent", "ProviderReplayInput", [pathParam("id"), merchant, keyHeader], "Replay a stored provider event", "Re-processes the event with the reason recorded; duplicates are recognised and counted.");
+// The Paystack test ingress: the address an operator registers with a Paystack test account, not a console call.
+described("PaystackTestEvent", obj({ event: str, data: { type: "object", additionalProperties: {}, description: "The event's payload as Paystack sent it." } }), "A Paystack test event exactly as Paystack signed it. The signature covers these bytes, so the body is authenticated before it is parsed. charge.success and the two direct-debit authorisation events are recorded; any other signed event is acknowledged and recorded as ignored.");
+described("PaystackDeliveryReceipt", obj({ accepted: { type: "boolean", const: true }, duplicate: bool }), "The acknowledgement Paystack receives: the signed event is saved in the mapped lender's inbox, or recognised as a repeat delivery of one already saved.");
+const connectionIdParam = { name: "connectionId", in: "path", required: true, schema: { type: "string", pattern: "^[a-f0-9]{64}$" }, description: "The opaque ID an operator mapped to one synthetic lender in VALOPAY_PAYSTACK_CONNECTIONS; it alone selects the lender, and it is not a credential." };
+const paystackSignature = { name: "x-paystack-signature", in: "header", required: true, schema: { type: "string", pattern: "^[a-fA-F0-9]{128}$" }, description: "HMAC-SHA512 of the exact request bytes under the configured test secret key, in hexadecimal." };
+operation("/v1/providers/paystack/{connectionId}/events", "post", "receivePaystackTestEvent", "PaystackDeliveryReceipt", "PaystackTestEvent", [connectionIdParam, paystackSignature], "Receive a signed Paystack test event", "The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key, and at most 120 deliveries a minute per client address.");
+Object.assign(paths["/v1/providers/paystack/{connectionId}/events"].post.responses, {
+  "400": { description: "The body is not JSON bytes, the connection ID is malformed, or the signed event is inconsistent or from live mode" },
+  "401": { description: "The signature does not match the exact bytes under the configured test key; nothing was locked, read or saved" },
+  "403": { description: "The mapped lender is not a synthetic lender in sandbox or observation mode with its kill switch on, or the mapping names another workspace" },
+  "404": { description: "No lender is mapped to this connection ID" },
+  "413": { description: "The body is larger than 256 KiB" },
+  "429": { description: "More than 120 deliveries a minute from this client address; retry after the Retry-After seconds" },
+  "503": { description: "The ingress is off or misconfigured, or the lender is busy; Paystack delivers again" },
+});
 
 // Personal work.
 derived("PersonalWorkView", shared.personalWorkViewSchema, "The caller's (or, for administrators, the team's) cases, handovers, reviews and notifications, paged and counted.");

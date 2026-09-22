@@ -2093,6 +2093,28 @@ export interface PaystackFixtureResult {
   event: ProviderEvent;
 }
 
+/**
+ * The event's payload as Paystack sent it.
+ */
+export type PaystackTestEventData = {[key: string]: unknown};
+
+/**
+ * A Paystack test event exactly as Paystack signed it. The signature covers these bytes, so the body is authenticated before it is parsed. charge.success and the two direct-debit authorisation events are recorded; any other signed event is acknowledged and recorded as ignored.
+ */
+export interface PaystackTestEvent {
+  event: string;
+  /** The event's payload as Paystack sent it. */
+  data: PaystackTestEventData;
+}
+
+/**
+ * The acknowledgement Paystack receives: the signed event is saved in the mapped lender's inbox, or recognised as a repeat delivery of one already saved.
+ */
+export interface PaystackDeliveryReceipt {
+  accepted: true;
+  duplicate: boolean;
+}
+
 export type PersonalWorkViewScope = typeof PersonalWorkViewScope[keyof typeof PersonalWorkViewScope];
 
 

@@ -1,4 +1,5 @@
 import { createPaystackTestAdapter, PaystackError, type ExpectedPayment } from '../../artifacts/api-server/src/providers/paystack.js';
+import { paystackIngressStatus } from '../../artifacts/api-server/src/providers/paystack-ingress-config.js';
 
 // Operator-only, read-only check. Never accept a key as a command-line argument.
 const usage = 'Use: check-paystack [--reference TEST_REFERENCE --amount-kobo POSITIVE_INTEGER] [--direct-debit] [--mandate-reference TEST_MANDATE_REFERENCE]';
@@ -18,7 +19,8 @@ try {
   if (amountText && (!/^[1-9]\d*$/.test(amountText) || BigInt(amountText) > BigInt(Number.MAX_SAFE_INTEGER))) throw new PaystackError('invalid_input', 'The expected amount must be a positive, safe integer in kobo.');
   const adapter = createPaystackTestAdapter({ secretKey: process.env.PAYSTACK_TEST_SECRET_KEY || '' });
   const connection = await adapter.checkConnection();
-  const output: Record<string, unknown> = { connection, applicationConnection: 'not_connected', webhookIngestion: 'disabled', instructions: 'disabled' };
+  // The ingress setting of the process this check runs in: a count of mapped connections, never their IDs.
+  const output: Record<string, unknown> = { connection, applicationConnection: 'not_connected', ...paystackIngressStatus(), instructions: 'disabled' };
   if (paymentReference && amountText) {
     const expected: ExpectedPayment = { reference: paymentReference, amountKobo: Number(amountText), currency: 'NGN', ...(flags.has('--direct-debit') ? { channel: 'direct_debit' as const } : {}) };
     const verified = await adapter.verifyTransaction(expected);

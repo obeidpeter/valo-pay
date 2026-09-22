@@ -821,11 +821,11 @@ export const GetOpenApiDocumentResponse = zod.record(zod.string(), zod.unknown()
 
 
 /**
- * Always 403: no provider adapter is configured and no event is processed.
- * @summary Provider webhook ingress, disabled in the sandbox
+ * Always 403: no event is processed here. Paystack test events go to POST /v1/providers/paystack/{connectionId}/events.
+ * @summary Generic provider webhook address, always refused
  */
 export const DisabledProviderWebhookParams = zod.object({
-  "provider": zod.coerce.string().describe('Provider name; every provider\'s ingress is disabled in the sandbox.')
+  "provider": zod.coerce.string().describe('Provider name; this generic address refuses every provider (the Paystack test ingress has its own address).')
 })
 
 export const DisabledProviderWebhookResponse = zod.void()
@@ -3052,6 +3052,35 @@ export const ReplayProviderEventResponse = zod.object({
   "replayCount": zod.number().int(),
   "financialRecordsCreated": zod.literal(0)
 }).describe('A stored provider event: fixture or test mode, how often it was delivered and replayed, and the guarantee that it created no financial record.')
+
+
+/**
+ * The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key, and at most 120 deliveries a minute per client address.
+ * @summary Receive a signed Paystack test event
+ */
+export const receivePaystackTestEventPathConnectionIdRegExp = new RegExp('^[a-f0-9]{64}$');
+
+
+export const ReceivePaystackTestEventParams = zod.object({
+  "connectionId": zod.coerce.string().regex(receivePaystackTestEventPathConnectionIdRegExp).describe('The opaque ID an operator mapped to one synthetic lender in VALOPAY_PAYSTACK_CONNECTIONS; it alone selects the lender, and it is not a credential.')
+})
+
+export const receivePaystackTestEventHeaderXPaystackSignatureRegExp = new RegExp('^[a-fA-F0-9]{128}$');
+
+
+export const ReceivePaystackTestEventHeader = zod.object({
+  "x-paystack-signature": zod.string().regex(receivePaystackTestEventHeaderXPaystackSignatureRegExp).describe('HMAC-SHA512 of the exact request bytes under the configured test secret key, in hexadecimal.')
+})
+
+export const ReceivePaystackTestEventBody = zod.object({
+  "event": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('The event\'s payload as Paystack sent it.')
+}).describe('A Paystack test event exactly as Paystack signed it. The signature covers these bytes, so the body is authenticated before it is parsed. charge.success and the two direct-debit authorisation events are recorded; any other signed event is acknowledged and recorded as ignored.')
+
+export const ReceivePaystackTestEventResponse = zod.object({
+  "accepted": zod.literal(true),
+  "duplicate": zod.boolean()
+}).describe('The acknowledgement Paystack receives: the signed event is saved in the mapped lender\'s inbox, or recognised as a repeat delivery of one already saved.')
 
 
 /**

@@ -98,7 +98,7 @@ Provide credentials through your environment's secret manager, never through com
 | `VALOPAY_PAYLOAD_ENCRYPTION` | `kms` protects stored raw import and recovery payloads; unset or `off` retains legacy synthetic storage. |
 | `VALOPAY_KMS_KEY` | Google Cloud KMS CryptoKey resource name; Application Default Credentials supply key access. |
 | `VALOPAY_KMS_PREVIOUS_KEYS` | Comma-separated prior CryptoKey names permitted to open historical envelopes. |
-| `VALOPAY_PAYSTACK_INGRESS` | `test` enables signed test-event ingress after credentials and an operator mapping exist; otherwise disabled. |
+| `VALOPAY_PAYSTACK_INGRESS` | `test` turns on the signed Paystack test-event address `POST /api/v1/providers/paystack/{connectionId}/events` (see `docs/paystack.md`); unset or any other value answers 503 there. |
 | `VALOPAY_PAYSTACK_CONNECTIONS` | Server-only JSON mapping from opaque 64-character hex connection IDs to existing workspace/lender IDs. |
 | `VALOPAY_EXPIRED_WORKSPACE_CLEANUP` | Optional; `on` allows new anonymous workspace bootstrap to delete a small batch of expired anonymous workspaces; unset or any other value keeps automatic cleanup off |
 | `VITE_PILOT_EMAIL` | Optional pilot enquiry address shown on the landing page; without it the page names no address |
@@ -111,7 +111,7 @@ Provide credentials through your environment's secret manager, never through com
 | `VALOPAY_BENCH_CUSTOMERS` | Optional size of the synthetic lender in the workflow benchmark suites |
 | `VALOPAY_EXPORT_REPETITIONS` | Optional repetitions of the export step in the workflow benchmark suite |
 | `PLAYWRIGHT_CHROMIUM_EXECUTABLE` | Optional Chromium binary for the browser tests on a host without Playwright's own download |
-| `PAYSTACK_TEST_SECRET_KEY` | Read only by `pnpm run check:paystack`: an `sk_test_` key from the process environment, never by the running sandbox |
+| `PAYSTACK_TEST_SECRET_KEY` | An `sk_test_` key from the process environment. Read by `pnpm run check:paystack`, and by the API only while `VALOPAY_PAYSTACK_INGRESS` is `test`, to check the signatures of test events; never a live key |
 | `VALOPAY_MONITOR_ORIGIN` | HTTPS origin probed by `pnpm run check:operations`; the other monitor settings are in `docs/operational-rehearsals.md` |
 | `VALOPAY_MONITOR_EXPECT_SCHEDULER` | `on` when the probed host is expected to run automatic closes |
 | `VALOPAY_MONITOR_OWNER` | Person or team responsible for responding to a monitor incident |
@@ -162,7 +162,7 @@ The API process runs each lender's daily close at its configured West Africa Tim
 
 ### Pilot preparation
 
-`docs/paystack.md` describes the prepared Paystack test adapter and the connection check to run once a test key is available. `PAYSTACK_TEST_SECRET_KEY` is read only by the opt-in command, never by the running sandbox. There is no charging method or public webhook ingestion route. Direct Debit availability in test mode must be confirmed separately.
+`docs/paystack.md` covers the Paystack test adapter, the connection check and the optional signed test ingress: the address to register with a Paystack test account, its configuration and its answers. The API reads `PAYSTACK_TEST_SECRET_KEY` only while `VALOPAY_PAYSTACK_INGRESS` is `test`, and checks each delivery's signature on its raw bytes before it locks or reads a lender. Received events are test evidence only: there is no charging method, live-mode events are refused, and Direct Debit availability in test mode must still be confirmed separately.
 
 `docs/pilot-security.md` covers the isolated access/MFA preflight and tenant-bound field-encryption helpers. `docs/pilot-database.md` covers the guarded staging RLS migration and disposable-database tests. These foundations are not wired into production: the sandbox remains closed to real customer data and live instructions.
 

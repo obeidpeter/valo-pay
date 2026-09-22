@@ -1,8 +1,9 @@
 // Offline security regression checks for the API shell (see docs/security-review.md):
 // how a thrown error is answered, and the headers and origin rule on every /api/v1 answer.
-// No database: the webhook ingress route answers without one, and the error handler is
+// No database: the webhook ingress routes answer without one, and the error handler is
 // exercised with a fake request and response.
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { ZodError } from "zod";
 import { errorHandler } from "../src/lib/error-handler.js";
 import { validateRecord } from "../src/domain/validation.js";
@@ -111,8 +112,31 @@ try {
   assert.equal(nul.status, 400, "a NUL character is refused at the edge");
   assert.equal(await errorOf(nul), "Text cannot contain the NUL character (\\u0000). Remove it from data.name and try again.");
   checks += 21;
+
+  // The Paystack test ingress checks a delivery's signature on its raw bytes before it touches a lender:
+  // with the database unreachable, a forged delivery to a mapped connection is still a 401, not a 500.
+  const paystackNames = ["VALOPAY_PAYSTACK_INGRESS", "PAYSTACK_TEST_SECRET_KEY", "VALOPAY_PAYSTACK_CONNECTIONS"] as const;
+  const paystackSaved = Object.fromEntries(paystackNames.map((name) => [name, process.env[name]]));
+  try {
+    const key = ["sk", "test", "OFFLINE", "0".repeat(20)].join("_"), connection = "c".repeat(64);
+    process.env["VALOPAY_PAYSTACK_INGRESS"] = "test";
+    process.env["PAYSTACK_TEST_SECRET_KEY"] = key;
+    process.env["VALOPAY_PAYSTACK_CONNECTIONS"] = JSON.stringify({ [connection]: { workspaceId: "unreachable-workspace", merchantId: "unreachable-lender" } });
+    const event = JSON.stringify({ event: "charge.success", data: { domain: "test", id: "800001", status: "success", amount: 10000, currency: "NGN", reference: "OFFLINE-INGRESS-001", channel: "direct_debit" } });
+    const deliver = (bytes: string, signature: string) => fetch(`${base}/api/v1/providers/paystack/${connection}/events`, { method: "POST", headers: { "Content-Type": "application/json", "X-Paystack-Signature": signature }, body: bytes });
+    const forged = await deliver(event, "f".repeat(128));
+    assert.equal(forged.status, 401, "a forged delivery is refused before the lender is locked or read");
+    assert.equal(await errorOf(forged), "The Paystack webhook signature is invalid.");
+    assert.equal(forged.headers.get("cache-control"), "no-store");
+    assert.equal(forged.headers.get("x-content-type-options"), "nosniff");
+    const live = event.replace('"domain":"test"', '"domain":"live"');
+    assert.equal((await deliver(live, createHmac("sha512", key).update(live).digest("hex"))).status, 400, "a signed live-mode event is refused before the lender is opened");
+    checks += 5;
+  } finally {
+    for (const name of paystackNames) { const value = paystackSaved[name]; if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+  }
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-console.log(`API security tests passed (${checks} checks): error answers and statuses, body-parser and NUL refusals, unavailable services and storage failures, prototype keys, response headers, origin rule before the body, body limit, webhook ingress.`);
+console.log(`API security tests passed (${checks} checks): error answers and statuses, body-parser and NUL refusals, unavailable services and storage failures, prototype keys, response headers, origin rule before the body, body limit, webhook ingress, Paystack signature before any lender work.`);

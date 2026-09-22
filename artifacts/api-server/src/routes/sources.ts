@@ -1,12 +1,12 @@
 import { Router, raw, type IRouter } from "express";
 import { z } from "zod";
-import { CreateRecordResponse } from "@workspace/api-zod";
+import { CreateRecordResponse, ReceivePaystackTestEventResponse } from "@workspace/api-zod";
 import { sourceProfileInputSchema, sourceBatchQualitySchema, paystackFixtureInputSchema, providerReplayInputSchema, sourceManifestInputSchema, sourceCompletenessSchema, businessDateSchema } from "@workspace/valopay-schema";
 import { withState } from "./valopay";
 import { saveSourceProfile, sourceQuality } from "../domain/source-quality";
 import { saveSourceManifest } from "../domain/source-completeness";
 import { providerEventView, receivePaystackEvent, replayProviderEvent, runPaystackFixture } from "../providers/paystack-inbox";
-import { parsePaystackTestWebhook, PaystackError } from "../providers/paystack";
+import { parsePaystackTestWebhook, PaystackError, type PaystackWebhook } from "../providers/paystack";
 import type { DomainState, Context } from "../domain/types";
 
 const router: IRouter = Router();
@@ -50,25 +50,27 @@ router.post("/v1/sources/events/:id/replay", async (req, res) => {
 });
 export default router;
 
-/** Server-only resolver must lock and persist the mapped lender transaction. Never resolve a browser workspace or query-string merchant. */
-export type PaystackConnectionTransaction = <T>(connectionId: string, apply: (connection: { state: DomainState; context: Context; secretKey: string }) => T | Promise<T>) => Promise<T>;
-/** Mount before JSON parsing. The only admitted body is authenticated raw application/json bytes. */
-export function createPaystackIngress(transact: PaystackConnectionTransaction): IRouter {
+/** Server-only resolver: locks, loads and saves the mapped lender. Called only with a verified event; never resolves a browser workspace or query-string merchant. */
+export type PaystackConnectionTransaction = <T>(connectionId: string, apply: (connection: { state: DomainState; context: Context }) => T | Promise<T>) => Promise<T>;
+/**
+ * What the ingress needs from the server. `secretKey` reads the process environment only, never the
+ * database, and throws a 503 while the ingress is off or misconfigured; `transact` opens the lender.
+ */
+export type PaystackIngress = { secretKey: () => string; transact: PaystackConnectionTransaction };
+const paystackRefusal = (error: unknown) => error instanceof PaystackError ? Object.assign(new Error(error.message), { status: error.code === "invalid_signature" ? 401 : error.code === "configuration" ? 503 : 400 }) : error;
+/**
+ * Mount before JSON parsing. The exact raw bytes are authenticated before any lender is locked, read or
+ * decrypted, so a forged delivery costs one HMAC and learns nothing about the connection or its lender.
+ */
+export function createPaystackIngress({ secretKey, transact }: PaystackIngress): IRouter {
   const ingress = Router();
   ingress.post("/v1/providers/paystack/:connectionId/events", raw({ type: "application/json", limit: "256kb" }), async (req, res) => {
     const connectionId = z.string().regex(/^[a-f0-9]{64}$/).parse(req.params.connectionId);
     if (!Buffer.isBuffer(req.body)) throw Object.assign(new Error("A signed JSON body is required."), { status: 400 });
-    try {
-      const result = await transact(connectionId, ({ state, context, secretKey }) => {
-        const event = parsePaystackTestWebhook(req.body, req.header("x-paystack-signature"), secretKey);
-        const receipt = receivePaystackEvent(state, context, event, { connectionId, mode: "test" });
-        return { accepted: true, duplicate: receipt.duplicate };
-      });
-      res.status(200).json(result);
-    } catch (error) {
-      if (error instanceof PaystackError) throw Object.assign(new Error(error.message), { status: error.code === "invalid_signature" ? 401 : error.code === "configuration" ? 503 : 400 });
-      throw error;
-    }
+    let event: PaystackWebhook;
+    try { event = parsePaystackTestWebhook(req.body, req.header("x-paystack-signature"), secretKey()); } catch (error) { throw paystackRefusal(error); }
+    const result = await transact(connectionId, ({ state, context }) => ({ accepted: true as const, duplicate: receivePaystackEvent(state, context, event, { connectionId, mode: "test" }).duplicate }));
+    res.status(200).json(ReceivePaystackTestEventResponse.parse(result));
   });
   return ingress;
 }

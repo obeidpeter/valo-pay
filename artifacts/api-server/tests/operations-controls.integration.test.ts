@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import express from "express";
 import { once } from "node:events";
-import { randomBytes, randomUUID, createCipheriv, createDecipheriv } from "node:crypto";
+import { randomBytes, randomUUID, createCipheriv, createDecipheriv, createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 if(process.env.VALOPAY_RUN_INTEGRATION!=="1"){console.log("Operations controls integration requires a disposable local PostgreSQL database.");process.exit(0);}
 assert.ok(["localhost","127.0.0.1","[::1]"].includes(new URL(process.env.DATABASE_URL||"").hostname),"Refuse a non-local integration database.");
@@ -15,12 +15,17 @@ const {managedWrappingKeys,openPayload}=await import("../src/lib/protected-paylo
 const oldWrap=managedWrappingKeys.wrap,oldUnwrap=managedWrappingKeys.unwrap,master=randomBytes(32);
 // Fixture injection is restricted to this test module; runtime keeps its managed KMS adapter.
 managedWrappingKeys.wrap=async(_key,data,aad)=>{const iv=randomBytes(12),cipher=createCipheriv("aes-256-gcm",master,iv);cipher.setAAD(aad);const encrypted=Buffer.concat([cipher.update(data),cipher.final()]);return Buffer.concat([iv,cipher.getAuthTag(),encrypted]);};
-managedWrappingKeys.unwrap=async(_key,data,aad)=>{const decipher=createDecipheriv("aes-256-gcm",master,data.subarray(0,12));decipher.setAAD(aad);decipher.setAuthTag(data.subarray(12,28));return Buffer.concat([decipher.update(data.subarray(28)),decipher.final()]);};
+// Every opened payload is counted: a forged Paystack delivery must open none.
+let unwraps=0;
+managedWrappingKeys.unwrap=async(_key,data,aad)=>{unwraps++;const decipher=createDecipheriv("aes-256-gcm",master,data.subarray(0,12));decipher.setAAD(aad);decipher.setAuthTag(data.subarray(12,28));return Buffer.concat([decipher.update(data.subarray(28)),decipher.final()]);};
 const {default:router}=await import("../src/routes/index");
 const {errorHandler}=await import("../src/lib/error-handler");
-const {paystackConnectionTransaction}=await import("../src/lib/paystack-connection");
+const {createPaystackIngress}=await import("../src/routes/sources");
+const {paystackConnectionTransaction,paystackIngress}=await import("../src/lib/paystack-connection");
 const {receivePaystackEvent}=await import("../src/providers/paystack-inbox");
-const app=express();app.use(express.json({limit:"2mb"}));app.use((req,_res,next)=>{(req as any).auth=Object.assign(()=>({userId:null}),{[Symbol.for("@clerk/express.auth")]:true});(req as any).log={info(){},warn(){},error(){}};next();});app.use("/api",router);app.use(errorHandler);
+// The Paystack test ingress reads its own raw body, so it is mounted before JSON parsing, as in app.ts.
+const app=express();app.use((req,_res,next)=>{(req as any).log={info(){},warn(){},error(){}};next();});app.use("/api",createPaystackIngress(paystackIngress));
+app.use(express.json({limit:"2mb"}));app.use((req,_res,next)=>{(req as any).auth=Object.assign(()=>({userId:null}),{[Symbol.for("@clerk/express.auth")]:true});next();});app.use("/api",router);app.use(errorHandler);
 const server=app.listen(0,"127.0.0.1");await once(server,"listening");
 const base=`http://127.0.0.1:${(server.address() as any).port}/api`,cookie=`valopay_sandbox=${randomBytes(32).toString("hex")}`;
 const workspaces=new Set<string>();
@@ -47,6 +52,7 @@ try{
   const encryptedBatch=(await pool.query("SELECT data FROM valopay_records WHERE id=$1 AND merchant_id=$2",[batch.id,lender])).rows[0].data;
   assert.equal(encryptedBatch.csv.protectedPayload,1);assert.equal(encryptedBatch.check.protectedPayload,1);assert.equal(JSON.stringify(encryptedBatch).includes("Synthetic controls customer"),false);
   assert.equal(await openPayload(encryptedBatch.csv,{lender,record:batch.id,field:"csv"},managedWrappingKeys),batchInput.csv);
+  assert.ok(unwraps>0,"the fixture counts every payload it opens");
   await assert.rejects(()=>openPayload(encryptedBatch.csv,{lender:other,record:batch.id,field:"csv"},managedWrappingKeys));
 
   const customerPath=`/v1/records/customers?merchantId=${lender}`,customerKey=randomUUID(),customerBody={name:"Retention request fixture",reference:`RETAIN-${randomUUID()}`,data:{consentProvenance:"Synthetic retention consent"}};
@@ -134,6 +140,8 @@ try{
   assert.ok((await pool.query("SELECT 1 FROM valopay_records WHERE id=$1 AND kind='customers'",[customer.id])).rows[0]);
 
   // Real repository callback, server-owned tenant map and durable test event receipt. No provider HTTP call.
+  // One more protected batch, so that loading the lender has payloads to open.
+  ok(await post(`/v1/pilot/batches?merchantId=${lender}`,{...batchInput,name:"Protected batch for the ingress",sourceBatchId:"controls-002"}));
   await pool.query("UPDATE valopay_merchants SET info=jsonb_set(jsonb_set(info,'{killSwitch}','true'::jsonb),'{mode}','\"observation\"'::jsonb) WHERE id=$1",[lender]);
   process.env.VALOPAY_PAYSTACK_INGRESS="test";process.env.PAYSTACK_TEST_SECRET_KEY=["sk","test","OFFLINE","0".repeat(20)].join("_");
   const connectionId=randomBytes(32).toString("hex");
@@ -143,10 +151,34 @@ try{
   const receipt=await ingest(),duplicate=await ingest();assert.equal(receipt.event.id,duplicate.event.id);assert.equal(duplicate.duplicate,true);
   assert.equal(Number((await pool.query("SELECT count(*) AS n FROM valopay_records WHERE merchant_id=$1 AND kind='provider-events'",[lender])).rows[0].n),1);
   await assert.rejects(()=>paystackConnectionTransaction("f".repeat(64),()=>true),/not found/);
+  // Over HTTP: the signature is checked on the raw bytes before the lender is locked, loaded or decrypted.
+  const providerEvents=async()=>Number((await pool.query("SELECT count(*) AS n FROM valopay_records WHERE merchant_id=$1 AND kind='provider-events'",[lender])).rows[0].n);
+  const protectedBatches=Number((await pool.query("SELECT count(*) AS n FROM valopay_records WHERE merchant_id=$1 AND kind='import-batches' AND (data->'csv' ? 'protectedPayload' OR data->'check' ? 'protectedPayload')",[lender])).rows[0].n);
+  assert.ok(protectedBatches>0,"the lender holds protected payloads a full load would open");
+  const signedBody=JSON.stringify({event:"charge.success",data:{domain:"test",id:"90211",status:"success",amount:2500,currency:"NGN",reference:"SYNTHETIC-MAPPED-002",channel:"direct_debit"}});
+  const deliver=(signature:string)=>fetch(`${base}/v1/providers/paystack/${connectionId}/events`,{method:"POST",headers:{"Content-Type":"application/json","X-Paystack-Signature":signature},body:signedBody});
+  const signed=createHmac("sha512",process.env.PAYSTACK_TEST_SECRET_KEY!).update(signedBody).digest("hex"),forged="f".repeat(128);
+  unwraps=0;
+  const refused=await deliver(forged);
+  assert.equal(refused.status,401);assert.equal(((await refused.json()) as {error:string}).error,"The Paystack webhook signature is invalid.");
+  assert.equal(unwraps,0,"a forged delivery opens no protected payload");
+  const holder=await pool.connect();
+  try{
+    await holder.query("BEGIN");await holder.query("SELECT 1 FROM valopay_merchants WHERE id=$1 FOR UPDATE",[lender]);
+    assert.equal((await deliver(forged)).status,401,"a forged delivery never waits for or reports on the lender lock");
+    const busy=await deliver(signed);
+    assert.equal(busy.status,503);assert.match(((await busy.json()) as {error:string}).error,/The test lender is busy/);
+  }finally{await holder.query("ROLLBACK");holder.release();}
+  assert.equal(unwraps,0);assert.equal(await providerEvents(),1,"refused deliveries save nothing");
+  const accepted=await deliver(signed);
+  assert.equal(accepted.status,200);assert.deepEqual(await accepted.json(),{accepted:true,duplicate:false});
+  assert.equal(await providerEvents(),2,"a verified delivery is saved in the mapped lender's inbox");
+  assert.deepEqual(await (await deliver(signed)).json(),{accepted:true,duplicate:true});
+  assert.equal(await providerEvents(),2);
   process.env.VALOPAY_PAYSTACK_CONNECTIONS=JSON.stringify({[connectionId]:{workspaceId:"wrong-workspace",merchantId:lender}});
   await assert.rejects(ingest,/unavailable/);
   assert.equal(Number((await pool.query("SELECT count(*) AS n FROM valopay_records WHERE merchant_id=$1 AND kind='provider-events'",[other])).rows[0].n),0);
-  console.log("Operations controls PostgreSQL integration passed: source checks, encrypted payloads, holds/stale previews, verified retention receipts, preserved request tombstones and mapped Paystack test receipts.");
+  console.log("Operations controls PostgreSQL integration passed: source checks, encrypted payloads, holds/stale previews, verified retention receipts, preserved request tombstones, mapped Paystack test receipts and forged deliveries refused before the lender is locked or decrypted.");
 }finally{
   managedWrappingKeys.wrap=oldWrap;managedWrappingKeys.unwrap=oldUnwrap;master.fill(0);
   for(const name of environmentNames){const value=previousEnvironment[name];if(value===undefined)delete process.env[name];else process.env[name]=value;}

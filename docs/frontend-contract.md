@@ -177,6 +177,10 @@ Reports format ratios and basis points as percentages. Billing evidence is avail
 
 All paged reads clamp deleted last pages, cap each page at 100 and remain inside the scoped repository. These read models never create writable partial snapshots. Desktop and phone Chromium tests use `artifacts/valo-pay/e2e`; database parity and isolation tests use `artifacts/api-server/tests/console-read-models.integration.test.ts`.
 
+## Provider ingress
+
+The console never calls `POST /v1/providers/paystack/{connectionId}/events`: it is the webhook address an operator registers with a Paystack test account (`docs/paystack.md`). It is off unless the host sets `VALOPAY_PAYSTACK_INGRESS=test`, and it checks each delivery's signature on its raw bytes before it locks or reads a lender, so a forged or tampered delivery gets 401 and nothing else. What it saves appears on `/sources`, in the Paystack test connection panel, through `GET /v1/sources` (`paystack.events`), as test-mode evidence only.
+
 ## Search and history paging
 
 The priority queues distinguish an unmatched search from an empty lender queue. Clearing the search keeps the status, owner and type filters. Reconciliation exposes the same explicit search form across its views and applies customer/payment/instalment reference matching before server counts and pages. Its monthly precision sample measures remain unfiltered.
