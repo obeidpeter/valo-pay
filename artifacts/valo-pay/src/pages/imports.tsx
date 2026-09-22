@@ -463,9 +463,11 @@ function BatchEditor({
           disabled={locked || denied}
           className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
         >
-          <label className="space-y-1 text-sm font-medium">
-            Business date (WAT)
+          <div className="space-y-1 text-sm font-medium">
+            <label htmlFor="import-business-date">Business date (WAT)</label>
             <input
+              id="import-business-date"
+              aria-describedby="import-business-date-help"
               className={pilotField}
               type="date"
               required={!id || !!form.businessDate}
@@ -473,11 +475,11 @@ function BatchEditor({
               value={form.businessDate || ""}
               onChange={(e) => set("businessDate", e.target.value)}
             />
-            <span className="block text-xs text-muted-foreground">
+            <p id="import-business-date-help" className="text-xs font-normal text-muted-foreground">
               The date this file belongs to, rather than its upload date. Saved
               batches keep this date.
-            </span>
-          </label>
+            </p>
+          </div>
           {!id && (
             <label className="space-y-1 text-sm font-medium">
               Expected source file

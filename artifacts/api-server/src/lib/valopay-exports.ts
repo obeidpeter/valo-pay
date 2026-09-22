@@ -1,13 +1,11 @@
 import PDFDocument from "pdfkit";
 import { createHash } from "node:crypto";
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
 import { objectStorageClient } from "./objectStorage";
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { buildReports } from "../domain";
 import { getGates } from "./valopay-readiness";
 import { verifyAudit } from "./valopay-store";
-import { EXPORT_STORAGE_TIMEOUT_MS, collectExportBytes, readExportBytes, readExportMetadata } from "./export-download";
+import { collectExportBytes, readExportBytes, readExportMetadata, writeExportBytes } from "./export-download";
 import { buildDisputePack, disputePackCsv, packFonts, renderDisputePackPdf, type DisputePack } from "./valopay-packs";
 import { MAX_EXPORT_BYTES, publicExportRecord, type ClaimedExport, type ExportArtifact, type ExportJobStorage } from './export-jobs';
 import { reviewedCloseEvidence } from '../domain/close-review';
@@ -118,12 +116,7 @@ export const exportJobStorage: ExportJobStorage = {
   return artifact;
  },
  async put(claim,bytes,artifact,signal) {
-  signal?.throwIfAborted();
-  const stream=objectStorageClient.bucket(claim.location.bucket).file(claim.location.objectName).createWriteStream({resumable:false,timeout:EXPORT_STORAGE_TIMEOUT_MS,contentType:artifact.contentType,preconditionOpts:{ifGenerationMatch:0},metadata:{cacheControl:'private, no-store',metadata:{valopayExportId:claim.id,valopayMerchantId:claim.merchantId,valopayArtifact:JSON.stringify(artifact)}}});
-  // Abort destroys the actual upload stream, rather than leaving a timed-out
-  // promise uploading in the background and consuming an unbounded worker slot.
-  const deadline=AbortSignal.timeout(EXPORT_STORAGE_TIMEOUT_MS);
-  await pipeline(Readable.from([bytes]),stream,{signal:signal?AbortSignal.any([signal,deadline]):deadline});
+  await writeExportBytes(objectStorageClient.bucket(claim.location.bucket).file(claim.location.objectName),bytes,{contentType:artifact.contentType,cacheControl:'private, no-store',metadata:{valopayExportId:claim.id,valopayMerchantId:claim.merchantId,valopayArtifact:JSON.stringify(artifact)}},signal);
  },
 };
 /** Where an export lives and what to check it against. */

@@ -11,13 +11,13 @@ test('a proposed source correction preserves the original record and shows its r
   expect(committed.ok()).toBeTruthy();
   const customer = (await (await request.get(`/api/v1/records/customers?merchantId=${merchantId}&search=BROWSER-CORRECTION-1`)).json()).items[0];
   await page.goto(`/imports?batch=${batch.id}`);
-  await page.getByLabel('Imported record', { exact: true }).selectOption(customer.id);
+  await page.getByRole('combobox', { name: 'Imported record', exact: true }).selectOption(customer.id);
   await page.getByLabel('Corrected customer name', { exact: true }).fill('Corrected sample customer');
   await page.getByRole('button', { name: 'Preview correction', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Before and after', exact: true })).toBeVisible();
   await page.getByLabel('Reason for correction', { exact: true }).fill('Correct the spelling against the original source evidence.');
   await page.getByLabel('Evidence reference', { exact: true }).fill('SYNTHETIC-CORRECTION-001');
-  await page.getByLabel('Independent Finance reviewer', { exact: true }).selectOption('Sandbox Finance');
+  await page.getByRole('combobox', { name: 'Independent Finance reviewer', exact: true }).selectOption('Sandbox Finance');
   await page.getByRole('button', { name: 'Propose correction', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Awaiting review', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Approve and apply correction', exact: true })).toHaveCount(0);
@@ -28,5 +28,6 @@ test('a proposed source correction preserves the original record and shows its r
   await page.addScriptTag({ path: path.resolve('node_modules/axe-core/axe.min.js') });
   expect(await page.evaluate(async () => (await (window as any).axe.run(document.getElementById('main'), { runOnly: { type: 'tag', values: ['wcag2a','wcag2aa','wcag21aa'] } })).violations.map((item: any) => ({ id: item.id, nodes: item.nodes.map((node: any) => node.target) })))).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
+  await page.getByRole('heading', { name: 'Awaiting review', exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: info.outputPath('import-correction-review.png'), fullPage: true });
 });

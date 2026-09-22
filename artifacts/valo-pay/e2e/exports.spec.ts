@@ -34,5 +34,6 @@ test('saved exports keep exact history, file verification and recovery readable 
   await page.addScriptTag({ path: path.resolve('node_modules/axe-core/axe.min.js') });
   expect(await page.evaluate(async () => (await (window as any).axe.run(document.getElementById('main'), { runOnly: { type: 'tag', values: ['wcag2a','wcag2aa','wcag21aa'] } })).violations.map((item: any) => ({ id: item.id, nodes: item.nodes.map((node: any) => node.target) })))).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBeTruthy();
+  await page.getByRole('button', { name: 'Recover saved export', exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath('saved-export-recovery.png'), fullPage: true });
 });

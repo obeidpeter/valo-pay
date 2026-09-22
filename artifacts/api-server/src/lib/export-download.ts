@@ -1,5 +1,6 @@
 import type { File } from "@google-cloud/storage";
 import { Readable } from "node:stream";
+import { createHash, randomUUID } from 'node:crypto';
 
 /** One consumer owns buffering, cancellation and cleanup for an export read. */
 export const EXPORT_STORAGE_TIMEOUT_MS = 60_000;
@@ -92,7 +93,7 @@ async function readStorageObject(file:File,media:boolean,signal?:AbortSignal,max
  try{
   // Both path segments are encoded independently; a slash, space or question
   // mark in an object name cannot change the endpoint or its query parameters.
-  const url=new URL(`/storage/v1/b/${encodeURIComponent(file.bucket.name)}/o/${encodeURIComponent(file.name)}`,file.storage.apiEndpoint);
+  const url=new URL(`${media?'/download':''}/storage/v1/b/${encodeURIComponent(file.bucket.name)}/o/${encodeURIComponent(file.name)}`,file.storage.apiEndpoint);
   if(media)url.searchParams.set('alt','media');
   const authHeaders=await beforeAbort(file.storage.authClient.getRequestHeaders(url.toString()),controller.signal);
   controller.signal.throwIfAborted();
@@ -110,6 +111,31 @@ export function readExportBytes(file:File,signal?:AbortSignal,maxBytes?:number,t
 }
 export async function readExportMetadata(file:File,signal?:AbortSignal,timeoutMs?:number):Promise<Record<string,any>>{
  return JSON.parse((await readStorageObject(file,false,signal,256*1024,timeoutMs)).toString('utf8'));
+}
+/** A create-only upload with one cancellable native request. A late credential
+ * refresh never starts a write; a lost acknowledgement is recovered by the
+ * caller through the same key and verified artifact metadata. */
+export async function writeExportBytes(file:File,bytes:Buffer,metadata:Record<string,unknown>,signal?:AbortSignal,timeoutMs=EXPORT_STORAGE_TIMEOUT_MS):Promise<void>{
+ const contentType=String(metadata.contentType||'application/octet-stream');
+ if(!/^(application\/(json|pdf|octet-stream)|text\/csv(?:; charset=utf-8)?)$/.test(contentType))throw new Error('Export content type is invalid.');
+ const controller=new AbortController();
+ const abort=()=>controller.abort(signal?.reason instanceof Error?signal.reason:Object.assign(new Error('Export upload cancelled.'),{name:'AbortError'}));
+ if(signal?.aborted){abort();throw controller.signal.reason;}
+ signal?.addEventListener('abort',abort,{once:true});
+ const timer=setTimeout(()=>controller.abort(new Error('Export upload timed out.')),timeoutMs);
+ try{
+  const url=new URL(`/upload/storage/v1/b/${encodeURIComponent(file.bucket.name)}/o`,file.storage.apiEndpoint);
+  url.searchParams.set('uploadType','multipart');url.searchParams.set('name',file.name);url.searchParams.set('ifGenerationMatch','0');
+  const headers=new Headers(await beforeAbort(file.storage.authClient.getRequestHeaders(url.toString()),controller.signal));
+  controller.signal.throwIfAborted();
+  const boundary=`valopay-${randomUUID()}`;
+  const properties={...metadata,contentType,name:file.name,md5Hash:createHash('md5').update(bytes).digest('base64')};
+  const body=Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(properties)}\r\n--${boundary}\r\nContent-Type: ${contentType}\r\n\r\n`),bytes,Buffer.from(`\r\n--${boundary}--\r\n`)]);
+  headers.set('Content-Type',`multipart/related; boundary=${boundary}`);
+  const response=await globalThis.fetch(url,{method:'POST',headers,body,signal:controller.signal,redirect:'error'});
+  await response.body?.cancel();
+  if(!response.ok)throw Object.assign(new Error('Export object could not be saved.'),{statusCode:response.status});
+ }finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);controller.abort();}
 }
 /** Delete only the observed generation of this lender's immutable export.
  * A timed-out/lost acknowledgement is retried by reading metadata first. */
