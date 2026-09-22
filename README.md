@@ -1,5 +1,7 @@
 # Valo Pay
 
+The [22 September usability release](docs/usability/README.md) records operational improvements, the evidence-led audit, role/task map, validation limits and real-user research kit. Its five-component scorecards contain no invented participant results. Production and live-provider activation remain separate decisions.
+
 Observation-first collections operations and connected banking workflows for Nigerian lenders and SMEs. This application is a **synthetic sandbox**, not a live payment service or an approved system for real customer data. Pay-by-bank, Credit Desk, Cash Desk and purpose-specific permissions have working sample journeys; each live capability remains independently gated.
 
 ## Source repository

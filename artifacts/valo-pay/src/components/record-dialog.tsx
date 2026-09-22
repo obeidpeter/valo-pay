@@ -2,15 +2,17 @@ import React, { useState, useEffect, useRef, ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { Button } from './ui/button';
-import { FieldError, FormAlert, attentionTitle, focusField, formErrorMessage, invalidProps, missingMessage, serverFieldErrors } from './form-field';
+import { FieldError, FormAlert, FormErrorLinks, attentionTitle, focusField, formErrorMessage, invalidProps, isStaleRecordError, missingMessage, serverFieldErrors } from './form-field';
 import { useSafeCreateRecord as useCreateRecord, useSafeUpdateRecord as useUpdateRecord, useSafePerformAction as usePerformAction, submissionFingerprint } from '@/lib/safe-mutations';
 import { useUnsavedChanges } from '@/lib/unsaved-changes';
+import { focusMain } from '@/lib/focus';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkspace } from '@/lib/workspace-context';
 import { readableLabel } from './record-label';
 import { formatDate } from '@/lib/formatters';
 import { koboToNaira, moneyFieldLabel, nairaToKobo } from '@/lib/money-input';
 import { permissionReason } from '@/lib/permissions';
+import { referenceOf } from '@/lib/notify';
 
 const actionLabels: Record<string, string> = {
   mandate_suspend: 'Suspend mandate', mandate_cancel: 'Cancel mandate', mandate_reinstate: 'Resume mandate',
@@ -66,11 +68,20 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
   const currentScope = useRef('');
   const originalRecord = useRef(record);
   const pendingErrorFocus = useRef<string | null>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  const dialogTitle = useRef<HTMLHeadingElement | null>(null);
   const [initialForm, setInitialForm] = useState('');
   const scope = JSON.stringify([merchantId, kind, record?.id, actionMutation, actionRecordId, isOpen]);
   currentScope.current = scope;
   const { confirmDiscard } = useUnsavedChanges(isOpen && initialForm !== '' && submissionFingerprint(formData) !== initialForm);
-  const changeOpen = (open: boolean) => { if (open || confirmDiscard()) onOpenChange(open); };
+  const changeOpen = (open: boolean) => {
+    if (!open && isPending) return;
+    if (!open && hasUnconfirmedOutcome) {
+      if (window.confirm('The outcome is not confirmed. Closing does not cancel the request and discards this draft and its retry information. Check the records before starting again. Close anyway?')) onOpenChange(false);
+      return;
+    }
+    if (open || confirmDiscard()) onOpenChange(open);
+  };
   const fieldId = (name: string) => `record-${name}`;
   const fieldProps = (field: FieldDef) => {
     const props = invalidProps(fieldId(field.name), fieldErrors[field.name]);
@@ -83,7 +94,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
   };
   const firstNamed = (errors: Record<string, string>) => fields.find(f => errors[f.name])?.name ?? (errors.reason ? 'reason' : undefined);
   const applyServerError = (error: unknown) => {
-    setConflict((error as { status?: number })?.status === 409);
+    setConflict(isStaleRecordError(error));
     const { fields: named, general } = serverFieldErrors(error, resolveField);
     setFieldErrors(named); setFormErrors(general.map(message => formErrorMessage(message, fields)));
     const first = firstNamed(named);
@@ -124,6 +135,19 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
   const perform = usePerformAction({ mutation: { onSuccess: invalidateChangedData } }, scope);
 
   const isPending = create.isPending || update.isPending || perform.isPending || refreshingLatest;
+  const hasUnconfirmedOutcome = create.hasUnconfirmedOutcome || update.hasUnconfirmedOutcome || perform.hasUnconfirmedOutcome;
+  const supportReference = referenceOf(perform.error || update.error || create.error);
+  const retryUnconfirmed = async () => {
+    const submittedSession = session.current;
+    try {
+      const response = actionMutation ? await perform.retryUnconfirmed() : record ? await update.retryUnconfirmed() : await create.retryUnconfirmed();
+      if (submittedSession !== session.current || currentScope.current !== scope) return;
+      if (actionMutation === 'backtest_policy') { setResult(response); setFormErrors([]); return; }
+      onOpenChange(false);
+    } catch (error) {
+      if (submittedSession === session.current && currentScope.current === scope) applyServerError(error);
+    }
+  };
   useEffect(() => {
     if (!isPending && pendingErrorFocus.current) { focusField(fieldId(pendingErrorFocus.current)); pendingErrorFocus.current = null; }
   }, [isPending, fieldErrors]);
@@ -144,14 +168,15 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!merchantId || isPending) return;
+    if (!merchantId || isPending || hasUnconfirmedOutcome) return;
     if (blockedReason) { setFormErrors([blockedReason]); return; }
     // Every field is checked here first, so a missing value is named at the field and never costs a request.
     const errors: Record<string, string> = {};
     fields.forEach(f => {
       const value = formData[f.name];
       const empty = value === undefined || value === null || String(value).trim() === '';
-      if (f.required && f.type !== 'checkbox' && empty) errors[f.name] = missingMessage(f.label, f.type);
+      if (f.required && f.type === 'checkbox' && value !== true) errors[f.name] = `Confirm ${f.label.toLowerCase()} before saving.`;
+      else if (f.required && empty) errors[f.name] = missingMessage(f.label, f.type);
       else if (isMoney(f) && !empty) {
         try { nairaToKobo(String(value)); } catch (error) { errors[f.name] = (error as Error).message; }
       }
@@ -213,19 +238,27 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
     <Dialog.Root open={isOpen} onOpenChange={changeOpen}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 z-50" />
-        <Dialog.Content className="fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] -translate-y-[50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg max-h-[90vh] overflow-y-auto">
+        <Dialog.Content onOpenAutoFocus={event => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; if (context) { event.preventDefault(); dialogTitle.current?.focus(); } }} onCloseAutoFocus={event => { event.preventDefault(); if (opener.current?.isConnected) opener.current.focus(); else focusMain(); }} className="fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] -translate-y-[50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg max-h-[90vh] overflow-y-auto">
           <div className="flex flex-col space-y-1.5 text-center sm:text-left">
-            <Dialog.Title className="text-lg font-semibold leading-none tracking-tight">{title}</Dialog.Title>
+            <Dialog.Title ref={dialogTitle} tabIndex={context ? -1 : undefined} className="text-lg font-semibold leading-none tracking-tight focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">{title}</Dialog.Title>
             <Dialog.Description className="text-xs text-muted-foreground">Use sample data only. This action cannot collect money or send a customer message. Fields marked * are required.</Dialog.Description>
           </div>
           
           <form noValidate onSubmit={handleSubmit} className="space-y-4 py-4">
             {blockedReason && <p role="status" className="rounded-lg border bg-secondary/30 p-3 text-sm">{blockedReason}</p>}
-            <fieldset disabled={isPending || !!blockedReason} className="contents">
+            {hasUnconfirmedOutcome && <div role="alert" className="space-y-2 rounded-lg border border-warning-border bg-warning/20 p-3 text-sm">
+              <p className="font-semibold">Outcome not confirmed</p>
+              <p>The request may have finished. Retry the same request to recover its result before changing these values. Keep this dialog open: its draft and retry information are not saved after closing or reloading.</p>
+              {formErrors.length > 0 && <div><p className="font-medium">Latest response</p>{formErrors.map((message, index) => <p key={index}>{message}</p>)}</div>}
+              {supportReference && <p>Support reference: {supportReference}</p>}
+              <Button type="button" variant="outline" busy={isPending} busyLabel="Recovering result…" onClick={() => { void retryUnconfirmed(); }}>Retry same request</Button>
+            </div>}
+            <fieldset disabled={isPending || hasUnconfirmedOutcome || !!blockedReason} className="contents">
             {typeof context === 'function' ? context(formData) : context}
-            {(formErrors.length > 0 || Object.keys(fieldErrors).length > 0) && (
+            {!hasUnconfirmedOutcome && (formErrors.length > 0 || Object.keys(fieldErrors).length > 0) && (
               <FormAlert title={formErrors[0] ?? attentionTitle(Object.keys(fieldErrors).length)}>
                 {formErrors.slice(1).map(message => <p key={message}>{message}</p>)}
+                <FormErrorLinks errors={fieldErrors} fields={[...fields, ...(actionMutation ? [{ name: 'reason', label: 'Reason' }] : [])]} prefix="record" />
                 {conflict && <><p className="mt-2">Your draft is still here. Refresh to review the latest record before editing again.</p><Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => { void refreshLatest(); }} busy={refreshingLatest} busyLabel="Refreshing…">Discard draft and refresh</Button></>}
               </FormAlert>
             )}
@@ -259,6 +292,8 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
                     type="checkbox" 
                     checked={!!formData[f.name]} 
                     onChange={e => handleChange(f.name, e.target.checked)} 
+                    required={f.required}
+                    {...fieldProps(f)}
                   />
                 ) : (
                   <input 
@@ -297,13 +332,13 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
             </section>}
             </fieldset>
             <div className="flex justify-end gap-2 mt-4 pt-4 border-t">
-              <Button type="button" variant="outline" onClick={() => changeOpen(false)}>Cancel</Button>
-              <Button type="submit" disabled={!!blockedReason} busy={isPending} busyLabel={actionMutation ? 'Working…' : 'Saving…'}>{actionMutation ? actionLabels[actionMutation] || 'Confirm action' : 'Save'}</Button>
+              <Button type="button" variant="outline" disabled={isPending} onClick={() => changeOpen(false)}>{hasUnconfirmedOutcome ? 'Close' : 'Cancel'}</Button>
+              <Button type="submit" disabled={!!blockedReason || hasUnconfirmedOutcome} busy={isPending} busyLabel={actionMutation ? 'Working…' : 'Saving…'}>{actionMutation ? actionLabels[actionMutation] || 'Confirm action' : 'Save'}</Button>
             </div>
           </form>
 
           <Dialog.Close asChild>
-            <button className="absolute right-3 top-3 inline-flex h-6 w-6 items-center justify-center rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
+            <button disabled={isPending} className="absolute right-3 top-3 inline-flex h-6 w-6 items-center justify-center rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
               <X className="h-4 w-4" />
               <span className="sr-only">Close</span>
             </button>

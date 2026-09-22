@@ -64,7 +64,7 @@ export default function MandatesPage() {
   const createSession = useRef({ scope: draftScope });
   if (createSession.current.scope !== draftScope) createSession.current = { scope: draftScope };
   const { confirmDiscard } = useUnsavedChanges(isCreateOpen && JSON.stringify(draft) !== JSON.stringify(emptyMandate));
-  const changeCreateOpen = (open: boolean) => { if (open || confirmDiscard()) { if (!open) setDraft(emptyMandate); setIsCreateOpen(open); } };
+  const changeCreateOpen = (open: boolean) => { if (!open && (createMandate.isPending || createMandate.hasUnconfirmedOutcome)) return; if (open || confirmDiscard()) { if (!open) setDraft(emptyMandate); setIsCreateOpen(open); } };
   useEffect(() => () => { createSession.current = { scope: 'unmounted' }; }, []);
   useEffect(() => {
     setSelectedMandate(null); setIsDialogOpen(false); setIsCreateOpen(false);
@@ -115,8 +115,10 @@ export default function MandatesPage() {
 
   const submitCreate = (event: React.FormEvent) => {
     event.preventDefault();
+    if (createMandate.isPending) return;
     const blocked = permissionReason(workspace, { kind: 'mandates' });
     if (blocked) { setFormErrors([blocked]); return; }
+    if (createMandate.hasUnconfirmedOutcome) { void createMandate.retryUnconfirmed().catch(() => undefined); return; }
     const errors: Record<string, string> = {};
     for (const field of requiredFields) {
       const value = String(draft[field.name] ?? '').trim();
@@ -281,8 +283,9 @@ export default function MandatesPage() {
             <Dialog.Title className="text-lg font-semibold">Create synthetic mandate</Dialog.Title>
             <Dialog.Description className="mt-1 text-sm text-muted-foreground">Use synthetic details only. This records a mandate in the sandbox; it sends no instruction to a bank.</Dialog.Description>
             <form noValidate className="mt-5 space-y-4" onSubmit={submitCreate}>
-              <fieldset disabled={createMandate.isPending} className="contents">
-              {(formErrors.length > 0 || Object.keys(fieldErrors).length > 0) && (
+              {createMandate.hasUnconfirmedOutcome && <FormAlert title="Mandate creation outcome unconfirmed">The response was lost or unavailable. This mandate may already exist. Keep these details unchanged and retry the original request to recover its result without creating a second mandate.</FormAlert>}
+              <fieldset disabled={createMandate.isPending || createMandate.hasUnconfirmedOutcome} className="contents">
+              {!createMandate.hasUnconfirmedOutcome && (formErrors.length > 0 || Object.keys(fieldErrors).length > 0) && (
                 <FormAlert title={formErrors[0] ?? attentionTitle(Object.keys(fieldErrors).length)}>{formErrors.slice(1).map(message => <p key={message}>{message}</p>)}</FormAlert>
               )}
               <MandateField label="Mandate name" value={draft.name} id="mandate-name" error={fieldErrors.name} onChange={value => change('name', value)} required />
@@ -297,8 +300,8 @@ export default function MandatesPage() {
               <MandateSelect label="Frequency" value={draft.frequency} id="mandate-frequency" error={fieldErrors.frequency} onChange={value => change('frequency', value)} required options={mandateFrequencies.map(frequency => ({ value: frequency, label: frequency.charAt(0).toUpperCase() + frequency.slice(1) }))} />
               </fieldset>
               <div className="flex justify-end gap-2 border-t pt-4">
-                <Button type="button" variant="outline" onClick={() => changeCreateOpen(false)}>Cancel</Button>
-                <Button kind="mandates" type="submit" busy={createMandate.isPending} busyLabel="Creating mandate…">Create mandate</Button>
+                <Button type="button" variant="outline" disabled={createMandate.isPending || createMandate.hasUnconfirmedOutcome} onClick={() => changeCreateOpen(false)}>Cancel</Button>
+                <Button kind="mandates" type="submit" busy={createMandate.isPending} busyLabel={createMandate.hasUnconfirmedOutcome ? 'Recovering result…' : 'Creating mandate…'}>{createMandate.hasUnconfirmedOutcome ? 'Retry original mandate request' : 'Create mandate'}</Button>
               </div>
             </form>
           </Dialog.Content>

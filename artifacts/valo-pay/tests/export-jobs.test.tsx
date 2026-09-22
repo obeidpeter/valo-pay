@@ -1,10 +1,43 @@
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {installFakeApi,type FakeApi} from './fake-api';
 import {renderApp,screen,userEvent,waitFor} from './harness';
+import { queueExport } from '../../api-server/src/lib/export-jobs';
 let api:FakeApi;
 beforeEach(()=>{api=installFakeApi({queuedExports:true});vi.spyOn(window,'open').mockReturnValue(null);});
 afterEach(()=>api.uninstall());
 describe('saved background exports',()=>{
+ it('keeps the original file format during uncertain request recovery',async()=>{
+  const user=userEvent.setup();
+  const customer=api.state().records.find(record=>record.kind==='customers')!;
+  api.failNext(/^\/v1\/exports$/, 'offline', 'POST');
+  renderApp(`/customers/${customer.id}`);
+  await user.click(await screen.findByRole('button',{name:'CSV'}));
+  await screen.findByRole('button',{name:'Retry original request'});
+  expect(screen.getByRole('button',{name:'JSON'}).hasAttribute('disabled')).toBe(true);
+  expect(screen.getByRole('button',{name:'Export dispute pack (PDF)'}).hasAttribute('disabled')).toBe(true);
+  await user.click(screen.getByRole('button',{name:'JSON'}));
+  expect(api.calls.filter(call=>call.path==='/v1/exports'&&call.method==='POST')).toHaveLength(1);
+  await user.click(screen.getByRole('button',{name:'Retry original request'}));
+  expect(await screen.findByText('Dispute pack is queued')).toBeTruthy();
+  const attempts=api.calls.filter(call=>call.path==='/v1/exports'&&call.method==='POST');
+  expect(attempts).toHaveLength(2);
+  expect(attempts.map(call=>(call.body as any).format)).toEqual(['csv','csv']);
+  expect(api.state().records.filter(record=>record.kind==='exports')).toHaveLength(1);
+ });
+ it('recovers an unconfirmed request by checking saved jobs without submitting another export',async()=>{
+  const user=userEvent.setup();
+  api.failNext(/^\/v1\/exports$/, 'offline', 'POST');
+  renderApp('/reports?view=billing');
+  await user.click(await screen.findByRole('button',{name:'Export billing CSV'}));
+  expect(await screen.findByText('Billing export request could not be confirmed')).toBeTruthy();
+  expect(screen.getByText(/The request may have been saved/)).toBeTruthy();
+  // Represent a server-committed job whose acknowledgement did not reach the browser.
+  api.mutate((state,ctx)=>queueExport(state,ctx,{kind:'billing',format:'csv'},'sample/private'));
+  await user.click(screen.getByRole('button',{name:'Check saved exports'}));
+  expect(await screen.findByText('Billing CSV is queued')).toBeTruthy();
+  expect(api.calls.filter(call=>call.path==='/v1/exports'&&call.method==='POST')).toHaveLength(1);
+  expect(window.open).not.toHaveBeenCalled();
+ });
  it('resumes a queued export after revisiting the page and offers its completed download',async()=>{
   const user=userEvent.setup();
   const view=renderApp('/reports?view=billing');

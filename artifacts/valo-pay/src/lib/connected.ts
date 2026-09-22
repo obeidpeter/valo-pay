@@ -1,7 +1,8 @@
 import { useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "./workspace-context";
-import { submissionFingerprint } from "./safe-mutations";
+import { outcomeIsUnconfirmed, submissionFingerprint } from "./safe-mutations";
+import { useUnsavedChanges } from "./unsaved-changes";
 
 export interface ConnectedRecord {
   id: string;
@@ -57,7 +58,7 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   if (!response.ok)
     throw Object.assign(
       new Error(body.error || "The request could not be completed."),
-      { status: response.status },
+      { status: response.status, data: body },
     );
   return body;
 }
@@ -70,6 +71,14 @@ export function useConnected() {
     fingerprint: string;
     key: string;
     body: string;
+    input: {
+      action: string;
+      data: Record<string, unknown>;
+      recordId?: string;
+      reason: string;
+    };
+    unconfirmed: boolean;
+    pending: boolean;
   } | null>(null);
   if (previousScope.current !== scope) {
     previousScope.current = scope;
@@ -99,6 +108,17 @@ export function useConnected() {
       // request after a lost/ambiguous response so the server can replay its
       // committed answer even though the workspace now has a newer revision.
       const fingerprint = submissionFingerprint({ scope, input });
+      if (attempt.current?.pending)
+        throw new Error(
+          "The original request is still in progress. Wait for its result.",
+        );
+      if (
+        attempt.current?.unconfirmed &&
+        attempt.current.fingerprint !== fingerprint
+      )
+        throw new Error(
+          "The previous request has an unconfirmed outcome. Retry the original request before changing it.",
+        );
       if (!attempt.current || attempt.current.fingerprint !== fingerprint)
         attempt.current = {
           fingerprint,
@@ -107,10 +127,14 @@ export function useConnected() {
             ...input,
             expectedRevision: query.data.revision,
           }),
+          input: structuredClone(input),
+          unconfirmed: false,
+          pending: false,
         };
       const current = attempt.current;
+      current.pending = true;
       try {
-        await request(
+        const result = await request<Record<string, unknown> | null>(
           `/api/v1/connected/actions?merchantId=${encodeURIComponent(merchantId)}`,
           {
             method: "POST",
@@ -118,23 +142,39 @@ export function useConnected() {
             body: current.body,
           },
         );
+        if (
+          !result ||
+          typeof result.message !== "string" ||
+          result.mode !== "synthetic" ||
+          result.externalInstructionPerformed !== false ||
+          !result.record ||
+          typeof result.record !== "object" ||
+          Array.isArray(result.record)
+        ) {
+          throw new Error(
+            "The response did not confirm the expected sample result. Retry the original request to recover its outcome.",
+          );
+        }
         if (attempt.current === current) attempt.current = null;
       } catch (error) {
         // A definite request rejection did not commit; a reviewed retry may
         // use the newly fetched revision. Network/timeout/5xx stays ambiguous.
-        const status = (error as { status?: number }).status;
-        if (
-          status &&
-          status >= 400 &&
-          status < 500 &&
-          attempt.current === current
-        )
+        // A later authentication/revision rejection can happen before replay
+        // lookup. It does not prove that an earlier unknown write failed.
+        current.unconfirmed =
+          current.unconfirmed || outcomeIsUnconfirmed(error);
+        if (!current.unconfirmed && attempt.current === current)
           attempt.current = null;
         throw error;
+      } finally {
+        current.pending = false;
       }
     },
     onSettled: () => client.invalidateQueries(),
   });
+  useUnsavedChanges(
+    mutation.isPending || Boolean(attempt.current?.unconfirmed),
+  );
   return {
     ...query,
     run: async (
@@ -146,6 +186,13 @@ export function useConnected() {
       await mutation.mutateAsync({ action, data, recordId, reason });
     },
     pending: mutation.isPending,
+    scope,
+    hasUnconfirmedOutcome: Boolean(attempt.current?.unconfirmed),
+    retryUnconfirmed: async () => {
+      if (!attempt.current?.unconfirmed)
+        throw new Error("There is no unconfirmed request to retry.");
+      await mutation.mutateAsync(attempt.current.input);
+    },
     canWrite: !!workspace && workspace.role !== "Read-only",
   };
 }

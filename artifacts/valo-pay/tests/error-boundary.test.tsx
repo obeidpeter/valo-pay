@@ -74,7 +74,7 @@ describe("error boundary", () => {
     );
     expect(await screen.findByRole("heading", { level: 1, name: "We could not display this page" })).toBeTruthy();
     expect(await screen.findByRole("link", { name: /Audit log/ })).toBeTruthy();
-    expect(screen.getByText("Mode: sandbox")).toBeTruthy();
+    expect(screen.getByText("Environment: sandbox")).toBeTruthy();
     expect(screen.getByText(/Sandbox · Sample data\. We never hold money\./)).toBeTruthy();
     await waitFor(() => expect(document.title).toBe("Page error · Valo Pay"));
   });

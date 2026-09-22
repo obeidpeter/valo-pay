@@ -11,32 +11,40 @@ function reset() {
   api?.uninstall();
   api = installFakeApi({ now: "2026-09-19T12:00:00.000Z" });
   api.mutate((state) => {
-    const mandate = state.records.find(
-      (r) => r.kind === "mandates" && r.status === "pending_activation",
-    )!;
-    const due = state.records.find(
-      (r) => r.kind === "due-items" && r.data.mandateId === mandate.id,
-    )!;
     const allocation = state.records.find(
       (r) => r.kind === "allocations" && r.status === "proposed",
     )!;
+    const payment = state.records.find((r) => r.id === allocation.data.paymentId)!;
+    const due = state.records.find((r) => r.id === allocation.data.dueItemId)!;
+    const mandate = state.records.find((r) => r.id === due.data.mandateId)!;
     for (let i = 0; i < 55; i++) {
+      // Each proposal needs its own receipt and instalment. Sharing the seed
+      // payment would create 56 competing proposals and make a paged decision
+      // correctly fail the server's specific-proposal check.
+      const mandateId = randomUUID(), dueItemId = randomUUID(), paymentId = randomUUID();
       state.records.push({
         ...structuredClone(mandate),
-        id: randomUUID(),
+        id: mandateId,
         reference: `BROWSER-MND-${String(i).padStart(2, "0")}`,
         data: { ...mandate.data, activationDeadline: "2026-01-01T00:00:00Z" },
       });
       state.records.push({
         ...structuredClone(due),
-        id: randomUUID(),
+        id: dueItemId,
         reference: `BROWSER-DUE-${String(i).padStart(2, "0")}`,
-        data: { ...due.data, dueDate: "2026-01-01" },
+        data: { ...due.data, mandateId, dueDate: "2026-01-01" },
+      });
+      state.records.push({
+        ...structuredClone(payment),
+        id: paymentId,
+        reference: `BROWSER-PAY-${String(i).padStart(2, "0")}`,
+        data: { ...payment.data, dueItemId, proposedDueItemId: dueItemId },
       });
       state.records.push({
         ...structuredClone(allocation),
         id: randomUUID(),
         reference: `BROWSER-MATCH-${String(i).padStart(2, "0")}`,
+        data: { ...allocation.data, paymentId, dueItemId },
       });
       state.records.push({
         ...structuredClone(due),

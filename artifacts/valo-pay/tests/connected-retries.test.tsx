@@ -11,90 +11,184 @@ beforeEach(() => {
 });
 afterEach(() => api.uninstall());
 
-it.each(["Meridian Credit", "Cedar Cooperative"])("retries the original committed request after a lost response and automatic revision refresh in %s", async (lenderName) => {
-  // Seed ids are random. Exercise each lender explicitly rather than letting
-  // UUID ordering decide which workspace this regression covers.
-  const merchantId = api.merchantIds.find(
-    (id) => api.state(id).merchant.name === lenderName,
-  )!;
-  api.merchantIds = [merchantId, ...api.merchantIds.filter((id) => id !== merchantId)];
-  const applicant = api.state(merchantId).records.find(
-    (record) => record.kind === "customers" && record.reference === "DEMO-C1001",
-  )!;
-  const originalFetch = globalThis.fetch;
-  const committed = new Map<string, Response>();
-  const submissions: { key: string; body: string }[] = [];
-  let loseResponse = true;
-  globalThis.fetch = async (input, options) => {
-    const url =
-      typeof input === "string"
-        ? input
-        : input instanceof Request
-          ? input.url
-          : input.toString();
-    if (options?.method !== "POST" || !url.includes("/connected/actions"))
-      return originalFetch(input, options);
-    const key = new Headers(options.headers).get("Idempotency-Key")!;
-    submissions.push({ key, body: String(options.body) });
-    if (committed.has(key)) return committed.get(key)!.clone();
-    const response = await originalFetch(input, options);
-    if (response.ok) committed.set(key, response.clone());
-    if (response.ok && loseResponse) {
-      loseResponse = false;
-      throw new TypeError("Connection lost after the server committed");
-    }
-    return response;
-  };
-  const user = userEvent.setup();
-  renderApp("/credit-desk");
-  await screen.findByRole("heading", { name: "Credit Desk", level: 1 });
-  await user.selectOptions(screen.getByLabelText("Applicant"), applicant.id);
-  await user.type(
-    screen.getByLabelText("Reason for this assessment"),
-    "Check the synthetic evidence before reviewer handoff",
-  );
-  await user.click(
-    screen.getByRole("button", { name: /Run sample assessment/ }),
-  );
-  expect((await screen.findByRole("alert")).textContent).toContain(
-    "Connection lost after the server committed",
-  );
-  // Synchronize on the regression's actual precondition: React Query has
-  // applied the automatic refetch and its new revision before the retry.
-  // The score's display copy is unrelated to retry/idempotency semantics.
-  await waitFor(() => {
-    const refreshed = queryClient.getQueryData<ConnectedView>(["connected", merchantId]);
-    expect(refreshed?.revision).toBe(connectedRevision(api.state(merchantId)));
-    expect(refreshed?.revision).not.toBe(JSON.parse(submissions[0]!.body).expectedRevision);
-    expect(refreshed?.credit.assessments).toHaveLength(1);
-  });
-  await screen.findByRole("combobox", { name: "Assessment version" });
-  expect(
-    api
-      .state()
-      .records.filter(
-        (record) => record.kind === "connected-credit-assessments",
-      ),
-  ).toHaveLength(1);
-  expect(connectedRevision(api.state())).not.toBe(
-    JSON.parse(submissions[0]!.body).expectedRevision,
-  );
-  await user.click(
-    screen.getByRole("button", { name: /Run sample assessment/ }),
-  );
-  await waitFor(() => expect(submissions).toHaveLength(2));
-  expect(submissions[1]).toEqual(submissions[0]);
-  expect(
-    api
-      .state()
-      .records.filter(
-        (record) => record.kind === "connected-credit-assessments",
-      ),
-  ).toHaveLength(1);
-  await screen.findByText(
-    /A new immutable sample assessment has been recorded/,
-  );
-});
+it.each(["malformed JSON", "unexpected shape", "timeout"])(
+  "retains the original request after a committed action returns %s",
+  async (failureMode) => {
+    const send = globalThis.fetch;
+    let saved: Response | undefined;
+    const submissions: Array<{ key: string; body: string }> = [];
+    globalThis.fetch = async (input, options) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof Request
+            ? input.url
+            : input.toString();
+      if (options?.method !== "POST" || !url.includes("/connected/actions"))
+        return send(input, options);
+      submissions.push({
+        key: new Headers(options.headers).get("Idempotency-Key")!,
+        body: String(options.body),
+      });
+      if (saved) return saved.clone();
+      const response = await send(input, options);
+      saved = response.clone();
+      if (failureMode === "timeout")
+        return new Response(
+          JSON.stringify({ error: "The gateway timed out." }),
+          { status: 408, headers: { "Content-Type": "application/json" } },
+        );
+      return new Response(failureMode === "malformed JSON" ? "broken" : "{}", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const user = userEvent.setup();
+    renderApp("/credit-desk");
+    await screen.findByRole("heading", { name: "Credit Desk", level: 1 });
+    await user.type(
+      screen.getByLabelText("Reason for this assessment"),
+      "Review a synthetic application for response recovery",
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Run sample assessment/ }),
+    );
+    await screen.findByText("Previous action outcome unconfirmed");
+    await user.click(
+      screen.getByRole("button", { name: "Retry original sample request" }),
+    );
+    await screen.findByText(/Original sample request confirmed/);
+    expect(submissions).toHaveLength(2);
+    expect(submissions[1]).toEqual(submissions[0]);
+    expect(
+      api
+        .state()
+        .records.filter((r) => r.kind === "connected-credit-assessments"),
+    ).toHaveLength(1);
+  },
+);
+
+it.each(["Meridian Credit", "Cedar Cooperative"])(
+  "retries the original committed request after a lost response and automatic revision refresh in %s",
+  async (lenderName) => {
+    // Seed ids are random. Exercise each lender explicitly rather than letting
+    // UUID ordering decide which workspace this regression covers.
+    const merchantId = api.merchantIds.find(
+      (id) => api.state(id).merchant.name === lenderName,
+    )!;
+    api.merchantIds = [
+      merchantId,
+      ...api.merchantIds.filter((id) => id !== merchantId),
+    ];
+    const applicant = api
+      .state(merchantId)
+      .records.find(
+        (record) =>
+          record.kind === "customers" && record.reference === "DEMO-C1001",
+      )!;
+    const originalFetch = globalThis.fetch;
+    const committed = new Map<string, Response>();
+    const submissions: { key: string; body: string }[] = [];
+    let loseResponse = true;
+    let rejectRecovery = true;
+    globalThis.fetch = async (input, options) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof Request
+            ? input.url
+            : input.toString();
+      if (options?.method !== "POST" || !url.includes("/connected/actions"))
+        return originalFetch(input, options);
+      const key = new Headers(options.headers).get("Idempotency-Key")!;
+      submissions.push({ key, body: String(options.body) });
+      if (committed.has(key)) {
+        if (rejectRecovery) {
+          rejectRecovery = false;
+          return new Response(
+            JSON.stringify({
+              error:
+                "Restore your session before recovering the original request.",
+            }),
+            { status: 403, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        return committed.get(key)!.clone();
+      }
+      const response = await originalFetch(input, options);
+      if (response.ok) committed.set(key, response.clone());
+      if (response.ok && loseResponse) {
+        loseResponse = false;
+        throw new TypeError("Connection lost after the server committed");
+      }
+      return response;
+    };
+    const user = userEvent.setup();
+    renderApp("/credit-desk");
+    await screen.findByRole("heading", { name: "Credit Desk", level: 1 });
+    await user.selectOptions(screen.getByLabelText("Applicant"), applicant.id);
+    await user.type(
+      screen.getByLabelText("Reason for this assessment"),
+      "Check the synthetic evidence before reviewer handoff",
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Run sample assessment/ }),
+    );
+    await screen.findByText("Previous action outcome unconfirmed");
+    // Synchronize on the regression's actual precondition: React Query has
+    // applied the automatic refetch and its new revision before the retry.
+    // The score's display copy is unrelated to retry/idempotency semantics.
+    await waitFor(() => {
+      const refreshed = queryClient.getQueryData<ConnectedView>([
+        "connected",
+        merchantId,
+      ]);
+      expect(refreshed?.revision).toBe(
+        connectedRevision(api.state(merchantId)),
+      );
+      expect(refreshed?.revision).not.toBe(
+        JSON.parse(submissions[0]!.body).expectedRevision,
+      );
+      expect(refreshed?.credit.assessments).toHaveLength(1);
+    });
+    await screen.findByRole("combobox", { name: "Assessment version" });
+    expect(
+      api
+        .state()
+        .records.filter(
+          (record) => record.kind === "connected-credit-assessments",
+        ),
+    ).toHaveLength(1);
+    expect(connectedRevision(api.state())).not.toBe(
+      JSON.parse(submissions[0]!.body).expectedRevision,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Retry original sample request" }),
+    );
+    await waitFor(() => expect(submissions).toHaveLength(2));
+    await screen.findByText(
+      "Restore your session before recovering the original request.",
+    );
+    expect(
+      screen.getByLabelText("Reason for this assessment").closest("fieldset")
+        ?.disabled,
+    ).toBe(true);
+    await user.click(
+      screen.getByRole("button", { name: "Retry original sample request" }),
+    );
+    await waitFor(() => expect(submissions).toHaveLength(3));
+    expect(submissions[1]).toEqual(submissions[0]);
+    expect(submissions[2]).toEqual(submissions[0]);
+    expect(
+      api
+        .state()
+        .records.filter(
+          (record) => record.kind === "connected-credit-assessments",
+        ),
+    ).toHaveLength(1);
+    await screen.findByText(/Original sample request confirmed/);
+  },
+);
 
 it("a definite stale-version rejection releases the old revision for an explicitly retried action", async () => {
   const originalFetch = globalThis.fetch;

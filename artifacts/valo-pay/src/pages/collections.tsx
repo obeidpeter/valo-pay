@@ -135,8 +135,8 @@ export default function CollectionsPage() {
               <div className="flex flex-wrap gap-2" role="group" aria-label="Collection views">
                 {views.map(option => <Button key={option.key} size="sm" variant={view === option.key ? 'default' : 'ghost'} aria-pressed={view === option.key} onClick={() => setView(option.key)}>{option.label} ({option.count})</Button>)}
               </div>
-              <label className="flex items-center gap-2 text-sm sm:ml-auto">Owner
-                <select aria-label="Filter collections by owner" className="max-w-60 rounded-md border bg-background px-3 py-2" value={owner} onChange={event => setOwner(event.target.value)}>
+              <label className="flex w-full min-w-0 flex-col gap-2 text-sm sm:ml-auto sm:w-auto sm:flex-row sm:items-center">Owner
+                <select aria-label="Filter collections by owner" className="w-full min-w-0 max-w-full rounded-md border bg-background px-3 py-2 sm:w-auto sm:max-w-60" value={owner} onChange={event => setOwner(event.target.value)}>
                   <option value="">All owners</option>
                   {owners.map(value => <option key={value} value={value}>{readableLabel(value)}</option>)}
                 </select>

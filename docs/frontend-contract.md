@@ -4,6 +4,12 @@ All data is a persistent, isolated **synthetic sandbox**. No payment or SMS is a
 
 ## Workflow guidance and task queues
 
+The [evidence-led usability release](usability/README.md) keeps navigation stable while showing the actual demo role, lender operating mode and WAT separately from environment. Queue scroll offsets are held only in memory for the current lender/actor/role, with a bounded map; returning to a visited filtered route restores its position. This is separate from the existing saved-view preferences.
+
+Forms distinguish a structured initial rejection from an unknown result after a lost response. Unknown writes retain the original payload and idempotency key, hold changed inputs and offer an exact retry. Later authentication/policy refusal does not turn that original outcome into a known failure. Recovery state is not persisted through reload or deliberate abandonment. Check-only import failures remain editable; an import check never commits. Consequential dialogs start at their decision evidence, and correction links focus associated fields.
+
+The console sends `proposalId` and `proposalUpdatedAt` in the existing action data for allocation confirmation/rejection. The server validates the supplied pair against the current proposed allocation before changing anything. The pair remains optional for compatibility with older API clients; adopting it as mandatory needs a separately reviewed contract change. At allocation commit, the server also checks current payment credit, current instalment balance and cancelled/closed/disputed state, and refuses an already-applied allocation. An audit correction displays its restored-balance effect and does not imply a refund.
+
 The landing page offers a user-started preview of the actual console and a pilot enquiry email link. Loading the landing page alone still creates no workspace. Selecting Load interactive preview creates or resumes the same sample workspace used by the full console; the caption explains that its changes persist there. The preview omits the personal guide with `embedded=1`.
 
 The console guide has five optional steps: inspect a customer, review a match, follow up an overdue exception, run daily close and export a dispute pack. Progress is stored per lender in the browser and is explicitly self-reported, not operational evidence. It can be dismissed, reopened and restarted.

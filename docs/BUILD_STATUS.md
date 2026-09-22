@@ -8,7 +8,9 @@ The platform now includes working synthetic Pay-by-bank, Credit Desk, Cash Desk 
 
 This is a working, persistent **synthetic observation sandbox** built towards Stage 1. It is **not** a claim that all 137 Stage 1 MUST requirements, live acceptance tests, regulatory prerequisites or nine-month pilot evidence have been completed.
 
-The Business Plan v2.1 Gate Change Note, Technical Requirements v1.1 and Roadmap v1.1 govern scope. Stage 1 is two lenders and one aggregator. No funds are held.
+The legacy core scope is retained within the later supplied Business Plan v3.0, Technical Requirements v2.0 and Roadmap v2.0 Connected Banking planning set. The original two-lender, one-aggregator core evidence gates remain separate from each expansion gate. A planning requirement is not evidence that a live capability is implemented. No funds are held.
+
+The [22 September usability candidate](usability/README.md) adds operational review and recovery safeguards, with a traceable audit and human-validation kit. It is prepared for controlled preview and independent review; this note does not declare production acceptance.
 
 ## Available in this build
 

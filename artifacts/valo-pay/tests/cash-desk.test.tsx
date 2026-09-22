@@ -63,6 +63,134 @@ async function confirm(
 }
 
 describe("Cash Desk", () => {
+  it("recovers a lost forecast response inside its locked review dialog without creating another version", async () => {
+    setUp();
+    const send = globalThis.fetch;
+    let saved: Response | undefined;
+    const submissions: Array<{ key: string; body: string }> = [];
+    globalThis.fetch = async (input, options) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof Request
+            ? input.url
+            : input.toString();
+      if (options?.method !== "POST" || !url.includes("/connected/actions"))
+        return send(input, options);
+      submissions.push({
+        key: new Headers(options.headers).get("Idempotency-Key")!,
+        body: String(options.body),
+      });
+      if (saved) return saved.clone();
+      const response = await send(input, options);
+      saved = response.clone();
+      throw new TypeError("Response lost after commit");
+    };
+    const user = userEvent.setup();
+    renderApp("/cash-desk");
+    await user.click(
+      await screen.findByRole("button", { name: /Save forecast/ }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    const reason = within(dialog).getByRole("textbox", { name: "Review note" });
+    await user.type(reason, "Review this synthetic cash forecast");
+    await user.click(
+      within(dialog).getByRole("button", { name: "Confirm and save" }),
+    );
+    const retry = await within(dialog).findByRole("button", {
+      name: "Retry original sample request",
+    });
+    expect((reason as HTMLTextAreaElement).disabled).toBe(true);
+    expect(
+      (
+        within(dialog).getByRole("button", {
+          name: "Cancel",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    await user.click(retry);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(submissions).toHaveLength(2);
+    expect(submissions[1]).toEqual(submissions[0]);
+    expect(
+      api.state().records.filter((r) => r.kind === "connected-cash-forecasts"),
+    ).toHaveLength(1);
+    expect(screen.getByRole("status").textContent).toContain(
+      "Original sample request confirmed",
+    );
+  });
+
+  it("clears planning inputs when switching to another lender's SME workspace", async () => {
+    const user = userEvent.setup();
+    renderApp("/cash-desk");
+    const buffer = await screen.findByLabelText("Planning buffer (₦)");
+    await user.clear(buffer);
+    await user.type(buffer, "1250000.99");
+    await user.selectOptions(
+      screen.getAllByLabelText("Active lender")[0]!,
+      api.merchantIds[1]!,
+    );
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("Planning buffer (₦)") as HTMLInputElement)
+          .value,
+      ).toBe("1500000"),
+    );
+  });
+
+  it("rejects fractional kobo and invalid planning assumptions before review, then saves exact amounts with confirmed feedback", async () => {
+    setUp();
+    const user = userEvent.setup();
+    renderApp("/cash-desk");
+    const buffer = await screen.findByLabelText("Planning buffer (₦)");
+    await user.clear(buffer);
+    await user.type(buffer, "1500000.005");
+    await user.click(screen.getByRole("button", { name: /Save forecast/ }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(buffer.getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement).toBe(buffer);
+    expect(
+      api.calls.some(
+        (c) =>
+          c.method === "POST" &&
+          (c.body as { action?: string }).action === "cash.forecast",
+      ),
+    ).toBe(false);
+    await user.clear(buffer);
+    await user.type(buffer, "1,500,000.29");
+    await user.click(screen.getByRole("button", { name: /Save forecast/ }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("₦1,500,000.29 planning buffer");
+    const release = api.hold(/^\/v1\/connected\/actions$/);
+    try {
+      await user.type(
+        within(dialog).getByRole("textbox", { name: "Review note" }),
+        "Review the exact sample forecast buffer",
+      );
+      await user.click(
+        within(dialog).getByRole("button", { name: "Confirm and save" }),
+      );
+      expect(
+        screen.queryByText(
+          "New sample forecast saved. Your source balances and commitments are unchanged.",
+        ),
+      ).toBeNull();
+    } finally {
+      release();
+    }
+    await screen.findByText(
+      "New sample forecast saved. Your source balances and commitments are unchanged.",
+    );
+    const request = api.calls.find(
+      (c) =>
+        c.method === "POST" &&
+        (c.body as { action?: string }).action === "cash.forecast",
+    );
+    expect(request?.body).toMatchObject({ data: { bufferMinor: 150_000_029 } });
+  });
+
   it("shows an honest sample preview without creating records or enabling preparation before permission", async () => {
     renderApp("/cash-desk");
     expect(

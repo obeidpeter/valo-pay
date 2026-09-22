@@ -79,7 +79,7 @@ export default function ExceptionsPage() {
           <p className="hidden print:block text-sm">Showing: {filters.find(option => option.key === filter)?.label}</p>
           <div className="flex flex-wrap gap-2" role="tablist" aria-label="Exception filter">
             {filters.map((option, index) => (
-              <Button key={option.key} ref={element => { tabRefs.current[index] = element; }} role="tab" aria-selected={filter === option.key} tabIndex={filter === option.key ? 0 : -1} onKeyDown={event => onTabKeyDown(event, index, filters.map(item => item.key))} variant={filter === option.key ? 'secondary' : 'ghost'} size="sm" className={filter === option.key ? 'bg-primary text-primary-foreground hover:bg-primary/90' : ''} onClick={() => setFilter(option.key)}>
+              <Button key={option.key} id={`exception-tab-${option.key}`} aria-controls="exception-results" ref={element => { tabRefs.current[index] = element; }} role="tab" aria-selected={filter === option.key} tabIndex={filter === option.key ? 0 : -1} onKeyDown={event => onTabKeyDown(event, index, filters.map(item => item.key))} variant={filter === option.key ? 'secondary' : 'ghost'} size="sm" className={filter === option.key ? 'bg-primary text-primary-foreground hover:bg-primary/90' : ''} onClick={() => setFilter(option.key)}>
                 {option.label}
               </Button>
             ))}
@@ -99,6 +99,7 @@ export default function ExceptionsPage() {
           <p className="w-full text-xs text-muted-foreground">Overdue items first, then severity and deadline. Dates use West Africa Time.</p>
         </div>
 
+        <div id="exception-results" role="tabpanel" aria-labelledby={`exception-tab-${filter}`} tabIndex={0}>
         {isLoading ? (
           <Loading what="exceptions" />
         ) : error && !data ? (
@@ -180,6 +181,7 @@ export default function ExceptionsPage() {
           </ScrollFrame>
         )}
         {!isLoading && !error && (data?.total || 0) > 25 && <RecordPagination pagination={pagination} total={data?.total || 0} label="exceptions" />}
+        </div>
       </div>
 
       <RecordDialog

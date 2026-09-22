@@ -40,6 +40,20 @@ export function focusField(id: string): void {
   document.getElementById(id)?.focus();
 }
 
+/** A correction index for long dialogs: each message links to its actual control. */
+export function FormErrorLinks({ errors, fields, prefix }: { errors: Record<string, string>; fields: Array<{ name: string; label: string }>; prefix: string }) {
+  const listed = fields.filter(field => errors[field.name]);
+  if (!listed.length) return null;
+  return <ul className="mt-2 space-y-1">{listed.map(field => <li key={field.name}><button type="button" className="min-h-6 text-left underline underline-offset-2" onClick={() => focusField(`${prefix}-${field.name}`)}>{field.label}: {errors[field.name]}</button></li>)}</ul>;
+}
+
+/** Other conflicts (for example an existing reference) do not mean the draft's record is stale. */
+export function isStaleRecordError(error: unknown): boolean {
+  const value = error as { status?: number; data?: { error?: unknown }; message?: unknown } | null;
+  const message = value?.data?.error ?? value?.message;
+  return value?.status === 409 && typeof message === 'string' && /record changed after you opened/i.test(message);
+}
+
 /** The words for a value that is missing, in the field's own label. */
 export function missingMessage(label: string, type: string): string {
   return `${label} is required.${type === 'select' ? ' Choose an option.' : ''}`;

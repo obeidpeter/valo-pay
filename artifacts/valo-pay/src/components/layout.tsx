@@ -1,4 +1,4 @@
-import React, { ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { ReactNode, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useSearch } from 'wouter';
 import { useWorkspace } from '@/lib/workspace-context';
 import { AuthShow, useSignOut } from '@/lib/auth';
@@ -11,6 +11,7 @@ import { focusMain } from '@/lib/focus';
 import { formatDate } from '@/lib/formatters';
 import { useTheme } from '@/lib/theme';
 import { SandboxGuide } from './sandbox-guide';
+import { useQueuePosition } from '@/lib/queue-position';
 
 /** The console's pages, in the one order they are listed: the sidebar, the phone drawer and the page title. */
 const navItems = [
@@ -83,20 +84,14 @@ function AuthBlock({ role, signOut }: { role: string | undefined; signOut: () =>
 }
 
 export function Layout({ children }: { children: ReactNode }) {
-  const embedded = new URLSearchParams(useSearch()).get('embedded') === '1';
+  const search = useSearch();
+  const embedded = new URLSearchParams(search).get('embedded') === '1';
   const { workspace, merchantId, setMerchantId, isLoading } = useWorkspace();
   const [location] = useLocation();
   const signOut = useSignOut();
   const { theme, setChoice } = useTheme();
   const mainRef = useRef<HTMLElement>(null);
-  // The shell survives navigation, including its independently scrolling main region.
-  // Reset before paint only when the route changes; filters and other same-page updates keep their place.
-  useLayoutEffect(() => {
-    if (mainRef.current) {
-      mainRef.current.scrollTop = 0;
-      mainRef.current.scrollLeft = 0;
-    }
-  }, [location]);
+  useQueuePosition(mainRef, `${location}?${search}`, `${merchantId}:${workspace?.actor}:${workspace?.role}`);
 
   // The title names the page, or says the page stopped working while the boundary below shows its notice.
   const [pageError,setPageError]=useState<Error|null>(null);
@@ -120,7 +115,8 @@ export function Layout({ children }: { children: ReactNode }) {
   }, []);
   // Paper carries what the screen's chrome carried: the lender, the sandbox notice, and when it was printed.
   // The time is taken again as the print dialog opens, since a page can sit open for a day before it is printed.
-  const lenderName = workspace?.merchants.find((m: any) => m.id === merchantId)?.name;
+  const lender = workspace?.merchants.find(m => m.id === merchantId);
+  const lenderName = lender?.name;
   const pageTitle = navItems.find(n => n.href === location)?.label || 'Customer timeline';
   const [printedAt, setPrintedAt] = useState(() => formatDate(new Date().toISOString()));
   useEffect(() => {
@@ -144,7 +140,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <div className="environment-strip px-4 py-2 text-[11px] font-medium flex items-center justify-center gap-2 border-b z-50 print:hidden">
         <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
         <span>Sandbox · Sample data. We never hold money.<span className="hidden sm:inline"> Live instructions are disabled.</span></span>
-        {workspace?.environment && <span className="ml-2 hidden sm:inline-block text-[10px] uppercase tracking-wider rounded border px-2 py-0.5">Mode: {workspace.environment}</span>}
+        {workspace?.environment && <span className="ml-2 hidden sm:inline-block text-[10px] uppercase tracking-wider rounded border px-2 py-0.5">Environment: {workspace.environment}</span>}
       </div>
 
       {/* Phone bar: the brand, the lender being worked on, and the drawer with the same pages as the sidebar. */}
@@ -209,9 +205,9 @@ export function Layout({ children }: { children: ReactNode }) {
 
         {/* Main Content */}
         <main ref={mainRef} id="main" tabIndex={-1} className="min-w-0 flex-1 overflow-auto bg-background focus:outline-none print:overflow-visible">
-          <div className="workspace-bar hidden md:flex items-center justify-between gap-4 border-b px-8 py-3.5 print:hidden">
-            <div className="flex items-center gap-2 text-xs"><span className="text-muted-foreground">Workspace</span><ChevronRight className="h-3 w-3 text-muted-foreground" aria-hidden="true" /><span className="font-medium">{pageTitle}</span></div>
-            <span className="text-[11px] text-muted-foreground flex items-center gap-2"><span className="h-1.5 w-1.5 rounded-full bg-brand" />No live instructions</span>
+          <div className="workspace-bar flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3 md:px-8 print:hidden">
+            <div className="hidden md:flex items-center gap-2 text-xs"><span className="text-muted-foreground">Workspace</span><ChevronRight className="h-3 w-3 text-muted-foreground" aria-hidden="true" /><span className="font-medium">{pageTitle}</span></div>
+            <p aria-live="polite" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs"><span>{workspace?.authenticated ? 'Role' : 'Demo role'}: <strong className="font-semibold">{workspace?.role || 'Loading…'}</strong></span>{lender?.mode && <span>Mode: <strong className="font-semibold">{lender.mode}</strong></span>}<span className="text-muted-foreground">Times in WAT</span></p>
           </div>
           <div className="console-content p-4 sm:p-6 md:p-8 max-w-[1440px] mx-auto print:max-w-none print:p-0" aria-busy={isLoading && !workspace}>
             {/* Print only: the provenance the screen's banner and sidebar carried. */}

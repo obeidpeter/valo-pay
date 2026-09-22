@@ -113,6 +113,7 @@ test("close range uses native date fields, pages summaries and loads evidence on
 });
 test("reconciliation pages retain evidence and reject a proposed match with a reason", async ({
   page,
+  request,
 }) => {
   const unbounded: string[] = [];
   page.on("request", (r) => {
@@ -141,10 +142,28 @@ test("reconciliation pages retain evidence and reject a proposed match with a re
   await dialog
     .getByLabel(/Reason/)
     .fill("The synthetic source reference needs a separate Finance review.");
+  const rejection = page.waitForResponse((response) =>
+    response.url().includes("/api/v1/actions?") && response.request().method() === "POST",
+  );
   await dialog
     .getByRole("button", { name: "Reject allocation", exact: true })
     .click();
+  const response = await rejection;
+  const outcome = await response.json();
+  expect(response.ok(), JSON.stringify(outcome)).toBeTruthy();
+  const submitted = response.request().postDataJSON();
+  expect(submitted.data.proposalId).toBeTruthy();
+  expect(submitted.data.proposalUpdatedAt).toBeTruthy();
+  expect(outcome.record).toMatchObject({
+    id: submitted.data.proposalId,
+    status: "superseded",
+    data: { supersededReason: submitted.reason },
+  });
   await expect(dialog).toBeHidden();
+  const merchantId = new URL(response.url()).searchParams.get("merchantId");
+  const saved = await request.get(`/api/v1/records/allocations?merchantId=${merchantId}&id=${submitted.data.proposalId}&limit=1`);
+  expect(saved.ok()).toBeTruthy();
+  expect((await saved.json()).items[0].status).toBe("superseded");
   expect(unbounded).toHaveLength(0);
   await navigate(page, "Reports");
   await expect(

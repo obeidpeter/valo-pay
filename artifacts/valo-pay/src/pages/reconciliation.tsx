@@ -26,10 +26,11 @@ import { LoadProblem } from '@/components/load-problem';
 const paymentAvailable = (record: any): number => Math.max(0, Number(record?.amountKobo || 0) - Number(record?.data?.allocatedKobo || 0));
 const instalmentOutstanding = (record: any): number => Math.max(0, Number(record?.data?.outstandingKobo ?? record?.amountKobo ?? 0));
 
-function MatchEvidence({ allocation, payment, instalment, decision }: { allocation: any; payment: any; instalment: any; decision: string }) {
+function MatchEvidence({ allocation, payment, instalment, customer, decision }: { allocation: any; payment: any; instalment: any; customer?: any; decision: string }) {
   const available = paymentAvailable(payment), outstanding = instalmentOutstanding(instalment);
   return (
     <section aria-label="Match evidence" className="space-y-3 rounded-lg border bg-secondary/20 p-3 text-sm">
+      <div><p className="font-semibold">{customer?.name || 'Customer details unavailable'}</p><p className="mt-1 font-mono text-xs">{customer?.reference || 'Check the linked records before recording a decision.'}</p></div>
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="rounded-md border bg-card p-3">
           <h3 className="font-semibold">Recorded payment</h3>
@@ -37,6 +38,7 @@ function MatchEvidence({ allocation, payment, instalment, decision }: { allocati
           <p className="mt-2">Received: <strong>{payment ? formatKobo(payment.amountKobo) : 'Not available'}</strong></p>
           <p className="text-xs text-muted-foreground">{payment ? formatDate(String(payment.data?.observedAt || payment.createdAt)) : 'Reload to check this payment.'}</p>
           <p className="mt-2">Available to allocate: {payment ? formatKobo(available) : 'Not available'}</p>
+          <dl className="mt-3 space-y-1 text-xs"><div><dt className="inline text-muted-foreground">Receipt status: </dt><dd className="inline">{payment?.data?.collectionStatus ? readableLabel(payment.data.collectionStatus) : 'Not recorded'}</dd></div><div><dt className="inline text-muted-foreground">Settlement: </dt><dd className="inline">{payment?.data?.settlementStatus ? readableLabel(payment.data.settlementStatus) : 'Not recorded'}</dd></div><div><dt className="inline text-muted-foreground">Provider reference: </dt><dd className="inline break-all">{String(payment?.data?.providerReference || payment?.reference || 'Not recorded')}</dd></div></dl>
         </div>
         <div className="rounded-md border bg-card p-3">
           <h3 className="font-semibold">Instalment</h3>
@@ -45,12 +47,13 @@ function MatchEvidence({ allocation, payment, instalment, decision }: { allocati
           <p className="text-xs text-muted-foreground">Due: {formatDate(String(instalment?.data?.dueDate || ''))}</p>
         </div>
       </div>
-      <p><strong>Why this match was suggested:</strong> {String(allocation.data?.explanation || 'No explanation was recorded. Review the source records before deciding.')}</p>
+      <p><strong>Matching evidence:</strong> {String(allocation.data?.explanation || 'No explanation was recorded. Review the source records before deciding.')}</p>
       <p className="text-xs text-muted-foreground">Rule {String(allocation.data?.rule || 'not recorded')} · {readableLabel(allocation.data?.confidence || 'not recorded')}</p>
+      <p className="text-xs text-muted-foreground">The allocation credits the payment amount to the instalment. Provider fees are reviewed separately in settlement batches; they do not reduce this credit.</p>
       {decision === 'confirm_allocation' ? <>
         <p>Confirming applies <strong>{formatKobo(allocation.amountKobo)}</strong> to this instalment.</p>
         {payment && instalment && allocation.amountKobo <= available && allocation.amountKobo <= outstanding && <p className="text-xs text-muted-foreground">After confirmation: {formatKobo(available - allocation.amountKobo)} unapplied payment; {formatKobo(outstanding - allocation.amountKobo)} still due.</p>}
-      </> : <p>Rejecting removes this proposed match. The payment remains available for Finance to review and allocate.</p>}
+      </> : decision === 'reject_allocation' ? <p>Rejecting removes this proposed match. The payment remains available for Finance to review and allocate.</p> : decision === 'review_correct' ? <p>Recording this match as correct keeps the allocation applied and saves your review and reason in the audit record.</p> : <div className="rounded-md border border-warning-border bg-warning p-3 text-warning-foreground"><p className="font-semibold">This corrects the recorded allocation</p><p className="mt-1">Marking it incorrect removes {formatKobo(allocation.amountKobo)} from the applied allocation and reopens the payment and instalment for review. This does not refund or move money.</p>{payment && instalment && <p className="mt-2">After correction: {formatKobo(Math.min(payment.amountKobo, available + allocation.amountKobo))} unapplied payment; {formatKobo(Math.min(instalment.amountKobo, outstanding + allocation.amountKobo))} still due.</p>}</div>}
     </section>
   );
 }
@@ -114,6 +117,7 @@ export default function ReconciliationPage() {
   };
 
   const handleAction = (record: any, action: string) => {
+    if (action === 'manual_allocate') { setAllocationSearch(''); choicePage.setPage(0); }
     setSelectedRecord(record);
     setActionKind(action);
     setIsDialogOpen(true);
@@ -128,8 +132,9 @@ export default function ReconciliationPage() {
 
   if (!merchantId) return null;
   const isProposalDecision = actionKind === 'confirm_allocation' || actionKind === 'reject_allocation';
-  const selectedPayment = isProposalDecision ? paymentById.get(String(selectedRecord?.data?.paymentId)) : selectedRecord;
-  const selectedInstalment = isProposalDecision ? dueItemById.get(String(selectedRecord?.data?.dueItemId)) : null;
+  const isAllocationReview = actionKind === 'review_allocation';
+  const selectedPayment = isProposalDecision || isAllocationReview ? paymentById.get(String(selectedRecord?.data?.paymentId)) : selectedRecord;
+  const selectedInstalment = isProposalDecision || isAllocationReview ? dueItemById.get(String(selectedRecord?.data?.dueItemId)) : null;
 
   return (
     <div className="space-y-6">
@@ -476,8 +481,8 @@ export default function ReconciliationPage() {
         }
         actionMutation={actionKind === 'create_batch' || actionKind === 'edit_batch' ? undefined : actionKind}
         actionRecordId={isProposalDecision ? selectedRecord?.data?.paymentId : undefined}
-        defaultValues={actionKind === 'review_allocation' ? { correct: reviewCorrect } : actionKind === 'manual_allocate' ? { amountKobo: paymentAvailable(selectedRecord) } : {}}
-        context={isProposalDecision && selectedRecord ? <MatchEvidence allocation={selectedRecord} payment={selectedPayment} instalment={selectedInstalment} decision={actionKind} /> : actionKind === 'manual_allocate' ? values => {
+        defaultValues={isProposalDecision ? { data: { proposalId: selectedRecord?.id, proposalUpdatedAt: selectedRecord?.updatedAt } } : actionKind === 'review_allocation' ? { correct: reviewCorrect } : actionKind === 'manual_allocate' ? { amountKobo: paymentAvailable(selectedRecord) } : {}}
+        context={isProposalDecision && selectedRecord ? <MatchEvidence allocation={selectedRecord} payment={selectedPayment} instalment={selectedInstalment} customer={customerById.get(String(selectedRecord.customerId))} decision={actionKind} /> : isAllocationReview && selectedRecord ? values => <MatchEvidence allocation={selectedRecord} payment={selectedPayment} instalment={selectedInstalment} customer={customerById.get(String(selectedRecord.customerId))} decision={values.correct ? 'review_correct' : 'review_incorrect'} /> : actionKind === 'manual_allocate' ? values => {
           const due = dueItemById.get(String(values.dueItemId));
           const available = paymentAvailable(selectedRecord), outstanding = instalmentOutstanding(due);
           let amount: number | null = null;
@@ -486,13 +491,16 @@ export default function ReconciliationPage() {
             <label className="grid gap-1 text-xs">Find an instalment<input type="search" value={allocationSearch} onChange={event=>{setAllocationSearch(event.target.value);choicePage.setPage(0);}} placeholder="Name or reference" className="min-h-10 rounded-md border bg-background px-3" /></label>
             {choicesQuery.error ? <LoadProblem what="instalment choices" error={choicesQuery.error} retry={()=>{void choicesQuery.refetch();}} /> : choicesQuery.isFetching ? <p role="status">Loading instalment choices…</p> : <RecordPagination pagination={choicePage} total={choicesQuery.data?.total || 0} label="instalment choices" />}
             <p className="font-semibold">Payment {selectedRecord?.reference}</p>
+            <p>Recorded payer: <strong>{customerById.get(String(selectedRecord?.customerId))?.name || (selectedRecord?.customerId ? 'Customer name unavailable' : 'Not identified')}</strong></p>
+            {!selectedRecord?.customerId && <p className="text-xs text-muted-foreground">Confirm the payer from the payment evidence before choosing their instalment.</p>}
             <p>Available to allocate: <strong>{formatKobo(available)}</strong></p>
             <p>Selected instalment outstanding: <strong>{due ? formatKobo(outstanding) : 'Choose an instalment'}</strong></p>
             {due && amount !== null && amount > 0 && amount <= available && amount <= outstanding && <p className="text-xs text-muted-foreground">After allocation: {formatKobo(available - amount)} unapplied payment; {formatKobo(outstanding - amount)} still due.</p>}
           </section>;
         } : undefined}
         validate={(values): Record<string, string> => {
-          if (isProposalDecision && (!selectedPayment || !selectedInstalment)) return { reason: 'Payment or instalment details are unavailable. Close this dialog and reload before deciding.' };
+          if ((isProposalDecision || isAllocationReview) && (!selectedPayment || !selectedInstalment)) return { reason: 'Payment or instalment details are unavailable. Close this dialog and reload before deciding.' };
+          if (actionKind === 'confirm_allocation' && (selectedRecord.amountKobo > paymentAvailable(selectedPayment) || selectedRecord.amountKobo > instalmentOutstanding(selectedInstalment))) return { reason: 'The proposed amount exceeds the payment available or instalment outstanding. Close this dialog, refresh the queue and review the changed balances.' };
           if (actionKind !== 'manual_allocate') return {};
           const due = dueItemById.get(String(values.dueItemId));
           if (!due) return { dueItemId: 'Choose an instalment from the current lender.' };

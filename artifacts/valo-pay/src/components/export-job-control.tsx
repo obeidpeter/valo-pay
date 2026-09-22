@@ -41,11 +41,12 @@ export function ExportJobControl({ kind, customerId, formats = ['pdf'], label }:
   }, [scope, job?.id, state]);
   useEffect(() => { visit.current = { scope }; return () => { visit.current = { scope: 'unmounted' }; }; }, [scope]);
   const refresh = async () => { await recent.refetch(); };
-  const start = async (format: Format) => {
+  const refreshStatus = () => { void recent.refetch(); if (id) void status.refetch(); };
+  const start = async (format: Format, recover = false) => {
     if (!merchantId || create.isPending) return;
     const submitted = visit.current; setProblem(null);
     try {
-      const result = await create.mutateAsync({ data: { kind, format, ...(customerId ? { customerId } : {}) }, params: { merchantId } });
+      const result = await (recover ? create.retryUnconfirmed() : create.mutateAsync({ data: { kind, format, ...(customerId ? { customerId } : {}) }, params: { merchantId } }));
       if (submitted !== visit.current) return;
       setSelected({ scope, job: { ...result, kind, format } });
       queryClient.setQueryData(getGetExportJobQueryKey(result.id, { merchantId }), result);
@@ -54,7 +55,7 @@ export function ExportJobControl({ kind, customerId, formats = ['pdf'], label }:
     } catch (error) {
       if (submitted === visit.current) {
         setProblem({ scope, message: saidBy(error, 'The request could not be confirmed. Check recent exports or retry the unchanged request.') });
-        if (kind === 'dispute-pack') notifyProblem('Dispute pack could not be created', `${saidBy(error, 'The request could not be confirmed.')} Try the export again.`);
+        if (kind === 'dispute-pack') notifyProblem('Check the dispute pack request', `${saidBy(error, 'The request could not be confirmed.')} Check saved exports before starting another request.`);
       }
     }
   };
@@ -62,25 +63,26 @@ export function ExportJobControl({ kind, customerId, formats = ['pdf'], label }:
     if (!merchantId || !id || retry.isPending) return;
     const submitted = visit.current; setProblem(null);
     try {
-      const result = await retry.mutateAsync({ id, params: { merchantId } });
+      const result = await (retry.hasUnconfirmedOutcome ? retry.retryUnconfirmed() : retry.mutateAsync({ id, params: { merchantId } }));
       if (submitted !== visit.current) return;
-      setSelected({ scope, job: result }); queryClient.setQueryData(getGetExportJobQueryKey(id, { merchantId }), result); void refresh();
+      setSelected({ scope, job: result }); queryClient.setQueryData(getGetExportJobQueryKey(result.id, { merchantId }), result); void refresh();
     } catch (error) { if (submitted === visit.current) setProblem({ scope, message: saidBy(error, 'The retry could not be confirmed. Check this export’s status before trying again.') }); }
   };
   if (!merchantId) return null;
   return <div className="space-y-3 min-w-0 max-w-xl">
     <div className="flex flex-wrap gap-2">
-      {formats.map((format, index) => <Button key={format} variant={index === 0 ? 'outline' : 'ghost'} size="sm" disabled={create.isPending} busy={create.isPending && create.variables?.data.format === format} busyLabel={`Preparing ${format.toUpperCase()}…`} onClick={() => { void start(format); }}>
+      {formats.map((format, index) => <Button key={format} variant={index === 0 ? 'outline' : 'ghost'} size="sm" disabled={create.isPending || retry.isPending || create.hasUnconfirmedOutcome || retry.hasUnconfirmedOutcome} busy={create.isPending && create.variables?.data.format === format} busyLabel={`Preparing ${format.toUpperCase()}…`} onClick={() => { void start(format); }}>
         {index === 0 && <Download className="h-4 w-4" />}{index === 0 ? label : format.toUpperCase()}
       </Button>)}
     </div>
-    {problem?.scope === scope && <div role="alert" className="rounded-lg border border-destructive/30 p-3 text-sm"><p className="font-medium">{title === 'Billing CSV' ? 'Billing export' : title} not generated</p><p>{problem.message}</p></div>}
-    {(recent.error || status.error) && <div role="alert" className="text-sm"><p>Saved export status could not be loaded. A job may still be running.</p><Button variant="outline" size="sm" onClick={() => { void recent.refetch(); if (id) void status.refetch(); }}>Refresh export status</Button></div>}
+    {problem?.scope === scope && <div role="alert" className="rounded-lg border border-destructive/30 p-3 text-sm"><p className="font-medium">{title === 'Billing CSV' ? 'Billing export' : title} request could not be confirmed</p><p>{problem.message}</p><p className="mt-2">The request may have been saved. Check saved exports before starting another request.</p><Button className="mt-2" variant="outline" size="sm" onClick={refreshStatus}>Check saved exports</Button></div>}
+    {(create.hasUnconfirmedOutcome || retry.hasUnconfirmedOutcome) && <div className="rounded-lg border bg-secondary/20 p-3 text-sm"><p>Other export requests are paused until this result is confirmed. Retrying checks the original request without creating a duplicate.</p><Button variant="outline" size="sm" className="mt-2" busy={create.isPending || retry.isPending} busyLabel="Checking original request…" onClick={() => { if (create.hasUnconfirmedOutcome) void start(create.variables!.data.format as Format, true); else void retrySaved(); }}>Retry original request</Button></div>}
+    {(recent.error || status.error) && <div role="alert" className="text-sm"><p>Saved export status could not be loaded. A job may still be running.</p><Button variant="outline" size="sm" onClick={refreshStatus}>Refresh export status</Button></div>}
     {job && <div role={state === 'failed' ? 'alert' : 'status'} className="rounded-lg border bg-card p-3 text-sm space-y-2">
       <p className="font-medium">{title} {state === 'ready' ? 'is ready to download' : state === 'failed' ? 'could not be completed' : state === 'running' ? 'is being prepared' : 'is queued'}</p>
       {(state === 'queued' || state === 'running') && <p className="text-muted-foreground">You can leave this page. The saved job will continue and can be found here when you return.</p>}
-      {state === 'failed' && <><p>{job.error || 'Generation could not finish. Retry this saved export.'}</p><Button variant="outline" size="sm" onClick={() => { void retrySaved(); }} busy={retry.isPending} busyLabel="Retrying…"><RefreshCw className="h-4 w-4" />Retry export</Button></>}
-      {state === 'ready' && <><p className="text-xs text-muted-foreground">Sample data only{job.generatedAt ? ` · ${formatDate(job.generatedAt)}` : ''}</p><Button asChild variant="outline" size="sm"><a href={job.downloadUrl} target="_blank" rel="noopener noreferrer">{openLabel}</a></Button><p className="text-xs font-mono break-all">SHA-256: {job.checksum}</p></>}
+      {state === 'failed' && <><p>{job.error || 'Generation could not finish. Retry this saved export.'}</p><Button variant="outline" size="sm" disabled={create.isPending || create.hasUnconfirmedOutcome || retry.hasUnconfirmedOutcome} onClick={() => { void retrySaved(); }} busy={retry.isPending} busyLabel="Retrying…"><RefreshCw className="h-4 w-4" />Retry export</Button></>}
+      {state === 'ready' && <><p className="text-xs text-muted-foreground">Sample data only{job.generatedAt ? ` · ${formatDate(job.generatedAt)}` : ''}</p><Button asChild variant="outline" size="sm"><a href={job.downloadUrl} target="_blank" rel="noopener noreferrer">{openLabel}</a></Button><details className="text-xs"><summary className="min-h-8 cursor-pointer content-center font-medium">File verification and access</summary><p className="mt-2 font-mono break-all">SHA-256: {job.checksum}</p><p className="mt-2 text-muted-foreground">Workspace access is checked on every download. The service does not provide an expiry date. A copy already downloaded cannot be recalled.</p></details></>}
     </div>}
     {previous.length > 1 && <details className="text-xs"><summary className="cursor-pointer font-medium">Recent exports ({previous.length})</summary><ul className="mt-2 space-y-1">{previous.map(record => <li key={record.id}><button type="button" className="min-h-8 text-left underline" onClick={() => setSelected({ scope, job: { id: record.id, downloadUrl: `/api/v1/exports/${record.id}/download?merchantId=${merchantId}`, status: record.status as ExportResult['status'] } })}>{String(record.data.format).toUpperCase()} · {formatDate(record.createdAt)} · {record.status}</button></li>)}</ul></details>}
   </div>;

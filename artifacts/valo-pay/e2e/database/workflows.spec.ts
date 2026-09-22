@@ -1,6 +1,114 @@
 import { test, expect } from "@playwright/test";
 import { formatKobo } from "../../src/lib/formatters";
 
+test("a slow committed customer request recovers its lost response without a second record", async ({
+  page,
+  context,
+}) => {
+  const arranged = await context.request.post("/__test/session");
+  expect(arranged.ok()).toBeTruthy();
+  const fixture = await arranged.json();
+  const reference = "DB-INTERRUPTED-CUSTOMER";
+  const name = "Synthetic recovery customer";
+  const attempts: { key: string | undefined; body: string | null; url: string }[] = [];
+  let committed: { status: number; record: { id: string } } | undefined;
+  let releaseResponse!: () => void;
+  const responseHeld = new Promise<void>((resolve) => { releaseResponse = resolve; });
+
+  await page.route("**/api/v1/records/customers?*", async (route) => {
+    const request = route.request();
+    if (request.method() !== "POST") return route.continue();
+    attempts.push({
+      key: request.headers()["idempotency-key"],
+      body: request.postData(),
+      url: request.url(),
+    });
+    if (attempts.length !== 1) return route.continue();
+    // Commit through the real API/PostgreSQL first. Only delivery to this
+    // browser is held and then lost; no success response or record is mocked.
+    const response = await route.fetch({ maxRetries: 0 });
+    committed = { status: response.status(), record: await response.json() };
+    await responseHeld;
+    await route.abort("connectionreset");
+  });
+
+  await page.goto("/customers");
+  await page.getByRole("button", { name: "Add customer", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Add customer" });
+  const fullName = dialog.getByLabel(/^Full name/);
+  const loanReference = dialog.getByLabel(/^Loan software reference/);
+  await fullName.fill(name);
+  await loanReference.fill(reference);
+  await dialog.getByLabel(/^Consent source or reference/).fill("Synthetic signed form DB-CONSENT-RECOVERY");
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
+
+  try {
+    await expect.poll(() => committed?.status).toBe(200);
+    // The intentionally delayed acknowledgement must never be treated as
+    // success, even though a separate read can already see the saved record.
+    const savedBeforeAcknowledgement = await context.request.get(
+      `/api/v1/records/customers?merchantId=${fixture.merchantId}&search=${reference}&limit=10`,
+    );
+    expect(savedBeforeAcknowledgement.ok()).toBeTruthy();
+    expect((await savedBeforeAcknowledgement.json()).total).toBe(1);
+    await expect(dialog).toBeVisible();
+    const saving = dialog.getByRole("button", { name: "Saving…", exact: true });
+    await expect(saving).toBeDisabled();
+    await expect(saving).toHaveAttribute("aria-busy", "true");
+    await expect(dialog.getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
+    await expect(fullName).toBeDisabled();
+    await expect(dialog.getByText("Outcome not confirmed", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("row").filter({ hasText: reference })).toHaveCount(0);
+    expect(attempts).toHaveLength(1);
+  } finally {
+    releaseResponse();
+  }
+
+  await expect(dialog.getByText("Outcome not confirmed", { exact: true })).toBeVisible();
+  await expect(fullName).toBeDisabled();
+  await expect(fullName).toHaveValue(name);
+  await expect(loanReference).toBeDisabled();
+  await expect(loanReference).toHaveValue(reference);
+  await expect(dialog.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+
+  // Declining to abandon the uncertain session preserves the draft and retry.
+  const closeWarning = new Promise<string>((resolve) => {
+    page.once("dialog", async (warning) => {
+      const message = warning.message();
+      await warning.dismiss();
+      resolve(message);
+    });
+  });
+  await page.keyboard.press("Escape");
+  expect(await closeWarning).toContain("Closing does not cancel the request");
+  await expect(dialog).toBeVisible();
+  expect(attempts).toHaveLength(1);
+
+  const replayResponse = page.waitForResponse((response) =>
+    response.url().includes("/api/v1/records/customers?") && response.request().method() === "POST",
+  );
+  await dialog.getByRole("button", { name: "Retry same request", exact: true }).click();
+  const replay = await replayResponse;
+  expect(replay.ok()).toBeTruthy();
+  expect((await replay.json()).id).toBe(committed!.record.id);
+  await expect(dialog).toBeHidden();
+  expect(attempts).toHaveLength(2);
+  expect(attempts[0].key).toMatch(/^[0-9a-f-]{36}$/i);
+  expect(attempts[1]).toEqual(attempts[0]);
+
+  await page.reload();
+  await page.getByLabel("Search customers").fill(reference);
+  await expect(page.getByRole("row").filter({ hasText: reference })).toHaveCount(1);
+  const stored = await context.request.get(
+    `/api/v1/records/customers?merchantId=${fixture.merchantId}&search=${reference}&limit=10`,
+  );
+  expect(stored.ok()).toBeTruthy();
+  const records = await stored.json();
+  expect(records.total).toBe(1);
+  expect(records.items).toHaveLength(1);
+  expect(records.items[0]).toMatchObject({ id: committed!.record.id, name, reference, data: { synthetic: true } });
+});
+
 test("real API bootstrap, database history pages, full balances and lender isolation", async ({
   page,
   context,

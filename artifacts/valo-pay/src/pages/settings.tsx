@@ -6,7 +6,7 @@ import { DailyCloseStatus } from '@/components/daily-close-status';
 import { useWorkspace } from '@/lib/workspace-context';
 import { permissionReason } from '@/lib/permissions';
 import { useGetSettings, getGetSettingsQueryKey } from '@workspace/api-client-react';
-import { useSafeUpdateSettings as useUpdateSettings, useSafePerformAction as usePerformAction, submissionFingerprint } from '@/lib/safe-mutations';
+import { useSafeUpdateSettings as useUpdateSettings, useSafePerformAction as usePerformAction, submissionFingerprint, outcomeIsUnconfirmed } from '@/lib/safe-mutations';
 import { useUnsavedChanges } from '@/lib/unsaved-changes';
 import { useQueryClient } from '@tanstack/react-query';
 import { Settings as SettingsIcon, Shield, PowerOff, AlertTriangle } from 'lucide-react';
@@ -49,14 +49,17 @@ export default function SettingsPage() {
   const killSwitch = usePerformAction({ mutation: { onSuccess: changedData } }, merchantId);
   const requestInstruction = usePerformAction(undefined, merchantId);
   const updateExecSettings = useUpdateSettings({ mutation: { onSuccess: changedData } }, `${merchantId}:${isEditingExec}`);
+  const otherOutcomeUnconfirmed = killSwitch.hasUnconfirmedOutcome || requestInstruction.hasUnconfirmedOutcome || updateExecSettings.hasUnconfirmedOutcome;
+  const otherActionPending = killSwitch.isPending || requestInstruction.isPending || updateExecSettings.isPending;
+  useUnsavedChanges(updateRole.isPending || updateRole.hasUnconfirmedOutcome || otherActionPending || otherOutcomeUnconfirmed);
 
   const changeRole = async () => {
-    if (!merchantId || updateRole.isPending || !confirmExecDiscard()) return;
+    if (!merchantId || updateRole.isPending || otherActionPending || otherOutcomeUnconfirmed || (!updateRole.hasUnconfirmedOutcome && !confirmExecDiscard())) return;
     const isCurrent = captureVisit();
     try {
-      await updateRole.mutateAsync({ data: { action: 'set_role', data: { role } }, params: { merchantId } });
+      await (updateRole.hasUnconfirmedOutcome ? updateRole.retryUnconfirmed() : updateRole.mutateAsync({ data: { action: 'set_role', data: { role } }, params: { merchantId } }));
       if (isCurrent()) { setIsEditingExec(false); setKillReason(''); notifyDone('Demo role changed', 'Permissions now follow the selected sandbox role.'); }
-    } catch (error) { if (isCurrent()) notifyProblem('Demo role was not changed', saidBy(error, 'Check your connection and try again.')); }
+    } catch (error) { if (isCurrent()) notifyProblem(outcomeIsUnconfirmed(error) ? 'Demo role outcome unconfirmed' : 'Demo role was not changed', saidBy(error, 'Retry the original request to confirm its outcome.')); }
   };
   const changeStop = async () => {
     if (!merchantId || !settings || killSwitch.isPending) return;
@@ -64,17 +67,17 @@ export default function SettingsPage() {
     if (blocked) { notifyProblem('Emergency stop unchanged', blocked); return; }
     const isCurrent = captureVisit();
     try {
-      const data = await killSwitch.mutateAsync({ data: { action: 'kill_switch', reason: killReason, data: { enabled: !settings.merchant.killSwitch } }, params: { merchantId } });
+      const data = await (killSwitch.hasUnconfirmedOutcome ? killSwitch.retryUnconfirmed() : killSwitch.mutateAsync({ data: { action: 'kill_switch', reason: killReason, data: { enabled: !settings.merchant.killSwitch } }, params: { merchantId } }));
       if (isCurrent()) { setKillReason(''); notifyDone('Emergency stop updated', data.message); }
-    } catch (error) { if (isCurrent()) notifyProblem('The emergency stop was not changed', saidBy(error, 'Check your connection and try again.')); }
+    } catch (error) { if (isCurrent()) notifyProblem(outcomeIsUnconfirmed(error) ? 'Emergency stop outcome unconfirmed' : 'The emergency stop was not changed', saidBy(error, 'Retry the original request to confirm its outcome.')); }
   };
   const testInstruction = async () => {
     if (!merchantId || requestInstruction.isPending) return;
     const isCurrent = captureVisit();
     try {
-      const data = await requestInstruction.mutateAsync({ data: { action: 'request_instruction' }, params: { merchantId } });
+      const data = await (requestInstruction.hasUnconfirmedOutcome ? requestInstruction.retryUnconfirmed() : requestInstruction.mutateAsync({ data: { action: 'request_instruction' }, params: { merchantId } }));
       if (isCurrent()) notifyDone('Live instruction requested', data.message);
-    } catch (error) { if (isCurrent()) notifyProblem('Live instruction refused', saidBy(error, 'The request was refused.')); }
+    } catch (error) { if (isCurrent()) notifyProblem(outcomeIsUnconfirmed(error) ? 'Instruction-block test outcome unconfirmed' : 'Live instruction refused', saidBy(error, 'Retry the original request to confirm its outcome.')); }
   };
 
   const [execErrors, setExecErrors] = useState<Record<string, string>>({});
@@ -89,6 +92,7 @@ export default function SettingsPage() {
   const execKeys = ['closeTime', 'unallocatedAlertThreshold', 'notificationCostAlertKobo'] as const;
   /** The server's rule messages begin with the key they concern, so the message goes under that field. */
   const rejectExec = (err: any) => {
+    if (outcomeIsUnconfirmed(err)) { setExecConflict(false); setExecErrors({}); setExecAlert('The response was lost or unavailable. Your settings may already have been saved. Keep this draft unchanged and retry the original request to recover its result.'); return; }
     setExecConflict(err?.status === 409);
     const message = String(err?.data?.error || err?.message || 'The change was not saved.');
     const key = execKeys.find(candidate => message.startsWith(candidate));
@@ -121,13 +125,13 @@ export default function SettingsPage() {
     const submittedSession = execSession.current;
     const isCurrent = () => isCurrentVisit() && submittedSession === execSession.current;
     try {
-      await updateExecSettings.mutateAsync({ data: { ...execSettings, notificationCostAlertKobo, expectedRevision: execRevision.current }, params: { merchantId } });
+      await (updateExecSettings.hasUnconfirmedOutcome ? updateExecSettings.retryUnconfirmed() : updateExecSettings.mutateAsync({ data: { ...execSettings, notificationCostAlertKobo, expectedRevision: execRevision.current }, params: { merchantId } }));
       if (isCurrent()) { setIsEditingExec(false); notifyDone('Settings saved', 'Recorded in the audit log. Automatic closes follow these settings while the close service is running.'); }
     } catch (error) { if (isCurrent()) rejectExec(error); }
   };
-  const cancelExec = () => { if (confirmExecDiscard()) { execSession.current += 1; setIsEditingExec(false); setExecErrors({}); setExecAlert(''); setExecConflict(false); } };
+  const cancelExec = () => { if (updateExecSettings.isPending || updateExecSettings.hasUnconfirmedOutcome) return; if (confirmExecDiscard()) { execSession.current += 1; setIsEditingExec(false); setExecErrors({}); setExecAlert(''); setExecConflict(false); } };
   const refreshLatest = async () => {
-    if (!confirmExecDiscard() || refreshingLatest) return;
+    if (updateExecSettings.isPending || updateExecSettings.hasUnconfirmedOutcome || !confirmExecDiscard() || refreshingLatest) return;
     const isCurrentVisit = captureVisit();
     const submittedSession = execSession.current;
     setRefreshingLatest(true);
@@ -180,6 +184,7 @@ export default function SettingsPage() {
             id="persona"
             className="w-full sm:min-w-48 sm:max-w-xs sm:flex-1 bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
             value={role}
+            disabled={updateRole.isPending || updateRole.hasUnconfirmedOutcome || otherActionPending || otherOutcomeUnconfirmed}
             onChange={(e) => setRole(e.target.value)}
           >
             <option value="Admin">Admin</option>
@@ -190,11 +195,11 @@ export default function SettingsPage() {
           </select>
           <Button 
             onClick={() => { void changeRole(); }}
-            disabled={role === workspace?.role}
+            disabled={(!updateRole.hasUnconfirmedOutcome && role === workspace?.role) || otherActionPending || otherOutcomeUnconfirmed}
             busy={updateRole.isPending}
             busyLabel="Switching role…"
           >
-            Switch role
+            {updateRole.hasUnconfirmedOutcome ? 'Retry original role request' : 'Switch role'}
           </Button>
           
           <Button
@@ -204,9 +209,12 @@ export default function SettingsPage() {
             busy={requestInstruction.isPending}
             busyLabel="Requesting…"
           >
-            Test live-instruction block
+            {requestInstruction.hasUnconfirmedOutcome ? 'Retry original block test' : 'Test live-instruction block'}
           </Button>
         </div>
+        {updateRole.hasUnconfirmedOutcome && <p role="alert" className="text-sm mt-3">The role-change response is unconfirmed. Retry the original request before selecting another role.</p>}
+        {requestInstruction.hasUnconfirmedOutcome && <p role="alert" className="text-sm mt-3">The block-test response is unconfirmed. Retry the original test to recover its result. This does not enable live instructions.</p>}
+        {otherOutcomeUnconfirmed && <p className="text-sm text-muted-foreground mt-3">Resolve the unconfirmed settings or control request before changing roles.</p>}
       </section>
 
       {/* Collection settings */}
@@ -225,14 +233,14 @@ export default function SettingsPage() {
               <Button size="sm" variant="outline" action="update_settings" onClick={startEditExec}>Edit</Button>
             ) : (
               <div className="flex gap-2">
-                <Button size="sm" variant="ghost" onClick={cancelExec}>Cancel</Button>
-                <Button size="sm" action="update_settings" onClick={saveExec} disabled={refreshingLatest} busy={updateExecSettings.isPending} busyLabel="Saving…">Save</Button>
+                <Button size="sm" variant="ghost" onClick={cancelExec} disabled={updateExecSettings.isPending || updateExecSettings.hasUnconfirmedOutcome}>Cancel</Button>
+                <Button size="sm" action="update_settings" onClick={saveExec} disabled={refreshingLatest} busy={updateExecSettings.isPending} busyLabel="Saving…">{updateExecSettings.hasUnconfirmedOutcome ? 'Retry original settings request' : 'Save'}</Button>
               </div>
             )}
           </div>
-          {execAlert && <div className="px-6 pt-6"><FormAlert title="Settings not saved">{execAlert}{execConflict && <><p className="mt-2">Your draft is still here. Refresh to review the latest settings before editing again.</p><Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => { void refreshLatest(); }} busy={refreshingLatest} busyLabel="Refreshing…">Discard draft and refresh</Button></>}</FormAlert></div>}
+          {execAlert && <div className="px-6 pt-6"><FormAlert title={updateExecSettings.hasUnconfirmedOutcome ? 'Settings outcome unconfirmed' : 'Settings not saved'}>{execAlert}{execConflict && <><p className="mt-2">Your draft is still here. Refresh to review the latest settings before editing again.</p><Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => { void refreshLatest(); }} busy={refreshingLatest} busyLabel="Refreshing…">Discard draft and refresh</Button></>}</FormAlert></div>}
           <div className="p-6 space-y-6">
-            <fieldset disabled={updateExecSettings.isPending || refreshingLatest} className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 gap-6">
+            <fieldset disabled={updateExecSettings.isPending || updateExecSettings.hasUnconfirmedOutcome || refreshingLatest} className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 gap-6">
               <div>
                 <label htmlFor="settings-authorisationMode" className="text-sm font-medium block mb-1">Instruction approval</label>
                 {isEditingExec ? (
@@ -364,6 +372,7 @@ export default function SettingsPage() {
                     placeholder="Explain why you are turning the stop on or off"
                     aria-describedby="kill-reason-help"
                     value={killReason}
+                    disabled={killSwitch.isPending || killSwitch.hasUnconfirmedOutcome}
                     onChange={(e) => setKillReason(e.target.value)}
                     className="w-full bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   />
@@ -373,11 +382,11 @@ export default function SettingsPage() {
                 <Button 
                   variant="destructive"
                   action="kill_switch" onClick={() => { void changeStop(); }}
-                  disabled={!killReason}
+                  disabled={!killReason && !killSwitch.hasUnconfirmedOutcome}
                   busy={killSwitch.isPending}
                   busyLabel={settings.merchant.killSwitch ? 'Deactivating…' : 'Activating…'}
                 >
-                  {settings.merchant.killSwitch ? 'Turn off emergency stop' : 'Activate emergency stop'}
+                  {killSwitch.hasUnconfirmedOutcome ? 'Retry original emergency-stop request' : settings.merchant.killSwitch ? 'Turn off emergency stop' : 'Activate emergency stop'}
                 </Button>
                 
                 <Button 
@@ -388,6 +397,7 @@ export default function SettingsPage() {
                 </Button>
                 </div>
               </div>
+              {killSwitch.hasUnconfirmedOutcome && <p role="alert" className="text-sm mt-3">The emergency-stop response is unconfirmed. The stop may already have changed. Retry the original request to recover its result; do not submit the opposite action.</p>}
               {settings.merchant.killSwitch && (
                 <p className="text-xs text-destructive mt-2 flex items-center gap-1 font-bold">
                   <AlertTriangle className="h-3 w-3" /> Emergency stop active. No instructions can be sent to a provider or bank.

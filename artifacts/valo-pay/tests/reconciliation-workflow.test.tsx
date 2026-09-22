@@ -21,7 +21,7 @@ describe('reconciliation decisions', () => {
     await user.click(await screen.findByRole('button', { name: rowAction }));
     const dialog = await screen.findByRole('dialog', { name: title });
     const evidence = within(dialog).getByRole('region', { name: 'Match evidence' });
-    await within(evidence).findByText(payment.reference);
+    expect((await within(evidence).findAllByText(payment.reference)).length).toBeGreaterThan(0);
     expect(within(evidence).getByText(due.reference)).toBeTruthy();
     expect(evidence.textContent).toContain(String(proposal.data.explanation));
     expect(evidence.textContent).toContain('Available to allocate');
@@ -30,7 +30,7 @@ describe('reconciliation decisions', () => {
     await user.click(within(dialog).getByRole('button', { name: submit }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     const call = api.calls.find(call => (call.body as { action?: string })?.action === action);
-    expect(call?.body).toMatchObject({ action, recordId: payment.id });
+    expect(call?.body).toMatchObject({ action, recordId: payment.id, data: { proposalId: proposal.id, proposalUpdatedAt: proposal.updatedAt } });
     expect(call?.status).toBe(200);
     expect(api.state().records.find(record => record.id === proposal.id)?.status).toBe(allocationStatus);
     expect(api.state().records.find(record => record.id === payment.id)?.status).toBe(paymentStatus);
@@ -50,6 +50,42 @@ describe('reconciliation decisions', () => {
     expect(within(section).getByRole('link', { name: 'Review exceptions' }).getAttribute('href')).toBe('/exceptions?type=suspected_duplicate');
     expect(screen.queryByRole('heading', { name: 'Proposed matches' })).toBeNull();
     expect(screen.queryByRole('heading', { name: 'Unallocated payments' })).toBeNull();
+  });
+
+  it('keeps the decision open when the displayed proposal has changed on the server', async () => {
+    const user = userEvent.setup();
+    const proposal = api.state().records.find(record => record.kind === 'allocations' && record.status === 'proposed')!;
+    renderApp('/reconciliation?view=review');
+    await user.click(await screen.findByRole('button', { name: 'Confirm' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Confirm payment allocation' });
+    const reason = within(dialog).getByLabelText(/^Reason/);
+    await user.type(reason, 'Reviewed the payment and original proposal.');
+    api.mutate(state => { state.records.find(record => record.id === proposal.id)!.updatedAt = '2027-12-01T12:00:00.000Z'; });
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm allocation' }));
+    expect(await within(dialog).findByText(/This proposed match has changed since you opened it/)).toBeTruthy();
+    expect((reason as HTMLTextAreaElement).value).toBe('Reviewed the payment and original proposal.');
+    expect(api.state().records.find(record => record.id === proposal.id)?.status).toBe('proposed');
+    expect(api.calls.find(call => (call.body as any)?.action === 'confirm_allocation')?.status).toBe(409);
+  });
+
+  it('shows the financial effect and source records before correcting an automatic match', async () => {
+    const user = userEvent.setup();
+    api.setNow('2027-02-15T12:00:00.000Z');
+    api.mutate(state => { for (const record of state.records.filter(row => row.kind === 'allocations' && row.status === 'confirmed')) record.data.confirmedAt = '2027-01-20T12:00:00.000Z'; });
+    renderApp('/reconciliation');
+    await user.click((await screen.findAllByRole('button', { name: 'Mark incorrect' }))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: 'Review payment allocation' });
+    const evidence = within(dialog).getByRole('region', { name: 'Match evidence' });
+    expect(evidence.textContent).toContain('This corrects the recorded allocation');
+    expect(evidence.textContent).toContain('does not refund or move money');
+    expect(evidence.textContent).toContain('Receipt status:');
+    expect(evidence.textContent).toContain('Settlement:');
+    expect(evidence.textContent).toContain('Provider fees are reviewed separately');
+    expect(evidence.textContent).toContain('After correction:');
+    await user.click(within(dialog).getByRole('checkbox'));
+    expect(evidence.textContent).toContain('keeps the allocation applied');
+    expect(evidence.textContent).not.toContain('After correction:');
+    expect(api.calls.some(call => call.method === 'POST')).toBe(false);
   });
 });
 
@@ -113,12 +149,12 @@ describe('allocation amounts', () => {
     await user.clear(amount);
     await user.type(amount, '1.001');
     await user.click(within(dialog).getByRole('button', { name: 'Allocate payment' }));
-    expect(within(dialog).getByText(/no more than 2 decimal places/)).toBeTruthy();
+    expect(within(dialog).getAllByText(/no more than 2 decimal places/).length).toBeGreaterThan(0);
     expect(api.calls.some(call => call.method === 'POST')).toBe(false);
     await user.clear(amount);
     await user.type(amount, '32000');
     await user.click(within(dialog).getByRole('button', { name: 'Allocate payment' }));
-    expect(within(dialog).getByText(/This is the instalment still due/)).toBeTruthy();
+    expect(within(dialog).getAllByText(/This is the instalment still due/).length).toBeGreaterThan(0);
     expect(api.calls.some(call => call.method === 'POST')).toBe(false);
     await user.clear(amount);
     await user.type(amount, '1,000.29');

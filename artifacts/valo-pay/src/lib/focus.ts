@@ -7,7 +7,7 @@ import { useEffect, type RefObject } from 'react';
 
 /** Focus the page's main region, the way a page load would start the reader at the top of what changed. */
 export function focusMain(): void {
-  document.getElementById('main')?.focus();
+  document.getElementById('main')?.focus({ preventScroll: true });
 }
 
 /** True while the keyboard is typing into something, so a shortcut must not steal the key. */

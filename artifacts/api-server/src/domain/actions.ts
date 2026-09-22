@@ -264,12 +264,19 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     }
     const allocation = recordsOf(state, "allocations").find((item) => item.data.paymentId === payment.id && item.status === "proposed");
     if (!allocation) throw new Error("This payment has no proposed allocation to review. Refresh the page to see its current status.");
+    // The console reviews a specific proposal, not whichever proposal happens to
+    // be current when its request arrives. Older API callers may omit this pair.
+    if (data.proposalId !== undefined || data.proposalUpdatedAt !== undefined) {
+      if (data.proposalId !== allocation.id || data.proposalUpdatedAt !== allocation.updatedAt) {
+        throw Object.assign(new Error("This proposed match has changed since you opened it. Refresh the queue and review the current proposal before deciding."), { status: 409 });
+      }
+    }
     if (input.action === "reject_allocation") {
       allocation.status = "superseded"; allocation.data.supersededReason = reason(input);
       payment.status = "unallocated"; delete payment.data.proposedDueItemId; delete payment.data.proposedAmountKobo;
     } else {
-      allocation.data.confirmedBy = ctx.actor;
       applyConfirmedAllocation(state, ctx, allocation);
+      allocation.data.confirmedBy = ctx.actor;
     }
     touch(allocation, now); touch(payment, now);
     return result(`Allocation ${input.action === "reject_allocation" ? "rejected" : "confirmed"}.`, allocation);

@@ -28,10 +28,14 @@ import {
 } from "@/components/ui/dialog";
 import { Loading } from "@/components/loading";
 import { LoadProblem } from "@/components/load-problem";
-import { ConnectedFrame } from "@/components/connected-frame";
+import {
+  ConnectedFrame,
+  ConnectedRecovery,
+} from "@/components/connected-frame";
 import { useConnected } from "@/lib/connected";
 import { useWorkspace } from "@/lib/workspace-context";
 import { formatCompactDate, formatDate, formatKobo } from "@/lib/formatters";
+import { nairaToKobo } from "@/lib/money-input";
 
 type Point = {
   day: number;
@@ -344,14 +348,18 @@ function ForecastChart({
   );
 }
 export default function CashDeskPage() {
-  const { data, isLoading, error, refetch, run, pending, canWrite } =
-    useConnected();
+  const api = useConnected();
+  const { data, isLoading, error, refetch, run, pending, canWrite } = api;
   const { workspace, merchantId } = useWorkspace();
   const cash = data?.cash as CashView | undefined;
   const [tab, setTab] = useState("cash");
   const [action, setAction] = useState<PendingAction | null>(null);
   const [reason, setReason] = useState("");
   const [problem, setProblem] = useState("");
+  const [success, setSuccess] = useState("");
+  const [forecastErrors, setForecastErrors] = useState<Record<string, string>>(
+    {},
+  );
   const [downside, setDownside] = useState("70");
   const [delay, setDelay] = useState("7");
   const [buffer, setBuffer] = useState("1500000");
@@ -359,6 +367,12 @@ export default function CashDeskPage() {
     setAction(null);
     setReason("");
     setProblem("");
+    setSuccess("");
+    setForecastErrors({});
+    setDownside("70");
+    setDelay("7");
+    setBuffer("1500000");
+    setTab("cash");
   }, [merchantId]);
   const maker = ["Admin", "Operations"].includes(workspace?.role ?? "");
   const finance = workspace?.role === "Finance";
@@ -366,11 +380,42 @@ export default function CashDeskPage() {
     setAction(next);
     setReason("");
     setProblem("");
+    setSuccess("");
   };
   const act = async () => {
     if (!action) return;
     try {
       await run(action.action, action.data, action.recordId, reason);
+      const message: Record<string, string> = {
+        "cash.initialize":
+          "Sample Cash Desk set up. Review the account timestamps and planning assumptions before preparing work.",
+        "cash.forecast":
+          "New sample forecast saved. Your source balances and commitments are unchanged.",
+        "cash.refresh_sample":
+          "Sample source timestamps refreshed. Review the updated balances before preparing new work.",
+        "cash.erp.prepare":
+          "Sample accounting draft prepared. A different Finance reviewer must check it before export.",
+        "cash.erp.review":
+          "Sample accounting review recorded. The draft can be prepared for export if its evidence is still current. Nothing has been posted.",
+        "cash.erp.export":
+          "Sample accounting export prepared. Download the review file below. Nothing has been posted to accounting software.",
+        "cash.vat.export":
+          "Sample VAT review schedule saved. Review its evidence gaps before use. No tax return was filed or paid.",
+        "cash.payroll.export":
+          "Sample payroll export prepared. Download the review file below. Payroll remains unpaid.",
+        "cash.payroll.prepare":
+          "Sample payroll funding plan prepared. A different Finance reviewer must check the funding and items before export. Payroll remains unpaid.",
+        "cash.payroll.refresh":
+          "New sample funding review saved. Previous approval and export readiness have ended; Finance must review again. Existing item outcomes remain recorded.",
+        "cash.payroll.approve":
+          "Sample funding approval recorded. An export still requires current funding and source checks. Payroll remains unpaid.",
+        "cash.payroll.reconcile":
+          "Sample payroll item evidence recorded. Review each item's status; unknown outcomes stay on hold and must not be exported again.",
+      };
+      setSuccess(
+        message[action.action] ??
+          `${action.title} completed. The sample record is saved; review its current status below. No live financial instruction was sent.`,
+      );
       setAction(null);
     } catch (err) {
       setProblem(
@@ -380,16 +425,55 @@ export default function CashDeskPage() {
       );
     }
   };
+  const reviewForecast = () => {
+    const errors: Record<string, string> = {};
+    let bufferMinor = 0,
+      downsideInflowBps = 0;
+    try {
+      bufferMinor = nairaToKobo(buffer);
+    } catch (error) {
+      errors["cash-buffer"] = (error as Error).message;
+    }
+    if (!/^\d+(?:\.\d{1,2})?$/.test(downside) || Number(downside) > 100) {
+      errors["cash-receipts"] =
+        "Enter a percentage from 0 to 100 with no more than 2 decimal places.";
+    } else {
+      downsideInflowBps = nairaToKobo(downside);
+    }
+    if (!/^\d+$/.test(delay) || Number(delay) > 30)
+      errors["cash-delay"] = "Enter a whole number of days from 0 to 30.";
+    setForecastErrors(errors);
+    if (Object.keys(errors).length) {
+      const first = ["cash-receipts", "cash-delay", "cash-buffer"].find(
+        (id) => errors[id],
+      );
+      document.getElementById(first!)?.focus();
+      return;
+    }
+    ask({
+      action: "cash.forecast",
+      title: "Save forecast version",
+      detail: `Keep ${downside}% of expected receipts, delayed by ${delay} days, with a ${formatKobo(bufferMinor)} planning buffer. The base case keeps approved amounts. No bank balance or commitment will be changed.`,
+      data: {
+        downsideInflowBps,
+        downsideDelayDays: Number(delay),
+        bufferMinor,
+      },
+    });
+  };
   if (isLoading) return <Loading what="Cash Desk" />;
   if (error)
     return (
-      <LoadProblem
-        what="Cash Desk"
-        error={error}
-        retry={() => {
-          void refetch();
-        }}
-      />
+      <>
+        <LoadProblem
+          what="Cash Desk"
+          error={error}
+          retry={() => {
+            void refetch();
+          }}
+        />
+        <ConnectedRecovery recovery={api} />
+      </>
     );
   if (!cash) return <Loading what="Cash Desk" />;
   const position = cash.positions.find((p) => p.currency === "NGN");
@@ -402,7 +486,18 @@ export default function CashDeskPage() {
     <ConnectedFrame
       title="Cash Desk"
       description="A clearer view of business cash, commitments and the work ahead."
+      recovery={api}
+      onRecovered={() => {
+        setProblem("");
+        setAction(null);
+        setReason("");
+      }}
     >
+      {success && (
+        <p className="connected-note" role="status">
+          {success}
+        </p>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <p className="flex items-center gap-2 text-sm font-medium">
           <Building2 className="h-4 w-4" aria-hidden="true" />
@@ -592,11 +687,27 @@ export default function CashDeskPage() {
                       type="number"
                       min="0"
                       max="100"
+                      step="0.01"
+                      aria-invalid={!!forecastErrors["cash-receipts"]}
+                      aria-describedby={
+                        forecastErrors["cash-receipts"]
+                          ? "cash-receipts-error"
+                          : undefined
+                      }
                       value={downside}
                       onChange={(e) => setDownside(e.target.value)}
                     />
                     <span className="text-muted-foreground">%</span>
                   </span>
+                  {forecastErrors["cash-receipts"] && (
+                    <span
+                      id="cash-receipts-error"
+                      role="alert"
+                      className="block mt-2 text-xs text-destructive"
+                    >
+                      {forecastErrors["cash-receipts"]}
+                    </span>
+                  )}
                 </label>
                 <label
                   className="block text-sm font-medium"
@@ -610,11 +721,26 @@ export default function CashDeskPage() {
                       type="number"
                       min="0"
                       max="30"
+                      aria-invalid={!!forecastErrors["cash-delay"]}
+                      aria-describedby={
+                        forecastErrors["cash-delay"]
+                          ? "cash-delay-error"
+                          : undefined
+                      }
                       value={delay}
                       onChange={(e) => setDelay(e.target.value)}
                     />
                     <span className="text-muted-foreground">days</span>
                   </span>
+                  {forecastErrors["cash-delay"] && (
+                    <span
+                      id="cash-delay-error"
+                      role="alert"
+                      className="block mt-2 text-xs text-destructive"
+                    >
+                      {forecastErrors["cash-delay"]}
+                    </span>
+                  )}
                 </label>
                 <label
                   className="block text-sm font-medium"
@@ -624,12 +750,25 @@ export default function CashDeskPage() {
                   <input
                     id="cash-buffer"
                     className="mt-2 h-10 w-full rounded-lg border bg-background px-3"
-                    type="number"
-                    min="0"
-                    step="0.01"
+                    inputMode="decimal"
+                    aria-invalid={!!forecastErrors["cash-buffer"]}
+                    aria-describedby={
+                      forecastErrors["cash-buffer"]
+                        ? "cash-buffer-error"
+                        : undefined
+                    }
                     value={buffer}
                     onChange={(e) => setBuffer(e.target.value)}
                   />
+                  {forecastErrors["cash-buffer"] && (
+                    <span
+                      id="cash-buffer-error"
+                      role="alert"
+                      className="block mt-2 text-xs text-destructive"
+                    >
+                      {forecastErrors["cash-buffer"]}
+                    </span>
+                  )}
                 </label>
                 <Button
                   className="w-full"
@@ -638,30 +777,9 @@ export default function CashDeskPage() {
                     !["Admin", "Operations", "Finance"].includes(
                       workspace?.role ?? "",
                     ) ||
-                    pending ||
-                    !downside ||
-                    !delay ||
-                    !buffer ||
-                    Number(downside) < 0 ||
-                    Number(downside) > 100 ||
-                    !Number.isInteger(Number(delay)) ||
-                    Number(delay) < 0 ||
-                    Number(delay) > 30 ||
-                    Number(buffer) < 0
+                    pending
                   }
-                  onClick={() =>
-                    ask({
-                      action: "cash.forecast",
-                      title: "Save forecast version",
-                      detail:
-                        "The base case keeps approved amounts. The downside changes receipts only. No bank balance or commitment will be changed.",
-                      data: {
-                        downsideInflowBps: Math.round(Number(downside) * 100),
-                        downsideDelayDays: Number(delay),
-                        bufferMinor: Math.round(Number(buffer) * 100),
-                      },
-                    })
-                  }
+                  onClick={reviewForecast}
                 >
                   Save forecast
                   <ArrowRight />
@@ -1449,7 +1567,7 @@ export default function CashDeskPage() {
       <Dialog
         open={!!action}
         onOpenChange={(open) => {
-          if (!open && !pending) setAction(null);
+          if (!open && !pending && !api.hasUnconfirmedOutcome) setAction(null);
         }}
       >
         <DialogContent>
@@ -1457,10 +1575,22 @@ export default function CashDeskPage() {
             <DialogTitle>{action?.title}</DialogTitle>
             <DialogDescription>{action?.detail}</DialogDescription>
           </DialogHeader>
+          <ConnectedRecovery
+            recovery={api}
+            onRecovered={() => {
+              setProblem("");
+              setAction(null);
+              setReason("");
+              setSuccess(
+                "Original sample request confirmed. Review the refreshed records below. No live financial instruction was sent.",
+              );
+            }}
+          />
           <label htmlFor="cash-action-reason" className="text-sm font-medium">
             Review note
             <textarea
               id="cash-action-reason"
+              disabled={pending || api.hasUnconfirmedOutcome}
               className="mt-2 min-h-24 w-full rounded-lg border bg-background p-3 text-sm"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
@@ -1468,7 +1598,7 @@ export default function CashDeskPage() {
               placeholder="Explain why you are taking this action (at least 8 characters)."
             />
           </label>
-          {problem && (
+          {problem && !api.hasUnconfirmedOutcome && (
             <p role="alert" className="text-sm text-destructive">
               {problem}
             </p>
@@ -1476,7 +1606,7 @@ export default function CashDeskPage() {
           <DialogFooter>
             <Button
               variant="outline"
-              disabled={pending}
+              disabled={pending || api.hasUnconfirmedOutcome}
               onClick={() => setAction(null)}
             >
               Cancel
@@ -1484,7 +1614,7 @@ export default function CashDeskPage() {
             <Button
               busy={pending}
               busyLabel="Saving…"
-              disabled={reason.trim().length < 8}
+              disabled={reason.trim().length < 8 || api.hasUnconfirmedOutcome}
               onClick={() => {
                 void act();
               }}

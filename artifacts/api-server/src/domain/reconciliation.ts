@@ -52,6 +52,10 @@ function outstanding(due: TypedRecord<"due-items">): number {
   return Number.isInteger(due.data.outstandingKobo) ? Number(due.data.outstandingKobo) : due.amountKobo;
 }
 
+function eligibleForAutomaticMatching(due: TypedRecord<"due-items">): boolean {
+  return outstanding(due) > 0 && !["in_dispute", "unpaid_final", "cancelled", "closed"].includes(due.status);
+}
+
 function channelFor(source: unknown): PaymentChannel {
   switch (source) {
     case "webhook": case "settlement": return "direct_debit";
@@ -157,13 +161,14 @@ export function allocatePayment(
   automatic: boolean,
   explanation?: string,
 ): TypedRecord<"allocations"> {
+  assertAllocationEligible(due);
   if (!Number.isInteger(amount) || amount <= 0 || amount > payment.amountKobo - Number(payment.data.allocatedKobo || 0)) {
     throw new Error("Enter a positive whole number in kobo, no more than the payment has left to allocate.");
   }
   const remaining = outstanding(due);
   if (amount > remaining) throw new Error("This allocation exceeds the outstanding instalment balance. Enter a lower amount.");
   const allocation = makeRecord(state, "allocations", {
-    name: `Allocation ${rule}`, status: confidence === "probable" ? "proposed" : "confirmed",
+    name: `Allocation ${rule}`, status: "proposed",
     customerId: payment.customerId || due.customerId, amountKobo: amount, createdAt: ctx.now,
     data: { paymentId: payment.id, dueItemId: due.id, rule, confidence, automatic, explanation: explanation ?? `Matching rule ${rule} linked this payment to the instalment.`, reviewed: null },
   });
@@ -178,14 +183,21 @@ export function allocatePayment(
   return allocation;
 }
 
+function assertAllocationEligible(due: TypedRecord<'due-items'>): void {
+  if (['cancelled', 'closed', 'in_dispute'].includes(due.status)) throw Object.assign(new Error('This instalment is cancelled, closed or in dispute. Refresh the queue and review its status before allocating a payment.'), { status: 409 });
+}
+
 export function applyConfirmedAllocation(state: DomainState, ctx: Context, allocation: TypedRecord<"allocations">): void {
   const payment = findRecord(state, String(allocation.data.paymentId), "payments");
   const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
+  assertAllocationEligible(due);
   if (allocation.status === "superseded") throw new Error("This allocation is no longer applied and cannot be confirmed. Review the payment to create a new match.");
+  if (allocation.status === "confirmed") throw Object.assign(new Error("This allocation is already applied. Refresh the payment to see its current position."), { status: 409 });
   const amount = allocation.amountKobo;
-  if (allocation.status !== "confirmed" && amount > payment.amountKobo - Number(payment.data.allocatedKobo || 0)) {
+  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > payment.amountKobo - Number(payment.data.allocatedKobo || 0)) {
     throw new Error("This allocation is more than the payment has left to allocate. Refresh the payment and review the proposed amount.");
   }
+  if (amount > outstanding(due)) throw Object.assign(new Error("The proposed allocation exceeds the instalment balance now outstanding. Refresh the queue and review the changed balances."), { status: 409 });
   allocation.status = "confirmed";
   allocation.data.confirmedAt ||= ctx.now;
   paymentDimensions(payment);
@@ -363,7 +375,15 @@ function matchPayment(state: DomainState, ctx: Context, payment: TypedRecord<"pa
     raiseException(state, ctx, "suspected_duplicate", { linkedRecordId: payment.id, customerId: payment.customerId, amountKobo: payment.amountKobo, notes: payment.data.explanation });
     return;
   }
-  const dues = (index.duesByCustomer.get(payment.customerId) ?? []).filter((item) => outstanding(item) > 0 && !["in_dispute", "unpaid_final", "cancelled", "closed"].includes(item.status));
+  // A strong reference to a stopped instalment must not be redirected to a
+  // different obligation, or abort the whole batch at the allocation guard.
+  // Keep it in the existing unallocated Finance queue (and its ageing SLA).
+  if (intended && !eligibleForAutomaticMatching(intended.due)) {
+    payment.data.explanation = `Linked instalment ${intended.due.reference} is ${intended.due.status.replace(/_/g, " ")}; this payment remains unallocated for Finance review.`;
+    touch(payment, ctx.now);
+    return;
+  }
+  const dues = (index.duesByCustomer.get(payment.customerId) ?? []).filter(eligibleForAutomaticMatching);
   // R1: provider reference, same tenant and connection, NGN, gross amount equals the attempt (due) amount.
   if (intended && currencyOk && sameConnection && payment.amountKobo === intended.due.amountKobo && outstanding(intended.due) >= payment.amountKobo) {
     allocatePayment(state, ctx, payment, intended.due, payment.amountKobo, "R1", "certain", true, `Provider reference ${payment.reference} resolved to instalment ${intended.due.reference} by ${intended.key}; currency and gross amount match.`);
@@ -383,11 +403,11 @@ function matchPayment(state: DomainState, ctx: Context, payment: TypedRecord<"pa
   }
   // R4: a due item's external reference in the narration; certain only if unique within the tenant.
   const narration = String(payment.data.narration || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  const exact = narration ? dues.filter((due) => due.reference && narration.includes(due.reference.toLowerCase().replace(/[^a-z0-9]/g, "")) && due.amountKobo === payment.amountKobo) : [];
+  const exact = narration ? dues.filter((due) => due.reference && narration.includes(due.reference.toLowerCase().replace(/[^a-z0-9]/g, "")) && due.amountKobo === payment.amountKobo && outstanding(due) >= payment.amountKobo) : [];
   if (exact.length === 1) { allocatePayment(state, ctx, payment, exact[0]!, payment.amountKobo, "R4", "certain", true, `Narration carries the unique reference ${exact[0]!.reference} and the amount matches.`); return; }
   if (exact.length > 1) { allocatePayment(state, ctx, payment, exact[0]!, payment.amountKobo, "R4", "probable", false, "Narration reference is not unique within the tenant; proposed for Finance."); return; }
   // R5: amount, payer and a five-day window around the due date.
-  const near = dues.filter((due) => due.amountKobo === payment.amountKobo && Math.abs(Date.parse(String(due.data.dueDate)) - paymentObservedAt(payment)) <= 5 * DAY_MS);
+  const near = dues.filter((due) => due.amountKobo === payment.amountKobo && outstanding(due) >= payment.amountKobo && Math.abs(Date.parse(String(due.data.dueDate)) - paymentObservedAt(payment)) <= 5 * DAY_MS);
   if (near.length === 1) allocatePayment(state, ctx, payment, near[0]!, payment.amountKobo, "R5", "probable", false, "Amount and payer match one instalment within five days of its due date; Finance confirmation required.");
 }
 

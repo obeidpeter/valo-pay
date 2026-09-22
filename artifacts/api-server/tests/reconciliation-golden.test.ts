@@ -2,7 +2,7 @@
 // exceptions and the daily close against TRD v1.1 sections 5.7, 5.8, 5.9, 7 and 10.4.
 import assert from "node:assert/strict";
 import { DAY, HOUR, addAttempt, addNotice, addObservation, ctxAt, liveFixture, outstandingOf, wat } from "./helpers.js";
-import { intendedDueItem, reconcile } from "../src/domain/reconciliation.js";
+import { allocatePayment, applyConfirmedAllocation, intendedDueItem, reconcile } from "../src/domain/reconciliation.js";
 import { executeAction } from "../src/domain/actions.js";
 import { buildOverview, buildReports } from "../src/domain/reports.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
@@ -279,4 +279,135 @@ function assertOnePayment(state: DomainState, due: ValopayRecord, label: string)
   checks += 15;
 }
 
-console.log(`Reconciliation golden tests passed (${checks} checks): three-source replay in six orders, duplicate evidence, allocation ceiling, fee schedule, exception catalogue, final attempts, reversal vocabulary, precision audit, mandate operations and hand-back.`);
+// UX-C01: a reviewed proposal cannot silently become another match, or exceed
+// balances changed while Finance was reviewing it. These are server checks.
+{
+  for (const action of ['confirm_allocation', 'reject_allocation']) {
+    const { state, due } = liveFixture({ withFailure: false, merchantId: `proposal-${action}` });
+    const payment = makeRecord(state, 'payments', { amountKobo: GROSS, customerId: due.customerId, data: { allocatedKobo: 0 } });
+    const ctx = finance(wat('2027-07-01T11:00:00'));
+    const proposal = allocatePayment(state, ctx, payment, due, GROSS, 'R5', 'probable', false);
+    const input = { action, recordId: payment.id, reason: 'Checked the displayed proposal.', data: { proposalId: proposal.id, proposalUpdatedAt: proposal.updatedAt } };
+    const before = structuredClone(state);
+    assert.throws(() => executeAction(state, ctx, { ...input, data: { ...input.data, proposalId: 'another-proposal' } }), (error: any) => error.status === 409);
+    assert.deepEqual(state, before, 'A changed proposal is refused before any record is changed.');
+    assert.throws(() => executeAction(state, ctx, { ...input, data: { proposalId: proposal.id } }), (error: any) => error.status === 409);
+    assert.throws(() => executeAction(state, ctx, { ...input, data: { ...input.data, proposalUpdatedAt: '2027-01-01T00:00:00Z' } }), (error: any) => error.status === 409);
+    executeAction(state, ctx, input);
+    assert.equal(proposal.status, action === 'confirm_allocation' ? 'confirmed' : 'superseded');
+    const committed = structuredClone(state);
+    assert.throws(() => executeAction(state, ctx, input), /no proposed allocation/);
+    assert.deepEqual(state, committed, 'A repeated decision cannot apply the payment twice.');
+    if (action === 'confirm_allocation') {
+      assert.throws(() => applyConfirmedAllocation(state, ctx, proposal), /already applied/);
+      assert.deepEqual(state, committed);
+      checks += 2;
+    }
+    checks += 7;
+  }
+  const { state, due } = liveFixture({ withFailure: false, merchantId: 'proposal-balance-change' });
+  const payment = makeRecord(state, 'payments', { amountKobo: GROSS, customerId: due.customerId, data: { allocatedKobo: 0 } });
+  const ctx = finance(wat('2027-07-01T11:00:00'));
+  const proposal = allocatePayment(state, ctx, payment, due, GROSS, 'R5', 'probable', false);
+  due.data.outstandingKobo = GROSS - 1;
+  const before = structuredClone(state);
+  assert.throws(() => executeAction(state, ctx, { action: 'confirm_allocation', recordId: payment.id, reason: 'Review before another receipt arrived.', data: { proposalId: proposal.id, proposalUpdatedAt: proposal.updatedAt } }), (error: any) => error.status === 409 && /balance now outstanding/.test(error.message));
+  assert.deepEqual(state, before, 'A reduced instalment ceiling blocks the allocation without partial changes.');
+  checks += 2;
+}
+
+for (const status of ['cancelled', 'closed', 'in_dispute'] as const) {
+  const {state,due}=liveFixture({withFailure:false,merchantId:`proposal-${status}`});
+  const payment=makeRecord(state,'payments',{amountKobo:GROSS,customerId:due.customerId,data:{allocatedKobo:0}});
+  const ctx=finance(wat('2027-07-01T11:00:00'));
+  const proposal=allocatePayment(state,ctx,payment,due,GROSS,'R5','probable',false);
+  due.status=status;
+  const before=structuredClone(state);
+  assert.throws(()=>applyConfirmedAllocation(state,ctx,proposal),(error:any)=>error.status===409 && /instalment is/.test(error.message));
+  assert.deepEqual(state,before,'Changed eligibility cannot be overwritten by an old proposal.');
+  assert.throws(()=>allocatePayment(state,ctx,payment,due,GROSS,'manual','manual',false),(error:any)=>error.status===409);
+  assert.deepEqual(state,before,'Manual allocation checks eligibility before creating any record.');
+  checks+=4;
+}
+
+// Automatic matching must quarantine an ineligible strong reference without
+// redirecting it to another obligation or rolling back unrelated valid receipts.
+for (const status of ['cancelled', 'closed', 'in_dispute', 'unpaid_final'] as const) {
+  for (const linkBy of ['attempt', 'observation'] as const) {
+    const { state, due } = liveFixture({ withFailure: false, merchantId: `batch-${status}-${linkBy}` });
+    const observedAt = wat('2027-06-30T06:20:00');
+    const ctx = finance(wat('2027-06-30T07:00:00'));
+    due.status = status;
+    const stopped = structuredClone(due);
+    const alternative = makeRecord(state, 'due-items', {
+      name: 'Another instalment for the same customer', status: 'scheduled', reference: 'DO-NOT-REDIRECT',
+      customerId: due.customerId, amountKobo: GROSS,
+      data: { ...due.data, dueDate: '2027-06-30', owner: 'lms' },
+    });
+    const healthy = recordsOf(state, 'due-items').find(item => item.customerId !== due.customerId && item.status === 'scheduled' && item.amountKobo === 6_000_000)!;
+    const reference = `STOPPED-${status}-${linkBy}`;
+    if (linkBy === 'attempt') addAttempt(state, due, { status: 'succeeded', occurredAt: observedAt, providerReference: reference });
+    const blockedObservation = addObservation(state, {
+      reference, amountKobo: GROSS, source: 'webhook', customerId: due.customerId,
+      ...(linkBy === 'observation' ? { dueItemId: due.id } : {}),
+      narration: alternative.reference, eventId: 'stopped-receipt', occurredAt: observedAt,
+    });
+    addObservation(state, { reference: 'VALID-IN-SAME-BATCH', amountKobo: healthy.amountKobo, source: 'webhook', customerId: healthy.customerId, dueItemId: healthy.id, eventId: 'valid-receipt', occurredAt: observedAt });
+    assert.doesNotThrow(() => reconcile(state, ctx), 'A stopped instalment cannot abort reconciliation of other receipts.');
+    const payment = recordsOf(state, 'payments').find(item => item.reference === reference)!;
+    assert.equal(blockedObservation.status, 'resolved', 'The receipt is still recorded as evidence.');
+    assert.equal(payment.status, 'unallocated');
+    assert.match(String(payment.data.explanation), /unallocated for Finance review/);
+    assert.equal(recordsOf(state, 'allocations').filter(item => item.data.paymentId === payment.id).length, 0);
+    assert.deepEqual(due, stopped, 'Matching cannot reopen a stopped instalment.');
+    assert.equal(outstandingOf(alternative), GROSS, 'A strong reference is not redirected by a weaker rule.');
+    assert.equal(healthy.status, 'paid', 'A valid later receipt in the same batch is allocated.');
+    reconcile(state, finance(wat('2027-07-02T07:00:00')));
+    assert.equal(payment.status, 'unallocated');
+    assert.equal(recordsOf(state, 'exceptions').filter(item => item.data.linkedRecordId === payment.id && item.data.type === 'unallocated_payment').length, 1, 'Existing Finance ageing rules retain the unresolved payment.');
+    assert.equal(recordsOf(state, 'allocations').filter(item => item.data.dueItemId === healthy.id && item.status === 'confirmed').length, 1, 'A subsequent close does not duplicate the healthy allocation.');
+    invariant(state);
+    checks += 11;
+  }
+}
+
+// R4 (including ambiguous narration) and R5 cannot propose the original gross
+// instalment amount after another receipt has reduced the outstanding balance.
+for (const rule of ['R4-unique', 'R4-ambiguous', 'R5'] as const) {
+  const { state, due } = liveFixture({ withFailure: false, merchantId: `batch-partial-${rule}` });
+  const observedAt = wat('2027-06-30T06:20:00');
+  const ctx = finance(wat('2027-06-30T07:00:00'));
+  due.data.dueDate = '2027-06-30';
+  const candidates = [due];
+  if (rule === 'R4-ambiguous') candidates.push(makeRecord(state, 'due-items', {
+    name: 'Second partially paid instalment', status: 'scheduled', reference: 'OTHER-PARTIAL-LOAN',
+    customerId: due.customerId, amountKobo: GROSS, data: { ...due.data, owner: 'lms' },
+  }));
+  for (const [index, candidate] of candidates.entries()) {
+    const partial = makeRecord(state, 'payments', {
+      name: 'Earlier partial receipt', status: 'unallocated', reference: `PARTIAL-${index}`,
+      customerId: candidate.customerId, amountKobo: GROSS / 2,
+      data: { allocatedKobo: 0, observedAt: wat('2027-06-29T06:00:00') },
+    });
+    allocatePayment(state, ctx, partial, candidate, GROSS / 2, 'R7', 'manual', false);
+  }
+  const before = candidates.map(candidate => structuredClone(candidate));
+  const healthy = recordsOf(state, 'due-items').find(item => item.customerId !== due.customerId && item.status === 'scheduled' && item.amountKobo === 6_000_000)!;
+  addObservation(state, {
+    reference: 'GROSS-AFTER-PARTIAL', amountKobo: GROSS, source: 'transfer', customerId: due.customerId,
+    ...(rule.startsWith('R4') ? { narration: candidates.map(candidate => candidate.reference).join(' and ') } : {}),
+    eventId: 'gross-after-partial', occurredAt: observedAt,
+  });
+  addObservation(state, { reference: 'VALID-AFTER-PARTIAL', amountKobo: healthy.amountKobo, source: 'webhook', customerId: healthy.customerId, dueItemId: healthy.id, eventId: 'valid-after-partial', occurredAt: observedAt });
+  assert.doesNotThrow(() => reconcile(state, ctx), `${rule}: a balance mismatch cannot abort the batch.`);
+  const payment = recordsOf(state, 'payments').find(item => item.reference === 'GROSS-AFTER-PARTIAL')!;
+  assert.equal(payment.status, 'unallocated', `${rule}: the gross receipt needs Finance review.`);
+  assert.equal(recordsOf(state, 'allocations').filter(item => item.data.paymentId === payment.id).length, 0, 'No impossible proposal is created.');
+  assert.deepEqual(candidates, before, 'Previously reduced balances are unchanged.');
+  assert.equal(healthy.status, 'paid');
+  assert.equal(recordsOf(state, 'allocations').filter(item => item.data.dueItemId === healthy.id && item.status === 'confirmed').length, 1);
+  invariant(state);
+  checks += 6;
+}
+
+console.log(`Reconciliation golden tests passed (${checks} checks): three-source replay in six orders, duplicate evidence, allocation ceiling, fee schedule, exception catalogue, final attempts, reversal vocabulary, precision audit, mandate operations, hand-back, stale proposal protection and safe automatic batch matching.`);
