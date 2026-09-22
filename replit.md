@@ -55,6 +55,7 @@ Two synthetic lenders; customer positions and timelines; mandate tracking; sched
 
 - Amounts are safe integer kobo. Refuse due items below 500,000; 500,000–999,999 requires a recorded merchant Admin override. This floor does not reject inbound partial payments.
 - All workspace/merchant operations, imports, exports and idempotency use the scoped repository. Only that runtime module may access the database connection; routes and domain modules must never receive raw clients or unrestricted query functions. Keep principal and merchant locking across validation, mutation and audit append.
+- Every transaction checks out through `checkOut` and begins with `beginStatement` (`artifacts/api-server/src/lib/database-limits.ts`), so it carries statement, lock and idle limits. Never use a bare BEGIN or an unlistened pool client: an unheard client error ends the process.
 - Use one audit-hash canonicalisation implementation. Independent hash formats cannot share a chain.
 - Orval's post-generation barrel normalisation is intentional; generated request parameter types and validators otherwise collide.
 - App Storage provides private persistence, but retention lock, six-year policy and crypto-shredding are not certified.

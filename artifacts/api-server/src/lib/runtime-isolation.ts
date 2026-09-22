@@ -1,6 +1,7 @@
 import { pool, type PoolClient } from "@workspace/db";
 import { createHash } from "node:crypto";
 import { reviewedRuntimeHelpers, reviewedRuntimeServerMajor, runtimeHelperDifferences, runtimePolicyDifferences, type RuntimeHelperRow, type RuntimePolicyRow, type RuntimeTriggerRow } from "./runtime-isolation-policy";
+import { beginStatement, checkOut, databaseLimits, failedTransaction } from "./database-limits";
 
 export const runtimeIsolationTables = ["valopay_workspaces", "valopay_merchants", "valopay_records", "valopay_idempotency", "valopay_operations", "valopay_teams", "valopay_staff_memberships", "valopay_staff_invitations", "valopay_staff_events", "valopay_staff_lender_access"] as const;
 /** Everything the self-check compares, in one round trip: the ten tables' row
@@ -76,10 +77,18 @@ export async function bindRuntimeService(client: PoolClient) {
   const member = (await client.query<{ role: string }>("SELECT role FROM valopay_staff_memberships WHERE user_id=current_setting('valopay.runtime_user',true) AND status='active' AND expires_at>clock_timestamp()")).rows[0];
   if (!member || !["Admin", "Operations"].includes(member.role)) unavailable("The isolated service worker needs an active Operations or administrator membership.");
 }
+/** A background transaction with the system limits; under isolation it runs as the service member, otherwise binding is a no-op. */
 export async function runtimeServiceRead<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try { await client.query("BEGIN"); await bindRuntimeService(client); const result = await operation(client); await client.query("COMMIT"); return result; }
-  catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  const guard = await checkOut(() => pool.connect()), client = guard.client;
+  let committing = false;
+  try {
+    await client.query(beginStatement(databaseLimits().system)); await bindRuntimeService(client);
+    const result = await operation(client);
+    committing = true; await client.query("COMMIT"); return result;
+  } catch (error) {
+    try { await client.query("ROLLBACK"); } catch { /* the transaction is already closed */ }
+    throw failedTransaction(error, { committing, lost: guard.lost(), write: true });
+  } finally { guard.release(); }
 }
 /** Claims never turn a stored arbitrary role into authority. A job's named
  * requester must still have its original role and access to this lender. */

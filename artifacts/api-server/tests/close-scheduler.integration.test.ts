@@ -128,18 +128,19 @@ try {
     assert.equal(healthy.lastErrorAt, null);
     assert.ok(Date.parse(healthy.observedAt) >= Date.parse(healthy.lastSuccessAt));
 
-    // Fail the scan before any lender transaction. The last success stays historical,
-    // and a later healthy pass must clear the error rather than keep a false outage.
-    const originalQuery = pool.query;
+    // Fail the scan before any lender transaction (the scan checks out a connection
+    // for its bounded transaction). The last success stays historical, and a later
+    // healthy pass must clear the error rather than keep a false outage.
+    const originalConnect = pool.connect;
     try {
-      pool.query = (() => Promise.reject(new Error("Injected scheduler scan failure"))) as typeof pool.query;
+      pool.connect = (() => Promise.reject(new Error("Injected scheduler scan failure"))) as typeof pool.connect;
       assert.equal(await scheduler.tick(), null);
       const failed = schedulerStatus();
       assert.equal(failed.lastSuccessAt, healthy.lastSuccessAt);
       assert.ok(failed.lastErrorAt, "a failed scan has a failure timestamp");
       assert.ok(Date.parse(failed.lastErrorAt) >= Date.parse(healthy.lastSuccessAt));
     } finally {
-      pool.query = originalQuery;
+      pool.connect = originalConnect;
     }
     assert.ok(await scheduler.tick());
     assert.equal(schedulerStatus().lastErrorAt, null, "a returning pass clears the service-level error");

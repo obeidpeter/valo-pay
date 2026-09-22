@@ -9,14 +9,15 @@ import { errorHandler } from "../src/lib/error-handler.js";
 import { validateRecord } from "../src/domain/validation.js";
 import { markRolledBack } from "../src/lib/transaction-outcome.js";
 import { storageFailure } from "../src/lib/export-download.js";
+import { DatabaseLimitError } from "../src/lib/database-limits.js";
 
 let checks = 0;
-type Answer = { status?: number; body?: unknown };
+type Answer = { status?: number; body?: unknown; headers?: Record<string, string> };
 function answer(error: unknown): Answer {
   const out: Answer = {};
   const logged: unknown[] = [];
   const req = { id: "test-request", log: { error: (...args: unknown[]) => logged.push(args), warn: (...args: unknown[]) => logged.push(args), info: (...args: unknown[]) => logged.push(args) } };
-  const res = { headersSent: false, status(code: number) { out.status = code; return this; }, json(body: unknown) { out.body = body; return this; } };
+  const res = { headersSent: false, setHeader(name: string, value: string) { out.headers = { ...out.headers, [name]: value }; return this; }, status(code: number) { out.status = code; return this; }, json(body: unknown) { out.body = body; return this; } };
   errorHandler(error, req as never, res as never, () => undefined);
   return out;
 }
@@ -59,7 +60,13 @@ function answer(error: unknown): Answer {
   const zod = answer(new ZodError([{ code: "custom", path: ["data", "amountKobo"], message: "Expected number" }]));
   assert.equal(zod.status, 400);
   assert.deepEqual((zod.body as { details: unknown[] }).details, [{ field: "data.amountKobo", message: "Expected number" }], "validation failures name their fields");
-  checks += 29;
+  // A database limit (a busy lender, a lock or statement past its limit, a lost connection) is a 503 that says when to retry.
+  assert.deepEqual(answer(markRolledBack(new DatabaseLimitError("lock_timeout", { write: true }))), { status: 503, headers: { "Retry-After": "2" }, body: { error: "This lender is busy with another change. Nothing was saved. Try again in a moment.", committed: false, requestId: "test-request" } }, "a lock wait past its limit is a 503 with Retry-After, and nothing was saved");
+  assert.equal(answer(markRolledBack(new DatabaseLimitError("statement_timeout"))).headers?.["Retry-After"], "5", "a stopped statement waits longer before a retry");
+  assert.deepEqual(answer(new DatabaseLimitError("pool_timeout", { write: false })), { status: 503, headers: { "Retry-After": "2" }, body: { error: "The service is busy. Try again in a moment.", requestId: "test-request" } }, "committed: false only when the store says nothing was saved");
+  assert.equal(answer(Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" })).status, 500, "a raw PostgreSQL code is translated by the store, never guessed here");
+  assert.equal((unconfigured as Answer).headers, undefined, "an application 503 sets no Retry-After");
+  checks += 34;
 }
 
 {

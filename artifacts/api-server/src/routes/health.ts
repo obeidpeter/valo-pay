@@ -11,8 +11,9 @@ const router: IRouter = Router();
  * Liveness (/healthz): the process answers, and says which build it is, how
  * long it has been up and what its scheduler is doing. It never touches the
  * database, so a database outage does not read as a dead process. Readiness
- * (/readyz): one bounded round trip to the database; 503 while it fails, so
- * traffic can be held back from an instance that cannot serve it.
+ * (/readyz): one bounded round trip to the database on its own connection, so
+ * a busy request pool does not read as an unreachable database; 503 while it
+ * fails, so traffic can be held back from an instance that cannot serve it.
  */
 router.get("/healthz", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");

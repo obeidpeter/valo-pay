@@ -5,16 +5,29 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
   console.log("Set VALOPAY_RUN_INTEGRATION=1 for the disposable-database concurrency tests.");
   process.exit(0);
 }
-const { pool } = await import("@workspace/db");
-const { inWorkspace, listMerchants, loadState, saveState, changeRole, appendAudit, verifyAudit, saveIdempotency, findIdempotency, digest } = await import("../src/lib/valopay-store");
-const token = randomBytes(32).toString("hex");
-const req = () => ({ headers: { cookie: `valopay_sandbox=${token}` }, secure: false, auth: Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true }) }) as any;
+const { pool, poolSize, POOL_WAIT_MS } = await import("@workspace/db");
+const { inWorkspace, listMerchants, loadState, saveState, changeRole, appendAudit, verifyAudit, saveIdempotency, findIdempotency, digest, pingDatabase, closeDatabase } = await import("../src/lib/valopay-store");
+const { databaseLimitOf, DatabaseLimitError, overrideDatabaseLimits } = await import("../src/lib/database-limits");
+const { wasRolledBack } = await import("../src/lib/transaction-outcome");
+const token = randomBytes(32).toString("hex"), otherToken = randomBytes(32).toString("hex");
+/** A request as a route makes it; with a lender in the query string, the per-lender gate applies. */
+const reqFor = (merchantId?: string, sandbox = token) => ({ headers: { cookie: `valopay_sandbox=${sandbox}` }, query: merchantId ? { merchantId } : {}, secure: false, auth: Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true }) }) as any;
+const req = () => reqFor();
 const res = () => ({ cookie() {} }) as any;
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+const failure = (promise: Promise<unknown>) => promise.then(() => undefined, (error: unknown) => error);
 function gate() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
-async function within<T>(promise: Promise<T>, label: string): Promise<T> {
+async function within<T>(promise: Promise<T>, label: string, ms = 5_000): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
-  try { return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} blocked for 5 seconds`)), 5_000); })]); }
+  try { return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} blocked for ${ms} ms`)), ms); })]); }
   finally { clearTimeout(timer!); }
+}
+/** A 503 for this database limit, with nothing saved. */
+function turnedAway(error: unknown, limits: string[], label: string) {
+  assert.ok(error instanceof DatabaseLimitError, `${label}: ${error instanceof Error ? error.message : String(error)}`);
+  assert.ok(limits.includes(error.limit), `${label}: ${error.limit}`);
+  assert.equal(error.status, 503, label);
+  assert.equal(wasRolledBack(error), true, `${label}: nothing was saved`);
 }
 async function staysBlocked(entered: Promise<void>, label: string) {
   const winner = await Promise.race([entered.then(() => "entered"), new Promise<string>(resolve => setTimeout(() => resolve("blocked"), 100))]);
@@ -85,13 +98,85 @@ try {
   const newRole = track(inWorkspace(req(), res(), async context => { newRoleEntered.resolve(); assert.equal(context.role, "Finance"); }, "read"));
   await staysBlocked(newRoleEntered.promise, "new request cannot observe uncommitted persona");
   releasePersona.resolve(); await persona; await within(newRole, "new persona reader");
-  console.log("Workspace concurrency passed: concurrent readers, cross-lender reads/writes, same-lender isolation, bootstrap, read capability, persona, audit and idempotency.");
+
+  // ---- Database limits: one busy lender, a slow statement, an idle or lost connection and a full pool ----
+  const uncaught: unknown[] = [];
+  const heard = (error: unknown) => { uncaught.push(error); };
+  process.on("uncaughtException", heard);
+  try {
+    const [otherLender] = (await inWorkspace(reqFor(undefined, otherToken), res(), listMerchants, "read")).map(row => row.id) as [string];
+    {
+      const restore = overrideDatabaseLimits({ request: { lockMs: 400, idleMs: 5_000 } });
+      try {
+        const writerIn = gate(), releaseBusy = gate(); cleanup.push(releaseBusy.resolve);
+        const writer = track(inWorkspace(reqFor(first), res(), async context => {
+          const state = await loadState(context, first);
+          writerIn.resolve(); await releaseBusy.promise;
+          state.settings.concurrencyFixture = "writer that outlasted the readers";
+          await saveState(context, state);
+        }));
+        await within(writerIn.promise, "busy writer");
+        const readers = Array.from({ length: 10 }, () => failure(inWorkspace(reqFor(first), res(), context => loadState(context, first, "share"), "read")));
+        await within(inWorkspace(reqFor(otherLender, otherToken), res(), context => loadState(context, otherLender, "share"), "read"), "another workspace's read while one lender is busy", 1_000);
+        assert.equal((await pingDatabase()).status, "ok", "readiness answers while one lender is busy");
+        const outcomes = await within(Promise.all(readers), "readers of the busy lender", 3_000);
+        outcomes.forEach((error, index) => turnedAway(error, ["lock_timeout", "lender_busy"], `reader ${index + 1}`));
+        const seen = new Set(outcomes.map(databaseLimitOf));
+        assert.ok(seen.has("lock_timeout") && seen.has("lender_busy"), `some readers waited for the lock and the rest for the gate (${[...seen].join(", ")})`);
+        releaseBusy.resolve();
+        await within(writer, "the busy writer commits");
+      } finally { restore(); }
+    }
+    {
+      const restore = overrideDatabaseLimits({ request: { lockMs: 5_000, statementMs: 300 } });
+      const holder = await pool.connect();
+      try {
+        await holder.query("BEGIN");
+        await holder.query("SELECT id FROM valopay_merchants WHERE id=$1 FOR UPDATE", [first]);
+        turnedAway(await within(failure(inWorkspace(reqFor(first), res(), context => loadState(context, first, "share"), "read")), "statement limit", 2_000), ["statement_timeout"], "a statement past its limit is stopped");
+      } finally { await holder.query("ROLLBACK"); holder.release(); restore(); }
+    }
+    {
+      const restore = overrideDatabaseLimits({ request: { idleMs: 300 } });
+      try {
+        const error = await failure(inWorkspace(reqFor(first), res(), async context => { await loadState(context, first); await sleep(800); await loadState(context, first); }));
+        turnedAway(error, ["idle_timeout"], "a transaction idle past its limit is ended");
+      } finally { restore(); }
+      await within(inWorkspace(reqFor(first), res(), async context => { const state = await loadState(context, first); state.settings.concurrencyFixture = "after an idle kill"; await saveState(context, state); }), "a write after the idle kill", 1_000);
+    }
+    {
+      const error = await failure(inWorkspace(reqFor(first), res(), async context => {
+        await loadState(context, first);
+        const backend = (await pool.query<{ pid: number }>("SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND backend_type='client backend' AND state='idle in transaction' ORDER BY xact_start DESC LIMIT 1")).rows[0];
+        await pool.query("SELECT pg_terminate_backend($1)", [backend!.pid]);
+        await sleep(200);
+        await loadState(context, first);
+      }));
+      turnedAway(error, ["connection_lost"], "a lost connection");
+    }
+    {
+      const held = await Promise.all(Array.from({ length: poolSize }, () => pool.connect()));
+      try {
+        const error = await within(failure(inWorkspace(reqFor(otherLender, otherToken), res(), listMerchants, "read")), "checkout limit", POOL_WAIT_MS + 2_000);
+        turnedAway(error, ["pool_timeout"], "no free connection");
+        assert.equal((await pingDatabase()).status, "ok", "readiness has its own connection");
+        for (const client of held) {
+          const settings = (await client.query<{ statement: string; lock: string; idle: string }>("SELECT current_setting('statement_timeout') AS statement, current_setting('lock_timeout') AS lock, current_setting('idle_in_transaction_session_timeout') AS idle")).rows[0];
+          assert.deepEqual(settings, { statement: "0", lock: "0", idle: "0" }, "the limits end with each transaction: no pooled connection keeps them");
+        }
+      } finally { held.forEach(client => client.release()); }
+    }
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(uncaught, [], "a lost or killed connection never reaches the process as an uncaught error");
+  } finally { process.off("uncaughtException", heard); }
+  console.log("Workspace concurrency passed: concurrent readers, cross-lender reads/writes, same-lender isolation, bootstrap, read capability, persona, audit and idempotency; one busy lender, a slow statement, an idle or lost connection and a full pool are each turned away with a 503 without holding up another lender or readiness.");
 } finally {
   cleanup.forEach(release => release());
   await Promise.allSettled(pending);
-  const principal = digest(`demo:${token}`);
-  for (const table of ["valopay_idempotency", "valopay_records"]) await pool.query(`DELETE FROM ${table} WHERE merchant_id IN (SELECT m.id FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id WHERE w.principal_hash=$1)`, [principal]);
-  await pool.query("DELETE FROM valopay_merchants WHERE workspace_id IN (SELECT id FROM valopay_workspaces WHERE principal_hash=$1)", [principal]);
-  await pool.query("DELETE FROM valopay_workspaces WHERE principal_hash=$1", [principal]);
-  await pool.end();
+  for (const principal of [digest(`demo:${token}`), digest(`demo:${otherToken}`)]) {
+    for (const table of ["valopay_idempotency", "valopay_records"]) await pool.query(`DELETE FROM ${table} WHERE merchant_id IN (SELECT m.id FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id WHERE w.principal_hash=$1)`, [principal]);
+    await pool.query("DELETE FROM valopay_merchants WHERE workspace_id IN (SELECT id FROM valopay_workspaces WHERE principal_hash=$1)", [principal]);
+    await pool.query("DELETE FROM valopay_workspaces WHERE principal_hash=$1", [principal]);
+  }
+  await closeDatabase();
 }

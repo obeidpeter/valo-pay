@@ -16,6 +16,8 @@ process.env["CLERK_SECRET_KEY"] ??= "sk_test_placeholder";
 process.env["CLERK_PUBLISHABLE_KEY"] ??= `pk_test_${Buffer.from("clerk.example.test$").toString("base64")}`;
 const { default: app, requestIdFor } = await import("../src/app.js");
 const { errorHandler } = await import("../src/lib/error-handler.js");
+const { DatabaseLimitError } = await import("../src/lib/database-limits.js");
+const { markRolledBack } = await import("../src/lib/transaction-outcome.js");
 const { schedulerStatus, markSchedulerOff } = await import("../src/lib/close-scheduler.js");
 const { BUILD } = await import("../src/lib/build-info.js");
 
@@ -32,9 +34,9 @@ checks += 7;
 // ---- The error handler: the id in every body, the stack for a failure, the reason for a rejection ----
 const handled = (error: unknown) => {
   const logged: Array<{ level: string; fields: Record<string, unknown> }> = [];
-  const out: { status?: number; body?: any } = {};
+  const out: { status?: number; body?: any; headers: Record<string, string> } = { headers: {} };
   const req = { id: "req-abc12345", log: { error: (fields: Record<string, unknown>) => logged.push({ level: "error", fields }), warn: (fields: Record<string, unknown>) => logged.push({ level: "warn", fields }), info: (fields: Record<string, unknown>) => logged.push({ level: "info", fields }) } };
-  const res = { headersSent: false, status(code: number) { out.status = code; return this; }, json(body: unknown) { out.body = body; return this; } };
+  const res = { headersSent: false, setHeader(name: string, value: string) { out.headers[name] = value; return this; }, status(code: number) { out.status = code; return this; }, json(body: unknown) { out.body = body; return this; } };
   errorHandler(error, req as any, res as any, () => {});
   return { ...out, logged };
 };
@@ -52,7 +54,17 @@ assert.deepEqual(refused.logged[0], { level: "info", fields: { event: "request.r
 const thrownValue = handled("not even an error");
 assert.equal(thrownValue.status, 500);
 assert.equal(thrownValue.logged[0]!.fields["event"], "request.failed");
-checks += 10;
+// A request turned away at a database limit is one request.busy line: a warning while a lender is busy, an error when a statement, a connection or the pool failed.
+const lockWait = new Error("canceling statement due to lock timeout");
+const busy = handled(markRolledBack(new DatabaseLimitError("lock_timeout", { cause: lockWait })));
+assert.equal(busy.status, 503);
+assert.equal(busy.body.requestId, "req-abc12345", "a busy answer names the request");
+assert.equal(busy.logged.length, 1);
+assert.deepEqual({ level: busy.logged[0]!.level, event: busy.logged[0]!.fields["event"], status: busy.logged[0]!.fields["status"], limit: busy.logged[0]!.fields["limit"] }, { level: "warn", event: "request.busy", status: 503, limit: "lock_timeout" }, "a busy lender is a warning");
+assert.equal(busy.logged[0]!.fields["err"], lockWait, "with the database's own error");
+const stopped = handled(markRolledBack(new DatabaseLimitError("statement_timeout")));
+assert.deepEqual([stopped.logged[0]!.level, stopped.logged[0]!.fields["limit"], stopped.headers["Retry-After"]], ["error", "statement_timeout", "5"], "a stopped statement is an error line");
+checks += 17;
 
 // ---- Over HTTP: liveness, readiness, ids on answers, refusals in the log, nothing secret written ----
 const server = app.listen(0);
@@ -87,6 +99,14 @@ try {
   assert.ok(Date.now() - started < 5_000, "the readiness check is bounded");
   assert.ok(!JSON.stringify(readyBody).includes("127.0.0.1"), "the answer does not describe the database");
   checks += 6;
+
+  // A request that needs the database while it cannot be reached is turned away with a 503 that says when to retry.
+  const unreachable = await fetch(`${base}/api/v1/workspace`);
+  const unreachableBody = await unreachable.json() as { error: string; committed?: boolean; requestId: string };
+  assert.equal(unreachable.status, 503, "an unreachable database is a 503, not a general 500");
+  assert.equal(unreachable.headers.get("retry-after"), "10");
+  assert.deepEqual(unreachableBody, { error: "The database is not available. Try again shortly.", committed: false, requestId: unreachable.headers.get("x-request-id") }, "in plain words, naming the request");
+  checks += 3;
 
   const kept = await fetch(`${base}/api/healthz`, { headers: { "X-Request-Id": "edge-0123456789" } });
   assert.equal(kept.headers.get("x-request-id"), "edge-0123456789", "the edge's id comes back on the answer");
@@ -126,8 +146,12 @@ try {
   assert.ok(notReady && typeof notReady["reason"] === "string", "a failed readiness check says why, in the log");
   const failed = requestLines.find((line) => line["req"]["url"] === "/api/readyz");
   assert.equal(failed?.["level"], 50, "a 5xx answer is an error line");
+  const turnedAway = requestLines.find((line) => line["req"]["url"] === "/api/v1/workspace");
+  assert.equal(turnedAway?.["level"], 40, "a 503 that says when to retry is a warning line, so busy moments do not page anyone");
+  const busyLine = written.find((line) => line["event"] === "request.busy");
+  assert.deepEqual([busyLine?.["level"], busyLine?.["limit"], busyLine?.["req"]?.["id"]], [50, "database_unavailable", unreachable.headers.get("x-request-id")], "the handler's own line says which limit, at error level when the database is unreachable");
   assert.ok(requestLines.filter((line) => line["res"]["statusCode"] < 500).every((line) => line["level"] === 30), "every other answer is an info line");
-  checks += 12 + requestLines.length * 5;
+  checks += 14 + requestLines.length * 5;
 } finally {
   server.close();
   rmSync(logFile, { force: true });

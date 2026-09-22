@@ -74,6 +74,7 @@ Provide credentials through your environment's secret manager, never through com
 | Name | Purpose |
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection, server only |
+| `VALOPAY_DATABASE_POOL_SIZE` | Optional; the database connections one API process may hold, a whole number from 2 to 100, default 10. One lender may use at most half of them. Keep instances × size (plus one short-lived readiness connection per instance) within the database's connection limit. |
 | `CLERK_SECRET_KEY` | Clerk server authentication/proxy |
 | `CLERK_PUBLISHABLE_KEY` | Server-side Clerk configuration |
 | `VITE_CLERK_PUBLISHABLE_KEY` | Frontend Clerk configuration for sign-in; on a local host without it the console runs the anonymous sandbox, sign-in links inside the console are hidden and `/sign-in` explains that sign-in is not available on this host |
@@ -152,7 +153,9 @@ The Replit development environment sets `VALOPAY_CLOSE_SCHEDULER=off` to prevent
 
 ### Operating
 
-`GET /api/healthz` answers without a sandbox or a sign-in: the build, the start time, the uptime and what the close scheduler is doing. `GET /api/readyz` makes one bounded round trip to the database and answers 503 while it fails. Every answer carries `X-Request-Id` and every error body `requestId`; the console quotes it as the reference in a failure notice, and every log line of the request carries it. The log's lines and events, what to watch and how to trace a report are in `docs/observability.md`. On SIGTERM the process finishes the requests in flight and any close pass in progress before it exits.
+`GET /api/healthz` answers without a sandbox or a sign-in: the build, the start time, the uptime and what the close scheduler is doing. `GET /api/readyz` makes one bounded round trip to the database on its own connection and answers 503 while it fails.
+
+Every database transaction the API opens sets its own limits (`artifacts/api-server/src/lib/database-limits.ts`). A request waits at most 5 s for a lock and 5 s for a free connection, a statement runs for at most 15 s, and a transaction may stay idle between statements for at most 30 s. The scheduled close, Paystack test deliveries and other service transactions allow 30 s for a statement and 60 s idle; export jobs keep 5 s for a statement, 1 s for a lock and 5 s idle. One lender may occupy at most half of the process's connections; further requests for it wait up to 5 s without one. A request turned away is answered 503 with `Retry-After` and, when nothing was saved, `committed: false`. A connection the database ends, for example at the idle limit, fails that request only. Every answer carries `X-Request-Id` and every error body `requestId`; the console quotes it as the reference in a failure notice, and every log line of the request carries it. The log's lines and events, what to watch and how to trace a report are in `docs/observability.md`. On SIGTERM the process finishes the requests in flight and any close pass in progress before it exits.
 
 ### Scheduled daily close
 

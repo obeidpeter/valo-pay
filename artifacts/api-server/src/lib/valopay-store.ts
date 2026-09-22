@@ -1,5 +1,5 @@
 import { historySections, historyKind, positionNote, type CustomerHistoryQuery, type HistorySection } from './customer-history';
-import { pool, type PoolClient } from "@workspace/db";
+import { pool, Pool, poolSize, type PoolClient } from "@workspace/db";
 import { getAuth, clerkClient } from "@clerk/express";
 import { staffMode, verifyStaff } from './staff-access';
 import { validateLenderAccessChange } from './staff-lender-access';
@@ -21,6 +21,8 @@ import { periodBounds, previousMonth } from '../domain/billing';
 import { measurementRules } from '@workspace/valopay-schema';
 import { protectStored, revealStored, protectRecordData, revealRecordData, payloadEncryptionKey, isProtectedPayload } from './protected-payloads';
 import { markRolledBack } from './transaction-outcome';
+import { beginStatement, checkOut, databaseLimits, failedTransaction, type Checkout } from './database-limits';
+import { createLenderGate } from './lender-gate';
 import { assertImportedCorrectionChange } from '../domain/import-corrections';
 import type { LifecycleExternalCandidate, LifecycleCandidate } from '@workspace/valopay-schema';
 import { assertLifecycleCandidate, eraseLifecycleRawCsv, recordLifecycleReceipt, lifecycleRunView } from '../domain/lifecycle';
@@ -99,6 +101,13 @@ export function bindOperation(req: Request, id: string, merchantId: string) { re
 /** The journal entry the recovery middleware bound to this request, if any. */
 export function boundOperation(req: Request) { return requestOperations.get(req); }
 const databaseConflictCodes = new Set(["23503", "23505", "23514", "P0001"]);
+/** One lender holds at most half this process's connections; a request past that waits, without one, for up to the lock limit. */
+const lenderGate = createLenderGate({ capacity: Math.max(1, Math.floor(poolSize / 2)), waitMs: () => databaseLimits().request.lockMs });
+/** The lender a request names: every lender-scoped route carries it as the merchantId query value. */
+function gatedLender(req: Request): string | undefined {
+  const lender = (req.query as Record<string, unknown> | undefined)?.merchantId;
+  return typeof lender === "string" && lender.length >= 1 && lender.length <= 100 ? lender : undefined;
+}
 
 /** Throws an error carrying the HTTP status the error handler answers with (400 unless given). */
 export function fail(message: string, status = 400): never {
@@ -182,9 +191,9 @@ export async function cancelOperation(ctx: StoreContext, merchantId: string, id:
  * pending limit, and its key cannot run again. Runs in its own transaction
  * after the refused request's transaction rolled back. */
 export async function rejectOperation(req: Request, bound: { id: string; merchantId: string }, rejection: { status: number; message: string }) {
-  const client = await pool.connect();
+  const guard = await checkOut(() => pool.connect()), client = guard.client;
   try {
-    await client.query('BEGIN');
+    await client.query(beginStatement(databaseLimits().request));
     if (runtimeIsolationEnabled()) {
       const verified = getAuth(req) as unknown as VerifiedClerkSession;
       await bindRuntimeIdentity(client, { organizationId: verified.orgId || '', userId: verified.userId || '' });
@@ -195,7 +204,7 @@ export async function rejectOperation(req: Request, bound: { id: string; merchan
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch { /* the transaction is already closed */ }
     throw error;
-  } finally { client.release(); }
+  } finally { guard.release(); }
 }
 /** Receipt and domain writes commit together. A process crash cannot leave a
  * completed journal entry without the corresponding business write. */
@@ -299,9 +308,10 @@ export async function acceptStaffInvitation(req: Request, token: string) {
   return acceptVerifiedInvitation(auth, token, emails);
 }
 async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: string, verifiedEmails: string[]) {
-  const client = await pool.connect();
+  const guard = await checkOut(() => pool.connect()), client = guard.client;
+  let committing = false;
   try {
-    await client.query('BEGIN');
+    await client.query(beginStatement(databaseLimits().request));
     await bindRuntimeIdentity(client, { organizationId: auth.orgId || '', userId: auth.userId || '' }, { token, verifiedEmails });
     const team = (await client.query<{ workspace_id: string }>(`SELECT t.workspace_id FROM valopay_teams t JOIN valopay_workspaces w ON w.id=t.workspace_id WHERE t.organization_id=$1 FOR UPDATE OF w`, [auth.orgId])).rows[0];
     if (!team) fail('Select the organisation named in your invitation.', 403);
@@ -326,23 +336,32 @@ async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: strin
       ON CONFLICT(workspace_id,user_id) DO UPDATE SET display_name=EXCLUDED.display_name,role=EXCLUDED.role,status='active',expires_at=EXCLUDED.expires_at,updated_at=greatest(now(),valopay_staff_memberships.updated_at+interval '1 millisecond')`, [randomUUID(), team.workspace_id, auth.userId, invite.email, invite.role]);
     await client.query("UPDATE valopay_staff_invitations SET status='accepted' WHERE id=$1 AND workspace_id=$2", [invite.id, team.workspace_id]);
     await staffEvent(client, team.workspace_id, `Clerk:${auth.userId}`, 'staff.accepted', invite.id, { role: invite.role });
+    committing = true;
     await client.query('COMMIT'); return { message: 'Invitation accepted. Your pilot membership lasts 90 days.', role: invite.role };
-  } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch { /* the transaction is already closed */ }
+    throw failedTransaction(error, { committing, lost: guard.lost(), write: true });
+  } finally { guard.release(); }
 }
 
 /** Operator-only bootstrap; never called by an HTTP route. */
 export async function provisionStaffWorkspace(organizationId: string, userId: string, name: string) {
   if (runtimeIsolationEnabled()) fail('Provision isolated staff workspaces through the separate migration-owner connection before starting the restricted runtime.', 503);
   if (!staffMode() || !/^org_[A-Za-z0-9]+$/.test(organizationId) || !/^user_[A-Za-z0-9]+$/.test(userId) || !name.trim() || name.length > 100) fail('Provide a staging organisation, administrator user ID and workspace name.');
-  const client = await pool.connect(), workspaceId = randomUUID();
+  const guard = await checkOut(() => pool.connect()), client = guard.client, workspaceId = randomUUID();
+  let committing = false;
   try {
-    await client.query('BEGIN');
+    await client.query(beginStatement(databaseLimits().request));
     await client.query("INSERT INTO valopay_workspaces(id,principal_hash,role) VALUES($1,$2,'Read-only')", [workspaceId, digest(`staff-org:${organizationId}`)]);
     await client.query('INSERT INTO valopay_teams(workspace_id,organization_id,name) VALUES($1,$2,$3)', [workspaceId, organizationId, name]);
     await client.query("INSERT INTO valopay_staff_memberships(id,workspace_id,user_id,display_name,role,expires_at) VALUES($1,$2,$3,$4,'Admin',now()+interval '90 days')", [randomUUID(), workspaceId, userId, 'Pilot administrator']);
     await staffEvent(client, workspaceId, 'System · operator provisioning', 'staff.provisioned', userId, { organizationId });
+    committing = true;
     await client.query('COMMIT'); return { workspaceId };
-  } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch { /* the transaction is already closed */ }
+    throw failedTransaction(error, { committing, lost: guard.lost(), write: true });
+  } finally { guard.release(); }
 }
 
 export async function createPilotLender(ctx: StoreContext, input: { name: string; segment: string }, key: string) {
@@ -428,13 +447,21 @@ function scopedMerchantQuery(lock: MerchantLock = "none") {
 
 /** Persona changes lock the workspace exclusively. Ordinary work shares that
  * lock, fixing the persona for the transaction while lender locks serialize
- * mutations. Only first-visit bootstrap needs the principal advisory lock. */
+ * mutations. Only first-visit bootstrap needs the principal advisory lock.
+ * Every transaction is bounded (database-limits.ts): a lock wait, a statement
+ * and idle time each have a limit, and one lender holds at most half the
+ * pool, so a busy lender turns its own requests away with a 503 instead of
+ * holding up other tenants. */
 export async function inWorkspace<T>(req: Request, res: Response, fn: (context: StoreContext) => Promise<T>, access: WorkspaceAccess = "write"): Promise<T> {
   const identity = principalFor(req, res);
-  const client = await pool.connect();
+  const write = access !== "read", lender = gatedLender(req);
+  const leave = lender ? await lenderGate.enter(lender, write) : undefined;
+  let guard: Checkout<PoolClient> | undefined;
   let context: StoreContext | undefined, committing = false, isolationVerified = false;
   try {
-    await client.query(runtimeIsolationEnabled() && access === 'read' ? 'BEGIN ISOLATION LEVEL REPEATABLE READ' : 'BEGIN');
+    guard = await checkOut(() => pool.connect(), write);
+    const client = guard.client;
+    await client.query(beginStatement(databaseLimits().request, runtimeIsolationEnabled() && access === 'read' ? 'ISOLATION LEVEL REPEATABLE READ' : undefined));
     if (runtimeIsolationEnabled()) {
       const verified = getAuth(req) as unknown as VerifiedClerkSession;
       isolationVerified = await bindRuntimeIdentity(client, { organizationId: verified.orgId || '', userId: verified.userId || '' });
@@ -478,8 +505,17 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       if (inserted) {
         await seedWorkspace(client, workspace, identity.principal, !identity.authenticated, now);
         // When explicitly enabled, each new anonymous sandbox pays for a few expired ones without a scheduler.
+        // The sweep runs inside a savepoint: one that is slow, meets a lock or deadlocks is undone and left to
+        // a later bootstrap, and never fails this visitor's.
         if (!identity.authenticated && expiredWorkspaceCleanupEnabled(process.env["VALOPAY_EXPIRED_WORKSPACE_CLEANUP"])) {
-          await sweepExpiredWorkspaces(client, SWEEP_BATCH);
+          await client.query("SAVEPOINT expired_workspace_sweep");
+          try {
+            await sweepExpiredWorkspaces(client, SWEEP_BATCH);
+            await client.query("RELEASE SAVEPOINT expired_workspace_sweep");
+          } catch (error) {
+            try { await client.query("ROLLBACK TO SAVEPOINT expired_workspace_sweep"); } catch { throw error; }
+            (req as { log?: { warn?(fields: object, message: string): void } }).log?.warn?.({ event: "workspace.sweep_failed", err: error }, "Expired sandboxes were left for a later sweep");
+          }
         }
       }
     }
@@ -497,7 +533,10 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
     if (committed.command !== "COMMIT") throw markRolledBack(new Error("The workspace transaction was rolled back."));
     return result;
   } catch (error) {
-    try { await client.query("ROLLBACK"); } catch { /* transaction is already closed */ }
+    if (guard) try { await guard.client.query("ROLLBACK"); } catch { /* transaction is already closed */ }
+    // A limit reached before COMMIT is a 503 that says nothing was saved; a connection lost during COMMIT stays unconfirmed.
+    const failed = failedTransaction(error, { committing, lost: guard?.lost(), write });
+    if (failed !== error) throw failed;
     // Before COMMIT was sent nothing was saved; a failed COMMIT's outcome is unknown.
     if (!committing) markRolledBack(error);
     if (databaseConflictCodes.has((error as { code?: string } | undefined)?.code || "")) {
@@ -509,7 +548,8 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       const session = sessions.get(context);
       if (session) { session.active = false; session.snapshot = undefined; session.summarised = undefined; session.lockedMerchantId = undefined; }
     }
-    client.release();
+    guard?.release();
+    leave?.();
   }
 }
 
@@ -692,10 +732,16 @@ export async function listQueue(context: StoreContext, merchantId: string, queue
   // by primary key from the same lender, one index probe per attempt: joining
   // the scoped set to itself made PostgreSQL compare every attempt with every
   // instalment (38 million pairs for one page of a 6,000-instalment lender).
+  // OFFSET 0 keeps the lookup a primary-key probe whatever the statistics say:
+  // as a plain join, a lender loaded since the last ANALYZE was estimated at
+  // one row and each attempt scanned all its instalments (22 s for a
+  // 25,000-record lender, past the statement limit). The lender and kind are
+  // checked on the row the probe found.
   const cte = `WITH scoped AS (SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND ${kind}),
     b AS (SELECT r.*, ${deadline} AS deadline, ${timestamp(deadline)} AS deadline_at, ${owner} AS queue_owner,
       ${unpaid} AS unpaid, ${timestamp("r.data->>'occurredAt'")} AS attempt_at
-      FROM scoped r LEFT JOIN valopay_records d ON r.kind='attempts' AND d.id=r.data->>'dueItemId' AND d.merchant_id=r.merchant_id AND d.kind='due-items' WHERE ${kind}),
+      FROM scoped r LEFT JOIN LATERAL (SELECT d.merchant_id,d.kind,d.status,d.data FROM valopay_records d WHERE r.kind='attempts' AND d.id=r.data->>'dueItemId' OFFSET 0) d
+        ON d.merchant_id=r.merchant_id AND d.kind='due-items' WHERE ${kind}),
     q AS (SELECT b.*,coalesce(${overdue},false) AS overdue,
       coalesce(CASE WHEN length(deadline)=10 THEN deadline ELSE to_char(deadline_at AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD') END = to_char($4::timestamptz AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD'),false) AS today FROM b)`;
   const conditions: Record<string, string> = queue === 'exceptions' ? {
@@ -1263,14 +1309,16 @@ async function seedWorkspace(client: PoolClient, workspace: WorkspaceRow, princi
  * query keeps its tenant predicate.  The merchant row is taken with SKIP
  * LOCKED: two instances never close the same lender at once and a request in
  * flight is never queued behind the scheduler.  Returns undefined when the
- * merchant is locked elsewhere or no longer exists.
+ * merchant is locked elsewhere or no longer exists.  It carries the system
+ * limits (database-limits.ts) and is not gated: SKIP LOCKED already keeps it
+ * from waiting on a busy lender.
  */
 export async function inMerchantAsSystem<T>(merchantId: string, actor: string, fn: (context: StoreContext) => Promise<T>): Promise<T | undefined> {
   if (!actor.startsWith(SYSTEM_ACTOR_PREFIX)) throw new Error("A system transaction needs a system actor.");
-  const client = await pool.connect();
-  let context: StoreContext | undefined;
+  const guard = await checkOut(() => pool.connect()), client = guard.client;
+  let context: StoreContext | undefined, committing = false;
   try {
-    await client.query("BEGIN");
+    await client.query(beginStatement(databaseLimits().system));
     await bindRuntimeService(client);
     const scope = (await client.query<{ id: string; workspace_id: string; principal_hash: string; role: string }>(
       `SELECT m.id,m.workspace_id,w.principal_hash,w.role FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id
@@ -1282,39 +1330,37 @@ export async function inMerchantAsSystem<T>(merchantId: string, actor: string, f
     context = Object.freeze({ authenticated: true, role: "Operations", actor, now });
     sessions.set(context, { client, workspace: { id: scope.workspace_id, principal_hash: scope.principal_hash, role: scope.role }, principal: scope.principal_hash, active: true, access: "write" });
     const result = await fn(context);
+    committing = true;
     const committed = await client.query("COMMIT");
     if (committed.command !== "COMMIT") throw new Error("The system transaction was rolled back.");
     return result;
   } catch (error) {
     try { await client.query("ROLLBACK"); } catch { /* transaction is already closed */ }
-    throw error;
+    throw failedTransaction(error, { committing, lost: guard.lost(), write: true });
   } finally {
     if (context) {
       const session = sessions.get(context);
       if (session) { session.active = false; session.snapshot = undefined; session.summarised = undefined; session.lockedMerchantId = undefined; }
     }
-    client.release();
+    guard.release();
   }
 }
 
 /**
  * Merchants whose scheduled close is due by their stored cursor, oldest first.
- * A plain read: the caller re-checks under the merchant lock before closing.
+ * A plain read with the system limits (runtimeServiceRead binds the service
+ * identity only under runtime isolation): the caller re-checks under the
+ * merchant lock before closing.
  */
 export async function dueScheduledCloses(limit: number): Promise<string[]> {
-  if (runtimeIsolationEnabled()) return runtimeServiceRead(async client => (await client.query<{ id: string }>(
-    `SELECT m.id FROM valopay_merchants m WHERE COALESCE(m.settings->>'scheduledCloseEnabled','true') <> 'false'
-      AND (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END)<=now()
-      ORDER BY (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END),m.id LIMIT $1`,
-    [limit, ISO_INSTANT_PATTERN])).rows.map(row => row.id));
-  return (await pool.query<{ id: string }>(
+  return runtimeServiceRead(async client => (await client.query<{ id: string }>(
     `SELECT m.id FROM valopay_merchants m
      WHERE COALESCE(m.settings->>'scheduledCloseEnabled','true') <> 'false'
        AND (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END) <= now()
      ORDER BY (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END), m.id
      LIMIT $1`,
     [limit, ISO_INSTANT_PATTERN],
-  )).rows.map((row) => row.id);
+  )).rows.map((row) => row.id));
 }
 
 /**
@@ -1323,31 +1369,43 @@ export async function dueScheduledCloses(limit: number): Promise<string[]> {
  * first scheduled close comes at its time rather than at the next tick.
  */
 export async function initialiseCloseCursors(): Promise<number> {
-  if (runtimeIsolationEnabled()) return runtimeServiceRead(async client => {
-    const rows = (await client.query<{ id: string; settings: Record<string, unknown>; now: Date }>("SELECT m.id,m.settings,now() AS now FROM valopay_merchants m WHERE m.settings->>'nextCloseAt' IS NULL FOR UPDATE", [])).rows;
-    for (const row of rows) await client.query("UPDATE valopay_merchants SET settings=settings || jsonb_build_object('nextCloseAt',$2::text) WHERE id=$1 AND settings->>'nextCloseAt' IS NULL", [row.id, nextCloseInstant(row.now.toISOString(), closeTimeOf(row.settings))]);
-    return rows.length;
+  return runtimeServiceRead(async client => {
+    if (runtimeIsolationEnabled()) {
+      const rows = (await client.query<{ id: string; settings: Record<string, unknown>; now: Date }>("SELECT m.id,m.settings,now() AS now FROM valopay_merchants m WHERE m.settings->>'nextCloseAt' IS NULL FOR UPDATE", [])).rows;
+      for (const row of rows) await client.query("UPDATE valopay_merchants SET settings=settings || jsonb_build_object('nextCloseAt',$2::text) WHERE id=$1 AND settings->>'nextCloseAt' IS NULL", [row.id, nextCloseInstant(row.now.toISOString(), closeTimeOf(row.settings))]);
+      return rows.length;
+    }
+    const rows = (await client.query<{ id: string; settings: Record<string, unknown>; now: Date }>(
+      "SELECT m.id,m.settings,now() AS now FROM valopay_merchants m WHERE m.settings->>'nextCloseAt' IS NULL",
+    )).rows;
+    if (!rows.length) return 0;
+    const updated = await client.query(
+      `UPDATE valopay_merchants m SET settings = m.settings || jsonb_build_object('nextCloseAt', v.next_at)
+       FROM (SELECT unnest($1::text[]) AS id, unnest($2::text[]) AS next_at) v
+       WHERE m.id = v.id AND m.settings->>'nextCloseAt' IS NULL`,
+      [rows.map((row) => row.id), rows.map((row) => nextCloseInstant(row.now.toISOString(), closeTimeOf(row.settings)))],
+    );
+    return updated.rowCount || 0;
   });
-  const rows = (await pool.query<{ id: string; settings: Record<string, unknown>; now: Date }>(
-    "SELECT m.id,m.settings,now() AS now FROM valopay_merchants m WHERE m.settings->>'nextCloseAt' IS NULL",
-  )).rows;
-  if (!rows.length) return 0;
-  const updated = await pool.query(
-    `UPDATE valopay_merchants m SET settings = m.settings || jsonb_build_object('nextCloseAt', v.next_at)
-     FROM (SELECT unnest($1::text[]) AS id, unnest($2::text[]) AS next_at) v
-     WHERE m.id = v.id AND m.settings->>'nextCloseAt' IS NULL`,
-    [rows.map((row) => row.id), rows.map((row) => nextCloseInstant(row.now.toISOString(), closeTimeOf(row.settings)))],
-  );
-  return updated.rowCount || 0;
 }
 
-/** Readiness: one bounded round trip to the database. Never throws; the reason stays in the caller's log, not in an answer. */
+let readiness: InstanceType<typeof Pool> | undefined;
+/**
+ * Readiness: one bounded round trip to the database, on its own connection,
+ * so a request pool that is busy does not read as a database that cannot be
+ * reached. Never throws; the reason stays in the caller's log, not in an answer.
+ */
 export async function pingDatabase(timeoutMs = 2000): Promise<{ status: "ok" | "failed"; latencyMs: number; error?: string }> {
   const started = performance.now();
   let timer: NodeJS.Timeout | undefined;
   try {
+    if (!readiness) {
+      readiness = new Pool({ connectionString: process.env.DATABASE_URL, max: 1, connectionTimeoutMillis: timeoutMs, idleTimeoutMillis: 10_000, allowExitOnIdle: true });
+      // An idle connection that fails is replaced; the next ping reports whether the database answers.
+      readiness.on("error", () => {});
+    }
     await Promise.race([
-      pool.query("SELECT 1"),
+      readiness.query("SELECT 1"),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${timeoutMs} ms`)), timeoutMs); }),
     ]);
     return { status: "ok", latencyMs: Math.round(performance.now() - started) };
@@ -1363,9 +1421,11 @@ export function watchDatabase(log: { error: (fields: object, message: string) =>
   pool.on("error", (error) => log.error({ event: "database.pool_error", err: error }, "Database connection error on an idle client"));
 }
 
-/** Ends the pool on shutdown, after the last transaction. */
+/** Ends the pools on shutdown, after the last transaction. */
 export async function closeDatabase(): Promise<void> {
-  await pool.end();
+  const ending = readiness;
+  readiness = undefined;
+  await Promise.all([pool.end(), ending?.end()]);
 }
 
 /** Appends a hash-chained audit entry for an action to the lender's state. */

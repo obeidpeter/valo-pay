@@ -8,7 +8,8 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
 
 const { pool } = await import("@workspace/db");
 const { getAuth } = await import("@clerk/express");
-const { inWorkspace, listMerchants, loadState, saveState, findIdempotency, saveIdempotency, changeRole, appendAudit, settleChanges, addedRecords } = await import("../src/lib/valopay-store.js");
+const { inWorkspace, listMerchants, loadState, saveState, findIdempotency, saveIdempotency, changeRole, appendAudit, settleChanges, addedRecords, closeDatabase } = await import("../src/lib/valopay-store.js");
+const { overrideDatabaseLimits } = await import("../src/lib/database-limits.js");
 
 const requestFor = (token: string) => {
   // Verify this is the real Clerk request shape used by principalFor rather
@@ -127,6 +128,19 @@ try {
   await inWorkspace(requestFor(token()), response(), async (context) => { await listMerchants(context); });
   assert.equal((await pool.query("SELECT 1 FROM valopay_workspaces WHERE id=$1", [staleWorkspace])).rowCount, 1, "with cleanup off, the default, the expired sandbox is kept");
   process.env.VALOPAY_EXPIRED_WORKSPACE_CLEANUP = "on";
+  {
+    // A sweep that cannot finish (here, a record of the expired sandbox is locked elsewhere past the lock limit) rolls back to its savepoint: the visitor is still seeded.
+    const restore = overrideDatabaseLimits({ request: { lockMs: 300 } });
+    const holder = await pool.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query("SELECT 1 FROM valopay_records WHERE merchant_id=$1 LIMIT 1 FOR UPDATE", [staleMerchant]);
+      const seeded = await inWorkspace(requestFor(token()), response(), listMerchants);
+      assert.equal(seeded.length, 2, "a stuck sweep never fails a new visitor's bootstrap");
+      assert.equal((await pool.query("SELECT 1 FROM valopay_workspaces WHERE id=$1", [staleWorkspace])).rowCount, 1, "the expired sandbox is left whole for a later sweep");
+      assert.equal((await pool.query("SELECT 1 FROM valopay_merchants WHERE workspace_id=$1", [staleWorkspace])).rowCount, 2, "with both its lenders");
+    } finally { await holder.query("ROLLBACK"); holder.release(); restore(); }
+  }
   await inWorkspace(requestFor(token()), response(), async (context) => { await listMerchants(context); });
   assert.equal((await pool.query("SELECT 1 FROM valopay_workspaces WHERE id=$1", [staleWorkspace])).rowCount, 0, "with cleanup on, the expired anonymous sandbox is removed");
   assert.equal((await pool.query("SELECT 1 FROM valopay_merchants WHERE workspace_id=$1", [staleWorkspace])).rowCount, 0, "with its lenders and records");
@@ -195,5 +209,5 @@ try {
   console.log("valopay repository integration tests passed");
 } finally {
   delete process.env.VALOPAY_EXPIRED_WORKSPACE_CLEANUP;
-  await pool.end();
+  await closeDatabase();
 }
