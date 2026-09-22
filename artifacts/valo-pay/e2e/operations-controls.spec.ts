@@ -47,7 +47,9 @@ for (const theme of ['light', 'dark'] as const) test(`new operations pages expos
       const history = page.getByRole('navigation', { name: 'Close snapshots' });
       await expect(history).toHaveAttribute('tabindex', '0');
       const bounds = await history.boundingBox();
-      expect(bounds!.height).toBeLessThanOrEqual((page.viewportSize()?.width || 1280) < 1024 ? 320 : 768);
+      // Firefox can report fractional layout units just above the CSS maximum.
+      const maximumHeight = (page.viewportSize()?.width || 1280) < 1024 ? 320 : 768;
+      expect(bounds!.height).toBeLessThanOrEqual(maximumHeight + 0.5);
       await page.getByRole('heading', { name: '1. Saved close evidence', exact: true }).scrollIntoViewIfNeeded();
       await expect(page.getByRole('heading', { name: '1. Saved close evidence', exact: true })).toBeVisible();
     }
