@@ -1015,8 +1015,10 @@ export async function saveState(context: StoreContext, state: DomainState): Prom
 }
 
 export async function lifecycleInventory(context:StoreContext,state:DomainState):Promise<LifecycleExternalCandidate[]> {
- const session=sessionFor(context),merchantId=lockedMerchant(session);
- if(context.role!=='Admin'||state.merchant.id!==merchantId)fail('An administrator in this lender is required.',403);
+ const session=sessionFor(context),merchantId=session.lockedMerchantId;
+ // Inventory is also used by GET after loadState acquired a shared lender lock.
+ // Physical execution still requires lockedMerchant's exclusive write snapshot.
+ if(context.role!=='Admin'||!merchantId||state.merchant.id!==merchantId)fail('An administrator in this lender is required.',403);
  const rows=(await session.client.query<OperationRow>("SELECT * FROM valopay_operations WHERE merchant_id=$1 AND status IN ('completed','cancelled') AND NOT(request ? 'purged') ORDER BY updated_at,id",[merchantId])).rows;
  return [
   ...rows.map(row=>({kind:'journal_payload' as const,merchantId,sourceId:row.id,version:row.updated_at.toISOString(),createdAt:row.updated_at.toISOString(),label:'Terminal operation payload',digest:digest(canonical({request:row.request,receipt:row.receipt,key:row.request_key,hash:row.request_hash,status:row.status})),status:row.status as 'completed'|'cancelled'})),
