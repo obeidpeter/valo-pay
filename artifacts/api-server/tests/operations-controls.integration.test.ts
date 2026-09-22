@@ -60,8 +60,8 @@ try{
   // Only a view that shows or uses the raw source rows opens them. Overviews,
   // lists, unrelated saves and the scheduled close make no key-service call, so
   // they keep working while the key service is down.
-  const fixtureUnwrap=managedWrappingKeys.unwrap;let unwraps=0;
-  managedWrappingKeys.unwrap=async(...args)=>{unwraps++;return fixtureUnwrap(...args);};
+  // The fixture's unwrap above already counts every payload opened.
+  const fixtureUnwrap=managedWrappingKeys.unwrap;
   try{
     for(const path of ["/v1/overview","/v1/work","/v1/pilot/journey","/v1/pilot/progress","/v1/pilot/batches"]){unwraps=0;ok(await call(`${path}?merchantId=${lender}`));assert.equal(unwraps,0,`${path} opens no protected payload`);}
     const listed=ok(await call(`/v1/pilot/batches?merchantId=${lender}`)).items.find((item:any)=>item.id===batch.id);
