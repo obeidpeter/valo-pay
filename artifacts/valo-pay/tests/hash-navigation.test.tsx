@@ -35,7 +35,7 @@ describe('section deep links', () => {
 
   it('opens a landing section from a shared URL without loading a workspace', async () => {
     renderApp('/#pilot');
-    const section = screen.getByRole('region', { name: 'See how Valo Pay fits your team.' });
+    const section = screen.getByRole('region', { name: 'Start with one problem worth solving.' });
     await waitFor(() => expect(document.activeElement).toBe(section));
     expect(api.calls).toEqual([]);
   });

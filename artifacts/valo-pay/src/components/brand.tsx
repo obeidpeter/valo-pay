@@ -1,4 +1,4 @@
-import { Link } from 'wouter';
+import { Link } from "wouter";
 
 /**
  * The brand mark: the favicon's orange square carrying a white V. One mark,
@@ -6,11 +6,23 @@ import { Link } from 'wouter';
  * sidebar, so the product is recognised the same way everywhere (consistency).
  * Decorative beside the wordmark, so it is hidden from assistive technology.
  */
-export function BrandMark({ className = 'h-8 w-8' }: { className?: string }) {
+export function BrandMark({ className = "h-8 w-8" }: { className?: string }) {
   return (
-    <svg viewBox="0 0 40 40" className={className} aria-hidden="true" focusable="false">
+    <svg
+      viewBox="0 0 40 40"
+      className={className}
+      aria-hidden="true"
+      focusable="false"
+    >
       <rect width="40" height="40" rx="9" className="fill-brand" />
-      <path d="M11 12l9 17 9-17" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+      <path
+        d="M11 12l9 17 9-17"
+        fill="none"
+        stroke="white"
+        strokeWidth="4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }
@@ -22,13 +34,35 @@ export function BrandMark({ className = 'h-8 w-8' }: { className?: string }) {
  * alone below 640 px, where the console's phone bar has no room for the name;
  * the link's label still says what it is.
  */
-export function BrandLockup({ href = '/', descriptor = true, compact = false, className = '' }: { href?: string; descriptor?: boolean; compact?: boolean; className?: string }) {
+export function BrandLockup({
+  href = "/",
+  descriptor = true,
+  compact = false,
+  className = "",
+}: {
+  href?: string;
+  descriptor?: boolean;
+  compact?: boolean;
+  className?: string;
+}) {
   return (
-    <Link href={href} className={`inline-flex items-center gap-3 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${className}`} aria-label="Valo Pay, collections operations layer. Go to home page">
+    <Link
+      href={href}
+      className={`inline-flex items-center gap-3 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${className}`}
+      aria-label="Valo Pay, payments, credit and cash operations. Go to home page"
+    >
       <BrandMark />
-      <span className={compact ? 'hidden leading-tight sm:block' : 'leading-tight'}>
-        <span className="block text-lg font-bold tracking-tight text-foreground">Valo Pay</span>
-        {descriptor && <span className="block text-xs text-muted-foreground">Collections operations layer</span>}
+      <span
+        className={compact ? "hidden leading-tight sm:block" : "leading-tight"}
+      >
+        <span className="block text-lg font-bold tracking-tight text-foreground">
+          Valo Pay
+        </span>
+        {descriptor && (
+          <span className="block text-xs text-muted-foreground">
+            Payments, credit &amp; cash operations
+          </span>
+        )}
       </span>
     </Link>
   );
