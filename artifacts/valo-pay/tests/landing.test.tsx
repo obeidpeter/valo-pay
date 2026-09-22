@@ -3,100 +3,187 @@ import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, waitFor, within } from "./harness";
 
 let api: FakeApi;
-beforeEach(() => { api = installFakeApi(); });
-afterEach(() => { api.uninstall(); vi.unstubAllEnvs(); });
-
-const hrefs = (name: RegExp) => screen.getAllByRole("link", { name }).map((link) => link.getAttribute("href"));
+beforeEach(() => {
+  api = installFakeApi();
+});
+afterEach(() => {
+  api.uninstall();
+  vi.unstubAllEnvs();
+});
 
 describe("landing page", () => {
-  it('closes section navigation on Escape and returns focus to the toggle', async () => {
+  it("closes section navigation on Escape and focuses the chosen section", async () => {
     const user = userEvent.setup();
-    renderApp('/');
-    const toggle = screen.getByRole('button', { name: 'Open navigation' });
+    renderApp("/");
+    const toggle = screen.getByRole("button", { name: "Open navigation" });
     await user.click(toggle);
-    expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    await user.keyboard('{Escape}');
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    await user.keyboard("{Escape}");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(toggle);
     await user.click(toggle);
     await user.tab();
-    expect(document.activeElement).toBe(within(screen.getByRole('navigation', { name: 'Mobile sections' })).getByRole('link', { name: 'What it does' }));
-    await user.click(within(screen.getByRole('navigation', { name: 'Mobile sections' })).getByRole('link', { name: 'Pricing' }));
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    await waitFor(() => expect(document.activeElement?.id).toBe('pricing'));
-    expect(screen.getByRole('heading', { name: 'Know what goes into the cost.' })).toBeTruthy();
+    expect(document.activeElement).toBe(
+      within(
+        screen.getByRole("navigation", { name: "Mobile sections" }),
+      ).getByRole("link", { name: "Workspaces" }),
+    );
+    await user.click(
+      within(
+        screen.getByRole("navigation", { name: "Mobile sections" }),
+      ).getByRole("link", { name: "Common questions" }),
+    );
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await waitFor(() => expect(document.activeElement?.id).toBe("questions"));
     expect(api.calls).toEqual([]);
   });
-  it('lets visitors choose a screen before loading and close and reopen the preview', async () => {
+
+  it("previews all four workspaces by keyboard without fetching or creating a sandbox", async () => {
     const user = userEvent.setup();
-    renderApp('/');
-    await user.click(screen.getByRole('button', { name: /03 · Daily close/ }));
-    expect(document.querySelector('iframe')).toBeNull();
-    expect(screen.getByRole('link', { name: 'Open full screen' }).getAttribute('href')).toBe('/reports#daily-closes');
-    await user.click(screen.getByRole('button', { name: 'Load interactive preview' }));
-    expect(screen.getByTitle('Interactive Valo Pay daily close preview — sample data')).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: 'Close preview' }));
-    expect(document.querySelector('iframe')).toBeNull();
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Load interactive preview' })));
-    await user.click(screen.getByRole('button', { name: 'Load interactive preview' }));
-    expect(screen.getByTitle('Interactive Valo Pay daily close preview — sample data').getAttribute('src')).toBe('/reports?embedded=1#daily-closes');
-    expect(api.calls).toEqual([]);
-  });
-  it('keeps the interactive preview inside a deployment mounted below the origin root', async () => {
-    vi.stubEnv('BASE_URL', '/preview/');
-    const user = userEvent.setup();
-    renderApp('/');
-    await user.click(screen.getByRole('button', { name: 'Load interactive preview' }));
-    expect(screen.getByTitle('Interactive Valo Pay overview preview — sample data').getAttribute('src')).toBe('/preview/overview?embedded=1');
-    await user.click(screen.getByRole('button', { name: /02 · Payment matching/ }));
-    expect(screen.getByTitle('Interactive Valo Pay payment matching preview — sample data').getAttribute('src')).toBe('/preview/reconciliation?view=review&embedded=1');
-    await user.click(screen.getByRole('button', { name: /03 · Daily close/ }));
-    expect(screen.getByTitle('Interactive Valo Pay daily close preview — sample data').getAttribute('src')).toBe('/preview/reports?embedded=1#daily-closes');
-    expect(api.calls).toEqual([]);
-  });
-  it("offers the approved pilot email and loads actual console screens only on request", async () => {
-    const user = userEvent.setup();
-    renderApp('/');
-    expect(document.querySelector('iframe')).toBeNull();
-    expect(api.calls).toEqual([]);
-    const contact = screen.getAllByRole('link', { name: 'Discuss a pilot' }).find(link => link.getAttribute('href')?.startsWith('mailto:'));
-    expect(contact?.getAttribute('href')).toMatch(/^mailto:obeidpeter1@gmail\.com\?subject=/);
-    await user.click(screen.getByRole('button', { name: 'Load interactive preview' }));
-    expect(screen.getByTitle('Interactive Valo Pay overview preview — sample data').getAttribute('src')).toBe('/overview?embedded=1');
-    await user.click(screen.getByRole('button', { name: /02 · Payment matching/ }));
-    expect(screen.getByTitle('Interactive Valo Pay payment matching preview — sample data').getAttribute('src')).toBe('/reconciliation?view=review&embedded=1');
-    // jsdom does not execute frames; actual frame requests are verified in a browser.
-    expect(api.calls).toEqual([]);
-  });
-  it("says what Valo Pay is and is not, with every way in a real link, and creates no sandbox", async () => {
     renderApp("/");
-    expect(await screen.findByRole("heading", { level: 1, name: "Know what was paid, what is due, and what needs attention." })).toBeTruthy();
-    await waitFor(() => expect(document.title).toBe("Valo Pay · Collections and connected banking"));
-    // The descriptor, the promise and "we never hold money" are the first three lines (marketing strategy 3.1).
-    const lines = Array.from(screen.getByRole("main").querySelectorAll("p, h1")).slice(0, 3).map((node) => node.textContent ?? "");
-    expect(lines[0]).toMatch(/^Collections and connected banking for lenders/);
-    expect(lines[1]).toBe("Know what was paid, what is due, and what needs attention.");
+    const tabs = screen.getByRole("tablist", { name: "Preview a workspace" });
+    await user.click(within(tabs).getByRole("tab", { name: "Collections" }));
+    for (const [key, name, path] of [
+      ["{ArrowRight}", "Pay-by-bank", "/pay-by-bank"],
+      ["{ArrowRight}", "Credit Desk", "/credit-desk"],
+      ["{End}", "Cash Desk", "/cash-desk"],
+      ["{ArrowRight}", "Collections", "/overview"],
+      ["{ArrowLeft}", "Cash Desk", "/cash-desk"],
+      ["{Home}", "Collections", "/overview"],
+    ]) {
+      await user.keyboard(key!);
+      const selected = within(tabs).getByRole("tab", { name: name! });
+      expect(document.activeElement).toBe(selected);
+      expect(selected.getAttribute("aria-selected")).toBe("true");
+      const panel = screen.getByRole("tabpanel", { name: name! });
+      expect(
+        within(panel)
+          .getByRole("link", { name: `Explore ${name}` })
+          .getAttribute("href"),
+      ).toBe(path);
+      expect(
+        document.getElementById(selected.getAttribute("aria-controls")!),
+      ).toBe(panel);
+    }
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(api.calls).toEqual([]);
+  });
+
+  it("lets visitors choose before loading and close and reopen the actual console", async () => {
+    const user = userEvent.setup();
+    renderApp("/");
+    await user.click(screen.getByRole("button", { name: /04 · Cash Desk/ }));
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(
+      screen
+        .getByRole("link", { name: "Open full screen" })
+        .getAttribute("href"),
+    ).toBe("/cash-desk");
+    await user.click(
+      screen.getByRole("button", { name: "Load interactive preview" }),
+    );
+    expect(
+      screen
+        .getByTitle("Interactive Valo Pay cash desk preview — sample data")
+        .getAttribute("src"),
+    ).toBe("/cash-desk?embedded=1");
+    await user.click(screen.getByRole("button", { name: "Close preview" }));
+    expect(document.querySelector("iframe")).toBeNull();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Load interactive preview" }),
+      ),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Load interactive preview" }),
+    );
+    expect(document.querySelector("iframe")).toBeTruthy();
+    expect(api.calls).toEqual([]);
+  });
+
+  it("keeps previews below a deployment base path and requires a new load after switching", async () => {
+    vi.stubEnv("BASE_URL", "/preview/");
+    const user = userEvent.setup();
+    renderApp("/");
+    for (const [name, route] of [
+      ["Collections", "overview"],
+      ["Pay-by-bank", "pay-by-bank"],
+      ["Credit Desk", "credit-desk"],
+      ["Cash Desk", "cash-desk"],
+    ]) {
+      await user.click(
+        screen.getByRole("button", { name: new RegExp(`0[1-4] · ${name}`) }),
+      );
+      expect(document.querySelector("iframe")).toBeNull();
+      await user.click(
+        screen.getByRole("button", { name: "Load interactive preview" }),
+      );
+      expect(
+        screen
+          .getByTitle(
+            `Interactive Valo Pay ${name!.toLowerCase()} preview — sample data`,
+          )
+          .getAttribute("src"),
+      ).toBe(`/preview/${route}?embedded=1`);
+    }
+    expect(api.calls).toEqual([]);
+  });
+
+  it("describes the expanded product and its limits without starting a workspace", async () => {
+    renderApp("/");
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Collections, credit and cash. One clear workspace.",
+      }),
+    ).toBeTruthy();
+    await waitFor(() =>
+      expect(document.title).toBe(
+        "Valo Pay · Collections, credit and cash operations",
+      ),
+    );
+    const lines = Array.from(screen.getByRole("main").querySelectorAll("p, h1"))
+      .slice(0, 3)
+      .map((node) => node.textContent ?? "");
+    expect(lines[0]).toBe("Financial operations for Nigerian lenders and SMEs");
     expect(lines[2]).toMatch(/^We never hold money\./);
-    // Both ways in are links to real addresses, repeated where a reader would look for them.
-    expect(hrefs(/Open the sandbox/)).toEqual(["/overview", "/overview", "/overview"]);
-    expect(hrefs(/^Sign in$/)).toEqual(["/sign-in", "/sign-in", "/sign-in"]);
-    expect(screen.getByRole("link", { name: "Skip to main content" }).getAttribute("href")).toBe("#main");
-    expect(screen.getByRole("link", { name: "See how it works" }).getAttribute("href")).toBe("#how");
-    // What we are not is stated, and the illustration is labelled as one.
-    expect(screen.getByRole("heading", { name: "What Valo Pay does, and where it stops" })).toBeTruthy();
-    expect(screen.getByText("Not a wallet, not a bank, not a payment provider")).toBeTruthy();
-    expect(screen.getByText("Illustration with synthetic figures. These are sample records, not live results.")).toBeTruthy();
-    // Reading about the product asks the API for nothing: no workspace, no sandbox cookie.
+    expect(
+      screen
+        .getByRole("link", { name: "Skip to main content" })
+        .getAttribute("href"),
+    ).toBe("#main");
+    expect(screen.getByText("Live operations are disabled")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Illustrative sample workflows. No live bank connection or financial instruction.",
+      ),
+    ).toBeTruthy();
+    const contact = screen
+      .getAllByRole("link", { name: "Discuss a pilot" })
+      .find((link) => link.getAttribute("href")?.startsWith("mailto:"));
+    expect(contact?.getAttribute("href")).toMatch(
+      /^mailto:obeidpeter1@gmail\.com\?subject=/,
+    );
+    for (const link of document.querySelectorAll<HTMLAnchorElement>(
+      'a[href^="#"]',
+    )) {
+      expect(
+        document.getElementById(link.hash.slice(1)),
+        link.hash,
+      ).toBeTruthy();
+    }
     expect(api.calls).toEqual([]);
   });
 
   it("opens the sandbox only when the visitor chooses to", async () => {
     const user = userEvent.setup();
     renderApp("/");
-    await screen.findByRole("heading", { level: 1 });
-    expect(api.calls.some((call) => call.path === "/v1/workspace")).toBe(false);
-    await user.click(screen.getAllByRole("link", { name: /Open the sandbox/ })[0]!);
-    expect(await screen.findByRole("heading", { name: "Operations overview" })).toBeTruthy();
+    expect(api.calls).toEqual([]);
+    await user.click(
+      screen.getAllByRole("link", { name: /Open the sandbox/ })[0]!,
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Operations overview" }),
+    ).toBeTruthy();
     expect(api.calls.some((call) => call.path === "/v1/workspace")).toBe(true);
     await waitFor(() => expect(document.title).toBe("Overview · Valo Pay"));
   });
