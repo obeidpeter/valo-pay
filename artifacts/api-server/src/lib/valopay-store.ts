@@ -80,6 +80,8 @@ type Session = {
   access: WorkspaceAccess;
   lockedMerchantId?: string; snapshot?: StateSnapshot; summarised?: Set<string>;
   owner?: string; operationId?: string; userId?: string; organizationId?: string;
+  /** This transaction passed the restricted-database self-check (runtime isolation). */
+  isolationVerified?: boolean;
 };
 
 /**
@@ -379,6 +381,8 @@ function sessionFor(context: StoreContext): Session {
   if (!session || !session.active) fail("This workspace transaction is no longer available.", 409);
   return session;
 }
+/** Whether this request's own transaction verified the restricted database: the readiness page reports this, never the configuration alone. */
+export function runtimeIsolationVerified(context: StoreContext): boolean { return sessionFor(context).isolationVerified === true; }
 export function systemWorkspaceMatches(context:StoreContext,workspaceId:string):boolean {return context.actor.startsWith(SYSTEM_ACTOR_PREFIX)&&sessionFor(context).workspace.id===workspaceId;}
 export async function verifyWorkspaceEncryption(context:StoreContext) {
   const session=teamAdmin(context);
@@ -428,12 +432,12 @@ function scopedMerchantQuery(lock: MerchantLock = "none") {
 export async function inWorkspace<T>(req: Request, res: Response, fn: (context: StoreContext) => Promise<T>, access: WorkspaceAccess = "write"): Promise<T> {
   const identity = principalFor(req, res);
   const client = await pool.connect();
-  let context: StoreContext | undefined, committing = false;
+  let context: StoreContext | undefined, committing = false, isolationVerified = false;
   try {
     await client.query(runtimeIsolationEnabled() && access === 'read' ? 'BEGIN ISOLATION LEVEL REPEATABLE READ' : 'BEGIN');
     if (runtimeIsolationEnabled()) {
       const verified = getAuth(req) as unknown as VerifiedClerkSession;
-      await bindRuntimeIdentity(client, { organizationId: verified.orgId || '', userId: verified.userId || '' });
+      isolationVerified = await bindRuntimeIdentity(client, { organizationId: verified.orgId || '', userId: verified.userId || '' });
     }
     // Single source of time: the database clock, read once per transaction.
     let now = (await client.query<{ now: Date }>("SELECT now() AS now")).rows[0]!.now.toISOString();
@@ -484,7 +488,7 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       actor: staff ? `Clerk:${staff.user_id}` : `Sandbox ${workspace.role}`, now, accessMode: staff ? 'staff' : 'sandbox',
     });
     sessions.set(context, { client, workspace, principal: workspace.principal_hash, owner: identity.principal, active: true, access,
-      operationId: requestOperations.get(req)?.id, userId: staff?.user_id, organizationId: auth?.orgId || undefined });
+      operationId: requestOperations.get(req)?.id, userId: staff?.user_id, organizationId: auth?.orgId || undefined, isolationVerified });
     const result = await fn(context);
     committing = true;
     const committed = await client.query("COMMIT");
