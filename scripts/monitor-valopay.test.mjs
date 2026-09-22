@@ -47,11 +47,12 @@ try {
   assert.deepEqual((await probeService({ origin: 'https://example.com', expectScheduler: true, now, fetchImpl: fake({ state: 'running', intervalMs: 1000, lastSuccessAt: new Date(now - 4000).toISOString() }) })).codes, ['scheduler_stale']);
   await assert.rejects(() => sendWebhook(`${origin}/alerts`, {}), /HTTPS/);
   let email;
-  await sendEmail(received[0], { apiKey: 'synthetic-secret', from: 'alerts@example.com', fetchImpl: async (url, request) => {
+  await assert.rejects(() => sendEmail(received[0], { apiKey: 'synthetic-secret', from: 'alerts@example.com' }), /recipient/);
+  await sendEmail(received[0], { apiKey: 'synthetic-secret', from: 'alerts@example.com', to: 'operations@example.test', fetchImpl: async (url, request) => {
     assert.equal(url, 'https://api.resend.com/emails'); email = JSON.parse(request.body); return new Response('{}');
   } });
-  assert.deepEqual(email.to, ['obeidpeter1@gmail.com']);
+  assert.deepEqual(email.to, ['operations@example.test']);
   assert.ok(!JSON.stringify(email).includes('synthetic-secret'));
-  await assert.rejects(() => sendEmail(received[0], { apiKey: 'synthetic-secret', from: 'alerts@example.com', fetchImpl: async () => { throw new Error('provider secret'); } }), error => !error.message.includes('provider secret'));
+  await assert.rejects(() => sendEmail(received[0], { apiKey: 'synthetic-secret', from: 'alerts@example.com', to: 'operations@example.test', fetchImpl: async () => { throw new Error('provider secret'); } }), error => !error.message.includes('provider secret'));
   console.log('Operational monitor passed: real local HTTP probe/delivery, incident threshold, no repeat, recovery, failed-delivery retry, scheduler expectation, redacted failures.');
 } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }

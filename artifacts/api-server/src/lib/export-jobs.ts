@@ -58,7 +58,7 @@ export function exportJobView(record: ValopayRecord, now = new Date().toISOStrin
 }
 /** Queueing writes metadata only; no rendering, object-storage calls or credentials belong in this transaction. */
 export function queueExport(state: DomainState, ctx: Context, input: ExportInput, privateDirectory: string): ExportJobView {
-  if(ctx.role==='Read-only')fail('Your read-only role may download existing exports. Ask a colleague to generate new evidence.',403);
+  if (ctx.role === 'Read-only') fail('Your read-only role may download existing exports. Ask a colleague to generate new evidence.', 403);
   const review = input.kind === 'reviewed-close' ? reviewedCloseEvidence(state, input.closeReviewId || '', true) : undefined;
   if (!privateDirectory || !/^\/?[^/]+\/.+/.test(privateDirectory)) fail('Private export storage is not configured. Contact the workspace administrator.', 503);
   if (input.customerId && !state.records.some(record => record.kind === 'customers' && record.id === input.customerId)) fail('Customer not found in this lender.', 404);
@@ -73,7 +73,7 @@ export function exportIsClaimable(record: ValopayRecord, now: string): boolean {
   return record.status === 'queued' || (record.status === 'running' && (!record.data.leaseExpiresAt || Date.parse(record.data.leaseExpiresAt) <= Date.parse(now)));
 }
 export function retryExport(state: DomainState, ctx: Context, id: string): ExportJobView {
-  if(ctx.role==='Read-only')fail('Your read-only role may download existing exports. Ask a colleague to retry evidence generation.',403);
+  if (ctx.role === 'Read-only') fail('Your read-only role may download existing exports. Ask a colleague to retry evidence generation.', 403);
   const record = findExportJob(state, id);
   if(record.data.fileDeletedAt)fail('This export file expired under the retention policy. Start a new export if current evidence is needed.',410);
   if (record.status === 'ready' || record.status === 'queued') return exportJobView(record, ctx.now);

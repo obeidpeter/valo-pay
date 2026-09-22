@@ -80,7 +80,7 @@ describe("settings", () => {
     renderApp("/settings");
     await screen.findByText("07:00 WAT");
     const edit = screen.getByRole("button", { name: "Edit" });
-    expect(edit.hasAttribute("disabled")).toBe(true);
+    expect(edit.getAttribute("aria-disabled")).toBe("true");
     expect(document.getElementById(edit.getAttribute("aria-describedby")!)?.textContent).toBe("Requires Admin.");
     await user.click(edit);
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();

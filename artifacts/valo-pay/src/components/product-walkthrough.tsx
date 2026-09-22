@@ -63,8 +63,9 @@ const screens = [
     boundary: "No live bank feeds, accounting posting, tax filing or payouts.",
   },
 ];
-export const PILOT_EMAIL = "obeidpeter1@gmail.com";
-export const PILOT_CONTACT = `mailto:${PILOT_EMAIL}?subject=${encodeURIComponent("Valo Pay pilot enquiry")}&body=${encodeURIComponent("Hello, I would like to discuss a Valo Pay pilot.\n\nOrganisation and my role:\nWorkflow of interest (Collections / Pay-by-bank / Credit Desk / Cash Desk):\nThe problem we want to solve:\nCurrent payment provider, banks and business software (names only):\nApproximate monthly workflow volume:\nDesired pilot timing:\n\nPlease do not include customer records, bank details or credentials.")}`;
+/** The pilot enquiry address comes from the host's configuration; without one the page names no address. */
+export const pilotEmail = (): string => String(import.meta.env.VITE_PILOT_EMAIL || "").trim();
+export const pilotContact = (): string => `mailto:${pilotEmail()}?subject=${encodeURIComponent("Valo Pay pilot enquiry")}&body=${encodeURIComponent("Hello, I would like to discuss a Valo Pay pilot.\n\nOrganisation and my role:\nWorkflow of interest (Collections / Pay-by-bank / Credit Desk / Cash Desk):\nThe problem we want to solve:\nCurrent payment provider, banks and business software (names only):\nApproximate monthly workflow volume:\nDesired pilot timing:\n\nPlease do not include customer records, bank details or credentials.")}`;
 
 /** Uses the actual console, loaded only after an explicit choice; no decorative mock data or autoplay. */
 export function ProductWalkthrough() {
@@ -238,14 +239,20 @@ export function PilotEnquiry() {
               <Mail aria-hidden="true" />
             </span>
             <h3>Let’s talk about your workflow</h3>
-            <Button asChild size="lg">
-              <a href={PILOT_CONTACT}>
-                Discuss a pilot{" "}
-                <ArrowRight aria-hidden="true" className="ml-2 h-4 w-4" />
-              </a>
-            </Button>
-            <a href={`mailto:${PILOT_EMAIL}`}>{PILOT_EMAIL}</a>
-            <span>Opens your email app · You choose when to send</span>
+            {pilotEmail() ? (
+              <>
+                <Button asChild size="lg">
+                  <a href={pilotContact()}>
+                    Discuss a pilot{" "}
+                    <ArrowRight aria-hidden="true" className="ml-2 h-4 w-4" />
+                  </a>
+                </Button>
+                <a href={`mailto:${pilotEmail()}`}>{pilotEmail()}</a>
+                <span>Opens your email app · You choose when to send</span>
+              </>
+            ) : (
+              <span>Pilot enquiries go through your Valo Pay contact; this host has no enquiry address configured.</span>
+            )}
           </div>
         </div>
       </div>

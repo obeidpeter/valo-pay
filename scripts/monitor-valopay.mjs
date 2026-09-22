@@ -79,9 +79,9 @@ export async function sendWebhook(urlText, event, { fetchImpl = fetch, allowLoca
   finally { clearTimeout(timer); }
 }
 
-export async function sendEmail(event, { apiKey, from, to = 'obeidpeter1@gmail.com', fetchImpl = fetch, timeoutMs = 8000 }) {
+export async function sendEmail(event, { apiKey, from, to, fetchImpl = fetch, timeoutMs = 8000 }) {
   const address = /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/;
-  if (!apiKey || !address.test(from || '') || !address.test(to)) throw new Error('Email delivery needs a configured provider and verified sender.');
+  if (!apiKey || !address.test(from || '') || !address.test(to || '')) throw new Error('Email delivery needs a configured provider, verified sender and recipient.');
   const abort = new AbortController(); const timer = setTimeout(() => abort.abort(), timeoutMs);
   try {
     const response = await fetchImpl('https://api.resend.com/emails', { method: 'POST', redirect: 'error', signal: abort.signal,
@@ -106,12 +106,13 @@ async function main() {
   const statePath = process.env.VALOPAY_MONITOR_STATE_FILE;
   const emailKey = process.env.VALOPAY_ALERT_RESEND_KEY;
   const sender = process.env.VALOPAY_ALERT_FROM;
-  if ((!receiver && !(emailKey && sender)) || !owner || !statePath) throw new Error('Configure a receiver or email provider, alert owner and monitor state file.');
+  const recipient = process.env.VALOPAY_ALERT_TO;
+  if ((!receiver && !(emailKey && sender && recipient)) || !owner || !statePath) throw new Error('Configure a receiver or email provider with sender and recipient, alert owner and monitor state file.');
   const target = resolve(statePath);
   let previous;
   try { previous = JSON.parse(await readFile(target, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('The monitor state could not be read; refusing to reset incident history.'); }
-  const result = await deliverTransition(probe, previous, event => receiver ? sendWebhook(receiver, event) : sendEmail(event, { apiKey: emailKey, from: sender }), { owner });
+  const result = await deliverTransition(probe, previous, event => receiver ? sendWebhook(receiver, event) : sendEmail(event, { apiKey: emailKey, from: sender, to: recipient }), { owner });
   await mkdir(dirname(target), { recursive: true });
   const temporary = `${target}.next`;
   await writeFile(temporary, JSON.stringify(result.state), { mode: 0o600 });
