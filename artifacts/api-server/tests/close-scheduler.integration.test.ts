@@ -1,8 +1,13 @@
 // Database-backed test for the scheduled daily close runner (REC-01): it closes
 // only due lenders, each in its own system transaction through the scoped
 // repository; skips a lender locked by a request in flight; isolates one
-// lender's failure from the others; gives legacy lenders a cursor without a
-// close; and its audit entries never keep an abandoned sandbox alive.
+// lender's failure from the others and backs off before retrying it; drains
+// batches until nothing is due, sharing each batch across workspaces; pauses
+// an idle anonymous sandbox instead of closing it; stops between lenders when
+// told to; gives legacy lenders a cursor without a close; and its audit
+// entries never keep an abandoned sandbox alive. Every pass is scoped to this
+// test's own lenders, so other due lenders in a reused database never crowd
+// them out.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 
@@ -13,7 +18,7 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
 
 const { pool } = await import("@workspace/db");
 const { nextCloseInstant } = await import("@workspace/valopay-schema");
-const { SYSTEM_ACTOR_PREFIX, inWorkspace, listMerchants, loadState } = await import("../src/lib/valopay-store.js");
+const { SYSTEM_ACTOR_PREFIX, appendAudit, dueScheduledCloses, inWorkspace, listMerchants, loadState, saveState } = await import("../src/lib/valopay-store.js");
 const { SCHEDULED_CLOSE_ACTOR, runDueCloses, startCloseScheduler, schedulerStatus } = await import("../src/lib/close-scheduler.js");
 
 const requestFor = (token: string) => ({ headers: { cookie: `valopay_sandbox=${token}` }, secure: false, auth: Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true }) }) as any;
@@ -23,6 +28,24 @@ const setCursor = (merchantId: string, at: string) => pool.query("UPDATE valopay
 const cursorOf = async (merchantId: string): Promise<string | null> => (await pool.query<{ cursor: string | null }>("SELECT settings->>'nextCloseAt' AS cursor FROM valopay_merchants WHERE id=$1", [merchantId])).rows[0]!.cursor;
 const closesOf = async (merchantId: string) => (await pool.query<{ id: string; data: Record<string, any> }>("SELECT id,data FROM valopay_records WHERE merchant_id=$1 AND kind='closes' ORDER BY created_at", [merchantId])).rows;
 const closedIds = (run: Awaited<ReturnType<typeof runDueCloses>>) => run.closed.map((item) => item.merchantId);
+const settingsOf = async (merchantId: string): Promise<Record<string, any>> => (await pool.query<{ settings: Record<string, any> }>("SELECT settings FROM valopay_merchants WHERE id=$1", [merchantId])).rows[0]!.settings;
+const databaseNow = async () => Date.parse((await pool.query<{ now: Date }>("SELECT now() AS now")).rows[0]!.now.toISOString());
+const hoursAgo = (now: number, hours: number) => new Date(now - hours * 60 * 60 * 1000).toISOString();
+/** A new sandbox's two lenders, sorted by id.  Each comes from its own address, so the per-address creation limit is left for the expiry check below. */
+let addresses = 0;
+const sandboxLenders = async (sandboxToken = token()): Promise<[string, string]> => {
+  let ids: string[] = [];
+  await inWorkspace(Object.assign(requestFor(sandboxToken), { ip: `10.14.0.${(addresses += 1)}` }), response(), async (context) => { ids = (await listMerchants(context)).map((merchant) => merchant.id).sort(); });
+  return ids as [string, string];
+};
+/** Makes the lender's first instalment unsaveable, so its close fails until the stored value is put back. */
+const breakLender = async (merchantId: string) => {
+  const due = (await pool.query<{ id: string; data: Record<string, any> }>("SELECT id,data FROM valopay_records WHERE merchant_id=$1 AND kind='due-items' ORDER BY created_at LIMIT 1", [merchantId])).rows[0]!;
+  await pool.query(`UPDATE valopay_records SET data = data || '{"outstandingKobo": 9007199254740000}' WHERE id=$1`, [due.id]);
+  return due;
+};
+/** Moves a recorded retry's next attempt into the past, as if its wait had passed. */
+const retryNow = async (merchantId: string) => pool.query("UPDATE valopay_merchants SET settings = jsonb_set(settings, '{closeRetry,retryAt}', to_jsonb($2::text)) WHERE id=$1", [merchantId, new Date((await databaseNow()) - 1000).toISOString()]);
 
 try {
   const sandbox = token();
@@ -37,13 +60,15 @@ try {
   assert.equal(new Date(seeded).getUTCHours(), 6, "07:00 WAT is 06:00 UTC");
   assert.equal(new Date(seeded).getUTCMinutes(), 0);
   assert.ok(Date.parse(seeded) - Date.parse(dbNow) <= 24 * 60 * 60 * 1000, "within a day");
-  const idle = await runDueCloses({ batchSize: 100 });
+  const only = merchants;
+  const idle = await runDueCloses({ batchSize: 100, onlyMerchantIds: only });
   assert.equal(closedIds(idle).some((id) => merchants.includes(id)), false, "nothing is due yet");
+  assert.equal(idle.examined, 0); assert.deepEqual(idle.paused, [], "a new sandbox is never paused");
 
   // Lender A became due an hour ago (the platform was down): it is closed late; B is left alone.
   const dueAt = new Date(Date.parse(dbNow) - 60 * 60 * 1000).toISOString();
   await setCursor(a, dueAt);
-  const run = await runDueCloses({ batchSize: 100 });
+  const run = await runDueCloses({ batchSize: 100, onlyMerchantIds: only });
   const closedA = run.closed.find((item) => item.merchantId === a);
   assert.ok(closedA, "the due lender is closed");
   assert.equal(closedIds(run).includes(b), false, "the lender whose time has not come is not");
@@ -64,7 +89,7 @@ try {
     assert.equal(state.settings.nextCloseAt, nextCloseInstant(String(closes[0]!.data.closedAt), "07:00"), "the cursor moved to the next 07:00 WAT after the close");
     assert.ok(String(state.settings.nextCloseAt) > dbNow);
   });
-  const again = await runDueCloses({ batchSize: 100 });
+  const again = await runDueCloses({ batchSize: 100, onlyMerchantIds: only });
   assert.equal(closedIds(again).includes(a), false, "a second pass finds nothing due for the closed lender");
 
   // A lender locked by a request in flight is skipped, never queued behind.
@@ -73,7 +98,7 @@ try {
   try {
     await holder.query("BEGIN");
     await holder.query("SELECT 1 FROM valopay_merchants WHERE id=$1 FOR UPDATE", [b]);
-    const skipped = await runDueCloses({ batchSize: 100 });
+    const skipped = await runDueCloses({ batchSize: 100, onlyMerchantIds: only });
     assert.ok(skipped.skipped.includes(b), "the locked lender is skipped");
     assert.equal(closedIds(skipped).includes(b), false);
     await holder.query("ROLLBACK");
@@ -84,30 +109,41 @@ try {
 
   // The automatic close switched off: the lender is not even examined.
   await pool.query(`UPDATE valopay_merchants SET settings = settings || '{"scheduledCloseEnabled": false}' WHERE id=$1`, [b]);
-  const off = await runDueCloses({ batchSize: 100 });
+  const off = await runDueCloses({ batchSize: 100, onlyMerchantIds: only });
   assert.equal(closedIds(off).includes(b), false);
   assert.equal(off.skipped.includes(b), false);
   await pool.query(`UPDATE valopay_merchants SET settings = settings || '{"scheduledCloseEnabled": true}' WHERE id=$1`, [b]);
 
   // One lender's failure does not stop the others: B's state is made unsaveable, both are due.
   await setCursor(a, dueAt);
-  const brokenDue = (await pool.query<{ id: string; data: Record<string, any> }>("SELECT id,data FROM valopay_records WHERE merchant_id=$1 AND kind='due-items' ORDER BY created_at LIMIT 1", [b])).rows[0]!;
-  await pool.query(`UPDATE valopay_records SET data = data || '{"outstandingKobo": 9007199254740000}' WHERE id=$1`, [brokenDue.id]);
-  const mixed = await runDueCloses({ batchSize: 100 });
+  const brokenDue = await breakLender(b);
+  const mixed = await runDueCloses({ batchSize: 100, onlyMerchantIds: only });
   assert.ok(closedIds(mixed).includes(a), "the healthy lender is closed");
   const failure = mixed.failed.find((item) => item.merchantId === b);
   assert.ok(failure, "the broken lender is reported");
   assert.match(failure.error, /Outstanding balance is invalid/);
   assert.equal((await closesOf(b)).length, 0, "nothing of the failed close was committed");
+  // The failure is recorded on the lender for this close time, with a two-minute wait before the next attempt.
+  assert.equal(failure.failures, 1);
+  const failedAt = await databaseNow();
+  assert.ok(Math.abs(Date.parse(failure.retryAt!) - (failedAt + 2 * 60 * 1000)) <= 5000, "the next attempt is two minutes after the failure");
+  const recorded = (await settingsOf(b)).closeRetry;
+  assert.equal(recorded.cursor, dueAt); assert.equal(recorded.failures, 1); assert.equal(recorded.retryAt, failure.retryAt);
+  assert.equal(JSON.stringify(recorded).includes("Outstanding"), false, "the error text stays in the log, not in the lender's settings");
+  assert.equal(await cursorOf(b), dueAt, "the close stays pending at its time");
+  const waiting = await runDueCloses({ batchSize: 100, onlyMerchantIds: only });
+  assert.equal([...closedIds(waiting), ...waiting.failed.map((item) => item.merchantId), ...waiting.skipped].includes(b), false, "a pass inside the wait does not try the lender again");
   await pool.query("UPDATE valopay_records SET data = $2 WHERE id=$1", [brokenDue.id, brokenDue.data]);
-  const repaired = await runDueCloses({ batchSize: 100 });
-  assert.ok(closedIds(repaired).includes(b), "once repaired the lender closes at the next pass");
+  await retryNow(b);
+  const repaired = await runDueCloses({ batchSize: 100, onlyMerchantIds: only });
+  assert.ok(closedIds(repaired).includes(b), "once repaired the lender closes when its wait is over");
   assert.equal((await closesOf(b)).length, 1);
+  assert.equal((await settingsOf(b)).closeRetry, undefined, "the close clears the retry");
 
   // A lender from before the scheduler carries no cursor: it gets the next configured time, without a close.
   await pool.query("UPDATE valopay_merchants SET settings = settings - 'nextCloseAt' WHERE id=$1", [b]);
   assert.equal(await cursorOf(b), null);
-  const initialised = await runDueCloses({ batchSize: 100 });
+  const initialised = await runDueCloses({ batchSize: 100, onlyMerchantIds: only });
   assert.ok(initialised.initialised >= 1);
   const cursorB = (await cursorOf(b))!;
   assert.ok(cursorB > dbNow, "the new cursor is the next 07:00 WAT");
@@ -116,7 +152,7 @@ try {
   assert.equal((await closesOf(b)).length, 1);
 
   // The tick loop: two ticks at once share one pass.
-  const scheduler = startCloseScheduler({ intervalMs: 60_000, firstDelayMs: 60_000, batchSize: 100 });
+  const scheduler = startCloseScheduler({ intervalMs: 60_000, firstDelayMs: 60_000, batchSize: 100, onlyMerchantIds: only });
   try {
     assert.equal(schedulerStatus().state, "running");
     assert.equal(schedulerStatus().lastSuccessAt, null, "starting the timer is not a successful service check");
@@ -149,6 +185,98 @@ try {
     scheduler.stop();
   }
   assert.equal(schedulerStatus().state, "stopped", "stop cannot retain a running status");
+
+  // Failing lenders never hold back a healthy one: the pass reads batch after batch until nothing is due,
+  // and each failure waits longer before its next attempt: 2, 4, 8, 16 minutes.
+  const [p1, p2] = await sandboxLenders(), [q1, q2] = await sandboxLenders();
+  const broken = [p1, p2, q1], drainOnly = [p1, p2, q1, q2];
+  let clock = await databaseNow();
+  for (const id of broken) { await setCursor(id, hoursAgo(clock, 3)); await breakLender(id); }
+  await setCursor(q2, hoursAgo(clock, 1));
+  const drained = await runDueCloses({ batchSize: 2, onlyMerchantIds: drainOnly });
+  assert.deepEqual(closedIds(drained), [q2], "the healthy lender is closed in the same pass");
+  assert.ok(drained.batches >= 2, "the pass read more than one batch");
+  assert.deepEqual(drained.failed.map((item) => item.merchantId).sort(), [...broken].sort());
+  assert.ok(drained.failed.every((item) => item.failures === 1));
+  assert.equal((await runDueCloses({ batchSize: 2, onlyMerchantIds: drainOnly })).examined, 0, "failed lenders wait for their retry time");
+  for (const expected of [2, 3, 4]) {
+    for (const id of broken) await retryNow(id);
+    const retried = await runDueCloses({ batchSize: 2, onlyMerchantIds: broken });
+    assert.equal(retried.failed.length, 3);
+    for (const id of broken) {
+      const retry = (await settingsOf(id)).closeRetry;
+      assert.equal(retry.failures, expected);
+      assert.equal((Date.parse(retry.retryAt) - Date.parse(retry.lastFailedAt)) / 60_000, 2 ** expected, `failure ${expected} waits ${2 ** expected} minutes`);
+    }
+  }
+  for (const id of broken) await pool.query(`UPDATE valopay_merchants SET settings = settings || '{"scheduledCloseEnabled": false}' WHERE id=$1`, [id]);
+
+  // Batches are shared across workspaces: one lender per workspace per turn, then the earliest time,
+  // and a staff or signed-in lender before any anonymous sandbox.
+  const [x1, x2] = await sandboxLenders(), [y1] = await sandboxLenders(), [s1] = await sandboxLenders();
+  clock = await databaseNow();
+  await setCursor(x1, hoursAgo(clock, 5)); await setCursor(x2, hoursAgo(clock, 5)); await setCursor(y1, hoursAgo(clock, 1));
+  const shared = await dueScheduledCloses(2, { only: [x1, x2, y1] });
+  assert.equal(shared.length, 2);
+  assert.ok(shared.includes(y1), "the other workspace's lender is in the batch");
+  assert.equal(shared.filter((id) => id === x1 || id === x2).length, 1, "one lender from the workspace with two earlier ones");
+  assert.deepEqual((await dueScheduledCloses(2, { only: [x1, x2, y1], exclude: [y1] })).sort(), [x1, x2].sort(), "an excluded lender is left out");
+  await pool.query(`UPDATE valopay_merchants SET settings = settings || '{"anonymousWorkspace": false}' WHERE id=$1`, [s1]);
+  await setCursor(s1, new Date(clock - 30 * 60 * 1000).toISOString());
+  assert.deepEqual(await dueScheduledCloses(1, { only: [x1, x2, y1, s1] }), [s1], "a signed-in lender comes first");
+  const fair = await runDueCloses({ batchSize: 1, onlyMerchantIds: [x1, x2, y1, s1] });
+  assert.deepEqual(closedIds(fair).sort(), [x1, x2, y1, s1].sort(), "a pass drains every due lender");
+  assert.equal(closedIds(fair)[0], s1); assert.equal(fair.batches, 5, "four full batches of one and a last empty one");
+
+  // An anonymous sandbox nobody has changed for a week is paused, not closed; one a person changed is closed.
+  const [z1, z2] = await sandboxLenders(), wToken = token(), [w1, w2] = await sandboxLenders(wToken);
+  const workspaceOf = async (merchantId: string) => (await pool.query<{ workspace_id: string }>("SELECT workspace_id FROM valopay_merchants WHERE id=$1", [merchantId])).rows[0]!.workspace_id;
+  for (const id of [z1, w1]) await pool.query("UPDATE valopay_workspaces SET created_at = now() - interval '10 days' WHERE id=$1", [await workspaceOf(id)]);
+  await inWorkspace(requestFor(wToken), response(), async (context) => {
+    const state = await loadState(context, w2, "update");
+    appendAudit(state, context, "test.change", "workspace", "A change by a person");
+    await saveState(context, state);
+  });
+  clock = await databaseNow();
+  for (const id of [z1, z2, w1, w2]) await setCursor(id, hoursAgo(clock, 1));
+  const idleRun = await runDueCloses({ onlyMerchantIds: [z1, z2, w1, w2] });
+  assert.deepEqual([...idleRun.paused].sort(), [z1, z2].sort(), "both lenders of the idle sandbox are paused");
+  assert.deepEqual(closedIds(idleRun).sort(), [w1, w2].sort(), "the sandbox a person changed is closed");
+  for (const id of [z1, z2]) {
+    assert.equal((await closesOf(id)).length, 0, "an idle sandbox is not closed");
+    const settings = await settingsOf(id);
+    assert.equal(settings.scheduledCloseEnabled, false);
+    assert.ok(Date.parse(settings.closePausedForInactivityAt) >= clock, "the pause is recorded");
+    const audit = (await pool.query<{ name: string; data: Record<string, any> }>("SELECT name,data FROM valopay_records WHERE merchant_id=$1 AND kind='audit' ORDER BY (data->>'sequence')::int DESC LIMIT 1", [id])).rows[0]!;
+    assert.equal(audit.name, "daily_close.paused"); assert.equal(audit.data.actor, SCHEDULED_CLOSE_ACTOR);
+  }
+  assert.equal((await runDueCloses({ onlyMerchantIds: [z1, z2] })).examined, 0, "a paused close is not due");
+
+  // A stop ends the pass between lenders; the rest stay due for the next start.
+  const [t1, t2] = await sandboxLenders();
+  clock = await databaseNow();
+  const stopAt = hoursAgo(clock, 1);
+  await setCursor(t1, stopAt); await setCursor(t2, stopAt);
+  assert.equal((await runDueCloses({ onlyMerchantIds: [t1, t2], budgetMs: 0 })).examined, 0, "a pass whose budget is spent starts no close");
+  const aborted = new AbortController();
+  aborted.abort();
+  const none = await runDueCloses({ onlyMerchantIds: [t1, t2], signal: aborted.signal });
+  assert.equal(none.closed.length, 0, "a pass told to stop before it starts closes nothing");
+  assert.equal(await cursorOf(t1), stopAt); assert.equal(await cursorOf(t2), stopAt);
+  const halfway = new AbortController();
+  const stopAfterFirst = { child: () => ({ info: (_fields: unknown, message: string) => { if (message === "scheduled daily close completed") halfway.abort(); }, error() {}, debug() {} }) } as any;
+  const partial = await runDueCloses({ onlyMerchantIds: [t1, t2], signal: halfway.signal, log: stopAfterFirst });
+  assert.equal(partial.closed.length, 1, "the lender in progress finishes and the next is not started");
+  const [finished, left] = partial.closed[0]!.merchantId === t1 ? [t1, t2] : [t2, t1];
+  assert.notEqual(await cursorOf(finished), stopAt);
+  assert.equal(await cursorOf(left), stopAt, "the other lender is still due");
+  const stopping = startCloseScheduler({ intervalMs: 60_000, firstDelayMs: 60_000, onlyMerchantIds: [left] });
+  const pass = stopping.tick();
+  stopping.stop();
+  await stopping.settle();
+  assert.equal((await pass)!.closed.length, 0, "stop ends a pass that has not reached a lender");
+  assert.equal(await cursorOf(left), stopAt);
+  assert.deepEqual(closedIds(await runDueCloses({ onlyMerchantIds: [left] })), [left], "the next pass closes it");
 
   // Expiry: scheduled-close audit entries never keep an abandoned sandbox alive.
   const workspace = (await pool.query<{ workspace_id: string }>("SELECT workspace_id FROM valopay_merchants WHERE id=$1", [a])).rows[0]!.workspace_id;

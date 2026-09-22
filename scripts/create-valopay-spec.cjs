@@ -43,6 +43,9 @@ const schemas = {
 };
 // Additive metadata remains optional for clients reading an older service response.
 for (const field of ["lastSuccessAt", "lastErrorAt"]) schemas.SchedulerStatus.properties[field] = { type: ["string", "null"] };
+// Optional too: a settings answer stored as an idempotency receipt by an earlier build is parsed again on replay.
+Object.assign(schemas.EffectiveCloseSchedule.properties, { failedAttempts: num, retryAt: { type: ["string", "null"] }, pausedForInactivityAt: { type: ["string", "null"] } });
+Object.assign(schemas.SchedulerRun.properties, { paused: num, batches: num });
 for (const name of ["Overview", "Settings"]) schemas[name].properties.closeSchedule = ref("EffectiveCloseSchedule");
 const paths = {};
 schemas.Settings.properties.revision = str;
@@ -111,7 +114,7 @@ describe("/v1/openapi.json","get","This specification","The versioned public con
 describe("/v1/webhooks/{provider}","post","Generic provider webhook address, always refused","Always 403: no event is processed here. Paystack test events go to POST /v1/providers/paystack/{connectionId}/events.");
 const schemaDescriptions = {
   HealthStatus: "The liveness answer: the build, when the process started, its uptime and what the close scheduler is doing.",
-  SchedulerRun: "The last scheduler pass that found work: its id, when it ran, how long it took and what it did.",
+  SchedulerRun: "The last scheduler pass that found work: its id, when it ran, how long it took, how many batches it read and what it did, including idle sandboxes whose automatic close it paused.",
   SchedulerStatus: "Whether closes are scheduled in this process, how often it looks, when it last looked and its last pass with work.",
   DatabaseCheck: "One round trip to the database and how long it took.",
   ReadinessStatus: "The readiness answer: ok, or degraded while the database does not answer.",
@@ -138,7 +141,7 @@ const schemaDescriptions = {
   SettingsInput: "The execution settings to change; every field is optional.",
   ExportInput: "What to export (a record kind, gate-pack, billing, dispute-pack or customer-pack with a customerId) and in which format.",
   ExportResult: "Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.",
-  EffectiveCloseSchedule: "Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.",
+  EffectiveCloseSchedule: "Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender. failedAttempts and retryAt describe failed automatic attempts at the pending time (retryAt only while automatic closes are available); pausedForInactivityAt says when the scheduler switched off the automatic close of a sandbox nobody changed. Answers from earlier builds may lack these three fields.",
 };
 for (const [name, description] of Object.entries(schemaDescriptions)) schemas[name].description = description;
 // Priority queues keep complete counts while returning only a bounded page and its linked records.
@@ -461,7 +464,7 @@ described("CaseDetail", obj({ record: ref("ValopayRecord"), assignees: arr("Assi
 derived("CaseInput", shared.caseInputSchema, "A case handover or update: assignee, next action and its time, note and evidence, with the version being changed.");
 derived("PilotLenderInput", shared.lenderInputSchema, "A new synthetic lender for a staff workspace: name and segment.");
 operation("/v1/pilot/journey", "get", "getPilotJourney", "PilotJourney", null, [merchant], "Read the pilot journey counts", "Counts of the records each pilot step needs, for the journey page. No record is created by reading.");
-operation("/v1/pilot/lenders", "post", "createPilotLender", "Merchant", "PilotLenderInput", [keyHeader], "Create a synthetic lender", "Administrator with recent MFA on a staff host. The key makes creation repeatable; the same key with different details is refused.");
+operation("/v1/pilot/lenders", "post", "createPilotLender", "Merchant", "PilotLenderInput", [keyHeader], "Create a synthetic lender", "An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused.");
 operation("/v1/pilot/batches", "get", "listImportBatches", "ImportBatchList", null, [merchant, journalOffset], "List import batches", "Newest first, 25 a page, without source rows.");
 operation("/v1/pilot/batches/{id}", "get", "getImportBatch", "ImportBatchDetail", null, [pathParam("id"), merchant], "Open an import batch", "The batch with its source rows and revisions. Import operator roles only (403); unknown batches are 404.");
 operation("/v1/pilot/batches", "post", "saveImportBatch", "ValopayRecord", "ImportBatchInput", [merchant, keyHeader], "Save a source batch", "Parses and checks the rows, screens them for raw bank details, and records the batch as ready or needing correction. A batch with the same source identity is refused (409).");

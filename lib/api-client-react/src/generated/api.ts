@@ -2919,7 +2919,7 @@ export const getCreatePilotLenderUrl = () => {
 }
 
 /**
- * Administrator with recent MFA on a staff host. The key makes creation repeatable; the same key with different details is refused.
+ * An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused.
  * @summary Create a synthetic lender
  */
 export const createPilotLender = async (pilotLenderInput: PilotLenderInput, options?: Parameters<typeof customFetch>[1]): Promise<Merchant> => {

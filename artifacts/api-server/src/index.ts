@@ -43,10 +43,11 @@ const server = app.listen(port, (err) => {
 
 /**
  * A stop signal drains rather than drops: no new connections, the requests in
- * flight finish, a close pass in progress completes, then the pool ends. A
- * pass that will not finish in time is abandoned by the deadline; its
- * transaction rolls back with the connection and the close runs again as a
- * catch-up after restart (NFR-AVA-02).
+ * flight finish, a scheduled close pass ends after the lender close in
+ * progress, then the pool ends. The lenders the pass had not reached are
+ * still due and close as a catch-up after restart (NFR-AVA-02). A close that
+ * will not finish in time is abandoned by the deadline; its transaction rolls
+ * back with the connection and it runs again after restart the same way.
  */
 let stopping = false;
 async function shutdown(signal: string): Promise<void> {

@@ -11,6 +11,7 @@ import type { Request, Response } from "express";
 import { closeTimeOf, nextCloseInstant } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { recordsOf } from "../domain/records";
+import { nextCloseRetry, type CloseRetry } from "../domain/close";
 import { seedMerchant } from "./valopay-seed";
 import { createCreationLimiter } from "./creation-limit";
 import { foldForSearch, LIST_PAGE_CEILING, type ListQuery } from "./valopay-list";
@@ -116,6 +117,8 @@ export function fail(message: string, status = 400): never {
 const conflict = (message = "Operation conflicts with the current lender state."): never => fail(message, 409);
 /** Anonymous sandboxes expire after this many days without a change; the cookie carries the same lifetime. */
 export const ANONYMOUS_WORKSPACE_DAYS = 30;
+/** Lenders a sandbox workspace can hold, the two samples included, so one visitor cannot fill the scheduler's queue. */
+export const SANDBOX_LENDER_LIMIT = 5;
 /** How many expired sandboxes one bootstrap removes, so a request never pays for a large backlog. */
 const SWEEP_BATCH = 5;
 /** Automatic deletion is opt-in so importing the application cannot remove existing workspaces. */
@@ -375,6 +378,11 @@ export async function createPilotLender(ctx: StoreContext, input: { name: string
   const id = digest(`onboarding:${session.workspace.id}:${session.owner}:${key}`), fingerprint = digest(canonical(input));
   const found = (await session.client.query<MerchantRow>('SELECT id,info,settings FROM valopay_merchants WHERE workspace_id=$1 AND id=$2', [session.workspace.id, id])).rows[0];
   if (found) { if (found.settings.onboardingFingerprint !== fingerprint) fail('This setup request was already used for different details.', 409); return found.info; }
+  // 'team' access holds the workspace lock exclusively (lockWorkspace), so two creations at once are counted one after the other.
+  if (ctx.accessMode !== 'staff') {
+    const held = (await session.client.query<{ count: number }>('SELECT count(*)::int AS count FROM valopay_merchants WHERE workspace_id=$1', [session.workspace.id])).rows[0]!.count;
+    if (held >= SANDBOX_LENDER_LIMIT) fail(`This sandbox already holds ${SANDBOX_LENDER_LIMIT} lenders, the most a sandbox can have. Continue with an existing lender; a staff workspace can hold more.`, 409);
+  }
   const state = seedMerchant(id, true);
   state.records = [];
   Object.assign(state.merchant, { name: input.name, shortName: input.name, segment: input.segment, provider: 'Paystack', mode: 'observation', status: 'onboarding', monthlyVolume: 0, killSwitch: true, preDataReady: false, preLiveReady: false });
@@ -1418,20 +1426,76 @@ export async function inMerchantAsSystem<T>(merchantId: string, actor: string, f
 }
 
 /**
- * Merchants whose scheduled close is due by their stored cursor, oldest first.
- * A plain read with the system limits (runtimeServiceRead binds the service
- * identity only under runtime isolation): the caller re-checks under the
- * merchant lock before closing.
+ * The next lenders whose scheduled close is due, in a fair order: staff and
+ * signed-in lenders before anonymous sandboxes; lenders waiting to retry a
+ * failed attempt after the rest; one lender per workspace per turn, so one
+ * workspace's many lenders never hold another's back; then the earliest
+ * time.  A lender waiting for its retry time is not due.  `exclude` leaves
+ * out lenders a pass has already dealt with; `only` limits the read to the
+ * lenders named (tests and operator tooling).  A plain read with the system
+ * limits (runtimeServiceRead binds the service identity only under runtime
+ * isolation): the caller re-checks under the merchant lock before closing.
  */
-export async function dueScheduledCloses(limit: number): Promise<string[]> {
+export async function dueScheduledCloses(limit: number, options: { exclude?: readonly string[]; only?: readonly string[] } = {}): Promise<string[]> {
   return runtimeServiceRead(async client => (await client.query<{ id: string }>(
-    `SELECT m.id FROM valopay_merchants m
-     WHERE COALESCE(m.settings->>'scheduledCloseEnabled','true') <> 'false'
-       AND (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END) <= now()
-     ORDER BY (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END), m.id
-     LIMIT $1`,
-    [limit, ISO_INSTANT_PATTERN],
+    `WITH ready AS (
+       SELECT m.id, m.workspace_id,
+         (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END) AS due_at,
+         -- A retry counts only for the pending time and when well formed, as closeRetryOf reads it.
+         CASE WHEN m.settings->'closeRetry'->>'cursor' = m.settings->>'nextCloseAt' AND m.settings->'closeRetry'->>'failures' ~ '^[1-9][0-9]{0,5}$' AND m.settings->'closeRetry'->>'retryAt' ~ $2
+              THEN (m.settings->'closeRetry'->>'failures')::int ELSE 0 END AS failures,
+         CASE WHEN m.settings->'closeRetry'->>'cursor' = m.settings->>'nextCloseAt' AND m.settings->'closeRetry'->>'failures' ~ '^[1-9][0-9]{0,5}$' AND m.settings->'closeRetry'->>'retryAt' ~ $2
+              THEN (m.settings->'closeRetry'->>'retryAt')::timestamptz END AS retry_at,
+         COALESCE(m.settings->>'anonymousWorkspace', 'false') = 'true' AS anonymous
+       FROM valopay_merchants m
+       WHERE COALESCE(m.settings->>'scheduledCloseEnabled','true') <> 'false'
+         AND NOT (m.id = ANY($3::text[])) AND ($4::text[] IS NULL OR m.id = ANY($4::text[]))
+     ), due AS (
+       SELECT * FROM ready WHERE due_at <= now() AND (retry_at IS NULL OR retry_at <= now())
+     ), ranked AS (
+       SELECT id, anonymous, failures, due_at, row_number() OVER (PARTITION BY workspace_id ORDER BY failures > 0, due_at, id) AS turn FROM due
+     )
+     SELECT id FROM ranked ORDER BY anonymous, failures > 0, turn, due_at, id LIMIT $1`,
+    [limit, ISO_INSTANT_PATTERN, [...(options.exclude ?? [])], options.only ? [...options.only] : null],
   )).rows.map((row) => row.id));
+}
+
+/**
+ * Records a failed scheduled attempt on the lender (settings.closeRetry): one
+ * more failure at its pending close time and when to try again, from the
+ * database clock.  Its own small service transaction, after the failed close
+ * rolled back; the row is taken with SKIP LOCKED, so a request or another
+ * instance holding the lender is never waited for.  Returns undefined when
+ * nothing was recorded: the lender is gone or locked, or its close is no
+ * longer pending because someone closed it meanwhile.  The error text is never
+ * stored, because the lender's settings are shown to its users.
+ */
+export async function recordScheduledCloseFailure(merchantId: string): Promise<CloseRetry | undefined> {
+  return runtimeServiceRead(async client => {
+    const row = (await client.query<{ settings: Record<string, unknown>; now: Date }>("SELECT settings, now() AS now FROM valopay_merchants WHERE id=$1 FOR UPDATE SKIP LOCKED", [merchantId])).rows[0];
+    const retry = row ? nextCloseRetry(row.settings, row.now.toISOString()) : null;
+    if (!retry) return undefined;
+    const updated = await client.query("UPDATE valopay_merchants SET settings = settings || jsonb_build_object('closeRetry', $2::jsonb) WHERE id=$1", [merchantId, JSON.stringify(retry)]);
+    return rowsAffected(updated) ? retry : undefined;
+  });
+}
+
+/**
+ * Whether nobody has changed this context's workspace for `days`: it is older
+ * than that and no audit entry by a person was written within it.  The same
+ * definition of activity as the expiry sweep, so the scheduled close's own
+ * entries never count.
+ */
+export async function sandboxInactiveFor(context: StoreContext, days: number): Promise<boolean> {
+  const session = sessionFor(context);
+  return (await session.client.query<{ idle: boolean }>(
+    `SELECT (w.created_at < now() - make_interval(days => $2)) AND NOT EXISTS (
+       SELECT 1 FROM valopay_merchants m JOIN valopay_records r ON r.merchant_id=m.id
+       WHERE m.workspace_id=w.id AND r.kind='audit' AND r.created_at >= now() - make_interval(days => $2)
+         AND COALESCE(r.data->>'actor','') NOT LIKE $3) AS idle
+     FROM valopay_workspaces w WHERE w.id=$1`,
+    [session.workspace.id, days, `${SYSTEM_ACTOR_PREFIX}%`],
+  )).rows[0]?.idle === true;
 }
 
 /**

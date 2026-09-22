@@ -41,7 +41,7 @@ All paths below are beneath `/api/v1`. Lender paths require `merchantId`; paged 
 | Endpoint | Contract and permissions |
 | --- | --- |
 | `GET /pilot/journey` | Saved lender counts, synthetic-only marker and access mode |
-| `POST /pilot/lenders` | Admin; name and segment; required idempotency key; creates an empty synthetic lender with automatic close disabled |
+| `POST /pilot/lenders` | Admin (a staff host also requires recent MFA); name and segment; required idempotency key; creates an empty synthetic lender with automatic close disabled; a sandbox workspace holds at most five lenders (409 beyond) |
 | `GET /operations` | This caller's request summaries and receipts, without stored bodies |
 | `POST /operations/:id/retry` | Uses the exact saved request and key; requires the original actor and role plus current permission |
 | `POST /operations/:id/cancel` | Serialises with the lender transaction; refuses completed work and blocks future execution |

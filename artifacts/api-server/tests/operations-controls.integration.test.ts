@@ -73,9 +73,9 @@ try{
     managedWrappingKeys.unwrap=async()=>{unwraps++;throw new Error("key service unavailable");};
     unwraps=0;
     ok(await call(`/v1/overview?merchantId=${lender}`));ok(await call(`/v1/pilot/batches?merchantId=${lender}`));
-    // The oldest cursor, so this lender is first in the scheduler's batch.
+    // Due long ago; the pass is scoped to this lender, so other due lenders in a reused database never crowd it out.
     await pool.query("UPDATE valopay_merchants SET settings=settings||'{\"nextCloseAt\":\"2000-01-01T00:00:00.000Z\"}'::jsonb WHERE id=$1",[lender]);
-    const closes=await runDueCloses({batchSize:25});
+    const closes=await runDueCloses({batchSize:25,onlyMerchantIds:[lender]});
     assert.deepEqual(closes.failed.filter(failure=>failure.merchantId===lender),[],"the scheduled close does not need the key service");
     assert.ok(closes.closed.some(closed=>closed.merchantId===lender),"the scheduled close ran during the outage");
     assert.equal(unwraps,0);

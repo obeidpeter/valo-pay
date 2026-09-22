@@ -9,7 +9,7 @@ import type { EffectiveCloseScheduleRuntimeState } from './effectiveCloseSchedul
 import type { EffectiveCloseScheduleServiceIssue } from './effectiveCloseScheduleServiceIssue';
 
 /**
- * Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.
+ * Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender. failedAttempts and retryAt describe failed automatic attempts at the pending time (retryAt only while automatic closes are available); pausedForInactivityAt says when the scheduler switched off the automatic close of a sandbox nobody changed. Answers from earlier builds may lack these three fields.
  */
 export interface EffectiveCloseSchedule {
   time: string;
@@ -31,4 +31,9 @@ export interface EffectiveCloseSchedule {
   lastCheckedAt: string | null;
   /** @nullable */
   lastErrorAt: string | null;
+  failedAttempts?: number;
+  /** @nullable */
+  retryAt?: string | null;
+  /** @nullable */
+  pausedForInactivityAt?: string | null;
 }

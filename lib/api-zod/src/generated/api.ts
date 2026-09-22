@@ -30,8 +30,10 @@ export const HealthCheckResponse = zod.object({
   "examined": zod.number().int(),
   "closed": zod.number().int(),
   "skipped": zod.number().int(),
-  "failed": zod.number().int()
-}).describe('The last scheduler pass that found work: its id, when it ran, how long it took and what it did.'),zod.null()]),
+  "failed": zod.number().int(),
+  "paused": zod.number().int().optional(),
+  "batches": zod.number().int().optional()
+}).describe('The last scheduler pass that found work: its id, when it ran, how long it took, how many batches it read and what it did, including idle sandboxes whose automatic close it paused.'),zod.null()]),
   "lastSuccessAt": zod.string().nullish(),
   "lastErrorAt": zod.string().nullish()
 }).describe('Whether closes are scheduled in this process, how often it looks, when it last looked and its last pass with work.')
@@ -160,8 +162,11 @@ export const GetOverviewResponse = zod.object({
   "lastAt": zod.string().nullable(),
   "lastTrigger": zod.string().nullable(),
   "lastCheckedAt": zod.string().nullable(),
-  "lastErrorAt": zod.string().nullable()
-}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.')
+  "lastErrorAt": zod.string().nullable(),
+  "failedAttempts": zod.number().int().optional(),
+  "retryAt": zod.string().nullish(),
+  "pausedForInactivityAt": zod.string().nullish()
+}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender. failedAttempts and retryAt describe failed automatic attempts at the pending time (retryAt only while automatic closes are available); pausedForInactivityAt says when the scheduler switched off the automatic close of a sandbox nobody changed. Answers from earlier builds may lack these three fields.')
 }).describe('The overview: metrics, queues, recent activity, upcoming due items, the close schedule and the alerts.')
 
 
@@ -587,8 +592,11 @@ export const GetSettingsResponse = zod.object({
   "lastAt": zod.string().nullable(),
   "lastTrigger": zod.string().nullable(),
   "lastCheckedAt": zod.string().nullable(),
-  "lastErrorAt": zod.string().nullable()
-}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.'),
+  "lastErrorAt": zod.string().nullable(),
+  "failedAttempts": zod.number().int().optional(),
+  "retryAt": zod.string().nullish(),
+  "pausedForInactivityAt": zod.string().nullish()
+}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender. failedAttempts and retryAt describe failed automatic attempts at the pending time (retryAt only while automatic closes are available); pausedForInactivityAt says when the scheduler switched off the automatic close of a sandbox nobody changed. Answers from earlier builds may lack these three fields.'),
   "revision": zod.string().optional()
 }).describe('A lender\'s settings and the caller\'s permissions, with integrations, members and the business calendar.')
 
@@ -684,8 +692,11 @@ export const UpdateSettingsResponse = zod.object({
   "lastAt": zod.string().nullable(),
   "lastTrigger": zod.string().nullable(),
   "lastCheckedAt": zod.string().nullable(),
-  "lastErrorAt": zod.string().nullable()
-}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.'),
+  "lastErrorAt": zod.string().nullable(),
+  "failedAttempts": zod.number().int().optional(),
+  "retryAt": zod.string().nullish(),
+  "pausedForInactivityAt": zod.string().nullish()
+}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender. failedAttempts and retryAt describe failed automatic attempts at the pending time (retryAt only while automatic closes are available); pausedForInactivityAt says when the scheduler switched off the automatic close of a sandbox nobody changed. Answers from earlier builds may lack these three fields.'),
   "revision": zod.string().optional()
 }).describe('A lender\'s settings and the caller\'s permissions, with integrations, members and the business calendar.')
 
@@ -1393,7 +1404,7 @@ export const GetPilotJourneyResponse = zod.object({
 
 
 /**
- * Administrator with recent MFA on a staff host. The key makes creation repeatable; the same key with different details is refused.
+ * An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused.
  * @summary Create a synthetic lender
  */
 export const createPilotLenderHeaderIdempotencyKeyMin = 8;

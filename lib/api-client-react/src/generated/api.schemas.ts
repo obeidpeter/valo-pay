@@ -16,7 +16,7 @@ export const SchedulerStatusState = {
 } as const;
 
 /**
- * The last scheduler pass that found work: its id, when it ran, how long it took and what it did.
+ * The last scheduler pass that found work: its id, when it ran, how long it took, how many batches it read and what it did, including idle sandboxes whose automatic close it paused.
  */
 export interface SchedulerRun {
   runId: string;
@@ -27,6 +27,8 @@ export interface SchedulerRun {
   closed: number;
   skipped: number;
   failed: number;
+  paused?: number;
+  batches?: number;
 }
 
 /**
@@ -236,7 +238,7 @@ export const EffectiveCloseScheduleServiceIssue = {
 } as const;
 
 /**
- * Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.
+ * Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender. failedAttempts and retryAt describe failed automatic attempts at the pending time (retryAt only while automatic closes are available); pausedForInactivityAt says when the scheduler switched off the automatic close of a sandbox nobody changed. Answers from earlier builds may lack these three fields.
  */
 export interface EffectiveCloseSchedule {
   time: string;
@@ -258,6 +260,11 @@ export interface EffectiveCloseSchedule {
   lastCheckedAt: string | null;
   /** @nullable */
   lastErrorAt: string | null;
+  failedAttempts?: number;
+  /** @nullable */
+  retryAt?: string | null;
+  /** @nullable */
+  pausedForInactivityAt?: string | null;
 }
 
 /**

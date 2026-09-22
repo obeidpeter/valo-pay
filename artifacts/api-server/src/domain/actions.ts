@@ -53,7 +53,8 @@ function dueItemsUnderMandate(state: DomainState, mandateId: string): Set<string
  * 7.5: remember the opening position, run the close, then write the REC-07
  * report as immutable evidence.  Every close, scheduled or manual, covers the
  * pending scheduled instant if one has passed and moves the schedule cursor to
- * the next configured time (REC-01); a close that starts more than
+ * the next configured time (REC-01), ending any retry the scheduler recorded
+ * for failed attempts; a close that starts more than
  * closeRules.lateAfterMinutes after that instant is recorded as late.
  */
 export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTrigger): ActionResult {
@@ -69,6 +70,7 @@ export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTr
   report.alerts = buildAlerts(state, now);
   const reports = buildReports(state, now);
   state.settings.nextCloseAt = nextCloseInstant(now, schedule.time);
+  delete state.settings.closeRetry;
   const summary = `${counted(report.observations.received, "observation")} received, ${counted(report.allocated.count, "allocation")} confirmed, ${report.unallocated.count} unallocated (${report.unallocated.olderThan24Hours} older than 24h), ${counted(report.exceptions.opened.count, "exception")} opened and ${report.exceptions.closed.count} closed, ${counted(report.customerPositionsChanged.length, "customer position")} changed.`;
   const close = makeRecord(state, "closes", {
     name: `Daily close ${now.slice(0, 10)}${trigger === "scheduled" ? " · scheduled" : ""}`, status: "completed", createdAt: now,

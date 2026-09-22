@@ -1934,7 +1934,7 @@
           }
         },
         "summary": "Create a synthetic lender",
-        "description": "Administrator with recent MFA on a staff host. The key makes creation repeatable; the same key with different details is refused."
+        "description": "An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused."
       }
     },
     "/v1/pilot/batches": {
@@ -4496,6 +4496,12 @@
           },
           "failed": {
             "type": "integer"
+          },
+          "paused": {
+            "type": "integer"
+          },
+          "batches": {
+            "type": "integer"
           }
         },
         "required": [
@@ -4508,7 +4514,7 @@
           "skipped",
           "failed"
         ],
-        "description": "The last scheduler pass that found work: its id, when it ran, how long it took and what it did."
+        "description": "The last scheduler pass that found work: its id, when it ran, how long it took, how many batches it read and what it did, including idle sandboxes whose automatic close it paused."
       },
       "SchedulerStatus": {
         "type": "object",
@@ -5566,6 +5572,21 @@
               "string",
               "null"
             ]
+          },
+          "failedAttempts": {
+            "type": "integer"
+          },
+          "retryAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pausedForInactivityAt": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -5583,7 +5604,7 @@
           "lastCheckedAt",
           "lastErrorAt"
         ],
-        "description": "Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender."
+        "description": "Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender. failedAttempts and retryAt describe failed automatic attempts at the pending time (retryAt only while automatic closes are available); pausedForInactivityAt says when the scheduler switched off the automatic close of a sandbox nobody changed. Answers from earlier builds may lack these three fields."
       },
       "QueuePage": {
         "type": "object",

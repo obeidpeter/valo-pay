@@ -25,6 +25,8 @@ export function effectiveCloseSchedule(state: DomainState, now: string, runtime:
     runtimeState: runtime.state,
     automatic,
     nextAt: automatic ? schedule.nextAt : null,
+    // A retry time is a promise of an automatic attempt, so it is shown only while one can run.
+    retryAt: automatic ? schedule.retryAt : null,
     // Preserve overdue work when the service is unhealthy, but not when scheduling is deliberately off.
     missed: schedule.missed && runtime.state !== "off",
     serviceIssue,

@@ -249,6 +249,38 @@ try {
     ok(await call(`/v1/records/customers?merchantId=${empty.id}`)).total,
     0,
   );
+  // A sandbox holds at most five lenders, the two samples included. Creation
+  // takes the workspace lock exclusively, so creations at once are counted one
+  // after another and never pass the limit together.
+  const concurrent = await Promise.all(
+    [1, 2, 3, 4].map((n) =>
+      call(
+        "/v1/pilot/lenders",
+        "POST",
+        { name: `Extra pilot lender ${n}`, segment: "Cooperative" },
+        randomUUID(),
+      ),
+    ),
+  );
+  assert.deepEqual(
+    concurrent.map((result) => result.status).sort(),
+    [200, 200, 409, 409],
+  );
+  for (const refused of concurrent.filter((result) => result.status === 409))
+    assert.match(String((refused.data as { error?: unknown }).error), /most a sandbox can have/);
+  assert.equal(
+    ok(
+      await call(
+        "/v1/pilot/lenders",
+        "POST",
+        { name: "Empty pilot lender", segment: "Cooperative" },
+        setupKey,
+      ),
+    ).id,
+    empty.id,
+    "a repeated setup request still returns its lender at the limit",
+  );
+  assert.equal(ok(await call("/v1/workspace")).merchants.length, 5);
   const batchInput = {
     name: "Pilot customers",
     kind: "customers",
