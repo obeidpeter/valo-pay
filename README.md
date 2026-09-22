@@ -86,6 +86,25 @@ Provide credentials through your environment's secret manager, never through com
 | `LOG_FILE` | Optional; writes the server log synchronously to this file instead of stdout, for a test or a local run that reads it back |
 | `VALOPAY_CLOSE_SCHEDULER` | Optional; `off` stops this API process from running the scheduled daily close, so closes must be triggered by hand |
 | `VALOPAY_EXPIRED_WORKSPACE_CLEANUP` | Optional; `on` allows new anonymous workspace bootstrap to delete a small batch of expired anonymous workspaces; unset or any other value keeps automatic cleanup off |
+| `VITE_PILOT_EMAIL` | Optional pilot enquiry address shown on the landing page; without it the page names no address |
+| `VALOPAY_RUN_INTEGRATION` | Set to `1` to run the database-backed suites (`pnpm run test:integration`), never against a deployed database |
+| `VALOPAY_RUN_PILOT_RLS` | With the above, `1` runs the isolated-schema row-level-security rehearsal |
+| `VALOPAY_RUN_RECOVERY` | With the above, `1` runs the measured backup and restore rehearsal on a loopback `valopay` database |
+| `VALOPAY_REHEARSAL_REPORT` | Optional path where the recovery rehearsal writes its timings and counts |
+| `VALOPAY_BROWSER_TEST` | Set to `1` by the browser test runner for its loopback fixture server; test only |
+| `VALOPAY_BROWSER_DATABASE_TEST` | Set to `1` by the real-API browser runner for its test-only host; test only |
+| `VALOPAY_BENCH_CUSTOMERS` | Optional size of the synthetic lender in the workflow benchmark suites |
+| `VALOPAY_EXPORT_REPETITIONS` | Optional repetitions of the export step in the workflow benchmark suite |
+| `PLAYWRIGHT_CHROMIUM_EXECUTABLE` | Optional Chromium binary for the browser tests on a host without Playwright's own download |
+| `PAYSTACK_TEST_SECRET_KEY` | Read only by `pnpm run check:paystack`: an `sk_test_` key from the process environment, never by the running sandbox |
+| `VALOPAY_MONITOR_ORIGIN` | HTTPS origin probed by `pnpm run check:operations`; the other monitor settings are in `docs/operational-rehearsals.md` |
+| `VALOPAY_MONITOR_EXPECT_SCHEDULER` | `on` when the probed host is expected to run automatic closes |
+| `VALOPAY_MONITOR_OWNER` | Person or team responsible for responding to a monitor incident |
+| `VALOPAY_MONITOR_STATE_FILE` | Private state file the monitor owns between runs |
+| `VALOPAY_MONITOR_ALERT_URL` | Optional HTTPS receiver for monitor incidents and recoveries |
+| `VALOPAY_ALERT_RESEND_KEY` | Optional email-provider key for monitor alerts |
+| `VALOPAY_ALERT_FROM` | Verified sender address for monitor emails |
+| `VALOPAY_ALERT_TO` | Recipient address for monitor emails; there is no default |
 
 The storage client obtains credentials from a **Replit sidecar**. Supplying storage paths alone will not make exports work outside Replit. External hosting requires a reviewed storage-authentication adapter, Clerk setup, PostgreSQL provisioning and same-origin routing for `/api/*` versus frontend assets; these are not implemented by this source transfer.
 
@@ -169,7 +188,7 @@ The local `.github/workflows/ci.yml` definition is configured to run on pull req
 
 All three jobs have read-only repository permissions and no application secrets. None publishes, deploys or migrates a real database. The export-stream suite still needs App Storage credentials, and the deployment smoke/security scripts still need the Replit development domain and Clerk. The workflow must first be committed to GitHub through an account with workflow-write permission; source sync with `--skip-workflows` does not install or enable it.
 
-The checks report failures on the pull request. Enforcing a merge block requires a GitHub branch rule that requires **TypeScript, database boundary and pure tests** and **Repository and scheduler tests on PostgreSQL**; this workflow does not change repository protection settings.
+The checks report failures on the pull request. Enforcing a merge block requires a GitHub branch rule that requires **TypeScript, database boundary and pure tests**, **Repository and scheduler tests on PostgreSQL** and **Browser workflows on the real API and PostgreSQL**; this workflow does not change repository protection settings.
 
 ### Builds and integration checks
 

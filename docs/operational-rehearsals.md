@@ -8,7 +8,7 @@ The shipped sandbox remains synthetic. These checks exercise recovery, alert del
 
 Run `pnpm run check:operations` with `VALOPAY_MONITOR_ORIGIN` set to the HTTPS service origin. The default is a dry run: it prints only the service origin, check time and fixed failure codes. It reads no customer records and sends no alerts.
 
-External delivery requires a configured service. The selected email recipient is **obeidpeter1@gmail.com**. The optional Resend adapter follows the [send-email API](https://resend.com/docs/api-reference/emails/send-email); a verified sender and a provider key are required. Provider acceptance is not proof that a message reached the inbox. Confirm receipt during the host commissioning exercise.
+External delivery requires a configured service. The email recipient is the address in `VALOPAY_ALERT_TO`; no address is written into the source. The optional Resend adapter follows the [send-email API](https://resend.com/docs/api-reference/emails/send-email); a verified sender and a provider key are required. Provider acceptance is not proof that a message reached the inbox. Confirm receipt during the host commissioning exercise.
 
 | Variable | Meaning |
 | --- | --- |
@@ -19,6 +19,7 @@ External delivery requires a configured service. The selected email recipient is
 | `VALOPAY_MONITOR_ALERT_URL` | Optional HTTPS receiver; this takes precedence over the email adapter. Store any receiver token securely. |
 | `VALOPAY_ALERT_RESEND_KEY` | Optional email-provider key, supplied through the host's secret configuration. |
 | `VALOPAY_ALERT_FROM` | Verified sender email address for the email adapter. |
+| `VALOPAY_ALERT_TO` | Recipient email address for the email adapter; required with the provider key and sender. |
 
 To enable delivery after configuration, run `pnpm run check:operations -- --deliver`. Use an external scheduler so an unavailable app cannot also stop its own monitor. Two consecutive identical failing probes open an incident. Unchanged incidents stay quiet. A healthy probe after a delivered incident sends a recovery. Failed delivery does not mark an incident as delivered. The state file must be durable; separate instances must not run concurrently against the same file. A crash between receiver acceptance and saving local state can repeat a notification, so receiver-side deduplication remains useful.
 

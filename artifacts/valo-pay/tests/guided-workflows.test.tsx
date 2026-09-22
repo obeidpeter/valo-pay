@@ -70,7 +70,7 @@ describe('template review lifecycle', () => {
     const message = within(dialog).getByLabelText(/Message \(include/);
     const before = api.state().records.find(record => record.kind === 'templates')!.data.text;
     await user.clear(message); await user.paste(`${before} {{unknown}}`);
-    expect(within(dialog).getByText(/Unknown placeholder/)).toBeTruthy();
+    expect(within(dialog).getByText(/Unknown placeholder \{\{unknown\}\}\. Use only/)).toBeTruthy();
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
     await screen.findByRole('alert');
     expect(api.state().records.find(record => record.kind === 'templates')!.data.text).toBe(before);

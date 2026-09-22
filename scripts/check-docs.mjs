@@ -71,7 +71,8 @@ for (const file of sources) for (const match of read(file).matchAll(/process\.en
 const readme = read("README.md");
 for (const name of readVariables) check(readme.includes(name), `README.md does not mention ${name}, which the code reads`);
 const documented = [...readme.matchAll(/^\| `([A-Z][A-Z0-9_]*)` \|/gm)].map((m) => m[1]);
-const otherReaders = [".github/workflows/ci.yml", ".replit", ...walk("scripts", (p) => /\.(?:mjs|cjs|sh)$/.test(p))].map((p) => read(p)).join("\n");
+// Variables a test runner, a browser fixture or a script reads count as read: the table documents them for the person running those.
+const otherReaders = [".github/workflows/ci.yml", ".replit", ...walk("scripts", (p) => /\.(?:mjs|cjs|sh|ts)$/.test(p)), ...walk("artifacts", (p) => /\/(?:tests|e2e)\/.*\.(?:ts|tsx|mjs)$/.test(p) || /\/(?:playwright[^/]*|vitest)\.config\.ts$/.test(p))].map((p) => read(p)).join("\n");
 for (const name of documented) check(readVariables.has(name) || otherReaders.includes(name), `README.md documents ${name}, which nothing reads`);
 
 // ---- 4. The contract describes itself ----

@@ -79,9 +79,17 @@ createServer(async (req, res) => {
       const chunks: Buffer[] = [];
       for await (const chunk of req) chunks.push(Buffer.from(chunk));
       const body = Buffer.concat(chunks).toString();
+      // Forward every header the console sent (Idempotency-Key among them); only hop-by-hop ones are dropped.
+      const headers: Record<string, string> = {};
+      for (const [name, value] of Object.entries(req.headers)) {
+        if (["host", "connection", "content-length", "transfer-encoding", "keep-alive"].includes(name)) continue;
+        if (typeof value === "string") headers[name] = value;
+        else if (Array.isArray(value)) headers[name] = value.join(", ");
+      }
+      if (!headers["content-type"]) headers["content-type"] = "application/json";
       const result = await fetch(url, {
         method: req.method,
-        headers: { "content-type": "application/json" },
+        headers,
         ...(body ? { body } : {}),
       });
       res.writeHead(
