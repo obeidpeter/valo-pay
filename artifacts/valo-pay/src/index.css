@@ -197,14 +197,14 @@
   }
 }
 
-/* Nothing moves for someone who has asked for less motion: every animation and transition completes
-   at once. The near-zero duration, rather than none, keeps the end-of-animation events that the
-   dialogs and notices wait for before they unmount. */
+/* Keep animation-end events for dialog/notice lifecycles, but disable transitions.
+   A universal non-zero transition duration activates the default `all` property even on plain
+   text. WebKit can then pass an old inherited colour down the tree over successive frames. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 0s !important;
     scroll-behavior: auto !important;
   }
 }

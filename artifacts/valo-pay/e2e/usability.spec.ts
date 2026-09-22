@@ -141,6 +141,39 @@ test("the payment comparison keeps evidence readable and keyboard focus inside i
   await expect(opener).toBeFocused();
 });
 
+test("reduced-motion theme changes keep inherited text in the selected palette immediately", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("valopay-theme", "light"));
+  await page.goto("/settings");
+  await expect(page.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  for (const theme of ["dark", "light"] as const) {
+    await page.getByRole("radio", { name: theme === "dark" ? "Dark" : "Light", exact: true }).check();
+    // Do not wait away a transient contrast defect: inherited text and the palette
+    // must agree as soon as the user's theme selection completes.
+    const colours = await page.evaluate(() => {
+      const expected = document.createElement("span");
+      expected.style.cssText = "display:none;transition:none!important;color:hsl(var(--foreground))";
+      document.body.append(expected);
+      const foreground = getComputedStyle(expected).color;
+      expected.remove();
+      return {
+        dark: document.documentElement.classList.contains("dark"),
+        foreground,
+        nodes: [...document.querySelectorAll("body,#main,.workspace-bar strong,h1,#paystack-heading")].map(node => {
+          const style = getComputedStyle(node);
+          return { name: node.id || node.tagName, colour: style.color, fill: style.getPropertyValue("-webkit-text-fill-color"), duration: style.transitionDuration };
+        }),
+      };
+    });
+    expect(colours.dark).toBe(theme === "dark");
+    expect(colours.nodes.length).toBeGreaterThan(4);
+    for (const node of colours.nodes) {
+      expect(node, `${theme}: ${node.name}`).toMatchObject({ colour: colours.foreground, duration: "0s" });
+      if (node.fill) expect(node.fill, `${theme}: ${node.name} text fill`).toBe(colours.foreground);
+    }
+  }
+});
+
 for (const theme of ["light", "dark"] as const) {
   test(`critical queues pass scoped WCAG 2.2 AA checks and reflow in ${theme} mode`, async ({ page }, info) => {
     test.setTimeout(60000);
