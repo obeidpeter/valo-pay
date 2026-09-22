@@ -110,6 +110,24 @@ export function paymentUnappliedKobo(payment: { amountKobo?: unknown; data?: { a
   if (!payment || paymentMoneyReturned(payment.data)) return 0;
   return Math.max(0, Number(payment.amountKobo || 0) - Number(payment.data?.allocatedKobo || 0));
 }
+/**
+ * What a refund returned to the payer: data.refundedKobo as recorded, or the
+ * whole payment for a refund recorded before the amount was kept.
+ */
+export function paymentRefundedKobo(payment: { amountKobo?: unknown; data?: { refundStatus?: unknown; refundedKobo?: unknown } | null } | null | undefined): number {
+  if (!payment || normaliseRefundStatus(payment.data?.refundStatus) !== "refunded") return 0;
+  const recorded = payment.data?.refundedKobo;
+  return typeof recorded === "number" && Number.isSafeInteger(recorded) && recorded >= 0 ? recorded : Number(payment.amountKobo || 0);
+}
+/**
+ * The applied money that stands: what a payment applied to instalments, less
+ * whatever of it a refund returned, and nothing once the payment was reversed.
+ * Billing, the uplift report and the overview read collections through this.
+ */
+export function paymentAppliedKobo(payment: { amountKobo?: unknown; data?: { allocatedKobo?: unknown; reversalStatus?: unknown; refundStatus?: unknown; refundedKobo?: unknown } | null } | null | undefined): number {
+  if (!payment || normaliseReversalStatus(payment.data?.reversalStatus) === "reversed") return 0;
+  return Math.max(0, Math.min(Number(payment.data?.allocatedKobo || 0), Number(payment.amountKobo || 0) - paymentRefundedKobo(payment)));
+}
 
 /** Why a customer message was sent. */
 export const notificationPurposes = ["activation_reminder", "pre_debit", "failed_debit", "confirmation", "final_attempt", "policy_change"] as const;

@@ -95,6 +95,52 @@ try {
       },
     });
   }
+  // Matches at the audit month's edges, which are midnight West Africa Time
+  // (23:00 UTC the day before): at the month's first instant and half an hour
+  // later (still the previous month in UTC), at its last millisecond, and at
+  // the next month's first instant (still this month in UTC). One more has no
+  // confirmedAt, so its creation time stands in, and one is a date only.
+  const monthStart = Date.parse(`${month}-01T00:00:00.000Z`) - 3_600_000;
+  const [year, monthNumber] = month.split("-").map(Number);
+  const nextMonthStart = Date.UTC(year!, monthNumber!, 1) - 3_600_000;
+  const edges = [
+    { at: monthStart, stamped: true },
+    { at: monthStart + 30 * 60_000, stamped: true },
+    { at: nextMonthStart - 1, stamped: true },
+    { at: nextMonthStart, stamped: true },
+    { at: monthStart + 30 * 60_000, stamped: false },
+  ];
+  for (const [index, edge] of edges.entries()) {
+    const at = new Date(edge.at).toISOString();
+    const data: Record<string, unknown> = {
+      ...proposal.data,
+      automatic: true,
+      confidence: "certain",
+    };
+    if (edge.stamped) data.confirmedAt = at;
+    else delete data.confirmedAt;
+    rows.push({
+      ...proposal,
+      id: randomUUID(),
+      reference: `READ-WAT-${index}`,
+      status: "confirmed",
+      createdAt: at,
+      data,
+    });
+  }
+  rows.push({
+    ...proposal,
+    id: randomUUID(),
+    reference: "READ-WAT-DATE",
+    status: "confirmed",
+    createdAt: `${month}-01T00:00:00.000Z`,
+    data: {
+      ...proposal.data,
+      automatic: true,
+      confidence: "certain",
+      confirmedAt: `${month}-01`,
+    },
+  });
   await pool.query(
     `INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at)
     SELECT id,"merchantId",kind,name,status,reference,"amountKobo","customerId",data,"createdAt","updatedAt" FROM jsonb_to_recordset($1::jsonb) AS x(id text,"merchantId" text,kind text,name text,status text,reference text,"amountKobo" bigint,"customerId" text,data jsonb,"createdAt" timestamptz,"updatedAt" timestamptz)`,
@@ -132,6 +178,29 @@ try {
           assert.ok(actual.items.length <= filters.limit);
           assert.ok(actual.related.every((r) => r.merchantId === merchantId));
         }
+      // The audit month is the same WAT month in SQL and in the domain.
+      const watMonth = (at: string) =>
+        new Date(Date.parse(at) + 3_600_000).toISOString().slice(0, 7);
+      const audited = full.records.filter(
+        (r) =>
+          r.kind === "allocations" &&
+          ["confirmed", "superseded"].includes(r.status) &&
+          r.data.automatic === true &&
+          r.data.confidence === "certain" &&
+          watMonth(String(r.data.confirmedAt || r.createdAt)) === month,
+      );
+      assert.ok(
+        ["READ-WAT-0", "READ-WAT-1", "READ-WAT-2", "READ-WAT-4", "READ-WAT-DATE"]
+          .every((reference) => audited.some((r) => r.reference === reference)) &&
+          !audited.some((r) => r.reference === "READ-WAT-3"),
+        "the edge rows fall where the WAT month says",
+      );
+      assert.equal(
+        (await listReconciliation(ctx, merchantId, "audit", { limit: 25 }))
+          .precision?.population,
+        audited.length,
+        "the audit population counts the WAT month",
+      );
       const complete=customerTimeline(full,due.customerId);
       for(const historyQuery of [{},{eventsOffset:25,eventsLimit:25},{eventsOffset:99999,mandatesOffset:99999,dueItemsOffset:99999,paymentsOffset:99999},{eventsLimit:1,mandatesLimit:1,dueItemsLimit:1,paymentsLimit:1,record:complete.events.at(-1)!.id},{record:'not-this-customer'}]) {
         const result=await getCustomerHistory(ctx,merchantId,due.customerId,historyQuery);
@@ -210,7 +279,7 @@ try {
     (e: any) => e.status === 404,
   );
   console.log(
-    "Console read models passed: 900 additional records, all reconciliation queues, seeded audit parity, WAT history, lazy evidence, unchanged report measures and isolation.",
+    "Console read models passed: 906 additional records, all reconciliation queues, seeded audit parity, WAT history, lazy evidence, unchanged report measures and isolation.",
   );
 } finally {
   const principals = tokens.map((token) =>

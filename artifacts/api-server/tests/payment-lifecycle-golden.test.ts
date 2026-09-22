@@ -81,6 +81,7 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   equal(positionFor(state, due.customerId).unallocatedKobo, 1_234_500, "while it waits, it is the customer's credit");
   executeAction(state, finance(wat("2027-07-01T11:00:00")), { action: "record_refund", recordId: payment.id, reason: "Returned to the payer", data: { reference: "RF-ODD-1" } });
   equal([payment.status, payment.data.refundStatus], ["returned", "refunded"], "a recorded refund returns the payment");
+  equal(payment.data.refundedKobo, 1_234_500, "the refund records the amount that went back");
   equal(positionFor(state, due.customerId).unallocatedKobo, 0, "refunded money is not customer credit");
   refused(() => executeAction(state, finance(wat("2027-07-01T12:00:00")), { action: "record_refund", recordId: payment.id, reason: "Again", data: { reference: "RF-ODD-2" } }), /already recorded/, 409, "one refund per payment");
   // A new instalment for exactly that amount appears; R5 must not propose the refunded money against it.
@@ -96,6 +97,7 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   equal([over.status, due.status, positionFor(state, due.customerId).unallocatedKobo], ["overpaid", "paid", 500_000], "the excess is the customer's credit until it is refunded");
   executeAction(state, finance(wat("2027-07-03T11:00:00")), { action: "record_refund", recordId: over.id, reason: "Excess returned to the payer", data: { reference: "RF-OVER" } });
   equal([over.status, over.data.refundStatus, over.data.allocatedKobo], ["allocated", "refunded", GROSS], "the refund returns the excess; what was applied stays applied");
+  equal(over.data.refundedKobo, 500_000, "only the excess is recorded as refunded");
   equal([due.status, allocationsFor(state, over).map((item) => item.status)], ["paid", ["confirmed"]], "the instalment stays paid by the money that stayed");
   equal(positionFor(state, due.customerId).unallocatedKobo, 0, "the refunded excess is no longer credit");
   refused(() => executeAction(state, finance(wat("2027-07-03T12:00:00")), { action: "manual_allocate", recordId: over.id, reason: "Apply the rest", data: { dueItemId: recordsOf(state, "due-items").find((item) => item.reference === "DEMO-LOAN-2006")!.id, amountKobo: 500_000 } }), /refunded to the payer\. Its money went back/, 409, "the refunded excess cannot be allocated");
@@ -110,6 +112,8 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   executeAction(state, finance(wat("2027-07-01T11:00:00")), { action: "manual_allocate", recordId: payment.id, reason: "Customer asked for instalment 6", data: { dueItemId: second.id, amountKobo: GROSS } });
   equal([payment.status, payment.data.allocatedKobo], ["allocated", GROSS], "the payment is fully applied to the instalment Finance chose");
   equal([proposal.status, payment.data.proposedDueItemId], ["superseded", undefined], "the proposal that no longer fits is withdrawn");
+  refused(() => executeAction(state, finance(wat("2027-07-01T11:02:00")), { action: "record_refund", recordId: payment.id, reason: "Returned", data: { reference: "RF-STALE" } }), /nothing unapplied to refund/, 409, "a payment whose money is all applied has nothing a refund recorded here can return");
+  equal([payment.status, payment.data.refundStatus, payment.data.refundedKobo], ["allocated", "none", undefined], "and the refused refund records nothing");
   assert.throws(() => executeAction(state, finance(wat("2027-07-01T11:05:00")), { action: "reject_allocation", recordId: payment.id, reason: "Old screen" }), /no proposed allocation/); checks += 1;
   for (const day of ["2027-07-02", "2027-07-03"]) reconcile(state, finance(wat(`${day}T07:00:00`)));
   equal([payment.status, allocationsFor(state, payment).filter((item) => item.status === "confirmed").length], ["allocated", 1], "later closes leave the applied payment alone");

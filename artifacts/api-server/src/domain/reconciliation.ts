@@ -462,6 +462,23 @@ export function settlePaymentStatus(state: DomainState, ctx: Context, payment: T
   touch(payment, ctx.now);
 }
 
+/**
+ * Records a refund made outside Valo Pay: it returns what the payment has not
+ * applied, and data.refundedKobo keeps that amount for billing and reports. A
+ * caller that returns applied money, such as the pay-by-bank refund, takes the
+ * allocations off their instalments first, so the whole receipt is recorded.
+ */
+export function recordPaymentRefund(state: DomainState, ctx: Context, payment: TypedRecord<"payments">, reason: string): number {
+  paymentDimensions(payment);
+  const refundedKobo = Math.max(0, payment.amountKobo - Number(payment.data.allocatedKobo || 0));
+  payment.data.refundStatus = "refunded";
+  payment.data.refundedKobo = refundedKobo;
+  touch(payment, ctx.now);
+  // Its money went back: open proposals are withdrawn and the payment leaves the allocation queues.
+  settlePaymentStatus(state, ctx, payment, reason);
+  return refundedKobo;
+}
+
 /** Finance said this payment does not belong to the instalment: automatic matching never proposes the pair again. */
 export function rememberRejectedMatch(payment: TypedRecord<"payments">, dueItemId: unknown): void {
   if (typeof dueItemId !== "string" || !dueItemId) return;
@@ -542,6 +559,8 @@ function canonicalPayment(state: DomainState, ctx: Context, observation: TypedRe
   if (source === "settlement") {
     payment.data.settlementStatus = "settled";
     payment.data.settledAt ||= observedAt;
+    // A settlement line pays out a debit that was collected, so it succeeded even when its webhook never arrived.
+    if (payment.data.channel === "direct_debit" && payment.data.collectionStatus !== "failed") payment.data.collectionStatus = "succeeded";
     settlementBatch(state, ctx, observation, payment);
   }
   if (observation.data.reversed === true || observation.data.reversalStatus === "reversed") reversePayment(state, ctx, payment);

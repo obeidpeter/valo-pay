@@ -169,4 +169,17 @@ const reviewer = (now: string) => ctxAt(now, "Compliance reviewer");
   checks += 11;
 }
 
+// ---------- NFR-OBS-02: message cost per collection is for the WAT month, and counts a direct debit that settled without its webhook ----------
+{
+  const state = seedMerchant("alerts-wat-month");
+  for (const payment of recordsOf(state, "payments")) payment.data.channel = "transfer"; // only the collection below counts
+  makeRecord(state, "notifications", { name: "sms", status: "delivered", data: { purpose: "pre_debit", channel: "sms", costKobo: 5_000, submittedAt: wat("2027-07-31T23:50:00") } });
+  const collection = makeRecord(state, "payments", { name: "Canonical payment", status: "allocated", customerId: recordsOf(state, "customers")[0]!.id, amountKobo: 2_500_000, reference: "PSK-SETTLED", data: { channel: "direct_debit", collectionStatus: "received", settlementStatus: "settled", observedAt: wat("2027-07-31T20:00:00"), settledAt: wat("2027-07-31T20:00:00"), reversalStatus: "none", refundStatus: "none", allocatedKobo: 2_500_000 } });
+  const costAlert = (now: string) => buildAlerts(state, now).some((item) => item.key === "notification_cost");
+  assert.equal(costAlert(wat("2027-07-31T23:55:00")), true, "the settled direct debit is July's one collection, so July's NGN 50 of messages is over the ceiling");
+  collection.data.collectionStatus = "succeeded";
+  assert.equal(costAlert(wat("2027-08-01T00:30:00")), false, "at 00:30 WAT on 1 August the month is August, though it is still July in UTC");
+  checks += 2;
+}
+
 console.log(`RET-07 and alerts golden tests passed (${checks} checks): consent pins the version, engine refuses an unconsented version, notice and consent gates, version history, one number per approved version, re-issue, and the alerts feed.`);

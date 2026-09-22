@@ -212,6 +212,8 @@ export const recordDataSchemas = {
     refundReference: z.string().optional(),
     refundRecordedAt: isoDateOrTimestamp.optional(),
     refundRecordedExternally: z.boolean().optional(),
+    /** What the refund returned to the payer: the money the payment had not applied, or the whole receipt for a pay-by-bank refund. A refund recorded without it is read as the whole payment. */
+    refundedKobo: kobo.optional(),
     /** Instalments Finance said this payment does not belong to; automatic matching never proposes them again. */
     rejectedDueItemIds: z.array(z.string()).optional(),
     duplicateSettlementLine: z.boolean().optional(),
@@ -496,14 +498,22 @@ export const recordDataSchemas = {
     designPartnerDiscount: z.object({ rate: z.number(), kobo: z.number().int(), note: z.string().optional() }).optional(),
     recoveryFee: z.object({ enabled: z.boolean(), lines: z.array(z.object({ dueItemId: z.string(), reference: z.string(), attemptId: z.string(), firstFailureAt: isoDateOrTimestamp.optional(), windowClosedAt: isoDateOrTimestamp, feeKobo: z.number().int() })), kobo: z.number().int(), note: z.string().optional() }).optional(),
     subtotals: z.record(z.number()).optional(),
-    usageLines: z.array(z.object({ paymentId: z.string(), paymentReference: z.string(), allocatedKobo: kobo, feeKobo: kobo, allocationIds: z.array(z.string()).optional() })),
+    /** feeKobo is the public price, discountRate the design-partner share taken off it, and chargedKobo what the line charged; lines issued before the last two were kept take the invoice's rate. */
+    usageLines: z.array(z.object({ paymentId: z.string(), paymentReference: z.string(), allocatedKobo: kobo, feeKobo: kobo, discountRate: z.number().min(0).max(1).optional(), chargedKobo: kobo.optional(), allocationIds: z.array(z.string()).optional() })),
     adjustments: z.array(z.object({
       reason: z.enum(adjustmentReasons),
       paymentId: z.string(),
       paymentReference: z.string(),
       originalInvoiceId: z.string(),
       originalInvoiceReference: z.string().optional(),
+      /** What this invoice carries, priced at the rate of the invoice that first billed the collection. Lines issued before feeDeltaKobo was kept carry the public-price change, discounted with the rest of their invoice. */
       kobo: z.number().int(),
+      /** The change in the public-price fee. */
+      feeDeltaKobo: z.number().int().optional(),
+      /** The design-partner share the collection was first billed under. */
+      discountRate: z.number().min(0).max(1).optional(),
+      /** What the collection had been charged net before this line. */
+      billedChargedKobo: z.number().int().optional(),
       billedFeeKobo: z.number().int().optional(),
       currentFeeKobo: z.number().int().optional(),
       billedAllocatedKobo: z.number().int().optional(),

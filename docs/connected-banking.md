@@ -26,7 +26,7 @@ Use the demo role selector in **Settings** to move between maker and reviewer ro
 3. **Simulate browser return**. The result is pending, not paid.
 4. Record a sample confirmed, failed or unknown provider outcome. An unknown result blocks another collection; query its outcome before proceeding.
 5. A confirmed sample receipt creates payment/observation records and applies the eligible amount in reconciliation. A late surplus is left for Finance review rather than over-allocated.
-6. For a refund, Admin/Operations records the request and a different Finance persona records sample refund evidence. Finance can also record reversal evidence. Affected obligations reopen for review; no refund or reversal sends money.
+6. For a refund, Admin/Operations records the request and a different Finance persona records sample refund evidence. Finance can also record reversal evidence. Affected obligations reopen for review, and a confirmed refund records the whole receipt as returned (data.refundedKobo); no refund or reversal sends money.
 
 Checkout creation/authorisation checks scheduled external instructions and existing in-flight collections. Authorisation cancels a replaceable, Valo-owned scheduled attempt. A store-level invariant prevents a checkout and another collection from being in flight for the same instalment. Already-submitted external work must be reconciled, not assumed cancelled.
 

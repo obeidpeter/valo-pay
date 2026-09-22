@@ -6,7 +6,8 @@ import { createHash } from "node:crypto";
 import { DAY, HOUR, addAttempt, addHoliday, addNotice, addObservation, ctxAt, liveFixture, toWat, wat } from "./helpers.js";
 import { reconcile } from "../src/domain/reconciliation.js";
 import { executeAction } from "../src/domain/actions.js";
-import { buildReports, upliftReport, billableCollection } from "../src/domain/reports.js";
+import { armStatistics, buildReports, precisionAudit, timeToClose, upliftReport, billableCollection } from "../src/domain/reports.js";
+import { monthOf } from "../src/domain/billing.js";
 import { decisionFingerprint, evaluateRetry, latestDecisionFor, type RetryDecision } from "../src/domain/policy-engine.js";
 import { positionFor } from "../src/domain/close.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
@@ -207,7 +208,24 @@ const decisionsFor = (state: DomainState, due: ValopayRecord) => recordsOf(state
   assert.equal(drifted.data.positionAlert, true, "REC-05: a rebuild that differs from the stored view is an alert");
   assert.equal(drifted.data.report.positionRebuild.mismatches[0].dueItemId, due.id);
   assert.equal(buildReports(state, wat("2027-08-01T09:00:00")).operational.timeToClose?.month, "2027-07", "MEA-01 time to close looks at the last month end");
-  checks += 9;
+  assert.equal(buildReports(state, wat("2027-08-01T00:30:00")).operational.timeToClose?.month, "2027-07", "July has ended at 00:30 WAT on 1 August, though it is still July in UTC");
+  checks += 10;
+}
+
+// ---------- MEA-01 and REC-09 count months in West Africa Time ----------
+{
+  const { state, customer, due } = liveFixture({ withFailure: false, merchantId: "wat-months" });
+  // A clean close at 00:30 WAT on 1 August is the first close after July's month end.
+  makeRecord(state, "closes" as string, { name: "Synthetic close", status: "completed", data: { closedAt: wat("2027-08-01T00:30:00"), report: { unallocated: { count: 0, kobo: 0, olderThan24Hours: 0 } } } });
+  const closed = timeToClose(state, wat("2027-08-02T09:00:00"))!;
+  assert.deepEqual([closed.month, closed.days], ["2027-07", 0.02], "July's books closed half an hour after its WAT month end");
+  // An automatic match confirmed at 00:30 WAT on 1 July is July's; one at 00:15 WAT on 1 August is August's.
+  const confirmed = (confirmedAt: string) => makeRecord(state, "allocations", { name: "R1", status: "confirmed", customerId: customer.id, amountKobo: 100, createdAt: confirmedAt, data: { paymentId: "p", dueItemId: due.id, rule: "R1", confidence: "certain", automatic: true, confirmedAt } });
+  const july = confirmed(wat("2027-07-01T00:30:00"));
+  confirmed(wat("2027-08-01T00:15:00"));
+  const audit = precisionAudit(state, wat("2027-08-01T00:30:00"));
+  assert.deepEqual([audit.month, audit.sampledAllocationIds], ["2027-07", [july.id]], "at 00:30 WAT on 1 August the audit month is July, and it holds July's WAT matches");
+  checks += 2;
 }
 
 // ---------- REC-07: a close counts the matches confirmed in its period, not matches reviewed or edited in it ----------
@@ -313,6 +331,19 @@ function settle(state: DomainState, due: ValopayRecord, amountKobo: number, sett
   checks += 8;
 }
 
+{
+  // A refund of an overpayment's excess leaves the recovery on the money that stayed.
+  const { state, policy } = liveFixture({ withFailure: false, merchantId: "uplift-refund" });
+  const experiment = makeRecord(state, "experiments", { name: "Test 2", status: "preregistered", data: { policyId: policy.id, holdoutShare: 0.5, minPerArm: 1, seed: "seed", baselineRate: 0.4, analysisDate: "2027-12-31", enrolmentClose: "2027-12-31", preregisteredAt: "2027-02-01T00:00:00.000Z" } });
+  const due = enrolledDue(state, experiment, "engine", 2_500_000, wat("2027-06-01T06:16:00"), 0);
+  const transfer = makeRecord(state, "payments", { name: "Canonical payment", status: "unallocated", customerId: due.customerId, amountKobo: 3_000_000, reference: "TRF-EXCESS", data: { channel: "transfer", collectionStatus: "succeeded", settlementStatus: "settled", settledAt: wat("2027-06-05T10:00:00"), observedAt: wat("2027-06-05T10:00:00"), reversalStatus: "none", refundStatus: "none", allocatedKobo: 0 } });
+  const finance = (now: string) => ctxAt(now, "Finance");
+  executeAction(state, finance(wat("2027-06-05T11:00:00")), { action: "manual_allocate", recordId: transfer.id, reason: "The customer paid the instalment and a little more", data: { dueItemId: due.id, amountKobo: 2_500_000 } });
+  executeAction(state, finance(wat("2027-06-06T10:00:00")), { action: "record_refund", recordId: transfer.id, reason: "Excess returned to the payer", data: { reference: "RF-EXCESS" } });
+  assert.equal(armStatistics(state, recordsOf(state, "due-items").filter((item) => item.id === due.id), wat("2027-07-15T09:00:00")).recoveredKobo, 2_500_000, "the NGN 25,000 applied to the instalment is still recovered");
+  checks += 1;
+}
+
 // ---------- BIL-01: only direct-debit attempts that succeeded are billable; transfers and card receipts are reported, never billed ----------
 {
   const state = seedMerchant("billing");
@@ -320,7 +351,7 @@ function settle(state: DomainState, due: ValopayRecord, amountKobo: number, sett
   const ada = payments.find((item) => item.reference === "SBX-PAY-1001")!; // direct debit, allocated, settled
   const tunde = payments.find((item) => item.reference === "SBX-PAY-1002")!; // transfer, allocated, settled
   const observed = Date.parse(ada.createdAt);
-  state.settings.billingPeriod = ada.createdAt.slice(0, 7);
+  state.settings.billingPeriod = monthOf(ada.createdAt);
   const afterWindow = new Date(observed + 10 * DAY).toISOString();
   const insideWindow = new Date(observed + 3 * DAY).toISOString();
   assert.equal(billableCollection(state, ada, afterWindow), true, "a settled direct debit past the reversal window is billable");

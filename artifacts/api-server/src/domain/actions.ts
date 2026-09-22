@@ -1,13 +1,13 @@
 import {
   counted, businessDateSchema,
   DEFAULT_ACTIVATION_WINDOW_DAYS, PLATFORM_OWNER, activationReminderCaps, closeRules, failureCodeList, isHandBackOwner, isKnownFailureCode,
-  nextCloseInstant, normaliseFailureCode, normaliseOwner, passRuleText, resolutionCodesFor, resolveExceptionType, withinQuietHours, templateTextProblems,
+  koboToNaira, nextCloseInstant, normaliseFailureCode, normaliseOwner, passRuleText, paymentUnappliedKobo, resolutionCodesFor, resolveExceptionType, withinQuietHours, templateTextProblems,
   type CloseTrigger,
 } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import {
   REVIEW_SUPERSESSION, allocatePayment, applyConfirmedAllocation, confirmAttemptOutcome, forgetRejectedMatch, paymentReturned, paymentReversed, reconcile,
-  reinstateAllocation, rememberRejectedMatch, settlePaymentStatus, supersedeAllocation, supersededByReview,
+  recordPaymentRefund, reinstateAllocation, rememberRejectedMatch, settlePaymentStatus, supersedeAllocation, supersededByReview,
 } from "./reconciliation";
 import { buildReports } from "./reports";
 import { buildCloseReport, closeSchedule, openingSnapshot, storedCloseCursor } from "./close";
@@ -363,11 +363,10 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     // Reversed money already went back. A refund returns what the payment has not applied, such as an overpayment's
     // excess: money applied to an instalment stays applied, and nothing is left to allocate or hold as credit.
     if (paymentReturned(payment)) throw Object.assign(new Error(paymentReversed(payment) ? `Payment ${payment.reference} was reversed by the provider, so its money already went back. There is nothing to refund.` : `A refund is already recorded for payment ${payment.reference}.`), { status: 409 });
-    payment.data.refundStatus = "refunded"; payment.data.refundReference = String(data.reference); payment.data.refundRecordedAt = now; payment.data.refundRecordedExternally = true;
-    touch(payment, now);
-    // Its money went back: open proposals are withdrawn and the payment leaves the allocation queues.
-    settlePaymentStatus(state, ctx, payment, "Superseded: the payment was refunded outside Valo Pay.");
-    return result("External refund reference recorded; Valo Pay did not move funds.", payment);
+    if (paymentUnappliedKobo(payment) <= 0) throw Object.assign(new Error(`Payment ${payment.reference} has all of its money applied to instalments, so there is nothing unapplied to refund. A refund recorded here returns only money the payment has not applied.`), { status: 409 });
+    payment.data.refundReference = String(data.reference); payment.data.refundRecordedAt = now; payment.data.refundRecordedExternally = true;
+    const refundedKobo = recordPaymentRefund(state, ctx, payment, "Superseded: the payment was refunded outside Valo Pay.");
+    return result(`External refund of NGN ${koboToNaira(refundedKobo)} recorded: the money this payment had not applied. Valo Pay did not move funds.`, payment, { refundedKobo });
   }
   if (input.action === "simulate_failure") {
     assertActionRole(ctx, ["Admin", "Operations"]);

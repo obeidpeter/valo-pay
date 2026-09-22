@@ -275,7 +275,17 @@ check(() => {
   assert.equal(openDue(s).status, "in_dispute");
   assert.equal(openDue(s).data.outstandingKobo, openDue(s).amountKobo);
   // The refunded money left the allocation queues and is no customer credit.
-  assert.equal(s.records.find((r) => r.id === i.data.paymentId)!.status, "returned");
+  const refunded = s.records.find((r) => r.id === i.data.paymentId)!;
+  assert.equal(refunded.status, "returned");
+  // The whole receipt went back, after its allocations were taken off the instalments.
+  assert.deepEqual(
+    [
+      refunded.data.refundStatus,
+      refunded.data.refundedKobo,
+      refunded.data.allocatedKobo,
+    ],
+    ["refunded", refunded.amountKobo, 0],
+  );
   assert.throws(
     () => run(s, "payment.refund_confirm", {}, i.id, finance),
     /confirmed/,

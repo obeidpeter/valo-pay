@@ -155,6 +155,17 @@ function assertOnePayment(state: DomainState, due: ValopayRecord, label: string)
   checks += 7;
 }
 
+// ---------- A settlement line proves a direct debit was collected, so a debit whose webhook never arrived is succeeded (BIL-01) ----------
+{
+  const { state, due } = liveFixture({ withFailure: false, merchantId: "settled-without-webhook" });
+  addObservation(state, { reference: "PSK-SETTLED", amountKobo: NET, grossAmountKobo: GROSS, feeKobo: FEE, batchReference: "B-SO", source: "settlement", customerId: due.customerId, dueItemId: due.id, eventId: "settled-only", occurredAt: wat("2027-07-01T07:00:00") });
+  reconcile(state, finance(wat("2027-07-01T07:05:00")));
+  const payment = recordsOf(state, "payments").find((item) => item.reference === "PSK-SETTLED")!;
+  assert.deepEqual([payment.data.channel, payment.data.collectionStatus, payment.data.settlementStatus], ["direct_debit", "succeeded", "settled"], "the settlement line settles the debit and records it as collected");
+  invariant(state);
+  checks += 1;
+}
+
 // ---------- Settlement batches follow their current lines and statement credit (ING-03, ING-07): a provider file split across two imports reconciles ----------
 {
   const { state, due } = liveFixture({ withFailure: false, merchantId: "split-settlement" });

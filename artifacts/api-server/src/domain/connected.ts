@@ -6,6 +6,7 @@ import {
   allocatePayment,
   supersedeAllocation,
   raiseException,
+  recordPaymentRefund,
   settlePaymentStatus,
 } from "./reconciliation";
 import { creditView, runCreditAction } from "./connected-credit-service";
@@ -482,10 +483,13 @@ function paymentAction(
       touch(affectedDue, ctx.now);
     }
     const refund = input.action === "payment.refund_confirm";
-    if (refund) payment.data.refundStatus = "refunded";
-    else payment.data.reversalStatus = "reversed";
     // The money went back: the payment leaves the allocation queues and is no longer customer credit.
-    settlePaymentStatus(state, ctx, payment, input.reason);
+    // With its allocations taken off above, a refund records the whole receipt as returned.
+    if (refund) recordPaymentRefund(state, ctx, payment, input.reason);
+    else {
+      payment.data.reversalStatus = "reversed";
+      settlePaymentStatus(state, ctx, payment, input.reason);
+    }
     due.status = "in_dispute";
     touch(due, ctx.now);
     raiseException(state, ctx, "unallocated_payment", {

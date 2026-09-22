@@ -17,7 +17,7 @@ import { foldForSearch, LIST_PAGE_CEILING, type ListQuery } from "./valopay-list
 import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
 import { validateCloseRange, pageOffset, type ReadPageQuery, type ReconciliationQueue } from './console-read-models';
 import { precisionAudit } from '../domain/reports';
-import { previousMonth } from '../domain/billing';
+import { periodBounds, previousMonth } from '../domain/billing';
 import { measurementRules } from '@workspace/valopay-schema';
 import { protectStored, revealStored, protectRecordData, revealRecordData, payloadEncryptionKey, isProtectedPayload } from './protected-payloads';
 import { markRolledBack } from './transaction-outcome';
@@ -748,10 +748,13 @@ export async function listReconciliation(context: StoreContext, merchantId: stri
   let precision: ReturnType<typeof precisionAudit> | undefined;
   let sampledIds: string[] = [];
   if (queue === 'audit') {
-    const month = previousMonth(context.now), seed = `${merchantId}:${month}`;
-    const predicate = "r.kind='allocations' AND r.status IN ('confirmed','superseded') AND r.data->'automatic'='true'::jsonb AND r.data->>'confidence'='certain' AND left(coalesce(nullif(r.data->>'confirmedAt',''),to_char(r.created_at AT TIME ZONE 'UTC','YYYY-MM-DD')),7)=$4";
-    const population = Number((await session.client.query<{total:string}>(`SELECT count(*) AS total ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND ${predicate}`, [...scope,month])).rows[0]!.total);
-    const sample = (await session.client.query<RecordRow>(`${select(predicate)} ORDER BY sha256(convert_to($5 || ':' || r.id,'UTF8')),r.id COLLATE "C" LIMIT $6`, [...scope,month,seed,measurementRules.precisionSampleSize])).rows.map(rowToRecord);
+    const month = previousMonth(context.now), seed = `${merchantId}:${month}`, { start, end } = periodBounds(month);
+    // The audit month is a WAT month: confirmedAt (or the creation time) as a UTC ISO string inside [start, end). Stored
+    // instants are UTC timestamps or dates, which compare as strings in the "C" collation the way the domain parses them.
+    const at = `coalesce(nullif(r.data->>'confirmedAt',''),to_char(r.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) COLLATE "C"`;
+    const predicate = `r.kind='allocations' AND r.status IN ('confirmed','superseded') AND r.data->'automatic'='true'::jsonb AND r.data->>'confidence'='certain' AND ${at}>=$4 AND ${at}<$5`;
+    const population = Number((await session.client.query<{total:string}>(`SELECT count(*) AS total ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND ${predicate}`, [...scope,start,end])).rows[0]!.total);
+    const sample = (await session.client.query<RecordRow>(`${select(predicate)} ORDER BY sha256(convert_to($6 || ':' || r.id,'UTF8')),r.id COLLATE "C" LIMIT $7`, [...scope,start,end,seed,measurementRules.precisionSampleSize])).rows.map(rowToRecord);
     precision = { ...precisionAudit({merchant:merchant.info,settings:merchant.settings,records:sample},context.now), population, requiredSample:Math.min(measurementRules.precisionSampleSize,population) };
     sampledIds = precision.sampledAllocationIds;
   }
