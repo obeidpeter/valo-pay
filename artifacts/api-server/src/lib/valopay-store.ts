@@ -248,7 +248,7 @@ export async function createPilotLender(ctx: StoreContext, input: { name: string
   if (found) { if (found.settings.onboardingFingerprint !== fingerprint) fail('This setup request was already used for different details.', 409); return found.info; }
   const state = seedMerchant(id, true);
   state.records = [];
-  Object.assign(state.merchant, { name: input.name, shortName: input.name, segment: input.segment, provider: 'Paystack', mode: 'sandbox', status: 'onboarding', killSwitch: true, preDataReady: false, preLiveReady: false });
+  Object.assign(state.merchant, { name: input.name, shortName: input.name, segment: input.segment, provider: 'Paystack', mode: 'observation', status: 'onboarding', monthlyVolume: 0, killSwitch: true, preDataReady: false, preLiveReady: false });
   Object.assign(state.settings, { onboardingFingerprint: fingerprint, scheduledCloseEnabled: false, anonymousWorkspace: !ctx.authenticated, nextCloseAt: null });
   await session.client.query('INSERT INTO valopay_merchants(id,workspace_id,info,settings) VALUES($1,$2,$3,$4)', [id, session.workspace.id, state.merchant, state.settings]);
   await loadState(ctx, id, 'update');

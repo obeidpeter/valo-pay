@@ -13,6 +13,7 @@ type WorkspaceContextType = {
 };
 
 const WorkspaceContext = createContext<WorkspaceContextType | null>(null);
+const rememberedLender = (scope: string) => { try { return sessionStorage.getItem(`valopay-lender:${scope}`); } catch { return null; } };
 
 /** Loads the caller's workspace and provides it to the console; shows the failure notice while it cannot be loaded. */
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
@@ -26,7 +27,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const previousUser=useRef<string|null|undefined>(undefined);
   const { data: workspace, isLoading,isFetching,error,refetch } = useGetWorkspace({query:{queryKey:["workspace",identity],enabled:isLoaded,refetchInterval:30000}});
   const [selectedMerchant, setMerchantId] = useState<string | null>(null);
-  const merchantId=workspace?.merchants.some(m=>m.id===selectedMerchant)?selectedMerchant:workspace?.merchants[0]?.id||null;
+  const preferenceScope = workspace?.viewerScope || identity;
+  const merchantId=[selectedMerchant, rememberedLender(preferenceScope)].find(id => workspace?.merchants.some(m=>m.id===id)) || workspace?.merchants[0]?.id || null;
 
   useEffect(() => {
     if(!isLoaded)return;
@@ -35,7 +37,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   },[identity,isLoaded,queryClient]);
 
   return (
-    <WorkspaceContext.Provider value={{ merchantId, setMerchantId: id => { if (id === merchantId || confirmUnsavedChanges()) setMerchantId(id); }, workspace, isLoading:isLoading||!isLoaded }}>
+    <WorkspaceContext.Provider value={{ merchantId, setMerchantId: id => { if (id === merchantId || confirmUnsavedChanges()) { setMerchantId(id); try { sessionStorage.setItem(`valopay-lender:${preferenceScope}`,id); } catch { /* Selection still works when browser storage is unavailable. */ } } }, workspace, isLoading:isLoading||!isLoaded }}>
       {error?<WorkspaceUnavailable error={error} retry={()=>{void refetch();}} busy={isFetching}/>:children}
     </WorkspaceContext.Provider>
   );

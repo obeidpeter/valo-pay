@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { lenderPath, pilotRequest, usePilotMutation } from "@/lib/pilot";
@@ -62,6 +63,29 @@ export default function OperationsPage() {
             <div className="min-w-0 space-y-2">
               <h2 className="font-semibold capitalize">{item.label}</h2>
               <p className="text-sm text-muted-foreground">{item.message}</p>
+              {item.status === "completed" &&
+                item.recordId &&
+                [
+                  "customers",
+                  "exceptions",
+                  "import-batches",
+                  "closes",
+                ].includes(item.recordKind) && (
+                  <Link
+                    className="inline-block text-sm text-primary underline"
+                    href={
+                      item.recordKind === "customers"
+                        ? `/customers/${item.recordId}`
+                        : item.recordKind === "exceptions"
+                          ? `/cases/${item.recordId}`
+                          : item.recordKind === "closes"
+                            ? "/reports"
+                            : "/imports"
+                    }
+                  >
+                    Open saved result
+                  </Link>
+                )}
               <p className="text-xs text-muted-foreground">
                 {formatDate(item.createdAt)} · {item.role}
               </p>

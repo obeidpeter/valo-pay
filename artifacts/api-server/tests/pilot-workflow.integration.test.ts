@@ -10,6 +10,9 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
   );
   process.exit(0);
 }
+// Cache one SDK client so its test-only verified-email adapter is stable.
+// This deliberately unusable placeholder is never sent to an external service.
+process.env.CLERK_SECRET_KEY = "sk_test_placeholder";
 const { pool } = await import("@workspace/db");
 const { default: router } = await import("../src/routes/index");
 const { errorHandler } = await import("../src/lib/error-handler");
@@ -316,6 +319,132 @@ try {
   );
   assert.equal(caseDetail.events.length, 1);
   assert.equal(caseDetail.record.data.case.assignee, "Sandbox Admin");
+
+  // Complete the empty lender journey using actual routes and persisted state.
+  const ingest = async (kind: string, csv: string) => {
+    const saved = ok(
+      await call(
+        `/v1/pilot/batches?merchantId=${empty.id}`,
+        "POST",
+        {
+          ...batchInput,
+          kind,
+          name: `Pilot ${kind}`,
+          sourceBatchId: kind,
+          csv,
+        },
+        randomUUID(),
+      ),
+    );
+    assert.equal(saved.data.check.invalid, 0, JSON.stringify(saved.data.check));
+    return ok(
+      await call(
+        `/v1/pilot/batches/${saved.id}/commit?merchantId=${empty.id}`,
+        "POST",
+        { expectedUpdatedAt: saved.updatedAt },
+        randomUUID(),
+      ),
+    );
+  };
+  await ingest(
+    "due-items",
+    "row_id,name,reference,customerId,amount,dueDate,owner\ndue-1,Pilot instalment,PILOT-D001,PILOT-C001,25000,2028-12-01,lms",
+  );
+  await ingest(
+    "observations",
+    "row_id,name,reference,customerId,amount,source,dueItemId,narration\npay-1,Pilot payment,PILOT-O001,PILOT-C001,25000,statement,PILOT-D001,Synthetic payment",
+  );
+  const act = async (data: any) =>
+    ok(
+      await call(
+        `/v1/actions?merchantId=${empty.id}`,
+        "POST",
+        data,
+        randomUUID(),
+      ),
+    );
+  await act({ action: "run_reconciliation" });
+  const customers = ok(
+    await call(`/v1/records/customers?merchantId=${empty.id}`),
+  ).items;
+  const payments = ok(
+    await call(`/v1/records/payments?merchantId=${empty.id}`),
+  ).items;
+  assert.equal(payments.length, 1);
+  let pilotCase = ok(
+    await call(
+      `/v1/records/exceptions?merchantId=${empty.id}`,
+      "POST",
+      {
+        name: "Classify synthetic provider code",
+        customerId: customers[0].id,
+        data: {
+          type: "mapping_needed",
+          notes: "Synthetic classification task",
+        },
+      },
+      randomUUID(),
+    ),
+  );
+  const coordinate = async (data: any) =>
+    ok(
+      await call(
+        `/v1/pilot/cases/${pilotCase.id}?merchantId=${empty.id}`,
+        "POST",
+        { ...caseBody, expectedUpdatedAt: pilotCase.updatedAt, ...data },
+        randomUUID(),
+      ),
+    );
+  pilotCase = await coordinate({ action: "claim" });
+  pilotCase = await coordinate({
+    action: "handover",
+    assignee: "Sandbox Finance",
+    note: "Finance to complete the synthetic classification.",
+  });
+  await act({ action: "set_role", data: { role: "Finance" } });
+  await act({
+    action: "resolve_exception",
+    recordId: pilotCase.id,
+    expectedUpdatedAt: pilotCase.updatedAt,
+    reason:
+      "Classified the synthetic provider code after checking its evidence.",
+    data: { resolutionCode: "mapped_to_code" },
+  });
+  await act({ action: "daily_close" });
+  const closes = ok(await call(`/v1/close-history?merchantId=${empty.id}`));
+  assert.equal(closes.total, 1);
+  const { buildExportBytes } = await import("../src/lib/valopay-exports");
+  const evidence = await store.inWorkspace(
+    {
+      headers: { cookie },
+      auth: Object.assign(() => ({ userId: null }), {
+        [Symbol.for("@clerk/express.auth")]: true,
+      }),
+    } as any,
+    response,
+    async (ctx) => {
+      const state = await store.loadState(ctx, empty.id, "share");
+      return {
+        close: await buildExportBytes(state, ctx, {
+          kind: "closes",
+          format: "json",
+        }),
+        pack: await buildExportBytes(state, ctx, {
+          kind: "dispute-pack",
+          customerId: customers[0].id,
+          format: "json",
+        }),
+      };
+    },
+    "read",
+  );
+  assert.equal(JSON.parse(evidence.close.bytes.toString()).data.length, 1);
+  assert.ok(
+    evidence.pack.bytes
+      .toString()
+      .includes("Finance to complete the synthetic classification."),
+  );
+  await act({ action: "set_role", data: { role: "Admin" } });
 
   process.env.VALOPAY_STAFF_ACCESS = "staging";
   process.env.VALOPAY_STAFF_ISSUER = "https://identity.example";

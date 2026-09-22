@@ -127,6 +127,7 @@ function describe(record: ValopayRecord): { event: string; detail: string } {
       detail: `Row ${text(d.rule)}; policy v${text(d.policyVersion)}; ${text(d.reason)}${d.nextAt ? ` Next attempt ${watStamp(String(d.nextAt))}.` : ""}${notice ? ` Notice required: ${text(notice.purpose)}${notice.requiredBy ? ` by ${watStamp(String(notice.requiredBy))}` : ""}, ${notice.evidenced ? "evidenced" : "not evidenced"}.` : ""}${d.experimentArm ? ` Arm ${d.experimentArm}.` : ""} Inputs: code ${text(inputs?.code) || "none"}, attempt ${text(inputs?.attemptNumber)} of ${text(inputs?.ceiling)}.`,
     };
     case "audit": return { event: `Action ${record.name}`, detail: `${text(d.actor)}: ${text(d.summary)}` };
+    case "case-events": return { event: record.name, detail: `${text(d.note)} Assignee: ${text(d.after?.assigneeName)}. Next action: ${text(d.after?.nextAction)}; follow-up ${d.after?.nextActionAt ? watStamp(String(d.after.nextActionAt)) : 'not set'}. Evidence: ${text(d.after?.evidenceIds || [])}.` };
     default: return { event: `${record.kind} ${record.status}`, detail: text(record.name) };
   }
 }
@@ -143,8 +144,8 @@ export function buildDisputePack(state: DomainState, ctx: Context, customerId: s
     const at = eventTime(record);
     const { event, detail } = describe(record);
     return {
-      at, kind: record.kind, event, status: record.status, reference: record.reference, amountKobo: record.amountKobo, detail,
-      actor: record.kind === "audit" ? text(record.data.actor) || null : record.data.confirmedBy || record.data.reviewedBy || record.data.resolvedBy || null,
+      at, kind: record.kind, event, status: record.status, reference: record.reference, amountKobo: record.amountKobo, detail: detail + (record.data.importIdentity ? ` Imported from ${text(record.data.importIdentity.source)}; source row ${text(record.data.importIdentity.rowId)}; batch ${text(record.data.importIdentity.batchId)}.` : ''),
+      actor: ['audit', 'case-events'].includes(record.kind) ? text(record.data.actor) || null : record.data.confirmedBy || record.data.reviewedBy || record.data.resolvedBy || null,
       policyVersion: governing(documents, "policies", at)?.version ?? null,
       templateVersion: governing(documents, "templates", at)?.version ?? null,
       cutoverId: governing(documents, "cutovers", at)?.id ?? null,
