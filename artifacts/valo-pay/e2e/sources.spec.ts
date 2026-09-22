@@ -35,6 +35,13 @@ test("source schedules and signed fixture receipts stay clear and usable on smal
   await expect(page.getByRole("heading",{name:"Sources & connections",exact:true})).toBeVisible();
   await page.getByLabel("Profile name",{exact:true}).fill("Scheduled loan feed");
   await page.getByLabel("Source name",{exact:true}).fill("synthetic-loan-feed");
+  const firstDelivery=page.getByLabel("First delivery expected (WAT)",{exact:true});
+  await firstDelivery.fill("");
+  await page.getByRole("button",{name:"Save source profile",exact:true}).click();
+  await expect(page.getByRole("alert")).toContainText("Enter a complete, valid delivery date and time");
+  await expect(firstDelivery).toHaveValue("");
+  await firstDelivery.fill("2026-09-24T07:30:45.25");
+  expect(await firstDelivery.evaluate((input:HTMLInputElement)=>input.validity.valid)).toBeTruthy();
   await page.getByRole("button",{name:"Save source profile",exact:true}).click();
   await expect(page.getByRole("button",{name:"Edit Scheduled loan feed",exact:true})).toBeVisible();
   await page.getByRole("button",{name:"Receive sample payment",exact:true}).click();

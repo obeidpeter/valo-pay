@@ -12,7 +12,22 @@ import { readableLabel } from "@/components/record-label";
 import { SourceCompletenessPanel, SourceManifestEditor } from "@/components/source-manifest-editor";
 
 const kinds = { customers: "Customers", mandates: "Mandates", "due-items": "Instalments", attempts: "Collection attempts", observations: "Payment evidence" };
-const wat = (iso: string) => new Date(Date.parse(iso) + 3600000).toISOString().slice(0,16);
+const wat = (iso: string) => {
+  const date = new Date(Date.parse(iso) + 3600000);
+  return Number.isFinite(date.getTime()) ? date.toISOString().slice(0,16) : "";
+};
+// Native controls can emit seconds or an empty value while a date is edited.
+// Validate the complete calendar value before converting it; Date.parse alone
+// silently rolls some impossible dates into the next month.
+function deliveryInstant(value: string): string | null {
+  const parts = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/.exec(value);
+  if (!parts || value.startsWith("0000-")) return null;
+  const local = `${parts[1]}T${parts[2]}:${parts[3]}:${parts[4] || "00"}.${(parts[5] || "").padEnd(3,"0")}`;
+  const date = new Date(`${local}+01:00`);
+  if (!Number.isFinite(date.getTime())) return null;
+  return new Date(date.getTime()+3600000).toISOString().slice(0,-1) === local ? date.toISOString() : null;
+}
+const deliveryError = "Enter a complete, valid delivery date and time in West Africa Time (UTC+01:00).";
 const blank = (): SourceProfileInput => ({ name: "", source: "", kind: "customers", mapping: {}, identityColumn: "source_row_id", amountUnit: "naira", firstExpectedAt: new Date(Date.now()+86400000).toISOString(), cadenceHours: 24, graceMinutes: 60, expectedRows: null, expectedAmountKobo: null, status: "active", syntheticOnly: true });
 export default function SourcesPage() { const { merchantId } = useWorkspace(); return <Sources key={merchantId || "none"} />; }
 function Sources() {
@@ -59,19 +74,20 @@ function Sources() {
 
 function ProfileEditor({ profile, onSaved, onNew }: { profile: any; onSaved(): void; onNew(): void }) {
   const [input, setInput] = useState<SourceProfileInput>(() => profile ? { ...blank(), ...profile.data, name: profile.name, status: profile.status, expectedUpdatedAt: profile.updatedAt } : blank());
+  const [deliveryDraft, setDeliveryDraft] = useState(() => wat(input.firstExpectedAt)), [deliveryInvalid, setDeliveryInvalid] = useState(false);
   const [dirty, setDirty] = useState(false), [mappingRows, setMappingRows] = useState(() => Object.entries(input.mapping).map(([from,to]) => ({from,to})));
   useUnsavedChanges(dirty);
   const mutation = usePilotMutation(() => { setDirty(false); onSaved(); });
   const update = (patch: Partial<SourceProfileInput>) => { setInput(v=>({...v,...patch})); setDirty(true); };
   const locked = mutation.isPending || mutation.hasUnconfirmedOutcome;
-  return <PilotPanel title={profile ? `Edit ${profile.name}` : "Add a source profile"}><form className="space-y-4" onSubmit={e=>{e.preventDefault(); const { name, source, kind, identityColumn, amountUnit, firstExpectedAt, cadenceHours, graceMinutes, expectedRows, expectedAmountKobo, status, expectedUpdatedAt } = input; mutation.mutate({path: profile ? `/sources/profiles/${profile.id}/save` : "/sources/profiles", data: { name, source, kind, identityColumn, amountUnit, firstExpectedAt, cadenceHours, graceMinutes, expectedRows, expectedAmountKobo, status, expectedUpdatedAt, syntheticOnly: true, mapping: Object.fromEntries(mappingRows.filter(r=>r.from).map(r=>[r.from,r.to])) } });}}>
+  return <PilotPanel title={profile ? `Edit ${profile.name}` : "Add a source profile"}><form className="space-y-4" onSubmit={e=>{e.preventDefault(); const parsedDelivery = deliveryInstant(deliveryDraft); if (!parsedDelivery) { setDeliveryInvalid(true); document.getElementById("source-first-delivery")?.focus(); return; } const { name, source, kind, identityColumn, amountUnit, cadenceHours, graceMinutes, expectedRows, expectedAmountKobo, status, expectedUpdatedAt } = input; const firstExpectedAt = deliveryDraft === wat(input.firstExpectedAt) ? input.firstExpectedAt : parsedDelivery; mutation.mutate({path: profile ? `/sources/profiles/${profile.id}/save` : "/sources/profiles", data: { name, source, kind, identityColumn, amountUnit, firstExpectedAt, cadenceHours, graceMinutes, expectedRows, expectedAmountKobo, status, expectedUpdatedAt, syntheticOnly: true, mapping: Object.fromEntries(mappingRows.filter(r=>r.from).map(r=>[r.from,r.to])) } });}}>
     <fieldset disabled={locked} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       <label className="text-sm space-y-1">Profile name<input className={pilotField} required maxLength={120} value={input.name} onChange={e=>update({name:e.target.value})}/></label>
       <label className="text-sm space-y-1">Source name<input className={pilotField} required maxLength={100} disabled={!!profile} value={input.source} onChange={e=>update({source:e.target.value})}/></label>
       <label className="text-sm space-y-1">Record type<select className={pilotField} disabled={!!profile} value={input.kind} onChange={e=>update({kind:e.target.value as SourceProfileInput["kind"]})}>{Object.entries(kinds).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
       <label className="text-sm space-y-1">Source row ID column<input className={pilotField} required value={input.identityColumn} onChange={e=>update({identityColumn:e.target.value})}/></label>
       <label className="text-sm space-y-1">Source amounts<select className={pilotField} value={input.amountUnit} onChange={e=>update({amountUnit:e.target.value as "naira"|"kobo"})}><option value="naira">Naira</option><option value="kobo">Kobo</option></select></label>
-      <label className="text-sm space-y-1">First delivery expected (WAT)<input className={pilotField} required type="datetime-local" value={wat(input.firstExpectedAt)} onChange={e=>{if(e.target.value) update({firstExpectedAt:new Date(`${e.target.value}:00+01:00`).toISOString()});}}/></label>
+      <div className="text-sm space-y-1"><label htmlFor="source-first-delivery">First delivery expected (WAT)</label><input id="source-first-delivery" className={pilotField} required type="datetime-local" step="any" value={deliveryDraft} aria-invalid={deliveryInvalid || undefined} aria-describedby={deliveryInvalid ? "source-first-delivery-error" : undefined} onChange={e=>{setDeliveryDraft(e.target.value); setDirty(true); if (deliveryInvalid) setDeliveryInvalid(!deliveryInstant(e.target.value));}} onBlur={()=>setDeliveryInvalid(!deliveryInstant(deliveryDraft))} onInvalid={()=>setDeliveryInvalid(true)}/>{deliveryInvalid && <p id="source-first-delivery-error" role="alert" className="text-destructive">{deliveryError}</p>}</div>
       <label className="text-sm space-y-1">Delivery interval (hours)<input className={pilotField} type="number" min={1} max={8760} required value={input.cadenceHours} onChange={e=>update({cadenceHours:Number(e.target.value)})}/></label>
       <label className="text-sm space-y-1">Grace period (minutes)<input className={pilotField} type="number" min={0} max={10080} required value={input.graceMinutes} onChange={e=>update({graceMinutes:Number(e.target.value)})}/></label>
       <label className="text-sm space-y-1">Expected source rows (optional)<input className={pilotField} type="number" min={0} max={500} value={input.expectedRows ?? ""} onChange={e=>update({expectedRows:e.target.value === "" ? null : Number(e.target.value)})}/></label>
