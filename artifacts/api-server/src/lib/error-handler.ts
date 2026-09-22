@@ -1,7 +1,7 @@
 import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
 import { PilotAccessError } from './pilot-access';
-import { closeRejectedOperation } from './operation-recovery';
+import { closeRefusedOperation } from './refused-operations';
 
 /**
  * One place that turns a thrown error into an HTTP answer.
@@ -16,7 +16,8 @@ import { closeRejectedOperation } from './operation-recovery';
  *
  * Before a definitive refusal is sent, the request's operations-journal entry
  * (when the recovery middleware bound one) is closed, so a refused request
- * never lingers as pending.
+ * never lingers as pending. The middleware registers how; this module never
+ * imports the store or the database, so the offline suites can load it.
  */
 const programmingErrors = [TypeError, RangeError, ReferenceError, SyntaxError, URIError, EvalError];
 const databaseCodes = ["23503", "23505", "23514", "P0001"];
@@ -56,6 +57,6 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
   const answer = describe(error, req);
   const send = () => { if (!res.headersSent) res.status(answer.status).json(answer.body); };
   // A refusal with a journal entry waits for the entry to close; every other refusal is answered at once.
-  const closing = closeRejectedOperation(req, answer.status, answer.body.error);
+  const closing = closeRefusedOperation(req, answer.status, answer.body.error);
   if (closing) void closing.then(send, send); else send();
 };

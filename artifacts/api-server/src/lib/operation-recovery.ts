@@ -2,6 +2,7 @@ import type { RequestHandler } from "express";
 import { z } from "zod";
 import { parse } from "csv-parse/sync";
 import { assertNoRealBankDetails } from "../domain/records";
+import { registerRefusalCloser } from "./refused-operations";
 import {
   bindOperation,
   boundOperation,
@@ -130,6 +131,7 @@ export const recoveryMiddleware: RequestHandler = async (req, res, next) => {
           prepareOperation(ctx, merchantId, key, request),
         );
         bindOperation(req, id, merchantId);
+        registerRefusalCloser(req, (status, message) => closeRejectedOperation(req, status, message));
         res.setHeader("X-Valopay-Operation", id);
       }
     }
