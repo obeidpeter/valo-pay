@@ -22,8 +22,9 @@ import { RecordPagination } from '@/components/record-pagination';
 import { useUrlPagination } from '@/lib/use-url-pagination';
 import { useReconciliationPage } from '@/lib/use-reconciliation-page';
 import { LoadProblem } from '@/components/load-problem';
+import { paymentUnappliedKobo } from '@workspace/valopay-schema';
 
-const paymentAvailable = (record: any): number => Math.max(0, Number(record?.amountKobo || 0) - Number(record?.data?.allocatedKobo || 0));
+const paymentAvailable = (record: any): number => paymentUnappliedKobo(record);
 const instalmentOutstanding = (record: any): number => Math.max(0, Number(record?.data?.outstandingKobo ?? record?.amountKobo ?? 0));
 
 function MatchEvidence({ allocation, payment, instalment, customer, decision }: { allocation: any; payment: any; instalment: any; customer?: any; decision: string }) {

@@ -14,13 +14,13 @@ import { recordsOf } from "../domain/records";
 import { seedMerchant } from "./valopay-seed";
 import { createCreationLimiter } from "./creation-limit";
 import { foldForSearch, LIST_PAGE_CEILING, type ListQuery } from "./valopay-list";
-import { advanceRecordVersions } from "./edit-versions";
 import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
 import { validateCloseRange, pageOffset, type ReadPageQuery, type ReconciliationQueue } from './console-read-models';
 import { precisionAudit } from '../domain/reports';
 import { previousMonth } from '../domain/billing';
 import { measurementRules } from '@workspace/valopay-schema';
 import { protectStored, revealStored, protectRecordData, revealRecordData, payloadEncryptionKey, isProtectedPayload } from './protected-payloads';
+import { markRolledBack } from './transaction-outcome';
 import { assertImportedCorrectionChange } from '../domain/import-corrections';
 import type { LifecycleExternalCandidate, LifecycleCandidate } from '@workspace/valopay-schema';
 import { assertLifecycleCandidate, eraseLifecycleRawCsv, recordLifecycleReceipt, lifecycleRunView } from '../domain/lifecycle';
@@ -41,6 +41,35 @@ export function canonical(value: unknown): string {
 }
 
 type WorkspaceRow = { id: string; principal_hash: string; role: string };
+/**
+ * The lender as a write transaction loaded it, one JSON string per record.
+ * A save serialises the lender once more and compares strings: whatever is
+ * identical is untouched, so checks, versions, audit digests and writes look
+ * only at what the request changed.
+ */
+type StateSnapshot = { merchant: string; settings: string; records: Map<string, string> };
+const snapshotOf = (state: DomainState): StateSnapshot => ({
+  merchant: JSON.stringify(state.merchant), settings: JSON.stringify(state.settings),
+  records: new Map(state.records.map((record) => [record.id, JSON.stringify(record)])),
+});
+/** One JSON pass: the records added or changed since the lender was loaded, and the IDs left untouched. */
+function changesSince(snapshot: StateSnapshot, state: DomainState): { changed: ValopayRecord[]; unchanged: Set<string> } {
+  const changed: ValopayRecord[] = [], unchanged = new Set<string>();
+  for (const record of state.records) {
+    if (snapshot.records.get(record.id) === JSON.stringify(record)) unchanged.add(record.id);
+    else changed.push(record);
+  }
+  return { changed, unchanged };
+}
+/** Every changed stored record gets a strictly newer version, even when two actions share a millisecond. */
+function advanceChanged(snapshot: StateSnapshot, changed: ValopayRecord[], now: string): void {
+  for (const record of changed) {
+    const original = snapshot.records.get(record.id);
+    if (original === undefined) continue;
+    const previous = Date.parse((JSON.parse(original) as ValopayRecord).updatedAt);
+    record.updatedAt = new Date(Math.max(Date.parse(now), Date.parse(record.updatedAt), previous + 1)).toISOString();
+  }
+}
 type MerchantRow = { id: string; info: DomainState["merchant"]; settings: Record<string, any> };
 type RecordRow = {
   id: string; merchant_id: string; kind: string; name: string; status: string; reference: string;
@@ -49,7 +78,7 @@ type RecordRow = {
 type Session = {
   client: PoolClient; workspace: WorkspaceRow; principal: string; active: boolean;
   access: WorkspaceAccess;
-  lockedMerchantId?: string; snapshot?: DomainState;
+  lockedMerchantId?: string; snapshot?: StateSnapshot; summarised?: Set<string>;
   owner?: string; operationId?: string; userId?: string; organizationId?: string;
 };
 
@@ -226,7 +255,10 @@ export async function updateStaff(ctx: StoreContext, id: string, input: { role: 
   if (row.status === 'revoked' && input.status !== 'revoked') fail('A revoked person must accept a new invitation before access is restored.', 409);
   const result = await session.client.query<StaffRow>(`UPDATE valopay_staff_memberships SET role=$3,status=$4,updated_at=greatest(now(),updated_at+interval '1 millisecond') WHERE workspace_id=$1 AND id=$2 RETURNING *`, [session.workspace.id, id, input.role, input.status]);
   if (input.status === 'revoked' || input.role !== row.role) await session.client.query('DELETE FROM valopay_staff_lender_access WHERE membership_id=$1', [id]);
-  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.changed', id, { before: { role: row.role, status: row.status }, after: { role: input.role, status: input.status }, reason: input.reason });
+  // Suspension and revocation withdraw the person's pending invitations: an
+  // invitation sent earlier must not hand the access straight back.
+  const invitationsRevoked = input.status === 'active' ? 0 : (await session.client.query("UPDATE valopay_staff_invitations SET status='revoked' WHERE workspace_id=$1 AND lower(email)=lower($2) AND status='pending'", [session.workspace.id, row.display_name])).rowCount || 0;
+  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.changed', id, { before: { role: row.role, status: row.status }, after: { role: input.role, status: input.status }, reason: input.reason, ...(invitationsRevoked ? { invitationsRevoked } : {}) });
   return staffView(result.rows[0]!);
 }
 /** The workspace's exclusive team lock serialises grant changes with every
@@ -273,10 +305,17 @@ async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: strin
     if (!team) fail('Select the organisation named in your invitation.', 403);
     const checkedAt = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();
     verifyStaff(auth, { id: 'invitation-check', userId: auth.userId || '', organizationId: auth.orgId || '', tenantId: 'invitation-check', role: 'Read-only', status: 'active', validFrom: '2020-01-01T00:00:00.000Z', expiresAt: '2100-01-01T00:00:00.000Z' }, true, checkedAt);
-    const invite = (await client.query<{ id: string; email: string; role: string }>(`SELECT id,email,role FROM valopay_staff_invitations WHERE workspace_id=$1 AND token_hash=$2 AND status='pending' AND expires_at>clock_timestamp() FOR UPDATE`, [team.workspace_id, digest(token)])).rows[0];
+    const invite = (await client.query<{ id: string; email: string; role: string; created_at: Date }>(`SELECT id,email,role,created_at FROM valopay_staff_invitations WHERE workspace_id=$1 AND token_hash=$2 AND status='pending' AND expires_at>clock_timestamp() FOR UPDATE`, [team.workspace_id, digest(token)])).rows[0];
     if (!invite || !verifiedEmails.includes(invite.email)) fail('This invitation is expired, used, revoked or belongs to another verified email address.', 403);
     const existing = (await client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND user_id=$2 FOR UPDATE', [team.workspace_id, auth.userId])).rows[0];
     if (existing?.status === 'active' && existing.expires_at > new Date(checkedAt)) fail('You already have an active membership. Ask an administrator to change its role.', 409);
+    if (existing && existing.status !== 'active') {
+      // Only an invitation an administrator sent after the suspension or
+      // revocation restores access; an older one, sent to any of the person's
+      // verified addresses, is refused.
+      const withdrawnAt = (await client.query<{ at: Date | null }>(`SELECT max(created_at) AS at FROM valopay_staff_events WHERE workspace_id=$1 AND subject=$2 AND action='staff.changed' AND detail->'after'->>'status' IN ('suspended','revoked')`, [team.workspace_id, existing.id])).rows[0]?.at ?? existing.updated_at;
+      if (invite.created_at <= withdrawnAt) fail('This invitation was sent before your access was suspended or revoked, so it cannot restore it. Ask an administrator for a new invitation.', 403);
+    }
     if(existing) {
       if (runtimeIsolationEnabled()) await clearRuntimeInviteeGrants(client);
       else await client.query('DELETE FROM valopay_staff_lender_access WHERE membership_id=$1',[existing.id]);
@@ -389,7 +428,7 @@ function scopedMerchantQuery(lock: MerchantLock = "none") {
 export async function inWorkspace<T>(req: Request, res: Response, fn: (context: StoreContext) => Promise<T>, access: WorkspaceAccess = "write"): Promise<T> {
   const identity = principalFor(req, res);
   const client = await pool.connect();
-  let context: StoreContext | undefined;
+  let context: StoreContext | undefined, committing = false;
   try {
     await client.query(runtimeIsolationEnabled() && access === 'read' ? 'BEGIN ISOLATION LEVEL REPEATABLE READ' : 'BEGIN');
     if (runtimeIsolationEnabled()) {
@@ -447,13 +486,16 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
     sessions.set(context, { client, workspace, principal: workspace.principal_hash, owner: identity.principal, active: true, access,
       operationId: requestOperations.get(req)?.id, userId: staff?.user_id, organizationId: auth?.orgId || undefined });
     const result = await fn(context);
+    committing = true;
     const committed = await client.query("COMMIT");
     // PostgreSQL accepts COMMIT after a caught statement error by returning
     // ROLLBACK.  Do not let a caller that swallowed that error observe success.
-    if (committed.command !== "COMMIT") throw new Error("The workspace transaction was rolled back.");
+    if (committed.command !== "COMMIT") throw markRolledBack(new Error("The workspace transaction was rolled back."));
     return result;
   } catch (error) {
     try { await client.query("ROLLBACK"); } catch { /* transaction is already closed */ }
+    // Before COMMIT was sent nothing was saved; a failed COMMIT's outcome is unknown.
+    if (!committing) markRolledBack(error);
     if (databaseConflictCodes.has((error as { code?: string } | undefined)?.code || "")) {
       conflict("Operation conflicts with the current lender state.");
     }
@@ -461,7 +503,7 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
   } finally {
     if (context) {
       const session = sessions.get(context);
-      if (session) { session.active = false; session.snapshot = undefined; session.lockedMerchantId = undefined; }
+      if (session) { session.active = false; session.snapshot = undefined; session.summarised = undefined; session.lockedMerchantId = undefined; }
     }
     client.release();
   }
@@ -508,22 +550,65 @@ async function readMerchant(context: StoreContext, merchantId: string, lock: Exc
   return merchant;
 }
 
+/** A daily close as the domain reads earlier closes: its summary and the unallocated and exception totals, without the full REC-07 arrays. */
+const closeSummarySql = "(r.data - 'report' - 'operational' - 'metrics') || CASE WHEN r.data ? 'report' THEN jsonb_build_object('report',jsonb_build_object('unallocated',r.data#>'{report,unallocated}','exceptions',r.data#>'{report,exceptions}')) ELSE '{}'::jsonb END";
+/** Closes this recent stay whole in a write load; the latest close, which a Finance review hashes, is always among them. */
+const FULL_CLOSE_DAYS = 7;
+
 export async function loadState(context: StoreContext, merchantId: string, lock: Exclude<MerchantLock, "none"> = "update"): Promise<DomainState> {
   const session = sessionFor(context);
   const merchant = await readMerchant(context, merchantId, lock);
-  const records = (await session.client.query<RecordRow>(
-    `SELECT r.id,r.merchant_id,r.kind,r.name,r.status,r.reference,r.amount_kobo,r.customer_id,r.data,r.created_at,r.updated_at
-     FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id
-     JOIN valopay_workspaces w ON w.id=m.workspace_id
-     WHERE r.merchant_id=$1 AND m.workspace_id=$2 AND w.id=$2 AND w.principal_hash=$3 ORDER BY r.created_at,r.id`,
-    [merchantId, session.workspace.id, session.principal],
-  )).rows.map(rowToRecord);
+  // A write loads earlier closes as summaries: each stored report is about
+  // 100 KB, and a year of them used to be reloaded and hashed by every save.
+  // The full reports stay in PostgreSQL; saveState refuses to change them.
+  const rows = (await session.client.query<RecordRow & { summarised: boolean }>(
+    `WITH recent AS (SELECT max(created_at) - make_interval(days => $5) AS cutoff FROM valopay_records WHERE merchant_id=$1 AND kind='closes'),
+     loaded AS (SELECT r.*, ($4 AND r.kind='closes' AND r.created_at < recent.cutoff) AS summarised
+       FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id
+       JOIN valopay_workspaces w ON w.id=m.workspace_id CROSS JOIN recent
+       WHERE r.merchant_id=$1 AND m.workspace_id=$2 AND w.id=$2 AND w.principal_hash=$3)
+     SELECT r.id,r.merchant_id,r.kind,r.name,r.status,r.reference,r.amount_kobo,r.customer_id,
+       CASE WHEN r.summarised THEN ${closeSummarySql} ELSE r.data END AS data,r.created_at,r.updated_at,r.summarised
+     FROM loaded r ORDER BY r.created_at,r.id`,
+    [merchantId, session.workspace.id, session.principal, lock === "update", FULL_CLOSE_DAYS],
+  )).rows;
+  const records = rows.map(rowToRecord);
   const state: DomainState = { merchant: merchant.info, settings: merchant.settings, records:await Promise.all(records.map(revealRecordData)) };
   if (state.merchant.id !== merchantId) conflict("Lender identity does not match its stored scope.");
   // A shared load is read-only, even in an otherwise write-capable context.
-  // Avoid cloning the entire history just to serve a dashboard or export lookup.
-  session.snapshot = lock === "update" ? structuredClone(state) : undefined;
+  // Avoid serialising the entire history just to serve a dashboard or export lookup.
+  session.snapshot = lock === "update" ? snapshotOf(state) : undefined;
+  session.summarised = lock === "update" ? new Set(rows.filter((row) => row.summarised).map((row) => row.id)) : undefined;
   return state;
+}
+
+/**
+ * After a mutation and before its response is built: every changed record
+ * gets a strictly newer version, so the response carries it, and the audit
+ * entry receives digests of exactly the records the request added or changed,
+ * before and after, with the lender's settings. Unchanged records are never
+ * canonicalised; before this, every save hashed the whole lender twice.
+ */
+export function settleChanges(context: StoreContext, state: DomainState): { beforeDigest: string; afterDigest: string; changedRecords: number } {
+  const session = sessionFor(context);
+  lockedMerchant(session);
+  const snapshot = session.snapshot!;
+  const { changed } = changesSince(snapshot, state);
+  advanceChanged(snapshot, changed, context.now);
+  const byId = (a: ValopayRecord, b: ValopayRecord) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  const previous = changed.filter((record) => snapshot.records.has(record.id)).map((record) => JSON.parse(snapshot.records.get(record.id)!) as ValopayRecord).sort(byId);
+  return {
+    beforeDigest: digest(canonical({ merchant: JSON.parse(snapshot.merchant), settings: JSON.parse(snapshot.settings), records: previous })),
+    afterDigest: digest(canonical({ merchant: state.merchant, settings: state.settings, records: [...changed].sort(byId) })),
+    changedRecords: changed.length,
+  };
+}
+
+/** Records this write transaction added since it loaded the lender. */
+export function addedRecords(context: StoreContext, state: DomainState): ValopayRecord[] {
+  const session = sessionFor(context);
+  lockedMerchant(session);
+  return state.records.filter((record) => !session.snapshot!.records.has(record.id));
 }
 
 const recordColumns = "r.id,r.merchant_id,r.kind,r.name,r.status,r.reference,r.amount_kobo,r.customer_id,r.data,r.created_at,r.updated_at";
@@ -599,12 +684,14 @@ export async function listQueue(context: StoreContext, merchantId: string, queue
   const kind = queue === 'collections' ? "(r.kind='due-items' OR r.kind='attempts' AND r.status='failed')" : `r.kind='${queue}'`;
   const unpaid = `coalesce((CASE WHEN r.kind='attempts' THEN d.status ELSE r.status END) NOT IN ('paid','closed','cancelled'),false)`;
   const overdue = queue === 'collections' ? `(CASE WHEN length(deadline)=10 THEN deadline < to_char($4::timestamptz AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD') ELSE deadline_at < $4::timestamptz END)` : 'deadline_at < $4::timestamptz';
-  // Count/order only this queue's kinds. Materialise that scoped input once so
-  // related instalment joins cannot repeat workspace joins for every attempt.
-  const cte = `WITH scoped AS MATERIALIZED (SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND ${kind}),
+  // Count/order only this queue's kinds. A failed attempt's instalment is read
+  // by primary key from the same lender, one index probe per attempt: joining
+  // the scoped set to itself made PostgreSQL compare every attempt with every
+  // instalment (38 million pairs for one page of a 6,000-instalment lender).
+  const cte = `WITH scoped AS (SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND ${kind}),
     b AS (SELECT r.*, ${deadline} AS deadline, ${timestamp(deadline)} AS deadline_at, ${owner} AS queue_owner,
       ${unpaid} AS unpaid, ${timestamp("r.data->>'occurredAt'")} AS attempt_at
-      FROM scoped r LEFT JOIN scoped d ON r.kind='attempts' AND d.kind='due-items' AND d.id=r.data->>'dueItemId' WHERE ${kind}),
+      FROM scoped r LEFT JOIN valopay_records d ON r.kind='attempts' AND d.id=r.data->>'dueItemId' AND d.merchant_id=r.merchant_id AND d.kind='due-items' WHERE ${kind}),
     q AS (SELECT b.*,coalesce(${overdue},false) AS overdue,
       coalesce(CASE WHEN length(deadline)=10 THEN deadline ELSE to_char(deadline_at AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD') END = to_char($4::timestamptz AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD'),false) AS today FROM b)`;
   const conditions: Record<string, string> = queue === 'exceptions' ? {
@@ -722,10 +809,13 @@ export async function getCloseDetail(context: StoreContext, merchantId:string, i
  * pulling large REC-07 evidence arrays into every summary request. */
 export async function loadReportsView(context:StoreContext,merchantId:string):Promise<DomainState> {
   const session=sessionFor(context),merchant=await readMerchant(context,merchantId);
-  const data = "CASE WHEN r.kind='closes' THEN (r.data - 'report' - 'operational' - 'metrics') || CASE WHEN r.data ? 'report' THEN jsonb_build_object('report',jsonb_build_object('unallocated',r.data#>'{report,unallocated}','exceptions',r.data#>'{report,exceptions}')) ELSE '{}'::jsonb END ELSE r.data END AS data";
+  const data = `CASE WHEN r.kind='closes' THEN ${closeSummarySql} ELSE r.data END AS data`;
   const rows=(await session.client.query<RecordRow>(`SELECT ${recordColumns.replace('r.data',data)} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind NOT IN ('audit','observations','notifications','retry-decisions') ORDER BY r.created_at,r.id`,[merchantId,session.workspace.id,session.principal])).rows;
   return {merchant:merchant.info,settings:merchant.settings,records:rows.map(rowToRecord)};
 }
+
+/** paymentMoneyReturned in SQL: reversed by the provider, or refunded (including the legacy spelling). Returned money is no customer's credit. */
+const paymentReturnedSql = "(coalesce(r.data->>'reversalStatus','')='reversed' OR coalesce(r.data->>'refundStatus','') IN ('refunded','recorded_externally'))";
 
 /** Read-only customer cards and events are paged; balances aggregate every related record. */
 export async function getCustomerHistory(context: StoreContext, merchantId: string, id: string, query: CustomerHistoryQuery) {
@@ -738,7 +828,7 @@ export async function getCustomerHistory(context: StoreContext, merchantId: stri
     count(*) FILTER(WHERE r.kind='mandates') AS mandates, count(*) FILTER(WHERE r.kind='due-items') AS "dueItems", count(*) FILTER(WHERE r.kind='payments') AS payments,
     coalesce(sum(r.amount_kobo) FILTER(WHERE r.kind='due-items' AND r.status<>'cancelled'),0) AS obligations,
     coalesce(sum(r.amount_kobo) FILTER(WHERE r.kind='allocations' AND r.status='confirmed'),0) AS allocated,
-    coalesce(sum(greatest(0,r.amount_kobo-coalesce((r.data->>'allocatedKobo')::numeric,0))) FILTER(WHERE r.kind='payments'),0) AS credit
+    coalesce(sum(greatest(0,r.amount_kobo-coalesce((r.data->>'allocatedKobo')::numeric,0))) FILTER(WHERE r.kind='payments' AND NOT ${paymentReturnedSql}),0) AS credit
     ${base} AND r.customer_id=$4`,values)).rows[0]!;
   const totals = {} as Record<HistorySection,number>, offsets = {} as Record<HistorySection,number>;
   const pages = {} as Record<HistorySection,ValopayRecord[]>;
@@ -845,7 +935,12 @@ function isExportRetry(before: ValopayRecord, after: ValopayRecord, now?: string
   return canonical({ ...after, status: before.status, updatedAt: before.updatedAt, data: stableData(after) }) === canonical({ ...before, data: stableData(before) });
 }
 
-export function assertFinalState(snapshot: DomainState, state: DomainState, merchantId: string, now?: string) {
+/**
+ * The repository's final-state checks. `unchanged` names records whose JSON is
+ * identical to the loaded snapshot: they passed these checks when they were
+ * written, so only added and changed records are compared field by field.
+ */
+export function assertFinalState(snapshot: DomainState, state: DomainState, merchantId: string, now?: string, unchanged: ReadonlySet<string> = new Set()) {
   if (state.merchant.id !== merchantId || snapshot.merchant.id !== merchantId) conflict("Lender identity cannot be reassigned.");
   const final = new Map<string, ValopayRecord>();
   for (const record of state.records) {
@@ -859,6 +954,7 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
   for (const [id, before] of original) {
     const after = final.get(id);
     const present = after ?? conflict("Records cannot be deleted.");
+    if (unchanged.has(id)) continue;
     if (present.id !== before.id || present.merchantId !== before.merchantId || present.kind !== before.kind || present.createdAt !== before.createdAt) {
       conflict("Record identity, lender, kind, and creation time are immutable.");
     }
@@ -892,10 +988,12 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
   const dueReferences = new Set<string>(), observations = new Set<string>(), inflight = new Set<string>();
   const allocatedPayments = new Map<string, number>(), allocatedDues = new Map<string, number>();
   const changed = (record: ValopayRecord, ...keys: string[]) => {
+    if (unchanged.has(record.id)) return false;
     const before = original.get(record.id);
     return !before || keys.some((key) => canonical(before.data[key]) !== canonical(record.data[key]));
   };
   const changedCustomer = (record: ValopayRecord) => {
+    if (unchanged.has(record.id)) return false;
     const before = original.get(record.id);
     return !before || before.customerId !== record.customerId;
   };
@@ -998,19 +1096,26 @@ export async function saveState(context: StoreContext, state: DomainState): Prom
   const session = sessionFor(context);
   const merchantId = lockedMerchant(session);
   const snapshot = session.snapshot!;
-  advanceRecordVersions(snapshot, state, context.now);
-  assertFinalState(snapshot, state, merchantId, context.now);
+  const { changed, unchanged } = changesSince(snapshot, state);
+  // A summarised close would overwrite its full stored report; closes are evidence and never change.
+  if (changed.some((record) => session.summarised?.has(record.id))) conflict("Evidence records are immutable.");
+  advanceChanged(snapshot, changed, context.now);
+  // An unchanged record is its own "before": identical JSON is identical content.
+  const current = new Map(state.records.map((record) => [record.id, record]));
+  const before: DomainState = {
+    merchant: JSON.parse(snapshot.merchant), settings: JSON.parse(snapshot.settings),
+    records: [...snapshot.records].map(([id, json]) => (unchanged.has(id) ? current.get(id)! : JSON.parse(json) as ValopayRecord)),
+  };
+  assertFinalState(before, state, merchantId, context.now, unchanged);
   const owned = await session.client.query(scopedMerchantQuery(), [merchantId, session.workspace.id, session.principal]);
   if (!owned.rows[0]) fail("Lender not found in this workspace.", 404);
-  const old = new Map(snapshot.records.map((record) => [record.id, canonical(record)]));
-  const sorted = [...state.records].sort((a, b) => {
+  const sorted = [...changed].sort((a, b) => {
     const priority = (record: ValopayRecord) => record.kind === "allocations" ? (record.status === "confirmed" ? 3 : 0) : record.kind === "audit" ? 4 : 1;
     return priority(a) - priority(b);
   });
   for (const record of sorted) {
-    if (old.get(record.id) === canonical(record)) continue;
     const values = [record.id, merchantId, record.kind, record.name, record.status, record.reference, record.amountKobo, record.customerId, await protectRecordData(record), record.createdAt, record.updatedAt];
-    if (old.has(record.id)) {
+    if (snapshot.records.has(record.id)) {
       const result = await session.client.query(
         `UPDATE valopay_records SET name=$4,status=$5,reference=$6,amount_kobo=$7,customer_id=$8,data=$9,updated_at=$11
          WHERE id=$1 AND merchant_id=$2 AND kind=$3 AND created_at=$10 AND EXISTS (
@@ -1036,9 +1141,10 @@ export async function saveState(context: StoreContext, state: DomainState): Prom
     [merchantId, session.workspace.id, session.principal, state.merchant, state.settings],
   );
   if (!rowsAffected(merchantUpdate)) fail("Lender not found in this workspace.", 404);
-  // A subsequent repository save in this transaction validates against this
-  // fresh authoritative snapshot, never a caller-supplied "previous" array.
-  session.snapshot = structuredClone(state);
+  // A subsequent repository save in this transaction validates against what
+  // was just written, never a caller-supplied "previous" array.
+  for (const record of changed) snapshot.records.set(record.id, JSON.stringify(record));
+  snapshot.merchant = JSON.stringify(state.merchant); snapshot.settings = JSON.stringify(state.settings);
 }
 
 export async function lifecycleInventory(context:StoreContext,state:DomainState):Promise<LifecycleExternalCandidate[]> {
@@ -1178,7 +1284,7 @@ export async function inMerchantAsSystem<T>(merchantId: string, actor: string, f
   } finally {
     if (context) {
       const session = sessions.get(context);
-      if (session) { session.active = false; session.snapshot = undefined; session.lockedMerchantId = undefined; }
+      if (session) { session.active = false; session.snapshot = undefined; session.summarised = undefined; session.lockedMerchantId = undefined; }
     }
     client.release();
   }
@@ -1257,9 +1363,14 @@ export async function closeDatabase(): Promise<void> {
 
 /** Appends a hash-chained audit entry for an action to the lender's state. */
 export function appendAudit(state: DomainState, ctx: Context, action: string, objectId: string, summary: string, changes?: unknown): ValopayRecord {
-  const chain = recordsOf(state, "audit").sort((a, b) => Number(a.data.sequence || 0) - Number(b.data.sequence || 0));
-  const previous = chain.at(-1);
-  const body = { sequence: chain.length + 1, actor: ctx.actor, action, objectId, summary, changeDigest: digest(canonical(changes ?? {})), previousHash: previous?.data.hash ?? "GENESIS", timestamp: ctx.now };
+  // One pass for the chain's length and head; the chain grows with every save, so it is not sorted here.
+  let length = 0, previous: ValopayRecord | undefined;
+  for (const record of state.records) {
+    if (record.kind !== "audit") continue;
+    length += 1;
+    if (!previous || Number(record.data.sequence || 0) >= Number(previous.data.sequence || 0)) previous = record;
+  }
+  const body = { sequence: length + 1, actor: ctx.actor, action, objectId, summary, changeDigest: digest(canonical(changes ?? {})), previousHash: previous?.data.hash ?? "GENESIS", timestamp: ctx.now };
   const record: ValopayRecord = { id: randomUUID(), merchantId: state.merchant.id, kind: "audit", name: action, status: "recorded", reference: "", amountKobo: 0, customerId: state.records.find((item) => item.id === objectId)?.customerId || "", createdAt: ctx.now, updatedAt: ctx.now, data: { ...body, hash: digest(canonical(body)) } };
   state.records.push(record);
   return record;

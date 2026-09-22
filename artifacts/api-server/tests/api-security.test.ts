@@ -6,6 +6,8 @@ import assert from "node:assert/strict";
 import { ZodError } from "zod";
 import { errorHandler } from "../src/lib/error-handler.js";
 import { validateRecord } from "../src/domain/validation.js";
+import { markRolledBack } from "../src/lib/transaction-outcome.js";
+import { storageFailure } from "../src/lib/export-download.js";
 
 let checks = 0;
 type Answer = { status?: number; body?: unknown };
@@ -22,7 +24,8 @@ function answer(error: unknown): Answer {
   const raised = Object.assign(new Error("Only an Admin can change lender settings."), { status: 403 });
   assert.deepEqual(answer(raised), { status: 403, body: { error: "Only an Admin can change lender settings.", requestId: "test-request" } }, "an error raised with a status is answered in its own words, with the request id");
   assert.deepEqual(answer(new Error("A reason is required for this business or destructive action.")), { status: 400, body: { error: "A reason is required for this business or destructive action.", requestId: "test-request" } }, "a domain rule without a status is a 400 in its own words");
-  assert.equal(answer(new Error("Execution is not permitted in observation mode.")).status, 403, "the wording of a refusal implies 403");
+  assert.equal(answer(new Error("Execution is not permitted in observation mode.")).status, 400, "a refusal without a status is a 400, whatever its wording");
+  assert.equal(answer(new Error("Unsupported domain action: open_gate.")).status, 400, "words from the request never choose the status");
   const typeError = answer(new TypeError("Cannot read properties of undefined (reading 'merchant')"));
   assert.equal(typeError.status, 500, "a programming error is a 500");
   assert.equal((typeError.body as { error: string }).error, "We could not confirm this action. Check Operations or retry the same request before submitting a new one.", "a programming error's message stays out of the response and does not claim an unconfirmed write was rolled back");
@@ -30,10 +33,32 @@ function answer(error: unknown): Answer {
   assert.equal(answer("a string thrown by mistake").status, 500, "something that is not an Error is a 500");
   assert.equal(answer(Object.assign(new Error("duplicate key"), { code: "23505" })).status, 409, "a database safety constraint is a conflict");
   assert.equal(answer(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" })).status, 500, "an error with a code the application does not own is a 500");
+  // The body parser's errors are the request's fault, even the JSON SyntaxError.
+  const parserError = (type: string, status: number) => Object.assign(new SyntaxError("Unexpected token } in JSON at position 9"), { type, status, statusCode: status, expose: true });
+  assert.deepEqual(answer(parserError("entity.parse.failed", 400)), { status: 400, body: { error: "The request body is not valid JSON. Check its format and try again.", requestId: "test-request" } }, "malformed JSON is a 400 in plain words");
+  assert.equal(answer(parserError("entity.too.large", 413)).status, 413);
+  assert.equal(answer(parserError("charset.unsupported", 415)).status, 415);
+  assert.equal(answer(Object.assign(new Error("invalid byte sequence"), { code: "22021" })).status, 400, "a NUL that reached PostgreSQL text is the request's fault");
+  assert.equal((answer(Object.assign(new Error("unsupported Unicode escape sequence"), { code: "22P05" })).body as { error: string }).error, "Text cannot contain the NUL character (\\u0000). Remove it and try again.");
+  // A service the application found unavailable keeps its status and words; the store says when nothing was saved.
+  const unconfigured = answer(Object.assign(new Error("Private export storage is not configured. Contact the workspace administrator."), { status: 503 }));
+  assert.deepEqual(unconfigured, { status: 503, body: { error: "Private export storage is not configured. Contact the workspace administrator.", requestId: "test-request" } }, "an application 503 is not flattened to a general 500");
+  const rolledBack = answer(markRolledBack(Object.assign(new Error("Protected data cannot be opened. Ask the administrator to check the configured encryption key."), { status: 503 })));
+  assert.equal((rolledBack.body as { committed?: boolean }).committed, false, "a refusal inside a rolled-back transaction says nothing was saved");
+  const rolledBackBug = answer(markRolledBack(new TypeError("Cannot read properties of undefined")));
+  assert.deepEqual(rolledBackBug, { status: 500, body: { error: "This action failed and nothing was saved. Try again, and quote this reference if it happens again.", committed: false, requestId: "test-request" } }, "a programming error whose transaction rolled back says nothing was saved, still in general words");
+  // Storage failures and integrity failures are server-side, never a 400.
+  assert.equal(answer(storageFailure(503)).status, 503, "a storage outage is a 503");
+  assert.equal(answer(storageFailure(404)).status, 502, "a missing export object is the service's failure");
+  assert.equal(answer(storageFailure(403)).status, 502);
+  assert.equal(answer(Object.assign(new Error("Export object could not be downloaded."), { statusCode: 500 })).status, 502, "an upstream status alone is never the request's fault");
+  const integrity = answer(Object.assign(new Error("Export checksum verification failed. The file was not sent: generate the export again, and quote this reference if it happens again."), { status: 500, expose: true }));
+  assert.equal(integrity.status, 500);
+  assert.match((integrity.body as { error: string }).error, /checksum verification failed/, "an integrity failure explains itself");
   const zod = answer(new ZodError([{ code: "custom", path: ["data", "amountKobo"], message: "Expected number" }]));
   assert.equal(zod.status, 400);
   assert.deepEqual((zod.body as { details: unknown[] }).details, [{ field: "data.amountKobo", message: "Expected number" }], "validation failures name their fields");
-  checks += 11;
+  checks += 29;
 }
 
 {
@@ -75,9 +100,19 @@ try {
   assert.equal(await errorOf(malformed), "Invalid request origin.");
   const tooLarge = await fetch(`${base}/api/v1/webhooks/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: `{"pad":"${"x".repeat(2 * 1024 * 1024 + 10)}"}` });
   assert.equal(tooLarge.status, 413, "a body over the 2 MB limit is refused");
-  checks += 11;
+  assert.equal(tooLarge.headers.get("x-content-type-options"), "nosniff", "an oversized body is answered with the security headers");
+  const brokenJson = await fetch(`${base}/api/v1/webhooks/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: '{"action":' });
+  assert.equal(brokenJson.status, 400, "malformed JSON is a 400, not a server failure");
+  assert.equal(await errorOf(brokenJson), "The request body is not valid JSON. Check its format and try again.");
+  for (const [header, value] of [["x-content-type-options", "nosniff"], ["x-frame-options", "DENY"], ["cache-control", "private, no-store"]]) assert.equal(brokenJson.headers.get(header!), value, `${header} on a malformed-body answer`);
+  const foreignBroken = await fetch(`${base}/api/v1/webhooks/test`, { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://evil.example" }, body: '{"action":' });
+  assert.equal(await errorOf(foreignBroken), "Cross-origin requests are not permitted.", "the origin rule runs before the body is read");
+  const nul = await fetch(`${base}/api/v1/webhooks/test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ data: { name: "Ada\u0000" } }) });
+  assert.equal(nul.status, 400, "a NUL character is refused at the edge");
+  assert.equal(await errorOf(nul), "Text cannot contain the NUL character (\\u0000). Remove it from data.name and try again.");
+  checks += 21;
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-console.log(`API security tests passed (${checks} checks): error answers, prototype keys, response headers, origin rule, body limit, webhook ingress.`);
+console.log(`API security tests passed (${checks} checks): error answers and statuses, body-parser and NUL refusals, unavailable services and storage failures, prototype keys, response headers, origin rule before the body, body limit, webhook ingress.`);

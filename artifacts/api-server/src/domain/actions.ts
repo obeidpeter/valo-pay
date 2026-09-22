@@ -5,7 +5,10 @@ import {
   type CloseTrigger,
 } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
-import { allocatePayment, applyConfirmedAllocation, reconcile, supersedeAllocation } from "./reconciliation";
+import {
+  REVIEW_SUPERSESSION, allocatePayment, applyConfirmedAllocation, confirmAttemptOutcome, forgetRejectedMatch, paymentReturned, paymentReversed, reconcile,
+  reinstateAllocation, rememberRejectedMatch, settlePaymentStatus, supersedeAllocation, supersededByReview,
+} from "./reconciliation";
 import { buildReports } from "./reports";
 import { buildCloseReport, closeSchedule, openingSnapshot, storedCloseCursor } from "./close";
 import { issueInvoice } from "./billing";
@@ -264,6 +267,8 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     if (input.action === "manual_allocate") {
       const due = findRecord(state, String(data.dueItemId), "due-items");
       const allocation = allocatePayment(state, ctx, payment, due, Number(data.amountKobo), "R7", "manual", false, `Finance allocated manually: ${reason(input)}`);
+      // Finance's own allocation outranks an earlier "not this instalment".
+      forgetRejectedMatch(payment, due.id);
       return result("Manual allocation recorded by Finance.", allocation);
     }
     const allocation = recordsOf(state, "allocations").find((item) => item.data.paymentId === payment.id && item.status === "proposed");
@@ -277,7 +282,10 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     }
     if (input.action === "reject_allocation") {
       allocation.status = "superseded"; allocation.data.supersededReason = reason(input);
-      payment.status = "unallocated"; delete payment.data.proposedDueItemId; delete payment.data.proposedAmountKobo;
+      // The rejection sticks: automatic matching does not propose this instalment for the payment again,
+      // and the payment keeps whatever it has already applied elsewhere.
+      rememberRejectedMatch(payment, allocation.data.dueItemId);
+      settlePaymentStatus(state, ctx, payment);
     } else {
       applyConfirmedAllocation(state, ctx, allocation);
       allocation.data.confirmedBy = ctx.actor;
@@ -289,10 +297,33 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     assertActionRole(ctx, ["Admin", "Finance"]);
     const allocation = findRecord(state, String(input.recordId), "allocations");
     if (typeof data.correct !== "boolean") throw new Error("Choose whether the allocation is correct.");
-    allocation.data.reviewed = data.correct; allocation.data.reviewReason = reason(input); allocation.data.reviewedBy = ctx.actor; allocation.data.reviewedAt = now;
-    if (!data.correct) supersedeAllocation(state, ctx, allocation, `Precision audit marked this allocation wrong: ${reason(input)}`);
+    if (allocation.status === "proposed") throw Object.assign(new Error("This match is still a proposal. Confirm or reject it in the proposed matches instead of recording an accuracy review."), { status: 409 });
+    const payment = findRecord(state, String(allocation.data.paymentId), "payments");
+    const why = reason(input);
+    let message: string;
+    if (data.correct) {
+      if (supersededByReview(allocation)) {
+        // A match this review had marked wrong is applied again, or refused while the records have moved on.
+        reinstateAllocation(state, ctx, allocation);
+        message = "Allocation reviewed as correct and applied again.";
+      } else {
+        message = allocation.status === "superseded" ? "Allocation reviewed as correct. It stays out of use because it was superseded for another reason." : "Allocation reviewed as correct.";
+      }
+    } else {
+      // REC-09: the wrong pair is remembered, so the next close does not recreate the same match.
+      rememberRejectedMatch(payment, allocation.data.dueItemId);
+      if (allocation.status === "confirmed") {
+        supersedeAllocation(state, ctx, allocation, `${REVIEW_SUPERSESSION}: ${why}`);
+        allocation.data.supersededByReview = true;
+        message = "Allocation marked incorrect and no longer applied. The payment and instalment are open for review again, and automatic matching will not pair them again.";
+      } else {
+        touch(payment, now);
+        message = "Allocation marked incorrect. It was already out of use, and automatic matching will not pair this payment and instalment again.";
+      }
+    }
+    allocation.data.reviewed = data.correct; allocation.data.reviewReason = why; allocation.data.reviewedBy = ctx.actor; allocation.data.reviewedAt = now;
     touch(allocation, now);
-    return result(data.correct ? "Allocation reviewed as correct." : "Allocation marked incorrect and no longer applied. The payment and instalment are open for review again.", allocation);
+    return result(message, allocation);
   }
   if (input.action === "resolve_exception") {
     assertActionRole(ctx, ["Admin", "Finance", "Operations"]);
@@ -301,17 +332,31 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     if (["resolved", "closed"].includes(item.status)) throw new Error("This exception is already resolved.");
     const allowed = resolutionCodesFor(item.data.type);
     if (!allowed.includes(String(data.resolutionCode))) throw new Error(`Resolution code must be one of: ${allowed.join(", ")}.`);
+    const type = resolveExceptionType(item.data.type);
+    const confirmedCode = data.confirmedFailureCode === undefined || data.confirmedFailureCode === null || data.confirmedFailureCode === "" ? undefined : data.confirmedFailureCode;
+    if (confirmedCode !== undefined) {
+      if (type !== "unknown_outcome" || data.resolutionCode !== "resolved_failed") throw new Error("A confirmed failure code is recorded only when an unknown outcome is resolved as failed.");
+      if (!isKnownFailureCode(confirmedCode) || normaliseFailureCode(confirmedCode) === "TIMEOUT_UNKNOWN") throw new Error(`Choose the failure code the provider confirmed: ${failureCodeList.filter((code) => code !== "TIMEOUT_UNKNOWN").join(", ")}.`);
+    }
     item.status = "resolved"; item.data.resolutionCode = data.resolutionCode; item.data.notes = reason(input); item.data.resolvedBy = ctx.actor; item.data.resolvedAt = now;
-    if (!resolveExceptionType(item.data.type)) item.data.legacyType = true;
+    if (confirmedCode !== undefined) item.data.confirmedFailureCode = normaliseFailureCode(confirmedCode);
+    if (!type) item.data.legacyType = true;
     touch(item, now);
-    return result("Exception resolution recorded.", item);
+    // An unknown outcome's resolution is what the provider confirmed, so the attempt takes that outcome.
+    const outcome = type === "unknown_outcome" ? confirmAttemptOutcome(state, ctx, item) : undefined;
+    return result(outcome ? `Exception resolution recorded. The attempt is now recorded as ${outcome}.` : "Exception resolution recorded.", item, outcome ? { attemptStatus: outcome } : {});
   }
   if (input.action === "record_refund") {
     assertActionRole(ctx, ["Admin", "Finance"]);
     if (!data.reference || /^\d{8,}$/.test(String(data.reference))) throw new Error("Enter a masked sample reference for the refund recorded outside Valo Pay.");
     const payment = findRecord(state, String(input.recordId), "payments");
+    // Reversed money already went back. A refund returns what the payment has not applied, such as an overpayment's
+    // excess: money applied to an instalment stays applied, and nothing is left to allocate or hold as credit.
+    if (paymentReturned(payment)) throw Object.assign(new Error(paymentReversed(payment) ? `Payment ${payment.reference} was reversed by the provider, so its money already went back. There is nothing to refund.` : `A refund is already recorded for payment ${payment.reference}.`), { status: 409 });
     payment.data.refundStatus = "refunded"; payment.data.refundReference = String(data.reference); payment.data.refundRecordedAt = now; payment.data.refundRecordedExternally = true;
     touch(payment, now);
+    // Its money went back: open proposals are withdrawn and the payment leaves the allocation queues.
+    settlePaymentStatus(state, ctx, payment, "Superseded: the payment was refunded outside Valo Pay.");
     return result("External refund reference recorded; Valo Pay did not move funds.", payment);
   }
   if (input.action === "simulate_failure") {

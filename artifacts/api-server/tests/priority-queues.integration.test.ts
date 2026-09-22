@@ -59,7 +59,29 @@ try {
   assert.equal(sibling.related.length, 0);
   console.log(JSON.stringify({ benchmark: 'priority-queue-pages', syntheticRows: 6000, pages: timings.length, medianMs: Math.round([...timings].sort((a, b) => a - b)[Math.floor(timings.length / 2)]!), maximumMs: Math.round(Math.max(...timings)), note: 'Disposable CI database; not a production latency guarantee.' }));
   await assert.rejects(() => inWorkspace(request(), response(), ctx => listQueue(ctx, merchantId, 'collections', { view: 'invalid' }), 'read'), (error: any) => error.status === 400);
-  console.log('Priority queue integration passed: 6,000 rows, all filters, complete counts, bounded pages, deep links, related-record scoping and malformed legacy dates.');
+  // Pilot scale: 6,000 instalments, each with a failed attempt. Every attempt
+  // reads its instalment by key; comparing every attempt with every instalment
+  // took over two seconds a page at this size and grew with its square.
+  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data,amount_kobo)
+    SELECT $1 || '-scale-due-' || lpad(i::text,5,'0'),$1,'due-items','Scale instalment ' || i,'scheduled','SDUE-' || i,$2,
+      jsonb_build_object('synthetic',true,'mandateId',$3::text,'owner','valopay','dueDate',CASE WHEN i%2=0 THEN '2026-09-18' ELSE '2026-09-20' END),1000000
+    FROM generate_series(1,4000) i`, [merchantId, customer.id, mandate.id]);
+  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data,amount_kobo)
+    SELECT $1 || '-scale-attempt-' || lpad(i::text,5,'0'),$1,'attempts','Scale attempt ' || i,'failed','SATT-' || i,$2,
+      jsonb_build_object('synthetic',true,'dueItemId',$1 || '-scale-due-' || lpad(i::text,5,'0'),'occurredAt','2026-09-18T12:00:00Z'),1000000
+    FROM generate_series(1,4000) i`, [merchantId, customer.id]);
+  await pool.query('ANALYZE valopay_records');
+  const scaled = await inWorkspace(request(), response(), ctx => loadState(ctx, merchantId, 'share'), 'read');
+  for (const view of ['failed', 'overdue', 'all']) {
+    await inWorkspace(request(), response(), async ctx => {
+      const start = performance.now();
+      const actual = await listQueue(ctx, merchantId, 'collections', { view, limit: 25 });
+      const elapsed = performance.now() - start;
+      assert.deepEqual(normalise(actual), normalise(pageQueue(scaled.records, 'collections', { view, limit: 25 }, ctx.now)), `collections at pilot scale: ${view}`);
+      assert.ok(elapsed < 2000, `A pilot-scale collections page (${view}) returns in ${Math.round(elapsed)} ms.`);
+    }, 'read');
+  }
+  console.log('Priority queue integration passed: 6,000 rows, all filters, complete counts, bounded pages, deep links, related-record scoping, malformed legacy dates and a 14,000-row collections queue in linear time.');
 } finally {
   const principals = tokens.map(token => createHash('sha256').update(`demo:${token}`).digest('hex'));
   const scope = 'SELECT id FROM valopay_merchants WHERE workspace_id IN (SELECT id FROM valopay_workspaces WHERE principal_hash=ANY($1::text[]))';

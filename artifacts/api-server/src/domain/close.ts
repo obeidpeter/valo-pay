@@ -1,4 +1,4 @@
-import { closeRules, closeTimeOf, isOpenException, nextCloseInstant, type CloseReport } from "@workspace/valopay-schema";
+import { closeRules, closeTimeOf, isOpenException, nextCloseInstant, paymentUnappliedKobo, type CloseReport } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { paymentObservedAt } from "./reconciliation";
@@ -85,7 +85,7 @@ function positionIndex(state: DomainState) {
       const dueId = record.data.dueItemId;
       if (typeof dueId === "string") appliedByDue.set(dueId, (appliedByDue.get(dueId) ?? 0) + record.amountKobo);
     }
-    if (record.kind === "payments" && position) position.unallocatedKobo += Math.max(0, record.amountKobo - Number(record.data.allocatedKobo || 0));
+    if (record.kind === "payments" && position) position.unallocatedKobo += paymentUnappliedKobo(record);
   }
   for (const position of positions.values()) position.outstandingKobo = Math.max(0, position.obligationsKobo - position.allocatedKobo);
   return { positions, appliedByDue };
@@ -95,7 +95,7 @@ export function positionFor(state: DomainState, customerId: string): CustomerPos
   const related = state.records.filter((record) => record.customerId === customerId);
   const obligationsKobo = related.filter((record) => record.kind === "due-items" && record.status !== "cancelled").reduce((sum, record) => sum + record.amountKobo, 0);
   const allocatedKobo = related.filter((record) => record.kind === "allocations" && record.status === "confirmed").reduce((sum, record) => sum + record.amountKobo, 0);
-  const unallocatedKobo = related.filter((record) => record.kind === "payments").reduce((sum, record) => sum + Math.max(0, record.amountKobo - Number(record.data.allocatedKobo || 0)), 0);
+  const unallocatedKobo = related.filter((record) => record.kind === "payments").reduce((sum, record) => sum + paymentUnappliedKobo(record), 0);
   return { customerId, obligationsKobo, allocatedKobo, outstandingKobo: Math.max(0, obligationsKobo - allocatedKobo), unallocatedKobo };
 }
 

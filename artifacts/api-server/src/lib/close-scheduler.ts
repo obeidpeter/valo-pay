@@ -10,7 +10,7 @@
 import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import { closeRules } from "@workspace/valopay-schema";
-import { SYSTEM_ACTOR_PREFIX, appendAudit, canonical, digest, dueScheduledCloses, inMerchantAsSystem, initialiseCloseCursors, loadState, saveState } from "./valopay-store";
+import { SYSTEM_ACTOR_PREFIX, appendAudit, dueScheduledCloses, inMerchantAsSystem, initialiseCloseCursors, loadState, saveState, settleChanges } from "./valopay-store";
 import { runDailyClose } from "../domain/actions";
 import { scheduledCloseDue } from "../domain/close";
 import { enrolEligibleFailures } from "../domain/policy-engine";
@@ -64,11 +64,10 @@ export async function runDueCloses(options: { batchSize?: number; log?: Logger }
         const state = await loadState(ctx, merchantId, "update");
         // Re-checked under the lock: a person or another instance may have closed since the batch was read.
         if (!scheduledCloseDue(state, ctx.now)) return null;
-        const before = structuredClone(state);
         const result = runDailyClose(state, ctx, "scheduled");
         enrolEligibleFailures(state, ctx);
         if(result.record?.kind==='closes')bindCloseReviewBasis(state,result.record);
-        appendAudit(state, ctx, "daily_close", result.record!.id, result.message, { beforeDigest: digest(canonical(before)), afterDigest: digest(canonical(state)) });
+        appendAudit(state, ctx, "daily_close", result.record!.id, result.message, settleChanges(ctx, state));
         await saveState(ctx, state);
         const schedule = result.data.schedule as { late?: boolean; delayMinutes?: number | null } | undefined;
         return { closeId: result.record!.id, late: schedule?.late === true, delayMinutes: schedule?.delayMinutes ?? null };

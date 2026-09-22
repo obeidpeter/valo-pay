@@ -12,6 +12,19 @@ import { CLERK_PROXY_PATH,clerkProxyMiddleware,getClerkProxyHost } from "./middl
 import { createPaystackIngress } from './routes/sources';
 import { paystackConnectionTransaction } from './lib/paystack-connection';
 
+/** The path of the first key or string in a parsed body that carries a NUL character, "" for the body itself. */
+export function nulField(value: unknown, path = "", depth = 0): string | undefined {
+  if (typeof value === "string") return value.includes("\u0000") ? path : undefined;
+  if (depth > 32 || value === null || typeof value !== "object") return undefined;
+  for (const [key, item] of Object.entries(value)) {
+    const at = path ? `${path}.${key}` : key;
+    if (key.includes("\u0000")) return path || "a field name";
+    const found = nulField(item, at, depth + 1);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
 const app: Express = express();
 app.set("trust proxy",1);
 app.disable("x-powered-by");
@@ -63,12 +76,9 @@ app.use('/api/v1/providers/paystack',(req,res,next)=>{
   next();
 });
 app.use('/api',createPaystackIngress(paystackConnectionTransaction));
-app.use(express.json({limit:"2mb"}));
-app.use(express.urlencoded({ extended: false,limit:"2mb" }));
-app.use(clerkMiddleware((req)=>({
-  publishableKey:publishableKeyFromHost(getClerkProxyHost(req)??"",process.env.CLERK_PUBLISHABLE_KEY),
-  ...(staffMode() ? { authorizedParties: [...staffPolicy().authorisedParties] } : {}),
-})));
+// The response headers, the origin rule and the request limit come before the
+// body is read, so a malformed or oversized body is answered with the same
+// headers as any other request, and a refused client never has its body parsed.
 const limits=new Map<string,{count:number;reset:number}>();
 app.use("/api/v1",(req,res,next)=>{
   res.setHeader("Cache-Control","private, no-store");
@@ -94,6 +104,18 @@ app.use("/api/v1",(req,res,next)=>{
   }
   next();
 });
+app.use(express.json({limit:"2mb"}));
+app.use(express.urlencoded({ extended: false,limit:"2mb" }));
+app.use((req,res,next)=>{
+  // PostgreSQL text cannot hold NUL, so it is refused here, naming the field, before anything is journaled or saved.
+  const field=nulField(req.body);
+  if(field!==undefined){req.log.info({event:"request.rejected",status:400,reason:"nul_character"},"Request body refused");res.status(400).json({error:`Text cannot contain the NUL character (\\u0000). Remove it from ${field || "the request"} and try again.`,requestId:req.id});return;}
+  next();
+});
+app.use(clerkMiddleware((req)=>({
+  publishableKey:publishableKeyFromHost(getClerkProxyHost(req)??"",process.env.CLERK_PUBLISHABLE_KEY),
+  ...(staffMode() ? { authorizedParties: [...staffPolicy().authorisedParties] } : {}),
+})));
 
 app.use("/api", router);
 // An address under /api that no route answers is a JSON answer with the request id, not the framework's HTML page.

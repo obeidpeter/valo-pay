@@ -106,6 +106,9 @@ describe('safe mutation intentions', () => {
     for(const error of [new TypeError('Offline'),{status:200},{status:408,data:{error:'Timeout'}},{status:503,data:{error:'Unavailable'}}]) expect(outcomeIsUnconfirmed(error)).toBe(true);
     for(const status of [400,401,403,409,422,429]) expect(outcomeIsUnconfirmed({status,data:{error:'Rejected'}})).toBe(false);
     expect(outcomeIsUnconfirmed({status:403})).toBe(true);
+    // The server rolled the request back and says so: a 5xx with committed:false is a confirmed outcome.
+    for(const status of [500,503]) expect(outcomeIsUnconfirmed({status,data:{error:'Nothing was saved',committed:false}})).toBe(false);
+    expect(outcomeIsUnconfirmed({status:503,data:{error:'Unavailable',committed:true}})).toBe(true);
   });
 
   it.each([401,403,409])('keeps the original outcome unknown when its recovery is refused with %s',async status=>{
@@ -160,6 +163,25 @@ describe('safe mutation intentions', () => {
     expect(result.current.hasUnconfirmedOutcome).toBe(false);
     expect(requests[1]).toEqual(requests[0]);
     expect(successes).toBe(1);
+  });
+
+  it('releases the controls and uses a new key after a server failure that saved nothing', async () => {
+    const user = userEvent.setup();
+    const keys: string[] = [];
+    globalThis.fetch = async (_input, options) => {
+      keys.push(new Headers(options?.headers).get('Idempotency-Key')!);
+      return keys.length === 1
+        ? new Response(JSON.stringify({ error: 'Private export storage is not configured. Contact the workspace administrator.', committed: false, requestId: 'r1' }), { status: 503, headers: { 'content-type': 'application/json' } })
+        : new Response(JSON.stringify({ message: 'Saved', data: {} }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    render(<QueryClientProvider client={new QueryClient()}><Action action="new_policy_version" recordId="sample-policy" merchantId={api.merchantIds[0]!} /></QueryClientProvider>);
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
+    await screen.findByRole('alert');
+    expect(screen.queryByRole('button', { name: 'Retry original request' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
+    await screen.findByRole('status');
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).not.toBe(keys[0]);
   });
 
   it.each(['null','empty','invalid JSON'])('does not treat a %s successful body as a confirmed action',async body=>{

@@ -4,6 +4,7 @@ import {
   inWorkspace,
   loadState,
   saveState,
+  settleChanges,
   appendAudit,
   findIdempotency,
   saveIdempotency,
@@ -52,7 +53,6 @@ router.post("/v1/connected/actions", async (req, res) => {
           await completeOperation(ctx, prior.response);
           return prior.response;
         }
-        const before = digest(canonical(state));
         let record;
         try {
           record = runConnectedAction(state, ctx, input);
@@ -69,8 +69,7 @@ router.post("/v1/connected/actions", async (req, res) => {
           input.recordId || "connected-workspace",
           input.reason,
           {
-            beforeDigest: before,
-            afterDigest: digest(canonical(state)),
+            ...settleChanges(ctx, state),
             mode: "synthetic",
             externalInstructionPerformed: false,
           },

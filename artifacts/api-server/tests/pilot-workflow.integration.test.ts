@@ -628,6 +628,11 @@ try {
     403,
   );
 
+  // Invitations sent while the person is still active: one to the address the
+  // membership was accepted with, one to another of their verified addresses.
+  const sameAddress = ok(await call("/v1/team/invitations", "POST", { email: "finance@example.test", role: "Operations" }, undefined, "admin"));
+  const otherAddress = ok(await call("/v1/team/invitations", "POST", { email: "finance.alt@example.test", role: "Admin" }, undefined, "admin"));
+
   // Hold a staff transaction. Revocation must wait for it, then immediately
   // refuse all subsequent reads/writes under the already-issued session.
   let release!: () => void, entered!: () => void;
@@ -685,8 +690,24 @@ try {
     ).status,
     403,
   );
+  // A revoked person cannot restore their own access with an invitation sent
+  // before the revocation, whichever verified address it went to.
+  assert.equal((await pool.query("SELECT status FROM valopay_staff_invitations WHERE id=$1", [sameAddress.id])).rows[0].status, "revoked", "Revocation withdraws the person's pending invitation.");
+  (clerkClient.users as any).getUser = async () => ({
+    emailAddresses: ["finance@example.test", "finance.alt@example.test"].map((emailAddress) => ({ emailAddress, verification: { status: "verified" } })),
+  });
+  assert.equal((await call("/v1/team/accept", "POST", { token: sameAddress.token }, undefined, "finance")).status, 403);
+  const stale = await call("/v1/team/accept", "POST", { token: otherAddress.token }, undefined, "finance");
+  assert.equal(stale.status, 403, "An invitation sent before the revocation cannot restore access, or raise it to Admin.");
+  assert.match(String((stale.data as { error?: unknown }).error), /sent before your access was suspended or revoked/);
+  assert.equal((await pool.query("SELECT status,role FROM valopay_staff_memberships WHERE workspace_id=$1 AND user_id=$2", [provisioned.workspaceId, finance])).rows[0].status, "revoked");
+  const fresh = ok(await call("/v1/team/invitations", "POST", { email: "finance@example.test", role: "Read-only" }, undefined, "admin"));
+  ok(await call("/v1/team/accept", "POST", { token: fresh.token }, undefined, "finance"));
+  const restored = ok(await call("/v1/workspace", "GET", undefined, undefined, "finance"));
+  assert.equal(restored.role, "Read-only", "An invitation sent after the revocation restores access at its own role.");
+  assert.equal(restored.merchants.length, 0, "and without the lender access removed at revocation.");
   console.log(
-    "Pilot API/PostgreSQL checks passed: durable recovery, cancellation, concurrent imports/cases, empty onboarding, staff invitation, MFA, isolation and synchronised revocation.",
+    "Pilot API/PostgreSQL checks passed: durable recovery, cancellation, concurrent imports/cases, empty onboarding, staff invitation, MFA, isolation, synchronised revocation and invitations that cannot outlive a revocation.",
   );
 } finally {
   (clerkClient.users as any).getUser = oldGetUser;

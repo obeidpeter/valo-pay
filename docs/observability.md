@@ -36,9 +36,10 @@ Every line is JSON with `level` (30 info, 40 warn, 50 error, 60 fatal), `time`, 
 
 | Event | Level | Fields | Meaning |
 | --- | --- | --- | --- |
-| `request.rejected` | info | `status`, `reason` | A rule refused the request in its own words (400, 403, 409). |
+| `request.rejected` | info | `status`, `reason` | A rule refused the request in its own words (400, 403, 409), or the body could not be read (400, 413, 415; `reason` is the parser's type or `nul_character`). |
 | `request.refused` | warn | `reason`: `origin`, `origin_malformed`, `rate_limit` | The shell refused it before any route ran. |
-| `request.failed` | error | `err` with stack | The service itself failed; the answer was a general 500. |
+| `request.failed` | error | `err` with stack | The service itself failed; the answer was a general 500, or a 502 when a service it depends on answered with an error of its own. When the transaction was rolled back, the answer says `committed: false` and that nothing was saved. |
+| `request.unavailable` | error | `status`, `reason`, `err` | The application refused the request because a service it needs is unavailable or not configured (502, 503, 504), or an export failed its checksum (500); the answer keeps the status and the reason. |
 | `readiness.failed` | warn | `latencyMs`, `reason` | `/api/readyz` could not reach the database. |
 | `export.generated` | info | `kind`, `format`, `byteLength`, `generationMs` | An export was written to storage. |
 | `server.started`, `server.stopping`, `server.stopped`, `server.stop_timeout` | info / error | `port`, `build`, `node`; `signal` | The process lifecycle. |

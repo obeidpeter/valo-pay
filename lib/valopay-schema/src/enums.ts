@@ -97,6 +97,19 @@ export function normaliseRefundStatus(raw: unknown): (typeof refundStatuses)[num
   if (raw === "requested") return "requested";
   return "none";
 }
+/**
+ * Money that went back to the payer: a provider reversal, or a refund
+ * recorded outside Valo Pay. What such a payment has not already applied is
+ * neither allocatable nor customer credit, and it is nobody's open work.
+ */
+export function paymentMoneyReturned(data: { reversalStatus?: unknown; refundStatus?: unknown } | null | undefined): boolean {
+  return normaliseReversalStatus(data?.reversalStatus) === "reversed" || normaliseRefundStatus(data?.refundStatus) === "refunded";
+}
+/** What a payment still holds that is not applied to an instalment: the customer's credit, and what Finance may allocate. */
+export function paymentUnappliedKobo(payment: { amountKobo?: unknown; data?: { allocatedKobo?: unknown; reversalStatus?: unknown; refundStatus?: unknown } | null } | null | undefined): number {
+  if (!payment || paymentMoneyReturned(payment.data)) return 0;
+  return Math.max(0, Number(payment.amountKobo || 0) - Number(payment.data?.allocatedKobo || 0));
+}
 
 /** Why a customer message was sent. */
 export const notificationPurposes = ["activation_reminder", "pre_debit", "failed_debit", "confirmation", "final_attempt", "policy_change"] as const;

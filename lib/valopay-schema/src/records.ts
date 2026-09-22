@@ -149,6 +149,16 @@ export const recordDataSchemas = {
     reversed: z.boolean().optional(),
     reversedAt: isoDateOrTimestamp.optional(),
     paymentId: z.string().optional(),
+    /** Set when Operations resolved the attempt's unknown outcome: what it showed before and the resolution that confirmed it. */
+    outcomeConfirmation: z.object({
+      exceptionId: z.string(),
+      resolutionCode: z.string(),
+      previousStatus: z.string(),
+      previousFailureCode: z.string().optional(),
+      previousRawFailureCode: z.string().optional(),
+      confirmedAt: isoDateOrTimestamp,
+      confirmedBy: z.string(),
+    }).optional(),
   }).passthrough(),
   observations: z.object({
     ...common,
@@ -202,6 +212,8 @@ export const recordDataSchemas = {
     refundReference: z.string().optional(),
     refundRecordedAt: isoDateOrTimestamp.optional(),
     refundRecordedExternally: z.boolean().optional(),
+    /** Instalments Finance said this payment does not belong to; automatic matching never proposes them again. */
+    rejectedDueItemIds: z.array(z.string()).optional(),
     duplicateSettlementLine: z.boolean().optional(),
     statementObservationId: z.string().optional(),
     settlementBatchId: z.string().optional(),
@@ -228,6 +240,10 @@ export const recordDataSchemas = {
     confirmedAt: isoDateOrTimestamp.optional(),
     supersededReason: z.string().optional(),
     supersededBy: z.string().optional(),
+    /** Set when a precision review marked the match wrong, so a later "correct" verdict can apply it again. */
+    supersededByReview: z.boolean().optional(),
+    /** When a match marked wrong was reviewed as correct and applied again. */
+    reinstatedAt: isoDateOrTimestamp.optional(),
   }).passthrough(),
   /** Customer messages (NOT-01 to NOT-10): purpose, class, the provider's acceptance and delivery evidence and the cost. */
   notifications: z.object({
@@ -282,6 +298,10 @@ export const recordDataSchemas = {
     resolvedBy: z.string().optional(),
     resolvedAt: isoDateOrTimestamp.optional(),
     legacyType: z.boolean().optional(),
+    /** The state that raised the exception; a resolved exception is not raised again while this is unchanged. */
+    condition: z.string().optional(),
+    /** For an unknown outcome resolved as failed: the failure code the provider confirmed. */
+    confirmedFailureCode: z.string().optional(),
   }).passthrough(),
   policies: z.object({
     ...common,

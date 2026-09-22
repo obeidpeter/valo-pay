@@ -64,6 +64,22 @@ try{
   assert.equal(pending.status,"cancelled");assert.equal(cancelled.status,"cancelled");
   assert.equal(pending.receipt.protectedPayload,1);
   assert.equal((await openPayload(pending.receipt,{lender,record:pending.id,field:"receipt"},managedWrappingKeys)).rejected.status,400);
+  // A key-service outage inside the business transaction: nothing is saved, the
+  // answer keeps its 503 and says so, and the journal entry closes instead of
+  // waiting as unconfirmed. The journal's own request and refusal are sealed.
+  const workingWrap=managedWrappingKeys.wrap;let wraps=0;
+  managedWrappingKeys.wrap=async(...args)=>{if(++wraps===2)throw Object.assign(new Error("Protected data cannot be opened. Ask the administrator to check the configured encryption key."),{status:503});return workingWrap(...args);};
+  const outageKey=randomUUID(),outageName=`Outage customer ${randomUUID()}`;
+  const outage=await post(customerPath,{name:outageName,reference:`OUTAGE-${randomUUID()}`,data:{consentProvenance:"Synthetic outage consent"}},outageKey);
+  managedWrappingKeys.wrap=workingWrap;
+  assert.equal(outage.status,503,"an unavailable key service is not flattened to a general 500");
+  const outageBody=outage.data as {committed?:unknown;error?:string};
+  assert.equal(outageBody.committed,false,"the answer says nothing was saved");
+  assert.match(String(outageBody.error),/Protected data cannot be opened/);
+  assert.equal((await pool.query("SELECT count(*)::int AS count FROM valopay_records WHERE merchant_id=$1 AND name=$2",[lender,outageName])).rows[0].count,0);
+  const outageEntry=(await pool.query("SELECT status,receipt FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2",[lender,outageKey])).rows[0];
+  assert.equal(outageEntry.status,"cancelled","a request that saved nothing closes its journal entry");
+  assert.equal((await openPayload(outageEntry.receipt,{lender,record:(await pool.query("SELECT id FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2",[lender,outageKey])).rows[0].id,field:"receipt"},managedWrappingKeys)).rejected.status,503);
   // Reopen one entry as pending: a request whose outcome never came back (a crash before completion).
   await pool.query("UPDATE valopay_operations SET status='pending',receipt=NULL WHERE merchant_id=$1 AND id=$2",[lender,pending.id]);
   // Pending entries are limited per person and lender; closed ones do not count towards the limit.
