@@ -61,8 +61,9 @@ for (const theme of ["light", "dark"]) {
     await page.screenshot({
       path: info.outputPath(`landing-${theme}.png`),
       fullPage: true,
+      scale: "css",
     });
-    await page.screenshot({ path: info.outputPath(`hero-${theme}.png`) });
+    await page.screenshot({ path: info.outputPath(`hero-${theme}.png`), scale: "css" });
     for (const [route, heading] of [
       ["/sign-in", "Sign in to your workspace"],
       ["/sign-up", "Create your workspace"],
@@ -79,6 +80,7 @@ for (const theme of ["light", "dark"]) {
       await page.screenshot({
         path: info.outputPath(`${route!.slice(1)}-${theme}.png`),
         fullPage: true,
+        scale: "css",
       });
     }
     expect(requests).toEqual([]);
@@ -174,6 +176,7 @@ test("public layouts fit a narrow 320px viewport", async ({ page }, info) => {
         `${route === "/" ? "landing" : route.slice(1)}-320.png`,
       ),
       fullPage: true,
+      scale: "css",
     });
   }
 });
