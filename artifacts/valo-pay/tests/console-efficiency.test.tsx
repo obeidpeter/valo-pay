@@ -12,7 +12,7 @@ afterEach(() => api.uninstall());
 describe('console efficiency', () => {
   it('saves and restores a filter combination only for its own lender', async () => {
     const user = userEvent.setup();
-    renderApp('/exceptions?view=overdue&owner=Finance&type=unallocated_payment');
+    renderApp('/exceptions?view=overdue&owner=Finance&type=unallocated_payment&q=private-customer-search');
     await screen.findByRole('tab', { name: /All open \(\d+\)/ });
     await user.click(screen.getByText('Saved views'));
     await user.type(screen.getByLabelText('View name'), 'Finance follow-up');
@@ -22,7 +22,10 @@ describe('console efficiency', () => {
     await user.click(screen.getByRole('button', { name: 'Finance follow-up' }));
     await waitFor(() => expect((screen.getByLabelText('Filter exceptions by owner') as HTMLSelectElement).value).toBe('Finance'));
     expect(Object.fromEntries(new URLSearchParams(window.location.search))).toMatchObject({ view: 'overdue', owner: 'Finance', type: 'unallocated_payment' });
-    expect(localStorage.getItem(`valopay-queue-views-v2:Sandbox Admin:${api.merchantIds[0]}:exceptions`)).not.toContain('customerId');
+    expect(JSON.parse(localStorage.getItem(`valopay-queue-views-v2:Sandbox Admin:${api.merchantIds[0]}:exceptions`) || 'null')).toEqual([
+      { name: 'Finance follow-up', view: 'overdue', owner: 'Finance', type: 'unallocated_payment' },
+    ]);
+    expect(new URLSearchParams(window.location.search).has('q')).toBe(false);
     await user.selectOptions(screen.getByLabelText('Active lender', { selector: '#lender-sidebar' }), api.merchantIds[1]!);
     await user.click(screen.getByText('Saved views'));
     expect(screen.queryByRole('button', { name: 'Finance follow-up' })).toBeNull();

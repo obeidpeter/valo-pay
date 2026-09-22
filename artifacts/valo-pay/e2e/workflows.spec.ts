@@ -49,12 +49,20 @@ test("paged queue search, saved view, record return and browser history", async 
   await page.locator("summary").filter({ hasText: "Saved views" }).click();
   await page.getByLabel("View name").fill("Activation desk");
   await page.getByRole("button", { name: "Save current view" }).click();
+  const storedViews = await page.evaluate(() =>
+    Object.entries(localStorage)
+      .filter(([key]) => key.startsWith("valopay-queue-views-v2:"))
+      .flatMap(([, value]) => JSON.parse(value)),
+  );
+  expect(storedViews).toEqual([
+    { name: "Activation desk", view: "all", owner: "", type: "" },
+  ]);
   await page.reload();
   await page.locator("summary").filter({ hasText: "Saved views" }).click();
   await page
     .getByRole("button", { name: "Activation desk", exact: true })
     .click();
-  await expect(page.getByLabel("Search this queue")).toHaveValue("BROWSER-MND");
+  await expect(page.getByLabel("Search this queue")).toHaveValue("");
   await expect(page.getByText("Page 1 of 3", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Next page of mandates" }).click();
   await page.goBack();
