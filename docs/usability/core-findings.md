@@ -15,7 +15,7 @@ Inspected local baseline `cc9cca4127d963d9f8a3a600091d502c08eb4239` on branch `c
 
 Implemented: console sends `data.proposalId` and `data.proposalUpdatedAt`; server refuses mismatches with HTTP 409 before mutation. Server rechecks current instalment and payment balances; already-applied allocations are rejected. Newly created automatic/manual allocations transition through proposed within the transaction before being applied. The reviewed reason survives a conflict. No schema migration, role expansion or ceiling weakening.
 
-Five components: learnability—error names the changed match; efficiency—refresh/review recovery keeps the reason; memorability—same review/refresh locations; errors—authoritative stale-record and ceiling protection; satisfaction—confirmation reflects the proposal actually reviewed. Human benefits remain hypotheses.
+Five components: learnability—error names the changed match; efficiency—the conflict retains the entered reason while the dialog remains open, but choosing discard/refresh clears the draft; memorability—same review/refresh locations; errors—authoritative stale-record and ceiling protection; satisfaction—confirmation reflects the proposal actually reviewed. Human benefits remain hypotheses.
 
 Acceptance: `reconciliation-golden.test.ts` refuses wrong/missing/changed proposal token, repeats, already-confirmed application and a reduced outstanding balance without changing state. `reconciliation-workflow.test.tsx` verifies both IDs sent, actual domain confirm/reject outcome, conflict preserves reason and proposal, no optimistic success. Existing 285-check golden suite passed.
 
@@ -45,7 +45,7 @@ Five components: learnability—queued versus uncertain versus failed states; ef
 
 Acceptance: 5 export-job tests verify queued re-entry, failed saved-job same-ID retry, read-only status recovery, an injected committed job after an interrupted request, and CSV original-format recovery with other formats disabled. Reports/evidence/toast regression tests updated only for changed recovery copy/action and pass.
 
-Paths: `artifacts/valo-pay/src/components/export-job-control.tsx`, `artifacts/valo-pay/tests/export-jobs.test.tsx`, `tests/reports.test.tsx`, `tests/evidence.test.tsx`, `tests/toasts.test.tsx`. Residual: original request recovery memory is per mounted UI scope; reload uses saved job history and server idempotency rather than persisting sensitive request bodies. No file expiration policy is invented.
+Paths: `artifacts/valo-pay/src/components/export-job-control.tsx`, `artifacts/valo-pay/tests/export-jobs.test.tsx`, `tests/reports.test.tsx`, `tests/evidence.test.tsx`, `tests/toasts.test.tsx`. Residual: original request recovery memory is per mounted UI scope. After reload, the operator can inspect saved job history, but the original retry key is lost and cannot be replayed from that new session. Durable scoped recovery remains UX-B02; sensitive request bodies are not persisted in browser storage. No file expiration policy is invented.
 
 ## UX-C04: exception resolution omits issue notes and filtered return
 

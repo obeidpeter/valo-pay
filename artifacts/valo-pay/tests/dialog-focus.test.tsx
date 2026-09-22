@@ -1,0 +1,85 @@
+import { useLayoutEffect, useRef } from 'react';
+import { act, fireEvent, render } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useDialogActivationTracking, useDialogFocusReturn } from '@/lib/focus';
+import { installFakeApi, type FakeApi } from './fake-api';
+import { renderApp, screen, userEvent, waitFor, within } from './harness';
+
+let api: FakeApi;
+beforeEach(() => { api = installFakeApi(); vi.spyOn(window, 'confirm').mockReturnValue(true); });
+afterEach(() => api.uninstall());
+
+// jsdom does not lay out elements. Supply geometry for this visibly rendered
+// control only, so the activation tracker still rejects hidden elements.
+function visible(element: HTMLElement) {
+  vi.spyOn(element, 'getClientRects').mockReturnValue([new DOMRect(0, 0, 120, 40)] as unknown as DOMRectList);
+}
+
+function FocusHarness({ open, removeOpener = false }: { open: boolean; removeOpener?: boolean }) {
+  useDialogActivationTracking();
+  const restore = useDialogFocusReturn(open);
+  const input = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => { if (open) input.current?.focus(); }, [open]);
+  return <main id="main" tabIndex={-1}>
+    {!removeOpener && <button type="button">Unrelated action</button>}
+    {open && <><input ref={input} aria-label="Dialog field" /><button type="button" onClick={() => restore()}>Restore focus</button></>}
+  </main>;
+}
+
+describe('dialog opener restoration across browser click behavior', () => {
+  it.each([
+    { path: '/customers', button: 'Add customer', title: 'Add customer' },
+    { path: '/evidence', button: 'Log review', title: 'Log fortnightly review' },
+  ])('returns $title to an opener that the browser did not focus on click', async ({ path, button, title }) => {
+    const user = userEvent.setup();
+    renderApp(path);
+    const opener = await screen.findByRole('button', { name: button });
+    visible(opener);
+    screen.getByRole('main').focus();
+    expect(document.activeElement).not.toBe(opener);
+    // fireEvent reproduces Safari's click without the focusing pointer default.
+    fireEvent.click(opener.querySelector('svg') || opener);
+    const dialog = await screen.findByRole('dialog', { name: title });
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
+
+  it('preserves keyboard opener focus without a pointer activation', async () => {
+    const user = userEvent.setup();
+    renderApp('/customers');
+    const opener = await screen.findByRole('button', { name: 'Add customer' });
+    opener.focus();
+    await user.keyboard('{Enter}');
+    await screen.findByRole('dialog', { name: 'Add customer' });
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
+
+  it('does not focus unrelated clicks or reuse them for a later programmatic opening', async () => {
+    const view = render(<FocusHarness open={false} />);
+    const unrelated = screen.getByRole('button', { name: 'Unrelated action' });
+    visible(unrelated);
+    const main = screen.getByRole('main');
+    main.focus();
+    fireEvent.click(unrelated);
+    expect(document.activeElement).toBe(main);
+    await act(async () => { await new Promise<void>(resolve => window.setTimeout(resolve, 0)); });
+    view.rerender(<FocusHarness open />);
+    expect(document.activeElement).toBe(screen.getByLabelText('Dialog field'));
+    fireEvent.click(screen.getByRole('button', { name: 'Restore focus' }));
+    expect(document.activeElement).toBe(main);
+  });
+
+  it('falls back to main if the opening control was removed by the action', () => {
+    const view = render(<FocusHarness open={false} />);
+    const opener = screen.getByRole('button', { name: 'Unrelated action' });
+    visible(opener);
+    fireEvent.click(opener);
+    view.rerender(<FocusHarness open />);
+    view.rerender(<FocusHarness open removeOpener />);
+    fireEvent.click(screen.getByRole('button', { name: 'Restore focus' }));
+    expect(document.activeElement).toBe(screen.getByRole('main'));
+  });
+});

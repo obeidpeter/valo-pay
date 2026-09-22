@@ -5,7 +5,7 @@ import { Button } from './ui/button';
 import { FieldError, FormAlert, FormErrorLinks, attentionTitle, focusField, formErrorMessage, invalidProps, isStaleRecordError, missingMessage, serverFieldErrors } from './form-field';
 import { useSafeCreateRecord as useCreateRecord, useSafeUpdateRecord as useUpdateRecord, useSafePerformAction as usePerformAction, submissionFingerprint } from '@/lib/safe-mutations';
 import { useUnsavedChanges } from '@/lib/unsaved-changes';
-import { focusMain } from '@/lib/focus';
+import { useDialogFocusReturn } from '@/lib/focus';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkspace } from '@/lib/workspace-context';
 import { readableLabel } from './record-label';
@@ -68,7 +68,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
   const currentScope = useRef('');
   const originalRecord = useRef(record);
   const pendingErrorFocus = useRef<string | null>(null);
-  const opener = useRef<HTMLElement | null>(null);
+  const restoreOpenerFocus = useDialogFocusReturn(isOpen);
   const dialogTitle = useRef<HTMLHeadingElement | null>(null);
   const [initialForm, setInitialForm] = useState('');
   const scope = JSON.stringify([merchantId, kind, record?.id, actionMutation, actionRecordId, isOpen]);
@@ -238,7 +238,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
     <Dialog.Root open={isOpen} onOpenChange={changeOpen}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 z-50" />
-        <Dialog.Content onOpenAutoFocus={event => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; if (context) { event.preventDefault(); dialogTitle.current?.focus(); } }} onCloseAutoFocus={event => { event.preventDefault(); if (opener.current?.isConnected) opener.current.focus(); else focusMain(); }} className="fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] -translate-y-[50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg max-h-[90vh] overflow-y-auto">
+        <Dialog.Content onOpenAutoFocus={event => { if (context) { event.preventDefault(); dialogTitle.current?.focus(); } }} onCloseAutoFocus={restoreOpenerFocus} className="fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] -translate-y-[50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg max-h-[90vh] overflow-y-auto">
           <div className="flex flex-col space-y-1.5 text-center sm:text-left">
             <Dialog.Title ref={dialogTitle} tabIndex={context ? -1 : undefined} className="text-lg font-semibold leading-none tracking-tight focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">{title}</Dialog.Title>
             <Dialog.Description className="text-xs text-muted-foreground">Use sample data only. This action cannot collect money or send a customer message. Fields marked * are required.</Dialog.Description>

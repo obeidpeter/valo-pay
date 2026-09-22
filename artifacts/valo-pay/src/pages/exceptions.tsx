@@ -84,14 +84,14 @@ export default function ExceptionsPage() {
               </Button>
             ))}
           </div>
-          <label className="flex items-center gap-2 text-sm sm:ml-auto">Owner
-            <select aria-label="Filter exceptions by owner" className="max-w-52 rounded-md border bg-background px-3 py-2" value={owner} onChange={event => setOwner(event.target.value)}>
+          <label className="flex w-full min-w-0 flex-col gap-2 text-sm sm:ml-auto sm:w-auto sm:flex-row sm:items-center">Owner
+            <select aria-label="Filter exceptions by owner" className="w-full min-w-0 max-w-full rounded-md border bg-background px-3 py-2 sm:w-auto sm:max-w-52" value={owner} onChange={event => setOwner(event.target.value)}>
               <option value="">All owners</option>
               {owners.map(value => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
-          <label className="flex items-center gap-2 text-sm">Type
-            <select aria-label="Filter exceptions by type" className="max-w-60 rounded-md border bg-background px-3 py-2" value={type} onChange={event => setType(event.target.value)}>
+          <label className="flex w-full min-w-0 flex-col gap-2 text-sm sm:w-auto sm:flex-row sm:items-center">Type
+            <select aria-label="Filter exceptions by type" className="w-full min-w-0 max-w-full rounded-md border bg-background px-3 py-2 sm:w-auto sm:max-w-60" value={type} onChange={event => setType(event.target.value)}>
               <option value="">All types</option>
               {types.map(value => <option key={value} value={value}>{readableLabel(value)}</option>)}
             </select>

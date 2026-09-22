@@ -1,7 +1,7 @@
 import { useSafeCreateRecord as useCreateRecord } from '@/lib/safe-mutations';
 import { useEffect, useRef, useState } from 'react';
 import { useUnsavedChanges } from '@/lib/unsaved-changes';
-import { focusMain } from '@/lib/focus';
+import { useDialogFocusReturn } from '@/lib/focus';
 import { useQueryClient } from '@tanstack/react-query';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { PermissionButton as Button } from '@/components/permission-button';
@@ -27,7 +27,7 @@ export function ReviewDialog({ onClose }: { onClose: () => void }) {
   const [note, setNote] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState('');
-  const opener = useRef<HTMLElement | null>(null);
+  const restoreOpenerFocus = useDialogFocusReturn(true);
   const reviewFields = [{ name: 'reviewer', label: 'Reviewer name' }, { name: 'reviewedAt', label: 'Review date' }, { name: 'note', label: 'Review notes' }];
   const corrected = (field: string) => setErrors(previous => { const next = { ...previous }; delete next[field]; return next; });
   const visit = useRef({ merchantId });
@@ -74,7 +74,7 @@ export function ReviewDialog({ onClose }: { onClose: () => void }) {
   };
   return (
     <Dialog open onOpenChange={open => { if (!open && !create.isPending) close(); }}>
-      <DialogContent onOpenAutoFocus={() => { opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; }} onCloseAutoFocus={event => { event.preventDefault(); if (opener.current?.isConnected) opener.current.focus(); else focusMain(); }}>
+      <DialogContent onCloseAutoFocus={restoreOpenerFocus}>
         <DialogHeader>
           <DialogTitle>Log fortnightly review</DialogTitle>
           <DialogDescription>Record what was checked with sample data. Only a review confirming all four tasks counts towards the review schedule. Reviewer name, review date and notes are required.</DialogDescription>

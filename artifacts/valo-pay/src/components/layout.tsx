@@ -7,7 +7,7 @@ import { Button } from './ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from './ui/sheet';
 import { BrandLockup } from './brand';
 import { ErrorBoundary, ErrorNotice } from './error-boundary';
-import { focusMain } from '@/lib/focus';
+import { focusMain, useDialogActivationTracking } from '@/lib/focus';
 import { formatDate } from '@/lib/formatters';
 import { useTheme } from '@/lib/theme';
 import { SandboxGuide } from './sandbox-guide';
@@ -84,6 +84,7 @@ function AuthBlock({ role, signOut }: { role: string | undefined; signOut: () =>
 }
 
 export function Layout({ children }: { children: ReactNode }) {
+  useDialogActivationTracking();
   const search = useSearch();
   const embedded = new URLSearchParams(search).get('embedded') === '1';
   const { workspace, merchantId, setMerchantId, isLoading } = useWorkspace();

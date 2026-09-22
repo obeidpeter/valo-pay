@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 
 /**
  * Keyboard paths the console keeps the same everywhere (Nielsen 4 and 7;
@@ -8,6 +8,56 @@ import { useEffect, type RefObject } from 'react';
 /** Focus the page's main region, the way a page load would start the reader at the top of what changed. */
 export function focusMain(): void {
   document.getElementById('main')?.focus({ preventScroll: true });
+}
+
+type Activation = { target: HTMLElement };
+const currentActivations = new WeakMap<Document, Activation>();
+
+/** Safari does not always focus clicked buttons. Remember only this click's
+ * visible control, without changing focus or retaining an unrelated last click. */
+export function useDialogActivationTracking(): void {
+  useEffect(() => {
+    let activation: Activation | undefined;
+    let expiry: number | undefined;
+    const clear = () => {
+      if (activation && currentActivations.get(document) === activation) currentActivations.delete(document);
+      activation = undefined;
+      if (expiry !== undefined) window.clearTimeout(expiry);
+      expiry = undefined;
+    };
+    const capture = (event: MouseEvent) => {
+      clear();
+      const target = event.composedPath().find(node => node instanceof HTMLElement && node.matches('button:not(:disabled), a[href], [role="button"], [role="link"]'));
+      if (!(target instanceof HTMLElement) || !target.isConnected || target.getClientRects().length === 0 || target.closest('[inert]') || getComputedStyle(target).visibility !== 'visible') return;
+      activation = { target };
+      currentActivations.set(document, activation);
+      // Discrete React click updates commit before this next task. A later
+      // asynchronous/programmatic opening must use its own focused context.
+      expiry = window.setTimeout(clear, 0);
+    };
+    document.addEventListener('click', capture, true);
+    return () => { document.removeEventListener('click', capture, true); clear(); };
+  }, []);
+}
+
+/** Snapshot at opening, before the dialog's autofocus effect moves focus. */
+export function useDialogFocusReturn(isOpen: boolean): (event?: { preventDefault(): void }) => void {
+  const opener = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    const activated = currentActivations.get(document)?.target;
+    const focused = document.activeElement;
+    opener.current = activated?.isConnected ? activated : focused instanceof HTMLElement && focused !== document.body && focused !== document.documentElement ? focused : null;
+  }, [isOpen]);
+  return event => {
+    event?.preventDefault();
+    const target = opener.current;
+    if (target?.isConnected) {
+      target.focus({ preventScroll: true });
+      if (document.activeElement === target) return;
+    }
+    focusMain();
+  };
 }
 
 /** True while the keyboard is typing into something, so a shortcut must not steal the key. */
