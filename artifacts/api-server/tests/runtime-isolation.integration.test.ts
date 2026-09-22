@@ -41,7 +41,7 @@ try {
   } finally { owner.release(); }
   const url = new URL(original.DATABASE_URL!); url.username = appRole; url.password = password;
   process.env.DATABASE_URL = url.toString();
-  Object.assign(process.env, { VALOPAY_RUNTIME_ISOLATION: "staging", VALOPAY_RUNTIME_SCHEMA: schema, VALOPAY_RUNTIME_ROLE: appRole, VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://identity.example", VALOPAY_STAFF_ORIGINS: "https://pilot.example", VALOPAY_PAYLOAD_ENCRYPTION: "kms", VALOPAY_KMS_KEY: "projects/synthetic-test/locations/global/keyRings/test/cryptoKeys/test", VALOPAY_RUNTIME_SERVICE_ORG: "org_runtimeA", VALOPAY_RUNTIME_SERVICE_USER: "user_serviceA" });
+  Object.assign(process.env, { VALOPAY_RUNTIME_ISOLATION: "staging", VALOPAY_RUNTIME_SCHEMA: schema, VALOPAY_RUNTIME_ROLE: appRole, VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://identity.example", VALOPAY_STAFF_ORIGINS: "https://pilot.example", VALOPAY_PAYLOAD_ENCRYPTION: "kms", VALOPAY_KMS_KEY: "projects/synthetic-test/locations/global/keyRings/test/cryptoKeys/test", VALOPAY_RUNTIME_SERVICE_ORG: "org_runtimeA", VALOPAY_RUNTIME_SERVICE_USER: "user_serviceA", CLERK_SECRET_KEY: "sk_test_placeholder" });
   const { pool } = await import("@workspace/db"); runtimePool = pool;
   const isolation = await import("../src/lib/runtime-isolation"), store = await import("../src/lib/valopay-store");
   const client = await pool.connect();
@@ -98,6 +98,36 @@ try {
   // synthetic fixture; encryption has its own injected-adapter acceptance suite.
   const now = Math.floor(Date.now() / 1000), auth = { userId: "user_financeA", orgId: "org_runtimeA", sessionId: "sess_runtime", tokenType: "session_token", sessionStatus: "active", factorVerificationAge: [0, 0], sessionClaims: { sub: "user_financeA", sid: "sess_runtime", iss: "https://identity.example", azp: "https://pilot.example", iat: now - 1, exp: now + 3600 } };
   const req = { headers: {}, auth: Object.assign(() => auth, { [Symbol.for("@clerk/express.auth")]: true }) } as any;
+  // Actual acceptance and ON CONFLICT renewal under the restricted LOGIN.
+  // Only Clerk's verified-email lookup is replaced; no external call is made.
+  const { clerkClient } = await import("@clerk/express"), previousGetUser = clerkClient.users.getUser;
+  const inviteeAuth = { ...auth, userId: "user_invitee", sessionClaims: { ...auth.sessionClaims, sub: "user_invitee" } };
+  const inviteeRequest = { headers: {}, auth: Object.assign(() => inviteeAuth, { [Symbol.for("@clerk/express.auth")]: true }) } as any;
+  let verifiedEmail = "wrong@example.test";
+  clerkClient.users.getUser = (async () => ({ id: "user_invitee", emailAddresses: [{ emailAddress: verifiedEmail, verification: { status: "verified" } }] })) as any;
+  try {
+    await assert.rejects(() => store.acceptStaffInvitation(inviteeRequest, "token-workspace-a"), /organisation|invitation/i, "A verified but different email cannot accept the invitation.");
+    verifiedEmail = "workspace-a@example.test";
+    const accepted = await Promise.allSettled([store.acceptStaffInvitation(inviteeRequest, "token-workspace-a"), store.acceptStaffInvitation(inviteeRequest, "token-workspace-a")]);
+    assert.equal(accepted.filter(result => result.status === "fulfilled").length, 1, "Concurrent invitation acceptance commits exactly once.");
+    assert.equal(accepted.filter(result => result.status === "rejected").length, 1);
+    const firstMembership = (await admin.query(`SELECT id,role,status FROM "${schema}".valopay_staff_memberships WHERE workspace_id='workspace-a' AND user_id='user_invitee'`)).rows[0];
+    assert.equal(firstMembership.role, "Finance"); assert.equal(firstMembership.status, "active");
+    assert.equal((await admin.query(`SELECT status FROM "${schema}".valopay_staff_invitations WHERE id='invite-workspace-a'`)).rows[0].status, "accepted");
+    assert.deepEqual(await store.inWorkspace(inviteeRequest, { cookie() {} } as any, ctx => store.listMerchants(ctx), "read"), [], "Accepting an invitation grants no lenders.");
+    await admin.query(`INSERT INTO "${schema}".valopay_staff_invitations(id,workspace_id,email,role,token_hash,invited_by,expires_at) VALUES('invite-renewal','workspace-a','workspace-a@example.test','Read-only',$1,'System',now()+interval '1 day')`, [createHash("sha256").update("token-renewal").digest("hex")]);
+    await assert.rejects(() => store.acceptStaffInvitation(inviteeRequest, "token-renewal"), /already have an active membership/, "An active member cannot use renewal to change their own role.");
+    await admin.query(`UPDATE "${schema}".valopay_staff_memberships SET status='revoked' WHERE id=$1`, [firstMembership.id]);
+    await admin.query(`INSERT INTO "${schema}".valopay_staff_lender_access(membership_id,merchant_id,granted_by) VALUES($1,'lender-a','fixture')`, [firstMembership.id]);
+    const renewed = await store.acceptStaffInvitation(inviteeRequest, "token-renewal");
+    assert.equal(renewed.role, "Read-only");
+    const membershipRows = (await admin.query(`SELECT id,role,status FROM "${schema}".valopay_staff_memberships WHERE workspace_id='workspace-a' AND user_id='user_invitee'`)).rows;
+    assert.deepEqual(membershipRows, [{ id: firstMembership.id, role: "Read-only", status: "active" }], "Renewal updates the original membership under the invitation policy.");
+    assert.equal((await admin.query(`SELECT count(*)::int AS count FROM "${schema}".valopay_staff_lender_access WHERE membership_id=$1`, [firstMembership.id])).rows[0].count, 0, "The narrow renewal helper clears the revoked person's old grants.");
+    assert.equal((await admin.query(`SELECT count(*)::int AS count FROM "${schema}".valopay_staff_events WHERE actor='Clerk:user_invitee' AND action='staff.accepted'`)).rows[0].count, 2, "Acceptance and renewal each preserve an audit event.");
+    assert.deepEqual(await store.inWorkspace(inviteeRequest, { cookie() {} } as any, ctx => store.listMerchants(ctx), "read"), []);
+    await assert.rejects(() => store.acceptStaffInvitation(inviteeRequest, "token-renewal"), /expired|used|revoked|invitation/i, "A consumed renewal token cannot be reused.");
+  } finally { clerkClient.users.getUser = previousGetUser; }
   const result = await store.inWorkspace(req, { cookie() {} } as any, async ctx => ({ lenders: await store.listMerchants(ctx), state: await store.loadState(ctx, "lender-a", "share") }), "read");
   assert.deepEqual(result.lenders.map(lender => lender.id), ["lender-a"]); assert.equal(result.state.records[0]?.name, "Synthetic customer");
   const readerAuth = { ...auth, userId: "user_readerA", sessionClaims: { ...auth.sessionClaims, sub: "user_readerA" } };
@@ -109,7 +139,7 @@ try {
   await assert.rejects(() => store.inWorkspace(req, { cookie() {} } as any, ctx => store.loadState(ctx, "lender-a", "share"), "read"), /not found/);
   const elevated = await admin.connect(); try { await elevated.query("BEGIN"); await assert.rejects(() => isolation.bindRuntimeIdentity(elevated, { organizationId: "org_runtimeA", userId: "user_adminA" }), /elevated/); await elevated.query("ROLLBACK"); } finally { elevated.release(); }
   const configured = process.env.VALOPAY_RUNTIME_SCHEMA; process.env.VALOPAY_RUNTIME_SCHEMA = "public"; assert.throws(() => isolation.runtimeIsolationConfiguration(), /public/); process.env.VALOPAY_RUNTIME_SCHEMA = configured;
-  console.log("Runtime isolation passed: actual restricted login, ten forced-RLS tables, pooled-scope reset, mixed-tenant denial, per-lender grants, invitation scope, service requester checks and real repository/MFA integration.");
+  console.log("Runtime isolation passed: actual restricted login, ten forced-RLS tables, pooled-scope reset, mixed-tenant denial, per-lender grants, concurrent invitation acceptance and renewal, service requester checks and real repository/MFA integration.");
 } finally {
   if (runtimePool) await runtimePool.end();
   if (!/^valopay_runtime_test_[a-f0-9]+$/.test(schema) || !/^runtime_(app|helper)_[a-f0-9]+$/.test(appRole) || !/^runtime_(app|helper)_[a-f0-9]+$/.test(helperRole)) throw new Error("Unsafe generated test cleanup target.");

@@ -51,8 +51,12 @@ const step = (state: DomainState, id: string) => pilotProgress(state).steps.find
   assert.equal(JSON.stringify(first), snapshot, "Approval never edits the close snapshot.");
   assert.throws(() => decideCloseReview(state, finance, review.id, decision), /changed/);
   assert.throws(() => decideCloseReview(state, finance, review.id, { ...decision, expectedUpdatedAt: review.updatedAt }), /already has a decision/);
-  makeRecord(state, "exports", { status: "ready", data: { checksum: "b".repeat(64), closeReviewId: review.id, closeSnapshotDigest: review.data.snapshotDigest } });
+  const evidenceExport = makeRecord(state, "exports", { status: "ready", data: { checksum: "b".repeat(64), closeReviewId: review.id, closeSnapshotDigest: review.data.snapshotDigest } });
   assert.equal(step(state, "export").state, "completed");
+  evidenceExport.data.fileDeletedAt = "2026-09-22T10:06:00.000Z";
+  assert.equal(step(state, "export").state, "in_progress", "An expired export receipt cannot satisfy downloadable reviewed evidence.");
+  assert.match(step(state, "export").missing[0]!, /Generate an evidence export/);
+  delete evidenceExport.data.fileDeletedAt;
   makeRecord(state, "customers", { status: "active", name: "Later correction" });
   assert.equal(reviewIsCurrent(state, review), false);
   assert.equal(step(state, "close").state, "blocked");

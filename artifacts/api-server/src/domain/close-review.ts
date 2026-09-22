@@ -107,7 +107,7 @@ export function pilotProgress(state: DomainState, accessMode = "sandbox") {
   const unresolvedObservations = observations.filter(r => r.status !== "resolved");
   const cases = ofKind(state, "exceptions"), openCases = cases.filter(open), unowned = openCases.filter(r => !r.data.case?.assignee), resolved = cases.filter(r => !open(r));
   const close = latestClose(state), reviews = newest(ofKind(state, "close-reviews")), currentReview = reviews.find(r => r.data.closeId === close?.id && reviewIsCurrent(state, r)), approved = currentReview?.status === "approved" ? currentReview : undefined;
-  const readyExports = ofKind(state, "exports").filter(r => r.status === "ready" && !!r.data.checksum);
+  const readyExports = ofKind(state, "exports").filter(r => r.status === "ready" && !!r.data.checksum && !r.data.fileDeletedAt);
   // Root export integration stamps the immutable review ID and digest on the
   // receipt. Timestamp proximity or a customer pack is never enough evidence.
   const reviewedExports = approved ? readyExports.filter(r => r.data.closeReviewId === approved.id && r.data.closeSnapshotDigest === approved.data.snapshotDigest) : [];
