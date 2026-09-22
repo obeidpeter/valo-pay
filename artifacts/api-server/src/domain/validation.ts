@@ -226,6 +226,11 @@ export function validateRecord(
     requireRole(ctx, ["Admin"]);
     if (!isUpdate && input.status && input.status !== "draft") throw new Error("Policies are created as drafts only.");
     if (data.reviewer !== undefined && data.reviewer !== existing?.data.reviewer) throw new Error("The policy reviewer is recorded during approval and cannot be changed here.");
+    for (const key of ["previousVersionId", "approvedAt", "submittedAt", "rejectedAt"]) {
+      if (JSON.stringify(data[key]) !== JSON.stringify(existing?.data[key])) throw new Error(`Policy ${key} is recorded by its review or version action and cannot be changed here.`);
+    }
+    // The API numbers versions: 1 on create, and new_policy_version after the whole history.
+    if (existing && JSON.stringify(data.version) !== JSON.stringify(existing.data.version)) throw new Error("Policy version numbers are assigned when a new draft version is created.");
     const maxAttempts = data.maxAttempts ?? policyGuardrails.defaultMaxAttempts;
     const spacing = data.spacingHours ?? policyGuardrails.defaultSpacingHours;
     const firstNotice = data.firstNoticeHours ?? policyGuardrails.defaultFirstNoticeHours;

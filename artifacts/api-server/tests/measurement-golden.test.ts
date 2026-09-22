@@ -2,11 +2,12 @@
 // records, REC-07 close report, RET-06 uplift report with its 90% interval and
 // BIL-01 billable collections (TRD v1.1 sections 5.6, 5.8, 5.15, 6.6 and 7.5).
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { DAY, HOUR, addAttempt, addHoliday, addNotice, addObservation, ctxAt, liveFixture, toWat, wat } from "./helpers.js";
 import { reconcile } from "../src/domain/reconciliation.js";
 import { executeAction } from "../src/domain/actions.js";
 import { buildReports, upliftReport, billableCollection } from "../src/domain/reports.js";
-import { latestDecisionFor } from "../src/domain/policy-engine.js";
+import { decisionFingerprint, evaluateRetry, latestDecisionFor, type RetryDecision } from "../src/domain/policy-engine.js";
 import { positionFor } from "../src/domain/close.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
@@ -63,6 +64,65 @@ const decisionsFor = (state: DomainState, due: ValopayRecord) => recordsOf(state
   moved[0]!.data.reason = "edited";
   assert.throws(() => assertFinalState(before, state, state.merchant.id), /immutable/, "decision records are immutable evidence");
   checks += 7;
+}
+
+// ---------- RET-03 (audit item 13): new notice evidence, or any other changed input, is a new decision; the evaluation clock is not ----------
+{
+  const { state, due, policy } = liveFixture({ merchantId: "decision-evidence" });
+  const failed = recordsOf(state, "attempts").find((item) => item.data.dueItemId === due.id)!;
+  reconcile(state, ctxAt(wat("2027-06-28T09:01:00"), "Finance"));
+  const [pending] = decisionsFor(state, due);
+  assert.equal(pending!.data.noticeRequired!.evidenced, false, "planned before the failed-debit notice was accepted");
+  failed.data.noticeId = addNotice(state, due, wat("2027-06-28T10:00:00")).id;
+  reconcile(state, ctxAt(wat("2027-06-28T11:00:00"), "Finance"));
+  const evidenced = decisionsFor(state, due);
+  assert.equal(evidenced.length, 2, "the provider's acceptance of the notice is a new decision");
+  assert.equal(evidenced[1]!.data.nextAt, pending!.data.nextAt, "even though the planned time is the same");
+  assert.deepEqual([evidenced[1]!.data.noticeRequired!.evidenced, evidenced[1]!.data.noticeRequired!.noticeId], [true, failed.data.noticeId], "the new record carries the evidence");
+  assert.equal(evidenced[1]!.data.previousDecisionId, pending!.id, "and chains to the decision it replaces");
+  reconcile(state, ctxAt(wat("2027-06-28T12:00:00"), "Finance"));
+  assert.equal(decisionsFor(state, due).length, 2, "nothing changed afterwards, so nothing is written");
+  checks += 6;
+
+  // What makes two evaluations the same decision, compared at every depth.
+  const base = evaluateRetry(state, ctxAt(wat("2027-06-28T12:00:00")), due, policy);
+  const same = (variant: RetryDecision) => decisionFingerprint(variant) === decisionFingerprint(base);
+  assert.equal(same({ ...base, inputs: { ...base.inputs, code: "ACCOUNT_CLOSED" } }), false, "a different failure code");
+  assert.equal(same({ ...base, inputs: { ...base.inputs, attemptNumber: 2 } }), false, "a different attempt number");
+  assert.equal(same({ ...base, noticeRequired: { ...base.noticeRequired!, evidenced: false, noticeId: null, acceptedAt: null } }), false, "notice evidence withdrawn");
+  assert.equal(same({ ...base, evaluatedAt: wat("2027-06-28T13:00:00"), reason: "Reworded." }), true, "the evaluation time and wording are not part of the decision");
+  assert.equal(same({ ...base, inputs: { ...base.inputs, calendar: { earliestAt: wat("2027-06-28T13:00:00"), rolledForward: true } } }), true, "nor is the calendar working, which follows the evaluation clock");
+  checks += 5;
+}
+{
+  // Outside the collection window the calendar working moves with the clock, but the plan does not: one decision.
+  const { state, due } = liveFixture({ merchantId: "decision-clock", failureAt: wat("2027-06-25T06:16:00") });
+  const failed = recordsOf(state, "attempts").find((item) => item.data.dueItemId === due.id)!;
+  failed.data.noticeId = addNotice(state, due, wat("2027-06-25T07:00:00")).id;
+  reconcile(state, ctxAt(wat("2027-06-28T11:00:00"), "Finance"));
+  reconcile(state, ctxAt(wat("2027-06-28T15:00:00"), "Finance"));
+  assert.equal(decisionsFor(state, due).length, 1, "a close later the same day reaches the same decision");
+  checks += 1;
+}
+{
+  // A decision recorded by an earlier build carries the fingerprint that left out nested inputs; after the database round trip it is still recognised.
+  const { state, due } = liveFixture({ merchantId: "decision-legacy" });
+  reconcile(state, ctxAt(wat("2027-06-28T09:01:00"), "Finance"));
+  const stored = decisionsFor(state, due)[0]!;
+  const { evaluatedAt: _evaluatedAt, reason: _reason, fingerprint: _fingerprint, previousDecisionId: _previous, synthetic: _synthetic, ...rest } = stored.data;
+  stored.data.fingerprint = createHash("sha256").update(JSON.stringify(rest, Object.keys(rest).sort())).digest("hex");
+  state.records = JSON.parse(JSON.stringify(state.records));
+  reconcile(state, ctxAt(wat("2027-06-28T12:00:00"), "Finance"));
+  assert.equal(decisionsFor(state, due).length, 1, "the stored decision is not written again");
+  // An input left undefined (the code of an attempt still in flight) is absent after the round trip, and is the same decision.
+  addAttempt(state, due, { status: "unknown", occurredAt: wat("2027-06-30T07:00:00") });
+  reconcile(state, ctxAt(wat("2027-06-30T09:00:00"), "Finance"));
+  const inFlight = decisionsFor(state, due);
+  assert.equal(inFlight.at(-1)!.data.rule, "in_flight", "an attempt in flight blocks the plan");
+  state.records = JSON.parse(JSON.stringify(state.records));
+  reconcile(state, ctxAt(wat("2027-06-30T09:30:00"), "Finance"));
+  assert.equal(decisionsFor(state, due).length, inFlight.length, "and is not written again after the round trip");
+  checks += 3;
 }
 
 // ---------- RET-03 and 6.3 row 8: a notice deadline that passes unevidenced defers the attempt and raises the exception ----------
@@ -261,4 +321,4 @@ function settle(state: DomainState, due: ValopayRecord, amountKobo: number, sett
 }
 
 void HOUR; void addAttempt;
-console.log(`Measurement golden tests passed (${checks} checks): decision records, deferral deadline, arm on decision, close report, position rebuild, uplift interval and rule, billable channels, pack counts.`);
+console.log(`Measurement golden tests passed (${checks} checks): decision records and what makes a new one, deferral deadline, arm on decision, close report, position rebuild, uplift interval and rule, billable channels, pack counts.`);

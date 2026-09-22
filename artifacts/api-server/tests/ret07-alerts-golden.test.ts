@@ -83,6 +83,45 @@ const reviewer = (now: string) => ctxAt(now, "Compliance reviewer");
   checks += 16;
 }
 
+// ---------- RET-07 (audit item 13): one number names one set of rules ----------
+{
+  const { state, policy } = liveFixture({ merchantId: "policy-versions" });
+  const act = (action: string, recordId: string, now: string) => executeAction(state, action === "approve_policy" ? reviewer(now) : admin(now), { action, recordId, reason: "Version history test" });
+  const draft = (from: string, now: string) => findRecord(state, act("new_policy_version", from, now).record!.id, "policies");
+  const first = draft(policy.id, wat("2027-06-02T09:00:00")), second = draft(policy.id, wat("2027-06-02T09:05:00"));
+  assert.deepEqual([first.data.version, second.data.version], [2, 3], "two drafts from version 1 are numbered 2 and 3, never both 2");
+  assert.deepEqual([first.data.previousVersionId, second.data.previousVersionId], [policy.id, policy.id], "both still follow version 1");
+  second.data.spacingHours = 72;
+  for (const version of [first, second]) { act("submit_policy", version.id, wat("2027-06-02T10:00:00")); act("approve_policy", version.id, wat("2027-06-02T11:00:00")); }
+  assert.deepEqual([first.status, second.status], ["approved", "approved"]);
+  assert.equal(draft(first.id, wat("2027-06-03T09:00:00")).data.version, 4, "a draft from version 2 is numbered after the whole history, not after its source");
+  checks += 4;
+
+  // A duplicate stored by an earlier build, or a same-named policy (the same policy for consent and notices), cannot be approved under a number already approved.
+  const refusedApproval = (record: { id: string }, version: number, message: string) =>
+    assert.throws(() => act("approve_policy", record.id, wat("2027-06-04T09:00:00")), (error: any) => error.status === 409 && new RegExp(`^Version ${version} of this policy is already approved`).test(error.message), message);
+  const duplicate = makeRecord(state, "policies", { name: policy.name, status: "submitted", amountKobo: 0, data: { ...policy.data, version: 2, author: "Sandbox Admin", reviewer: "", previousVersionId: policy.id, approvedAt: undefined } });
+  refusedApproval(duplicate, 2, "a second version 2 is refused");
+  const namesake = makeRecord(state, "policies", { name: policy.name, status: "submitted", amountKobo: 0, data: { version: 1, maxAttempts: 3, author: "Sandbox Admin" } });
+  refusedApproval(namesake, 1, "so is a policy of the same name numbered 1");
+  assert.equal(duplicate.status, "submitted", "nothing changed");
+  const other = makeRecord(state, "policies", { name: "Short-term loan policy", status: "submitted", amountKobo: 0, data: { version: 1, maxAttempts: 3, author: "Sandbox Admin" } });
+  act("approve_policy", other.id, wat("2027-06-04T09:00:00"));
+  assert.equal(other.status, "approved", "another policy has its own version 1");
+  checks += 4;
+
+  // The record API cannot renumber or relink a version, or set its review times; other draft fields stay editable.
+  const editable = draft(policy.id, wat("2027-06-05T09:00:00"));
+  const patch = (data: Record<string, unknown>) => () => validateRecord(state, admin(wat("2027-06-05T10:00:00")), "policies", { ...editable, data: { ...editable.data, ...data } }, true);
+  assert.throws(patch({ version: 2 }), /Policy version numbers are assigned when a new draft version is created/, "the version number");
+  assert.throws(patch({ previousVersionId: undefined }), /Policy previousVersionId is recorded by its review or version action/, "the link to the previous version");
+  assert.throws(patch({ approvedAt: wat("2027-06-05T10:00:00") }), /Policy approvedAt is recorded/, "an approval time");
+  assert.doesNotThrow(patch({ spacingHours: 72 }), "a rule");
+  assert.throws(() => validateRecord(state, admin(wat("2027-06-05T10:00:00")), "policies", { name: "Copied policy", status: "draft", amountKobo: 0, data: { version: 1, author: "Sandbox Admin", previousVersionId: policy.id } }),
+    /Policy previousVersionId is recorded/, "a new policy cannot claim to follow another");
+  checks += 5;
+}
+
 // ---------- NFR-OBS-02: alerts derived from state ----------
 {
   const { state, due } = liveFixture({ merchantId: "alerts", withFailure: false });
@@ -130,4 +169,4 @@ const reviewer = (now: string) => ctxAt(now, "Compliance reviewer");
   checks += 11;
 }
 
-console.log(`RET-07 and alerts golden tests passed (${checks} checks): consent pins the version, engine refuses an unconsented version, notice and consent gates, version history, re-issue, and the alerts feed.`);
+console.log(`RET-07 and alerts golden tests passed (${checks} checks): consent pins the version, engine refuses an unconsented version, notice and consent gates, version history, one number per approved version, re-issue, and the alerts feed.`);

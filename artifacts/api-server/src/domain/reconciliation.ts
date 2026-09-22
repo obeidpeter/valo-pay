@@ -2,6 +2,7 @@ import { DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { addBusinessDays } from "./calendar";
+import { validateRecord } from "./validation";
 import { approvedPolicyFor, attemptTime, attemptsFor, enrolEligibleFailures, evaluateRetry, recordRetryDecision } from "./policy-engine";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -295,9 +296,60 @@ export function supersedeAllocation(state: DomainState, ctx: Context, allocation
   payment.data.allocatedKobo = Math.max(0, Number(payment.data.allocatedKobo || 0) - allocation.amountKobo);
   const restored = Math.min(due.amountKobo, outstanding(due) + allocation.amountKobo);
   due.data.outstandingKobo = restored;
-  if (!["in_dispute", "cancelled", "closed"].includes(due.status)) due.status = restored === due.amountKobo ? (attemptsFor(state, due.id).length ? "in_collection" : "scheduled") : "partially_paid";
+  settleDueStatus(state, ctx, due, true);
   touch(allocation, ctx.now); touch(due, ctx.now);
   settlePaymentStatus(state, ctx, payment);
+}
+
+/** Statuses a workflow sets rather than the balance: an edit, a repair or a returned allocation keeps them. */
+const heldDueStatuses: readonly string[] = ["in_dispute", "cancelled", "closed"];
+
+/**
+ * The status an instalment's balance implies: paid with nothing outstanding,
+ * part-paid while some but not all of it is paid, and otherwise scheduled or
+ * in collection, by its attempts. A dispute, cancellation or closure is kept,
+ * and so is a final failure while money is still owed, unless `reopenFinal`
+ * (a superseded allocation gives the engine money to collect again).
+ */
+export function derivedDueStatus(state: DomainState, due: TypedRecord<"due-items">, reopenFinal = false): TypedRecord<"due-items">["status"] {
+  if (heldDueStatuses.includes(due.status)) return due.status;
+  const left = outstanding(due);
+  if (left === 0) return "paid";
+  if (due.status === "unpaid_final" && !reopenFinal) return "unpaid_final";
+  if (left < due.amountKobo) return "partially_paid";
+  if (due.status === "scheduled" || due.status === "in_collection") return due.status;
+  return attemptsFor(state, due.id).length ? "in_collection" : "scheduled";
+}
+
+/** Moves an instalment to the status its balance implies; a settled one has its unsent attempts cancelled. True when the status changed. */
+export function settleDueStatus(state: DomainState, ctx: Context, due: TypedRecord<"due-items">, reopenFinal = false): boolean {
+  const status = derivedDueStatus(state, due, reopenFinal);
+  if (status === "paid") cancelUnsentAttempts(state, due.id, ctx.now);
+  if (status === due.status) return false;
+  due.status = status; touch(due, ctx.now);
+  return true;
+}
+
+/**
+ * An instalment edited through the record API. Its outstanding balance is
+ * rebuilt from the confirmed allocations and its status follows that balance,
+ * so a paid instalment whose amount rises is part-paid again and a part-paid
+ * one reduced to what was paid is paid. The status is derived after
+ * validation, which refuses a status set by the caller.
+ */
+export function amendDueItem(state: DomainState, ctx: Context, due: TypedRecord<"due-items">, input: TypedRecord<"due-items">): TypedRecord<"due-items"> {
+  const allocated = recordsOf(state, "allocations").filter((item) => item.status === "confirmed" && item.data.dueItemId === due.id).reduce((sum, item) => sum + item.amountKobo, 0);
+  if (input.amountKobo < allocated) throw new Error("Due amount cannot be reduced below confirmed allocations.");
+  for (const key of ["experimentId", "experimentArm", "firstFailureAt"] as const) {
+    if (JSON.stringify(input.data[key]) !== JSON.stringify(due.data[key])) throw new Error("Experiment assignment is immutable.");
+  }
+  input.data.outstandingKobo = input.amountKobo - allocated;
+  // RET-10: an obligation amended after its first failure leaves the experiment's eligible set.
+  if (input.amountKobo !== due.amountKobo || String(input.data.dueDate) !== String(due.data.dueDate)) input.data.amendedAt = ctx.now;
+  validateRecord(state, ctx, "due-items", input, true);
+  Object.assign(due, input);
+  settleDueStatus(state, ctx, due);
+  return due;
 }
 
 /** The reason a precision review records when it takes a match out of use; older records carry only this text. */
@@ -636,6 +688,12 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
   // unapplied payments that still hold their money.
   const repaired = paymentsToSettle(state);
   repaired.forEach((payment) => settlePaymentStatus(state, ctx, payment));
+  // Instalment statuses that contradict their stored balance, as an amount edit
+  // could leave them before this rule, are re-derived before matching and before
+  // the engine evaluates them. A record without a stored balance is left alone.
+  const duesRepaired = recordsOf(state, "due-items")
+    .filter((due) => Number.isInteger(due.data.outstandingKobo) && derivedDueStatus(state, due) !== due.status)
+    .filter((due) => settleDueStatus(state, ctx, due)).length;
   const matches = new MatchIndex(state);
   let paymentsSkipped = 0;
   for (const payment of recordsOf(state, "payments").filter((item) => item.status === "unallocated")) {
@@ -674,7 +732,7 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
     message: "Reconciliation complete. Payment evidence has been checked for matches. No money was moved and no collection instruction was sent.",
     data: {
       observationsResolved: observations.filter((item) => item.status === "resolved").length, observationsBySource, canonicalPayments: resolved.length,
-      settlementStatementsMatched: statementBatchesMatched, settlementVariances: feeVariances, allocationsByRule, paymentStatusesRepaired: repaired.length, paymentsSkipped, attemptOutcomesConfirmed: outcomesConfirmed,
+      settlementStatementsMatched: statementBatchesMatched, settlementVariances: feeVariances, allocationsByRule, paymentStatusesRepaired: repaired.length, dueStatusesRepaired: duesRepaired, paymentsSkipped, attemptOutcomesConfirmed: outcomesConfirmed,
       proposed: recordsOf(state, "payments").filter((item) => item.status === "proposed").length,
       unallocated: recordsOf(state, "payments").filter((item) => item.status === "unallocated").length,
       possibleDuplicates: recordsOf(state, "payments").filter((item) => item.status === "possible_duplicate").length,

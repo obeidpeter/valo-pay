@@ -14,7 +14,7 @@ import { buildCloseReport, closeSchedule, openingSnapshot, storedCloseCursor } f
 import { issueInvoice } from "./billing";
 import type { ActionInput, ActionResult, Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { assertActionRole } from "./validation";
-import { countedAttempts, evaluateRetry, policyIdFor, policySummary, preregisterSample, samePolicyLineage } from "./policy-engine";
+import { countedAttempts, evaluateRetry, policyIdFor, policyLineage, policySummary, policyVersionOf, preregisterSample, samePolicyLineage } from "./policy-engine";
 import { buildAlerts } from "./alerts";
 
 const requiresReason = new Set([
@@ -175,6 +175,11 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     if (input.action === "approve_policy") {
       assertActionRole(ctx, ["Compliance reviewer"]);
       if (policy.status !== "submitted" || !policy.data.author || policy.data.author === ctx.actor) throw new Error("Submit the policy for review, then ask a Compliance reviewer other than its author to approve it.");
+      // One approved number names one set of rules: consent records, notices and decisions quote it.
+      const version = policyVersionOf(policy);
+      if (policyLineage(state, policy).some((item) => item.id !== policy.id && item.status === "approved" && policyVersionOf(item) === version)) {
+        throw Object.assign(new Error(`Version ${version} of this policy is already approved with its own rules. Reject this submission, then draft the next version from the approved one so it gets a new number.`), { status: 409 });
+      }
       policy.status = "approved"; policy.data.reviewer = ctx.actor; policy.data.approvedAt = now;
     }
     if (input.action === "reject_policy") {
@@ -185,7 +190,12 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     if (input.action === "new_policy_version") {
       assertActionRole(ctx, ["Admin"]);
       const { reviewer: _reviewer, approvedAt: _approvedAt, submittedAt: _submittedAt, rejectedAt: _rejectedAt, ...carried } = policy.data;
-      const copy = makeRecord(state, "policies", { name: policy.name, status: "draft", amountKobo: 0, createdAt: now, data: { ...carried, version: Number(policy.data.version || 0) + 1, author: ctx.actor, previousVersionId: policy.id } });
+      // Numbered after every version of the policy, drafts and rejected ones included, so two drafts from one version never share a number.
+      const versions = policyLineage(state, policy).map(policyVersionOf);
+      if (versions.some((version) => !Number.isSafeInteger(version) || version < 1)) throw new Error("Policy history has an invalid version number.");
+      const latest = Math.max(...versions);
+      if (latest >= Number.MAX_SAFE_INTEGER) throw new Error("This policy has reached the supported version limit.");
+      const copy = makeRecord(state, "policies", { name: policy.name, status: "draft", amountKobo: 0, createdAt: now, data: { ...carried, version: latest + 1, author: ctx.actor, previousVersionId: policy.id } });
       return result("Draft policy version created.", copy);
     }
     policy.data.lastActionReason = reason(input); touch(policy, now);

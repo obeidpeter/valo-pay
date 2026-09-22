@@ -1,10 +1,11 @@
 // Golden tests for the payment and exception rules corrected after the
 // September 2026 audit: money that went back to the payer, payment status
-// after a stale or rejected proposal, precision reviews that stick, and
-// exception resolutions that hold across daily closes.
+// after a stale or rejected proposal, precision reviews that stick,
+// exception resolutions that hold across daily closes, and an instalment's
+// status after its amount is edited.
 import assert from "node:assert/strict";
 import { addAttempt, addObservation, ctxAt, liveFixture, outstandingOf, wat } from "./helpers.js";
-import { allocatePayment, reconcile } from "../src/domain/reconciliation.js";
+import { allocatePayment, amendDueItem, reconcile } from "../src/domain/reconciliation.js";
 import { executeAction } from "../src/domain/actions.js";
 import { positionFor } from "../src/domain/close.js";
 import { countedAttempts, evaluateRetry } from "../src/domain/policy-engine.js";
@@ -333,4 +334,75 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   invariant(state);
 }
 
-console.log(`Payment lifecycle golden tests passed (${checks} checks): returned money, stale and rejected proposals, repaired statuses, isolated matching, precision reviews that stick and apply again, durable exception resolutions and confirmed unknown outcomes.`);
+// ---------- Item 13: an instalment's status follows its balance after an amount edit ----------
+/** The store's check on a save, against the state as it was loaded. */
+const saved = (loaded: DomainState, state: DomainState) => { assert.doesNotThrow(() => assertFinalState(loaded, state, state.merchant.id)); checks += 1; };
+const dueByReference = (state: DomainState, reference: string) => recordsOf(state, "due-items").find((item) => item.reference === reference)!;
+/** Finance applies a transfer of this amount to the instalment. */
+function manualTransfer(state: DomainState, due: TypedRecord<"due-items">, reference: string, amountKobo: number, at: string) {
+  const payment = makeRecord(state, "payments", { name: "Canonical payment", status: "unallocated", reference, customerId: due.customerId, amountKobo, data: { allocatedKobo: 0, observedAt: at, channel: "transfer" } });
+  executeAction(state, finance(at), { action: "manual_allocate", recordId: payment.id, reason: "Customer confirmed the instalment", data: { dueItemId: due.id, amountKobo } });
+}
+{
+  const state = seedMerchant("due-edits");
+  const at = wat("2027-07-01T09:00:00");
+  /** The record API's edit: the stored record with the changed fields, as PATCH /v1/records/due-items/:id builds it. */
+  const edit = (due: TypedRecord<"due-items">, changes: { amountKobo?: number; name?: string }) =>
+    amendDueItem(state, ctxAt(at, "Admin"), due, { ...due, ...changes, data: { ...due.data }, updatedAt: at });
+  const paid = dueByReference(state, "DEMO-LOAN-1001"); // ₦25,000, paid in full by a confirmed allocation
+  const partPaid = dueByReference(state, "DEMO-LOAN-1005"); // ₦25,000
+  manualTransfer(state, partPaid, "TRF-PART", 1_000_000, at);
+  const planned = addAttempt(state, partPaid, { status: "scheduled", occurredAt: wat("2027-07-03T07:00:00") });
+  const collecting = dueByReference(state, "DEMO-LOAN-1004"); // ₦35,000, in collection after a failed attempt
+  const untouched = dueByReference(state, "DEMO-LOAN-1006");
+  const disputed = dueByReference(state, "DEMO-LOAN-1007");
+  disputed.status = "in_dispute";
+  const tunde = dueByReference(state, "DEMO-LOAN-1002");
+  const final = makeRecord(state, "due-items", { name: "Túndé Bakare · instalment 9", status: "scheduled", customerId: tunde.customerId, amountKobo: 4_200_000, reference: "DEMO-LOAN-2009", data: { dueDate: "2027-06-01", mandateId: tunde.data.mandateId, owner: "lms", outstandingKobo: 4_200_000 } });
+  manualTransfer(state, final, "TRF-FINAL", 1_500_000, at);
+  final.status = "unpaid_final"; // the engine gave up after part of it was paid
+  equal([paid.status, partPaid.status, partPaid.data.outstandingKobo], ["paid", "partially_paid", 1_500_000], "one instalment is paid and another part-paid by a ₦10,000 transfer");
+  const loaded = structuredClone(state);
+
+  edit(paid, { amountKobo: 3_000_000 });
+  equal([paid.status, paid.data.outstandingKobo], ["partially_paid", 500_000], "a paid instalment raised to ₦30,000 owes ₦5,000 again and is part-paid");
+  edit(paid, { amountKobo: GROSS });
+  equal([paid.status, paid.data.outstandingKobo], ["paid", 0], "reduced back to what was paid, it is paid");
+  refused(() => edit(paid, { amountKobo: 1_000_000 }), /below confirmed allocations/, undefined, "an amount below the confirmed allocations is still refused");
+  edit(partPaid, { amountKobo: 1_000_000 });
+  equal([partPaid.status, partPaid.data.outstandingKobo], ["paid", 0], "a part-paid instalment reduced to the amount paid is paid with nothing outstanding");
+  equal(planned.status, "cancelled", "and its unsent attempt is cancelled, as when a payment settles it");
+  edit(untouched, { name: "Dami Adéyẹmí · instalment 6 (renamed)" });
+  equal([untouched.status, untouched.data.outstandingKobo], ["scheduled", 6_000_000], "an edit that leaves the balance whole keeps a scheduled instalment scheduled");
+  edit(collecting, { amountKobo: 3_600_000 });
+  equal([collecting.status, collecting.data.outstandingKobo], ["in_collection", 3_600_000], "an instalment in collection with nothing paid stays in collection when its amount changes");
+  edit(disputed, { amountKobo: 3_000_000 });
+  equal([disputed.status, disputed.data.outstandingKobo], ["in_dispute", 3_000_000], "a dispute is kept whatever the amount");
+  edit(final, { amountKobo: 4_500_000 });
+  equal([final.status, final.data.outstandingKobo], ["unpaid_final", 3_000_000], "a final failure is kept while money is still owed");
+  edit(final, { amountKobo: 1_500_000 });
+  equal([final.status, final.data.outstandingKobo], ["paid", 0], "and is paid once the edit leaves nothing outstanding");
+  saved(loaded, state);
+}
+{
+  // Statuses an amount edit left behind before this rule are repaired by the next close, before the engine evaluates them.
+  const state = seedMerchant("due-repair");
+  const raised = dueByReference(state, "DEMO-LOAN-1002"); // paid ₦42,000, raised to ₦47,000 by an earlier build's edit
+  raised.amountKobo = 4_700_000; raised.data.outstandingKobo = 500_000;
+  const reduced = dueByReference(state, "DEMO-LOAN-1005"); // part-paid, then reduced to what was paid
+  manualTransfer(state, reduced, "TRF-LEGACY", 1_000_000, wat("2027-07-01T09:00:00"));
+  const planned = addAttempt(state, reduced, { status: "scheduled", occurredAt: wat("2027-07-03T07:00:00") });
+  reduced.amountKobo = 1_000_000; reduced.data.outstandingKobo = 0;
+  const unknown = dueByReference(state, "DEMO-LOAN-1006"); // no stored balance: the repair does not guess one
+  delete unknown.data.outstandingKobo; unknown.status = "partially_paid";
+  equal([raised.status, reduced.status], ["paid", "partially_paid"], "the stored statuses contradict the balances");
+  const loaded = structuredClone(state);
+  const run = reconcile(state, finance(wat("2027-07-02T07:00:00")));
+  equal([raised.status, reduced.status, unknown.status], ["partially_paid", "paid", "partially_paid"], "each stored balance now decides its status");
+  equal(planned.status, "cancelled", "the settled instalment's unsent attempt is cancelled");
+  equal(run.data.dueStatusesRepaired, 2, "the close reports the repairs");
+  saved(loaded, state);
+  equal(reconcile(state, finance(wat("2027-07-03T07:00:00"))).data.dueStatusesRepaired, 0, "the next close has nothing left to repair");
+}
+
+console.log(`Payment lifecycle golden tests passed (${checks} checks): returned money, stale and rejected proposals, repaired statuses, isolated matching, precision reviews that stick and apply again, durable exception resolutions, confirmed unknown outcomes, and instalment statuses that follow their balance.`);
