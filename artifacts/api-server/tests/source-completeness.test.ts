@@ -68,6 +68,9 @@ assert.equal(watBusinessDate("2026-09-21T23:30:00.000Z"),date);
   fake.data.sourceQuality.sourceRows=1;fake.data.sourceQuality.sourceAmountKobo=0;assert.equal(sourceCompleteness(state,date).status,"complete");
   makeRecord(state,"source-profiles",{status:"active",data:{source:"another-feed",kind:"observations"}});
   assert.match(sourceCompleteness(state,date).issues[0].label,/another-feed/);
+  makeRecord(state,"source-profiles",{status:"active",data:{source:"future-feed",kind:"payments",firstExpectedAt:"2026-09-25T08:00:00.000Z"}});
+  assert.equal(sourceCompleteness(state,date).issues.some(issue=>/future-feed/.test(issue.label)),false,"A profile expecting its first delivery after this business date has nothing to declare for it.");
+  assert.equal(sourceCompleteness(state,"2026-09-25").issues.some(issue=>/future-feed/.test(issue.label)),true);
 }
 {
   const state=fresh();saveSourceManifest(state,ctx,{...declaration,files:[],noFilesExpected:true});

@@ -58,6 +58,11 @@ try {
     await client.query("SAVEPOINT escalation");
     await assert.rejects(() => client.query("UPDATE valopay_staff_memberships SET role='Admin' WHERE id='finance-a'"), /row-level security/);
     await client.query("ROLLBACK TO SAVEPOINT escalation");
+    await client.query("SAVEPOINT workspace_role");
+    await assert.rejects(() => client.query("UPDATE valopay_workspaces SET role='Admin' WHERE id='workspace-a'"), /never changes them/, "The application role can lock its workspace row but never rewrite it; staff roles come from memberships.");
+    await client.query("ROLLBACK TO SAVEPOINT workspace_role");
+    assert.equal((await client.query("SELECT id FROM valopay_workspaces WHERE id='workspace-a' FOR SHARE")).rowCount, 1, "Row locks, which the store takes on every staff request, still work.");
+    await client.query("ROLLBACK TO SAVEPOINT workspace_role");
     await assert.rejects(() => client.query("INSERT INTO valopay_staff_lender_access(membership_id,merchant_id,granted_by) VALUES('member-workspace-a','lender-a','forbidden')"), /row-level security/);
     await client.query("ROLLBACK TO SAVEPOINT escalation");
     assert.equal((await client.query("DELETE FROM valopay_staff_lender_access WHERE membership_id='service-a'")).rowCount, 0, "A worker cannot revoke another person's grants with raw SQL.");

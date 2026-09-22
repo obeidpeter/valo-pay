@@ -26,6 +26,7 @@ const suites = [
   "artifacts/api-server/tests/pilot-workflow.integration.test.ts",
   "artifacts/api-server/tests/connected-workflows.integration.test.ts",
   "artifacts/api-server/tests/record-index-migration.integration.test.ts",
+  "artifacts/api-server/tests/pilot-workflow-migration.integration.test.ts",
   "artifacts/api-server/tests/valopay-store.integration.test.ts",
   "artifacts/api-server/tests/close-scheduler.integration.test.ts",
   "artifacts/api-server/tests/record-lists.integration.test.ts",

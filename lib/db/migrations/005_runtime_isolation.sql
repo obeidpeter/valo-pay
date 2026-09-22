@@ -96,7 +96,20 @@ BEGIN
  END;
  $body$
  $fn$,target_schema);
- FOREACH table_name IN ARRAY ARRAY['valopay_runtime_workspace()','valopay_runtime_admin()','valopay_runtime_writer()','valopay_runtime_lender(text)','valopay_runtime_member(text)','valopay_runtime_invited(text,text,timestamp with time zone)','valopay_runtime_clear_invitee_grants()'] LOOP
+ -- The runtime login locks workspace rows (SELECT ... FOR UPDATE/SHARE needs an
+ -- UPDATE grant on some column) but never changes them: staff roles come from
+ -- memberships. This guard refuses any UPDATE the runtime login attempts.
+ EXECUTE format($fn$
+ CREATE FUNCTION %1$I.valopay_runtime_guard_workspace() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog,%1$I,pg_temp AS $body$
+ BEGIN
+   IF session_user=%2$L THEN RAISE EXCEPTION 'The runtime role reads and locks workspace rows; it never changes them. Staff roles come from memberships.' USING ERRCODE='42501'; END IF;
+   RETURN NEW;
+ END;
+ $body$
+ $fn$,target_schema,app_role);
+ EXECUTE format('CREATE TRIGGER valopay_runtime_workspace_guard BEFORE UPDATE ON %1$I.valopay_workspaces FOR EACH ROW EXECUTE FUNCTION %1$I.valopay_runtime_guard_workspace()',target_schema);
+ FOREACH table_name IN ARRAY ARRAY['valopay_runtime_workspace()','valopay_runtime_admin()','valopay_runtime_writer()','valopay_runtime_lender(text)','valopay_runtime_member(text)','valopay_runtime_invited(text,text,timestamp with time zone)','valopay_runtime_clear_invitee_grants()','valopay_runtime_guard_workspace()'] LOOP
    EXECUTE format('ALTER FUNCTION %I.%s OWNER TO %I',target_schema,table_name,helper_role);
    EXECUTE format('REVOKE ALL ON FUNCTION %I.%s FROM PUBLIC',target_schema,table_name);
    EXECUTE format('GRANT EXECUTE ON FUNCTION %I.%s TO %I',target_schema,table_name,app_role);
@@ -137,6 +150,7 @@ BEGIN
    EXECUTE format('GRANT SELECT ON TABLE %I.%I TO %I',target_schema,table_name,app_role);
  END LOOP;
  EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM %I',target_schema,helper_role);
+ -- UPDATE(role) exists only so the runtime login can take row locks on its workspace; the guard trigger above refuses the update itself.
  EXECUTE format('GRANT UPDATE(role) ON %I.valopay_workspaces TO %I',target_schema,app_role);
  EXECUTE format('GRANT INSERT ON %1$I.valopay_merchants,%1$I.valopay_records,%1$I.valopay_idempotency,%1$I.valopay_operations,%1$I.valopay_staff_memberships,%1$I.valopay_staff_invitations,%1$I.valopay_staff_events,%1$I.valopay_staff_lender_access TO %2$I',target_schema,app_role);
  EXECUTE format('GRANT UPDATE(info,settings) ON %I.valopay_merchants TO %I',target_schema,app_role);

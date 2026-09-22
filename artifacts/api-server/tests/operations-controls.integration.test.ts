@@ -60,6 +60,19 @@ try{
   assert.equal((await post(customerPath,{name:"Cancelled missing consent"},cancelledKey)).status,400);
   const pending=(await pool.query("SELECT * FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2",[lender,pendingKey])).rows[0];
   const cancelled=(await pool.query("SELECT * FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2",[lender,cancelledKey])).rows[0];
+  // A definitive refusal closes the entry with its protected reason; it no longer counts as pending.
+  assert.equal(pending.status,"cancelled");assert.equal(cancelled.status,"cancelled");
+  assert.equal(pending.receipt.protectedPayload,1);
+  assert.equal((await openPayload(pending.receipt,{lender,record:pending.id,field:"receipt"},managedWrappingKeys)).rejected.status,400);
+  // Reopen one entry as pending: a request whose outcome never came back (a crash before completion).
+  await pool.query("UPDATE valopay_operations SET status='pending',receipt=NULL WHERE merchant_id=$1 AND id=$2",[lender,pending.id]);
+  // Pending entries are limited per person and lender; closed ones do not count towards the limit.
+  await pool.query("INSERT INTO valopay_operations(id,merchant_id,owner,actor,role,request_key,request_hash,request,label) SELECT 'cap-'||i,$1,$2,$3,$4,'cap-key-'||i,'cap-hash','{}','Cap fixture' FROM generate_series(1,99) i",[lender,pending.owner,pending.actor,pending.role]);
+  const capped=await post(customerPath,{name:"Beyond the pending limit"});
+  assert.equal(capped.status,409);assert.match(String((capped.data as {error?:string}).error),/pending operations/);
+  await pool.query("UPDATE valopay_operations SET status='cancelled' WHERE merchant_id=$1 AND id LIKE 'cap-%'",[lender]);
+  assert.equal((await post(customerPath,{name:"Beyond the pending limit"})).status,400,"Closed entries free the limit; the request is then refused on its own merits.");
+  await pool.query("DELETE FROM valopay_operations WHERE merchant_id=$1 AND (id LIKE 'cap-%' OR label='Save records customers' AND status='cancelled' AND id<>$2)",[lender,cancelled.id]);
   ok(await post(`/v1/operations/${cancelled.id}/cancel?merchantId=${lender}`,{}));
   await pool.query("UPDATE valopay_operations SET updated_at=$3::timestamptz WHERE merchant_id=$1 AND id=ANY($2::text[])",[lender,[completed.id,cancelled.id,pending.id],at(30)]);
   await pool.query("UPDATE valopay_records SET data=jsonb_set(data,'{committedAt}',to_jsonb($3::text)),updated_at=$3::timestamptz WHERE id=$1 AND merchant_id=$2",[batch.id,lender,at(30)]);

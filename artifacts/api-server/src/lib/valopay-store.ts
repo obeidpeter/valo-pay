@@ -63,8 +63,10 @@ export interface StoreContext extends Context {
   readonly accessMode?: 'sandbox' | 'staff';
 }
 const sessions = new WeakMap<StoreContext, Session>();
-const requestOperations = new WeakMap<Request, string>();
-export function bindOperation(req: Request, id: string) { requestOperations.set(req, id); }
+const requestOperations = new WeakMap<Request, { id: string; merchantId: string }>();
+export function bindOperation(req: Request, id: string, merchantId: string) { requestOperations.set(req, { id, merchantId }); }
+/** The journal entry the recovery middleware bound to this request, if any. */
+export function boundOperation(req: Request) { return requestOperations.get(req); }
 const databaseConflictCodes = new Set(["23503", "23505", "23514", "P0001"]);
 
 /** Throws an error carrying the HTTP status the error handler answers with (400 unless given). */
@@ -92,7 +94,9 @@ export interface StoredRequest { method: 'POST' | 'PATCH'; path: string; body: u
 type OperationRow = { id: string; merchant_id: string; owner: string; actor: string; role: string; request_key: string; request_hash: string; request: StoredRequest; label: string; status: string; receipt: any; created_at: Date; updated_at: Date };
 const operationView = (row: OperationRow) => ({ id: row.id, label: row.label, actor: row.actor, role: row.role, status: row.status,
   createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString(),
-  message: row.status === 'completed' ? 'The service saved this request.' : row.status === 'cancelled' ? 'Cancelled before completion. This request cannot run again.' : 'Completion has not been confirmed. Check the original request.',
+  message: row.status === 'completed' ? 'The service saved this request.'
+    : row.status === 'cancelled' ? (row.receipt?.rejected ? `The service refused this request: ${row.receipt.rejected.message} Correct it and submit it again.` : 'Cancelled before completion. This request cannot run again.')
+    : 'Completion has not been confirmed. Check the original request.',
   // Only a compact result reference. Original payloads and export locations stay private.
   recordId: row.receipt?.record?.id || row.receipt?.id || null,
   recordKind: row.receipt?.record?.kind || row.receipt?.kind || null });
@@ -141,6 +145,26 @@ export async function cancelOperation(ctx: StoreContext, merchantId: string, id:
   if (legacy.rows.length) fail('A receipt already exists for this request. Check the original request to recover it.', 409);
   await session.client.query("UPDATE valopay_operations SET status='cancelled',updated_at=$4 WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND status='pending'", [id, merchantId, session.owner || session.principal, ctx.now]);
   return { message: 'The server confirmed this request has not completed and cancelled it. It cannot run again.' };
+}
+/** A definitive refusal (a 4xx the same request would receive again) closes
+ * the journal entry: it neither waits for confirmation nor counts towards the
+ * pending limit, and its key cannot run again. Runs in its own transaction
+ * after the refused request's transaction rolled back. */
+export async function rejectOperation(req: Request, bound: { id: string; merchantId: string }, rejection: { status: number; message: string }) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    if (runtimeIsolationEnabled()) {
+      const verified = getAuth(req) as unknown as VerifiedClerkSession;
+      await bindRuntimeIdentity(client, { organizationId: verified.orgId || '', userId: verified.userId || '' });
+    }
+    const receipt = await protectStored({ rejected: rejection }, { lender: bound.merchantId, record: bound.id, field: 'receipt' });
+    await client.query("UPDATE valopay_operations SET status='cancelled',receipt=$3,updated_at=now() WHERE id=$1 AND merchant_id=$2 AND status='pending'", [bound.id, bound.merchantId, receipt]);
+    await client.query('COMMIT');
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch { /* the transaction is already closed */ }
+    throw error;
+  } finally { client.release(); }
 }
 /** Receipt and domain writes commit together. A process crash cannot leave a
  * completed journal entry without the corresponding business write. */
@@ -421,7 +445,7 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       actor: staff ? `Clerk:${staff.user_id}` : `Sandbox ${workspace.role}`, now, accessMode: staff ? 'staff' : 'sandbox',
     });
     sessions.set(context, { client, workspace, principal: workspace.principal_hash, owner: identity.principal, active: true, access,
-      operationId: requestOperations.get(req), userId: staff?.user_id, organizationId: auth?.orgId || undefined });
+      operationId: requestOperations.get(req)?.id, userId: staff?.user_id, organizationId: auth?.orgId || undefined });
     const result = await fn(context);
     const committed = await client.query("COMMIT");
     // PostgreSQL accepts COMMIT after a caught statement error by returning

@@ -108,7 +108,17 @@ const mutations = contract.slice(contract.indexOf("## Mutations"), contract.inde
 for (const action of reasoned) check(mutations.includes(`\`${action}\``), `docs/frontend-contract.md does not describe the action ${action}`);
 for (const match of mutations.matchAll(/`([a-z]+_[a-z_]+)`/g)) check(actionsSource.includes(`"${match[1]}"`), `docs/frontend-contract.md describes an action the code does not have: ${match[1]}`);
 
-// ---- 8. British spelling in prose ----
+// ---- 8. Every route the API mounts is in the contract ----
+// The routers index.ts mounts, plus the replay path the recovery middleware serves itself.
+const operations = new Set(Object.entries(spec.paths).flatMap(([path, methods]) => Object.keys(methods).map((method) => `${method.toUpperCase()} ${path}`)));
+const mounted = [...read("artifacts/api-server/src/routes/index.ts").matchAll(/from ["']\.\/([\w-]+)["']/g)].map((m) => `artifacts/api-server/src/routes/${m[1]}.ts`);
+for (const file of mounted) for (const match of read(file).matchAll(/router\.(get|post|patch|put|delete)\(\s*["'`]([^"'`$]+)["'`]/g)) {
+  const route = `${match[1].toUpperCase()} ${match[2].replace(/:(\w+)/g, "{$1}")}`;
+  check(operations.has(route), `${file} serves ${route}, which lib/api-spec/openapi.json does not describe`);
+}
+check(!read("artifacts/api-server/src/lib/operation-recovery.ts").includes("/retry$/") || operations.has("POST /v1/operations/{id}/retry"), "the recovery middleware serves POST /v1/operations/{id}/retry, which lib/api-spec/openapi.json does not describe");
+
+// ---- 9. British spelling in prose ----
 const american = /\b(colou?rs?(?<!colour)(?<!colours)|behaviors?|organi[sz]ations?(?<!organisation)(?<!organisations)|organize[ds]?|centered|analyzed?|catalogs?|favorites?|honor(?:ed|s)?|labeled|labeling|canceled|fulfill(?:ed|s)?|authoriz(?:e[ds]?|ation|ing)|unauthorized|initializ(?:e[ds]?|ation|ing)|serializ(?:e[ds]?|ation)|normaliz(?:e[ds]?|ation)|optimiz(?:e[ds]?|ation)|customiz(?:e[ds]?|ation)|recogniz(?:e[ds]?|ation)|standardiz(?:e[ds]?|ation)|minimiz(?:e[ds]?|ation)|maximiz(?:e[ds]?|ation)|synchroniz(?:e[ds]?|ation)|sanitiz(?:e[ds]?|ation)|summariz(?:e[ds]?|ation)|prioritiz(?:e[ds]?|ation)|utiliz(?:e[ds]?|ation)|finaliz(?:e[ds]?|ation)|categoriz(?:e[ds]?|ation)|visualiz(?:e[ds]?|ation)|capitaliz(?:e[ds]?|ation)|emphasiz(?:e[ds]?|ation)|realiz(?:e[ds]?|ation)|gray|defense|traveled|traveling|signaled|signaling|modeling|enrollment|installments?)\b/gi;
 for (const doc of documents) {
   for (const match of prose(read(doc)).matchAll(american)) check(false, `${doc} uses an American spelling in prose: ${match[0]}`);
@@ -119,4 +129,4 @@ if (problems.length) {
   console.error(problems.join("\n"));
   assert.fail(`Documentation check found ${problems.length} problem(s)`);
 }
-console.log(`Documentation checks passed (${checks} checks): paths, links and commands the documents name exist, environment variables are documented and read, the contract describes every operation, parameter and schema, the shared schema's exports are documented, every document reaches the snapshot, the contract lists every route and action, and the prose is British.`);
+console.log(`Documentation checks passed (${checks} checks): paths, links and commands the documents name exist, environment variables are documented and read, the contract describes every operation, parameter and schema, the shared schema's exports are documented, every document reaches the snapshot, the contract lists every route and action, every mounted API route is in the contract, and the prose is British.`);

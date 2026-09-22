@@ -6,7 +6,7 @@ import {
   type CaseInput,
 } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "./types";
-import { makeRecord } from "./records";
+import { makeRecord, assertNoRealBankDetails } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
 import { importCsv } from "../lib/valopay-import";
 import { batchSourceQuality, assertSourceBatchReady } from './source-quality';
@@ -56,6 +56,13 @@ function rowIdentities(input: BatchInput): string[] {
     });
   } catch {
     refuse("The CSV could not be read. Check its headers and row lengths.");
+  }
+  // The rows are screened here, where every batch is saved, not only where a
+  // recoverable request carries a key.
+  try {
+    assertNoRealBankDetails(rows);
+  } catch (error) {
+    refuse(error instanceof Error ? error.message : "The source rows could not be checked.");
   }
   if (
     !rows.length ||
