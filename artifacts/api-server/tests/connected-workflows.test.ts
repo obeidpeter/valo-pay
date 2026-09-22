@@ -274,6 +274,8 @@ check(() => {
   assert.equal(i.status, "refunded");
   assert.equal(openDue(s).status, "in_dispute");
   assert.equal(openDue(s).data.outstandingKobo, openDue(s).amountKobo);
+  // The refunded money left the allocation queues and is no customer credit.
+  assert.equal(s.records.find((r) => r.id === i.data.paymentId)!.status, "returned");
   assert.throws(
     () => run(s, "payment.refund_confirm", {}, i.id, finance),
     /confirmed/,
@@ -289,6 +291,7 @@ check(() => {
     s.records.find((r) => r.id === i.data.paymentId)!.data.reversalStatus,
     "reversed",
   );
+  assert.equal(s.records.find((r) => r.id === i.data.paymentId)!.status, "returned");
   assert.equal(openDue(s).status, "in_dispute");
 });
 check(() => {

@@ -3,7 +3,7 @@ import { listReconciliation, listCloseHistory, getCloseDetail, loadReportsView }
 import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
 import { z } from "zod";
-import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, roles, fail, appendAudit, verifyAudit, digest, canonical, listMerchants, findIdempotency, saveIdempotency, changeRole, type StoreContext } from "../lib/valopay-store";
+import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, roles, fail, appendAudit, verifyAudit, digest, canonical, listMerchants, findIdempotency, saveIdempotency, changeRole, type StoreContext } from "../lib/valopay-store";
 import { customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
 import { bindCloseReviewBasis } from '../domain/close-review';
@@ -14,7 +14,7 @@ import { getGates } from "../lib/valopay-readiness";
 import { importCsv } from "../lib/valopay-import";
 import { exportDescriptorForRecord, exportKinds, readExport } from "../lib/valopay-exports";
 import { exportJobView, publicExportRecord, queueExport, retryExport } from '../lib/export-jobs';
-import { advanceRecordVersions, assertRecordVersion, assertSettingsVersion } from "../lib/edit-versions";
+import { assertRecordVersion, assertSettingsVersion } from "../lib/edit-versions";
 import { schedulerStatus } from "../lib/close-scheduler";
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../lib/valopay-close-views";
 import { listQueue } from '../lib/valopay-store';
@@ -28,7 +28,6 @@ export async function withState<T>(req:Request,res:Response,operation:(state:Dom
  return inWorkspace(req,res,async ctx=>{
   // A read takes a share lock so it never queues behind other reads; a mutation takes the exclusive lock.
   const state=await loadState(ctx,merchantId,mutating?"update":"share");
-   const before=mutating?structuredClone(state):undefined;
   const key=req.header("Idempotency-Key");
   // A demo-role switch changes ctx.actor itself. Its unchanged retry must keep
   // the original request identity; all other actions stay persona-bound.
@@ -41,11 +40,13 @@ export async function withState<T>(req:Request,res:Response,operation:(state:Dom
     if(found){if(found.request_hash!==fingerprint)fail("This idempotency key was used with different input.",409);const receipt=responseSchema?responseSchema.parse(found.response):found.response;await completeOperation(ctx,receipt);return receipt;}
   }
    const rawResult=await operation(state,ctx);
-   if(mutating){enrolEligibleFailures(state,ctx);for(const close of state.records.filter(r=>r.kind==='closes'&&!before!.records.some(old=>old.id===r.id)))bindCloseReviewBasis(state,close);advanceRecordVersions(before!,state,ctx.now);}
+   // Versions advance before the response is built, so it carries them; the audit entry commits to exactly what changed.
+   let changes:ReturnType<typeof settleChanges>|undefined;
+   if(mutating){enrolEligibleFailures(state,ctx);for(const close of addedRecords(ctx,state).filter(r=>r.kind==='closes'))bindCloseReviewBasis(state,close);changes=settleChanges(ctx,state);}
    // Validate before committing: an invalid response must not leave durable writes.
    const result=responseSchema?responseSchema.parse(rawResult):rawResult;
   if(mutating){
-   appendAudit(state,ctx,req.path.includes("/actions")?String(req.body.action):`${req.method.toLowerCase()}.${req.path.split("/").slice(2).join(".")}`,req.body.recordId||String(req.params.id||"workspace"),req.body.reason||"Synthetic workspace operation",{beforeDigest:digest(canonical(before)),afterDigest:digest(canonical(state))});
+   appendAudit(state,ctx,req.path.includes("/actions")?String(req.body.action):`${req.method.toLowerCase()}.${req.path.split("/").slice(2).join(".")}`,req.body.recordId||String(req.params.id||"workspace"),req.body.reason||"Synthetic workspace operation",changes);
     await saveState(ctx,state);
     if(idempotencyKey)await saveIdempotency(ctx,idempotencyKey,fingerprint,result);
   }

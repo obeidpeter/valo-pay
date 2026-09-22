@@ -9,6 +9,7 @@ const original = { ...process.env }, admin = new Pool({ connectionString: proces
 const suffix = randomBytes(6).toString("hex"), schema = `valopay_runtime_test_${suffix}`, appRole = `runtime_app_${suffix}`, helperRole = `runtime_helper_${suffix}`, password = randomBytes(24).toString("hex");
 const tables = ["valopay_workspaces", "valopay_merchants", "valopay_records", "valopay_idempotency", "valopay_operations", "valopay_teams", "valopay_staff_memberships", "valopay_staff_invitations", "valopay_staff_events", "valopay_staff_lender_access"];
 let runtimePool: InstanceType<typeof Pool> | undefined;
+const scopeMigration = await readFile(new URL("../../../lib/db/migrations/006_runtime_isolation_scope.sql", import.meta.url), "utf8");
 try {
   const owner = await admin.connect();
   try {
@@ -37,6 +38,9 @@ try {
     await owner.query("SELECT set_config('valopay.runtime_migration','staging-only',false),set_config('valopay.runtime_app_role',$1,false),set_config('valopay.runtime_helper_role',$2,false)", [appRole, helperRole]);
     const migration = await readFile(new URL("../../../lib/db/migrations/005_runtime_isolation.sql", import.meta.url), "utf8");
     await owner.query(migration);
+    // 006 runs as its own explicit step: 005 clears the commissioning opt-in when it finishes.
+    await assert.rejects(() => owner.query(scopeMigration), /explicit commissioning/, "006 needs its own explicit opt-in.");
+    await owner.query("ROLLBACK");
     await owner.query(`ALTER ROLE "${appRole}" PASSWORD '${password}'`);
   } finally { owner.release(); }
   const url = new URL(original.DATABASE_URL!); url.username = appRole; url.password = password;
@@ -44,6 +48,23 @@ try {
   Object.assign(process.env, { VALOPAY_RUNTIME_ISOLATION: "staging", VALOPAY_RUNTIME_SCHEMA: schema, VALOPAY_RUNTIME_ROLE: appRole, VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://identity.example", VALOPAY_STAFF_ORIGINS: "https://pilot.example", VALOPAY_PAYLOAD_ENCRYPTION: "kms", VALOPAY_KMS_KEY: "projects/synthetic-test/locations/global/keyRings/test/cryptoKeys/test", VALOPAY_RUNTIME_SERVICE_ORG: "org_runtimeA", VALOPAY_RUNTIME_SERVICE_USER: "user_serviceA", CLERK_SECRET_KEY: "sk_test_placeholder" });
   const { pool } = await import("@workspace/db"); runtimePool = pool;
   const isolation = await import("../src/lib/runtime-isolation"), store = await import("../src/lib/valopay-store");
+  // With 005 alone every lender check runs per row; the application refuses that schema.
+  const early = await pool.connect();
+  try {
+    await early.query("BEGIN");
+    await assert.rejects(() => isolation.bindRuntimeIdentity(early, { organizationId: "org_runtimeA", userId: "user_financeA" }), /Apply lib\/db\/migrations\/006_runtime_isolation_scope\.sql/, "The application refuses row-by-row lender policies.");
+    await early.query("ROLLBACK");
+  } finally { early.release(); }
+  const upgrade = await admin.connect();
+  try {
+    await upgrade.query(`SET search_path TO "${schema}", public`);
+    await upgrade.query("SELECT set_config('valopay.runtime_migration','staging-only',false)");
+    await upgrade.query(scopeMigration);
+    await upgrade.query("SELECT set_config('valopay.runtime_migration','staging-only',false)");
+    await assert.rejects(() => upgrade.query(scopeMigration), /already evaluates lender scope once per statement/, "006 applies once.");
+    await upgrade.query("ROLLBACK");
+    await upgrade.query("SELECT set_config('valopay.runtime_migration','',false)");
+  } finally { upgrade.release(); }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -122,16 +143,20 @@ try {
     assert.deepEqual(await store.inWorkspace(inviteeRequest, { cookie() {} } as any, ctx => store.listMerchants(ctx), "read"), [], "Accepting an invitation grants no lenders.");
     await admin.query(`INSERT INTO "${schema}".valopay_staff_invitations(id,workspace_id,email,role,token_hash,invited_by,expires_at) VALUES('invite-renewal','workspace-a','workspace-a@example.test','Read-only',$1,'System',now()+interval '1 day')`, [createHash("sha256").update("token-renewal").digest("hex")]);
     await assert.rejects(() => store.acceptStaffInvitation(inviteeRequest, "token-renewal"), /already have an active membership/, "An active member cannot use renewal to change their own role.");
-    await admin.query(`UPDATE "${schema}".valopay_staff_memberships SET status='revoked' WHERE id=$1`, [firstMembership.id]);
+    // Revoked as the team page records it: the membership's change time moves.
+    await admin.query(`UPDATE "${schema}".valopay_staff_memberships SET status='revoked',updated_at=clock_timestamp() WHERE id=$1`, [firstMembership.id]);
     await admin.query(`INSERT INTO "${schema}".valopay_staff_lender_access(membership_id,merchant_id,granted_by) VALUES($1,'lender-a','fixture')`, [firstMembership.id]);
-    const renewed = await store.acceptStaffInvitation(inviteeRequest, "token-renewal");
+    await assert.rejects(() => store.acceptStaffInvitation(inviteeRequest, "token-renewal"), /sent before your access was suspended or revoked/, "An invitation sent before the revocation cannot restore access.");
+    assert.equal((await admin.query(`SELECT status FROM "${schema}".valopay_staff_memberships WHERE id=$1`, [firstMembership.id])).rows[0].status, "revoked");
+    await admin.query(`INSERT INTO "${schema}".valopay_staff_invitations(id,workspace_id,email,role,token_hash,invited_by,expires_at) VALUES('invite-renewal-2','workspace-a','workspace-a@example.test','Read-only',$1,'System',now()+interval '1 day')`, [createHash("sha256").update("token-renewal-2").digest("hex")]);
+    const renewed = await store.acceptStaffInvitation(inviteeRequest, "token-renewal-2");
     assert.equal(renewed.role, "Read-only");
     const membershipRows = (await admin.query(`SELECT id,role,status FROM "${schema}".valopay_staff_memberships WHERE workspace_id='workspace-a' AND user_id='user_invitee'`)).rows;
     assert.deepEqual(membershipRows, [{ id: firstMembership.id, role: "Read-only", status: "active" }], "Renewal updates the original membership under the invitation policy.");
     assert.equal((await admin.query(`SELECT count(*)::int AS count FROM "${schema}".valopay_staff_lender_access WHERE membership_id=$1`, [firstMembership.id])).rows[0].count, 0, "The narrow renewal helper clears the revoked person's old grants.");
     assert.equal((await admin.query(`SELECT count(*)::int AS count FROM "${schema}".valopay_staff_events WHERE actor='Clerk:user_invitee' AND action='staff.accepted'`)).rows[0].count, 2, "Acceptance and renewal each preserve an audit event.");
     assert.deepEqual(await store.inWorkspace(inviteeRequest, { cookie() {} } as any, ctx => store.listMerchants(ctx), "read"), []);
-    await assert.rejects(() => store.acceptStaffInvitation(inviteeRequest, "token-renewal"), /expired|used|revoked|invitation/i, "A consumed renewal token cannot be reused.");
+    await assert.rejects(() => store.acceptStaffInvitation(inviteeRequest, "token-renewal-2"), /expired|used|revoked|invitation/i, "A consumed renewal token cannot be reused.");
   } finally { clerkClient.users.getUser = previousGetUser; }
   const result = await store.inWorkspace(req, { cookie() {} } as any, async ctx => ({ lenders: await store.listMerchants(ctx), state: await store.loadState(ctx, "lender-a", "share") }), "read");
   assert.deepEqual(result.lenders.map(lender => lender.id), ["lender-a"]); assert.equal(result.state.records[0]?.name, "Synthetic customer");
@@ -140,11 +165,31 @@ try {
   const readerState = await store.inWorkspace(readerRequest, { cookie() {} } as any, ctx => store.loadState(ctx, "lender-a", "share"), "read");
   assert.equal(readerState.records[0]?.name, "Synthetic customer", "Restricted Read-only users can still inspect a consistent lender snapshot.");
   await assert.rejects(() => store.inWorkspace(req, { cookie() {} } as any, ctx => store.loadState(ctx, "lender-a-private", "share"), "read"), /not found/);
+  // Pilot scale: a lender with 13,000 records loads through the policies in one
+  // pass. The visible lenders are a hashed set built once per statement, never a
+  // helper call per row (which took about ten seconds for this lender).
+  await admin.query(`INSERT INTO "${schema}".valopay_records(id,merchant_id,kind,name,status,data) SELECT 'scale-'||g,'lender-a','customers','Synthetic customer '||g,'active','{"synthetic":true}' FROM generate_series(1,13000) g`);
+  await admin.query(`ANALYZE "${schema}".valopay_records`);
+  const scale = await pool.connect();
+  try {
+    await scale.query("BEGIN"); await isolation.bindRuntimeIdentity(scale, { organizationId: "org_runtimeA", userId: "user_financeA" });
+    const plan = (await scale.query("EXPLAIN (COSTS OFF) SELECT * FROM valopay_records WHERE merchant_id='lender-a'")).rows.map(row => row["QUERY PLAN"]).join("\n");
+    assert.match(plan, /hashed SubPlan/, `The lender policy is a hashed set, not a per-row helper call:\n${plan}`);
+    assert.doesNotMatch(plan, /valopay_runtime_lender\(/, "No per-row lender helper remains in the records plan.");
+    const started = performance.now();
+    assert.equal((await scale.query("SELECT id FROM valopay_records WHERE merchant_id='lender-a'")).rowCount, 13001);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 3000, `A pilot-scale lender loads in ${Math.round(elapsed)} ms under row security.`);
+    assert.equal((await scale.query("SELECT count(*)::int AS count FROM valopay_records WHERE merchant_id='lender-b'")).rows[0].count, 0, "Another workspace's lender stays invisible.");
+    await scale.query("ROLLBACK");
+  } finally { scale.release(); }
+  const loaded = await store.inWorkspace(req, { cookie() {} } as any, ctx => store.loadState(ctx, "lender-a", "share"), "read");
+  assert.equal(loaded.records.length, 13001, "The repository loads the whole pilot-scale lender under the restricted login.");
   await admin.query(`DELETE FROM "${schema}".valopay_staff_lender_access WHERE membership_id='finance-a'`);
   await assert.rejects(() => store.inWorkspace(req, { cookie() {} } as any, ctx => store.loadState(ctx, "lender-a", "share"), "read"), /not found/);
   const elevated = await admin.connect(); try { await elevated.query("BEGIN"); await assert.rejects(() => isolation.bindRuntimeIdentity(elevated, { organizationId: "org_runtimeA", userId: "user_adminA" }), /elevated/); await elevated.query("ROLLBACK"); } finally { elevated.release(); }
   const configured = process.env.VALOPAY_RUNTIME_SCHEMA; process.env.VALOPAY_RUNTIME_SCHEMA = "public"; assert.throws(() => isolation.runtimeIsolationConfiguration(), /public/); process.env.VALOPAY_RUNTIME_SCHEMA = configured;
-  console.log("Runtime isolation passed: actual restricted login, ten forced-RLS tables, pooled-scope reset, mixed-tenant denial, per-lender grants, concurrent invitation acceptance and renewal, service requester checks and real repository/MFA integration.");
+  console.log("Runtime isolation passed: actual restricted login, ten forced-RLS tables, once-per-statement lender scope at pilot scale, pooled-scope reset, mixed-tenant denial, per-lender grants, concurrent invitation acceptance and renewal, service requester checks and real repository/MFA integration.");
 } finally {
   if (runtimePool) await runtimePool.end();
   if (!/^valopay_runtime_test_[a-f0-9]+$/.test(schema) || !/^runtime_(app|helper)_[a-f0-9]+$/.test(appRole) || !/^runtime_(app|helper)_[a-f0-9]+$/.test(helperRole)) throw new Error("Unsafe generated test cleanup target.");

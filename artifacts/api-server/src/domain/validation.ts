@@ -13,8 +13,8 @@ const editable = new Set<string>(editableKinds);
 const statuses: Record<string, readonly string[]> = recordStatuses;
 
 function requireRole(ctx: Context, allowed: string[]): void {
-  if (!roleSet.has(ctx.role)) throw new Error("This demo role is not recognised. Choose one of the available roles.");
-  if (!allowed.includes(ctx.role)) throw new Error(`${ctx.role} is not permitted to make this change.`);
+  if (!roleSet.has(ctx.role)) throw Object.assign(new Error("This demo role is not recognised. Choose one of the available roles."), { status: 403 });
+  if (!allowed.includes(ctx.role)) throw Object.assign(new Error(`${ctx.role} is not permitted to make this change.`), { status: 403 });
 }
 
 function positiveInteger(value: unknown, label: string, allowZero = false): void {
@@ -98,7 +98,7 @@ export function validateRecord(
   assertNoRealBankDetails(input);
   validateDates(input);
   if (!editable.has(kind)) throw new Error(`${kind} cannot be created or edited directly.`);
-  if (!roleSet.has(ctx.role) || ctx.role === "Read-only") throw new Error("This demo role has read-only access.");
+  if (!roleSet.has(ctx.role) || ctx.role === "Read-only") throw Object.assign(new Error("This demo role has read-only access."), { status: 403 });
   if (input.merchantId && input.merchantId !== state.merchant.id) throw new Error("Linked records must belong to the same lender workspace.");
   if (input.amountKobo !== undefined) positiveInteger(input.amountKobo, "amountKobo", true);
   if (input.status && statuses[kind] && !statuses[kind].includes(input.status)) {

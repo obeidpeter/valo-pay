@@ -8,7 +8,7 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
 
 const { pool } = await import("@workspace/db");
 const { getAuth } = await import("@clerk/express");
-const { inWorkspace, listMerchants, loadState, saveState, findIdempotency, saveIdempotency, changeRole, appendAudit } = await import("../src/lib/valopay-store.js");
+const { inWorkspace, listMerchants, loadState, saveState, findIdempotency, saveIdempotency, changeRole, appendAudit, settleChanges, addedRecords } = await import("../src/lib/valopay-store.js");
 
 const requestFor = (token: string) => {
   // Verify this is the real Clerk request shape used by principalFor rather
@@ -145,6 +145,53 @@ try {
   });
   await inWorkspace(requestFor(token()), response(), async (context) => { await listMerchants(context); });
   assert.equal((await pool.query("SELECT 1 FROM valopay_workspaces WHERE id=$1", [activeWorkspace])).rowCount, 1, "a recent change by a person keeps an old sandbox alive");
+  // A save touches only what the request changed. Earlier closes load as
+  // summaries for writes, stay whole in PostgreSQL and in reads, and a save
+  // cannot change them.
+  const savesToken = token();
+  let savesMerchant = "";
+  await inWorkspace(requestFor(savesToken), response(), async (context) => { savesMerchant = (await listMerchants(context))[0]!.id; });
+  const report = { unallocated: { count: 1, kobo: 5, olderThan24Hours: 0 }, exceptions: { openAtClose: 2, overdueAtClose: 1 }, customerPositionsChanged: Array.from({ length: 200 }, (_, index) => ({ customerId: `c${index}`, note: "x".repeat(200) })) };
+  for (const [id, days] of [["close-old", 30], ["close-recent", 2], ["close-latest", 0]] as const) {
+    await pool.query("INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at) VALUES($1,$2,'closes',$1,'completed','',0,'',$3,now()-make_interval(days=>$4),now()-make_interval(days=>$4))",
+      [`${savesMerchant}-${id}`, savesMerchant, { summary: id, closedAt: new Date(Date.now() - days * 86400000).toISOString(), report, operational: { rows: 1 }, metrics: [{ key: "m" }], synthetic: true }, days]);
+  }
+  const stamps = async () => new Map((await pool.query<{ id: string; updated_at: Date }>("SELECT id,updated_at FROM valopay_records WHERE merchant_id=$1", [savesMerchant])).rows.map((row) => [row.id, row.updated_at.toISOString()]));
+  const beforeSave = await stamps();
+  await inWorkspace(requestFor(savesToken), response(), async (context) => {
+    const state = await loadState(context, savesMerchant);
+    const old = state.records.find((record) => record.id === `${savesMerchant}-close-old`)!;
+    assert.deepEqual(Object.keys(old.data).sort(), ["closedAt", "report", "summary", "synthetic"], "an earlier close loads for a write as its summary");
+    assert.deepEqual(old.data.report, { unallocated: report.unallocated, exceptions: report.exceptions }, "with the totals the domain reads");
+    assert.equal(state.records.find((record) => record.id === `${savesMerchant}-close-recent`)!.data.operational?.rows, 1, "recent closes, and so the latest, stay whole");
+    const customer = state.records.find((record) => record.kind === "customers")!;
+    customer.name = `${customer.name} (renamed)`;
+    const added = { ...structuredClone(customer), id: randomUUID(), reference: `SAVE-${randomUUID()}`, name: "Added in this save", createdAt: context.now, updatedAt: context.now };
+    state.records.push(added);
+    assert.deepEqual(addedRecords(context, state).map((record) => record.id), [added.id]);
+    const changes = settleChanges(context, state);
+    assert.equal(changes.changedRecords, 2, "the audit digests cover the renamed and the added customer only");
+    assert.ok(customer.updatedAt > beforeSave.get(customer.id)!, "the changed record gets a newer version before the response is built");
+    appendAudit(state, context, "patch.records.customers", customer.id, "Renamed in the save test", changes);
+    await saveState(context, state);
+  });
+  const afterSave = await stamps();
+  const rewritten = [...beforeSave].filter(([id, at]) => afterSave.get(id) !== at).map(([id]) => id);
+  assert.equal(rewritten.length, 1, "only the renamed record was rewritten; the rest of the lender was left alone");
+  assert.equal(afterSave.size, beforeSave.size + 2, "the added customer and the audit entry were inserted");
+  const stored = (await pool.query("SELECT data FROM valopay_records WHERE id=$1", [`${savesMerchant}-close-old`])).rows[0].data;
+  assert.equal(stored.report.customerPositionsChanged.length, 200, "the earlier close keeps its full report in PostgreSQL");
+  assert.equal(stored.operational.rows, 1);
+  await inWorkspace(requestFor(savesToken), response(), async (context) => {
+    const full = await loadState(context, savesMerchant, "share");
+    assert.equal(full.records.find((record) => record.id === `${savesMerchant}-close-old`)!.data.report.customerPositionsChanged.length, 200, "a read still sees every close whole");
+  }, "read");
+  await assert.rejects(() => inWorkspace(requestFor(savesToken), response(), async (context) => {
+    const state = await loadState(context, savesMerchant);
+    state.records.find((record) => record.id === `${savesMerchant}-close-old`)!.data.summary = "rewritten";
+    await saveState(context, state);
+  }), /Evidence records are immutable/, "a summarised close can never be written back over its full report");
+  assert.equal((await pool.query("SELECT data->>'summary' AS summary FROM valopay_records WHERE id=$1", [`${savesMerchant}-close-old`])).rows[0].summary, "close-old");
   console.log("valopay repository integration tests passed");
 } finally {
   delete process.env.VALOPAY_EXPIRED_WORKSPACE_CLEANUP;

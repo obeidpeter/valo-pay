@@ -31,7 +31,7 @@ export const recordStatuses = {
   attempts: ["scheduled", "sent", "succeeded", "failed", "unknown", "cancelled", "reversed"],
   observations: ["unresolved", "resolved"],
   "settlement-batches": ["pending", "reconciled", "variance"],
-  payments: ["unallocated", "proposed", "allocated", "partial", "overpaid", "possible_duplicate"],
+  payments: ["unallocated", "proposed", "allocated", "partial", "overpaid", "possible_duplicate", "returned"],
   allocations: ["proposed", "confirmed", "superseded"],
   exceptions: ["open", "assigned", "in_progress", "resolved", "closed"],
   policies: ["draft", "submitted", "approved", "rejected"],

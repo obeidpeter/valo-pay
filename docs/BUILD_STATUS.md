@@ -1,4 +1,19 @@
 # Valo Pay — build status
+## Audit fixes · September 2026
+
+The first ten items of the 22 September 2026 audit are fixed and covered by tests:
+
+- **Returned money.** A reversed or refunded payment is `returned`: its proposals are withdrawn, it cannot be allocated, and it is neither customer credit nor unallocated work. A refund of an overpayment's excess leaves the applied money on its instalment.
+- **Payment status follows its records.** Rejecting a stale proposal keeps money applied elsewhere; each close repairs contradictory statuses and leaves a payment it cannot apply with Finance instead of failing.
+- **Reviews stick.** A match marked wrong, or a rejected proposal, is not recreated by the next close; "correct" after "incorrect" applies the same allocation again, or is refused while the money has moved on.
+- **Resolutions hold.** A close-raised exception is not raised again while the condition behind it is unchanged, and an unknown outcome's resolution becomes the attempt's outcome, so the instalment no longer waits as in flight.
+- **Bank-detail screen.** Record IDs and words such as "company" no longer trip the raw-identifier screen, so virtual-account links work for every customer.
+- **Staff access.** Suspending or revoking a person withdraws their pending invitations, and only an invitation sent afterwards restores access.
+- **Row security.** Migration `006_runtime_isolation_scope.sql` works out a person's lenders once per statement: a 13,000-record lender loads in about 80 ms instead of about 10 s under the restricted login.
+- **Saves.** A save compares one JSON string per record and hashes only what changed, and writes load earlier daily closes as summaries: a keyed save on a 25,870-record lender takes about 0.4 s instead of about 1.7 s, and on a lender with a year of daily closes about 0.15 s instead of about 4.5 s.
+- **Collections queue.** Each failed attempt reads its instalment by key: a page for a 6,208-instalment lender takes about 80 ms instead of about 2.8 s.
+- **Error answers.** Malformed bodies, NUL characters, unavailable services and storage failures get their correct statuses, the security headers and origin rule run before the body is read, and a request whose transaction was rolled back says that nothing was saved.
+
 ## Pilot operations controls · September 2026
 
 The [pilot operations release](pilot-operations-controls.md) adds evidence-based journey states, independent Finance close review, source mappings and delivery checks, a durable signed Paystack test inbox with local fixtures, personal work and handover receipts, explicit staff lender grants, optional full-runtime restricted database integration, managed encryption of raw import/recovery payloads, and retention previews/holds/deletion receipts. Recovery rehearsals now include ten database tables, generated private files and key/access configuration. These controls remain synthetic; host identity, managed keys and Paystack credentials are not configured, and external commissioning is not claimed.

@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_TOLERANCE_KOBO, exceptionCatalogue, isKobo, isOpenException, normaliseFailureCode, normaliseRefundStatus, normaliseReversalStatus, providerFeeKobo, resolveExceptionType, type ExceptionType, type ProviderFeeSchedule, type PaymentChannel } from "@workspace/valopay-schema";
+import { DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_TOLERANCE_KOBO, exceptionCatalogue, isKobo, isOpenException, normaliseFailureCode, normaliseRefundStatus, normaliseReversalStatus, paymentMoneyReturned, providerFeeKobo, resolveExceptionType, type ExceptionType, type ProviderFeeSchedule, type PaymentChannel } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { addBusinessDays } from "./calendar";
@@ -12,6 +12,8 @@ export const UNALLOCATED_AGE_MS = DAY_MS;
 
 export const paymentReversed = (payment: TypedRecord<"payments">): boolean => normaliseReversalStatus(payment.data.reversalStatus) === "reversed";
 export const paymentRefunded = (payment: TypedRecord<"payments">): boolean => normaliseRefundStatus(payment.data.refundStatus) === "refunded";
+/** Reversed or refunded: the money went back to the payer, so nothing it has not already applied can be allocated or held as credit. */
+export const paymentReturned = (payment: TypedRecord<"payments">): boolean => paymentMoneyReturned(payment.data);
 export const paymentObservedAt = (payment: TypedRecord<"payments">): number => Date.parse(String(payment.data.observedAt || payment.createdAt));
 
 /** The four independent status dimensions of a Payment (TRD 4.2), written in one vocabulary; legacy spellings are normalised. */
@@ -36,16 +38,66 @@ export function feeScheduleFor(state: DomainState, provider: unknown): ProviderF
   return DEFAULT_PROVIDER_FEE;
 }
 
-/** Appendix A: one open exception per (type, linked record), with the catalogue's owner, severity and business-day SLA. */
-export function raiseException(state: DomainState, ctx: Context, type: ExceptionType, options: { linkedRecordId?: string; customerId?: string; amountKobo?: number; notes: string }): TypedRecord<"exceptions"> {
+/** The condition an exception type raises for when it names only its record: the record itself. */
+const identityCondition = (type: ExceptionType, linkedRecordId: string): string => `${type}:${linkedRecordId}`;
+
+/**
+ * Appendix A: one open exception per (type, linked record), with the
+ * catalogue's owner, severity and business-day SLA.
+ *
+ * Checks the close repeats pass the `condition` that raised the exception.
+ * A resolution is then durable: while the same condition holds on the same
+ * record, it is not raised again, so a resolved exception does not come back
+ * at every close. A changed condition, such as a different fee variance, is
+ * new work and raises a new exception. Event-driven raises pass no condition
+ * and keep the one-open-exception rule only.
+ */
+export function raiseException(state: DomainState, ctx: Context, type: ExceptionType, options: { linkedRecordId?: string; customerId?: string; amountKobo?: number; notes: string; condition?: string }): TypedRecord<"exceptions"> {
   const definition = exceptionCatalogue[type];
   const linkedRecordId = options.linkedRecordId || "";
-  const existing = recordsOf(state, "exceptions").find((item) => isOpenException(item.status) && item.data.linkedRecordId === linkedRecordId && resolveExceptionType(item.data.type) === type);
+  const sameRecord = (item: TypedRecord<"exceptions">) => item.data.linkedRecordId === linkedRecordId && resolveExceptionType(item.data.type) === type;
+  const existing = recordsOf(state, "exceptions").find((item) => isOpenException(item.status) && sameRecord(item));
   if (existing) return existing;
+  if (options.condition !== undefined) {
+    // A resolution with no stored condition (an event-driven raise, or one recorded before conditions were stored) settles the record.
+    const settled = recordsOf(state, "exceptions").find((item) => sameRecord(item) && (item.data.condition === undefined || item.data.condition === options.condition));
+    if (settled) return settled;
+  }
   return makeRecord(state, "exceptions", {
     name: definition.title, status: "open", customerId: options.customerId || "", amountKobo: options.amountKobo || 0, createdAt: ctx.now,
-    data: { type, severity: definition.severity, owner: definition.owner, slaBusinessDays: definition.slaBusinessDays, dueBy: addBusinessDays(state, ctx.now, definition.slaBusinessDays), notes: options.notes, linkedRecordId },
+    data: { type, severity: definition.severity, owner: definition.owner, slaBusinessDays: definition.slaBusinessDays, dueBy: addBusinessDays(state, ctx.now, definition.slaBusinessDays), notes: options.notes, linkedRecordId, ...(options.condition !== undefined ? { condition: options.condition } : {}) },
   });
+}
+
+const confirmedOutcomes: Record<string, "failed" | "succeeded" | "cancelled"> = { resolved_failed: "failed", resolved_succeeded: "succeeded", provider_confirmed_no_debit: "cancelled" };
+
+/**
+ * Appendix A, unknown_outcome: the outcome Operations confirmed with the
+ * provider becomes the attempt's status, so the instalment stops waiting as
+ * in flight and the retry rules see a failed, succeeded or cancelled attempt.
+ * A failure without a confirmed code is recorded as UNKNOWN, which is never
+ * retried. What the attempt showed before is kept on it. Returns the new
+ * status, or undefined when the attempt no longer waits on this resolution.
+ */
+export function confirmAttemptOutcome(state: DomainState, ctx: Context, exception: TypedRecord<"exceptions">): "failed" | "succeeded" | "cancelled" | undefined {
+  const status = confirmedOutcomes[String(exception.data.resolutionCode)];
+  const attempt = recordsOf(state, "attempts").find((item) => item.id === exception.data.linkedRecordId);
+  if (!status || !attempt || attempt.status !== "unknown") return undefined;
+  attempt.data.outcomeConfirmation = {
+    exceptionId: exception.id, resolutionCode: String(exception.data.resolutionCode), previousStatus: attempt.status,
+    ...(attempt.data.failureCode ? { previousFailureCode: String(attempt.data.failureCode) } : {}),
+    ...(attempt.data.rawFailureCode ? { previousRawFailureCode: String(attempt.data.rawFailureCode) } : {}),
+    confirmedAt: ctx.now, confirmedBy: String(exception.data.resolvedBy || ctx.actor),
+  };
+  attempt.status = status;
+  const confirmedCode = typeof exception.data.confirmedFailureCode === "string" && exception.data.confirmedFailureCode ? exception.data.confirmedFailureCode : undefined;
+  if (status === "failed") attempt.data.failureCode = confirmedCode ?? "UNKNOWN";
+  else delete attempt.data.failureCode;
+  // The provider's raw code was the timeout; a confirmed code replaces it, so no mapping exception is raised for it.
+  if (status === "failed" && confirmedCode) attempt.data.rawFailureCode = confirmedCode; else delete attempt.data.rawFailureCode;
+  if (status === "cancelled") attempt.data.cancellationReason = "The provider confirmed that no debit took place.";
+  touch(attempt, ctx.now);
+  return status;
 }
 
 function outstanding(due: TypedRecord<"due-items">): number {
@@ -116,7 +168,7 @@ function checkBatchFees(state: DomainState, ctx: Context): number {
     if (Math.abs(variance) <= SETTLEMENT_BATCH_TOLERANCE_KOBO) continue;
     if (batch.status !== "variance") { batch.status = "variance"; touch(batch, ctx.now); }
     batch.data.explanation = `Provider fees of ${batch.data.feeKobo} kobo differ from the schedule's ${batch.data.expectedFeeKobo} kobo by ${variance} kobo.`;
-    raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, notes: batch.data.explanation });
+    raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, notes: batch.data.explanation, condition: `settlement_variance:${batch.id}:fees:${batch.data.feeKobo}:${batch.data.expectedFeeKobo}` });
     variances += 1;
   }
   return variances;
@@ -142,7 +194,7 @@ function matchSettlementStatements(state: DomainState, ctx: Context): number {
       batch.data.explanation = statement.amountKobo === Number(batch.data.netKobo)
         ? "Statement credit matched the batch net, but the provider fees differ from the fee schedule."
         : "Statement credit differs from gross settlement lines less recorded fees.";
-      raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, notes: batch.data.explanation });
+      raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, notes: batch.data.explanation, condition: `settlement_variance:${batch.id}:statement:${statement.amountKobo}:${batch.data.netKobo}:${batch.data.feeKobo}` });
     }
     touch(statement, ctx.now); touch(batch, ctx.now);
     matched += 1;
@@ -162,6 +214,7 @@ export function allocatePayment(
   explanation?: string,
 ): TypedRecord<"allocations"> {
   assertAllocationEligible(due);
+  assertPaymentAllocatable(payment);
   if (!Number.isInteger(amount) || amount <= 0 || amount > payment.amountKobo - Number(payment.data.allocatedKobo || 0)) {
     throw new Error("Enter a positive whole number in kobo, no more than the payment has left to allocate.");
   }
@@ -183,6 +236,13 @@ export function allocatePayment(
   return allocation;
 }
 
+/** Reversed or refunded money went back to the payer: no proposal, confirmation or manual allocation may apply it. */
+function assertPaymentAllocatable(payment: TypedRecord<"payments">): void {
+  if (!paymentReturned(payment)) return;
+  const how = paymentReversed(payment) ? "reversed by the provider" : "refunded to the payer";
+  throw Object.assign(new Error(`Payment ${payment.reference} was ${how}. Its money went back, so it cannot be allocated to an instalment.`), { status: 409 });
+}
+
 function assertAllocationEligible(due: TypedRecord<'due-items'>): void {
   if (['cancelled', 'closed', 'in_dispute'].includes(due.status)) throw Object.assign(new Error('This instalment is cancelled, closed or in dispute. Refresh the queue and review its status before allocating a payment.'), { status: 409 });
 }
@@ -191,6 +251,7 @@ export function applyConfirmedAllocation(state: DomainState, ctx: Context, alloc
   const payment = findRecord(state, String(allocation.data.paymentId), "payments");
   const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
   assertAllocationEligible(due);
+  assertPaymentAllocatable(payment);
   if (allocation.status === "superseded") throw new Error("This allocation is no longer applied and cannot be confirmed. Review the payment to create a new match.");
   if (allocation.status === "confirmed") throw Object.assign(new Error("This allocation is already applied. Refresh the payment to see its current position."), { status: 409 });
   const amount = allocation.amountKobo;
@@ -215,21 +276,126 @@ export function applyConfirmedAllocation(state: DomainState, ctx: Context, alloc
   if (!payment.data.proposedDueItemId || payment.data.proposedDueItemId === due.id) { delete payment.data.proposedDueItemId; delete payment.data.proposedAmountKobo; }
   touch(allocation, ctx.now); touch(payment, ctx.now); touch(due, ctx.now);
   if (remaining === 0) cancelUnsentAttempts(state, due.id, ctx.now);
+  // Another proposal on the same payment either still fits what is left or is superseded now.
+  settlePaymentStatus(state, ctx, payment);
 }
 
 /** REC-09: a wrong automatic allocation is superseded and the due item and payment are reopened. */
 export function supersedeAllocation(state: DomainState, ctx: Context, allocation: TypedRecord<"allocations">, reason: string): void {
-  if (allocation.status !== "confirmed") { allocation.status = "superseded"; touch(allocation, ctx.now); return; }
+  if (allocation.status !== "confirmed") {
+    // A proposal applied nothing; its payment is re-derived so it does not stay "proposed" with no proposal.
+    allocation.status = "superseded"; allocation.data.supersededReason ||= reason; touch(allocation, ctx.now);
+    settlePaymentStatus(state, ctx, findRecord(state, String(allocation.data.paymentId), "payments"));
+    return;
+  }
   const payment = findRecord(state, String(allocation.data.paymentId), "payments");
   const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
   allocation.status = "superseded";
   allocation.data.supersededReason = reason;
   payment.data.allocatedKobo = Math.max(0, Number(payment.data.allocatedKobo || 0) - allocation.amountKobo);
-  payment.status = Number(payment.data.allocatedKobo) === 0 ? "unallocated" : "partial";
   const restored = Math.min(due.amountKobo, outstanding(due) + allocation.amountKobo);
   due.data.outstandingKobo = restored;
   if (!["in_dispute", "cancelled", "closed"].includes(due.status)) due.status = restored === due.amountKobo ? (attemptsFor(state, due.id).length ? "in_collection" : "scheduled") : "partially_paid";
-  touch(allocation, ctx.now); touch(payment, ctx.now); touch(due, ctx.now);
+  touch(allocation, ctx.now); touch(due, ctx.now);
+  settlePaymentStatus(state, ctx, payment);
+}
+
+/** The reason a precision review records when it takes a match out of use; older records carry only this text. */
+export const REVIEW_SUPERSESSION = "Precision audit marked this allocation wrong";
+
+/** True when a precision review, not a reversal or a rejected proposal, took this allocation out of use. */
+export function supersededByReview(allocation: TypedRecord<"allocations">): boolean {
+  return allocation.status === "superseded" && (allocation.data.supersededByReview === true || String(allocation.data.supersededReason || "").startsWith(REVIEW_SUPERSESSION));
+}
+
+/**
+ * REC-09: a match a review had marked wrong is reviewed as correct, so it is
+ * applied again, provided the payment still holds that money and the
+ * instalment still owes it. Otherwise the verdict is refused, because a
+ * "correct" match that is not applied would misstate the false-match rate.
+ */
+export function reinstateAllocation(state: DomainState, ctx: Context, allocation: TypedRecord<"allocations">): void {
+  const payment = findRecord(state, String(allocation.data.paymentId), "payments");
+  const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
+  const left = payment.amountKobo - Number(payment.data.allocatedKobo || 0);
+  const blocker = paymentReturned(payment) ? `payment ${payment.reference} was ${paymentReversed(payment) ? "reversed" : "refunded"}`
+    : ["cancelled", "closed", "in_dispute"].includes(due.status) ? `instalment ${due.reference} is ${due.status.replace(/_/g, " ")}`
+    : allocation.amountKobo > left ? `payment ${payment.reference} no longer has that much left to allocate`
+    : allocation.amountKobo > outstanding(due) ? `instalment ${due.reference} no longer has that much outstanding`
+    : null;
+  if (blocker) throw Object.assign(new Error(`This match cannot be applied again because ${blocker}. Allocate the payment manually if it belongs to an instalment.`), { status: 409 });
+  forgetRejectedMatch(payment, due.id);
+  delete allocation.data.supersededReason; delete allocation.data.supersededByReview;
+  allocation.data.reinstatedAt = ctx.now;
+  allocation.status = "proposed"; // applyConfirmedAllocation applies an allocation that is not yet applied
+  applyConfirmedAllocation(state, ctx, allocation);
+}
+
+/**
+ * Re-derives a payment's allocation status from its own records after a
+ * proposal, allocation, refund or reversal changes it. A payment with money
+ * applied is never "unallocated"; one whose money went back is "returned"; a
+ * held possible duplicate keeps its hold. A proposal that no longer fits what
+ * the payment has left is superseded here, rather than failing a later close.
+ */
+export function settlePaymentStatus(state: DomainState, ctx: Context, payment: TypedRecord<"payments">, reason = "Superseded: the proposal no longer fits what the payment has left."): void {
+  paymentDimensions(payment);
+  const allocated = Number(payment.data.allocatedKobo || 0);
+  const left = payment.amountKobo - allocated;
+  const returned = paymentReturned(payment);
+  const proposals = recordsOf(state, "allocations").filter((item) => item.data.paymentId === payment.id && item.status === "proposed");
+  for (const proposal of proposals) {
+    if (!returned && proposal.amountKobo <= left) continue;
+    proposal.status = "superseded";
+    proposal.data.supersededReason = reason;
+    touch(proposal, ctx.now);
+  }
+  const live = proposals.find((item) => item.status === "proposed");
+  const previous = payment.status;
+  if (previous === "possible_duplicate" && allocated === 0 && !returned) return;
+  if (live) {
+    payment.status = "proposed";
+    payment.data.proposedDueItemId = String(live.data.dueItemId);
+    payment.data.proposedAmountKobo = live.amountKobo;
+  } else {
+    delete payment.data.proposedDueItemId; delete payment.data.proposedAmountKobo;
+    if (allocated === 0) payment.status = returned ? "returned" : "unallocated";
+    // Refunded after part of it was applied: the rest went back, so what stayed is all applied.
+    else if (left <= 0 || returned) payment.status = "allocated";
+    else payment.status = previous === "overpaid" ? "overpaid" : "partial";
+  }
+  touch(payment, ctx.now);
+}
+
+/** Finance said this payment does not belong to the instalment: automatic matching never proposes the pair again. */
+export function rememberRejectedMatch(payment: TypedRecord<"payments">, dueItemId: unknown): void {
+  if (typeof dueItemId !== "string" || !dueItemId) return;
+  const rejected = new Set(Array.isArray(payment.data.rejectedDueItemIds) ? payment.data.rejectedDueItemIds.map(String) : []);
+  rejected.add(dueItemId);
+  payment.data.rejectedDueItemIds = [...rejected].sort();
+}
+
+/** A reversed rejection: Finance now says the pair was right. */
+export function forgetRejectedMatch(payment: TypedRecord<"payments">, dueItemId: unknown): void {
+  if (!Array.isArray(payment.data.rejectedDueItemIds)) return;
+  const kept = payment.data.rejectedDueItemIds.map(String).filter((id) => id !== dueItemId);
+  if (kept.length) payment.data.rejectedDueItemIds = kept; else delete payment.data.rejectedDueItemIds;
+}
+
+const rejectedMatches = (payment: TypedRecord<"payments">): Set<string> => new Set(Array.isArray(payment.data.rejectedDueItemIds) ? payment.data.rejectedDueItemIds.map(String) : []);
+
+/**
+ * Payments whose status contradicts their records: "unallocated" with money
+ * applied, "proposed" with no live proposal, or money returned while still
+ * waiting in an allocation queue or carrying a proposal.
+ */
+function paymentsToSettle(state: DomainState): TypedRecord<"payments">[] {
+  const proposed = new Set(recordsOf(state, "allocations").filter((item) => item.status === "proposed").map((item) => String(item.data.paymentId)));
+  return recordsOf(state, "payments").filter((payment) => {
+    if (paymentReturned(payment)) return ["unallocated", "proposed", "possible_duplicate"].includes(payment.status) || proposed.has(payment.id);
+    if (payment.status === "unallocated") return Number(payment.data.allocatedKobo || 0) > 0 || proposed.has(payment.id);
+    return payment.status === "proposed" && !proposed.has(payment.id);
+  });
 }
 
 function reversePayment(state: DomainState, ctx: Context, payment: TypedRecord<"payments">): void {
@@ -245,9 +411,9 @@ function reversePayment(state: DomainState, ctx: Context, payment: TypedRecord<"
     allocation.data.supersededReason = "Payment reversed by the provider.";
     touch(allocation, ctx.now); touch(due, ctx.now);
   });
-  payment.status = "unallocated";
   payment.data.allocatedKobo = 0;
-  touch(payment, ctx.now);
+  // Proposals on reversed money are superseded and the payment leaves every unallocated queue.
+  settlePaymentStatus(state, ctx, payment, "Payment reversed by the provider.");
 }
 
 /** ING-03: every observation resolves to one canonical Payment by its strong keys; the batch leg of a statement never becomes a customer Payment. */
@@ -348,10 +514,23 @@ export function intendedDueItem(state: DomainState, payment: TypedRecord<"paymen
 
 /** Section 7.2 rule ladder, applied to canonical Payments, never to observations. */
 function matchPayment(state: DomainState, ctx: Context, payment: TypedRecord<"payments">, index: MatchIndex): void {
-  if (payment.status !== "unallocated" || paymentReversed(payment)) return;
+  if (payment.status !== "unallocated" || paymentReturned(payment)) return;
   const sameConnection = String(payment.data.providerConnection || state.merchant.provider) === String(state.merchant.provider) || Boolean(payment.data.providerConnection);
   const currencyOk = String(payment.data.currency || "NGN") === "NGN";
+  const rejected = rejectedMatches(payment);
   const intended = intendedDueItem(state, payment, index);
+  // A payment left for Finance is rewritten only when its explanation changes, so a daily close does not rewrite it every day.
+  const leaveForFinance = (explanation: string) => {
+    if (payment.data.explanation === explanation) return;
+    payment.data.explanation = explanation;
+    touch(payment, ctx.now);
+  };
+  // Finance's "this is the wrong instalment" stands: a strong reference to a
+  // rejected instalment is not matched anywhere else automatically either.
+  if (intended && rejected.has(intended.due.id)) {
+    leaveForFinance(`Finance said this payment does not belong to instalment ${intended.due.reference}. It stays unallocated for Finance to allocate.`);
+    return;
+  }
   // ING-05 (b): a second Payment for a due item that is already paid is held, never allocated.
   if (intended && outstanding(intended.due) === 0) {
     payment.status = "possible_duplicate";
@@ -366,7 +545,7 @@ function matchPayment(state: DomainState, ctx: Context, payment: TypedRecord<"pa
   };
   const twin = (index.paymentsByCustomer.get(payment.customerId) ?? []).find((item) =>
     item.id !== payment.id && item.reference !== payment.reference && payment.customerId && item.customerId === payment.customerId &&
-    item.amountKobo === payment.amountKobo && item.status !== "possible_duplicate" && !paymentReversed(item) &&
+    item.amountKobo === payment.amountKobo && item.status !== "possible_duplicate" && !paymentReturned(item) &&
     observedBefore(item) && paymentObservedAt(payment) - paymentObservedAt(item) <= DUPLICATE_WINDOW_MS,
   );
   if (twin) {
@@ -379,11 +558,10 @@ function matchPayment(state: DomainState, ctx: Context, payment: TypedRecord<"pa
   // different obligation, or abort the whole batch at the allocation guard.
   // Keep it in the existing unallocated Finance queue (and its ageing SLA).
   if (intended && !eligibleForAutomaticMatching(intended.due)) {
-    payment.data.explanation = `Linked instalment ${intended.due.reference} is ${intended.due.status.replace(/_/g, " ")}; this payment remains unallocated for Finance review.`;
-    touch(payment, ctx.now);
+    leaveForFinance(`Linked instalment ${intended.due.reference} is ${intended.due.status.replace(/_/g, " ")}; this payment remains unallocated for Finance review.`);
     return;
   }
-  const dues = (index.duesByCustomer.get(payment.customerId) ?? []).filter(eligibleForAutomaticMatching);
+  const dues = (index.duesByCustomer.get(payment.customerId) ?? []).filter((due) => eligibleForAutomaticMatching(due) && !rejected.has(due.id));
   // R1: provider reference, same tenant and connection, NGN, gross amount equals the attempt (due) amount.
   if (intended && currencyOk && sameConnection && payment.amountKobo === intended.due.amountKobo && outstanding(intended.due) >= payment.amountKobo) {
     allocatePayment(state, ctx, payment, intended.due, payment.amountKobo, "R1", "certain", true, `Provider reference ${payment.reference} resolved to instalment ${intended.due.reference} by ${intended.key}; currency and gross amount match.`);
@@ -436,7 +614,8 @@ function applyDecisions(state: DomainState, ctx: Context): { finalFailures: numb
       raiseException(state, ctx, "customer_dispute", { linkedRecordId: due.id, customerId: due.customerId, amountKobo: outstanding(due), notes: `${due.reference}: the customer disputed the debit.` });
       disputes += 1;
     } else if (decision.decision === "defer") {
-      raiseException(state, ctx, "notice_not_evidenced", { linkedRecordId: due.id, customerId: due.customerId, amountKobo: outstanding(due), notes: `${due.reference}: ${decision.reason}` });
+      // One exception per failed attempt whose notice was not evidenced: the deferred slot moves every close, the attempt does not.
+      raiseException(state, ctx, "notice_not_evidenced", { linkedRecordId: due.id, customerId: due.customerId, amountKobo: outstanding(due), notes: `${due.reference}: ${decision.reason}`, condition: `notice_not_evidenced:${due.id}:${decision.attemptId ?? ""}` });
       deferred += 1;
     }
   }
@@ -451,16 +630,40 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
   const statementBatchesMatched = matchSettlementStatements(state, ctx);
   const feeVariances = checkBatchFees(state, ctx);
   const allocationsBefore = new Set(recordsOf(state, "allocations").map((item) => item.id));
+  // Statuses written before these rules, or by a path that did not settle the
+  // payment, are re-derived first, so the rule ladder only sees whole,
+  // unapplied payments that still hold their money.
+  const repaired = paymentsToSettle(state);
+  repaired.forEach((payment) => settlePaymentStatus(state, ctx, payment));
   const matches = new MatchIndex(state);
-  recordsOf(state, "payments").filter((item) => item.status === "unallocated").forEach((payment) => matchPayment(state, ctx, payment, matches));
+  let paymentsSkipped = 0;
+  for (const payment of recordsOf(state, "payments").filter((item) => item.status === "unallocated")) {
+    try {
+      matchPayment(state, ctx, payment, matches);
+    } catch (error) {
+      // A payment the ladder cannot apply stays with Finance, with the reason; one row never stops the close.
+      if (!(error instanceof Error) || error.constructor !== Error) throw error;
+      const explanation = `Automatic matching left this payment for Finance: ${error.message}`;
+      if (payment.data.explanation !== explanation) { payment.data.explanation = explanation; touch(payment, ctx.now); }
+      paymentsSkipped += 1;
+    }
+  }
   const now = Date.parse(ctx.now);
-  const aged = recordsOf(state, "payments").filter((item) => item.status === "unallocated" && now - paymentObservedAt(item) >= UNALLOCATED_AGE_MS);
-  aged.forEach((payment) => raiseException(state, ctx, "unallocated_payment", { linkedRecordId: payment.id, customerId: payment.customerId, amountKobo: payment.amountKobo, notes: "No certain or confirmed allocation after 24 hours." }));
+  const aged = recordsOf(state, "payments").filter((item) => item.status === "unallocated" && !paymentReturned(item) && now - paymentObservedAt(item) >= UNALLOCATED_AGE_MS);
+  aged.forEach((payment) => raiseException(state, ctx, "unallocated_payment", { linkedRecordId: payment.id, customerId: payment.customerId, amountKobo: payment.amountKobo, notes: "No certain or confirmed allocation after 24 hours.", condition: identityCondition("unallocated_payment", payment.id) }));
+  // Outcomes resolved before resolutions updated the attempt are applied now, the latest resolution first,
+  // so those instalments stop waiting as in flight.
+  const unknownAttempts = new Set(recordsOf(state, "attempts").filter((attempt) => attempt.status === "unknown").map((attempt) => attempt.id));
+  const resolvedAt = (item: TypedRecord<"exceptions">) => String(item.data.resolvedAt || item.updatedAt);
+  const outcomesConfirmed = recordsOf(state, "exceptions")
+    .filter((item) => unknownAttempts.has(String(item.data.linkedRecordId)) && resolveExceptionType(item.data.type) === "unknown_outcome" && !isOpenException(item.status))
+    .sort((a, b) => resolvedAt(b).localeCompare(resolvedAt(a)))
+    .filter((item) => confirmAttemptOutcome(state, ctx, item)).length;
   const giveUps = applyDecisions(state, ctx);
   const unknownOutcomes = recordsOf(state, "attempts").filter((attempt) => attempt.status === "unknown" && now - Date.parse(attemptTime(attempt)) >= DAY_MS);
-  unknownOutcomes.forEach((attempt) => raiseException(state, ctx, "unknown_outcome", { linkedRecordId: attempt.id, customerId: attempt.customerId, amountKobo: attempt.amountKobo, notes: "TIMEOUT_UNKNOWN unresolved for 24 hours; the provider must confirm the outcome by reference." }));
+  unknownOutcomes.forEach((attempt) => raiseException(state, ctx, "unknown_outcome", { linkedRecordId: attempt.id, customerId: attempt.customerId, amountKobo: attempt.amountKobo, notes: "TIMEOUT_UNKNOWN unresolved for 24 hours; the provider must confirm the outcome by reference.", condition: identityCondition("unknown_outcome", attempt.id) }));
   const mappingNeeded = recordsOf(state, "attempts").filter((attempt) => attempt.status === "failed" && normaliseFailureCode(attempt.data.failureCode) === "UNKNOWN" && attempt.data.rawFailureCode);
-  mappingNeeded.forEach((attempt) => raiseException(state, ctx, "mapping_needed", { linkedRecordId: attempt.id, customerId: attempt.customerId, amountKobo: attempt.amountKobo, notes: `Provider code "${attempt.data.rawFailureCode}" is not in the failure-code mapping.` }));
+  mappingNeeded.forEach((attempt) => raiseException(state, ctx, "mapping_needed", { linkedRecordId: attempt.id, customerId: attempt.customerId, amountKobo: attempt.amountKobo, notes: `Provider code "${attempt.data.rawFailureCode}" is not in the failure-code mapping.`, condition: `mapping_needed:${attempt.id}:${attempt.data.rawFailureCode}` }));
   const newAllocations = recordsOf(state, "allocations").filter((item) => !allocationsBefore.has(item.id));
   const allocationsByRule: Record<string, number> = {};
   for (const allocation of newAllocations) allocationsByRule[String(allocation.data.rule)] = (allocationsByRule[String(allocation.data.rule)] || 0) + 1;
@@ -470,7 +673,7 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
     message: "Reconciliation complete. Payment evidence has been checked for matches. No money was moved and no collection instruction was sent.",
     data: {
       observationsResolved: observations.filter((item) => item.status === "resolved").length, observationsBySource, canonicalPayments: resolved.length,
-      settlementStatementsMatched: statementBatchesMatched, settlementVariances: feeVariances, allocationsByRule,
+      settlementStatementsMatched: statementBatchesMatched, settlementVariances: feeVariances, allocationsByRule, paymentStatusesRepaired: repaired.length, paymentsSkipped, attemptOutcomesConfirmed: outcomesConfirmed,
       proposed: recordsOf(state, "payments").filter((item) => item.status === "proposed").length,
       unallocated: recordsOf(state, "payments").filter((item) => item.status === "unallocated").length,
       possibleDuplicates: recordsOf(state, "payments").filter((item) => item.status === "possible_duplicate").length,

@@ -2,6 +2,24 @@ import type { File } from "@google-cloud/storage";
 import { Readable } from "node:stream";
 import { createHash, randomUUID } from 'node:crypto';
 
+/**
+ * A storage answer other than success. The storage status stays as statusCode
+ * for callers that treat a missing object as already deleted; status is how
+ * this API answers, and none of these is the person's fault: an outage is a
+ * 503, and a missing file or a refusal of this service's own access is a 502,
+ * logged as an error for the operators.
+ */
+export function storageFailure(statusCode: number | undefined, verb: "downloaded" | "saved" = "downloaded"): Error {
+  const status = statusCode === 429 || (statusCode ?? 0) >= 500 ? 503 : 502;
+  const message = statusCode === 404 ? "The export file is missing from storage. Generate the export again, and quote this reference if it happens again."
+    : status === 503 ? `Export storage is unavailable, so the file could not be ${verb}. Try again shortly.`
+    : `Export storage refused this service's request, so the file could not be ${verb}. Ask the administrator to check storage access.`;
+  return Object.assign(new Error(message), { statusCode, status });
+}
+/** A storage request that did not finish: no answer in time is a 504; a broken answer is a 502. */
+const storageTimeout = (message: string) => Object.assign(new Error(message), { status: 504 });
+const storageBroken = (message: string) => Object.assign(new Error(message), { status: 502 });
+
 /** One consumer owns buffering, cancellation and cleanup for an export read. */
 export const EXPORT_STORAGE_TIMEOUT_MS = 60_000;
 export function collectExportBytes(stream: Readable, signal?: AbortSignal, maxBytes = 32 * 1024 * 1024, timeoutMs = EXPORT_STORAGE_TIMEOUT_MS): Promise<Buffer> {
@@ -52,13 +70,13 @@ export function collectExportBytes(stream: Readable, signal?: AbortSignal, maxBy
     const onEnd = () => finish();
     const onError = (error: Error) => finish(error);
     const onClose = () => {
-      if (!settled) finish(new Error("Export download closed before completion."));
+      if (!settled) finish(storageBroken("Export download closed before completion."));
       else if (tearingDown) cleanup();
     };
     const onAbort = () => finish(signal?.reason instanceof Error ? signal.reason : Object.assign(new Error("Export download cancelled."), { name: "AbortError" }));
     const onResponse = (response: { statusCode?: number }) => {
       if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
-        finish(Object.assign(new Error("Export object could not be downloaded."), { statusCode: response.statusCode }));
+        finish(storageFailure(response.statusCode));
       }
     };
     stream.on("error", onError);
@@ -66,7 +84,7 @@ export function collectExportBytes(stream: Readable, signal?: AbortSignal, maxBy
     stream.once("close", onClose);
     stream.on("response", onResponse);
     signal?.addEventListener("abort", onAbort, { once: true });
-    timer = setTimeout(() => finish(new Error('Export storage request timed out.')), timeoutMs);
+    timer = setTimeout(() => finish(storageTimeout('Export storage request timed out.')), timeoutMs);
     if (signal?.aborted) { onAbort(); return; }
     stream.on("data", onData);
   });
@@ -89,7 +107,7 @@ async function readStorageObject(file:File,media:boolean,signal?:AbortSignal,max
  const abort=()=>controller.abort(Object.assign(new Error('Export download cancelled.'),{name:'AbortError'}));
  if(signal?.aborted){abort();throw controller.signal.reason;}
  signal?.addEventListener('abort',abort,{once:true});
- const timer=setTimeout(()=>controller.abort(new Error('Export storage request timed out.')),timeoutMs);
+ const timer=setTimeout(()=>controller.abort(storageTimeout('Export storage request timed out.')),timeoutMs);
  try{
   // Both path segments are encoded independently; a slash, space or question
   // mark in an object name cannot change the endpoint or its query parameters.
@@ -99,8 +117,8 @@ async function readStorageObject(file:File,media:boolean,signal?:AbortSignal,max
   controller.signal.throwIfAborted();
   const headers=new Headers(authHeaders);headers.set('Accept-Encoding','identity');headers.set('Cache-Control','no-store');
   const response=await globalThis.fetch(url,{headers,signal:controller.signal,redirect:'error'});
-  if(!response.ok){await response.body?.cancel();throw Object.assign(new Error('Export object could not be downloaded.'),{statusCode:response.status});}
-  if(!response.body)throw new Error('Export storage response has no body.');
+  if(!response.ok){await response.body?.cancel();throw storageFailure(response.status);}
+  if(!response.body)throw storageBroken('Export storage response has no body.');
   const stream=Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]);
   return await collectExportBytes(stream,controller.signal,maxBytes,timeoutMs);
  }finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);controller.abort();}
@@ -122,7 +140,7 @@ export async function writeExportBytes(file:File,bytes:Buffer,metadata:Record<st
  const abort=()=>controller.abort(signal?.reason instanceof Error?signal.reason:Object.assign(new Error('Export upload cancelled.'),{name:'AbortError'}));
  if(signal?.aborted){abort();throw controller.signal.reason;}
  signal?.addEventListener('abort',abort,{once:true});
- const timer=setTimeout(()=>controller.abort(new Error('Export upload timed out.')),timeoutMs);
+ const timer=setTimeout(()=>controller.abort(storageTimeout('Export upload timed out.')),timeoutMs);
  try{
   const url=new URL(`/upload/storage/v1/b/${encodeURIComponent(file.bucket.name)}/o`,file.storage.apiEndpoint);
   url.searchParams.set('uploadType','multipart');url.searchParams.set('name',file.name);url.searchParams.set('ifGenerationMatch','0');
@@ -134,7 +152,7 @@ export async function writeExportBytes(file:File,bytes:Buffer,metadata:Record<st
   headers.set('Content-Type',`multipart/related; boundary=${boundary}`);
   const response=await globalThis.fetch(url,{method:'POST',headers,body,signal:controller.signal,redirect:'error'});
   await response.body?.cancel();
-  if(!response.ok)throw Object.assign(new Error('Export object could not be saved.'),{statusCode:response.status});
+  if(!response.ok)throw storageFailure(response.status,'saved');
  }finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);controller.abort();}
 }
 /** Delete only the observed generation of this lender's immutable export.

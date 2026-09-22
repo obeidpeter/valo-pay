@@ -1,9 +1,10 @@
 // Golden tests for the shared per-kind schema as enforced by the validator and actions.
 import assert from "node:assert/strict";
-import { completeCutover, ctxAt, liveFixture, wat } from "./helpers.js";
+import { addObservation, completeCutover, ctxAt, liveFixture, wat } from "./helpers.js";
 import { validateRecord } from "../src/domain/validation.js";
 import { executeAction } from "../src/domain/actions.js";
-import { makeRecord, recordsOf } from "../src/domain/records.js";
+import { assertNoRealBankDetails, makeRecord, recordsOf } from "../src/domain/records.js";
+import { reconcile } from "../src/domain/reconciliation.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
 import { exceptionCatalogue, recordStatuses } from "@workspace/valopay-schema";
 import { importCsv } from "../src/lib/valopay-import.js";
@@ -185,4 +186,28 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   checks += 25;
 }
 
-console.log(`Validation golden tests passed (${checks} checks): state machines, exception codes, cutover contract, failure-code normalisation, batch/status vocabularies, template lifecycle and guided CSV imports.`);
+// ---------- The bank-detail screen refuses account and card numbers, not record IDs ----------
+{
+  for (const value of [{ accountId: "1234567890" }, { "Account number": "0123456789" }, { bank: "1234-5678-9012" }, { cardNumber: "4111111111111111" }, { virtualAccountCustomerId: "0123456789" }, { accounts: "0123456789" }, { payerCards: "4111 1111 1111 1111" }]) {
+    assert.throws(() => assertNoRealBankDetails(value), /Raw (financial identifiers|bank account details)/, `refused: ${JSON.stringify(value)}`);
+  }
+  // A UUID's digit groups are not an account number, and "company" or "accountable" are not financial words.
+  const digitHeavy = "12345678-1234-4123-8123-123456789012";
+  for (const value of [{ virtualAccountCustomerId: digitHeavy }, { companyId: "12345678901" }, { accountableUser: "12345678" }, { accountMasked: "•••• 1234" }, { accountRef: `batch ${digitHeavy} line` }]) {
+    assert.doesNotThrow(() => assertNoRealBankDetails(value), `accepted: ${JSON.stringify(value)}`);
+  }
+  // End to end: a customer whose ID has long digit groups carries a virtual-account link and R2 matches it.
+  const state = seedMerchant("virtual-account");
+  makeRecord(state, "customers", { id: digitHeavy, name: "Synthetic virtual-account customer", status: "active", data: { consentProvenance: "Synthetic imported consent" } });
+  const due = makeRecord(state, "due-items", { name: "Virtual account instalment", status: "scheduled", customerId: digitHeavy, amountKobo: 1_000_000, reference: "VA-LOAN-1", data: { dueDate: "2027-07-01", owner: "lms", outstandingKobo: 1_000_000 } });
+  addObservation(state, { reference: "VA-1", amountKobo: 1_000_000, source: "transfer", customerId: digitHeavy, virtualAccountCustomerId: digitHeavy, eventId: "va-1", occurredAt: wat("2027-07-01T09:00:00") });
+  reconcile(state, ctxAt(wat("2027-07-01T09:05:00"), "Finance"));
+  const payment = recordsOf(state, "payments").find((item) => item.reference === "VA-1")!;
+  assert.equal(payment.data.virtualAccountCustomerId, digitHeavy);
+  assert.equal(payment.status, "allocated");
+  assert.equal(recordsOf(state, "allocations").find((item) => item.data.paymentId === payment.id)!.data.rule, "R2");
+  assert.equal(due.status, "paid");
+  checks += 16;
+}
+
+console.log(`Validation golden tests passed (${checks} checks): state machines, exception codes, cutover contract, failure-code normalisation, batch/status vocabularies, template lifecycle, guided CSV imports and the bank-detail screen.`);

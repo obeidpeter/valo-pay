@@ -12,7 +12,7 @@ import { AlertTriangle, User, Calendar } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { formatKobo, formatDate } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
-import { exceptionSeverities, resolutionCodesFor } from '@workspace/valopay-schema';
+import { exceptionSeverities, failureCodeList, resolutionCodesFor, resolveExceptionType } from '@workspace/valopay-schema';
 import { readableLabel, RecordLabel, StatusBadge } from '@/components/record-label';
 import { deadlineInstant, isDueToday, isDeadlineOverdue as isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { RecordPagination } from '@/components/record-pagination';
@@ -194,9 +194,15 @@ export default function ExceptionsPage() {
         title={actionKind === 'resolve' ? 'Resolve exception' : 'Edit exception'}
         actionMutation={actionKind === 'resolve' ? 'resolve_exception' : undefined}
         context={selectedEx ? values => <ExceptionContext exception={selectedEx} customer={customerById.get(String(selectedEx.customerId))} resolving={actionKind === 'resolve'} resolutionCode={values.resolutionCode} /> : undefined}
+        validate={actionKind === 'resolve' ? (values): Record<string, string> => values.confirmedFailureCode && values.resolutionCode !== 'resolved_failed' ? { confirmedFailureCode: 'Choose a failure code only when the provider confirmed that the debit failed.' } : {} : undefined}
         fields={
           actionKind === 'resolve' ? [
-            { name: 'resolutionCode', label: `How was this resolved? (${readableLabel(selectedEx?.data?.type || 'exception').toLowerCase()})`, type: 'select', isData: true, required: true, options: resolutionCodesFor(selectedEx?.data?.type).map(code => ({ label: readableLabel(code), value: code })) }
+            { name: 'resolutionCode', label: `How was this resolved? (${readableLabel(selectedEx?.data?.type || 'exception').toLowerCase()})`, type: 'select', isData: true, required: true, options: resolutionCodesFor(selectedEx?.data?.type).map(code => ({ label: readableLabel(code), value: code })) },
+            ...(resolveExceptionType(selectedEx?.data?.type) === 'unknown_outcome' ? [{
+              name: 'confirmedFailureCode', label: 'Failure code the provider confirmed', type: 'select' as const, isData: true,
+              options: failureCodeList.filter(code => code !== 'TIMEOUT_UNKNOWN').map(code => ({ label: readableLabel(code), value: code })),
+              help: 'Only when the provider confirmed that the debit failed. Without a code the attempt is recorded as an unclassified failure, which is never retried.',
+            }] : []),
           ] : [
             { name: 'owner', label: 'Assigned owner', type: 'text', isData: true },
             { name: 'notes', label: 'Notes', type: 'textarea', isData: true },

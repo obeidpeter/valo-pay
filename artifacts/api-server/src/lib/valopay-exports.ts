@@ -135,7 +135,8 @@ export function exportDescriptorForRecord(record:ValopayRecord):ExportDescriptor
 /** Reads the object and verifies the immutable SHA-256 before any byte is returned; holds no database lock. */
 export async function readExport(descriptor:ExportDescriptor,signal?:AbortSignal){
  const bytes=await readExportBytes(objectStorageClient.bucket(descriptor.bucket).file(descriptor.objectName),signal);
- if(createHash("sha256").update(bytes).digest("hex")!==descriptor.checksum)throw new Error("Export checksum verification failed.");
+ // Evidence that no longer matches its recorded checksum is never sent, and is an error-level failure for the operators.
+ if(createHash("sha256").update(bytes).digest("hex")!==descriptor.checksum)throw Object.assign(new Error("Export checksum verification failed. The file was not sent: generate the export again, and quote this reference if it happens again."),{status:500,expose:true});
  return {bytes,contentType:descriptor.contentType,filename:descriptor.filename};
 }
 /** The export's bytes for a download, resolved from the lender's state and checksum verified. */

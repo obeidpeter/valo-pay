@@ -47,14 +47,15 @@ const query = z.object({ merchantId: z.string().min(1).max(100) });
 const definitive = new Set([400, 403, 404, 409, 410, 413, 415, 422]);
 /** Whether an HTTP status is a definitive refusal of the request that received it. */
 export const definitiveRejection = (status: number) => definitive.has(status);
-/** Closes the request's journal entry after a definitive refusal, so refused
- * requests never accumulate as pending and lock the person out. Returns
- * nothing when there is no entry to close, so an ordinary refusal is answered
- * synchronously. A failure to record it is logged and leaves the entry
- * pending, the safe direction. */
-export function closeRejectedOperation(req: Parameters<RequestHandler>[0], status: number, message: string): Promise<void> | undefined {
+/** Closes the request's journal entry after a definitive refusal, or after a
+ * failure whose transaction was rolled back (nothing was saved, so the entry
+ * has nothing to confirm), so such requests never accumulate as pending and
+ * lock the person out. Returns nothing when there is no entry to close, so an
+ * ordinary refusal is answered synchronously. A failure to record it is
+ * logged and leaves the entry pending, the safe direction. */
+export function closeRejectedOperation(req: Parameters<RequestHandler>[0], status: number, message: string, notSaved = false): Promise<void> | undefined {
   const bound = boundOperation(req);
-  if (!bound || !definitiveRejection(status)) return undefined;
+  if (!bound || !(definitiveRejection(status) || notSaved)) return undefined;
   return rejectOperation(req, bound, { status, message }).catch((error: unknown) => {
     req.log?.warn?.({ event: "operation.rejection_unrecorded", err: error instanceof Error ? error : new Error(String(error)) }, "A refused request stays pending in the operations journal");
   });
@@ -131,7 +132,7 @@ export const recoveryMiddleware: RequestHandler = async (req, res, next) => {
           prepareOperation(ctx, merchantId, key, request),
         );
         bindOperation(req, id, merchantId);
-        registerRefusalCloser(req, (status, message) => closeRejectedOperation(req, status, message));
+        registerRefusalCloser(req, (status, message, notSaved) => closeRejectedOperation(req, status, message, notSaved));
         res.setHeader("X-Valopay-Operation", id);
       }
     }

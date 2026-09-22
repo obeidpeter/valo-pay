@@ -19,8 +19,15 @@ type Options<Result, Variables> = { mutation?: UseMutationOptions<Result, Error,
 
 /** A structured rejection confirms no write; transport/parse/5xx errors do not. */
 export function outcomeIsUnconfirmed(error: unknown): boolean {
+  if (nothingSaved(error)) return false;
   const response = error as { status?: number; data?: { error?: unknown } } | null;
   return !(response?.status && response.status >= 400 && response.status < 500 && response.status !== 408 && typeof response.data?.error === 'string');
+}
+
+/** The server rolled the request back and says so: nothing was saved, whatever the status. */
+export function nothingSaved(error: unknown): boolean {
+  const response = error as { status?: number; data?: { error?: unknown; committed?: unknown } } | null;
+  return Boolean(response?.status && response.status >= 500 && response.data?.committed === false && typeof response.data.error === 'string');
 }
 
 function recoveryError(message: string) {
@@ -67,6 +74,8 @@ export function useSafeMutation<Result, Variables>(send: (variables: Variables, 
         // A later auth/policy rejection can occur before replay lookup. It does
         // not establish whether the original request committed.
         current.unconfirmed = current.unconfirmed || (writes(current.variables) && outcomeIsUnconfirmed(error));
+        // A request that saved nothing is finished: its journal entry is closed, so the next submission needs a new key.
+        if (nothingSaved(error) && !current.unconfirmed && attempt.current === current) attempt.current = null;
         throw error;
       } finally {
         current.pending = false;

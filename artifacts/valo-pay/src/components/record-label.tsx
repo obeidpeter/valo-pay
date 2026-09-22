@@ -7,6 +7,7 @@ const displayLabels: Record<string, string> = {
   valopay: 'Valo Pay', valo: 'Valo Pay', lms: 'Loan management system',
   merchant_manual: 'Lender team', provider_auto: 'Provider automatic collection',
   pending_activation: 'Awaiting activation', unpaid_final: 'Unpaid after final attempt', superseded: 'No longer applied',
+  returned: 'Returned to the payer',
   in_collection: 'Collection in progress', in_flight: 'Awaiting an outcome',
   not_proven: 'Not yet proven', not_eligible: 'Not eligible for a retry',
   would_schedule: 'Would schedule a retry', observation_only: 'Observation only',
