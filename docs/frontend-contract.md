@@ -6,6 +6,8 @@ All data is a persistent, isolated **synthetic sandbox**. No payment or SMS is a
 
 ## Workflow guidance and task queues
 
+`/presentation` is an optional investor demonstration preparation page inside the console. It offers six talking points, a downloadable presenter brief, synthetic CSV files and self-reported preparation checks. The guide persists only in this browser session, scoped to the viewer and lender; invalid saved state is ignored. Starting, advancing, ending or clearing preparation checks never submits operational actions. Presenter notes are collapsed and explicitly labelled as visible on the shared screen. Existing sandbox labels, permissions, source gaps and pending reviews remain visible. See [presentation preparation](investor-presentation.md).
+
 The [evidence-led usability release](usability/README.md) keeps navigation stable while showing the actual demo role, lender operating mode and WAT separately from environment. Queue scroll offsets are held only in memory for the current lender/actor/role, with a bounded map; returning to a visited filtered route restores its position. This is separate from the existing saved-view preferences.
 
 Forms distinguish a structured initial rejection from an unknown result after a lost response. Unknown writes retain the original payload and idempotency key, hold changed inputs and offer an exact retry. Later authentication/policy refusal does not turn that original outcome into a known failure. Recovery state is not persisted through reload or deliberate abandonment. Check-only import failures remain editable; an import check never commits. Consequential dialogs start at their decision evidence, and correction links focus associated fields.

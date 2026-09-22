@@ -21,7 +21,8 @@ describe("responsive layout", () => {
     expect(lenders.map((select) => select.value)).toEqual([api.merchantIds[0], api.merchantIds[0]]);
     const [sidebarPages] = screen.getAllByRole("navigation", { name: "Pages" });
     const sidebarLabels = within(sidebarPages!).getAllByRole("link").map((link) => link.textContent);
-    expect(sidebarLabels).toHaveLength(24);
+    expect(sidebarLabels).toHaveLength(25);
+    expect(within(sidebarPages!).getByRole('link', { name: 'Presentation' }).getAttribute('href')).toBe('/presentation');
     expect(sidebarLabels).toEqual(expect.arrayContaining(['My work','Sources & connections','Close review','Data retention','Saved exports']));
     expect(within(sidebarPages!).getByRole('link', { name: 'Saved exports' }).getAttribute('href')).toBe('/exports');
     expect(sidebarLabels).toEqual(expect.arrayContaining(['Pilot journey', 'Import batches', 'Operations', 'Team & access']));

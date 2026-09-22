@@ -11,6 +11,7 @@ import { focusMain, useDialogActivationTracking } from '@/lib/focus';
 import { formatDate } from '@/lib/formatters';
 import { useTheme } from '@/lib/theme';
 import { SandboxGuide } from './sandbox-guide';
+import { PresentationGuide, usePresentation } from './presentation-guide';
 import { useQueuePosition } from '@/lib/queue-position';
 
 /** The console's pages, in the one order they are listed: the sidebar, the phone drawer and the page title. */
@@ -39,6 +40,7 @@ const navItems = [
   { href: '/close-review', label: 'Close review', icon: FileCheck },
   { href: '/lifecycle', label: 'Data retention', icon: HardDrive },
   { href: '/exports', label: 'Saved exports', icon: HardDrive },
+  { href: '/presentation', label: 'Presentation', icon: Layers },
 ];
 
 /** The breakpoint at which the sidebar replaces the phone bar; the same value as Tailwind's `md`. */
@@ -93,6 +95,7 @@ function AuthBlock({ role, signOut }: { role: string | undefined; signOut: () =>
 }
 
 export function Layout({ children }: { children: ReactNode }) {
+  const presentation = usePresentation();
   useDialogActivationTracking();
   const search = useSearch();
   const embedded = new URLSearchParams(search).get('embedded') === '1';
@@ -232,7 +235,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 A page that stops working keeps the sidebar and the lender selector as the way out. */}
             {isLoading && !workspace
               ? <p role="status" className="text-sm text-muted-foreground">Loading your workspace…</p>
-              : <ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{!embedded && !location.startsWith('/cases/') && !['/pilot','/imports','/operations','/team','/pay-by-bank','/credit-desk','/cash-desk','/connections'].includes(location) && <SandboxGuide />}{children}</ErrorBoundary>}
+              : <ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{!embedded && <PresentationGuide />}{!embedded && !presentation.state.active && !location.startsWith('/cases/') && !['/presentation','/pilot','/imports','/operations','/team','/pay-by-bank','/credit-desk','/cash-desk','/connections'].includes(location) && <SandboxGuide />}{children}</ErrorBoundary>}
             <p className="hidden print:block mt-8 border-t pt-3 text-xs text-muted-foreground">Printed {printedAt} from the Valo Pay sandbox · {pageTitle}{lenderName ? ` · ${lenderName}` : ''}.</p>
           </div>
         </main>

@@ -8,6 +8,7 @@ import { screen, userEvent, waitFor, within } from "./harness";
 import { queryClient } from "@/App";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { Layout } from "@/components/layout";
+import { PresentationProvider } from "@/components/presentation-guide";
 import { WorkspaceProvider } from "@/lib/workspace-context";
 
 let api: FakeApi;
@@ -67,7 +68,7 @@ describe("error boundary", () => {
       <Router>
         <QueryClientProvider client={queryClient}>
           <WorkspaceProvider>
-            <Layout><Brittle broken /></Layout>
+            <PresentationProvider><Layout><Brittle broken /></Layout></PresentationProvider>
           </WorkspaceProvider>
         </QueryClientProvider>
       </Router>,

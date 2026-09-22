@@ -19,6 +19,7 @@ import { authEnabled, clerkPublishableKey } from '@/lib/auth';
 
 import { WorkspaceProvider } from '@/lib/workspace-context';
 import { Layout } from '@/components/layout';
+import { PresentationProvider } from '@/components/presentation-guide';
 
 // Public pages: no workspace, no sandbox. The landing page ships with the shell, since it is the
 // first thing a visitor sees; the sign-in pages bring Clerk's form and load only when someone goes there.
@@ -55,6 +56,7 @@ const SourcesPage: PageLoader = () => import('@/pages/sources');
 const WorkPage: PageLoader = () => import('@/pages/work');
 const LifecyclePage: PageLoader = () => import('@/pages/lifecycle');
 const ExportsPage: PageLoader = () => import('@/pages/exports');
+const PresentationPage: PageLoader = () => import('@/pages/presentation');
 
 type PageLoader = () => Promise<{ default: ComponentType<any> }>;
 const loadedPages = new Map<PageLoader, ComponentType<any>>();
@@ -150,6 +152,7 @@ const consoleRoutes: Array<{ path: string; load: PageLoader }> = [
   { path: '/work', load: WorkPage },
   { path: '/lifecycle', load: LifecyclePage },
   { path: '/exports', load: ExportsPage },
+  { path: '/presentation', load: PresentationPage },
 ];
 const consolePages = consoleRoutes.map((route) => route.load);
 const overviewOnly = [OverviewPage];
@@ -167,6 +170,7 @@ function Console() {
   if (!known) return <NotFoundPage />;
   return (
     <WorkspaceProvider>
+      <PresentationProvider>
       <Layout>
         {/* A page's code arrives on its first visit; the sidebar and the lender stay meanwhile, and the
             other pages are fetched while the browser is idle. */}
@@ -175,6 +179,7 @@ function Console() {
         </Switch>
         <Prefetch pages={consolePages} />
       </Layout>
+      </PresentationProvider>
     </WorkspaceProvider>
   );
 }
