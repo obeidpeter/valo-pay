@@ -289,11 +289,8 @@ export function coordinateCase(
       refuse(
         "Every evidence link must reference an eligible record in this lender.",
       );
-    if (
-      record.customerId &&
-      linked.customerId &&
-      record.customerId !== linked.customerId
-    )
+    const linkedCustomer = linked.kind === 'customers' ? linked.id : linked.customerId;
+    if (record.customerId && linkedCustomer && record.customerId !== linkedCustomer)
       refuse("This evidence belongs to another customer.");
   }
   const next = {

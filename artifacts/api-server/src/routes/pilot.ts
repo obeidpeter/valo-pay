@@ -261,9 +261,9 @@ router.get("/v1/pilot/cases/:id", async (req, res) => {
                   "policies",
                   "notifications",
                 ].includes(r.kind) &&
-                (!record.customerId ||
-                  !r.customerId ||
-                  r.customerId === record.customerId),
+                (!record.customerId || (r.kind === 'customers'
+                  ? r.id === record.customerId
+                  : !r.customerId || r.customerId === record.customerId)),
             )
             .map((r) => ({
               id: r.id,

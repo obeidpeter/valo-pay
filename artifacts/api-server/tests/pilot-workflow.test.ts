@@ -251,6 +251,9 @@ assert.throws(
     ),
   /case assignee/,
 );
+const otherCustomer = state.records.find(r => r.kind === 'customers' && r.id !== exception.customerId)!;
+assert.ok(exception.customerId && otherCustomer);
+assert.throws(() => coordinateCase(state,ctx,exception.id,{...caseInput,expectedUpdatedAt:exception.updatedAt,evidenceIds:[otherCustomer.id]},assignees),/another customer/);
 before = structuredClone(state);
 const event = state.records.find((r) => r.kind === "case-events")!;
 event.data.note = "Tampered note";
