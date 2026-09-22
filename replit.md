@@ -14,7 +14,7 @@ Observation-first collections operations for Nigerian lenders. The current appli
 - `node scripts/check-db-boundary.mjs` — disallow raw database access outside the scoped repository.
 - `VALOPAY_RUN_INTEGRATION=1 pnpm run test:integration` — the repository and scheduled-close suites against `DATABASE_URL`, which must be a disposable development database with the schema pushed; the pull-request workflow runs them against its own PostgreSQL service container.
 - `node scripts/security-valopay.mjs` — negative and concurrent API checks using fresh synthetic development workspaces.
-- The API process runs the scheduled daily close (REC-01, default 07:00 WAT per lender) from `artifacts/api-server/src/lib/close-scheduler.ts`; set `VALOPAY_CLOSE_SCHEDULER=off` to run a process without it.
+- The API process runs the scheduled daily close (REC-01, default 07:00 WAT per lender) from `artifacts/api-server/src/lib/close-scheduler.ts`; set `VALOPAY_CLOSE_SCHEDULER=off` to run a process without it. The close scheduler and the export worker both run inside the API process, so they need an always-on host: an Autoscale deployment scaled to zero runs no close or export until a request starts it (README, Scheduled daily close). A stopped worker returns its unfinished exports to the queue.
 - Required integrations: PostgreSQL, managed Clerk and private App Storage. Never display their environment secret values.
 
 ## Stack

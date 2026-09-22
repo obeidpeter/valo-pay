@@ -2,7 +2,7 @@ import { pool, type PoolClient } from '@workspace/db';
 import { randomUUID } from 'node:crypto';
 import type { Context, DomainState, ValopayRecord } from '../domain/types';
 import { canonical, digest, SYSTEM_ACTOR_PREFIX } from './valopay-store';
-import { EXPORT_LEASE_MS, EXPORT_CONFIRM_LEASE_MS, exportIsClaimable, type ClaimedExport, type ExportArtifact, type ExportJobRepository, type ExportWriteResult } from './export-jobs';
+import { EXPORT_LEASE_MS, EXPORT_CONFIRM_LEASE_MS, exportIsClaimable, returnExportToQueue, type ClaimedExport, type ExportArtifact, type ExportJobRepository, type ExportWriteResult } from './export-jobs';
 import { bindRuntimeService, runtimeExportRequesterAllowed } from './runtime-isolation';
 import { beginStatement, checkOut, databaseLimits } from './database-limits';
 
@@ -125,6 +125,18 @@ export const exportJobRepository: ExportJobRepository = {
       // be adopted shortly, with the same object/key, without waiting five minutes.
       if (stage === 'confirming') job.data.leaseExpiresAt = new Date(scope.now.getTime() + EXPORT_CONFIRM_LEASE_MS).toISOString();
       await writeJob(client, scope, job);
+      return 'saved';
+    }) ?? 'busy';
+  },
+  async release(claim) {
+    return await transaction(claim.merchantId, async (client, scope) => {
+      const row = (await client.query<Row>(`SELECT r.* FROM valopay_records r WHERE r.id=$4 AND r.merchant_id=$1 AND r.kind='exports' AND ${ownership}`, [scope.id, scope.workspace_id, scope.principal_hash, claim.id])).rows[0];
+      if (!row || row.status !== 'running' || row.data.leaseToken !== claim.token) return 'lost';
+      // Attempts keep counting claims, and the private object key stays, so a file the stopped upload committed is adopted.
+      const job = recordOf(row);
+      returnExportToQueue(job, scope.now.toISOString());
+      await writeJob(client, scope, job);
+      await audit(client, scope, job, 'export.released', 'The export worker stopped before finishing; the saved job returns to the queue for the next worker.');
       return 'saved';
     }) ?? 'busy';
   },

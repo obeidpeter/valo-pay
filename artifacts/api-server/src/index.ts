@@ -47,13 +47,17 @@ const server = app.listen(port, (err) => {
  * progress, then the pool ends. The lenders the pass had not reached are
  * still due and close as a catch-up after restart (NFR-AVA-02). A close that
  * will not finish in time is abandoned by the deadline; its transaction rolls
- * back with the connection and it runs again after restart the same way.
+ * back with the connection and it runs again after restart the same way. An
+ * export attempt in progress is cancelled and its job handed back to the
+ * queue for the next worker, never failed; if that write cannot be made
+ * before the deadline, the job keeps its lease and a later poll recovers it
+ * when the lease expires.
  */
 let stopping = false;
 async function shutdown(signal: string): Promise<void> {
   if (stopping) return;
   stopping = true;
-  logger.info({ event: "server.stopping", signal }, "Shutting down: finishing requests and any close in progress");
+  logger.info({ event: "server.stopping", signal }, "Shutting down: finishing requests and any close in progress; unfinished exports return to the queue");
   const deadline = setTimeout(() => { logger.error({ event: "server.stop_timeout" }, "Shutdown deadline passed; exiting"); process.exit(1); }, 10_000);
   deadline.unref();
   scheduler?.stop();
