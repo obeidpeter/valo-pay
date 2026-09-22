@@ -206,12 +206,14 @@ async function authorisedExport(req:Request,res:Response){
  return inWorkspace(req,res,async ctx=>{
   const page=await listRecords(ctx,merchantId,'exports',{id:String(req.params.id),limit:1});
   if(!page.items[0])fail('Export not found in this lender.',404);
-  return page.items[0];
+  // The transaction clock decides whether the export is stalled or its lease expired.
+  return {record:page.items[0],now:ctx.now};
  },'read');
 }
 router.get('/v1/exports/:id',async(req,res)=>{
  res.setHeader('Cache-Control','private, no-store');
- res.json(S.GetExportJobResponse.parse(exportJobView(await authorisedExport(req,res))));
+ const found=await authorisedExport(req,res);
+ res.json(S.GetExportJobResponse.parse(exportJobView(found.record,found.now)));
 });
 router.post('/v1/exports/:id/retry',async(req,res)=>{
  req.body={};
@@ -226,7 +228,7 @@ router.get("/v1/exports/:id/download",async(req,res)=>{
  res.once("close",close);
  try{
  // The authorised metadata is read inside the transaction; the object-storage read happens after it ends, so no merchant lock is held across the download.
- const descriptor=exportDescriptorForRecord(await authorisedExport(req,res));
+ const descriptor=exportDescriptorForRecord((await authorisedExport(req,res)).record);
  if(cancellation.signal.aborted)return;
  const result=await readExport(descriptor,cancellation.signal);
  if(cancellation.signal.aborted)return;

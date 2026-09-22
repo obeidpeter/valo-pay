@@ -59,8 +59,6 @@ export const ReadinessCheckResponse = zod.object({
  * @summary The caller's workspace: its lenders, roles and actor
  */
 export const GetWorkspaceResponse = zod.object({
-  "accessMode": zod.enum(['sandbox', 'staff']).optional().describe('Whether the server authorises a demo persona or a provisioned staff membership.'),
-  "viewerScope": zod.string().optional().describe('Opaque workspace/user scope for browser preferences; never an authorisation credential.'),
   "name": zod.string(),
   "environment": zod.string(),
   "actor": zod.string(),
@@ -80,7 +78,9 @@ export const GetWorkspaceResponse = zod.object({
   "preLiveReady": zod.boolean()
 }).describe('A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags.')),
   "roles": zod.array(zod.string()),
-  "productionEnabled": zod.boolean()
+  "productionEnabled": zod.boolean(),
+  "accessMode": zod.enum(['sandbox', 'staff']).optional().describe('Whether the server authorises a demo persona or a provisioned staff membership.'),
+  "viewerScope": zod.string().optional().describe('Opaque workspace/user scope for browser preferences; never an authorisation credential.')
 }).describe('The caller\'s workspace: who is acting, in which role, whether they signed in, and the lenders and roles available.')
 
 
@@ -699,17 +699,22 @@ export const CreateExportQueryParams = zod.object({
 })
 
 export const CreateExportBody = zod.object({
-  "closeReviewId": zod.string().optional(),
   "kind": zod.string(),
   "customerId": zod.string().optional(),
+  "closeReviewId": zod.string().optional(),
   "format": zod.enum(['json', 'csv', 'pdf'])
 }).describe('What to export (a record kind, gate-pack, billing, dispute-pack or customer-pack with a customerId) and in which format.')
 
 export const CreateExportResponse = zod.object({
-  "expiredAt": zod.string().optional(),
   "id": zod.string(),
   "downloadUrl": zod.string(),
   "status": zod.enum(['queued', 'running', 'ready', 'failed']).optional(),
+  "stage": zod.enum(['queued', 'checking', 'rendering', 'uploading', 'confirming', 'ready', 'failed']).optional(),
+  "lastProgressAt": zod.string().optional(),
+  "stalled": zod.boolean().optional(),
+  "retryAllowed": zod.boolean().optional(),
+  "recoveryAt": zod.string().optional(),
+  "expiredAt": zod.string().optional(),
   "kind": zod.string().optional(),
   "format": zod.string().optional(),
   "customerId": zod.string().optional(),
@@ -719,12 +724,7 @@ export const CreateExportResponse = zod.object({
   "generatedAt": zod.string().optional(),
   "byteLength": zod.number().int().optional(),
   "generationMs": zod.number().int().optional(),
-  "error": zod.string().optional(),
-  "stage": zod.enum(['queued', 'checking', 'rendering', 'uploading', 'confirming', 'ready', 'failed']).optional(),
-  "lastProgressAt": zod.string().optional(),
-  "stalled": zod.boolean().optional(),
-  "retryAllowed": zod.boolean().optional(),
-  "recoveryAt": zod.string().optional()
+  "error": zod.string().optional()
 }).describe('Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.')
 
 
@@ -741,10 +741,15 @@ export const GetExportJobQueryParams = zod.object({
 })
 
 export const GetExportJobResponse = zod.object({
-  "expiredAt": zod.string().optional(),
   "id": zod.string(),
   "downloadUrl": zod.string(),
   "status": zod.enum(['queued', 'running', 'ready', 'failed']).optional(),
+  "stage": zod.enum(['queued', 'checking', 'rendering', 'uploading', 'confirming', 'ready', 'failed']).optional(),
+  "lastProgressAt": zod.string().optional(),
+  "stalled": zod.boolean().optional(),
+  "retryAllowed": zod.boolean().optional(),
+  "recoveryAt": zod.string().optional(),
+  "expiredAt": zod.string().optional(),
   "kind": zod.string().optional(),
   "format": zod.string().optional(),
   "customerId": zod.string().optional(),
@@ -754,12 +759,7 @@ export const GetExportJobResponse = zod.object({
   "generatedAt": zod.string().optional(),
   "byteLength": zod.number().int().optional(),
   "generationMs": zod.number().int().optional(),
-  "error": zod.string().optional(),
-  "stage": zod.enum(['queued', 'checking', 'rendering', 'uploading', 'confirming', 'ready', 'failed']).optional(),
-  "lastProgressAt": zod.string().optional(),
-  "stalled": zod.boolean().optional(),
-  "retryAllowed": zod.boolean().optional(),
-  "recoveryAt": zod.string().optional()
+  "error": zod.string().optional()
 }).describe('Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.')
 
 
@@ -776,10 +776,15 @@ export const RetryExportJobQueryParams = zod.object({
 })
 
 export const RetryExportJobResponse = zod.object({
-  "expiredAt": zod.string().optional(),
   "id": zod.string(),
   "downloadUrl": zod.string(),
   "status": zod.enum(['queued', 'running', 'ready', 'failed']).optional(),
+  "stage": zod.enum(['queued', 'checking', 'rendering', 'uploading', 'confirming', 'ready', 'failed']).optional(),
+  "lastProgressAt": zod.string().optional(),
+  "stalled": zod.boolean().optional(),
+  "retryAllowed": zod.boolean().optional(),
+  "recoveryAt": zod.string().optional(),
+  "expiredAt": zod.string().optional(),
   "kind": zod.string().optional(),
   "format": zod.string().optional(),
   "customerId": zod.string().optional(),
@@ -789,12 +794,7 @@ export const RetryExportJobResponse = zod.object({
   "generatedAt": zod.string().optional(),
   "byteLength": zod.number().int().optional(),
   "generationMs": zod.number().int().optional(),
-  "error": zod.string().optional(),
-  "stage": zod.enum(['queued', 'checking', 'rendering', 'uploading', 'confirming', 'ready', 'failed']).optional(),
-  "lastProgressAt": zod.string().optional(),
-  "stalled": zod.boolean().optional(),
-  "retryAllowed": zod.boolean().optional(),
-  "recoveryAt": zod.string().optional()
+  "error": zod.string().optional()
 }).describe('Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.')
 
 
@@ -1289,3 +1289,2972 @@ export const PerformConnectedActionResponse = zod.object({
   "mode": zod.enum(['synthetic']),
   "externalInstructionPerformed": zod.literal(false)
 }).describe('Committed sample operation. Cash actions include their record and outcome inside record; use the refreshed workspace view for display. A receipt is evidence from the server simulator only.')
+
+
+/**
+ * Every keyed, recoverable request the caller made in this lender, with its confirmation state. Read-only; private to the person who made the requests.
+ * @summary List the caller's recovery journal
+ */
+export const listOperationsQueryOffsetMin = 0;
+export const listOperationsQueryOffsetMax = 100000;
+
+
+
+export const ListOperationsQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "offset": zod.coerce.number().int().min(listOperationsQueryOffsetMin).max(listOperationsQueryOffsetMax).optional().describe('Rows to skip in the newest-first order; pages hold 25 rows.')
+})
+
+export const ListOperationsResponse = zod.object({
+  "items": zod.array(zod.object({
+  "id": zod.string(),
+  "label": zod.string(),
+  "actor": zod.string(),
+  "role": zod.string(),
+  "status": zod.enum(['pending', 'completed', 'cancelled']),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "message": zod.string(),
+  "recordId": zod.string().nullable(),
+  "recordKind": zod.string().nullable()
+}).describe('One journal entry: what was asked, by whom, in which role, and whether the service confirmed it. Original request bodies stay private; a completed entry names the record it produced. A refused entry is cancelled and its message says why.')),
+  "total": zod.number().int(),
+  "offset": zod.number().int()
+}).describe('The caller\'s journal for one lender, newest first, 25 rows a page.')
+
+
+/**
+ * Re-enters the original route with the stored request and key under the current rules. A completed entry returns its saved result; a cancelled or refused one is refused (409); a different role cannot repeat it (403).
+ * @summary Recover or repeat a journaled request
+ */
+export const RetryOperationParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const RetryOperationQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const RetryOperationResponse = zod.record(zod.string(), zod.unknown()).describe('The original route\'s answer, recovered or re-run under the current validation and authorisation; its shape is that route\'s response.')
+
+
+/**
+ * Confirms with the server that the request never completed and closes it, so its key cannot run again. A completed entry, or one whose receipt already exists, is refused (409).
+ * @summary Cancel an unconfirmed request
+ */
+export const CancelOperationParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const CancelOperationQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const CancelOperationResponse = zod.object({
+  "message": zod.string()
+}).describe('A confirmation in plain words; nothing else changed that the caller needs to read back.')
+
+
+/**
+ * Counts of the records each pilot step needs, for the journey page. No record is created by reading.
+ * @summary Read the pilot journey counts
+ */
+export const GetPilotJourneyQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const GetPilotJourneyResponse = zod.object({
+  "lender": zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "shortName": zod.string(),
+  "segment": zod.string(),
+  "mode": zod.string(),
+  "status": zod.string(),
+  "provider": zod.string(),
+  "monthlyVolume": zod.number().int(),
+  "killSwitch": zod.boolean(),
+  "preDataReady": zod.boolean(),
+  "preLiveReady": zod.boolean()
+}).describe('A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags.'),
+  "accessMode": zod.enum(['sandbox', 'staff']),
+  "actor": zod.string(),
+  "syntheticOnly": zod.literal(true),
+  "counts": zod.object({
+  "customers": zod.number().int(),
+  "batches": zod.number().int(),
+  "receipts": zod.number().int(),
+  "openCases": zod.number().int(),
+  "unassignedCases": zod.number().int(),
+  "closes": zod.number().int(),
+  "exports": zod.number().int()
+}).describe('Record counts that place the lender on the pilot journey: customers, committed batches, receipts, open and unassigned cases, closes and ready exports.')
+}).describe('The lender, the caller\'s access mode and the counts behind the journey view. Synthetic throughout.')
+
+
+/**
+ * Administrator with recent MFA on a staff host. The key makes creation repeatable; the same key with different details is refused.
+ * @summary Create a synthetic lender
+ */
+export const createPilotLenderHeaderIdempotencyKeyMin = 8;
+export const createPilotLenderHeaderIdempotencyKeyMax = 200;
+
+
+
+export const CreatePilotLenderHeader = zod.object({
+  "Idempotency-Key": zod.string().min(createPilotLenderHeaderIdempotencyKeyMin).max(createPilotLenderHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const createPilotLenderBodyNameMin = 2;
+export const createPilotLenderBodyNameMax = 100;
+
+
+
+export const CreatePilotLenderBody = zod.object({
+  "name": zod.string().min(createPilotLenderBodyNameMin).max(createPilotLenderBodyNameMax),
+  "segment": zod.enum(['Consumer lending', 'Cooperative', 'Asset finance', 'Business finance'])
+}).describe('A new synthetic lender for a staff workspace: name and segment.')
+
+export const CreatePilotLenderResponse = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "shortName": zod.string(),
+  "segment": zod.string(),
+  "mode": zod.string(),
+  "status": zod.string(),
+  "provider": zod.string(),
+  "monthlyVolume": zod.number().int(),
+  "killSwitch": zod.boolean(),
+  "preDataReady": zod.boolean(),
+  "preLiveReady": zod.boolean()
+}).describe('A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags.')
+
+
+/**
+ * Newest first, 25 a page, without source rows.
+ * @summary List import batches
+ */
+export const listImportBatchesQueryOffsetMin = 0;
+export const listImportBatchesQueryOffsetMax = 100000;
+
+
+
+export const ListImportBatchesQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "offset": zod.coerce.number().int().min(listImportBatchesQueryOffsetMin).max(listImportBatchesQueryOffsetMax).optional().describe('Rows to skip in the newest-first order; pages hold 25 rows.')
+})
+
+export const ListImportBatchesResponse = zod.object({
+  "items": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
+  "total": zod.number().int(),
+  "offset": zod.number().int()
+}).describe('Import batches newest first, 25 a page, with their source identity, quality totals and check counts but not their rows.')
+
+
+/**
+ * Parses and checks the rows, screens them for raw bank details, and records the batch as ready or needing correction. A batch with the same source identity is refused (409).
+ * @summary Save a source batch
+ */
+export const SaveImportBatchQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const saveImportBatchHeaderIdempotencyKeyMin = 8;
+export const saveImportBatchHeaderIdempotencyKeyMax = 200;
+
+
+
+export const SaveImportBatchHeader = zod.object({
+  "Idempotency-Key": zod.string().min(saveImportBatchHeaderIdempotencyKeyMin).max(saveImportBatchHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const saveImportBatchBodyNameMax = 120;
+
+export const saveImportBatchBodySourceMax = 100;
+
+export const saveImportBatchBodySourceBatchIdMax = 120;
+
+export const saveImportBatchBodyBusinessDateRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
+export const saveImportBatchBodySourceExpectationIdRegExp = new RegExp('^[a-f0-9]{64}$');
+export const saveImportBatchBodyCsvMax = 1500000;
+
+export const saveImportBatchBodyMappingMaxOne = 100;
+
+export const saveImportBatchBodyMappingDefault = {};
+export const saveImportBatchBodyIdentityColumnMax = 100;
+
+
+
+export const SaveImportBatchBody = zod.object({
+  "name": zod.string().min(1).max(saveImportBatchBodyNameMax),
+  "kind": zod.enum(['customers', 'mandates', 'due-items', 'attempts', 'observations']),
+  "source": zod.string().min(1).max(saveImportBatchBodySourceMax),
+  "sourceBatchId": zod.string().min(1).max(saveImportBatchBodySourceBatchIdMax),
+  "businessDate": zod.string().regex(saveImportBatchBodyBusinessDateRegExp).optional(),
+  "sourceExpectationId": zod.string().regex(saveImportBatchBodySourceExpectationIdRegExp).optional(),
+  "csv": zod.string().min(1).max(saveImportBatchBodyCsvMax),
+  "mapping": zod.record(zod.string(), zod.string().max(saveImportBatchBodyMappingMaxOne)).default(saveImportBatchBodyMappingDefault),
+  "amountUnit": zod.enum(['naira', 'kobo']),
+  "identityColumn": zod.string().min(1).max(saveImportBatchBodyIdentityColumnMax),
+  "syntheticOnly": zod.literal(true),
+  "expectedUpdatedAt": zod.coerce.date().optional()
+}).describe('A synthetic source batch: source, source batch ID, record kind, mapping, identity column, amount unit and up to 500 CSV rows. syntheticOnly must be true; raw bank details are refused.')
+
+export const SaveImportBatchResponse = zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')
+
+
+/**
+ * The batch with its source rows and revisions. Import operator roles only (403); unknown batches are 404.
+ * @summary Open an import batch
+ */
+export const GetImportBatchParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const GetImportBatchQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const GetImportBatchResponse = zod.object({
+  "batch": zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'),
+  "revisions": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'))
+}).describe('One batch with its source rows (import operator roles only) and every saved revision.')
+
+
+/**
+ * Saves a revision of the batch, keeping its source identity. A committed batch or a stale version is refused (409).
+ * @summary Correct an uncommitted batch
+ */
+export const SaveImportBatchRevisionParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const SaveImportBatchRevisionQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const saveImportBatchRevisionHeaderIdempotencyKeyMin = 8;
+export const saveImportBatchRevisionHeaderIdempotencyKeyMax = 200;
+
+
+
+export const SaveImportBatchRevisionHeader = zod.object({
+  "Idempotency-Key": zod.string().min(saveImportBatchRevisionHeaderIdempotencyKeyMin).max(saveImportBatchRevisionHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const saveImportBatchRevisionBodyNameMax = 120;
+
+export const saveImportBatchRevisionBodySourceMax = 100;
+
+export const saveImportBatchRevisionBodySourceBatchIdMax = 120;
+
+export const saveImportBatchRevisionBodyBusinessDateRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
+export const saveImportBatchRevisionBodySourceExpectationIdRegExp = new RegExp('^[a-f0-9]{64}$');
+export const saveImportBatchRevisionBodyCsvMax = 1500000;
+
+export const saveImportBatchRevisionBodyMappingMaxOne = 100;
+
+export const saveImportBatchRevisionBodyMappingDefault = {};
+export const saveImportBatchRevisionBodyIdentityColumnMax = 100;
+
+
+
+export const SaveImportBatchRevisionBody = zod.object({
+  "name": zod.string().min(1).max(saveImportBatchRevisionBodyNameMax),
+  "kind": zod.enum(['customers', 'mandates', 'due-items', 'attempts', 'observations']),
+  "source": zod.string().min(1).max(saveImportBatchRevisionBodySourceMax),
+  "sourceBatchId": zod.string().min(1).max(saveImportBatchRevisionBodySourceBatchIdMax),
+  "businessDate": zod.string().regex(saveImportBatchRevisionBodyBusinessDateRegExp).optional(),
+  "sourceExpectationId": zod.string().regex(saveImportBatchRevisionBodySourceExpectationIdRegExp).optional(),
+  "csv": zod.string().min(1).max(saveImportBatchRevisionBodyCsvMax),
+  "mapping": zod.record(zod.string(), zod.string().max(saveImportBatchRevisionBodyMappingMaxOne)).default(saveImportBatchRevisionBodyMappingDefault),
+  "amountUnit": zod.enum(['naira', 'kobo']),
+  "identityColumn": zod.string().min(1).max(saveImportBatchRevisionBodyIdentityColumnMax),
+  "syntheticOnly": zod.literal(true),
+  "expectedUpdatedAt": zod.coerce.date().optional()
+}).describe('A synthetic source batch: source, source batch ID, record kind, mapping, identity column, amount unit and up to 500 CSV rows. syntheticOnly must be true; raw bank details are refused.')
+
+export const SaveImportBatchRevisionResponse = zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')
+
+
+/**
+ * Imports the checked rows in one transaction and records the original source totals. A batch that is not ready, or a stale version, is refused (409).
+ * @summary Commit a checked batch
+ */
+export const CommitImportBatchParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const CommitImportBatchQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const commitImportBatchHeaderIdempotencyKeyMin = 8;
+export const commitImportBatchHeaderIdempotencyKeyMax = 200;
+
+
+
+export const CommitImportBatchHeader = zod.object({
+  "Idempotency-Key": zod.string().min(commitImportBatchHeaderIdempotencyKeyMin).max(commitImportBatchHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const CommitImportBatchBody = zod.object({
+  "expectedUpdatedAt": zod.string()
+}).describe('The batch version being committed; a stale version is refused (409).')
+
+export const CommitImportBatchResponse = zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')
+
+
+/**
+ * The exception with its possible assignees, handover history and citable evidence.
+ * @summary Open a case
+ */
+export const GetCaseParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const GetCaseQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const GetCaseResponse = zod.object({
+  "record": zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'),
+  "assignees": zod.array(zod.object({
+  "actor": zod.string(),
+  "name": zod.string(),
+  "role": zod.string()
+}).describe('A person who can own a case or review a close: demo roles in the sandbox, active staff with lender access on a staff host.')),
+  "events": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
+  "evidence": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "reference": zod.string(),
+  "kind": zod.string()
+}).describe('A record the case can cite as evidence.'))
+}).describe('One exception with the people it can be handed to, its handover events and the records it can cite.')
+
+
+/**
+ * Records the assignee, next action and evidence, with the version being changed. The next action must be in the future.
+ * @summary Hand over or update a case
+ */
+export const CoordinateCaseParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const CoordinateCaseQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const coordinateCaseHeaderIdempotencyKeyMin = 8;
+export const coordinateCaseHeaderIdempotencyKeyMax = 200;
+
+
+
+export const CoordinateCaseHeader = zod.object({
+  "Idempotency-Key": zod.string().min(coordinateCaseHeaderIdempotencyKeyMin).max(coordinateCaseHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const coordinateCaseBodyAssigneeMax = 256;
+
+export const coordinateCaseBodyNoteMin = 3;
+export const coordinateCaseBodyNoteMax = 2000;
+
+export const coordinateCaseBodyNextActionMin = 3;
+export const coordinateCaseBodyNextActionMax = 240;
+
+export const coordinateCaseBodyEvidenceIdsItemMax = 100;
+
+export const coordinateCaseBodyEvidenceIdsDefault = [];
+export const coordinateCaseBodyEvidenceIdsMax = 20;
+
+
+
+export const CoordinateCaseBody = zod.object({
+  "action": zod.enum(['claim', 'handover', 'update']),
+  "expectedUpdatedAt": zod.coerce.date(),
+  "assignee": zod.string().max(coordinateCaseBodyAssigneeMax).optional(),
+  "note": zod.string().min(coordinateCaseBodyNoteMin).max(coordinateCaseBodyNoteMax),
+  "nextAction": zod.string().min(coordinateCaseBodyNextActionMin).max(coordinateCaseBodyNextActionMax),
+  "nextActionAt": zod.coerce.date(),
+  "evidenceIds": zod.array(zod.string().min(1).max(coordinateCaseBodyEvidenceIdsItemMax)).max(coordinateCaseBodyEvidenceIdsMax).default(coordinateCaseBodyEvidenceIdsDefault)
+}).describe('A case handover or update: assignee, next action and its time, note and evidence, with the version being changed.')
+
+export const CoordinateCaseResponse = zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')
+
+
+/**
+ * Staff hosts only (403 elsewhere). Requires a signed-in session with an enrolled second factor used recently; otherwise answers with the identity provider's re-verification instruction.
+ * @summary Verify staff identity with a fresh second factor
+ */
+export const VerifyStaffIdentityResponse = zod.object({
+  "message": zod.string()
+}).describe('A confirmation in plain words; nothing else changed that the caller needs to read back.')
+
+
+/**
+ * Members, lenders, invitations and access history as the caller's role allows.
+ * @summary Read the team directory
+ */
+export const GetTeamResponse = zod.object({
+  "mode": zod.enum(['sandbox', 'staff']),
+  "actor": zod.string(),
+  "members": zod.array(zod.object({
+  "id": zod.string(),
+  "actor": zod.string(),
+  "name": zod.string(),
+  "role": zod.string(),
+  "status": zod.enum(['active', 'suspended', 'revoked']),
+  "expiresAt": zod.string(),
+  "updatedAt": zod.string(),
+  "lenderIds": zod.array(zod.string()).optional(),
+  "allLenders": zod.boolean().optional()
+}).describe('A staff membership: its role, state and expiry, and (in the directory) the lenders it may open; an administrator sees every lender.')),
+  "lenders": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "shortName": zod.string(),
+  "segment": zod.string(),
+  "mode": zod.string(),
+  "status": zod.string(),
+  "provider": zod.string(),
+  "monthlyVolume": zod.number().int(),
+  "killSwitch": zod.boolean(),
+  "preDataReady": zod.boolean(),
+  "preLiveReady": zod.boolean()
+}).describe('A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags.')),
+  "invitations": zod.array(zod.object({
+  "id": zod.string(),
+  "email": zod.string(),
+  "role": zod.string(),
+  "status": zod.string(),
+  "expiresAt": zod.string()
+}).describe('A pending, accepted or revoked invitation; the token is shown once, at creation.')),
+  "events": zod.array(zod.object({
+  "id": zod.string(),
+  "actor": zod.string(),
+  "action": zod.string(),
+  "subject": zod.string(),
+  "detail": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
+  "createdAt": zod.string()
+}).describe('One entry of the team\'s access history.')),
+  "message": zod.string()
+}).describe('The team as the caller may see it: members and lenders for everyone, invitations and history for administrators. In the sandbox the lists are empty and the message says why.')
+
+
+/**
+ * Administrator with recent MFA. Replaces any pending invitation for the same address; the token expires in seven days and is never emailed by the service.
+ * @summary Invite a staff member
+ */
+export const inviteStaffBodyEmailMax = 254;
+
+
+
+export const InviteStaffBody = zod.object({
+  "email": zod.string().email().max(inviteStaffBodyEmailMax),
+  "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only'])
+}).describe('An invitation: email address and pilot role.')
+
+export const InviteStaffResponse = zod.object({
+  "id": zod.string(),
+  "token": zod.string(),
+  "message": zod.string()
+}).describe('The invitation and its one-time acceptance token; no email is sent.')
+
+
+/**
+ * Administrator with recent MFA. A revoked token cannot be accepted.
+ * @summary Revoke an invitation
+ */
+export const RevokeInvitationParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const RevokeInvitationResponse = zod.object({
+  "message": zod.string()
+}).describe('A confirmation in plain words; nothing else changed that the caller needs to read back.')
+
+
+/**
+ * Administrator with recent MFA; nobody changes their own membership. Records the reason in the access history.
+ * @summary Change a membership
+ */
+export const UpdateStaffMemberParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const updateStaffMemberBodyReasonMin = 3;
+export const updateStaffMemberBodyReasonMax = 500;
+
+
+
+export const UpdateStaffMemberBody = zod.object({
+  "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
+  "status": zod.enum(['active', 'suspended', 'revoked']),
+  "expectedUpdatedAt": zod.coerce.date(),
+  "reason": zod.string().min(updateStaffMemberBodyReasonMin).max(updateStaffMemberBodyReasonMax)
+}).describe('A membership change: role, state, the version being changed and the reason.')
+
+export const UpdateStaffMemberResponse = zod.object({
+  "id": zod.string(),
+  "actor": zod.string(),
+  "name": zod.string(),
+  "role": zod.string(),
+  "status": zod.enum(['active', 'suspended', 'revoked']),
+  "expiresAt": zod.string(),
+  "updatedAt": zod.string(),
+  "lenderIds": zod.array(zod.string()).optional(),
+  "allLenders": zod.boolean().optional()
+}).describe('A staff membership: its role, state and expiry, and (in the directory) the lenders it may open; an administrator sees every lender.')
+
+
+/**
+ * Administrator with recent MFA. Non-administrators open only the lenders named here; sessions pick the change up on their next request.
+ * @summary Set a member's lender access
+ */
+export const UpdateStaffLendersParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const updateStaffLendersBodyLenderIdsItemMax = 100;
+
+export const updateStaffLendersBodyLenderIdsMax = 250;
+
+export const updateStaffLendersBodyReasonMin = 10;
+export const updateStaffLendersBodyReasonMax = 1000;
+
+
+
+export const UpdateStaffLendersBody = zod.object({
+  "expectedUpdatedAt": zod.coerce.date(),
+  "lenderIds": zod.array(zod.string().min(1).max(updateStaffLendersBodyLenderIdsItemMax)).max(updateStaffLendersBodyLenderIdsMax),
+  "reason": zod.string().min(updateStaffLendersBodyReasonMin).max(updateStaffLendersBodyReasonMax)
+}).describe('The lenders a non-administrator membership may open, with the version being changed and the reason.')
+
+export const UpdateStaffLendersResponse = zod.object({
+  "id": zod.string(),
+  "actor": zod.string(),
+  "name": zod.string(),
+  "role": zod.string(),
+  "status": zod.enum(['active', 'suspended', 'revoked']),
+  "expiresAt": zod.string(),
+  "updatedAt": zod.string(),
+  "lenderIds": zod.array(zod.string()),
+  "allLenders": zod.boolean(),
+  "message": zod.string()
+}).describe('The membership with its saved lender access.')
+
+
+/**
+ * The signed-in person's verified email must match the invitation. Creates a 90-day membership.
+ * @summary Accept an invitation
+ */
+export const acceptInvitationBodyTokenRegExp = new RegExp('^[a-f0-9]{64}$');
+
+
+export const AcceptInvitationBody = zod.object({
+  "token": zod.string().regex(acceptInvitationBodyTokenRegExp)
+}).describe('The acceptance token from the invitation link.')
+
+export const AcceptInvitationResponse = zod.object({
+  "message": zod.string(),
+  "role": zod.string()
+}).describe('Confirmation of the new membership and its role.')
+
+
+/**
+ * What this host has configured and verified for real staff access, from the request's own checks.
+ * @summary Read the access readiness checks
+ */
+export const GetAccessReadinessResponse = zod.object({
+  "syntheticOnly": zod.literal(true),
+  "canCommission": zod.boolean(),
+  "checkedAt": zod.string(),
+  "checks": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "state": zod.string(),
+  "detail": zod.string()
+}).describe('One readiness control (identity, MFA, origins, database isolation, encryption) with its state on this host and what it means.'))
+}).describe('The staff-access and encryption controls as this request observed them. Describes configuration; never reveals secrets.')
+
+
+/**
+ * Administrator with recent MFA. Seals and opens a synthetic payload with the configured key (503 when none is configured).
+ * @summary Verify managed payload encryption
+ */
+export const VerifyEncryptionResponse = zod.object({
+  "message": zod.string(),
+  "checkedAt": zod.string(),
+  "verified": zod.boolean()
+}).describe('The result of sealing and opening a synthetic payload with the configured managed key.')
+
+
+/**
+ * Administrator with recent MFA. Seals one bounded batch of unprotected import rows and recovery payloads; run until none remain.
+ * @summary Protect stored payloads
+ */
+export const ProtectPayloadsResponse = zod.object({
+  "message": zod.string(),
+  "protectedCount": zod.number().int(),
+  "mayHaveMore": zod.boolean()
+}).describe('How many stored payloads one bounded run protected, and whether another run is needed.')
+
+
+/**
+ * Derived from the lender's records on every read; nothing is written.
+ * @summary Read the pilot progress steps
+ */
+export const GetPilotProgressQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const GetPilotProgressResponse = zod.object({
+  "lender": zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "shortName": zod.string(),
+  "segment": zod.string(),
+  "mode": zod.string(),
+  "status": zod.string(),
+  "provider": zod.string(),
+  "monthlyVolume": zod.number().int(),
+  "killSwitch": zod.boolean(),
+  "preDataReady": zod.boolean(),
+  "preLiveReady": zod.boolean()
+}).describe('A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags.'),
+  "syntheticOnly": zod.literal(true),
+  "access": zod.object({
+  "mode": zod.string(),
+  "state": zod.string(),
+  "message": zod.string()
+}).describe('Whether real staff access is enabled on this host and what demo progress does not establish.'),
+  "steps": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "href": zod.string(),
+  "state": zod.string(),
+  "evidence": zod.array(zod.string()),
+  "missing": zod.array(zod.string())
+}).describe('One pilot step with its state, the evidence behind that state and what is still missing.'))
+}).describe('The lender\'s progress through onboarding, ingestion, reconciliation, exceptions, close review and export, derived from its records.')
+
+
+/**
+ * Newest 25 closes with their discrepancies, review state and the available Finance reviewers.
+ * @summary List closes and their reviews
+ */
+export const ListCloseReviewsQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const ListCloseReviewsResponse = zod.object({
+  "closes": zod.array(zod.object({
+  "close": zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'),
+  "issues": zod.array(zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')),
+  "problem": zod.string().nullable(),
+  "pendingFinancialCorrections": zod.number().int(),
+  "reviews": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.').and(zod.object({
+  "current": zod.boolean()
+})).describe('A close review record with whether its snapshot still matches the close and its source evidence.'))
+}).describe('One close with the discrepancies a reviewer must answer, why it cannot be reviewed now (if so), pending financial corrections and its reviews.')),
+  "total": zod.number().int(),
+  "actor": zod.string(),
+  "reviewers": zod.array(zod.object({
+  "actor": zod.string(),
+  "name": zod.string(),
+  "role": zod.string()
+}).describe('A person who can own a case or review a close: demo roles in the sandbox, active staff with lender access on a staff host.')),
+  "accessMode": zod.string(),
+  "ownPrincipal": zod.string()
+}).describe('The 25 newest closes with their reviews, the Finance reviewers available and who the caller is, so the console can enforce separation of duties.')
+
+
+/**
+ * Snapshots the close with its source-completeness basis and assigns an independent Finance reviewer. A close with an open review, a stale version or an unanswered discrepancy is refused.
+ * @summary Prepare a close for review
+ */
+export const PrepareCloseReviewQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const prepareCloseReviewHeaderIdempotencyKeyMin = 8;
+export const prepareCloseReviewHeaderIdempotencyKeyMax = 200;
+
+
+
+export const PrepareCloseReviewHeader = zod.object({
+  "Idempotency-Key": zod.string().min(prepareCloseReviewHeaderIdempotencyKeyMin).max(prepareCloseReviewHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const prepareCloseReviewBodyCloseIdMax = 100;
+
+export const prepareCloseReviewBodyReviewerMax = 200;
+
+export const prepareCloseReviewBodyPreparationNoteMin = 10;
+export const prepareCloseReviewBodyPreparationNoteMax = 3000;
+
+export const prepareCloseReviewBodyDiscrepancyResponsesItemIssueIdMax = 100;
+
+export const prepareCloseReviewBodyDiscrepancyResponsesItemExplanationMin = 10;
+export const prepareCloseReviewBodyDiscrepancyResponsesItemExplanationMax = 3000;
+
+export const prepareCloseReviewBodyDiscrepancyResponsesMax = 500;
+
+export const prepareCloseReviewBodyUnresolvedAcceptanceDefault = ``;
+export const prepareCloseReviewBodyUnresolvedAcceptanceMax = 3000;
+
+
+
+export const PrepareCloseReviewBody = zod.object({
+  "closeId": zod.string().min(1).max(prepareCloseReviewBodyCloseIdMax),
+  "expectedUpdatedAt": zod.coerce.date(),
+  "reviewer": zod.string().min(1).max(prepareCloseReviewBodyReviewerMax),
+  "preparationNote": zod.string().min(prepareCloseReviewBodyPreparationNoteMin).max(prepareCloseReviewBodyPreparationNoteMax),
+  "discrepancyResponses": zod.array(zod.object({
+  "issueId": zod.string().min(1).max(prepareCloseReviewBodyDiscrepancyResponsesItemIssueIdMax),
+  "explanation": zod.string().min(prepareCloseReviewBodyDiscrepancyResponsesItemExplanationMin).max(prepareCloseReviewBodyDiscrepancyResponsesItemExplanationMax)
+})).max(prepareCloseReviewBodyDiscrepancyResponsesMax),
+  "unresolvedAcceptance": zod.string().max(prepareCloseReviewBodyUnresolvedAcceptanceMax).default(prepareCloseReviewBodyUnresolvedAcceptanceDefault)
+}).describe('A close review preparation: the close and its version, an independent Finance reviewer, the preparation note and a response to every discrepancy.')
+
+export const PrepareCloseReviewResponse = zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')
+
+
+/**
+ * Only the named reviewer decides, and only while the snapshot is current; a changed close or source declaration must be prepared again.
+ * @summary Approve or reject a close review
+ */
+export const DecideCloseReviewParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const DecideCloseReviewQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const decideCloseReviewHeaderIdempotencyKeyMin = 8;
+export const decideCloseReviewHeaderIdempotencyKeyMax = 200;
+
+
+
+export const DecideCloseReviewHeader = zod.object({
+  "Idempotency-Key": zod.string().min(decideCloseReviewHeaderIdempotencyKeyMin).max(decideCloseReviewHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const decideCloseReviewBodyNoteMin = 10;
+export const decideCloseReviewBodyNoteMax = 3000;
+
+export const decideCloseReviewBodySourceExceptionsItemIssueIdMax = 200;
+
+export const decideCloseReviewBodySourceExceptionsItemReasonMin = 10;
+export const decideCloseReviewBodySourceExceptionsItemReasonMax = 3000;
+
+export const decideCloseReviewBodySourceExceptionsItemEvidenceMin = 5;
+export const decideCloseReviewBodySourceExceptionsItemEvidenceMax = 1000;
+
+export const decideCloseReviewBodySourceExceptionsDefault = [];
+export const decideCloseReviewBodySourceExceptionsMax = 500;
+
+
+
+export const DecideCloseReviewBody = zod.object({
+  "expectedUpdatedAt": zod.coerce.date(),
+  "action": zod.enum(['approve', 'return']),
+  "note": zod.string().min(decideCloseReviewBodyNoteMin).max(decideCloseReviewBodyNoteMax),
+  "sourceExceptions": zod.array(zod.object({
+  "issueId": zod.string().min(1).max(decideCloseReviewBodySourceExceptionsItemIssueIdMax),
+  "reason": zod.string().min(decideCloseReviewBodySourceExceptionsItemReasonMin).max(decideCloseReviewBodySourceExceptionsItemReasonMax),
+  "evidence": zod.string().min(decideCloseReviewBodySourceExceptionsItemEvidenceMin).max(decideCloseReviewBodySourceExceptionsItemEvidenceMax)
+})).max(decideCloseReviewBodySourceExceptionsMax).default(decideCloseReviewBodySourceExceptionsDefault)
+}).describe('A review decision: approve or reject with the version being decided, a note and an answer to every source exception.')
+
+export const DecideCloseReviewResponse = zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')
+
+
+/**
+ * The batch's imported records and every proposal with its current state.
+ * @summary List import corrections for a batch
+ */
+export const listImportCorrectionsQueryBatchIdMax = 100;
+
+
+
+export const ListImportCorrectionsQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "batchId": zod.coerce.string().max(listImportCorrectionsQueryBatchIdMax).describe('The committed import batch whose records may be corrected.')
+})
+
+export const ListImportCorrectionsResponse = zod.object({
+  "batchId": zod.string(),
+  "actor": zod.string(),
+  "ownPrincipal": zod.string(),
+  "role": zod.string(),
+  "targets": zod.array(zod.object({
+  "id": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "reference": zod.string(),
+  "updatedAt": zod.string(),
+  "rowId": zod.string(),
+  "amountKobo": zod.number(),
+  "dueDate": zod.string().nullable(),
+  "phoneMasked": zod.string(),
+  "supported": zod.boolean(),
+  "status": zod.string()
+})),
+  "proposals": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "createdAt": zod.string(),
+  "proposedBy": zod.string(),
+  "proposedPrincipal": zod.string(),
+  "reviewer": zod.string(),
+  "reason": zod.string(),
+  "evidence": zod.string(),
+  "proposalDigest": zod.string(),
+  "status": zod.enum(['awaiting_review', 'approved', 'rejected', 'withdrawn']),
+  "current": zod.boolean(),
+  "preview": zod.object({
+  "merchantId": zod.string(),
+  "batchId": zod.string(),
+  "targetId": zod.string(),
+  "targetKind": zod.string(),
+  "source": zod.string(),
+  "rowId": zod.string(),
+  "targetUpdatedAt": zod.string(),
+  "financial": zod.boolean(),
+  "previewDigest": zod.string(),
+  "differences": zod.array(zod.object({
+  "field": zod.enum(['name', 'phoneMasked', 'amountKobo', 'dueDate']),
+  "before": zod.union([zod.string(),zod.number(),zod.null()]),
+  "after": zod.union([zod.string(),zod.number()])
+})),
+  "affected": zod.array(zod.object({
+  "id": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "reference": zod.string(),
+  "status": zod.string(),
+  "updatedAt": zod.string()
+})),
+  "blockers": zod.array(zod.string()),
+  "consequence": zod.string()
+}),
+  "decision": zod.object({
+  "id": zod.string(),
+  "action": zod.enum(['approve', 'reject', 'withdraw']),
+  "actor": zod.string(),
+  "principalId": zod.string(),
+  "reason": zod.string(),
+  "at": zod.string()
+}).nullable()
+})),
+  "reviewers": zod.array(zod.object({
+  "actor": zod.string(),
+  "name": zod.string(),
+  "role": zod.string()
+})),
+  "syntheticOnly": zod.literal(true)
+}).describe('The batch\'s imported records, its proposals and the Finance reviewers available.')
+
+
+/**
+ * Records the comparison as evidence for an independent Finance reviewer. A changed comparison, a missing reviewer or an open proposal on the same record is refused.
+ * @summary Propose an import correction
+ */
+export const ProposeImportCorrectionQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const proposeImportCorrectionHeaderIdempotencyKeyMin = 8;
+export const proposeImportCorrectionHeaderIdempotencyKeyMax = 200;
+
+
+
+export const ProposeImportCorrectionHeader = zod.object({
+  "Idempotency-Key": zod.string().min(proposeImportCorrectionHeaderIdempotencyKeyMin).max(proposeImportCorrectionHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const proposeImportCorrectionBodyBatchIdMax = 100;
+
+export const proposeImportCorrectionBodyTargetIdMax = 100;
+
+export const proposeImportCorrectionBodyChangesNameMin = 2;
+export const proposeImportCorrectionBodyChangesNameMax = 160;
+
+export const proposeImportCorrectionBodyChangesPhoneMaskedMax = 40;
+
+export const proposeImportCorrectionBodyChangesAmountKoboMin = 500000;
+export const proposeImportCorrectionBodyChangesAmountKoboMax = 9007199254740991;
+
+export const proposeImportCorrectionBodyChangesDueDateRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
+export const proposeImportCorrectionBodyPreviewDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const proposeImportCorrectionBodyReviewerMax = 180;
+
+export const proposeImportCorrectionBodyReasonMin = 10;
+export const proposeImportCorrectionBodyReasonMax = 1000;
+
+export const proposeImportCorrectionBodyEvidenceMin = 5;
+export const proposeImportCorrectionBodyEvidenceMax = 1000;
+
+
+
+export const ProposeImportCorrectionBody = zod.object({
+  "batchId": zod.string().min(1).max(proposeImportCorrectionBodyBatchIdMax),
+  "targetId": zod.string().min(1).max(proposeImportCorrectionBodyTargetIdMax),
+  "expectedUpdatedAt": zod.coerce.date(),
+  "changes": zod.object({
+  "name": zod.string().min(proposeImportCorrectionBodyChangesNameMin).max(proposeImportCorrectionBodyChangesNameMax).optional(),
+  "phoneMasked": zod.string().max(proposeImportCorrectionBodyChangesPhoneMaskedMax).optional(),
+  "amountKobo": zod.number().int().min(proposeImportCorrectionBodyChangesAmountKoboMin).max(proposeImportCorrectionBodyChangesAmountKoboMax).optional(),
+  "dueDate": zod.string().regex(proposeImportCorrectionBodyChangesDueDateRegExp).optional()
+}),
+  "syntheticOnly": zod.literal(true),
+  "previewDigest": zod.string().regex(proposeImportCorrectionBodyPreviewDigestRegExp),
+  "reviewer": zod.string().min(1).max(proposeImportCorrectionBodyReviewerMax),
+  "reason": zod.string().min(proposeImportCorrectionBodyReasonMin).max(proposeImportCorrectionBodyReasonMax),
+  "evidence": zod.string().min(proposeImportCorrectionBodyEvidenceMin).max(proposeImportCorrectionBodyEvidenceMax)
+}).describe('A proposal quoting the preview digest, naming an independent Finance reviewer, with the reason and evidence.')
+
+export const ProposeImportCorrectionResponse = zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "createdAt": zod.string(),
+  "proposedBy": zod.string(),
+  "proposedPrincipal": zod.string(),
+  "reviewer": zod.string(),
+  "reason": zod.string(),
+  "evidence": zod.string(),
+  "proposalDigest": zod.string(),
+  "status": zod.enum(['awaiting_review', 'approved', 'rejected', 'withdrawn']),
+  "current": zod.boolean(),
+  "preview": zod.object({
+  "merchantId": zod.string(),
+  "batchId": zod.string(),
+  "targetId": zod.string(),
+  "targetKind": zod.string(),
+  "source": zod.string(),
+  "rowId": zod.string(),
+  "targetUpdatedAt": zod.string(),
+  "financial": zod.boolean(),
+  "previewDigest": zod.string(),
+  "differences": zod.array(zod.object({
+  "field": zod.enum(['name', 'phoneMasked', 'amountKobo', 'dueDate']),
+  "before": zod.union([zod.string(),zod.number(),zod.null()]),
+  "after": zod.union([zod.string(),zod.number()])
+})),
+  "affected": zod.array(zod.object({
+  "id": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "reference": zod.string(),
+  "status": zod.string(),
+  "updatedAt": zod.string()
+})),
+  "blockers": zod.array(zod.string()),
+  "consequence": zod.string()
+}),
+  "decision": zod.object({
+  "id": zod.string(),
+  "action": zod.enum(['approve', 'reject', 'withdraw']),
+  "actor": zod.string(),
+  "principalId": zod.string(),
+  "reason": zod.string(),
+  "at": zod.string()
+}).nullable()
+}).describe('A proposal with its preview, its decision if any, and whether the comparison is still current.')
+
+
+/**
+ * Shows what would change, which closes and financial records it touches, and what blocks it. Nothing is written.
+ * @summary Compare a proposed correction
+ */
+export const PreviewImportCorrectionQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const previewImportCorrectionBodyBatchIdMax = 100;
+
+export const previewImportCorrectionBodyTargetIdMax = 100;
+
+export const previewImportCorrectionBodyChangesNameMin = 2;
+export const previewImportCorrectionBodyChangesNameMax = 160;
+
+export const previewImportCorrectionBodyChangesPhoneMaskedMax = 40;
+
+export const previewImportCorrectionBodyChangesAmountKoboMin = 500000;
+export const previewImportCorrectionBodyChangesAmountKoboMax = 9007199254740991;
+
+export const previewImportCorrectionBodyChangesDueDateRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
+
+
+export const PreviewImportCorrectionBody = zod.object({
+  "batchId": zod.string().min(1).max(previewImportCorrectionBodyBatchIdMax),
+  "targetId": zod.string().min(1).max(previewImportCorrectionBodyTargetIdMax),
+  "expectedUpdatedAt": zod.coerce.date(),
+  "changes": zod.object({
+  "name": zod.string().min(previewImportCorrectionBodyChangesNameMin).max(previewImportCorrectionBodyChangesNameMax).optional(),
+  "phoneMasked": zod.string().max(previewImportCorrectionBodyChangesPhoneMaskedMax).optional(),
+  "amountKobo": zod.number().int().min(previewImportCorrectionBodyChangesAmountKoboMin).max(previewImportCorrectionBodyChangesAmountKoboMax).optional(),
+  "dueDate": zod.string().regex(previewImportCorrectionBodyChangesDueDateRegExp).optional()
+}),
+  "syntheticOnly": zod.literal(true)
+}).describe('The batch, the imported record with its version, and the supported field changes to compare.')
+
+export const PreviewImportCorrectionResponse = zod.object({
+  "merchantId": zod.string(),
+  "batchId": zod.string(),
+  "targetId": zod.string(),
+  "targetKind": zod.string(),
+  "source": zod.string(),
+  "rowId": zod.string(),
+  "targetUpdatedAt": zod.string(),
+  "financial": zod.boolean(),
+  "previewDigest": zod.string(),
+  "differences": zod.array(zod.object({
+  "field": zod.enum(['name', 'phoneMasked', 'amountKobo', 'dueDate']),
+  "before": zod.union([zod.string(),zod.number(),zod.null()]),
+  "after": zod.union([zod.string(),zod.number()])
+})),
+  "affected": zod.array(zod.object({
+  "id": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "reference": zod.string(),
+  "status": zod.string(),
+  "updatedAt": zod.string()
+})),
+  "blockers": zod.array(zod.string()),
+  "consequence": zod.string()
+}).describe('The before/after comparison, the records the change touches, any blockers and the digest a proposal must quote.')
+
+
+/**
+ * Only the named reviewer approves or rejects; the proposer may withdraw. Approval applies the change only while the comparison is current.
+ * @summary Decide an import correction
+ */
+export const DecideImportCorrectionParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const DecideImportCorrectionQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const decideImportCorrectionHeaderIdempotencyKeyMin = 8;
+export const decideImportCorrectionHeaderIdempotencyKeyMax = 200;
+
+
+
+export const DecideImportCorrectionHeader = zod.object({
+  "Idempotency-Key": zod.string().min(decideImportCorrectionHeaderIdempotencyKeyMin).max(decideImportCorrectionHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const decideImportCorrectionBodyProposalDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const decideImportCorrectionBodyReasonMin = 10;
+export const decideImportCorrectionBodyReasonMax = 1000;
+
+
+
+export const DecideImportCorrectionBody = zod.object({
+  "proposalDigest": zod.string().regex(decideImportCorrectionBodyProposalDigestRegExp),
+  "action": zod.enum(['approve', 'reject', 'withdraw']),
+  "reason": zod.string().min(decideImportCorrectionBodyReasonMin).max(decideImportCorrectionBodyReasonMax)
+}).describe('Approve, reject or withdraw, quoting the proposal digest, with a reason.')
+
+export const DecideImportCorrectionResponse = zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "createdAt": zod.string(),
+  "proposedBy": zod.string(),
+  "proposedPrincipal": zod.string(),
+  "reviewer": zod.string(),
+  "reason": zod.string(),
+  "evidence": zod.string(),
+  "proposalDigest": zod.string(),
+  "status": zod.enum(['awaiting_review', 'approved', 'rejected', 'withdrawn']),
+  "current": zod.boolean(),
+  "preview": zod.object({
+  "merchantId": zod.string(),
+  "batchId": zod.string(),
+  "targetId": zod.string(),
+  "targetKind": zod.string(),
+  "source": zod.string(),
+  "rowId": zod.string(),
+  "targetUpdatedAt": zod.string(),
+  "financial": zod.boolean(),
+  "previewDigest": zod.string(),
+  "differences": zod.array(zod.object({
+  "field": zod.enum(['name', 'phoneMasked', 'amountKobo', 'dueDate']),
+  "before": zod.union([zod.string(),zod.number(),zod.null()]),
+  "after": zod.union([zod.string(),zod.number()])
+})),
+  "affected": zod.array(zod.object({
+  "id": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "reference": zod.string(),
+  "status": zod.string(),
+  "updatedAt": zod.string()
+})),
+  "blockers": zod.array(zod.string()),
+  "consequence": zod.string()
+}),
+  "decision": zod.object({
+  "id": zod.string(),
+  "action": zod.enum(['approve', 'reject', 'withdraw']),
+  "actor": zod.string(),
+  "principalId": zod.string(),
+  "reason": zod.string(),
+  "at": zod.string()
+}).nullable()
+}).describe('A proposal with its preview, its decision if any, and whether the comparison is still current.')
+
+
+/**
+ * Completeness for the business date, profiles with delivery state, batches with quality totals and the Paystack test inbox.
+ * @summary Read the sources page
+ */
+export const getSourcesQueryBusinessDateRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
+
+
+export const GetSourcesQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "businessDate": zod.coerce.string().regex(getSourcesQueryBusinessDateRegExp).optional().describe('The WAT business date to report completeness for; defaults to the current one.')
+})
+
+export const getSourcesResponseCompletenessBusinessDateRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
+export const getSourcesResponseCompletenessFilesItemSourceMax = 100;
+
+export const getSourcesResponseCompletenessFilesItemSourceBatchIdMax = 120;
+
+export const getSourcesResponseCompletenessFilesItemExpectedRowsMin = 0;
+export const getSourcesResponseCompletenessFilesItemExpectedRowsMax = 500;
+
+export const getSourcesResponseCompletenessFilesItemExpectedAmountKoboMin = 0;
+export const getSourcesResponseCompletenessFilesItemExpectedAmountKoboMax = 9007199254740991;
+
+export const getSourcesResponseCompletenessFilesItemBusinessDateRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
+export const getSourcesResponseCompletenessFilesItemReceivedRowsMin = 0;
+export const getSourcesResponseCompletenessFilesItemReceivedRowsMax = 9007199254740991;
+
+export const getSourcesResponseCompletenessFilesItemReceivedAmountKoboMin = 0;
+export const getSourcesResponseCompletenessFilesItemReceivedAmountKoboMax = 9007199254740991;
+
+export const getSourcesResponseCompletenessBasisDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const getSourcesResponseCompletenessExpectedFilesMin = 0;
+export const getSourcesResponseCompletenessExpectedFilesMax = 9007199254740991;
+
+export const getSourcesResponseCompletenessCompleteFilesMin = 0;
+export const getSourcesResponseCompletenessCompleteFilesMax = 9007199254740991;
+
+export const getSourcesResponseBatchesItemQualitySourceRowsMin = 0;
+export const getSourcesResponseBatchesItemQualitySourceRowsMax = 9007199254740991;
+
+export const getSourcesResponseBatchesItemQualitySourceAmountKoboMin = 0;
+export const getSourcesResponseBatchesItemQualitySourceAmountKoboMax = 9007199254740991;
+
+export const getSourcesResponseBatchesItemQualityImportedRowsMin = 0;
+export const getSourcesResponseBatchesItemQualityImportedRowsMax = 9007199254740991;
+
+export const getSourcesResponseBatchesItemQualityImportedAmountKoboMin = 0;
+export const getSourcesResponseBatchesItemQualityImportedAmountKoboMax = 9007199254740991;
+
+export const getSourcesResponseBatchesItemQualityDuplicateRowsMin = 0;
+export const getSourcesResponseBatchesItemQualityDuplicateRowsMax = 9007199254740991;
+
+export const getSourcesResponseBatchesItemQualityConflictRowsMin = 0;
+export const getSourcesResponseBatchesItemQualityConflictRowsMax = 9007199254740991;
+
+export const getSourcesResponseBatchesItemQualityInvalidRowsMin = 0;
+export const getSourcesResponseBatchesItemQualityInvalidRowsMax = 9007199254740991;
+
+
+
+export const GetSourcesResponse = zod.object({
+  "completeness": zod.object({
+  "businessDate": zod.string().regex(getSourcesResponseCompletenessBusinessDateRegExp),
+  "manifest": zod.object({
+  "id": zod.string(),
+  "updatedAt": zod.coerce.date(),
+  "data": zod.record(zod.string(), zod.unknown())
+}).nullable(),
+  "files": zod.array(zod.object({
+  "source": zod.string().min(1).max(getSourcesResponseCompletenessFilesItemSourceMax),
+  "sourceBatchId": zod.string().min(1).max(getSourcesResponseCompletenessFilesItemSourceBatchIdMax),
+  "kind": zod.enum(['customers', 'mandates', 'due-items', 'attempts', 'observations']),
+  "expectedRows": zod.number().int().min(getSourcesResponseCompletenessFilesItemExpectedRowsMin).max(getSourcesResponseCompletenessFilesItemExpectedRowsMax),
+  "expectedAmountKobo": zod.number().int().min(getSourcesResponseCompletenessFilesItemExpectedAmountKoboMin).max(getSourcesResponseCompletenessFilesItemExpectedAmountKoboMax),
+  "id": zod.string(),
+  "batchId": zod.string().nullable(),
+  "batchStatus": zod.string(),
+  "businessDate": zod.string().regex(getSourcesResponseCompletenessFilesItemBusinessDateRegExp).nullable(),
+  "receivedRows": zod.number().int().min(getSourcesResponseCompletenessFilesItemReceivedRowsMin).max(getSourcesResponseCompletenessFilesItemReceivedRowsMax).nullable(),
+  "receivedAmountKobo": zod.number().int().min(getSourcesResponseCompletenessFilesItemReceivedAmountKoboMin).max(getSourcesResponseCompletenessFilesItemReceivedAmountKoboMax).nullable(),
+  "status": zod.enum(['complete', 'incomplete']),
+  "problems": zod.array(zod.string())
+})),
+  "activeProfiles": zod.array(zod.object({
+  "id": zod.string(),
+  "source": zod.string(),
+  "kind": zod.string()
+})),
+  "undeclared": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "source": zod.string(),
+  "sourceBatchId": zod.string(),
+  "kind": zod.string()
+})),
+  "status": zod.enum(['complete', 'incomplete']),
+  "issues": zod.array(zod.object({
+  "id": zod.string(),
+  "label": zod.string(),
+  "detail": zod.string()
+})),
+  "basisDigest": zod.string().regex(getSourcesResponseCompletenessBasisDigestRegExp),
+  "expectedFiles": zod.number().int().min(getSourcesResponseCompletenessExpectedFilesMin).max(getSourcesResponseCompletenessExpectedFilesMax),
+  "completeFiles": zod.number().int().min(getSourcesResponseCompletenessCompleteFilesMin).max(getSourcesResponseCompletenessCompleteFilesMax)
+}).describe('Whether the declared source files for a business date arrived complete, with each file\'s state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer.'),
+  "profiles": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.').and(zod.object({
+  "delivery": zod.object({
+  "status": zod.string(),
+  "missedDeliveries": zod.number().int(),
+  "nextExpectedAt": zod.string(),
+  "lastCommittedAt": zod.string().nullable(),
+  "lastBatchId": zod.string().nullable()
+}).describe('Where a profile stands against its cadence: missed deliveries, the next expected time and the last committed batch.')
+})).describe('A source profile record with its delivery state.')),
+  "batches": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "source": zod.string(),
+  "sourceBatchId": zod.string(),
+  "kind": zod.string(),
+  "status": zod.string(),
+  "createdAt": zod.string(),
+  "quality": zod.object({
+  "profileId": zod.string().nullable(),
+  "profileVersion": zod.string().nullable(),
+  "sourceRows": zod.number().int().min(getSourcesResponseBatchesItemQualitySourceRowsMin).max(getSourcesResponseBatchesItemQualitySourceRowsMax),
+  "sourceAmountKobo": zod.number().int().min(getSourcesResponseBatchesItemQualitySourceAmountKoboMin).max(getSourcesResponseBatchesItemQualitySourceAmountKoboMax).nullable(),
+  "importedRows": zod.number().int().min(getSourcesResponseBatchesItemQualityImportedRowsMin).max(getSourcesResponseBatchesItemQualityImportedRowsMax),
+  "importedAmountKobo": zod.number().int().min(getSourcesResponseBatchesItemQualityImportedAmountKoboMin).max(getSourcesResponseBatchesItemQualityImportedAmountKoboMax).nullable(),
+  "duplicateRows": zod.number().int().min(getSourcesResponseBatchesItemQualityDuplicateRowsMin).max(getSourcesResponseBatchesItemQualityDuplicateRowsMax),
+  "conflictRows": zod.number().int().min(getSourcesResponseBatchesItemQualityConflictRowsMin).max(getSourcesResponseBatchesItemQualityConflictRowsMax),
+  "invalidRows": zod.number().int().min(getSourcesResponseBatchesItemQualityInvalidRowsMin).max(getSourcesResponseBatchesItemQualityInvalidRowsMax),
+  "status": zod.enum(['checked', 'needs_review', 'unavailable']),
+  "issues": zod.array(zod.string())
+}).describe('The original committed totals and checks of a source batch.')
+}).describe('A batch as the sources page lists it, with its original quality totals.')),
+  "summary": zod.object({
+  "lateSources": zod.number().int(),
+  "duplicateRows": zod.number().int(),
+  "conflictRows": zod.number().int(),
+  "batchesNeedingReview": zod.number().int()
+}).describe('Counts that need attention: late sources, duplicate and conflicting rows, batches needing review.'),
+  "paystack": zod.object({
+  "mode": zod.literal("test_only"),
+  "externalConnectionVerified": zod.literal(false),
+  "canRunFixtures": zod.boolean(),
+  "state": zod.literal("configuration_required"),
+  "message": zod.string(),
+  "events": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "mode": zod.enum(['fixture', 'test']),
+  "message": zod.string(),
+  "deliveryCount": zod.number().int(),
+  "replayCount": zod.number().int(),
+  "financialRecordsCreated": zod.literal(0)
+}).describe('A stored provider event: fixture or test mode, how often it was delivered and replayed, and the guarantee that it created no financial record.')),
+  "total": zod.number().int(),
+  "quarantined": zod.number().int(),
+  "duplicates": zod.number().int()
+}).describe('The read-only Paystack test inbox: its fixed test-only state, the stored events and how many were quarantined or duplicated.')
+}).describe('Everything the sources page shows for one lender and business date.')
+
+
+/**
+ * One profile per source and record kind (409 otherwise). Import operator roles only.
+ * @summary Create a source profile
+ */
+export const CreateSourceProfileQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const createSourceProfileBodyNameMin = 2;
+export const createSourceProfileBodyNameMax = 120;
+
+export const createSourceProfileBodySourceMax = 100;
+
+export const createSourceProfileBodyMappingMaxOne = 100;
+
+export const createSourceProfileBodyMappingDefault = {};
+export const createSourceProfileBodyIdentityColumnMax = 100;
+
+export const createSourceProfileBodyCadenceHoursMax = 8760;
+
+export const createSourceProfileBodyGraceMinutesMin = 0;
+export const createSourceProfileBodyGraceMinutesMax = 10080;
+
+export const createSourceProfileBodyExpectedRowsDefault = null;
+export const createSourceProfileBodyExpectedRowsMin = 0;
+export const createSourceProfileBodyExpectedRowsMax = 500;
+
+export const createSourceProfileBodyExpectedAmountKoboDefault = null;
+export const createSourceProfileBodyExpectedAmountKoboMin = 0;
+export const createSourceProfileBodyExpectedAmountKoboMax = 9007199254740991;
+
+export const createSourceProfileBodyStatusDefault = `active`;
+
+export const CreateSourceProfileBody = zod.object({
+  "name": zod.string().min(createSourceProfileBodyNameMin).max(createSourceProfileBodyNameMax),
+  "source": zod.string().min(1).max(createSourceProfileBodySourceMax),
+  "kind": zod.enum(['customers', 'mandates', 'due-items', 'attempts', 'observations']),
+  "mapping": zod.record(zod.string(), zod.string().max(createSourceProfileBodyMappingMaxOne)).default(createSourceProfileBodyMappingDefault),
+  "identityColumn": zod.string().min(1).max(createSourceProfileBodyIdentityColumnMax),
+  "amountUnit": zod.enum(['naira', 'kobo']),
+  "firstExpectedAt": zod.coerce.date(),
+  "cadenceHours": zod.number().int().min(1).max(createSourceProfileBodyCadenceHoursMax),
+  "graceMinutes": zod.number().int().min(createSourceProfileBodyGraceMinutesMin).max(createSourceProfileBodyGraceMinutesMax),
+  "expectedRows": zod.number().int().min(createSourceProfileBodyExpectedRowsMin).max(createSourceProfileBodyExpectedRowsMax).nullish().default(createSourceProfileBodyExpectedRowsDefault),
+  "expectedAmountKobo": zod.number().int().min(createSourceProfileBodyExpectedAmountKoboMin).max(createSourceProfileBodyExpectedAmountKoboMax).nullish().default(createSourceProfileBodyExpectedAmountKoboDefault),
+  "status": zod.enum(['active', 'paused']).default(createSourceProfileBodyStatusDefault),
+  "syntheticOnly": zod.literal(true),
+  "expectedUpdatedAt": zod.coerce.date().optional()
+}).describe('A reusable synthetic source contract: mapping, identity column, amount unit, first expected delivery, cadence, grace and expected totals.')
+
+export const CreateSourceProfileResponse = zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')
+
+
+/**
+ * Saves a new version of the profile; batches keep the version they were checked against.
+ * @summary Change a source profile
+ */
+export const SaveSourceProfileParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const SaveSourceProfileQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const saveSourceProfileHeaderIdempotencyKeyMin = 8;
+export const saveSourceProfileHeaderIdempotencyKeyMax = 200;
+
+
+
+export const SaveSourceProfileHeader = zod.object({
+  "Idempotency-Key": zod.string().min(saveSourceProfileHeaderIdempotencyKeyMin).max(saveSourceProfileHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const saveSourceProfileBodyNameMin = 2;
+export const saveSourceProfileBodyNameMax = 120;
+
+export const saveSourceProfileBodySourceMax = 100;
+
+export const saveSourceProfileBodyMappingMaxOne = 100;
+
+export const saveSourceProfileBodyMappingDefault = {};
+export const saveSourceProfileBodyIdentityColumnMax = 100;
+
+export const saveSourceProfileBodyCadenceHoursMax = 8760;
+
+export const saveSourceProfileBodyGraceMinutesMin = 0;
+export const saveSourceProfileBodyGraceMinutesMax = 10080;
+
+export const saveSourceProfileBodyExpectedRowsDefault = null;
+export const saveSourceProfileBodyExpectedRowsMin = 0;
+export const saveSourceProfileBodyExpectedRowsMax = 500;
+
+export const saveSourceProfileBodyExpectedAmountKoboDefault = null;
+export const saveSourceProfileBodyExpectedAmountKoboMin = 0;
+export const saveSourceProfileBodyExpectedAmountKoboMax = 9007199254740991;
+
+export const saveSourceProfileBodyStatusDefault = `active`;
+
+export const SaveSourceProfileBody = zod.object({
+  "name": zod.string().min(saveSourceProfileBodyNameMin).max(saveSourceProfileBodyNameMax),
+  "source": zod.string().min(1).max(saveSourceProfileBodySourceMax),
+  "kind": zod.enum(['customers', 'mandates', 'due-items', 'attempts', 'observations']),
+  "mapping": zod.record(zod.string(), zod.string().max(saveSourceProfileBodyMappingMaxOne)).default(saveSourceProfileBodyMappingDefault),
+  "identityColumn": zod.string().min(1).max(saveSourceProfileBodyIdentityColumnMax),
+  "amountUnit": zod.enum(['naira', 'kobo']),
+  "firstExpectedAt": zod.coerce.date(),
+  "cadenceHours": zod.number().int().min(1).max(saveSourceProfileBodyCadenceHoursMax),
+  "graceMinutes": zod.number().int().min(saveSourceProfileBodyGraceMinutesMin).max(saveSourceProfileBodyGraceMinutesMax),
+  "expectedRows": zod.number().int().min(saveSourceProfileBodyExpectedRowsMin).max(saveSourceProfileBodyExpectedRowsMax).nullish().default(saveSourceProfileBodyExpectedRowsDefault),
+  "expectedAmountKobo": zod.number().int().min(saveSourceProfileBodyExpectedAmountKoboMin).max(saveSourceProfileBodyExpectedAmountKoboMax).nullish().default(saveSourceProfileBodyExpectedAmountKoboDefault),
+  "status": zod.enum(['active', 'paused']).default(saveSourceProfileBodyStatusDefault),
+  "syntheticOnly": zod.literal(true),
+  "expectedUpdatedAt": zod.coerce.date().optional()
+}).describe('A reusable synthetic source contract: mapping, identity column, amount unit, first expected delivery, cadence, grace and expected totals.')
+
+export const SaveSourceProfileResponse = zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')
+
+
+/**
+ * Records what must arrive for a business date. A revision must name the current declaration; a source batch declared for another date is refused.
+ * @summary Declare the expected source files
+ */
+export const SaveSourceManifestQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const saveSourceManifestHeaderIdempotencyKeyMin = 8;
+export const saveSourceManifestHeaderIdempotencyKeyMax = 200;
+
+
+
+export const SaveSourceManifestHeader = zod.object({
+  "Idempotency-Key": zod.string().min(saveSourceManifestHeaderIdempotencyKeyMin).max(saveSourceManifestHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const saveSourceManifestBodyBusinessDateRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
+export const saveSourceManifestBodyFilesItemSourceMax = 100;
+
+export const saveSourceManifestBodyFilesItemSourceBatchIdMax = 120;
+
+export const saveSourceManifestBodyFilesItemExpectedRowsMin = 0;
+export const saveSourceManifestBodyFilesItemExpectedRowsMax = 500;
+
+export const saveSourceManifestBodyFilesItemExpectedAmountKoboMin = 0;
+export const saveSourceManifestBodyFilesItemExpectedAmountKoboMax = 9007199254740991;
+
+export const saveSourceManifestBodyFilesMax = 100;
+
+export const saveSourceManifestBodyReasonMin = 10;
+export const saveSourceManifestBodyReasonMax = 3000;
+
+export const saveSourceManifestBodyEvidenceMin = 5;
+export const saveSourceManifestBodyEvidenceMax = 1000;
+
+export const saveSourceManifestBodyPreviousManifestIdMax = 100;
+
+
+
+export const SaveSourceManifestBody = zod.object({
+  "businessDate": zod.string().regex(saveSourceManifestBodyBusinessDateRegExp),
+  "files": zod.array(zod.object({
+  "source": zod.string().min(1).max(saveSourceManifestBodyFilesItemSourceMax),
+  "sourceBatchId": zod.string().min(1).max(saveSourceManifestBodyFilesItemSourceBatchIdMax),
+  "kind": zod.enum(['customers', 'mandates', 'due-items', 'attempts', 'observations']),
+  "expectedRows": zod.number().int().min(saveSourceManifestBodyFilesItemExpectedRowsMin).max(saveSourceManifestBodyFilesItemExpectedRowsMax),
+  "expectedAmountKobo": zod.number().int().min(saveSourceManifestBodyFilesItemExpectedAmountKoboMin).max(saveSourceManifestBodyFilesItemExpectedAmountKoboMax)
+})).max(saveSourceManifestBodyFilesMax),
+  "noFilesExpected": zod.boolean(),
+  "reason": zod.string().min(saveSourceManifestBodyReasonMin).max(saveSourceManifestBodyReasonMax),
+  "evidence": zod.string().min(saveSourceManifestBodyEvidenceMin).max(saveSourceManifestBodyEvidenceMax),
+  "previousManifestId": zod.string().min(1).max(saveSourceManifestBodyPreviousManifestIdMax).optional(),
+  "expectedUpdatedAt": zod.coerce.date().optional(),
+  "syntheticOnly": zod.literal(true)
+}).describe('The files and control totals expected for one WAT business date, or an explicit no-file declaration, with reason and evidence; a revision names the declaration it replaces.')
+
+export const SaveSourceManifestResponse = zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')
+
+
+/**
+ * Runs a test-only fixture through the inbox. No external call is made and no financial record is created.
+ * @summary Deliver a recorded Paystack scenario
+ */
+export const RunPaystackFixtureQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const runPaystackFixtureHeaderIdempotencyKeyMin = 8;
+export const runPaystackFixtureHeaderIdempotencyKeyMax = 200;
+
+
+
+export const RunPaystackFixtureHeader = zod.object({
+  "Idempotency-Key": zod.string().min(runPaystackFixtureHeaderIdempotencyKeyMin).max(runPaystackFixtureHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const RunPaystackFixtureBody = zod.object({
+  "scenario": zod.enum(['payment', 'duplicate', 'amount_mismatch', 'out_of_order', 'tampered']),
+  "syntheticOnly": zod.literal(true)
+}).describe('A recorded Paystack test scenario to deliver to the inbox.')
+
+export const RunPaystackFixtureResponse = zod.object({
+  "accepted": zod.boolean(),
+  "duplicate": zod.boolean(),
+  "event": zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "mode": zod.enum(['fixture', 'test']),
+  "message": zod.string(),
+  "deliveryCount": zod.number().int(),
+  "replayCount": zod.number().int(),
+  "financialRecordsCreated": zod.literal(0)
+}).describe('A stored provider event: fixture or test mode, how often it was delivered and replayed, and the guarantee that it created no financial record.')
+}).describe('Whether the fixture was accepted or recognised as a duplicate, and the stored event.')
+
+
+/**
+ * Re-processes the event with the reason recorded; duplicates are recognised and counted.
+ * @summary Replay a stored provider event
+ */
+export const ReplayProviderEventParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const ReplayProviderEventQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const replayProviderEventHeaderIdempotencyKeyMin = 8;
+export const replayProviderEventHeaderIdempotencyKeyMax = 200;
+
+
+
+export const ReplayProviderEventHeader = zod.object({
+  "Idempotency-Key": zod.string().min(replayProviderEventHeaderIdempotencyKeyMin).max(replayProviderEventHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const replayProviderEventBodyReasonMin = 3;
+export const replayProviderEventBodyReasonMax = 500;
+
+
+
+export const ReplayProviderEventBody = zod.object({
+  "expectedUpdatedAt": zod.coerce.date(),
+  "reason": zod.string().min(replayProviderEventBodyReasonMin).max(replayProviderEventBodyReasonMax)
+}).describe('A replay of a stored provider event, with its version and the reason.')
+
+export const ReplayProviderEventResponse = zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "mode": zod.enum(['fixture', 'test']),
+  "message": zod.string(),
+  "deliveryCount": zod.number().int(),
+  "replayCount": zod.number().int(),
+  "financialRecordsCreated": zod.literal(0)
+}).describe('A stored provider event: fixture or test mode, how often it was delivered and replayed, and the guarantee that it created no financial record.')
+
+
+/**
+ * Derived from cases, reviews and notifications on every read; bounded and lender scoped.
+ * @summary Read personal work
+ */
+export const getPersonalWorkQueryScopeDefault = `mine`;
+export const getPersonalWorkQueryFilterDefault = `all`;
+export const getPersonalWorkQueryOffsetMin = 0;
+export const getPersonalWorkQueryOffsetMax = 100000;
+
+export const getPersonalWorkQueryLimitMax = 50;
+
+
+
+export const GetPersonalWorkQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "scope": zod.enum(['mine', 'team']).default(getPersonalWorkQueryScopeDefault).describe('The caller\'s own work, or (administrators) the whole team\'s.'),
+  "filter": zod.enum(['all', 'overdue', 'handover', 'review', 'unread']).default(getPersonalWorkQueryFilterDefault).describe('Only overdue items, handovers, reviews or unread notifications.'),
+  "offset": zod.coerce.number().int().min(getPersonalWorkQueryOffsetMin).max(getPersonalWorkQueryOffsetMax).optional().describe('Rows to skip.'),
+  "limit": zod.coerce.number().int().min(1).max(getPersonalWorkQueryLimitMax).optional().describe('Page size; defaults to 25.')
+})
+
+export const getPersonalWorkResponseMerchantIdMax = 300;
+
+export const getPersonalWorkResponseActorMax = 300;
+
+export const getPersonalWorkResponseFilterDefault = `all`;
+export const getPersonalWorkResponseItemsItemIdMax = 300;
+
+export const getPersonalWorkResponseItemsItemEventIdMax = 300;
+
+export const getPersonalWorkResponseItemsItemSourceIdMax = 300;
+
+export const getPersonalWorkResponseItemsItemSourceDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const getPersonalWorkResponseItemsItemAssigneeMax = 300;
+
+export const getPersonalWorkResponseItemsItemAssignmentEventIdMax = 300;
+
+export const getPersonalWorkResponseItemsMax = 50;
+
+export const getPersonalWorkResponseTotalMin = 0;
+
+export const getPersonalWorkResponseOffsetMin = 0;
+
+export const getPersonalWorkResponseLimitMax = 50;
+
+export const getPersonalWorkResponseCountsAllMin = 0;
+
+export const getPersonalWorkResponseCountsOverdueMin = 0;
+
+export const getPersonalWorkResponseCountsHandoverMin = 0;
+
+export const getPersonalWorkResponseCountsReviewMin = 0;
+
+export const getPersonalWorkResponseCountsUnreadMin = 0;
+
+export const getPersonalWorkResponseCountsEscalatedMin = 0;
+
+export const getPersonalWorkResponseWorkloadItemActorMax = 300;
+
+export const getPersonalWorkResponseWorkloadItemTotalMin = 0;
+
+export const getPersonalWorkResponseWorkloadItemOverdueMin = 0;
+
+export const getPersonalWorkResponseWorkloadItemHandoversMin = 0;
+
+export const getPersonalWorkResponseWorkloadItemReviewsMin = 0;
+
+export const getPersonalWorkResponseWorkloadItemEscalatedMin = 0;
+
+export const getPersonalWorkResponseWorkloadMax = 100;
+
+export const getPersonalWorkResponseWorkloadTotalMin = 0;
+
+export const getPersonalWorkResponseHistoryItemIdMax = 300;
+
+export const getPersonalWorkResponseHistoryItemSourceIdMax = 300;
+
+export const getPersonalWorkResponseHistoryMax = 10;
+
+
+
+export const GetPersonalWorkResponse = zod.object({
+  "merchantId": zod.string().min(1).max(getPersonalWorkResponseMerchantIdMax),
+  "lenderName": zod.string(),
+  "actor": zod.string().min(1).max(getPersonalWorkResponseActorMax),
+  "role": zod.string(),
+  "asOf": zod.coerce.date(),
+  "syntheticOnly": zod.literal(true),
+  "canViewTeam": zod.boolean(),
+  "canWork": zod.boolean(),
+  "scope": zod.enum(['mine', 'team']),
+  "filter": zod.enum(['all', 'overdue', 'handover', 'review', 'unread']).default(getPersonalWorkResponseFilterDefault),
+  "items": zod.array(zod.object({
+  "id": zod.string().min(1).max(getPersonalWorkResponseItemsItemIdMax),
+  "eventId": zod.string().min(1).max(getPersonalWorkResponseItemsItemEventIdMax),
+  "sourceId": zod.string().min(1).max(getPersonalWorkResponseItemsItemSourceIdMax),
+  "sourceVersion": zod.coerce.date(),
+  "sourceDigest": zod.string().regex(getPersonalWorkResponseItemsItemSourceDigestRegExp),
+  "type": zod.enum(['case', 'handover', 'review']),
+  "title": zod.string(),
+  "nextAction": zod.string(),
+  "assignee": zod.string().min(1).max(getPersonalWorkResponseItemsItemAssigneeMax),
+  "assigneeName": zod.string(),
+  "dueAt": zod.coerce.date().nullable(),
+  "overdue": zod.boolean(),
+  "escalated": zod.boolean(),
+  "escalationReason": zod.string().nullable(),
+  "reviewCurrent": zod.boolean().nullable(),
+  "href": zod.string(),
+  "readAt": zod.coerce.date().nullable(),
+  "canAcknowledge": zod.boolean(),
+  "assignmentEventId": zod.string().min(1).max(getPersonalWorkResponseItemsItemAssignmentEventIdMax).nullable(),
+  "notice": zod.string().nullable()
+})).max(getPersonalWorkResponseItemsMax),
+  "total": zod.number().int().min(getPersonalWorkResponseTotalMin),
+  "offset": zod.number().int().min(getPersonalWorkResponseOffsetMin),
+  "limit": zod.number().int().min(1).max(getPersonalWorkResponseLimitMax),
+  "counts": zod.object({
+  "all": zod.number().int().min(getPersonalWorkResponseCountsAllMin),
+  "overdue": zod.number().int().min(getPersonalWorkResponseCountsOverdueMin),
+  "handover": zod.number().int().min(getPersonalWorkResponseCountsHandoverMin),
+  "review": zod.number().int().min(getPersonalWorkResponseCountsReviewMin),
+  "unread": zod.number().int().min(getPersonalWorkResponseCountsUnreadMin),
+  "escalated": zod.number().int().min(getPersonalWorkResponseCountsEscalatedMin)
+}),
+  "workload": zod.array(zod.object({
+  "actor": zod.string().min(1).max(getPersonalWorkResponseWorkloadItemActorMax),
+  "name": zod.string(),
+  "total": zod.number().int().min(getPersonalWorkResponseWorkloadItemTotalMin),
+  "overdue": zod.number().int().min(getPersonalWorkResponseWorkloadItemOverdueMin),
+  "handovers": zod.number().int().min(getPersonalWorkResponseWorkloadItemHandoversMin),
+  "reviews": zod.number().int().min(getPersonalWorkResponseWorkloadItemReviewsMin),
+  "escalated": zod.number().int().min(getPersonalWorkResponseWorkloadItemEscalatedMin)
+})).max(getPersonalWorkResponseWorkloadMax),
+  "workloadTotal": zod.number().int().min(getPersonalWorkResponseWorkloadTotalMin),
+  "history": zod.array(zod.object({
+  "id": zod.string().min(1).max(getPersonalWorkResponseHistoryItemIdMax),
+  "action": zod.enum(['read', 'acknowledge']),
+  "sourceId": zod.string().min(1).max(getPersonalWorkResponseHistoryItemSourceIdMax),
+  "summary": zod.string(),
+  "at": zod.coerce.date(),
+  "href": zod.string()
+})).max(getPersonalWorkResponseHistoryMax),
+  "escalationRule": zod.string()
+}).describe('The caller\'s (or, for administrators, the team\'s) cases, handovers, reviews and notifications, paged and counted.')
+
+
+/**
+ * Records who read it and when; the server supplies the recipient.
+ * @summary Mark a notification read
+ */
+export const ReadNotificationQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const readNotificationHeaderIdempotencyKeyMin = 8;
+export const readNotificationHeaderIdempotencyKeyMax = 200;
+
+
+
+export const ReadNotificationHeader = zod.object({
+  "Idempotency-Key": zod.string().min(readNotificationHeaderIdempotencyKeyMin).max(readNotificationHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const readNotificationBodySourceIdMax = 300;
+
+export const readNotificationBodyEventIdMax = 300;
+
+export const readNotificationBodyExpectedDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+
+
+export const ReadNotificationBody = zod.object({
+  "sourceId": zod.string().min(1).max(readNotificationBodySourceIdMax),
+  "eventId": zod.string().min(1).max(readNotificationBodyEventIdMax),
+  "expectedUpdatedAt": zod.coerce.date(),
+  "expectedDigest": zod.string().regex(readNotificationBodyExpectedDigestRegExp)
+}).describe('The item being acknowledged, with its version.')
+
+export const readNotificationResponseIdMax = 300;
+
+export const readNotificationResponseMerchantIdMax = 300;
+
+export const readNotificationResponseSourceIdMax = 300;
+
+export const readNotificationResponseEventIdMax = 300;
+
+export const readNotificationResponseActorMax = 300;
+
+
+
+export const ReadNotificationResponse = zod.object({
+  "id": zod.string().min(1).max(readNotificationResponseIdMax),
+  "merchantId": zod.string().min(1).max(readNotificationResponseMerchantIdMax),
+  "action": zod.enum(['read', 'acknowledge']),
+  "sourceId": zod.string().min(1).max(readNotificationResponseSourceIdMax),
+  "eventId": zod.string().min(1).max(readNotificationResponseEventIdMax),
+  "actor": zod.string().min(1).max(readNotificationResponseActorMax),
+  "at": zod.coerce.date(),
+  "duplicate": zod.boolean(),
+  "syntheticOnly": zod.literal(true),
+  "financialStatusChanged": zod.literal(false)
+}).describe('The recorded acknowledgement: who, what, and when.')
+
+
+/**
+ * Records that the assignee took the case over; a stale version is refused.
+ * @summary Acknowledge a handover
+ */
+export const AcknowledgeHandoverQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const acknowledgeHandoverHeaderIdempotencyKeyMin = 8;
+export const acknowledgeHandoverHeaderIdempotencyKeyMax = 200;
+
+
+
+export const AcknowledgeHandoverHeader = zod.object({
+  "Idempotency-Key": zod.string().min(acknowledgeHandoverHeaderIdempotencyKeyMin).max(acknowledgeHandoverHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const acknowledgeHandoverBodySourceIdMax = 300;
+
+export const acknowledgeHandoverBodyEventIdMax = 300;
+
+export const acknowledgeHandoverBodyExpectedDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+
+
+export const AcknowledgeHandoverBody = zod.object({
+  "sourceId": zod.string().min(1).max(acknowledgeHandoverBodySourceIdMax),
+  "eventId": zod.string().min(1).max(acknowledgeHandoverBodyEventIdMax),
+  "expectedUpdatedAt": zod.coerce.date(),
+  "expectedDigest": zod.string().regex(acknowledgeHandoverBodyExpectedDigestRegExp)
+}).describe('The item being acknowledged, with its version.')
+
+export const acknowledgeHandoverResponseIdMax = 300;
+
+export const acknowledgeHandoverResponseMerchantIdMax = 300;
+
+export const acknowledgeHandoverResponseSourceIdMax = 300;
+
+export const acknowledgeHandoverResponseEventIdMax = 300;
+
+export const acknowledgeHandoverResponseActorMax = 300;
+
+
+
+export const AcknowledgeHandoverResponse = zod.object({
+  "id": zod.string().min(1).max(acknowledgeHandoverResponseIdMax),
+  "merchantId": zod.string().min(1).max(acknowledgeHandoverResponseMerchantIdMax),
+  "action": zod.enum(['read', 'acknowledge']),
+  "sourceId": zod.string().min(1).max(acknowledgeHandoverResponseSourceIdMax),
+  "eventId": zod.string().min(1).max(acknowledgeHandoverResponseEventIdMax),
+  "actor": zod.string().min(1).max(acknowledgeHandoverResponseActorMax),
+  "at": zod.coerce.date(),
+  "duplicate": zod.boolean(),
+  "syntheticOnly": zod.literal(true),
+  "financialStatusChanged": zod.literal(false)
+}).describe('The recorded acknowledgement: who, what, and when.')
+
+
+/**
+ * Administrators only (403). Policy, holds, inventory and runs for the lender.
+ * @summary Read retention controls
+ */
+export const getLifecycleQueryOffsetMin = 0;
+export const getLifecycleQueryOffsetMax = 100000;
+
+
+
+export const GetLifecycleQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "offset": zod.coerce.number().int().min(getLifecycleQueryOffsetMin).max(getLifecycleQueryOffsetMax).optional().describe('Rows to skip in the newest-first order; pages hold 25 rows.')
+})
+
+export const getLifecycleResponseMerchantIdMax = 200;
+
+export const getLifecycleResponseActorMax = 200;
+
+export const getLifecycleResponsePolicyRawCsvDaysMax = 3650;
+
+export const getLifecycleResponsePolicyJournalPayloadDaysMax = 3650;
+
+export const getLifecycleResponsePolicyExportFileDaysMax = 3650;
+
+export const getLifecycleResponsePolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+export const getLifecycleResponseHoldRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+export const getLifecycleResponseEligibleCountMin = 0;
+
+export const getLifecycleResponseTargetsItemMerchantIdMax = 200;
+
+export const getLifecycleResponseTargetsItemSourceIdMax = 200;
+
+export const getLifecycleResponseTargetsItemVersionMax = 200;
+
+export const getLifecycleResponseTargetsItemLabelMax = 200;
+
+export const getLifecycleResponseTargetsItemDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const getLifecycleResponseTargetsMax = 100;
+
+export const getLifecycleResponseTargetTotalMin = 0;
+
+export const getLifecycleResponseTargetOffsetMin = 0;
+
+export const getLifecycleResponseHoldsItemSourceIdMax = 200;
+
+export const getLifecycleResponseHoldsItemActorMax = 200;
+
+export const getLifecycleResponseHoldsMax = 100;
+
+export const getLifecycleResponseHoldTotalMin = 0;
+
+export const getLifecycleResponseRunsItemIdMax = 200;
+
+export const getLifecycleResponseRunsItemMerchantIdMax = 200;
+
+export const getLifecycleResponseRunsItemPreviewDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const getLifecycleResponseRunsItemPolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+export const getLifecycleResponseRunsItemCandidatesItemMerchantIdMax = 200;
+
+export const getLifecycleResponseRunsItemCandidatesItemSourceIdMax = 200;
+
+export const getLifecycleResponseRunsItemCandidatesItemVersionMax = 200;
+
+export const getLifecycleResponseRunsItemCandidatesItemLabelMax = 200;
+
+export const getLifecycleResponseRunsItemCandidatesItemDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const getLifecycleResponseRunsItemCandidatesMax = 100;
+
+export const getLifecycleResponseRunsItemCandidateCountMin = 0;
+
+export const getLifecycleResponseRunsItemMoreEligibleMin = 0;
+
+export const getLifecycleResponseRunsItemReceiptsItemIdMax = 200;
+
+export const getLifecycleResponseRunsItemReceiptsItemSourceIdMax = 200;
+
+export const getLifecycleResponseRunsItemReceiptsItemActorMax = 200;
+
+export const getLifecycleResponseRunsItemReceiptsMax = 100;
+
+export const getLifecycleResponseRunsItemSuccessfulMin = 0;
+
+export const getLifecycleResponseRunsItemRemainingMin = 0;
+
+export const getLifecycleResponseRunsMax = 10;
+
+
+
+export const GetLifecycleResponse = zod.object({
+  "merchantId": zod.string().min(1).max(getLifecycleResponseMerchantIdMax),
+  "lenderName": zod.string(),
+  "actor": zod.string().min(1).max(getLifecycleResponseActorMax),
+  "asOf": zod.coerce.date(),
+  "policy": zod.object({
+  "rawCsvDays": zod.number().int().min(1).max(getLifecycleResponsePolicyRawCsvDaysMax).nullable(),
+  "journalPayloadDays": zod.number().int().min(1).max(getLifecycleResponsePolicyJournalPayloadDaysMax).nullable(),
+  "exportFileDays": zod.number().int().min(1).max(getLifecycleResponsePolicyExportFileDaysMax).nullable(),
+  "auditTrail": zod.literal("retain")
+}),
+  "policyRevision": zod.string().regex(getLifecycleResponsePolicyRevisionRegExp),
+  "holdRevision": zod.string().regex(getLifecycleResponseHoldRevisionRegExp),
+  "eligibleCount": zod.number().int().min(getLifecycleResponseEligibleCountMin),
+  "targets": zod.array(zod.object({
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "merchantId": zod.string().min(1).max(getLifecycleResponseTargetsItemMerchantIdMax),
+  "sourceId": zod.string().min(1).max(getLifecycleResponseTargetsItemSourceIdMax),
+  "version": zod.string().min(1).max(getLifecycleResponseTargetsItemVersionMax),
+  "createdAt": zod.coerce.date(),
+  "label": zod.string().min(1).max(getLifecycleResponseTargetsItemLabelMax),
+  "digest": zod.string().regex(getLifecycleResponseTargetsItemDigestRegExp),
+  "status": zod.enum(['committed', 'completed', 'cancelled', 'ready', 'failed']),
+  "held": zod.boolean()
+})).max(getLifecycleResponseTargetsMax),
+  "targetTotal": zod.number().int().min(getLifecycleResponseTargetTotalMin),
+  "targetOffset": zod.number().int().min(getLifecycleResponseTargetOffsetMin),
+  "holds": zod.array(zod.object({
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "sourceId": zod.string().min(1).max(getLifecycleResponseHoldsItemSourceIdMax),
+  "reason": zod.string(),
+  "actor": zod.string().min(1).max(getLifecycleResponseHoldsItemActorMax),
+  "at": zod.coerce.date()
+})).max(getLifecycleResponseHoldsMax),
+  "holdTotal": zod.number().int().min(getLifecycleResponseHoldTotalMin),
+  "runs": zod.array(zod.object({
+  "id": zod.string().min(1).max(getLifecycleResponseRunsItemIdMax),
+  "merchantId": zod.string().min(1).max(getLifecycleResponseRunsItemMerchantIdMax),
+  "status": zod.enum(['preview', 'approved', 'running', 'completed', 'attention']),
+  "updatedAt": zod.coerce.date(),
+  "createdAt": zod.coerce.date(),
+  "expiresAt": zod.coerce.date(),
+  "previewDigest": zod.string().regex(getLifecycleResponseRunsItemPreviewDigestRegExp),
+  "policyRevision": zod.string().regex(getLifecycleResponseRunsItemPolicyRevisionRegExp),
+  "candidates": zod.array(zod.object({
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "merchantId": zod.string().min(1).max(getLifecycleResponseRunsItemCandidatesItemMerchantIdMax),
+  "sourceId": zod.string().min(1).max(getLifecycleResponseRunsItemCandidatesItemSourceIdMax),
+  "version": zod.string().min(1).max(getLifecycleResponseRunsItemCandidatesItemVersionMax),
+  "createdAt": zod.coerce.date(),
+  "label": zod.string().min(1).max(getLifecycleResponseRunsItemCandidatesItemLabelMax),
+  "digest": zod.string().regex(getLifecycleResponseRunsItemCandidatesItemDigestRegExp),
+  "status": zod.enum(['committed', 'completed', 'cancelled', 'ready', 'failed'])
+})).max(getLifecycleResponseRunsItemCandidatesMax),
+  "candidateCount": zod.number().int().min(getLifecycleResponseRunsItemCandidateCountMin),
+  "moreEligible": zod.number().int().min(getLifecycleResponseRunsItemMoreEligibleMin),
+  "approvedBy": zod.string().nullable(),
+  "approvedAt": zod.coerce.date().nullable(),
+  "receipts": zod.array(zod.object({
+  "id": zod.string().min(1).max(getLifecycleResponseRunsItemReceiptsItemIdMax),
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "sourceId": zod.string().min(1).max(getLifecycleResponseRunsItemReceiptsItemSourceIdMax),
+  "status": zod.enum(['deleted', 'already_absent', 'blocked', 'failed']),
+  "at": zod.coerce.date(),
+  "detail": zod.string(),
+  "actor": zod.string().min(1).max(getLifecycleResponseRunsItemReceiptsItemActorMax)
+})).max(getLifecycleResponseRunsItemReceiptsMax),
+  "successful": zod.number().int().min(getLifecycleResponseRunsItemSuccessfulMin),
+  "remaining": zod.number().int().min(getLifecycleResponseRunsItemRemainingMin),
+  "auditRetained": zod.literal(true),
+  "financialRecordsRetained": zod.literal(true),
+  "syntheticOnly": zod.literal(true)
+})).max(getLifecycleResponseRunsMax),
+  "auditRetained": zod.literal(true),
+  "financialRecordsRetained": zod.literal(true),
+  "syntheticOnly": zod.literal(true)
+}).describe('The lender\'s retention policy, holds, bounded inventory of what the policy would touch, and saved retention runs.')
+
+
+/**
+ * Administrators only. The run's manifest and receipts.
+ * @summary Read a retention run
+ */
+export const GetLifecycleRunParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const GetLifecycleRunQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const getLifecycleRunResponseIdMax = 200;
+
+export const getLifecycleRunResponseMerchantIdMax = 200;
+
+export const getLifecycleRunResponsePreviewDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const getLifecycleRunResponsePolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+export const getLifecycleRunResponseCandidatesItemMerchantIdMax = 200;
+
+export const getLifecycleRunResponseCandidatesItemSourceIdMax = 200;
+
+export const getLifecycleRunResponseCandidatesItemVersionMax = 200;
+
+export const getLifecycleRunResponseCandidatesItemLabelMax = 200;
+
+export const getLifecycleRunResponseCandidatesItemDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const getLifecycleRunResponseCandidatesMax = 100;
+
+export const getLifecycleRunResponseCandidateCountMin = 0;
+
+export const getLifecycleRunResponseMoreEligibleMin = 0;
+
+export const getLifecycleRunResponseReceiptsItemIdMax = 200;
+
+export const getLifecycleRunResponseReceiptsItemSourceIdMax = 200;
+
+export const getLifecycleRunResponseReceiptsItemActorMax = 200;
+
+export const getLifecycleRunResponseReceiptsMax = 100;
+
+export const getLifecycleRunResponseSuccessfulMin = 0;
+
+export const getLifecycleRunResponseRemainingMin = 0;
+
+
+
+export const GetLifecycleRunResponse = zod.object({
+  "id": zod.string().min(1).max(getLifecycleRunResponseIdMax),
+  "merchantId": zod.string().min(1).max(getLifecycleRunResponseMerchantIdMax),
+  "status": zod.enum(['preview', 'approved', 'running', 'completed', 'attention']),
+  "updatedAt": zod.coerce.date(),
+  "createdAt": zod.coerce.date(),
+  "expiresAt": zod.coerce.date(),
+  "previewDigest": zod.string().regex(getLifecycleRunResponsePreviewDigestRegExp),
+  "policyRevision": zod.string().regex(getLifecycleRunResponsePolicyRevisionRegExp),
+  "candidates": zod.array(zod.object({
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "merchantId": zod.string().min(1).max(getLifecycleRunResponseCandidatesItemMerchantIdMax),
+  "sourceId": zod.string().min(1).max(getLifecycleRunResponseCandidatesItemSourceIdMax),
+  "version": zod.string().min(1).max(getLifecycleRunResponseCandidatesItemVersionMax),
+  "createdAt": zod.coerce.date(),
+  "label": zod.string().min(1).max(getLifecycleRunResponseCandidatesItemLabelMax),
+  "digest": zod.string().regex(getLifecycleRunResponseCandidatesItemDigestRegExp),
+  "status": zod.enum(['committed', 'completed', 'cancelled', 'ready', 'failed'])
+})).max(getLifecycleRunResponseCandidatesMax),
+  "candidateCount": zod.number().int().min(getLifecycleRunResponseCandidateCountMin),
+  "moreEligible": zod.number().int().min(getLifecycleRunResponseMoreEligibleMin),
+  "approvedBy": zod.string().nullable(),
+  "approvedAt": zod.coerce.date().nullable(),
+  "receipts": zod.array(zod.object({
+  "id": zod.string().min(1).max(getLifecycleRunResponseReceiptsItemIdMax),
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "sourceId": zod.string().min(1).max(getLifecycleRunResponseReceiptsItemSourceIdMax),
+  "status": zod.enum(['deleted', 'already_absent', 'blocked', 'failed']),
+  "at": zod.coerce.date(),
+  "detail": zod.string(),
+  "actor": zod.string().min(1).max(getLifecycleRunResponseReceiptsItemActorMax)
+})).max(getLifecycleRunResponseReceiptsMax),
+  "successful": zod.number().int().min(getLifecycleRunResponseSuccessfulMin),
+  "remaining": zod.number().int().min(getLifecycleRunResponseRemainingMin),
+  "auditRetained": zod.literal(true),
+  "financialRecordsRetained": zod.literal(true),
+  "syntheticOnly": zod.literal(true)
+}).describe('One retention run: its reviewed manifest, approval state and per-item receipts.')
+
+
+/**
+ * Administrators only. Keeps every previous policy version with its reason.
+ * @summary Change the retention policy
+ */
+export const SaveRetentionPolicyQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const saveRetentionPolicyHeaderIdempotencyKeyMin = 8;
+export const saveRetentionPolicyHeaderIdempotencyKeyMax = 200;
+
+
+
+export const SaveRetentionPolicyHeader = zod.object({
+  "Idempotency-Key": zod.string().min(saveRetentionPolicyHeaderIdempotencyKeyMin).max(saveRetentionPolicyHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const saveRetentionPolicyBodyPolicyRawCsvDaysMax = 3650;
+
+export const saveRetentionPolicyBodyPolicyJournalPayloadDaysMax = 3650;
+
+export const saveRetentionPolicyBodyPolicyExportFileDaysMax = 3650;
+
+export const saveRetentionPolicyBodyExpectedRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+export const saveRetentionPolicyBodyReasonMin = 10;
+export const saveRetentionPolicyBodyReasonMax = 500;
+
+
+
+export const SaveRetentionPolicyBody = zod.object({
+  "policy": zod.object({
+  "rawCsvDays": zod.number().int().min(1).max(saveRetentionPolicyBodyPolicyRawCsvDaysMax).nullable(),
+  "journalPayloadDays": zod.number().int().min(1).max(saveRetentionPolicyBodyPolicyJournalPayloadDaysMax).nullable(),
+  "exportFileDays": zod.number().int().min(1).max(saveRetentionPolicyBodyPolicyExportFileDaysMax).nullable(),
+  "auditTrail": zod.literal("retain")
+}),
+  "expectedRevision": zod.string().regex(saveRetentionPolicyBodyExpectedRevisionRegExp),
+  "reason": zod.string().min(saveRetentionPolicyBodyReasonMin).max(saveRetentionPolicyBodyReasonMax)
+}).describe('The retention periods per kind, with the version being changed and the reason.')
+
+export const saveRetentionPolicyResponseMerchantIdMax = 200;
+
+export const saveRetentionPolicyResponseActorMax = 200;
+
+export const saveRetentionPolicyResponsePolicyRawCsvDaysMax = 3650;
+
+export const saveRetentionPolicyResponsePolicyJournalPayloadDaysMax = 3650;
+
+export const saveRetentionPolicyResponsePolicyExportFileDaysMax = 3650;
+
+export const saveRetentionPolicyResponsePolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+export const saveRetentionPolicyResponseHoldRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+export const saveRetentionPolicyResponseEligibleCountMin = 0;
+
+export const saveRetentionPolicyResponseTargetsItemMerchantIdMax = 200;
+
+export const saveRetentionPolicyResponseTargetsItemSourceIdMax = 200;
+
+export const saveRetentionPolicyResponseTargetsItemVersionMax = 200;
+
+export const saveRetentionPolicyResponseTargetsItemLabelMax = 200;
+
+export const saveRetentionPolicyResponseTargetsItemDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const saveRetentionPolicyResponseTargetsMax = 100;
+
+export const saveRetentionPolicyResponseTargetTotalMin = 0;
+
+export const saveRetentionPolicyResponseTargetOffsetMin = 0;
+
+export const saveRetentionPolicyResponseHoldsItemSourceIdMax = 200;
+
+export const saveRetentionPolicyResponseHoldsItemActorMax = 200;
+
+export const saveRetentionPolicyResponseHoldsMax = 100;
+
+export const saveRetentionPolicyResponseHoldTotalMin = 0;
+
+export const saveRetentionPolicyResponseRunsItemIdMax = 200;
+
+export const saveRetentionPolicyResponseRunsItemMerchantIdMax = 200;
+
+export const saveRetentionPolicyResponseRunsItemPreviewDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const saveRetentionPolicyResponseRunsItemPolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+export const saveRetentionPolicyResponseRunsItemCandidatesItemMerchantIdMax = 200;
+
+export const saveRetentionPolicyResponseRunsItemCandidatesItemSourceIdMax = 200;
+
+export const saveRetentionPolicyResponseRunsItemCandidatesItemVersionMax = 200;
+
+export const saveRetentionPolicyResponseRunsItemCandidatesItemLabelMax = 200;
+
+export const saveRetentionPolicyResponseRunsItemCandidatesItemDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const saveRetentionPolicyResponseRunsItemCandidatesMax = 100;
+
+export const saveRetentionPolicyResponseRunsItemCandidateCountMin = 0;
+
+export const saveRetentionPolicyResponseRunsItemMoreEligibleMin = 0;
+
+export const saveRetentionPolicyResponseRunsItemReceiptsItemIdMax = 200;
+
+export const saveRetentionPolicyResponseRunsItemReceiptsItemSourceIdMax = 200;
+
+export const saveRetentionPolicyResponseRunsItemReceiptsItemActorMax = 200;
+
+export const saveRetentionPolicyResponseRunsItemReceiptsMax = 100;
+
+export const saveRetentionPolicyResponseRunsItemSuccessfulMin = 0;
+
+export const saveRetentionPolicyResponseRunsItemRemainingMin = 0;
+
+export const saveRetentionPolicyResponseRunsMax = 10;
+
+
+
+export const SaveRetentionPolicyResponse = zod.object({
+  "merchantId": zod.string().min(1).max(saveRetentionPolicyResponseMerchantIdMax),
+  "lenderName": zod.string(),
+  "actor": zod.string().min(1).max(saveRetentionPolicyResponseActorMax),
+  "asOf": zod.coerce.date(),
+  "policy": zod.object({
+  "rawCsvDays": zod.number().int().min(1).max(saveRetentionPolicyResponsePolicyRawCsvDaysMax).nullable(),
+  "journalPayloadDays": zod.number().int().min(1).max(saveRetentionPolicyResponsePolicyJournalPayloadDaysMax).nullable(),
+  "exportFileDays": zod.number().int().min(1).max(saveRetentionPolicyResponsePolicyExportFileDaysMax).nullable(),
+  "auditTrail": zod.literal("retain")
+}),
+  "policyRevision": zod.string().regex(saveRetentionPolicyResponsePolicyRevisionRegExp),
+  "holdRevision": zod.string().regex(saveRetentionPolicyResponseHoldRevisionRegExp),
+  "eligibleCount": zod.number().int().min(saveRetentionPolicyResponseEligibleCountMin),
+  "targets": zod.array(zod.object({
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "merchantId": zod.string().min(1).max(saveRetentionPolicyResponseTargetsItemMerchantIdMax),
+  "sourceId": zod.string().min(1).max(saveRetentionPolicyResponseTargetsItemSourceIdMax),
+  "version": zod.string().min(1).max(saveRetentionPolicyResponseTargetsItemVersionMax),
+  "createdAt": zod.coerce.date(),
+  "label": zod.string().min(1).max(saveRetentionPolicyResponseTargetsItemLabelMax),
+  "digest": zod.string().regex(saveRetentionPolicyResponseTargetsItemDigestRegExp),
+  "status": zod.enum(['committed', 'completed', 'cancelled', 'ready', 'failed']),
+  "held": zod.boolean()
+})).max(saveRetentionPolicyResponseTargetsMax),
+  "targetTotal": zod.number().int().min(saveRetentionPolicyResponseTargetTotalMin),
+  "targetOffset": zod.number().int().min(saveRetentionPolicyResponseTargetOffsetMin),
+  "holds": zod.array(zod.object({
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "sourceId": zod.string().min(1).max(saveRetentionPolicyResponseHoldsItemSourceIdMax),
+  "reason": zod.string(),
+  "actor": zod.string().min(1).max(saveRetentionPolicyResponseHoldsItemActorMax),
+  "at": zod.coerce.date()
+})).max(saveRetentionPolicyResponseHoldsMax),
+  "holdTotal": zod.number().int().min(saveRetentionPolicyResponseHoldTotalMin),
+  "runs": zod.array(zod.object({
+  "id": zod.string().min(1).max(saveRetentionPolicyResponseRunsItemIdMax),
+  "merchantId": zod.string().min(1).max(saveRetentionPolicyResponseRunsItemMerchantIdMax),
+  "status": zod.enum(['preview', 'approved', 'running', 'completed', 'attention']),
+  "updatedAt": zod.coerce.date(),
+  "createdAt": zod.coerce.date(),
+  "expiresAt": zod.coerce.date(),
+  "previewDigest": zod.string().regex(saveRetentionPolicyResponseRunsItemPreviewDigestRegExp),
+  "policyRevision": zod.string().regex(saveRetentionPolicyResponseRunsItemPolicyRevisionRegExp),
+  "candidates": zod.array(zod.object({
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "merchantId": zod.string().min(1).max(saveRetentionPolicyResponseRunsItemCandidatesItemMerchantIdMax),
+  "sourceId": zod.string().min(1).max(saveRetentionPolicyResponseRunsItemCandidatesItemSourceIdMax),
+  "version": zod.string().min(1).max(saveRetentionPolicyResponseRunsItemCandidatesItemVersionMax),
+  "createdAt": zod.coerce.date(),
+  "label": zod.string().min(1).max(saveRetentionPolicyResponseRunsItemCandidatesItemLabelMax),
+  "digest": zod.string().regex(saveRetentionPolicyResponseRunsItemCandidatesItemDigestRegExp),
+  "status": zod.enum(['committed', 'completed', 'cancelled', 'ready', 'failed'])
+})).max(saveRetentionPolicyResponseRunsItemCandidatesMax),
+  "candidateCount": zod.number().int().min(saveRetentionPolicyResponseRunsItemCandidateCountMin),
+  "moreEligible": zod.number().int().min(saveRetentionPolicyResponseRunsItemMoreEligibleMin),
+  "approvedBy": zod.string().nullable(),
+  "approvedAt": zod.coerce.date().nullable(),
+  "receipts": zod.array(zod.object({
+  "id": zod.string().min(1).max(saveRetentionPolicyResponseRunsItemReceiptsItemIdMax),
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "sourceId": zod.string().min(1).max(saveRetentionPolicyResponseRunsItemReceiptsItemSourceIdMax),
+  "status": zod.enum(['deleted', 'already_absent', 'blocked', 'failed']),
+  "at": zod.coerce.date(),
+  "detail": zod.string(),
+  "actor": zod.string().min(1).max(saveRetentionPolicyResponseRunsItemReceiptsItemActorMax)
+})).max(saveRetentionPolicyResponseRunsItemReceiptsMax),
+  "successful": zod.number().int().min(saveRetentionPolicyResponseRunsItemSuccessfulMin),
+  "remaining": zod.number().int().min(saveRetentionPolicyResponseRunsItemRemainingMin),
+  "auditRetained": zod.literal(true),
+  "financialRecordsRetained": zod.literal(true),
+  "syntheticOnly": zod.literal(true)
+})).max(saveRetentionPolicyResponseRunsMax),
+  "auditRetained": zod.literal(true),
+  "financialRecordsRetained": zod.literal(true),
+  "syntheticOnly": zod.literal(true)
+}).describe('The lender\'s retention policy, holds, bounded inventory of what the policy would touch, and saved retention runs.')
+
+
+/**
+ * Administrators only. A held item is never deleted by a run.
+ * @summary Place or release a hold
+ */
+export const SetRetentionHoldQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const setRetentionHoldHeaderIdempotencyKeyMin = 8;
+export const setRetentionHoldHeaderIdempotencyKeyMax = 200;
+
+
+
+export const SetRetentionHoldHeader = zod.object({
+  "Idempotency-Key": zod.string().min(setRetentionHoldHeaderIdempotencyKeyMin).max(setRetentionHoldHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const setRetentionHoldBodySourceIdMax = 200;
+
+export const setRetentionHoldBodyExpectedHoldRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+export const setRetentionHoldBodyReasonMin = 10;
+export const setRetentionHoldBodyReasonMax = 500;
+
+
+
+export const SetRetentionHoldBody = zod.object({
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "sourceId": zod.string().min(1).max(setRetentionHoldBodySourceIdMax),
+  "held": zod.boolean(),
+  "expectedHoldRevision": zod.string().regex(setRetentionHoldBodyExpectedHoldRevisionRegExp),
+  "reason": zod.string().min(setRetentionHoldBodyReasonMin).max(setRetentionHoldBodyReasonMax)
+}).describe('A hold on one item, or its release, with the reason.')
+
+export const setRetentionHoldResponseMerchantIdMax = 200;
+
+export const setRetentionHoldResponseActorMax = 200;
+
+export const setRetentionHoldResponsePolicyRawCsvDaysMax = 3650;
+
+export const setRetentionHoldResponsePolicyJournalPayloadDaysMax = 3650;
+
+export const setRetentionHoldResponsePolicyExportFileDaysMax = 3650;
+
+export const setRetentionHoldResponsePolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+export const setRetentionHoldResponseHoldRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+export const setRetentionHoldResponseEligibleCountMin = 0;
+
+export const setRetentionHoldResponseTargetsItemMerchantIdMax = 200;
+
+export const setRetentionHoldResponseTargetsItemSourceIdMax = 200;
+
+export const setRetentionHoldResponseTargetsItemVersionMax = 200;
+
+export const setRetentionHoldResponseTargetsItemLabelMax = 200;
+
+export const setRetentionHoldResponseTargetsItemDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const setRetentionHoldResponseTargetsMax = 100;
+
+export const setRetentionHoldResponseTargetTotalMin = 0;
+
+export const setRetentionHoldResponseTargetOffsetMin = 0;
+
+export const setRetentionHoldResponseHoldsItemSourceIdMax = 200;
+
+export const setRetentionHoldResponseHoldsItemActorMax = 200;
+
+export const setRetentionHoldResponseHoldsMax = 100;
+
+export const setRetentionHoldResponseHoldTotalMin = 0;
+
+export const setRetentionHoldResponseRunsItemIdMax = 200;
+
+export const setRetentionHoldResponseRunsItemMerchantIdMax = 200;
+
+export const setRetentionHoldResponseRunsItemPreviewDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const setRetentionHoldResponseRunsItemPolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+export const setRetentionHoldResponseRunsItemCandidatesItemMerchantIdMax = 200;
+
+export const setRetentionHoldResponseRunsItemCandidatesItemSourceIdMax = 200;
+
+export const setRetentionHoldResponseRunsItemCandidatesItemVersionMax = 200;
+
+export const setRetentionHoldResponseRunsItemCandidatesItemLabelMax = 200;
+
+export const setRetentionHoldResponseRunsItemCandidatesItemDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const setRetentionHoldResponseRunsItemCandidatesMax = 100;
+
+export const setRetentionHoldResponseRunsItemCandidateCountMin = 0;
+
+export const setRetentionHoldResponseRunsItemMoreEligibleMin = 0;
+
+export const setRetentionHoldResponseRunsItemReceiptsItemIdMax = 200;
+
+export const setRetentionHoldResponseRunsItemReceiptsItemSourceIdMax = 200;
+
+export const setRetentionHoldResponseRunsItemReceiptsItemActorMax = 200;
+
+export const setRetentionHoldResponseRunsItemReceiptsMax = 100;
+
+export const setRetentionHoldResponseRunsItemSuccessfulMin = 0;
+
+export const setRetentionHoldResponseRunsItemRemainingMin = 0;
+
+export const setRetentionHoldResponseRunsMax = 10;
+
+
+
+export const SetRetentionHoldResponse = zod.object({
+  "merchantId": zod.string().min(1).max(setRetentionHoldResponseMerchantIdMax),
+  "lenderName": zod.string(),
+  "actor": zod.string().min(1).max(setRetentionHoldResponseActorMax),
+  "asOf": zod.coerce.date(),
+  "policy": zod.object({
+  "rawCsvDays": zod.number().int().min(1).max(setRetentionHoldResponsePolicyRawCsvDaysMax).nullable(),
+  "journalPayloadDays": zod.number().int().min(1).max(setRetentionHoldResponsePolicyJournalPayloadDaysMax).nullable(),
+  "exportFileDays": zod.number().int().min(1).max(setRetentionHoldResponsePolicyExportFileDaysMax).nullable(),
+  "auditTrail": zod.literal("retain")
+}),
+  "policyRevision": zod.string().regex(setRetentionHoldResponsePolicyRevisionRegExp),
+  "holdRevision": zod.string().regex(setRetentionHoldResponseHoldRevisionRegExp),
+  "eligibleCount": zod.number().int().min(setRetentionHoldResponseEligibleCountMin),
+  "targets": zod.array(zod.object({
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "merchantId": zod.string().min(1).max(setRetentionHoldResponseTargetsItemMerchantIdMax),
+  "sourceId": zod.string().min(1).max(setRetentionHoldResponseTargetsItemSourceIdMax),
+  "version": zod.string().min(1).max(setRetentionHoldResponseTargetsItemVersionMax),
+  "createdAt": zod.coerce.date(),
+  "label": zod.string().min(1).max(setRetentionHoldResponseTargetsItemLabelMax),
+  "digest": zod.string().regex(setRetentionHoldResponseTargetsItemDigestRegExp),
+  "status": zod.enum(['committed', 'completed', 'cancelled', 'ready', 'failed']),
+  "held": zod.boolean()
+})).max(setRetentionHoldResponseTargetsMax),
+  "targetTotal": zod.number().int().min(setRetentionHoldResponseTargetTotalMin),
+  "targetOffset": zod.number().int().min(setRetentionHoldResponseTargetOffsetMin),
+  "holds": zod.array(zod.object({
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "sourceId": zod.string().min(1).max(setRetentionHoldResponseHoldsItemSourceIdMax),
+  "reason": zod.string(),
+  "actor": zod.string().min(1).max(setRetentionHoldResponseHoldsItemActorMax),
+  "at": zod.coerce.date()
+})).max(setRetentionHoldResponseHoldsMax),
+  "holdTotal": zod.number().int().min(setRetentionHoldResponseHoldTotalMin),
+  "runs": zod.array(zod.object({
+  "id": zod.string().min(1).max(setRetentionHoldResponseRunsItemIdMax),
+  "merchantId": zod.string().min(1).max(setRetentionHoldResponseRunsItemMerchantIdMax),
+  "status": zod.enum(['preview', 'approved', 'running', 'completed', 'attention']),
+  "updatedAt": zod.coerce.date(),
+  "createdAt": zod.coerce.date(),
+  "expiresAt": zod.coerce.date(),
+  "previewDigest": zod.string().regex(setRetentionHoldResponseRunsItemPreviewDigestRegExp),
+  "policyRevision": zod.string().regex(setRetentionHoldResponseRunsItemPolicyRevisionRegExp),
+  "candidates": zod.array(zod.object({
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "merchantId": zod.string().min(1).max(setRetentionHoldResponseRunsItemCandidatesItemMerchantIdMax),
+  "sourceId": zod.string().min(1).max(setRetentionHoldResponseRunsItemCandidatesItemSourceIdMax),
+  "version": zod.string().min(1).max(setRetentionHoldResponseRunsItemCandidatesItemVersionMax),
+  "createdAt": zod.coerce.date(),
+  "label": zod.string().min(1).max(setRetentionHoldResponseRunsItemCandidatesItemLabelMax),
+  "digest": zod.string().regex(setRetentionHoldResponseRunsItemCandidatesItemDigestRegExp),
+  "status": zod.enum(['committed', 'completed', 'cancelled', 'ready', 'failed'])
+})).max(setRetentionHoldResponseRunsItemCandidatesMax),
+  "candidateCount": zod.number().int().min(setRetentionHoldResponseRunsItemCandidateCountMin),
+  "moreEligible": zod.number().int().min(setRetentionHoldResponseRunsItemMoreEligibleMin),
+  "approvedBy": zod.string().nullable(),
+  "approvedAt": zod.coerce.date().nullable(),
+  "receipts": zod.array(zod.object({
+  "id": zod.string().min(1).max(setRetentionHoldResponseRunsItemReceiptsItemIdMax),
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "sourceId": zod.string().min(1).max(setRetentionHoldResponseRunsItemReceiptsItemSourceIdMax),
+  "status": zod.enum(['deleted', 'already_absent', 'blocked', 'failed']),
+  "at": zod.coerce.date(),
+  "detail": zod.string(),
+  "actor": zod.string().min(1).max(setRetentionHoldResponseRunsItemReceiptsItemActorMax)
+})).max(setRetentionHoldResponseRunsItemReceiptsMax),
+  "successful": zod.number().int().min(setRetentionHoldResponseRunsItemSuccessfulMin),
+  "remaining": zod.number().int().min(setRetentionHoldResponseRunsItemRemainingMin),
+  "auditRetained": zod.literal(true),
+  "financialRecordsRetained": zod.literal(true),
+  "syntheticOnly": zod.literal(true)
+})).max(setRetentionHoldResponseRunsMax),
+  "auditRetained": zod.literal(true),
+  "financialRecordsRetained": zod.literal(true),
+  "syntheticOnly": zod.literal(true)
+}).describe('The lender\'s retention policy, holds, bounded inventory of what the policy would touch, and saved retention runs.')
+
+
+/**
+ * Administrators only. Records the exact manifest of what would be deleted; nothing is deleted.
+ * @summary Preview a retention run
+ */
+export const PreviewLifecycleRunQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const previewLifecycleRunHeaderIdempotencyKeyMin = 8;
+export const previewLifecycleRunHeaderIdempotencyKeyMax = 200;
+
+
+
+export const PreviewLifecycleRunHeader = zod.object({
+  "Idempotency-Key": zod.string().min(previewLifecycleRunHeaderIdempotencyKeyMin).max(previewLifecycleRunHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const previewLifecycleRunBodyExpectedPolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+
+
+export const PreviewLifecycleRunBody = zod.object({
+  "expectedPolicyRevision": zod.string().regex(previewLifecycleRunBodyExpectedPolicyRevisionRegExp)
+}).describe('Which kinds to preview and the reason for the run.')
+
+export const previewLifecycleRunResponseIdMax = 200;
+
+export const previewLifecycleRunResponseMerchantIdMax = 200;
+
+export const previewLifecycleRunResponsePreviewDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const previewLifecycleRunResponsePolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+export const previewLifecycleRunResponseCandidatesItemMerchantIdMax = 200;
+
+export const previewLifecycleRunResponseCandidatesItemSourceIdMax = 200;
+
+export const previewLifecycleRunResponseCandidatesItemVersionMax = 200;
+
+export const previewLifecycleRunResponseCandidatesItemLabelMax = 200;
+
+export const previewLifecycleRunResponseCandidatesItemDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const previewLifecycleRunResponseCandidatesMax = 100;
+
+export const previewLifecycleRunResponseCandidateCountMin = 0;
+
+export const previewLifecycleRunResponseMoreEligibleMin = 0;
+
+export const previewLifecycleRunResponseReceiptsItemIdMax = 200;
+
+export const previewLifecycleRunResponseReceiptsItemSourceIdMax = 200;
+
+export const previewLifecycleRunResponseReceiptsItemActorMax = 200;
+
+export const previewLifecycleRunResponseReceiptsMax = 100;
+
+export const previewLifecycleRunResponseSuccessfulMin = 0;
+
+export const previewLifecycleRunResponseRemainingMin = 0;
+
+
+
+export const PreviewLifecycleRunResponse = zod.object({
+  "id": zod.string().min(1).max(previewLifecycleRunResponseIdMax),
+  "merchantId": zod.string().min(1).max(previewLifecycleRunResponseMerchantIdMax),
+  "status": zod.enum(['preview', 'approved', 'running', 'completed', 'attention']),
+  "updatedAt": zod.coerce.date(),
+  "createdAt": zod.coerce.date(),
+  "expiresAt": zod.coerce.date(),
+  "previewDigest": zod.string().regex(previewLifecycleRunResponsePreviewDigestRegExp),
+  "policyRevision": zod.string().regex(previewLifecycleRunResponsePolicyRevisionRegExp),
+  "candidates": zod.array(zod.object({
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "merchantId": zod.string().min(1).max(previewLifecycleRunResponseCandidatesItemMerchantIdMax),
+  "sourceId": zod.string().min(1).max(previewLifecycleRunResponseCandidatesItemSourceIdMax),
+  "version": zod.string().min(1).max(previewLifecycleRunResponseCandidatesItemVersionMax),
+  "createdAt": zod.coerce.date(),
+  "label": zod.string().min(1).max(previewLifecycleRunResponseCandidatesItemLabelMax),
+  "digest": zod.string().regex(previewLifecycleRunResponseCandidatesItemDigestRegExp),
+  "status": zod.enum(['committed', 'completed', 'cancelled', 'ready', 'failed'])
+})).max(previewLifecycleRunResponseCandidatesMax),
+  "candidateCount": zod.number().int().min(previewLifecycleRunResponseCandidateCountMin),
+  "moreEligible": zod.number().int().min(previewLifecycleRunResponseMoreEligibleMin),
+  "approvedBy": zod.string().nullable(),
+  "approvedAt": zod.coerce.date().nullable(),
+  "receipts": zod.array(zod.object({
+  "id": zod.string().min(1).max(previewLifecycleRunResponseReceiptsItemIdMax),
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "sourceId": zod.string().min(1).max(previewLifecycleRunResponseReceiptsItemSourceIdMax),
+  "status": zod.enum(['deleted', 'already_absent', 'blocked', 'failed']),
+  "at": zod.coerce.date(),
+  "detail": zod.string(),
+  "actor": zod.string().min(1).max(previewLifecycleRunResponseReceiptsItemActorMax)
+})).max(previewLifecycleRunResponseReceiptsMax),
+  "successful": zod.number().int().min(previewLifecycleRunResponseSuccessfulMin),
+  "remaining": zod.number().int().min(previewLifecycleRunResponseRemainingMin),
+  "auditRetained": zod.literal(true),
+  "financialRecordsRetained": zod.literal(true),
+  "syntheticOnly": zod.literal(true)
+}).describe('One retention run: its reviewed manifest, approval state and per-item receipts.')
+
+
+/**
+ * Administrators only. The manifest digest must match the preview; a changed inventory must be previewed again.
+ * @summary Approve a retention run
+ */
+export const ApproveLifecycleRunParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const ApproveLifecycleRunQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const approveLifecycleRunHeaderIdempotencyKeyMin = 8;
+export const approveLifecycleRunHeaderIdempotencyKeyMax = 200;
+
+
+
+export const ApproveLifecycleRunHeader = zod.object({
+  "Idempotency-Key": zod.string().min(approveLifecycleRunHeaderIdempotencyKeyMin).max(approveLifecycleRunHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const approveLifecycleRunBodyPreviewDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const approveLifecycleRunBodyReasonMin = 10;
+export const approveLifecycleRunBodyReasonMax = 500;
+
+
+
+export const ApproveLifecycleRunBody = zod.object({
+  "expectedUpdatedAt": zod.coerce.date(),
+  "previewDigest": zod.string().regex(approveLifecycleRunBodyPreviewDigestRegExp),
+  "reason": zod.string().min(approveLifecycleRunBodyReasonMin).max(approveLifecycleRunBodyReasonMax)
+}).describe('Approval of a previewed run, quoting its manifest digest.')
+
+export const approveLifecycleRunResponseIdMax = 200;
+
+export const approveLifecycleRunResponseMerchantIdMax = 200;
+
+export const approveLifecycleRunResponsePreviewDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const approveLifecycleRunResponsePolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+export const approveLifecycleRunResponseCandidatesItemMerchantIdMax = 200;
+
+export const approveLifecycleRunResponseCandidatesItemSourceIdMax = 200;
+
+export const approveLifecycleRunResponseCandidatesItemVersionMax = 200;
+
+export const approveLifecycleRunResponseCandidatesItemLabelMax = 200;
+
+export const approveLifecycleRunResponseCandidatesItemDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const approveLifecycleRunResponseCandidatesMax = 100;
+
+export const approveLifecycleRunResponseCandidateCountMin = 0;
+
+export const approveLifecycleRunResponseMoreEligibleMin = 0;
+
+export const approveLifecycleRunResponseReceiptsItemIdMax = 200;
+
+export const approveLifecycleRunResponseReceiptsItemSourceIdMax = 200;
+
+export const approveLifecycleRunResponseReceiptsItemActorMax = 200;
+
+export const approveLifecycleRunResponseReceiptsMax = 100;
+
+export const approveLifecycleRunResponseSuccessfulMin = 0;
+
+export const approveLifecycleRunResponseRemainingMin = 0;
+
+
+
+export const ApproveLifecycleRunResponse = zod.object({
+  "id": zod.string().min(1).max(approveLifecycleRunResponseIdMax),
+  "merchantId": zod.string().min(1).max(approveLifecycleRunResponseMerchantIdMax),
+  "status": zod.enum(['preview', 'approved', 'running', 'completed', 'attention']),
+  "updatedAt": zod.coerce.date(),
+  "createdAt": zod.coerce.date(),
+  "expiresAt": zod.coerce.date(),
+  "previewDigest": zod.string().regex(approveLifecycleRunResponsePreviewDigestRegExp),
+  "policyRevision": zod.string().regex(approveLifecycleRunResponsePolicyRevisionRegExp),
+  "candidates": zod.array(zod.object({
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "merchantId": zod.string().min(1).max(approveLifecycleRunResponseCandidatesItemMerchantIdMax),
+  "sourceId": zod.string().min(1).max(approveLifecycleRunResponseCandidatesItemSourceIdMax),
+  "version": zod.string().min(1).max(approveLifecycleRunResponseCandidatesItemVersionMax),
+  "createdAt": zod.coerce.date(),
+  "label": zod.string().min(1).max(approveLifecycleRunResponseCandidatesItemLabelMax),
+  "digest": zod.string().regex(approveLifecycleRunResponseCandidatesItemDigestRegExp),
+  "status": zod.enum(['committed', 'completed', 'cancelled', 'ready', 'failed'])
+})).max(approveLifecycleRunResponseCandidatesMax),
+  "candidateCount": zod.number().int().min(approveLifecycleRunResponseCandidateCountMin),
+  "moreEligible": zod.number().int().min(approveLifecycleRunResponseMoreEligibleMin),
+  "approvedBy": zod.string().nullable(),
+  "approvedAt": zod.coerce.date().nullable(),
+  "receipts": zod.array(zod.object({
+  "id": zod.string().min(1).max(approveLifecycleRunResponseReceiptsItemIdMax),
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "sourceId": zod.string().min(1).max(approveLifecycleRunResponseReceiptsItemSourceIdMax),
+  "status": zod.enum(['deleted', 'already_absent', 'blocked', 'failed']),
+  "at": zod.coerce.date(),
+  "detail": zod.string(),
+  "actor": zod.string().min(1).max(approveLifecycleRunResponseReceiptsItemActorMax)
+})).max(approveLifecycleRunResponseReceiptsMax),
+  "successful": zod.number().int().min(approveLifecycleRunResponseSuccessfulMin),
+  "remaining": zod.number().int().min(approveLifecycleRunResponseRemainingMin),
+  "auditRetained": zod.literal(true),
+  "financialRecordsRetained": zod.literal(true),
+  "syntheticOnly": zod.literal(true)
+}).describe('One retention run: its reviewed manifest, approval state and per-item receipts.')
+
+
+/**
+ * Administrators only. Deletes in bounded batches with a receipt per item; blocked and failed items are reported, never skipped silently.
+ * @summary Execute an approved run
+ */
+export const ExecuteLifecycleRunParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const ExecuteLifecycleRunQueryParams = zod.object({
+  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+})
+
+export const executeLifecycleRunHeaderIdempotencyKeyMin = 8;
+export const executeLifecycleRunHeaderIdempotencyKeyMax = 200;
+
+
+
+export const ExecuteLifecycleRunHeader = zod.object({
+  "Idempotency-Key": zod.string().min(executeLifecycleRunHeaderIdempotencyKeyMin).max(executeLifecycleRunHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+})
+
+export const executeLifecycleRunBodyPreviewDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+
+
+export const ExecuteLifecycleRunBody = zod.object({
+  "previewDigest": zod.string().regex(executeLifecycleRunBodyPreviewDigestRegExp)
+}).describe('Execution of an approved run, quoting its manifest digest, in bounded batches.')
+
+export const executeLifecycleRunResponseIdMax = 200;
+
+export const executeLifecycleRunResponseMerchantIdMax = 200;
+
+export const executeLifecycleRunResponsePreviewDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const executeLifecycleRunResponsePolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
+export const executeLifecycleRunResponseCandidatesItemMerchantIdMax = 200;
+
+export const executeLifecycleRunResponseCandidatesItemSourceIdMax = 200;
+
+export const executeLifecycleRunResponseCandidatesItemVersionMax = 200;
+
+export const executeLifecycleRunResponseCandidatesItemLabelMax = 200;
+
+export const executeLifecycleRunResponseCandidatesItemDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const executeLifecycleRunResponseCandidatesMax = 100;
+
+export const executeLifecycleRunResponseCandidateCountMin = 0;
+
+export const executeLifecycleRunResponseMoreEligibleMin = 0;
+
+export const executeLifecycleRunResponseReceiptsItemIdMax = 200;
+
+export const executeLifecycleRunResponseReceiptsItemSourceIdMax = 200;
+
+export const executeLifecycleRunResponseReceiptsItemActorMax = 200;
+
+export const executeLifecycleRunResponseReceiptsMax = 100;
+
+export const executeLifecycleRunResponseSuccessfulMin = 0;
+
+export const executeLifecycleRunResponseRemainingMin = 0;
+
+
+
+export const ExecuteLifecycleRunResponse = zod.object({
+  "id": zod.string().min(1).max(executeLifecycleRunResponseIdMax),
+  "merchantId": zod.string().min(1).max(executeLifecycleRunResponseMerchantIdMax),
+  "status": zod.enum(['preview', 'approved', 'running', 'completed', 'attention']),
+  "updatedAt": zod.coerce.date(),
+  "createdAt": zod.coerce.date(),
+  "expiresAt": zod.coerce.date(),
+  "previewDigest": zod.string().regex(executeLifecycleRunResponsePreviewDigestRegExp),
+  "policyRevision": zod.string().regex(executeLifecycleRunResponsePolicyRevisionRegExp),
+  "candidates": zod.array(zod.object({
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "merchantId": zod.string().min(1).max(executeLifecycleRunResponseCandidatesItemMerchantIdMax),
+  "sourceId": zod.string().min(1).max(executeLifecycleRunResponseCandidatesItemSourceIdMax),
+  "version": zod.string().min(1).max(executeLifecycleRunResponseCandidatesItemVersionMax),
+  "createdAt": zod.coerce.date(),
+  "label": zod.string().min(1).max(executeLifecycleRunResponseCandidatesItemLabelMax),
+  "digest": zod.string().regex(executeLifecycleRunResponseCandidatesItemDigestRegExp),
+  "status": zod.enum(['committed', 'completed', 'cancelled', 'ready', 'failed'])
+})).max(executeLifecycleRunResponseCandidatesMax),
+  "candidateCount": zod.number().int().min(executeLifecycleRunResponseCandidateCountMin),
+  "moreEligible": zod.number().int().min(executeLifecycleRunResponseMoreEligibleMin),
+  "approvedBy": zod.string().nullable(),
+  "approvedAt": zod.coerce.date().nullable(),
+  "receipts": zod.array(zod.object({
+  "id": zod.string().min(1).max(executeLifecycleRunResponseReceiptsItemIdMax),
+  "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
+  "sourceId": zod.string().min(1).max(executeLifecycleRunResponseReceiptsItemSourceIdMax),
+  "status": zod.enum(['deleted', 'already_absent', 'blocked', 'failed']),
+  "at": zod.coerce.date(),
+  "detail": zod.string(),
+  "actor": zod.string().min(1).max(executeLifecycleRunResponseReceiptsItemActorMax)
+})).max(executeLifecycleRunResponseReceiptsMax),
+  "successful": zod.number().int().min(executeLifecycleRunResponseSuccessfulMin),
+  "remaining": zod.number().int().min(executeLifecycleRunResponseRemainingMin),
+  "auditRetained": zod.literal(true),
+  "financialRecordsRetained": zod.literal(true),
+  "syntheticOnly": zod.literal(true)
+}).describe('One retention run: its reviewed manifest, approval state and per-item receipts.')
+
+

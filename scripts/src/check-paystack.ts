@@ -1,4 +1,4 @@
-import { createPaystackTestAdapter, PaystackError, type ExpectedPayment } from '../artifacts/api-server/src/providers/paystack.js';
+import { createPaystackTestAdapter, PaystackError, type ExpectedPayment } from '../../artifacts/api-server/src/providers/paystack.js';
 
 // Operator-only, read-only check. Never accept a key as a command-line argument.
 const usage = 'Use: check-paystack [--reference TEST_REFERENCE --amount-kobo POSITIVE_INTEGER] [--direct-debit] [--mandate-reference TEST_MANDATE_REFERENCE]';

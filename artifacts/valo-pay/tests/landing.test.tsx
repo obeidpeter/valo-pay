@@ -161,7 +161,7 @@ describe("landing page", () => {
       .getAllByRole("link", { name: "Discuss a pilot" })
       .find((link) => link.getAttribute("href")?.startsWith("mailto:"));
     expect(contact?.getAttribute("href")).toMatch(
-      /^mailto:obeidpeter1@gmail\.com\?subject=/,
+      /^mailto:pilots@example\.test\?subject=/,
     );
     for (const link of document.querySelectorAll<HTMLAnchorElement>(
       'a[href^="#"]',

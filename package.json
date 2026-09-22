@@ -18,7 +18,7 @@
     "test:security-api": "node scripts/security-valopay.mjs",
     "test:smoke": "node scripts/smoke-valopay.mjs",
     "test": "node scripts/run-tests.mjs",
-    "check:paystack": "pnpm --filter @workspace/scripts exec tsx ../scripts/check-paystack.ts",
+    "check:paystack": "pnpm --filter @workspace/scripts exec tsx ./src/check-paystack.ts",
     "check:operations": "node scripts/monitor-valopay.mjs"
   },
   "private": true,

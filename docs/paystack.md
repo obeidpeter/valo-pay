@@ -33,13 +33,13 @@ pnpm run check:paystack
 To verify an existing test payment against its expected amount (in kobo), add:
 
 ```sh
-pnpm run check:paystack --reference TEST_REFERENCE --amount-kobo 100000 --direct-debit
+pnpm run check:paystack -- --reference TEST_REFERENCE --amount-kobo 100000 --direct-debit
 ```
 
 To inspect an existing test mandate without creating or charging one:
 
 ```sh
-pnpm run check:paystack --mandate-reference TEST_MANDATE_REFERENCE
+pnpm run check:paystack -- --mandate-reference TEST_MANDATE_REFERENCE
 ```
 
 The checker prints only safe check results and states. It never prints the secret, transaction reference, amount, customer details, authorisation code or full provider response. Exit 0 means the requested read checks succeeded; it does not mark the Valo Pay integration connected. Missing or rejected credentials and failed/mismatched checks exit 1.

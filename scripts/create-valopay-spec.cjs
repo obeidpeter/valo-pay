@@ -46,6 +46,8 @@ for (const field of ["lastSuccessAt", "lastErrorAt"]) schemas.SchedulerStatus.pr
 for (const name of ["Overview", "Settings"]) schemas[name].properties.closeSchedule = ref("EffectiveCloseSchedule");
 const paths = {};
 schemas.Settings.properties.revision = str;
+schemas.Workspace.properties.accessMode = { type: "string", enum: ["sandbox", "staff"], description: "Whether the server authorises a demo persona or a provisioned staff membership." };
+schemas.Workspace.properties.viewerScope = { type: "string", description: "Opaque workspace/user scope for browser preferences; never an authorisation credential." };
 schemas.SettingsInput.properties.expectedRevision = str;
 schemas.ImportResult.properties.columns = { type: "array", items: str };
 schemas.ImportResult.properties.preview = { type: "array", items: obj({ row: num, values: ref("RecordData"), amountKobo: num }, ["row", "values"]) };
@@ -362,4 +364,216 @@ add('/v1/connected','get','getConnectedWorkspace','ConnectedWorkspace',null,[mer
 describe('/v1/connected','get','Read the connected workspace','Same-origin, private and tenant scoped. Returns granular consent state, bound sample payment intents, explained credit assessments, independent SME cash planning and closed live gates.');
 add('/v1/connected/actions','post','performConnectedAction','ConnectedActionResult','ConnectedActionInput',[merchant,{name:'Idempotency-Key',in:'header',required:true,schema:{type:'string',minLength:8,maxLength:200},description:'One key per unchanged intention. Retain it after response loss; replay happens before revision checking.'}]);
 describe('/v1/connected/actions','post','Perform a synthetic connected-workspace action','Runs inside the existing merchant transaction and audit boundary. Role, purpose, subject, expiry, ownership and version checks apply. Unknown payment outcomes hold retries. No bank, credit bureau, accounting or tax endpoint is called.');
+// ---- Pilot workflow, sources, personal work, retention and staff operations ----
+// Their request and response shapes are the shared zod definitions in lib/valopay-schema,
+// translated here so the contract cannot drift from what the routes validate. The views a
+// route assembles itself are described by hand next to it.
+require("tsx/cjs");
+const shared = require("../lib/valopay-schema/src/index.ts");
+function fromZod(schema) {
+  const def = schema._def, kind = def.typeName, described = (out) => schema.description ? { ...out, description: schema.description } : out;
+  switch (kind) {
+    case "ZodObject": {
+      const properties = {}, required = [];
+      for (const [key, value] of Object.entries(def.shape())) { properties[key] = fromZod(value); if (!value.isOptional()) required.push(key); }
+      const out = { type: "object", properties, ...(required.length ? { required } : {}) };
+      if (def.unknownKeys === "strict") out.additionalProperties = false;
+      else if (def.catchall && def.catchall._def.typeName !== "ZodNever") out.additionalProperties = fromZod(def.catchall);
+      return described(out);
+    }
+    case "ZodString": {
+      const out = { type: "string" };
+      for (const check of def.checks) {
+        if (check.kind === "min") out.minLength = check.value; else if (check.kind === "max") out.maxLength = check.value;
+        else if (check.kind === "length") out.minLength = out.maxLength = check.value; else if (check.kind === "regex") out.pattern = check.regex.source;
+        else if (check.kind === "datetime") out.format = "date-time"; else if (check.kind === "email") out.format = "email";
+        else if (check.kind === "uuid") out.format = "uuid"; else if (check.kind === "url") out.format = "uri";
+      }
+      return described(out);
+    }
+    case "ZodNumber": {
+      const out = { type: def.checks.some((check) => check.kind === "int") ? "integer" : "number" };
+      for (const check of def.checks) {
+        if (check.kind === "min") out[check.inclusive ? "minimum" : "exclusiveMinimum"] = check.value;
+        else if (check.kind === "max") out[check.inclusive ? "maximum" : "exclusiveMaximum"] = check.value;
+      }
+      return described(out);
+    }
+    case "ZodBoolean": return described({ type: "boolean" });
+    case "ZodNull": return described({ type: "null" });
+    case "ZodDate": return described({ type: "string", format: "date-time" });
+    case "ZodLiteral": return described({ type: def.value === null ? "null" : typeof def.value === "boolean" ? "boolean" : typeof def.value === "number" ? (Number.isInteger(def.value) ? "integer" : "number") : "string", const: def.value });
+    case "ZodEnum": return described({ type: "string", enum: [...def.values] });
+    case "ZodNativeEnum": return described({ enum: Object.values(def.values) });
+    case "ZodArray": {
+      const out = { type: "array", items: fromZod(def.type) };
+      if (def.exactLength) out.minItems = out.maxItems = def.exactLength.value;
+      else { if (def.minLength) out.minItems = def.minLength.value; if (def.maxLength) out.maxItems = def.maxLength.value; }
+      return described(out);
+    }
+    case "ZodTuple": return described({ type: "array", prefixItems: def.items.map(fromZod), minItems: def.items.length, maxItems: def.items.length });
+    case "ZodRecord": return described({ type: "object", additionalProperties: fromZod(def.valueType) });
+    case "ZodUnion": return described({ anyOf: def.options.map(fromZod) });
+    case "ZodDiscriminatedUnion": return described({ oneOf: [...(def.options.values ? def.options.values() : def.options)].map(fromZod) });
+    case "ZodIntersection": return described({ allOf: [fromZod(def.left), fromZod(def.right)] });
+    case "ZodNullable": {
+      const inner = fromZod(def.innerType);
+      return described(typeof inner.type === "string" && !inner.enum && inner.const === undefined ? { ...inner, type: [inner.type, "null"] } : { anyOf: [inner, { type: "null" }] });
+    }
+    case "ZodOptional": return described(fromZod(def.innerType));
+    case "ZodDefault": return described({ ...fromZod(def.innerType), default: def.defaultValue() });
+    case "ZodEffects": return described(fromZod(def.schema));
+    case "ZodPipeline": return described(fromZod(def.in));
+    case "ZodBranded": case "ZodReadonly": case "ZodCatch": return described(fromZod(def.type ?? def.innerType));
+    case "ZodLazy": return described(fromZod(def.getter()));
+    case "ZodAny": case "ZodUnknown": return described({});
+    default: throw new Error(`The contract generator cannot describe a ${kind}; extend fromZod.`);
+  }
+}
+// A component from a shared zod definition, and one described by hand. Both carry a description (documentation check).
+const derived = (name, zodSchema, description) => { schemas[name] = { ...fromZod(zodSchema), description }; return ref(name); };
+const described = (name, schema, description) => { schemas[name] = { ...schema, description }; return ref(name); };
+const nullable = (schema) => ({ type: [schema.type, "null"] });
+const strings = { type: "array", items: str };
+const keyHeader = { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 }, description: "One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result." };
+const journalOffset = { name: "offset", in: "query", schema: { type: "integer", minimum: 0, maximum: 100000 }, description: "Rows to skip in the newest-first order; pages hold 25 rows." };
+const operation = (path, method, id, response, body, params, summary, description) => { add(path, method, id, response, body, params); describe(path, method, summary, description); };
+
+// Operations journal (the recovery middleware and the pilot router).
+described("Message", obj({ message: str }), "A confirmation in plain words; nothing else changed that the caller needs to read back.");
+described("OperationView", obj({ id: str, label: str, actor: str, role: str, status: { type: "string", enum: ["pending", "completed", "cancelled"] }, createdAt: str, updatedAt: str, message: str, recordId: nullable(str), recordKind: nullable(str) }), "One journal entry: what was asked, by whom, in which role, and whether the service confirmed it. Original request bodies stay private; a completed entry names the record it produced. A refused entry is cancelled and its message says why.");
+described("OperationList", obj({ items: arr("OperationView"), total: num, offset: num }), "The caller's journal for one lender, newest first, 25 rows a page.");
+described("OperationReplayResult", { type: "object", additionalProperties: true }, "The original route's answer, recovered or re-run under the current validation and authorisation; its shape is that route's response.");
+operation("/v1/operations", "get", "listOperations", "OperationList", null, [merchant, journalOffset], "List the caller's recovery journal", "Every keyed, recoverable request the caller made in this lender, with its confirmation state. Read-only; private to the person who made the requests.");
+operation("/v1/operations/{id}/retry", "post", "retryOperation", "OperationReplayResult", null, [pathParam("id"), merchant], "Recover or repeat a journaled request", "Re-enters the original route with the stored request and key under the current rules. A completed entry returns its saved result; a cancelled or refused one is refused (409); a different role cannot repeat it (403).");
+operation("/v1/operations/{id}/cancel", "post", "cancelOperation", "Message", null, [pathParam("id"), merchant], "Cancel an unconfirmed request", "Confirms with the server that the request never completed and closes it, so its key cannot run again. A completed entry, or one whose receipt already exists, is refused (409).");
+
+// Pilot journey, import batches and case handover.
+described("JourneyCounts", obj({ customers: num, batches: num, receipts: num, openCases: num, unassignedCases: num, closes: num, exports: num }), "Record counts that place the lender on the pilot journey: customers, committed batches, receipts, open and unassigned cases, closes and ready exports.");
+described("PilotJourney", obj({ lender: ref("Merchant"), accessMode: { type: "string", enum: ["sandbox", "staff"] }, actor: str, syntheticOnly: { type: "boolean", const: true }, counts: ref("JourneyCounts") }), "The lender, the caller's access mode and the counts behind the journey view. Synthetic throughout.");
+described("ImportBatchList", obj({ items: arr("ValopayRecord"), total: num, offset: num }), "Import batches newest first, 25 a page, with their source identity, quality totals and check counts but not their rows.");
+described("ImportBatchDetail", obj({ batch: ref("ValopayRecord"), revisions: arr("ValopayRecord") }), "One batch with its source rows (import operator roles only) and every saved revision.");
+described("BatchVersion", obj({ expectedUpdatedAt: str }), "The batch version being committed; a stale version is refused (409).");
+derived("ImportBatchInput", shared.batchInputSchema, "A synthetic source batch: source, source batch ID, record kind, mapping, identity column, amount unit and up to 500 CSV rows. syntheticOnly must be true; raw bank details are refused.");
+described("Assignee", obj({ actor: str, name: str, role: str }), "A person who can own a case or review a close: demo roles in the sandbox, active staff with lender access on a staff host.");
+described("EvidenceLink", obj({ id: str, name: str, reference: str, kind: str }), "A record the case can cite as evidence.");
+described("CaseDetail", obj({ record: ref("ValopayRecord"), assignees: arr("Assignee"), events: arr("ValopayRecord"), evidence: arr("EvidenceLink") }), "One exception with the people it can be handed to, its handover events and the records it can cite.");
+derived("CaseInput", shared.caseInputSchema, "A case handover or update: assignee, next action and its time, note and evidence, with the version being changed.");
+derived("PilotLenderInput", shared.lenderInputSchema, "A new synthetic lender for a staff workspace: name and segment.");
+operation("/v1/pilot/journey", "get", "getPilotJourney", "PilotJourney", null, [merchant], "Read the pilot journey counts", "Counts of the records each pilot step needs, for the journey page. No record is created by reading.");
+operation("/v1/pilot/lenders", "post", "createPilotLender", "Merchant", "PilotLenderInput", [keyHeader], "Create a synthetic lender", "Administrator with recent MFA on a staff host. The key makes creation repeatable; the same key with different details is refused.");
+operation("/v1/pilot/batches", "get", "listImportBatches", "ImportBatchList", null, [merchant, journalOffset], "List import batches", "Newest first, 25 a page, without source rows.");
+operation("/v1/pilot/batches/{id}", "get", "getImportBatch", "ImportBatchDetail", null, [pathParam("id"), merchant], "Open an import batch", "The batch with its source rows and revisions. Import operator roles only (403); unknown batches are 404.");
+operation("/v1/pilot/batches", "post", "saveImportBatch", "ValopayRecord", "ImportBatchInput", [merchant, keyHeader], "Save a source batch", "Parses and checks the rows, screens them for raw bank details, and records the batch as ready or needing correction. A batch with the same source identity is refused (409).");
+operation("/v1/pilot/batches/{id}/save", "post", "saveImportBatchRevision", "ValopayRecord", "ImportBatchInput", [pathParam("id"), merchant, keyHeader], "Correct an uncommitted batch", "Saves a revision of the batch, keeping its source identity. A committed batch or a stale version is refused (409).");
+operation("/v1/pilot/batches/{id}/commit", "post", "commitImportBatch", "ValopayRecord", "BatchVersion", [pathParam("id"), merchant, keyHeader], "Commit a checked batch", "Imports the checked rows in one transaction and records the original source totals. A batch that is not ready, or a stale version, is refused (409).");
+operation("/v1/pilot/cases/{id}", "get", "getCase", "CaseDetail", null, [pathParam("id"), merchant], "Open a case", "The exception with its possible assignees, handover history and citable evidence.");
+operation("/v1/pilot/cases/{id}", "post", "coordinateCase", "ValopayRecord", "CaseInput", [pathParam("id"), merchant, keyHeader], "Hand over or update a case", "Records the assignee, next action and evidence, with the version being changed. The next action must be in the future.");
+
+// Team and readiness.
+described("StaffMember", obj({ id: str, actor: str, name: str, role: str, status: { type: "string", enum: ["active", "suspended", "revoked"] }, expiresAt: str, updatedAt: str, lenderIds: strings, allLenders: bool }, ["id", "actor", "name", "role", "status", "expiresAt", "updatedAt"]), "A staff membership: its role, state and expiry, and (in the directory) the lenders it may open; an administrator sees every lender.");
+described("StaffInvitation", obj({ id: str, email: str, role: str, status: str, expiresAt: str }), "A pending, accepted or revoked invitation; the token is shown once, at creation.");
+described("StaffEvent", obj({ id: str, actor: str, action: str, subject: str, detail: ref("RecordData"), createdAt: str }), "One entry of the team's access history.");
+described("StaffDirectory", obj({ mode: { type: "string", enum: ["sandbox", "staff"] }, actor: str, members: arr("StaffMember"), lenders: arr("Merchant"), invitations: arr("StaffInvitation"), events: arr("StaffEvent"), message: str }), "The team as the caller may see it: members and lenders for everyone, invitations and history for administrators. In the sandbox the lists are empty and the message says why.");
+derived("InvitationInput", shared.invitationInputSchema, "An invitation: email address and pilot role.");
+described("InvitationCreated", obj({ id: str, token: str, message: str }), "The invitation and its one-time acceptance token; no email is sent.");
+described("AcceptInvitationInput", obj({ token: { type: "string", pattern: "^[a-f0-9]{64}$" } }), "The acceptance token from the invitation link.");
+described("InvitationAccepted", obj({ message: str, role: str }), "Confirmation of the new membership and its role.");
+derived("MembershipInput", shared.membershipInputSchema, "A membership change: role, state, the version being changed and the reason.");
+derived("StaffLenderAccessInput", shared.staffLenderAccessInputSchema, "The lenders a non-administrator membership may open, with the version being changed and the reason.");
+described("StaffLenderAccess", obj({ ...schemas.StaffMember.properties, message: str }, [...schemas.StaffMember.required, "lenderIds", "allLenders", "message"]), "The membership with its saved lender access.");
+described("ReadinessCheck", obj({ id: str, name: str, state: str, detail: str }), "One readiness control (identity, MFA, origins, database isolation, encryption) with its state on this host and what it means.");
+described("AccessReadiness", obj({ syntheticOnly: { type: "boolean", const: true }, canCommission: bool, checkedAt: str, checks: arr("ReadinessCheck") }), "The staff-access and encryption controls as this request observed them. Describes configuration; never reveals secrets.");
+described("EncryptionVerification", obj({ message: str, checkedAt: str, verified: bool }), "The result of sealing and opening a synthetic payload with the configured managed key.");
+described("PayloadProtection", obj({ message: str, protectedCount: num, mayHaveMore: bool }), "How many stored payloads one bounded run protected, and whether another run is needed.");
+operation("/v1/team/verify", "post", "verifyStaffIdentity", "Message", null, [], "Verify staff identity with a fresh second factor", "Staff hosts only (403 elsewhere). Requires a signed-in session with an enrolled second factor used recently; otherwise answers with the identity provider's re-verification instruction.");
+operation("/v1/team", "get", "getTeam", "StaffDirectory", null, [], "Read the team directory", "Members, lenders, invitations and access history as the caller's role allows.");
+operation("/v1/team/invitations", "post", "inviteStaff", "InvitationCreated", "InvitationInput", [], "Invite a staff member", "Administrator with recent MFA. Replaces any pending invitation for the same address; the token expires in seven days and is never emailed by the service.");
+operation("/v1/team/invitations/{id}/revoke", "post", "revokeInvitation", "Message", null, [pathParam("id")], "Revoke an invitation", "Administrator with recent MFA. A revoked token cannot be accepted.");
+operation("/v1/team/members/{id}", "patch", "updateStaffMember", "StaffMember", "MembershipInput", [pathParam("id")], "Change a membership", "Administrator with recent MFA; nobody changes their own membership. Records the reason in the access history.");
+operation("/v1/team/members/{id}/lenders", "patch", "updateStaffLenders", "StaffLenderAccess", "StaffLenderAccessInput", [pathParam("id")], "Set a member's lender access", "Administrator with recent MFA. Non-administrators open only the lenders named here; sessions pick the change up on their next request.");
+operation("/v1/team/accept", "post", "acceptInvitation", "InvitationAccepted", "AcceptInvitationInput", [], "Accept an invitation", "The signed-in person's verified email must match the invitation. Creates a 90-day membership.");
+operation("/v1/team/readiness", "get", "getAccessReadiness", "AccessReadiness", null, [], "Read the access readiness checks", "What this host has configured and verified for real staff access, from the request's own checks.");
+operation("/v1/team/readiness/encryption", "post", "verifyEncryption", "EncryptionVerification", null, [], "Verify managed payload encryption", "Administrator with recent MFA. Seals and opens a synthetic payload with the configured key (503 when none is configured).");
+operation("/v1/team/readiness/protect", "post", "protectPayloads", "PayloadProtection", null, [], "Protect stored payloads", "Administrator with recent MFA. Seals one bounded batch of unprotected import rows and recovery payloads; run until none remain.");
+
+// Close review and pilot progress.
+described("ProgressStep", obj({ id: str, name: str, href: str, state: str, evidence: strings, missing: strings }), "One pilot step with its state, the evidence behind that state and what is still missing.");
+described("PilotAccess", obj({ mode: str, state: str, message: str }), "Whether real staff access is enabled on this host and what demo progress does not establish.");
+described("PilotProgress", obj({ lender: ref("Merchant"), syntheticOnly: { type: "boolean", const: true }, access: ref("PilotAccess"), steps: arr("ProgressStep") }), "The lender's progress through onboarding, ingestion, reconciliation, exceptions, close review and export, derived from its records.");
+described("CloseReviewRecord", { allOf: [ref("ValopayRecord"), obj({ current: bool })] }, "A close review record with whether its snapshot still matches the close and its source evidence.");
+described("CloseReviewEntry", obj({ close: ref("ValopayRecord"), issues: { type: "array", items: ref("RecordData") }, problem: nullable(str), pendingFinancialCorrections: num, reviews: arr("CloseReviewRecord") }), "One close with the discrepancies a reviewer must answer, why it cannot be reviewed now (if so), pending financial corrections and its reviews.");
+described("CloseReviewList", obj({ closes: arr("CloseReviewEntry"), total: num, actor: str, reviewers: arr("Assignee"), accessMode: str, ownPrincipal: str }), "The 25 newest closes with their reviews, the Finance reviewers available and who the caller is, so the console can enforce separation of duties.");
+derived("PrepareCloseReviewInput", shared.prepareCloseReviewSchema, "A close review preparation: the close and its version, an independent Finance reviewer, the preparation note and a response to every discrepancy.");
+derived("DecideCloseReviewInput", shared.decideCloseReviewSchema, "A review decision: approve or reject with the version being decided, a note and an answer to every source exception.");
+operation("/v1/pilot/progress", "get", "getPilotProgress", "PilotProgress", null, [merchant], "Read the pilot progress steps", "Derived from the lender's records on every read; nothing is written.");
+operation("/v1/pilot/close-reviews", "get", "listCloseReviews", "CloseReviewList", null, [merchant], "List closes and their reviews", "Newest 25 closes with their discrepancies, review state and the available Finance reviewers.");
+operation("/v1/pilot/close-reviews/prepare", "post", "prepareCloseReview", "ValopayRecord", "PrepareCloseReviewInput", [merchant, keyHeader], "Prepare a close for review", "Snapshots the close with its source-completeness basis and assigns an independent Finance reviewer. A close with an open review, a stale version or an unanswered discrepancy is refused.");
+operation("/v1/pilot/close-reviews/{id}/decision", "post", "decideCloseReview", "ValopayRecord", "DecideCloseReviewInput", [pathParam("id"), merchant, keyHeader], "Approve or reject a close review", "Only the named reviewer decides, and only while the snapshot is current; a changed close or source declaration must be prepared again.");
+
+// Import corrections.
+derived("ImportCorrectionPreviewInput", shared.importCorrectionPreviewInputSchema, "The batch, the imported record with its version, and the supported field changes to compare.");
+derived("ImportCorrectionPreview", shared.importCorrectionPreviewSchema, "The before/after comparison, the records the change touches, any blockers and the digest a proposal must quote.");
+derived("ImportCorrectionProposalInput", shared.importCorrectionProposalInputSchema, "A proposal quoting the preview digest, naming an independent Finance reviewer, with the reason and evidence.");
+derived("ImportCorrectionDecisionInput", shared.importCorrectionDecisionInputSchema, "Approve, reject or withdraw, quoting the proposal digest, with a reason.");
+derived("ImportCorrectionView", shared.importCorrectionViewSchema, "A proposal with its preview, its decision if any, and whether the comparison is still current.");
+derived("ImportCorrectionList", shared.importCorrectionsResponseSchema, "The batch's imported records, its proposals and the Finance reviewers available.");
+const batchIdParam = { name: "batchId", in: "query", required: true, schema: { type: "string", maxLength: 100 }, description: "The committed import batch whose records may be corrected." };
+operation("/v1/pilot/import-corrections", "get", "listImportCorrections", "ImportCorrectionList", null, [merchant, batchIdParam], "List import corrections for a batch", "The batch's imported records and every proposal with its current state.");
+operation("/v1/pilot/import-corrections/preview", "post", "previewImportCorrection", "ImportCorrectionPreview", "ImportCorrectionPreviewInput", [merchant], "Compare a proposed correction", "Shows what would change, which closes and financial records it touches, and what blocks it. Nothing is written.");
+operation("/v1/pilot/import-corrections", "post", "proposeImportCorrection", "ImportCorrectionView", "ImportCorrectionProposalInput", [merchant, keyHeader], "Propose an import correction", "Records the comparison as evidence for an independent Finance reviewer. A changed comparison, a missing reviewer or an open proposal on the same record is refused.");
+operation("/v1/pilot/import-corrections/{id}/decision", "post", "decideImportCorrection", "ImportCorrectionView", "ImportCorrectionDecisionInput", [pathParam("id"), merchant, keyHeader], "Decide an import correction", "Only the named reviewer approves or rejects; the proposer may withdraw. Approval applies the change only while the comparison is current.");
+
+// Sources: profiles, manifests, completeness and the Paystack test inbox.
+derived("SourceProfileInput", shared.sourceProfileInputSchema, "A reusable synthetic source contract: mapping, identity column, amount unit, first expected delivery, cadence, grace and expected totals.");
+derived("SourceManifestInput", shared.sourceManifestInputSchema, "The files and control totals expected for one WAT business date, or an explicit no-file declaration, with reason and evidence; a revision names the declaration it replaces.");
+derived("SourceCompleteness", shared.sourceCompletenessSchema, "Whether the declared source files for a business date arrived complete, with each file's state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer.");
+derived("SourceBatchQuality", shared.sourceBatchQualitySchema, "The original committed totals and checks of a source batch.");
+derived("PaystackFixtureInput", shared.paystackFixtureInputSchema, "A recorded Paystack test scenario to deliver to the inbox.");
+derived("ProviderReplayInput", shared.providerReplayInputSchema, "A replay of a stored provider event, with its version and the reason.");
+described("SourceDelivery", obj({ status: str, missedDeliveries: num, nextExpectedAt: str, lastCommittedAt: nullable(str), lastBatchId: nullable(str) }), "Where a profile stands against its cadence: missed deliveries, the next expected time and the last committed batch.");
+described("SourceProfile", { allOf: [ref("ValopayRecord"), obj({ delivery: ref("SourceDelivery") })] }, "A source profile record with its delivery state.");
+described("SourceBatchSummary", obj({ id: str, name: str, source: str, sourceBatchId: str, kind: str, status: str, createdAt: str, quality: ref("SourceBatchQuality") }), "A batch as the sources page lists it, with its original quality totals.");
+described("SourceSummary", obj({ lateSources: num, duplicateRows: num, conflictRows: num, batchesNeedingReview: num }), "Counts that need attention: late sources, duplicate and conflicting rows, batches needing review.");
+described("ProviderEvent", obj({ id: str, name: str, status: str, reference: str, amountKobo: num, createdAt: str, updatedAt: str, mode: { type: "string", enum: ["fixture", "test"] }, message: str, deliveryCount: num, replayCount: num, financialRecordsCreated: { type: "integer", const: 0 } }), "A stored provider event: fixture or test mode, how often it was delivered and replayed, and the guarantee that it created no financial record.");
+described("PaystackInbox", obj({ mode: { type: "string", const: "test_only" }, externalConnectionVerified: { type: "boolean", const: false }, canRunFixtures: bool, state: { type: "string", const: "configuration_required" }, message: str, events: arr("ProviderEvent"), total: num, quarantined: num, duplicates: num }), "The read-only Paystack test inbox: its fixed test-only state, the stored events and how many were quarantined or duplicated.");
+described("SourcesView", obj({ completeness: ref("SourceCompleteness"), profiles: arr("SourceProfile"), batches: arr("SourceBatchSummary"), summary: ref("SourceSummary"), paystack: ref("PaystackInbox") }), "Everything the sources page shows for one lender and business date.");
+described("PaystackFixtureResult", obj({ accepted: bool, duplicate: bool, event: ref("ProviderEvent") }), "Whether the fixture was accepted or recognised as a duplicate, and the stored event.");
+const businessDateParam = { name: "businessDate", in: "query", schema: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" }, description: "The WAT business date to report completeness for; defaults to the current one." };
+operation("/v1/sources", "get", "getSources", "SourcesView", null, [merchant, businessDateParam], "Read the sources page", "Completeness for the business date, profiles with delivery state, batches with quality totals and the Paystack test inbox.");
+operation("/v1/sources/profiles", "post", "createSourceProfile", "ValopayRecord", "SourceProfileInput", [merchant], "Create a source profile", "One profile per source and record kind (409 otherwise). Import operator roles only.");
+operation("/v1/sources/profiles/{id}/save", "post", "saveSourceProfile", "ValopayRecord", "SourceProfileInput", [pathParam("id"), merchant, keyHeader], "Change a source profile", "Saves a new version of the profile; batches keep the version they were checked against.");
+operation("/v1/sources/manifests", "post", "saveSourceManifest", "ValopayRecord", "SourceManifestInput", [merchant, keyHeader], "Declare the expected source files", "Records what must arrive for a business date. A revision must name the current declaration; a source batch declared for another date is refused.");
+operation("/v1/sources/paystack/fixtures", "post", "runPaystackFixture", "PaystackFixtureResult", "PaystackFixtureInput", [merchant, keyHeader], "Deliver a recorded Paystack scenario", "Runs a test-only fixture through the inbox. No external call is made and no financial record is created.");
+operation("/v1/sources/events/{id}/replay", "post", "replayProviderEvent", "ProviderEvent", "ProviderReplayInput", [pathParam("id"), merchant, keyHeader], "Replay a stored provider event", "Re-processes the event with the reason recorded; duplicates are recognised and counted.");
+
+// Personal work.
+derived("PersonalWorkView", shared.personalWorkViewSchema, "The caller's (or, for administrators, the team's) cases, handovers, reviews and notifications, paged and counted.");
+derived("WorkReceiptInput", shared.workReceiptInputSchema, "The item being acknowledged, with its version.");
+derived("WorkReceipt", shared.workReceiptSchema, "The recorded acknowledgement: who, what, and when.");
+const workParams = [merchant,
+  { name: "scope", in: "query", schema: { type: "string", enum: ["mine", "team"], default: "mine" }, description: "The caller's own work, or (administrators) the whole team's." },
+  { name: "filter", in: "query", schema: { type: "string", enum: ["all", "overdue", "handover", "review", "unread"], default: "all" }, description: "Only overdue items, handovers, reviews or unread notifications." },
+  { name: "offset", in: "query", schema: { type: "integer", minimum: 0, maximum: 100000 }, description: "Rows to skip." },
+  { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 50 }, description: "Page size; defaults to 25." }];
+operation("/v1/work", "get", "getPersonalWork", "PersonalWorkView", null, workParams, "Read personal work", "Derived from cases, reviews and notifications on every read; bounded and lender scoped.");
+operation("/v1/work/notifications/read", "post", "readNotification", "WorkReceipt", "WorkReceiptInput", [merchant, keyHeader], "Mark a notification read", "Records who read it and when; the server supplies the recipient.");
+operation("/v1/work/handovers/acknowledge", "post", "acknowledgeHandover", "WorkReceipt", "WorkReceiptInput", [merchant, keyHeader], "Acknowledge a handover", "Records that the assignee took the case over; a stale version is refused.");
+
+// Retention and lifecycle (administrators only).
+derived("LifecycleView", shared.lifecycleViewSchema, "The lender's retention policy, holds, bounded inventory of what the policy would touch, and saved retention runs.");
+derived("LifecycleRunView", shared.lifecycleRunViewSchema, "One retention run: its reviewed manifest, approval state and per-item receipts.");
+derived("RetentionPolicyInput", shared.retentionPolicyInputSchema, "The retention periods per kind, with the version being changed and the reason.");
+derived("RetentionHoldInput", shared.retentionHoldInputSchema, "A hold on one item, or its release, with the reason.");
+derived("LifecyclePreviewInput", shared.lifecyclePreviewInputSchema, "Which kinds to preview and the reason for the run.");
+derived("LifecycleApproveInput", shared.lifecycleApproveInputSchema, "Approval of a previewed run, quoting its manifest digest.");
+derived("LifecycleExecuteInput", shared.lifecycleExecuteInputSchema, "Execution of an approved run, quoting its manifest digest, in bounded batches.");
+operation("/v1/lifecycle", "get", "getLifecycle", "LifecycleView", null, [merchant, journalOffset], "Read retention controls", "Administrators only (403). Policy, holds, inventory and runs for the lender.");
+operation("/v1/lifecycle/runs/{id}", "get", "getLifecycleRun", "LifecycleRunView", null, [pathParam("id"), merchant], "Read a retention run", "Administrators only. The run's manifest and receipts.");
+operation("/v1/lifecycle/policy", "post", "saveRetentionPolicy", "LifecycleView", "RetentionPolicyInput", [merchant, keyHeader], "Change the retention policy", "Administrators only. Keeps every previous policy version with its reason.");
+operation("/v1/lifecycle/holds", "post", "setRetentionHold", "LifecycleView", "RetentionHoldInput", [merchant, keyHeader], "Place or release a hold", "Administrators only. A held item is never deleted by a run.");
+operation("/v1/lifecycle/runs", "post", "previewLifecycleRun", "LifecycleRunView", "LifecyclePreviewInput", [merchant, keyHeader], "Preview a retention run", "Administrators only. Records the exact manifest of what would be deleted; nothing is deleted.");
+operation("/v1/lifecycle/runs/{id}/approve", "post", "approveLifecycleRun", "LifecycleRunView", "LifecycleApproveInput", [pathParam("id"), merchant, keyHeader], "Approve a retention run", "Administrators only. The manifest digest must match the preview; a changed inventory must be previewed again.");
+operation("/v1/lifecycle/runs/{id}/execute", "post", "executeLifecycleRun", "LifecycleRunView", "LifecycleExecuteInput", [pathParam("id"), merchant, keyHeader], "Execute an approved run", "Administrators only. Deletes in bounded batches with a receipt per item; blocked and failed items are reported, never skipped silently.");
+
 fs.writeFileSync("lib/api-spec/openapi.json",JSON.stringify({openapi:"3.1.0",info:{title:"Valo Pay sandbox API",version:"1.1.0",description:"Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules."},servers:[{url:"/api"}],paths,components:{schemas}},null,2));

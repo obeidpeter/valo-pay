@@ -12,10 +12,15 @@ import type { ExportResultStatus } from './exportResultStatus';
  * Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.
  */
 export interface ExportResult {
-  expiredAt?: string;
   id: string;
   downloadUrl: string;
   status?: ExportResultStatus;
+  stage?: ExportResultStage;
+  lastProgressAt?: string;
+  stalled?: boolean;
+  retryAllowed?: boolean;
+  recoveryAt?: string;
+  expiredAt?: string;
   kind?: string;
   format?: string;
   customerId?: string;
@@ -26,9 +31,4 @@ export interface ExportResult {
   byteLength?: number;
   generationMs?: number;
   error?: string;
-  stage?: ExportResultStage;
-  lastProgressAt?: string;
-  stalled?: boolean;
-  retryAllowed?: boolean;
-  recoveryAt?: string;
 }

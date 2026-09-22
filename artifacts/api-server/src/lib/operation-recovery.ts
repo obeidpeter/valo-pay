@@ -2,11 +2,14 @@ import type { RequestHandler } from "express";
 import { z } from "zod";
 import { parse } from "csv-parse/sync";
 import { assertNoRealBankDetails } from "../domain/records";
+import { registerRefusalCloser } from "./refused-operations";
 import {
   bindOperation,
+  boundOperation,
   inWorkspace,
   prepareOperation,
   readOperation,
+  rejectOperation,
   type StoredRequest,
 } from "./valopay-store";
 
@@ -39,6 +42,23 @@ export function recoverableRequest(
   );
 }
 const query = z.object({ merchantId: z.string().min(1).max(100) });
+// Statuses that mean the same request would be refused again. A rate limit,
+// a timeout or a service failure leaves the entry pending: its outcome is unknown.
+const definitive = new Set([400, 403, 404, 409, 410, 413, 415, 422]);
+/** Whether an HTTP status is a definitive refusal of the request that received it. */
+export const definitiveRejection = (status: number) => definitive.has(status);
+/** Closes the request's journal entry after a definitive refusal, so refused
+ * requests never accumulate as pending and lock the person out. Returns
+ * nothing when there is no entry to close, so an ordinary refusal is answered
+ * synchronously. A failure to record it is logged and leaves the entry
+ * pending, the safe direction. */
+export function closeRejectedOperation(req: Parameters<RequestHandler>[0], status: number, message: string): Promise<void> | undefined {
+  const bound = boundOperation(req);
+  if (!bound || !definitiveRejection(status)) return undefined;
+  return rejectOperation(req, bound, { status, message }).catch((error: unknown) => {
+    req.log?.warn?.({ event: "operation.rejection_unrecorded", err: error instanceof Error ? error : new Error(String(error)) }, "A refused request stays pending in the operations journal");
+  });
+}
 const requestKey = z.string().min(8).max(200);
 export const recoveryMiddleware: RequestHandler = async (req, res, next) => {
   try {
@@ -110,7 +130,8 @@ export const recoveryMiddleware: RequestHandler = async (req, res, next) => {
         const id = await inWorkspace(req, res, (ctx) =>
           prepareOperation(ctx, merchantId, key, request),
         );
-        bindOperation(req, id);
+        bindOperation(req, id, merchantId);
+        registerRefusalCloser(req, (status, message) => closeRejectedOperation(req, status, message));
         res.setHeader("X-Valopay-Operation", id);
       }
     }

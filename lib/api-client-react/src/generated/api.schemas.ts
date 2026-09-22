@@ -175,10 +175,6 @@ export const WorkspaceAccessMode = {
  * The caller's workspace: who is acting, in which role, whether they signed in, and the lenders and roles available.
  */
 export interface Workspace {
-  /** Whether the server authorises a demo persona or a provisioned staff membership. */
-  accessMode?: WorkspaceAccessMode;
-  /** Opaque workspace/user scope for browser preferences; never an authorisation credential. */
-  viewerScope?: string;
   name: string;
   environment: string;
   actor: string;
@@ -187,6 +183,10 @@ export interface Workspace {
   merchants: Merchant[];
   roles: string[];
   productionEnabled: boolean;
+  /** Whether the server authorises a demo persona or a provisioned staff membership. */
+  accessMode?: WorkspaceAccessMode;
+  /** Opaque workspace/user scope for browser preferences; never an authorisation credential. */
+  viewerScope?: string;
 }
 
 /**
@@ -449,9 +449,9 @@ export const ExportInputFormat = {
  * What to export (a record kind, gate-pack, billing, dispute-pack or customer-pack with a customerId) and in which format.
  */
 export interface ExportInput {
-  closeReviewId?: string;
   kind: string;
   customerId?: string;
+  closeReviewId?: string;
   format: ExportInputFormat;
 }
 
@@ -482,10 +482,15 @@ export const ExportResultStage = {
  * Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.
  */
 export interface ExportResult {
-  expiredAt?: string;
   id: string;
   downloadUrl: string;
   status?: ExportResultStatus;
+  stage?: ExportResultStage;
+  lastProgressAt?: string;
+  stalled?: boolean;
+  retryAllowed?: boolean;
+  recoveryAt?: string;
+  expiredAt?: string;
   kind?: string;
   format?: string;
   customerId?: string;
@@ -496,11 +501,6 @@ export interface ExportResult {
   byteLength?: number;
   generationMs?: number;
   error?: string;
-  stage?: ExportResultStage;
-  lastProgressAt?: string;
-  stalled?: boolean;
-  retryAllowed?: boolean;
-  recoveryAt?: string;
 }
 
 export type QueuePageCounts = {[key: string]: number};
@@ -628,6 +628,2226 @@ export interface ConnectedActionResult {
   record: RecordData;
   mode: ConnectedActionResultMode;
   externalInstructionPerformed: false;
+}
+
+/**
+ * A confirmation in plain words; nothing else changed that the caller needs to read back.
+ */
+export interface Message {
+  message: string;
+}
+
+export type OperationViewStatus = typeof OperationViewStatus[keyof typeof OperationViewStatus];
+
+
+export const OperationViewStatus = {
+  pending: 'pending',
+  completed: 'completed',
+  cancelled: 'cancelled',
+} as const;
+
+/**
+ * One journal entry: what was asked, by whom, in which role, and whether the service confirmed it. Original request bodies stay private; a completed entry names the record it produced. A refused entry is cancelled and its message says why.
+ */
+export interface OperationView {
+  id: string;
+  label: string;
+  actor: string;
+  role: string;
+  status: OperationViewStatus;
+  createdAt: string;
+  updatedAt: string;
+  message: string;
+  /** @nullable */
+  recordId: string | null;
+  /** @nullable */
+  recordKind: string | null;
+}
+
+/**
+ * The caller's journal for one lender, newest first, 25 rows a page.
+ */
+export interface OperationList {
+  items: OperationView[];
+  total: number;
+  offset: number;
+}
+
+/**
+ * The original route's answer, recovered or re-run under the current validation and authorisation; its shape is that route's response.
+ */
+export interface OperationReplayResult { [key: string]: unknown }
+
+/**
+ * Record counts that place the lender on the pilot journey: customers, committed batches, receipts, open and unassigned cases, closes and ready exports.
+ */
+export interface JourneyCounts {
+  customers: number;
+  batches: number;
+  receipts: number;
+  openCases: number;
+  unassignedCases: number;
+  closes: number;
+  exports: number;
+}
+
+export type PilotJourneyAccessMode = typeof PilotJourneyAccessMode[keyof typeof PilotJourneyAccessMode];
+
+
+export const PilotJourneyAccessMode = {
+  sandbox: 'sandbox',
+  staff: 'staff',
+} as const;
+
+/**
+ * The lender, the caller's access mode and the counts behind the journey view. Synthetic throughout.
+ */
+export interface PilotJourney {
+  lender: Merchant;
+  accessMode: PilotJourneyAccessMode;
+  actor: string;
+  syntheticOnly: true;
+  counts: JourneyCounts;
+}
+
+/**
+ * Import batches newest first, 25 a page, with their source identity, quality totals and check counts but not their rows.
+ */
+export interface ImportBatchList {
+  items: ValopayRecord[];
+  total: number;
+  offset: number;
+}
+
+/**
+ * One batch with its source rows (import operator roles only) and every saved revision.
+ */
+export interface ImportBatchDetail {
+  batch: ValopayRecord;
+  revisions: ValopayRecord[];
+}
+
+/**
+ * The batch version being committed; a stale version is refused (409).
+ */
+export interface BatchVersion {
+  expectedUpdatedAt: string;
+}
+
+export type ImportBatchInputKind = typeof ImportBatchInputKind[keyof typeof ImportBatchInputKind];
+
+
+export const ImportBatchInputKind = {
+  customers: 'customers',
+  mandates: 'mandates',
+  'due-items': 'due-items',
+  attempts: 'attempts',
+  observations: 'observations',
+} as const;
+
+export type ImportBatchInputMapping = {[key: string]: string};
+
+export type ImportBatchInputAmountUnit = typeof ImportBatchInputAmountUnit[keyof typeof ImportBatchInputAmountUnit];
+
+
+export const ImportBatchInputAmountUnit = {
+  naira: 'naira',
+  kobo: 'kobo',
+} as const;
+
+/**
+ * A synthetic source batch: source, source batch ID, record kind, mapping, identity column, amount unit and up to 500 CSV rows. syntheticOnly must be true; raw bank details are refused.
+ */
+export interface ImportBatchInput {
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  name: string;
+  kind: ImportBatchInputKind;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  source: string;
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  sourceBatchId: string;
+  /** @pattern ^\d{4}-\d{2}-\d{2}$ */
+  businessDate?: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  sourceExpectationId?: string;
+  /**
+     * @minLength 1
+     * @maxLength 1500000
+     */
+  csv: string;
+  mapping?: ImportBatchInputMapping;
+  amountUnit: ImportBatchInputAmountUnit;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  identityColumn: string;
+  syntheticOnly: true;
+  expectedUpdatedAt?: string;
+}
+
+/**
+ * A person who can own a case or review a close: demo roles in the sandbox, active staff with lender access on a staff host.
+ */
+export interface Assignee {
+  actor: string;
+  name: string;
+  role: string;
+}
+
+/**
+ * A record the case can cite as evidence.
+ */
+export interface EvidenceLink {
+  id: string;
+  name: string;
+  reference: string;
+  kind: string;
+}
+
+/**
+ * One exception with the people it can be handed to, its handover events and the records it can cite.
+ */
+export interface CaseDetail {
+  record: ValopayRecord;
+  assignees: Assignee[];
+  events: ValopayRecord[];
+  evidence: EvidenceLink[];
+}
+
+export type CaseInputAction = typeof CaseInputAction[keyof typeof CaseInputAction];
+
+
+export const CaseInputAction = {
+  claim: 'claim',
+  handover: 'handover',
+  update: 'update',
+} as const;
+
+/**
+ * A case handover or update: assignee, next action and its time, note and evidence, with the version being changed.
+ */
+export interface CaseInput {
+  action: CaseInputAction;
+  expectedUpdatedAt: string;
+  /** @maxLength 256 */
+  assignee?: string;
+  /**
+     * @minLength 3
+     * @maxLength 2000
+     */
+  note: string;
+  /**
+     * @minLength 3
+     * @maxLength 240
+     */
+  nextAction: string;
+  nextActionAt: string;
+  /**
+     * @maxItems 20
+     * @items.minLength 1
+     * @items.maxLength 100
+     */
+  evidenceIds?: string[];
+}
+
+export type PilotLenderInputSegment = typeof PilotLenderInputSegment[keyof typeof PilotLenderInputSegment];
+
+
+export const PilotLenderInputSegment = {
+  Consumer_lending: 'Consumer lending',
+  Cooperative: 'Cooperative',
+  Asset_finance: 'Asset finance',
+  Business_finance: 'Business finance',
+} as const;
+
+/**
+ * A new synthetic lender for a staff workspace: name and segment.
+ */
+export interface PilotLenderInput {
+  /**
+     * @minLength 2
+     * @maxLength 100
+     */
+  name: string;
+  segment: PilotLenderInputSegment;
+}
+
+export type StaffMemberStatus = typeof StaffMemberStatus[keyof typeof StaffMemberStatus];
+
+
+export const StaffMemberStatus = {
+  active: 'active',
+  suspended: 'suspended',
+  revoked: 'revoked',
+} as const;
+
+/**
+ * A staff membership: its role, state and expiry, and (in the directory) the lenders it may open; an administrator sees every lender.
+ */
+export interface StaffMember {
+  id: string;
+  actor: string;
+  name: string;
+  role: string;
+  status: StaffMemberStatus;
+  expiresAt: string;
+  updatedAt: string;
+  lenderIds?: string[];
+  allLenders?: boolean;
+}
+
+/**
+ * A pending, accepted or revoked invitation; the token is shown once, at creation.
+ */
+export interface StaffInvitation {
+  id: string;
+  email: string;
+  role: string;
+  status: string;
+  expiresAt: string;
+}
+
+/**
+ * One entry of the team's access history.
+ */
+export interface StaffEvent {
+  id: string;
+  actor: string;
+  action: string;
+  subject: string;
+  detail: RecordData;
+  createdAt: string;
+}
+
+export type StaffDirectoryMode = typeof StaffDirectoryMode[keyof typeof StaffDirectoryMode];
+
+
+export const StaffDirectoryMode = {
+  sandbox: 'sandbox',
+  staff: 'staff',
+} as const;
+
+/**
+ * The team as the caller may see it: members and lenders for everyone, invitations and history for administrators. In the sandbox the lists are empty and the message says why.
+ */
+export interface StaffDirectory {
+  mode: StaffDirectoryMode;
+  actor: string;
+  members: StaffMember[];
+  lenders: Merchant[];
+  invitations: StaffInvitation[];
+  events: StaffEvent[];
+  message: string;
+}
+
+export type InvitationInputRole = typeof InvitationInputRole[keyof typeof InvitationInputRole];
+
+
+export const InvitationInputRole = {
+  Admin: 'Admin',
+  Operations: 'Operations',
+  Finance: 'Finance',
+  Compliance_reviewer: 'Compliance reviewer',
+  'Read-only': 'Read-only',
+} as const;
+
+/**
+ * An invitation: email address and pilot role.
+ */
+export interface InvitationInput {
+  /** @maxLength 254 */
+  email: string;
+  role: InvitationInputRole;
+}
+
+/**
+ * The invitation and its one-time acceptance token; no email is sent.
+ */
+export interface InvitationCreated {
+  id: string;
+  token: string;
+  message: string;
+}
+
+/**
+ * The acceptance token from the invitation link.
+ */
+export interface AcceptInvitationInput {
+  /** @pattern ^[a-f0-9]{64}$ */
+  token: string;
+}
+
+/**
+ * Confirmation of the new membership and its role.
+ */
+export interface InvitationAccepted {
+  message: string;
+  role: string;
+}
+
+export type MembershipInputRole = typeof MembershipInputRole[keyof typeof MembershipInputRole];
+
+
+export const MembershipInputRole = {
+  Admin: 'Admin',
+  Operations: 'Operations',
+  Finance: 'Finance',
+  Compliance_reviewer: 'Compliance reviewer',
+  'Read-only': 'Read-only',
+} as const;
+
+export type MembershipInputStatus = typeof MembershipInputStatus[keyof typeof MembershipInputStatus];
+
+
+export const MembershipInputStatus = {
+  active: 'active',
+  suspended: 'suspended',
+  revoked: 'revoked',
+} as const;
+
+/**
+ * A membership change: role, state, the version being changed and the reason.
+ */
+export interface MembershipInput {
+  role: MembershipInputRole;
+  status: MembershipInputStatus;
+  expectedUpdatedAt: string;
+  /**
+     * @minLength 3
+     * @maxLength 500
+     */
+  reason: string;
+}
+
+/**
+ * The lenders a non-administrator membership may open, with the version being changed and the reason.
+ */
+export interface StaffLenderAccessInput {
+  expectedUpdatedAt: string;
+  /**
+     * @maxItems 250
+     * @items.minLength 1
+     * @items.maxLength 100
+     */
+  lenderIds: string[];
+  /**
+     * @minLength 10
+     * @maxLength 1000
+     */
+  reason: string;
+}
+
+export type StaffLenderAccessStatus = typeof StaffLenderAccessStatus[keyof typeof StaffLenderAccessStatus];
+
+
+export const StaffLenderAccessStatus = {
+  active: 'active',
+  suspended: 'suspended',
+  revoked: 'revoked',
+} as const;
+
+/**
+ * The membership with its saved lender access.
+ */
+export interface StaffLenderAccess {
+  id: string;
+  actor: string;
+  name: string;
+  role: string;
+  status: StaffLenderAccessStatus;
+  expiresAt: string;
+  updatedAt: string;
+  lenderIds: string[];
+  allLenders: boolean;
+  message: string;
+}
+
+/**
+ * One readiness control (identity, MFA, origins, database isolation, encryption) with its state on this host and what it means.
+ */
+export interface ReadinessCheck {
+  id: string;
+  name: string;
+  state: string;
+  detail: string;
+}
+
+/**
+ * The staff-access and encryption controls as this request observed them. Describes configuration; never reveals secrets.
+ */
+export interface AccessReadiness {
+  syntheticOnly: true;
+  canCommission: boolean;
+  checkedAt: string;
+  checks: ReadinessCheck[];
+}
+
+/**
+ * The result of sealing and opening a synthetic payload with the configured managed key.
+ */
+export interface EncryptionVerification {
+  message: string;
+  checkedAt: string;
+  verified: boolean;
+}
+
+/**
+ * How many stored payloads one bounded run protected, and whether another run is needed.
+ */
+export interface PayloadProtection {
+  message: string;
+  protectedCount: number;
+  mayHaveMore: boolean;
+}
+
+/**
+ * One pilot step with its state, the evidence behind that state and what is still missing.
+ */
+export interface ProgressStep {
+  id: string;
+  name: string;
+  href: string;
+  state: string;
+  evidence: string[];
+  missing: string[];
+}
+
+/**
+ * Whether real staff access is enabled on this host and what demo progress does not establish.
+ */
+export interface PilotAccess {
+  mode: string;
+  state: string;
+  message: string;
+}
+
+/**
+ * The lender's progress through onboarding, ingestion, reconciliation, exceptions, close review and export, derived from its records.
+ */
+export interface PilotProgress {
+  lender: Merchant;
+  syntheticOnly: true;
+  access: PilotAccess;
+  steps: ProgressStep[];
+}
+
+/**
+ * A close review record with whether its snapshot still matches the close and its source evidence.
+ */
+export type CloseReviewRecord = ValopayRecord & {
+  current: boolean;
+};
+
+/**
+ * One close with the discrepancies a reviewer must answer, why it cannot be reviewed now (if so), pending financial corrections and its reviews.
+ */
+export interface CloseReviewEntry {
+  close: ValopayRecord;
+  issues: RecordData[];
+  /** @nullable */
+  problem: string | null;
+  pendingFinancialCorrections: number;
+  reviews: CloseReviewRecord[];
+}
+
+/**
+ * The 25 newest closes with their reviews, the Finance reviewers available and who the caller is, so the console can enforce separation of duties.
+ */
+export interface CloseReviewList {
+  closes: CloseReviewEntry[];
+  total: number;
+  actor: string;
+  reviewers: Assignee[];
+  accessMode: string;
+  ownPrincipal: string;
+}
+
+export type PrepareCloseReviewInputDiscrepancyResponsesItem = {
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  issueId: string;
+  /**
+     * @minLength 10
+     * @maxLength 3000
+     */
+  explanation: string;
+};
+
+/**
+ * A close review preparation: the close and its version, an independent Finance reviewer, the preparation note and a response to every discrepancy.
+ */
+export interface PrepareCloseReviewInput {
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  closeId: string;
+  expectedUpdatedAt: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  reviewer: string;
+  /**
+     * @minLength 10
+     * @maxLength 3000
+     */
+  preparationNote: string;
+  /** @maxItems 500 */
+  discrepancyResponses: PrepareCloseReviewInputDiscrepancyResponsesItem[];
+  /** @maxLength 3000 */
+  unresolvedAcceptance?: string;
+}
+
+export type DecideCloseReviewInputAction = typeof DecideCloseReviewInputAction[keyof typeof DecideCloseReviewInputAction];
+
+
+export const DecideCloseReviewInputAction = {
+  approve: 'approve',
+  return: 'return',
+} as const;
+
+export type DecideCloseReviewInputSourceExceptionsItem = {
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  issueId: string;
+  /**
+     * @minLength 10
+     * @maxLength 3000
+     */
+  reason: string;
+  /**
+     * @minLength 5
+     * @maxLength 1000
+     */
+  evidence: string;
+};
+
+/**
+ * A review decision: approve or reject with the version being decided, a note and an answer to every source exception.
+ */
+export interface DecideCloseReviewInput {
+  expectedUpdatedAt: string;
+  action: DecideCloseReviewInputAction;
+  /**
+     * @minLength 10
+     * @maxLength 3000
+     */
+  note: string;
+  /** @maxItems 500 */
+  sourceExceptions?: DecideCloseReviewInputSourceExceptionsItem[];
+}
+
+export type ImportCorrectionPreviewInputChanges = {
+  /**
+     * @minLength 2
+     * @maxLength 160
+     */
+  name?: string;
+  /** @maxLength 40 */
+  phoneMasked?: string;
+  /**
+     * @minimum 500000
+     * @maximum 9007199254740991
+     */
+  amountKobo?: number;
+  /** @pattern ^\d{4}-\d{2}-\d{2}$ */
+  dueDate?: string;
+};
+
+/**
+ * The batch, the imported record with its version, and the supported field changes to compare.
+ */
+export interface ImportCorrectionPreviewInput {
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  batchId: string;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  targetId: string;
+  expectedUpdatedAt: string;
+  changes: ImportCorrectionPreviewInputChanges;
+  syntheticOnly: true;
+}
+
+export type ImportCorrectionPreviewDifferencesItemField = typeof ImportCorrectionPreviewDifferencesItemField[keyof typeof ImportCorrectionPreviewDifferencesItemField];
+
+
+export const ImportCorrectionPreviewDifferencesItemField = {
+  name: 'name',
+  phoneMasked: 'phoneMasked',
+  amountKobo: 'amountKobo',
+  dueDate: 'dueDate',
+} as const;
+
+export type ImportCorrectionPreviewDifferencesItem = {
+  field: ImportCorrectionPreviewDifferencesItemField;
+  before: string | number | null;
+  after: string | number;
+};
+
+export type ImportCorrectionPreviewAffectedItem = {
+  id: string;
+  kind: string;
+  name: string;
+  reference: string;
+  status: string;
+  updatedAt: string;
+};
+
+/**
+ * The before/after comparison, the records the change touches, any blockers and the digest a proposal must quote.
+ */
+export interface ImportCorrectionPreview {
+  merchantId: string;
+  batchId: string;
+  targetId: string;
+  targetKind: string;
+  source: string;
+  rowId: string;
+  targetUpdatedAt: string;
+  financial: boolean;
+  previewDigest: string;
+  differences: ImportCorrectionPreviewDifferencesItem[];
+  affected: ImportCorrectionPreviewAffectedItem[];
+  blockers: string[];
+  consequence: string;
+}
+
+export type ImportCorrectionProposalInputChanges = {
+  /**
+     * @minLength 2
+     * @maxLength 160
+     */
+  name?: string;
+  /** @maxLength 40 */
+  phoneMasked?: string;
+  /**
+     * @minimum 500000
+     * @maximum 9007199254740991
+     */
+  amountKobo?: number;
+  /** @pattern ^\d{4}-\d{2}-\d{2}$ */
+  dueDate?: string;
+};
+
+/**
+ * A proposal quoting the preview digest, naming an independent Finance reviewer, with the reason and evidence.
+ */
+export interface ImportCorrectionProposalInput {
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  batchId: string;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  targetId: string;
+  expectedUpdatedAt: string;
+  changes: ImportCorrectionProposalInputChanges;
+  syntheticOnly: true;
+  /** @pattern ^[a-f0-9]{64}$ */
+  previewDigest: string;
+  /**
+     * @minLength 1
+     * @maxLength 180
+     */
+  reviewer: string;
+  /**
+     * @minLength 10
+     * @maxLength 1000
+     */
+  reason: string;
+  /**
+     * @minLength 5
+     * @maxLength 1000
+     */
+  evidence: string;
+}
+
+export type ImportCorrectionDecisionInputAction = typeof ImportCorrectionDecisionInputAction[keyof typeof ImportCorrectionDecisionInputAction];
+
+
+export const ImportCorrectionDecisionInputAction = {
+  approve: 'approve',
+  reject: 'reject',
+  withdraw: 'withdraw',
+} as const;
+
+/**
+ * Approve, reject or withdraw, quoting the proposal digest, with a reason.
+ */
+export interface ImportCorrectionDecisionInput {
+  /** @pattern ^[a-f0-9]{64}$ */
+  proposalDigest: string;
+  action: ImportCorrectionDecisionInputAction;
+  /**
+     * @minLength 10
+     * @maxLength 1000
+     */
+  reason: string;
+}
+
+export type ImportCorrectionViewStatus = typeof ImportCorrectionViewStatus[keyof typeof ImportCorrectionViewStatus];
+
+
+export const ImportCorrectionViewStatus = {
+  awaiting_review: 'awaiting_review',
+  approved: 'approved',
+  rejected: 'rejected',
+  withdrawn: 'withdrawn',
+} as const;
+
+export type ImportCorrectionViewPreviewDifferencesItemField = typeof ImportCorrectionViewPreviewDifferencesItemField[keyof typeof ImportCorrectionViewPreviewDifferencesItemField];
+
+
+export const ImportCorrectionViewPreviewDifferencesItemField = {
+  name: 'name',
+  phoneMasked: 'phoneMasked',
+  amountKobo: 'amountKobo',
+  dueDate: 'dueDate',
+} as const;
+
+export type ImportCorrectionViewPreviewDifferencesItem = {
+  field: ImportCorrectionViewPreviewDifferencesItemField;
+  before: string | number | null;
+  after: string | number;
+};
+
+export type ImportCorrectionViewPreviewAffectedItem = {
+  id: string;
+  kind: string;
+  name: string;
+  reference: string;
+  status: string;
+  updatedAt: string;
+};
+
+export type ImportCorrectionViewPreview = {
+  merchantId: string;
+  batchId: string;
+  targetId: string;
+  targetKind: string;
+  source: string;
+  rowId: string;
+  targetUpdatedAt: string;
+  financial: boolean;
+  previewDigest: string;
+  differences: ImportCorrectionViewPreviewDifferencesItem[];
+  affected: ImportCorrectionViewPreviewAffectedItem[];
+  blockers: string[];
+  consequence: string;
+};
+
+export type ImportCorrectionViewDecisionAction = typeof ImportCorrectionViewDecisionAction[keyof typeof ImportCorrectionViewDecisionAction];
+
+
+export const ImportCorrectionViewDecisionAction = {
+  approve: 'approve',
+  reject: 'reject',
+  withdraw: 'withdraw',
+} as const;
+
+/**
+ * @nullable
+ */
+export type ImportCorrectionViewDecision = {
+  id: string;
+  action: ImportCorrectionViewDecisionAction;
+  actor: string;
+  principalId: string;
+  reason: string;
+  at: string;
+} | null;
+
+/**
+ * A proposal with its preview, its decision if any, and whether the comparison is still current.
+ */
+export interface ImportCorrectionView {
+  id: string;
+  merchantId: string;
+  createdAt: string;
+  proposedBy: string;
+  proposedPrincipal: string;
+  reviewer: string;
+  reason: string;
+  evidence: string;
+  proposalDigest: string;
+  status: ImportCorrectionViewStatus;
+  current: boolean;
+  preview: ImportCorrectionViewPreview;
+  /** @nullable */
+  decision: ImportCorrectionViewDecision;
+}
+
+export type ImportCorrectionListTargetsItem = {
+  id: string;
+  kind: string;
+  name: string;
+  reference: string;
+  updatedAt: string;
+  rowId: string;
+  amountKobo: number;
+  /** @nullable */
+  dueDate: string | null;
+  phoneMasked: string;
+  supported: boolean;
+  status: string;
+};
+
+export type ImportCorrectionListProposalsItemStatus = typeof ImportCorrectionListProposalsItemStatus[keyof typeof ImportCorrectionListProposalsItemStatus];
+
+
+export const ImportCorrectionListProposalsItemStatus = {
+  awaiting_review: 'awaiting_review',
+  approved: 'approved',
+  rejected: 'rejected',
+  withdrawn: 'withdrawn',
+} as const;
+
+export type ImportCorrectionListProposalsItemPreviewDifferencesItemField = typeof ImportCorrectionListProposalsItemPreviewDifferencesItemField[keyof typeof ImportCorrectionListProposalsItemPreviewDifferencesItemField];
+
+
+export const ImportCorrectionListProposalsItemPreviewDifferencesItemField = {
+  name: 'name',
+  phoneMasked: 'phoneMasked',
+  amountKobo: 'amountKobo',
+  dueDate: 'dueDate',
+} as const;
+
+export type ImportCorrectionListProposalsItemPreviewDifferencesItem = {
+  field: ImportCorrectionListProposalsItemPreviewDifferencesItemField;
+  before: string | number | null;
+  after: string | number;
+};
+
+export type ImportCorrectionListProposalsItemPreviewAffectedItem = {
+  id: string;
+  kind: string;
+  name: string;
+  reference: string;
+  status: string;
+  updatedAt: string;
+};
+
+export type ImportCorrectionListProposalsItemPreview = {
+  merchantId: string;
+  batchId: string;
+  targetId: string;
+  targetKind: string;
+  source: string;
+  rowId: string;
+  targetUpdatedAt: string;
+  financial: boolean;
+  previewDigest: string;
+  differences: ImportCorrectionListProposalsItemPreviewDifferencesItem[];
+  affected: ImportCorrectionListProposalsItemPreviewAffectedItem[];
+  blockers: string[];
+  consequence: string;
+};
+
+export type ImportCorrectionListProposalsItemDecisionAction = typeof ImportCorrectionListProposalsItemDecisionAction[keyof typeof ImportCorrectionListProposalsItemDecisionAction];
+
+
+export const ImportCorrectionListProposalsItemDecisionAction = {
+  approve: 'approve',
+  reject: 'reject',
+  withdraw: 'withdraw',
+} as const;
+
+/**
+ * @nullable
+ */
+export type ImportCorrectionListProposalsItemDecision = {
+  id: string;
+  action: ImportCorrectionListProposalsItemDecisionAction;
+  actor: string;
+  principalId: string;
+  reason: string;
+  at: string;
+} | null;
+
+export type ImportCorrectionListProposalsItem = {
+  id: string;
+  merchantId: string;
+  createdAt: string;
+  proposedBy: string;
+  proposedPrincipal: string;
+  reviewer: string;
+  reason: string;
+  evidence: string;
+  proposalDigest: string;
+  status: ImportCorrectionListProposalsItemStatus;
+  current: boolean;
+  preview: ImportCorrectionListProposalsItemPreview;
+  /** @nullable */
+  decision: ImportCorrectionListProposalsItemDecision;
+};
+
+export type ImportCorrectionListReviewersItem = {
+  actor: string;
+  name: string;
+  role: string;
+};
+
+/**
+ * The batch's imported records, its proposals and the Finance reviewers available.
+ */
+export interface ImportCorrectionList {
+  batchId: string;
+  actor: string;
+  ownPrincipal: string;
+  role: string;
+  targets: ImportCorrectionListTargetsItem[];
+  proposals: ImportCorrectionListProposalsItem[];
+  reviewers: ImportCorrectionListReviewersItem[];
+  syntheticOnly: true;
+}
+
+export type SourceProfileInputKind = typeof SourceProfileInputKind[keyof typeof SourceProfileInputKind];
+
+
+export const SourceProfileInputKind = {
+  customers: 'customers',
+  mandates: 'mandates',
+  'due-items': 'due-items',
+  attempts: 'attempts',
+  observations: 'observations',
+} as const;
+
+export type SourceProfileInputMapping = {[key: string]: string};
+
+export type SourceProfileInputAmountUnit = typeof SourceProfileInputAmountUnit[keyof typeof SourceProfileInputAmountUnit];
+
+
+export const SourceProfileInputAmountUnit = {
+  naira: 'naira',
+  kobo: 'kobo',
+} as const;
+
+export type SourceProfileInputStatus = typeof SourceProfileInputStatus[keyof typeof SourceProfileInputStatus];
+
+
+export const SourceProfileInputStatus = {
+  active: 'active',
+  paused: 'paused',
+} as const;
+
+/**
+ * A reusable synthetic source contract: mapping, identity column, amount unit, first expected delivery, cadence, grace and expected totals.
+ */
+export interface SourceProfileInput {
+  /**
+     * @minLength 2
+     * @maxLength 120
+     */
+  name: string;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  source: string;
+  kind: SourceProfileInputKind;
+  mapping?: SourceProfileInputMapping;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  identityColumn: string;
+  amountUnit: SourceProfileInputAmountUnit;
+  firstExpectedAt: string;
+  /**
+     * @minimum 1
+     * @maximum 8760
+     */
+  cadenceHours: number;
+  /**
+     * @minimum 0
+     * @maximum 10080
+     */
+  graceMinutes: number;
+  /**
+     * @minimum 0
+     * @maximum 500
+     * @nullable
+     */
+  expectedRows?: number | null;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     * @nullable
+     */
+  expectedAmountKobo?: number | null;
+  status?: SourceProfileInputStatus;
+  syntheticOnly: true;
+  expectedUpdatedAt?: string;
+}
+
+export type SourceManifestInputFilesItemKind = typeof SourceManifestInputFilesItemKind[keyof typeof SourceManifestInputFilesItemKind];
+
+
+export const SourceManifestInputFilesItemKind = {
+  customers: 'customers',
+  mandates: 'mandates',
+  'due-items': 'due-items',
+  attempts: 'attempts',
+  observations: 'observations',
+} as const;
+
+export type SourceManifestInputFilesItem = {
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  source: string;
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  sourceBatchId: string;
+  kind: SourceManifestInputFilesItemKind;
+  /**
+     * @minimum 0
+     * @maximum 500
+     */
+  expectedRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  expectedAmountKobo: number;
+};
+
+/**
+ * The files and control totals expected for one WAT business date, or an explicit no-file declaration, with reason and evidence; a revision names the declaration it replaces.
+ */
+export interface SourceManifestInput {
+  /** @pattern ^\d{4}-\d{2}-\d{2}$ */
+  businessDate: string;
+  /** @maxItems 100 */
+  files: SourceManifestInputFilesItem[];
+  noFilesExpected: boolean;
+  /**
+     * @minLength 10
+     * @maxLength 3000
+     */
+  reason: string;
+  /**
+     * @minLength 5
+     * @maxLength 1000
+     */
+  evidence: string;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  previousManifestId?: string;
+  expectedUpdatedAt?: string;
+  syntheticOnly: true;
+}
+
+export type SourceCompletenessManifestData = {[key: string]: unknown};
+
+/**
+ * @nullable
+ */
+export type SourceCompletenessManifest = {
+  id: string;
+  updatedAt: string;
+  data: SourceCompletenessManifestData;
+} | null;
+
+export type SourceCompletenessFilesItemKind = typeof SourceCompletenessFilesItemKind[keyof typeof SourceCompletenessFilesItemKind];
+
+
+export const SourceCompletenessFilesItemKind = {
+  customers: 'customers',
+  mandates: 'mandates',
+  'due-items': 'due-items',
+  attempts: 'attempts',
+  observations: 'observations',
+} as const;
+
+export type SourceCompletenessFilesItemStatus = typeof SourceCompletenessFilesItemStatus[keyof typeof SourceCompletenessFilesItemStatus];
+
+
+export const SourceCompletenessFilesItemStatus = {
+  complete: 'complete',
+  incomplete: 'incomplete',
+} as const;
+
+export type SourceCompletenessFilesItem = {
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  source: string;
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  sourceBatchId: string;
+  kind: SourceCompletenessFilesItemKind;
+  /**
+     * @minimum 0
+     * @maximum 500
+     */
+  expectedRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  expectedAmountKobo: number;
+  id: string;
+  /** @nullable */
+  batchId: string | null;
+  batchStatus: string;
+  /**
+     * @nullable
+     * @pattern ^\d{4}-\d{2}-\d{2}$
+     */
+  businessDate: string | null;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     * @nullable
+     */
+  receivedRows: number | null;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     * @nullable
+     */
+  receivedAmountKobo: number | null;
+  status: SourceCompletenessFilesItemStatus;
+  problems: string[];
+};
+
+export type SourceCompletenessActiveProfilesItem = {
+  id: string;
+  source: string;
+  kind: string;
+};
+
+export type SourceCompletenessUndeclaredItem = {
+  id: string;
+  name: string;
+  status: string;
+  source: string;
+  sourceBatchId: string;
+  kind: string;
+};
+
+export type SourceCompletenessStatus = typeof SourceCompletenessStatus[keyof typeof SourceCompletenessStatus];
+
+
+export const SourceCompletenessStatus = {
+  complete: 'complete',
+  incomplete: 'incomplete',
+} as const;
+
+export type SourceCompletenessIssuesItem = {
+  id: string;
+  label: string;
+  detail: string;
+};
+
+/**
+ * Whether the declared source files for a business date arrived complete, with each file's state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer.
+ */
+export interface SourceCompleteness {
+  /** @pattern ^\d{4}-\d{2}-\d{2}$ */
+  businessDate: string;
+  /** @nullable */
+  manifest: SourceCompletenessManifest;
+  files: SourceCompletenessFilesItem[];
+  activeProfiles: SourceCompletenessActiveProfilesItem[];
+  undeclared: SourceCompletenessUndeclaredItem[];
+  status: SourceCompletenessStatus;
+  issues: SourceCompletenessIssuesItem[];
+  /** @pattern ^[a-f0-9]{64}$ */
+  basisDigest: string;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  expectedFiles: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  completeFiles: number;
+}
+
+export type SourceBatchQualityStatus = typeof SourceBatchQualityStatus[keyof typeof SourceBatchQualityStatus];
+
+
+export const SourceBatchQualityStatus = {
+  checked: 'checked',
+  needs_review: 'needs_review',
+  unavailable: 'unavailable',
+} as const;
+
+/**
+ * The original committed totals and checks of a source batch.
+ */
+export interface SourceBatchQuality {
+  /** @nullable */
+  profileId: string | null;
+  /** @nullable */
+  profileVersion: string | null;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  sourceRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     * @nullable
+     */
+  sourceAmountKobo: number | null;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  importedRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     * @nullable
+     */
+  importedAmountKobo: number | null;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  duplicateRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  conflictRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  invalidRows: number;
+  status: SourceBatchQualityStatus;
+  issues: string[];
+}
+
+export type PaystackFixtureInputScenario = typeof PaystackFixtureInputScenario[keyof typeof PaystackFixtureInputScenario];
+
+
+export const PaystackFixtureInputScenario = {
+  payment: 'payment',
+  duplicate: 'duplicate',
+  amount_mismatch: 'amount_mismatch',
+  out_of_order: 'out_of_order',
+  tampered: 'tampered',
+} as const;
+
+/**
+ * A recorded Paystack test scenario to deliver to the inbox.
+ */
+export interface PaystackFixtureInput {
+  scenario: PaystackFixtureInputScenario;
+  syntheticOnly: true;
+}
+
+/**
+ * A replay of a stored provider event, with its version and the reason.
+ */
+export interface ProviderReplayInput {
+  expectedUpdatedAt: string;
+  /**
+     * @minLength 3
+     * @maxLength 500
+     */
+  reason: string;
+}
+
+/**
+ * Where a profile stands against its cadence: missed deliveries, the next expected time and the last committed batch.
+ */
+export interface SourceDelivery {
+  status: string;
+  missedDeliveries: number;
+  nextExpectedAt: string;
+  /** @nullable */
+  lastCommittedAt: string | null;
+  /** @nullable */
+  lastBatchId: string | null;
+}
+
+/**
+ * A source profile record with its delivery state.
+ */
+export type SourceProfile = ValopayRecord & {
+  delivery: SourceDelivery;
+};
+
+/**
+ * A batch as the sources page lists it, with its original quality totals.
+ */
+export interface SourceBatchSummary {
+  id: string;
+  name: string;
+  source: string;
+  sourceBatchId: string;
+  kind: string;
+  status: string;
+  createdAt: string;
+  quality: SourceBatchQuality;
+}
+
+/**
+ * Counts that need attention: late sources, duplicate and conflicting rows, batches needing review.
+ */
+export interface SourceSummary {
+  lateSources: number;
+  duplicateRows: number;
+  conflictRows: number;
+  batchesNeedingReview: number;
+}
+
+export type ProviderEventMode = typeof ProviderEventMode[keyof typeof ProviderEventMode];
+
+
+export const ProviderEventMode = {
+  fixture: 'fixture',
+  test: 'test',
+} as const;
+
+/**
+ * A stored provider event: fixture or test mode, how often it was delivered and replayed, and the guarantee that it created no financial record.
+ */
+export interface ProviderEvent {
+  id: string;
+  name: string;
+  status: string;
+  reference: string;
+  amountKobo: number;
+  createdAt: string;
+  updatedAt: string;
+  mode: ProviderEventMode;
+  message: string;
+  deliveryCount: number;
+  replayCount: number;
+  financialRecordsCreated: 0;
+}
+
+/**
+ * The read-only Paystack test inbox: its fixed test-only state, the stored events and how many were quarantined or duplicated.
+ */
+export interface PaystackInbox {
+  mode: 'test_only';
+  externalConnectionVerified: false;
+  canRunFixtures: boolean;
+  state: 'configuration_required';
+  message: string;
+  events: ProviderEvent[];
+  total: number;
+  quarantined: number;
+  duplicates: number;
+}
+
+/**
+ * Everything the sources page shows for one lender and business date.
+ */
+export interface SourcesView {
+  completeness: SourceCompleteness;
+  profiles: SourceProfile[];
+  batches: SourceBatchSummary[];
+  summary: SourceSummary;
+  paystack: PaystackInbox;
+}
+
+/**
+ * Whether the fixture was accepted or recognised as a duplicate, and the stored event.
+ */
+export interface PaystackFixtureResult {
+  accepted: boolean;
+  duplicate: boolean;
+  event: ProviderEvent;
+}
+
+export type PersonalWorkViewScope = typeof PersonalWorkViewScope[keyof typeof PersonalWorkViewScope];
+
+
+export const PersonalWorkViewScope = {
+  mine: 'mine',
+  team: 'team',
+} as const;
+
+export type PersonalWorkViewFilter = typeof PersonalWorkViewFilter[keyof typeof PersonalWorkViewFilter];
+
+
+export const PersonalWorkViewFilter = {
+  all: 'all',
+  overdue: 'overdue',
+  handover: 'handover',
+  review: 'review',
+  unread: 'unread',
+} as const;
+
+export type PersonalWorkViewItemsItemType = typeof PersonalWorkViewItemsItemType[keyof typeof PersonalWorkViewItemsItemType];
+
+
+export const PersonalWorkViewItemsItemType = {
+  case: 'case',
+  handover: 'handover',
+  review: 'review',
+} as const;
+
+export type PersonalWorkViewItemsItem = {
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  id: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  eventId: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  sourceId: string;
+  sourceVersion: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  sourceDigest: string;
+  type: PersonalWorkViewItemsItemType;
+  title: string;
+  nextAction: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  assignee: string;
+  assigneeName: string;
+  /** @nullable */
+  dueAt: string | null;
+  overdue: boolean;
+  escalated: boolean;
+  /** @nullable */
+  escalationReason: string | null;
+  /** @nullable */
+  reviewCurrent: boolean | null;
+  href: string;
+  /** @nullable */
+  readAt: string | null;
+  canAcknowledge: boolean;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     * @nullable
+     */
+  assignmentEventId: string | null;
+  /** @nullable */
+  notice: string | null;
+};
+
+export type PersonalWorkViewCounts = {
+  /** @minimum 0 */
+  all: number;
+  /** @minimum 0 */
+  overdue: number;
+  /** @minimum 0 */
+  handover: number;
+  /** @minimum 0 */
+  review: number;
+  /** @minimum 0 */
+  unread: number;
+  /** @minimum 0 */
+  escalated: number;
+};
+
+export type PersonalWorkViewWorkloadItem = {
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  actor: string;
+  name: string;
+  /** @minimum 0 */
+  total: number;
+  /** @minimum 0 */
+  overdue: number;
+  /** @minimum 0 */
+  handovers: number;
+  /** @minimum 0 */
+  reviews: number;
+  /** @minimum 0 */
+  escalated: number;
+};
+
+export type PersonalWorkViewHistoryItemAction = typeof PersonalWorkViewHistoryItemAction[keyof typeof PersonalWorkViewHistoryItemAction];
+
+
+export const PersonalWorkViewHistoryItemAction = {
+  read: 'read',
+  acknowledge: 'acknowledge',
+} as const;
+
+export type PersonalWorkViewHistoryItem = {
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  id: string;
+  action: PersonalWorkViewHistoryItemAction;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  sourceId: string;
+  summary: string;
+  at: string;
+  href: string;
+};
+
+/**
+ * The caller's (or, for administrators, the team's) cases, handovers, reviews and notifications, paged and counted.
+ */
+export interface PersonalWorkView {
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  merchantId: string;
+  lenderName: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  actor: string;
+  role: string;
+  asOf: string;
+  syntheticOnly: true;
+  canViewTeam: boolean;
+  canWork: boolean;
+  scope: PersonalWorkViewScope;
+  filter?: PersonalWorkViewFilter;
+  /** @maxItems 50 */
+  items: PersonalWorkViewItemsItem[];
+  /** @minimum 0 */
+  total: number;
+  /** @minimum 0 */
+  offset: number;
+  /**
+     * @minimum 1
+     * @maximum 50
+     */
+  limit: number;
+  counts: PersonalWorkViewCounts;
+  /** @maxItems 100 */
+  workload: PersonalWorkViewWorkloadItem[];
+  /** @minimum 0 */
+  workloadTotal: number;
+  /** @maxItems 10 */
+  history: PersonalWorkViewHistoryItem[];
+  escalationRule: string;
+}
+
+/**
+ * The item being acknowledged, with its version.
+ */
+export interface WorkReceiptInput {
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  sourceId: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  eventId: string;
+  expectedUpdatedAt: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  expectedDigest: string;
+}
+
+export type WorkReceiptAction = typeof WorkReceiptAction[keyof typeof WorkReceiptAction];
+
+
+export const WorkReceiptAction = {
+  read: 'read',
+  acknowledge: 'acknowledge',
+} as const;
+
+/**
+ * The recorded acknowledgement: who, what, and when.
+ */
+export interface WorkReceipt {
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  id: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  merchantId: string;
+  action: WorkReceiptAction;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  sourceId: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  eventId: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  actor: string;
+  at: string;
+  duplicate: boolean;
+  syntheticOnly: true;
+  financialStatusChanged: false;
+}
+
+export type LifecycleViewPolicy = {
+  /**
+     * @minimum 1
+     * @maximum 3650
+     * @nullable
+     */
+  rawCsvDays: number | null;
+  /**
+     * @minimum 1
+     * @maximum 3650
+     * @nullable
+     */
+  journalPayloadDays: number | null;
+  /**
+     * @minimum 1
+     * @maximum 3650
+     * @nullable
+     */
+  exportFileDays: number | null;
+  auditTrail: 'retain';
+};
+
+export type LifecycleViewTargetsItemKind = typeof LifecycleViewTargetsItemKind[keyof typeof LifecycleViewTargetsItemKind];
+
+
+export const LifecycleViewTargetsItemKind = {
+  raw_csv: 'raw_csv',
+  journal_payload: 'journal_payload',
+  export_file: 'export_file',
+} as const;
+
+export type LifecycleViewTargetsItemStatus = typeof LifecycleViewTargetsItemStatus[keyof typeof LifecycleViewTargetsItemStatus];
+
+
+export const LifecycleViewTargetsItemStatus = {
+  committed: 'committed',
+  completed: 'completed',
+  cancelled: 'cancelled',
+  ready: 'ready',
+  failed: 'failed',
+} as const;
+
+export type LifecycleViewTargetsItem = {
+  kind: LifecycleViewTargetsItemKind;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  merchantId: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  sourceId: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  version: string;
+  createdAt: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  label: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  digest: string;
+  status: LifecycleViewTargetsItemStatus;
+  held: boolean;
+};
+
+export type LifecycleViewHoldsItemKind = typeof LifecycleViewHoldsItemKind[keyof typeof LifecycleViewHoldsItemKind];
+
+
+export const LifecycleViewHoldsItemKind = {
+  raw_csv: 'raw_csv',
+  journal_payload: 'journal_payload',
+  export_file: 'export_file',
+} as const;
+
+export type LifecycleViewHoldsItem = {
+  kind: LifecycleViewHoldsItemKind;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  sourceId: string;
+  reason: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  actor: string;
+  at: string;
+};
+
+export type LifecycleViewRunsItemStatus = typeof LifecycleViewRunsItemStatus[keyof typeof LifecycleViewRunsItemStatus];
+
+
+export const LifecycleViewRunsItemStatus = {
+  preview: 'preview',
+  approved: 'approved',
+  running: 'running',
+  completed: 'completed',
+  attention: 'attention',
+} as const;
+
+export type LifecycleViewRunsItemCandidatesItemKind = typeof LifecycleViewRunsItemCandidatesItemKind[keyof typeof LifecycleViewRunsItemCandidatesItemKind];
+
+
+export const LifecycleViewRunsItemCandidatesItemKind = {
+  raw_csv: 'raw_csv',
+  journal_payload: 'journal_payload',
+  export_file: 'export_file',
+} as const;
+
+export type LifecycleViewRunsItemCandidatesItemStatus = typeof LifecycleViewRunsItemCandidatesItemStatus[keyof typeof LifecycleViewRunsItemCandidatesItemStatus];
+
+
+export const LifecycleViewRunsItemCandidatesItemStatus = {
+  committed: 'committed',
+  completed: 'completed',
+  cancelled: 'cancelled',
+  ready: 'ready',
+  failed: 'failed',
+} as const;
+
+export type LifecycleViewRunsItemCandidatesItem = {
+  kind: LifecycleViewRunsItemCandidatesItemKind;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  merchantId: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  sourceId: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  version: string;
+  createdAt: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  label: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  digest: string;
+  status: LifecycleViewRunsItemCandidatesItemStatus;
+};
+
+export type LifecycleViewRunsItemReceiptsItemKind = typeof LifecycleViewRunsItemReceiptsItemKind[keyof typeof LifecycleViewRunsItemReceiptsItemKind];
+
+
+export const LifecycleViewRunsItemReceiptsItemKind = {
+  raw_csv: 'raw_csv',
+  journal_payload: 'journal_payload',
+  export_file: 'export_file',
+} as const;
+
+export type LifecycleViewRunsItemReceiptsItemStatus = typeof LifecycleViewRunsItemReceiptsItemStatus[keyof typeof LifecycleViewRunsItemReceiptsItemStatus];
+
+
+export const LifecycleViewRunsItemReceiptsItemStatus = {
+  deleted: 'deleted',
+  already_absent: 'already_absent',
+  blocked: 'blocked',
+  failed: 'failed',
+} as const;
+
+export type LifecycleViewRunsItemReceiptsItem = {
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  id: string;
+  kind: LifecycleViewRunsItemReceiptsItemKind;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  sourceId: string;
+  status: LifecycleViewRunsItemReceiptsItemStatus;
+  at: string;
+  detail: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  actor: string;
+};
+
+export type LifecycleViewRunsItem = {
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  id: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  merchantId: string;
+  status: LifecycleViewRunsItemStatus;
+  updatedAt: string;
+  createdAt: string;
+  expiresAt: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  previewDigest: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  policyRevision: string;
+  /** @maxItems 100 */
+  candidates: LifecycleViewRunsItemCandidatesItem[];
+  /** @minimum 0 */
+  candidateCount: number;
+  /** @minimum 0 */
+  moreEligible: number;
+  /** @nullable */
+  approvedBy: string | null;
+  /** @nullable */
+  approvedAt: string | null;
+  /** @maxItems 100 */
+  receipts: LifecycleViewRunsItemReceiptsItem[];
+  /** @minimum 0 */
+  successful: number;
+  /** @minimum 0 */
+  remaining: number;
+  auditRetained: true;
+  financialRecordsRetained: true;
+  syntheticOnly: true;
+};
+
+/**
+ * The lender's retention policy, holds, bounded inventory of what the policy would touch, and saved retention runs.
+ */
+export interface LifecycleView {
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  merchantId: string;
+  lenderName: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  actor: string;
+  asOf: string;
+  policy: LifecycleViewPolicy;
+  /** @pattern ^[a-f0-9]{64}$ */
+  policyRevision: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  holdRevision: string;
+  /** @minimum 0 */
+  eligibleCount: number;
+  /** @maxItems 100 */
+  targets: LifecycleViewTargetsItem[];
+  /** @minimum 0 */
+  targetTotal: number;
+  /** @minimum 0 */
+  targetOffset: number;
+  /** @maxItems 100 */
+  holds: LifecycleViewHoldsItem[];
+  /** @minimum 0 */
+  holdTotal: number;
+  /** @maxItems 10 */
+  runs: LifecycleViewRunsItem[];
+  auditRetained: true;
+  financialRecordsRetained: true;
+  syntheticOnly: true;
+}
+
+export type LifecycleRunViewStatus = typeof LifecycleRunViewStatus[keyof typeof LifecycleRunViewStatus];
+
+
+export const LifecycleRunViewStatus = {
+  preview: 'preview',
+  approved: 'approved',
+  running: 'running',
+  completed: 'completed',
+  attention: 'attention',
+} as const;
+
+export type LifecycleRunViewCandidatesItemKind = typeof LifecycleRunViewCandidatesItemKind[keyof typeof LifecycleRunViewCandidatesItemKind];
+
+
+export const LifecycleRunViewCandidatesItemKind = {
+  raw_csv: 'raw_csv',
+  journal_payload: 'journal_payload',
+  export_file: 'export_file',
+} as const;
+
+export type LifecycleRunViewCandidatesItemStatus = typeof LifecycleRunViewCandidatesItemStatus[keyof typeof LifecycleRunViewCandidatesItemStatus];
+
+
+export const LifecycleRunViewCandidatesItemStatus = {
+  committed: 'committed',
+  completed: 'completed',
+  cancelled: 'cancelled',
+  ready: 'ready',
+  failed: 'failed',
+} as const;
+
+export type LifecycleRunViewCandidatesItem = {
+  kind: LifecycleRunViewCandidatesItemKind;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  merchantId: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  sourceId: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  version: string;
+  createdAt: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  label: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  digest: string;
+  status: LifecycleRunViewCandidatesItemStatus;
+};
+
+export type LifecycleRunViewReceiptsItemKind = typeof LifecycleRunViewReceiptsItemKind[keyof typeof LifecycleRunViewReceiptsItemKind];
+
+
+export const LifecycleRunViewReceiptsItemKind = {
+  raw_csv: 'raw_csv',
+  journal_payload: 'journal_payload',
+  export_file: 'export_file',
+} as const;
+
+export type LifecycleRunViewReceiptsItemStatus = typeof LifecycleRunViewReceiptsItemStatus[keyof typeof LifecycleRunViewReceiptsItemStatus];
+
+
+export const LifecycleRunViewReceiptsItemStatus = {
+  deleted: 'deleted',
+  already_absent: 'already_absent',
+  blocked: 'blocked',
+  failed: 'failed',
+} as const;
+
+export type LifecycleRunViewReceiptsItem = {
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  id: string;
+  kind: LifecycleRunViewReceiptsItemKind;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  sourceId: string;
+  status: LifecycleRunViewReceiptsItemStatus;
+  at: string;
+  detail: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  actor: string;
+};
+
+/**
+ * One retention run: its reviewed manifest, approval state and per-item receipts.
+ */
+export interface LifecycleRunView {
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  id: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  merchantId: string;
+  status: LifecycleRunViewStatus;
+  updatedAt: string;
+  createdAt: string;
+  expiresAt: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  previewDigest: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  policyRevision: string;
+  /** @maxItems 100 */
+  candidates: LifecycleRunViewCandidatesItem[];
+  /** @minimum 0 */
+  candidateCount: number;
+  /** @minimum 0 */
+  moreEligible: number;
+  /** @nullable */
+  approvedBy: string | null;
+  /** @nullable */
+  approvedAt: string | null;
+  /** @maxItems 100 */
+  receipts: LifecycleRunViewReceiptsItem[];
+  /** @minimum 0 */
+  successful: number;
+  /** @minimum 0 */
+  remaining: number;
+  auditRetained: true;
+  financialRecordsRetained: true;
+  syntheticOnly: true;
+}
+
+export type RetentionPolicyInputPolicy = {
+  /**
+     * @minimum 1
+     * @maximum 3650
+     * @nullable
+     */
+  rawCsvDays: number | null;
+  /**
+     * @minimum 1
+     * @maximum 3650
+     * @nullable
+     */
+  journalPayloadDays: number | null;
+  /**
+     * @minimum 1
+     * @maximum 3650
+     * @nullable
+     */
+  exportFileDays: number | null;
+  auditTrail: 'retain';
+};
+
+/**
+ * The retention periods per kind, with the version being changed and the reason.
+ */
+export interface RetentionPolicyInput {
+  policy: RetentionPolicyInputPolicy;
+  /** @pattern ^[a-f0-9]{64}$ */
+  expectedRevision: string;
+  /**
+     * @minLength 10
+     * @maxLength 500
+     */
+  reason: string;
+}
+
+export type RetentionHoldInputKind = typeof RetentionHoldInputKind[keyof typeof RetentionHoldInputKind];
+
+
+export const RetentionHoldInputKind = {
+  raw_csv: 'raw_csv',
+  journal_payload: 'journal_payload',
+  export_file: 'export_file',
+} as const;
+
+/**
+ * A hold on one item, or its release, with the reason.
+ */
+export interface RetentionHoldInput {
+  kind: RetentionHoldInputKind;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  sourceId: string;
+  held: boolean;
+  /** @pattern ^[a-f0-9]{64}$ */
+  expectedHoldRevision: string;
+  /**
+     * @minLength 10
+     * @maxLength 500
+     */
+  reason: string;
+}
+
+/**
+ * Which kinds to preview and the reason for the run.
+ */
+export interface LifecyclePreviewInput {
+  /** @pattern ^[a-f0-9]{64}$ */
+  expectedPolicyRevision: string;
+}
+
+/**
+ * Approval of a previewed run, quoting its manifest digest.
+ */
+export interface LifecycleApproveInput {
+  expectedUpdatedAt: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  previewDigest: string;
+  /**
+     * @minLength 10
+     * @maxLength 500
+     */
+  reason: string;
+}
+
+/**
+ * Execution of an approved run, quoting its manifest digest, in bounded batches.
+ */
+export interface LifecycleExecuteInput {
+  /** @pattern ^[a-f0-9]{64}$ */
+  previewDigest: string;
 }
 
 export type GetOverviewParams = {
@@ -967,3 +3187,316 @@ export type PerformConnectedActionParams = {
  */
 merchantId: string;
 };
+
+export type ListOperationsParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+/**
+ * Rows to skip in the newest-first order; pages hold 25 rows.
+ * @minimum 0
+ * @maximum 100000
+ */
+offset?: number;
+};
+
+export type RetryOperationParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type CancelOperationParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type GetPilotJourneyParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type ListImportBatchesParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+/**
+ * Rows to skip in the newest-first order; pages hold 25 rows.
+ * @minimum 0
+ * @maximum 100000
+ */
+offset?: number;
+};
+
+export type SaveImportBatchParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type GetImportBatchParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type SaveImportBatchRevisionParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type CommitImportBatchParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type GetCaseParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type CoordinateCaseParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type GetPilotProgressParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type ListCloseReviewsParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type PrepareCloseReviewParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type DecideCloseReviewParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type ListImportCorrectionsParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+/**
+ * The committed import batch whose records may be corrected.
+ * @maxLength 100
+ */
+batchId: string;
+};
+
+export type ProposeImportCorrectionParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type PreviewImportCorrectionParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type DecideImportCorrectionParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type GetSourcesParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+/**
+ * The WAT business date to report completeness for; defaults to the current one.
+ * @pattern ^\d{4}-\d{2}-\d{2}$
+ */
+businessDate?: string;
+};
+
+export type CreateSourceProfileParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type SaveSourceProfileParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type SaveSourceManifestParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type RunPaystackFixtureParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type ReplayProviderEventParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type GetPersonalWorkParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+/**
+ * The caller's own work, or (administrators) the whole team's.
+ */
+scope?: GetPersonalWorkScope;
+/**
+ * Only overdue items, handovers, reviews or unread notifications.
+ */
+filter?: GetPersonalWorkFilter;
+/**
+ * Rows to skip.
+ * @minimum 0
+ * @maximum 100000
+ */
+offset?: number;
+/**
+ * Page size; defaults to 25.
+ * @minimum 1
+ * @maximum 50
+ */
+limit?: number;
+};
+
+export type GetPersonalWorkScope = typeof GetPersonalWorkScope[keyof typeof GetPersonalWorkScope];
+
+
+export const GetPersonalWorkScope = {
+  mine: 'mine',
+  team: 'team',
+} as const;
+
+export type GetPersonalWorkFilter = typeof GetPersonalWorkFilter[keyof typeof GetPersonalWorkFilter];
+
+
+export const GetPersonalWorkFilter = {
+  all: 'all',
+  overdue: 'overdue',
+  handover: 'handover',
+  review: 'review',
+  unread: 'unread',
+} as const;
+
+export type ReadNotificationParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type AcknowledgeHandoverParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type GetLifecycleParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+/**
+ * Rows to skip in the newest-first order; pages hold 25 rows.
+ * @minimum 0
+ * @maximum 100000
+ */
+offset?: number;
+};
+
+export type GetLifecycleRunParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type SaveRetentionPolicyParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type SetRetentionHoldParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type PreviewLifecycleRunParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type ApproveLifecycleRunParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+
+export type ExecuteLifecycleRunParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ */
+merchantId: string;
+};
+

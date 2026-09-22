@@ -11,8 +11,8 @@ import type { ExportInputFormat } from './exportInputFormat';
  * What to export (a record kind, gate-pack, billing, dispute-pack or customer-pack with a customerId) and in which format.
  */
 export interface ExportInput {
-  closeReviewId?: string;
   kind: string;
   customerId?: string;
+  closeReviewId?: string;
   format: ExportInputFormat;
 }

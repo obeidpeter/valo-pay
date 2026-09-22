@@ -34,6 +34,15 @@ const state = seedMerchant("pilot-domain", true);
 const customersBefore = state.records.filter(
   (r) => r.kind === "customers",
 ).length;
+assert.throws(
+  () =>
+    saveImportBatch(structuredClone(state), ctx, {
+      ...input,
+      csv: "source_row_id,name,account_number\nsource-1,Same name,0123456789",
+    }),
+  /not permitted/,
+  "Source rows are screened where the batch is saved, whatever route or key delivered them.",
+);
 let before = structuredClone(state);
 let batch = saveImportBatch(state, ctx, input);
 advanceRecordVersions(before, state, ctx.now);

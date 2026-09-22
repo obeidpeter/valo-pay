@@ -1,4 +1,5 @@
-# Offline checks only: no database, no secrets, no Replit services, no real lender data.
+# No secrets, no Replit services, no real lender data. The first job is offline; the other two use a
+# PostgreSQL 16 service container that exists only for the job and is discarded with the runner.
 name: Source checks
 
 on:

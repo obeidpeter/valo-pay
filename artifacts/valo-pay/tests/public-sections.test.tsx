@@ -9,7 +9,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import {
   ProductWalkthrough,
-  PILOT_CONTACT,
+  pilotContact,
 } from "@/components/product-walkthrough";
 import { LandingSections } from "@/components/landing-sections";
 
@@ -91,8 +91,8 @@ describe("public connected-product walkthrough", () => {
     await user.click(question);
     expect(disclosure.open).toBe(false);
     expect(document.querySelector("iframe")).toBeNull();
-    const contact = new URL(PILOT_CONTACT);
-    expect(contact.pathname).toBe("obeidpeter1@gmail.com");
+    const contact = new URL(pilotContact());
+    expect(contact.pathname).toBe("pilots@example.test");
     expect(contact.searchParams.get("body")).toContain(
       "Collections / Pay-by-bank / Credit Desk / Cash Desk",
     );

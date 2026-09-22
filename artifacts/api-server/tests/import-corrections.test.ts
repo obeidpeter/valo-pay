@@ -224,6 +224,7 @@ const dueInput = {
 const close = makeRecord(financial, "closes", {
   name: "Historical close",
   status: "complete",
+  createdAt: "2026-09-21T18:00:00.000Z",
 });
 const duePreview = previewImportCorrection(financial, ctx, dueInput);
 assert.equal(duePreview.financial, true);
@@ -240,6 +241,20 @@ const dueProposal = proposeImportCorrection(
     evidence: "SOURCE-AMOUNT-002",
   },
   reviewers,
+);
+// A close recorded after the comparison (tonight's scheduled close) carries
+// the same uncorrected value but does not change what approval does, so it
+// leaves the proposal current; only closes recorded before it are its evidence.
+makeRecord(financial, "closes", {
+  name: "Later close",
+  status: "complete",
+  createdAt: "2026-09-22T23:00:00.000Z",
+});
+assert.equal(
+  listImportCorrections(financial, ctx, instalment.batch.id).proposals.find(
+    (p) => p.id === dueProposal.id,
+  )?.current,
+  true,
 );
 const dueSnapshot = structuredClone(financial);
 const dueDecision = { ...decision, proposalDigest: dueProposal.proposalDigest };

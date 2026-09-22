@@ -68,15 +68,21 @@ function ownedTarget(state: DomainState, batch: ValopayRecord, id: string) {
     refuse("This imported record does not belong to the selected batch.", 404);
   return target;
 }
-function affectedRecords(state: DomainState, target: ValopayRecord) {
+/** The records a correction touches: the target's financial dependents, and
+ * the closes and close reviews recorded up to the comparison time. A close
+ * recorded after a proposal contains the same uncorrected value but does not
+ * change what approval does, so it does not invalidate the proposal. */
+function affectedRecords(state: DomainState, target: ValopayRecord, asOf: string) {
   const customerId =
     target.kind === "customers" ? target.id : target.customerId;
+  const recordedBy = (r: ValopayRecord) =>
+    Date.parse(r.createdAt) <= Date.parse(asOf);
   return state.records
     .filter(
       (r) =>
         r.id !== target.id &&
-        (r.kind === "closes" ||
-          r.kind === "close-reviews" ||
+        (((r.kind === "closes" || r.kind === "close-reviews") &&
+          recordedBy(r)) ||
           (financialKinds.has(r.kind) &&
             ((r.customerId === customerId && !!customerId) ||
               [
@@ -91,6 +97,7 @@ function calculate(
   state: DomainState,
   ctx: Context,
   raw: ImportCorrectionPreviewInput,
+  asOf = ctx.now,
 ) {
   const input = importCorrectionPreviewInputSchema.parse(raw),
     batch = ownedBatch(state, input.batchId),
@@ -139,7 +146,7 @@ function calculate(
       "Choose a value that differs from the current imported record.",
     );
   const financial = target.kind === "due-items",
-    affected = affectedRecords(state, target);
+    affected = affectedRecords(state, target, asOf);
   if (financial) {
     if (
       target.status !== "scheduled" ||
@@ -206,7 +213,7 @@ function calculate(
     affected: affectedView,
     blockers,
     consequence:
-      "Approval changes the current record only. The committed file, original source identity and before/after evidence remain unchanged. Existing close approvals must be refreshed.",
+      "Approval changes the current record only. The committed file, original source identity and before/after evidence remain unchanged. Close approvals recorded before this comparison must be refreshed; a close recorded afterwards does not change the comparison.",
   });
   return { input, batch, target, after, impactDigest, preview };
 }
@@ -242,8 +249,8 @@ export function importCorrectionView(
   let current = false;
   try {
     current =
-      calculate(state, ctx, proposal.data.input).preview.previewDigest ===
-      proposal.data.preview.previewDigest;
+      calculate(state, ctx, proposal.data.input, proposal.createdAt).preview
+        .previewDigest === proposal.data.preview.previewDigest;
   } catch {
     /* changed source or dependencies */
   }
@@ -421,7 +428,12 @@ export function decideImportCorrection(
       );
   }
   if (input.action === "approve") {
-    const checked = calculate(state, ctx, proposal.data.input);
+    const checked = calculate(
+      state,
+      ctx,
+      proposal.data.input,
+      proposal.createdAt,
+    );
     if (
       checked.preview.blockers.length ||
       checked.preview.previewDigest !== proposal.data.preview.previewDigest
@@ -512,12 +524,14 @@ export function assertImportedCorrectionChange(
       now: after.updatedAt,
     },
     proposal.data.input,
+    proposal.createdAt,
   );
   if (
     checked.preview.blockers.length ||
     checked.preview.previewDigest !== proposal.data.preview.previewDigest ||
     canonical(checked.after) !== canonical(proposal.data.after) ||
-    digest(affectedRecords(state, before)) !== proposal.data.impactDigest
+    digest(affectedRecords(state, before, proposal.createdAt)) !==
+      proposal.data.impactDigest
   )
     refuse("Correction dependencies changed; prepare a fresh proposal.");
 }

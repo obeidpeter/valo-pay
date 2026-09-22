@@ -147,7 +147,7 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   assert.throws(() => act('new_template_version', reviewer), /not permitted/);
   assert.throws(() => act('new_template_version', admin, second.id), /approved template/);
   second.status = 'submitted'; second.data.text = originalText + ' {{injected}}';
-  assert.throws(() => act('approve_template', reviewer, second.id), /Unknown placeholder/);
+  assert.throws(() => act('approve_template', reviewer, second.id), /Unknown placeholder \{\{injected\}\}\. Use only \{\{amount\}\}/);
   second.data.text = originalText; delete second.data.author;
   assert.throws(() => act('approve_template', reviewer, second.id), /other than its author/);
   checks += 23;

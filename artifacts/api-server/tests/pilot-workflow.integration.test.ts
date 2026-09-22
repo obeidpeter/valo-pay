@@ -172,10 +172,20 @@ try {
     ).status,
     400,
   );
-  const pending = ok(
-    await call(`/v1/operations?merchantId=${lender}`),
-  ).items.find((row: any) => row.status === "pending");
-  assert.ok(pending);
+  // A definitive refusal closes the journal entry with its reason; it never
+  // lingers as pending, so refused requests cannot exhaust the pending limit.
+  const listed = ok(await call(`/v1/operations?merchantId=${lender}`)).items;
+  const pending = listed.find(
+    (row: any) =>
+      row.status === "cancelled" && /refused this request/.test(row.message),
+  );
+  assert.ok(pending, "A refused request is closed with its reason.");
+  assert.match(pending.message, /consent/i);
+  assert.equal(
+    listed.some((row: any) => row.status === "pending"),
+    false,
+    "A refused request does not wait for confirmation.",
+  );
   ok(
     await call(
       `/v1/operations/${pending.id}/cancel?merchantId=${lender}`,
