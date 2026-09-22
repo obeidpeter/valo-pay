@@ -93,11 +93,35 @@ try {
   const personaReady = gate(), releasePersona = gate(); cleanup.push(releasePersona.resolve);
   const persona = track(inWorkspace(req(), res(), async context => { await changeRole(context, "Finance"); personaReady.resolve(); await releasePersona.promise; }, "persona"));
   await staysBlocked(personaReady.promise, "persona waits for all active workspace readers");
+  // A reader that arrives while the change waits queues behind it, so steady reads cannot hold a change off.
+  const lateReaderEntered = gate();
+  const lateReader = track(inWorkspace(req(), res(), async context => { lateReaderEntered.resolve(); assert.equal(context.role, "Finance", "the late reader sees the change it queued behind"); }, "read"));
+  await staysBlocked(lateReaderEntered.promise, "a reader arriving while a persona change waits queues behind it");
   releaseRoleReader.resolve(); await roleReader; await within(personaReady.promise, "persona after readers complete");
+  await staysBlocked(lateReaderEntered.promise, "the late reader waits for the change to commit");
   const newRoleEntered = gate();
   const newRole = track(inWorkspace(req(), res(), async context => { newRoleEntered.resolve(); assert.equal(context.role, "Finance"); }, "read"));
   await staysBlocked(newRoleEntered.promise, "new request cannot observe uncommitted persona");
-  releasePersona.resolve(); await persona; await within(newRole, "new persona reader");
+  releasePersona.resolve(); await persona; await within(newRole, "new persona reader"); await within(lateReader, "late reader after the persona change");
+
+  // A change that cannot start within the lock limit gives up with a 503 and
+  // changes nothing; the requests queued behind it then go ahead.
+  {
+    const holderIn = gate(), releaseHolder = gate(); cleanup.push(releaseHolder.resolve);
+    const holder = track(inWorkspace(req(), res(), async context => { holderIn.resolve(); await releaseHolder.promise; assert.equal(context.role, "Finance"); }, "read"));
+    await within(holderIn.promise, "held reader");
+    let change!: Promise<unknown>;
+    const restore = overrideDatabaseLimits({ request: { lockMs: 300 } });
+    try { change = failure(inWorkspace(req(), res(), context => changeRole(context, "Operations"), "persona")); await sleep(50); } finally { restore(); }
+    const queuedIn = gate();
+    const queued = track(inWorkspace(req(), res(), async context => { queuedIn.resolve(); assert.equal(context.role, "Finance", "the change that gave up changed nothing"); }, "read"));
+    await staysBlocked(queuedIn.promise, "a reader arriving while the change waits queues behind it");
+    const refused = await within(change, "a change past the lock limit", 2_000);
+    turnedAway(refused, ["workspace_busy"], "a change that cannot start in time");
+    assert.match((refused as Error).message, /^Other requests in this workspace are still finishing\. Nothing was saved\. Try this change again in a moment\.$/);
+    await within(queued, "the queued reader once the change gave up", 1_000);
+    releaseHolder.resolve(); await within(holder, "held reader");
+  }
 
   // ---- Database limits: one busy lender, a slow statement, an idle or lost connection and a full pool ----
   const uncaught: unknown[] = [];
@@ -169,7 +193,7 @@ try {
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(uncaught, [], "a lost or killed connection never reaches the process as an uncaught error");
   } finally { process.off("uncaughtException", heard); }
-  console.log("Workspace concurrency passed: concurrent readers, cross-lender reads/writes, same-lender isolation, bootstrap, read capability, persona, audit and idempotency; one busy lender, a slow statement, an idle or lost connection and a full pool are each turned away with a 503 without holding up another lender or readiness.");
+  console.log("Workspace concurrency passed: concurrent readers, cross-lender reads/writes, same-lender isolation, bootstrap, read capability, persona, audit and idempotency; a persona change is not overtaken by later readers and gives up with a 503 when it cannot start in time; one busy lender, a slow statement, an idle or lost connection and a full pool are each turned away with a 503 without holding up another lender or readiness.");
 } finally {
   cleanup.forEach(release => release());
   await Promise.allSettled(pending);

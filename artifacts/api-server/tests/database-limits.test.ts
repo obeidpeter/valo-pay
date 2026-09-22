@@ -55,6 +55,13 @@ const state = <T>(promise: Promise<T>) => { const seen: { value?: T; error?: unk
   holder();
   eq(gate.load("lender-a"), { active: 0, waiting: 0 }, "and the last release empties the lane");
 }
+// ---- The workspace lock's own words ----
+{
+  const change = new DatabaseLimitError("workspace_busy");
+  eq([change.status, change.retryAfterSeconds, change.message], [503, 2, "Other requests in this workspace are still finishing. Nothing was saved. Try this change again in a moment."], "a change that could not start says the workspace's requests are still finishing");
+  eq(new DatabaseLimitError("workspace_changing", { write: false }).message, "This workspace is busy with a team or role change. Try again in a moment.", "a request queued behind a change says so");
+  eq(databaseLimitOf(change), "workspace_busy", "the limit is named");
+}
 
 // ---- The limits every BEGIN sets ----
 {

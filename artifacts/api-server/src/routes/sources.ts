@@ -3,6 +3,7 @@ import { z } from "zod";
 import { CreateRecordResponse, ReceivePaystackTestEventResponse } from "@workspace/api-zod";
 import { sourceProfileInputSchema, sourceBatchQualitySchema, paystackFixtureInputSchema, providerReplayInputSchema, sourceManifestInputSchema, sourceCompletenessSchema, businessDateSchema } from "@workspace/valopay-schema";
 import { withState } from "./valopay";
+import { revealImportPayloads } from "../lib/valopay-store";
 import { saveSourceProfile, sourceQuality } from "../domain/source-quality";
 import { saveSourceManifest } from "../domain/source-completeness";
 import { providerEventView, receivePaystackEvent, replayProviderEvent, runPaystackFixture } from "../providers/paystack-inbox";
@@ -20,7 +21,9 @@ const sourcesResponse = z.object({
 });
 router.get("/v1/sources", async (req, res) => {
   const businessDate = businessDateSchema.optional().parse(req.query.businessDate);
-  const result = await withState(req, res, (state, ctx) => {
+  const result = await withState(req, res, async (state, ctx) => {
+    // Quality is checked against the source rows of batches not yet committed, and of older committed batches with no stored quality.
+    await revealImportPayloads(ctx, state, r => !(r.status === "committed" && r.data.sourceQuality));
     const events = state.records.filter(r => r.kind === "provider-events").sort((a,b) => b.createdAt.localeCompare(a.createdAt));
     return { ...sourceQuality(state, ctx.now, businessDate), paystack: { mode: "test_only", externalConnectionVerified: false, canRunFixtures: ["Admin", "Operations", "Finance"].includes(ctx.role), state: "configuration_required", message: "A Paystack account, test credentials and an operator-provisioned connection are required for an external test. Local fixture results do not verify a Paystack connection.", events: events.slice(0,50).map(providerEventView), total: events.length, quarantined: events.filter(e => e.status === "quarantined").length, duplicates: events.reduce((sum,e) => sum + Math.max(0, Number(e.data.deliveryCount || 0) - 1), 0) } };
   }, false, sourcesResponse);

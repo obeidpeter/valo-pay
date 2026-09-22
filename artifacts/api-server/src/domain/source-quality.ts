@@ -1,7 +1,7 @@
 import { parse } from "csv-parse/sync";
 import { csvAmountToKobo, sourceProfileInputSchema, type SourceProfileInput, type SourceBatchQuality } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "./types";
-import { makeRecord } from "./records";
+import { makeRecord, assertSourceOpened } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
 import { sourceCompleteness, watBusinessDate } from "./source-completeness";
 
@@ -35,6 +35,7 @@ export function saveSourceProfile(state: DomainState, ctx: Context, raw: SourceP
 
 /** Every row is summed with integer arithmetic; invalid or excessive totals cannot masquerade as zero. */
 export function batchSourceQuality(state: DomainState, batch: ValopayRecord): SourceBatchQuality {
+  assertSourceOpened(batch, ["csv", "check"]);
   const profile = state.records.find(r => r.kind === "source-profiles" && r.status === "active" && r.data.source === batch.data.source && r.data.kind === batch.data.kind);
   const check = batch.data.check || {}, issues: string[] = [];
   const quality: SourceBatchQuality = { profileId: profile?.id || null, profileVersion: profile?.updatedAt || null,

@@ -55,10 +55,14 @@ try {
   let finished = false;
   const revoke = call(`/v1/team/members/${memberId}/lenders`, "admin", "PATCH", { expectedUpdatedAt: allowed.updatedAt, lenderIds: [], reason: "The pilot work is reassigned to another team." }).then(result => { finished = true; return result; });
   await new Promise(resolve => setTimeout(resolve, 80)); assert.equal(finished, false, "Grant revocation must wait for in-flight authorised work.");
+  let lateFinished = false;
+  const late = call(`/v1/records/customers?merchantId=${a.id}`, "finance").then(result => { lateFinished = true; return result; });
+  await new Promise(resolve => setTimeout(resolve, 80)); assert.equal(lateFinished, false, "A request arriving while the revocation waits queues behind it.");
   release(); await work; ok(await revoke);
+  assert.equal((await late).status, 404, "The queued request runs after the revocation, without the removed grant.");
   assert.equal((await call(`/v1/records/customers?merchantId=${a.id}`, "finance")).status, 404, "An existing session cannot read after its lender grant is removed.");
   assert.equal((await call(`/v1/pilot/close-reviews?merchantId=${a.id}`, "finance")).status, 404);
-  console.log("Staff lender API/PostgreSQL checks passed: default denial, explicit grants, MFA, lender-filtered reviewers, independent concurrent close approval and synchronised access removal.");
+  console.log("Staff lender API/PostgreSQL checks passed: default denial, explicit grants, MFA, lender-filtered reviewers, independent concurrent close approval and synchronised access removal that later requests cannot overtake.");
 } finally {
   server.close(); await once(server, "close");
   for (const id of owned) { await pool.query("DELETE FROM valopay_staff_events WHERE workspace_id=$1", [id]); await pool.query("DELETE FROM valopay_staff_invitations WHERE workspace_id=$1", [id]); await pool.query("DELETE FROM valopay_staff_memberships WHERE workspace_id=$1", [id]); await pool.query("DELETE FROM valopay_teams WHERE workspace_id=$1", [id]); await pool.query("DELETE FROM valopay_idempotency WHERE merchant_id IN(SELECT id FROM valopay_merchants WHERE workspace_id=$1)", [id]); await pool.query("DELETE FROM valopay_records WHERE merchant_id IN(SELECT id FROM valopay_merchants WHERE workspace_id=$1)", [id]); await pool.query("DELETE FROM valopay_merchants WHERE workspace_id=$1", [id]); await pool.query("DELETE FROM valopay_workspaces WHERE id=$1", [id]); }

@@ -23,6 +23,7 @@ import {
   revokeInvitation,
   acceptStaffInvitation,
   createPilotLender,
+  revealImportPayloads,
   fail,
 } from "../lib/valopay-store";
 import { withState } from "./valopay";
@@ -147,10 +148,18 @@ router.get("/v1/pilot/batches", async (req, res) => {
               b.createdAt.localeCompare(a.createdAt) ||
               b.id.localeCompare(a.id),
           );
+        const page = all.slice(q.offset, q.offset + 25),
+          onPage = new Set(page.map((batch) => batch.id));
+        // The list's counts come from each batch's stored check summary; only
+        // batches saved before the summary existed open their check.
+        await revealImportPayloads(
+          ctx,
+          state,
+          (r) => onPage.has(r.id) && !r.data.checkSummary,
+          ["check"],
+        );
         return {
-          items: all
-            .slice(q.offset, q.offset + 25)
-            .map((batch) => batchView(batch)),
+          items: page.map((batch) => batchView(batch)),
           total: all.length,
           offset: q.offset,
         };
@@ -174,6 +183,7 @@ router.get("/v1/pilot/batches/:id", async (req, res) => {
           (r) => r.kind === "import-batches" && r.id === id,
         );
         if (!batch) fail("Import batch not found.", 404);
+        await revealImportPayloads(ctx, state, (r) => r.id === id);
         return {
           batch,
           revisions: state.records.filter(
@@ -217,8 +227,12 @@ router.post("/v1/pilot/batches/:id/commit", async (req, res) => {
     await withState(
       req,
       res,
-      (state, ctx) =>
-        commitImportBatch(state, ctx, id, input.expectedUpdatedAt),
+      async (state, ctx) => {
+        // The commit imports the batch's source rows; a role that cannot commit costs no key-service call.
+        if (["Admin", "Operations", "Finance"].includes(ctx.role))
+          await revealImportPayloads(ctx, state, (r) => r.id === id);
+        return commitImportBatch(state, ctx, id, input.expectedUpdatedAt);
+      },
       true,
       CreateRecordResponse,
     ),

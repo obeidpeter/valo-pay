@@ -224,6 +224,29 @@ try {
   const readerRequest = { headers: {}, auth: Object.assign(() => readerAuth, { [Symbol.for("@clerk/express.auth")]: true }) } as any;
   const readerState = await store.inWorkspace(readerRequest, { cookie() {} } as any, ctx => store.loadState(ctx, "lender-a", "share"), "read");
   assert.equal(readerState.records[0]?.name, "Synthetic customer", "Restricted Read-only users can still inspect a consistent lender snapshot.");
+  // A read here is REPEATABLE READ, with its snapshot taken before it waits for
+  // the workspace lock. One that queued behind a team change to its own
+  // membership is told its access changed; it is not answered from the older
+  // snapshot, and the retry sees the change.
+  {
+    const adminAuth = { ...auth, userId: "user_adminA", sessionClaims: { ...auth.sessionClaims, sub: "user_adminA" } };
+    const adminRequest = { headers: {}, auth: Object.assign(() => adminAuth, { [Symbol.for("@clerk/express.auth")]: true }) } as any;
+    const waiting = async (count: number) => { for (let tries = 0; tries < 100; tries++) { if ((await admin.query("SELECT count(*)::int AS count FROM pg_locks WHERE locktype='advisory' AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database())")).rows[0].count === count) return; await new Promise(resolve => setTimeout(resolve, 20)); } throw new Error(`${count} requests never queued for the workspace lock`); };
+    let releaseHeld!: () => void, heldIn!: () => void;
+    const hold = new Promise<void>(resolve => { releaseHeld = resolve; }), entered = new Promise<void>(resolve => { heldIn = resolve; });
+    const held = store.inWorkspace(readerRequest, { cookie() {} } as any, async () => { heldIn(); await hold; }, "read");
+    await entered;
+    const version = (await admin.query(`SELECT updated_at FROM "${schema}".valopay_staff_memberships WHERE id='finance-a'`)).rows[0].updated_at as Date;
+    const change = store.inWorkspace(adminRequest, { cookie() {} } as any, ctx => store.updateStaff(ctx, "finance-a", { role: "Finance", status: "active", expectedUpdatedAt: version.toISOString(), reason: "Re-confirm the Finance membership for the rehearsal." }), "team");
+    await waiting(1);
+    const late = store.inWorkspace(req, { cookie() {} } as any, ctx => store.listMerchants(ctx), "read").then(() => undefined, (error: unknown) => error);
+    await waiting(2);
+    releaseHeld(); await held; await change;
+    const refused = await late as { status?: number; message?: string } | undefined;
+    assert.equal(refused?.status, 409, "A request whose membership changed while it waited is refused, not answered from its older snapshot.");
+    assert.match(String(refused?.message), /access changed while this request was waiting/);
+    assert.deepEqual((await store.inWorkspace(req, { cookie() {} } as any, ctx => store.listMerchants(ctx), "read")).map(lender => lender.id), ["lender-a"], "The retry reads the current membership.");
+  }
   await assert.rejects(() => store.inWorkspace(req, { cookie() {} } as any, ctx => store.loadState(ctx, "lender-a-private", "share"), "read"), /not found/);
   // Pilot scale: a lender with 13,000 records loads through the policies in one
   // pass. The visible lenders are a hashed set built once per statement, never a
@@ -249,7 +272,7 @@ try {
   await assert.rejects(() => store.inWorkspace(req, { cookie() {} } as any, ctx => store.loadState(ctx, "lender-a", "share"), "read"), /not found/);
   const elevated = await admin.connect(); try { await elevated.query("BEGIN"); await assert.rejects(() => isolation.bindRuntimeIdentity(elevated, { organizationId: "org_runtimeA", userId: "user_adminA" }), /elevated/); await elevated.query("ROLLBACK"); } finally { elevated.release(); }
   const configured = process.env.VALOPAY_RUNTIME_SCHEMA; process.env.VALOPAY_RUNTIME_SCHEMA = "public"; assert.throws(() => isolation.runtimeIsolationConfiguration(), /public/); process.env.VALOPAY_RUNTIME_SCHEMA = configured;
-  console.log("Runtime isolation passed: actual restricted login, ten forced-RLS tables, the reviewed policies, helpers and workspace guard compared by definition (eight weakenings refused), once-per-statement lender scope at pilot scale, pooled-scope reset, mixed-tenant denial, per-lender grants, concurrent invitation acceptance and renewal, service requester checks and real repository/MFA integration.");
+  console.log("Runtime isolation passed: actual restricted login, ten forced-RLS tables, the reviewed policies, helpers and workspace guard compared by definition (eight weakenings refused), once-per-statement lender scope at pilot scale, pooled-scope reset, mixed-tenant denial, per-lender grants, concurrent invitation acceptance and renewal, a read queued behind a change to its own membership refused with a 409, service requester checks and real repository/MFA integration.");
 } finally {
   if (runtimePool) await runtimePool.end();
   if (!/^valopay_runtime_test_[a-f0-9]+$/.test(schema) || !/^runtime_(app|helper)_[a-f0-9]+$/.test(appRole) || !/^runtime_(app|helper)_[a-f0-9]+$/.test(helperRole)) throw new Error("Unsafe generated test cleanup target.");

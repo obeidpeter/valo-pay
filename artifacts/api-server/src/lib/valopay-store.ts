@@ -19,9 +19,9 @@ import { validateCloseRange, pageOffset, type ReadPageQuery, type Reconciliation
 import { precisionAudit } from '../domain/reports';
 import { periodBounds, previousMonth } from '../domain/billing';
 import { measurementRules } from '@workspace/valopay-schema';
-import { protectStored, revealStored, protectRecordData, revealRecordData, payloadEncryptionKey, isProtectedPayload } from './protected-payloads';
+import { protectStored, revealStored, protectRecordData, revealRecordsData, payloadEncryptionKey, isProtectedPayload, PROTECTED_IMPORT_FIELDS, type ProtectedImportField } from './protected-payloads';
 import { markRolledBack } from './transaction-outcome';
-import { beginStatement, checkOut, databaseLimits, failedTransaction, type Checkout } from './database-limits';
+import { beginStatement, checkOut, databaseLimits, failedTransaction, DatabaseLimitError, type Checkout } from './database-limits';
 import { createLenderGate } from './lender-gate';
 import { assertImportedCorrectionChange } from '../domain/import-corrections';
 import type { LifecycleExternalCandidate, LifecycleCandidate } from '@workspace/valopay-schema';
@@ -313,7 +313,11 @@ async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: strin
   try {
     await client.query(beginStatement(databaseLimits().request));
     await bindRuntimeIdentity(client, { organizationId: auth.orgId || '', userId: auth.userId || '' }, { token, verifiedEmails });
-    const team = (await client.query<{ workspace_id: string }>(`SELECT t.workspace_id FROM valopay_teams t JOIN valopay_workspaces w ON w.id=t.workspace_id WHERE t.organization_id=$1 FOR UPDATE OF w`, [auth.orgId])).rows[0];
+    // A membership change, like a team change: the workspace lock exclusively (waiting only for work already running), then its row.
+    const found = (await client.query<{ workspace_id: string }>('SELECT t.workspace_id FROM valopay_teams t WHERE t.organization_id=$1', [auth.orgId])).rows[0];
+    if (!found) fail('Select the organisation named in your invitation.', 403);
+    await lockWorkspace(client, found.workspace_id, 'exclusive', true);
+    const team = (await client.query<{ workspace_id: string }>(`SELECT t.workspace_id FROM valopay_teams t JOIN valopay_workspaces w ON w.id=t.workspace_id WHERE t.organization_id=$1 AND w.id=$2 FOR UPDATE OF w`, [auth.orgId, found.workspace_id])).rows[0];
     if (!team) fail('Select the organisation named in your invitation.', 403);
     const checkedAt = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();
     verifyStaff(auth, { id: 'invitation-check', userId: auth.userId || '', organizationId: auth.orgId || '', tenantId: 'invitation-check', role: 'Read-only', status: 'active', validFrom: '2020-01-01T00:00:00.000Z', expiresAt: '2100-01-01T00:00:00.000Z' }, true, checkedAt);
@@ -420,7 +424,7 @@ export async function protectWorkspacePayloads(context:StoreContext) {
   // One record per request bounds managed-key calls and keeps progress restartable.
   const batch=1;let protectedCount=0;
   const imports=(await session.client.query<RecordRow>(`SELECT r.* FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id WHERE m.workspace_id=$1 AND r.kind='import-batches' AND (r.data ? 'csv' AND NOT (jsonb_typeof(r.data->'csv')='object' AND r.data->'csv' ? 'protectedPayload')) ORDER BY r.id LIMIT $2 FOR UPDATE OF r`,[session.workspace.id,batch])).rows;
-  for(const row of imports){const record=await revealRecordData(rowToRecord(row));await session.client.query('UPDATE valopay_records SET data=$3 WHERE id=$1 AND merchant_id=$2',[row.id,row.merchant_id,await protectRecordData(record)]);protectedCount++;}
+  for(const row of imports){await session.client.query('UPDATE valopay_records SET data=$3 WHERE id=$1 AND merchant_id=$2',[row.id,row.merchant_id,await protectRecordData(rowToRecord(row))]);protectedCount++;}
   const operations=(await session.client.query<OperationRow>(`SELECT o.* FROM valopay_operations o JOIN valopay_merchants m ON m.id=o.merchant_id WHERE m.workspace_id=$1 AND ((NOT(o.request ? 'protectedPayload') AND NOT(o.request ? 'purged')) OR (o.receipt IS NOT NULL AND NOT(o.receipt ? 'protectedPayload') AND NOT(o.receipt ? 'purged'))) ORDER BY o.id LIMIT $2 FOR UPDATE OF o`,[session.workspace.id,batch])).rows;
   for(const row of operations){if(protectedCount)break;const scope={lender:row.merchant_id,record:row.id};const request=isProtectedPayload(row.request)?row.request:await protectStored(row.request,{...scope,field:'request'});const receipt=row.receipt===null||isProtectedPayload(row.receipt)?row.receipt:await protectStored(row.receipt,{...scope,field:'receipt'});await session.client.query('UPDATE valopay_operations SET request=$3,receipt=$4 WHERE id=$1 AND merchant_id=$2',[row.id,row.merchant_id,request,receipt]);protectedCount++;}
   const receipts=(await session.client.query<{id:string;merchant_id:string;response:unknown}>(`SELECT i.* FROM valopay_idempotency i JOIN valopay_merchants m ON m.id=i.merchant_id WHERE m.workspace_id=$1 AND NOT(i.response ? 'protectedPayload') AND NOT(i.response ? 'purged') ORDER BY i.id LIMIT $2 FOR UPDATE OF i`,[session.workspace.id,batch])).rows;
@@ -445,13 +449,37 @@ function scopedMerchantQuery(lock: MerchantLock = "none") {
     WHERE m.id=$1 AND m.workspace_id=$2 AND w.id=$2 AND w.principal_hash=$3${lock === "update" ? " FOR UPDATE OF m" : lock === "share" ? " FOR SHARE OF m" : ""}`;
 }
 
-/** Persona changes lock the workspace exclusively. Ordinary work shares that
- * lock, fixing the persona for the transaction while lender locks serialize
- * mutations. Only first-visit bootstrap needs the principal advisory lock.
- * Every transaction is bounded (database-limits.ts): a lock wait, a statement
- * and idle time each have a limit, and one lender holds at most half the
- * pool, so a busy lender turns its own requests away with a 503 instead of
- * holding up other tenants. */
+/**
+ * The workspace's own lock, taken before its row: shared by ordinary work,
+ * exclusive for a team, lender-access, invitation or persona change.
+ * PostgreSQL grants advisory locks in arrival order, so a request that arrives
+ * while a change waits queues behind it; a row share lock is granted past a
+ * waiting exclusive one, so steady polling could hold a revocation off for
+ * ever. The wait is the transaction's own lock limit (database-limits.ts):
+ * past it a change answers 503 and nothing changed, and a request queued
+ * behind a change that holds the lock too long is turned away the same way.
+ * The key's prefix keeps it apart from the principal's bootstrap lock.
+ */
+async function lockWorkspace(client: PoolClient, workspaceId: string, mode: "shared" | "exclusive", write: boolean): Promise<void> {
+  try {
+    await client.query(`SELECT ${mode === "exclusive" ? "pg_advisory_xact_lock" : "pg_advisory_xact_lock_shared"}(hashtextextended('valopay.workspace:' || $1, 0))`, [workspaceId]);
+  } catch (error) {
+    if ((error as { code?: unknown }).code !== "55P03") throw error;
+    throw markRolledBack(new DatabaseLimitError(mode === "exclusive" ? "workspace_busy" : "workspace_changing", { write, cause: error }));
+  }
+}
+
+/** Persona, team, lender-access and invitation changes take the workspace
+ * lock exclusively (lockWorkspace). Ordinary work shares it, fixing the
+ * persona and memberships for the transaction while lender locks serialize
+ * mutations; a change waits only for the work already running, and work that
+ * arrives meanwhile waits behind the change. The workspace row is still locked
+ * after it (shared or exclusive), so the expiry sweep skips busy workspaces.
+ * Only first-visit bootstrap needs the principal advisory lock. Every
+ * transaction is bounded (database-limits.ts): a lock wait, a statement and
+ * idle time each have a limit, and one lender holds at most half the pool, so
+ * a busy lender turns its own requests away with a 503 instead of holding up
+ * other tenants. */
 export async function inWorkspace<T>(req: Request, res: Response, fn: (context: StoreContext) => Promise<T>, access: WorkspaceAccess = "write"): Promise<T> {
   const identity = principalFor(req, res);
   const write = access !== "read", lender = gatedLender(req);
@@ -468,7 +496,15 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
     }
     // Single source of time: the database clock, read once per transaction.
     let now = (await client.query<{ now: Date }>("SELECT now() AS now")).rows[0]!.now.toISOString();
-    const workspaceQuery = `SELECT id,principal_hash,role FROM valopay_workspaces WHERE principal_hash=$1 FOR ${access === "persona" || access === 'team' ? "UPDATE" : "SHARE"}`;
+    const exclusive = access === "persona" || access === 'team', lockMode = exclusive ? "exclusive" : "shared";
+    const workspaceQuery = `SELECT id,principal_hash,role FROM valopay_workspaces WHERE principal_hash=$1 AND id=$2 FOR ${exclusive ? "UPDATE" : "SHARE"}`;
+    /** The principal's sandbox, found without a lock and then locked; one removed meanwhile (the expiry sweep) is created afresh. */
+    const lockedSandbox = async (): Promise<WorkspaceRow | undefined> => {
+      const found = (await client.query<{ id: string }>("SELECT id FROM valopay_workspaces WHERE principal_hash=$1", [identity.principal])).rows[0];
+      if (!found) return undefined;
+      await lockWorkspace(client, found.id, lockMode, write);
+      return (await client.query<WorkspaceRow>(workspaceQuery, [identity.principal, found.id])).rows[0];
+    };
     let workspace: WorkspaceRow | undefined;
     let staff: StaffRow | undefined;
     let auth: VerifiedClerkSession | undefined;
@@ -477,17 +513,26 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       if (access === 'persona') fail('Staff roles are assigned by an administrator. Demo role switching is unavailable.', 403);
       // Lock the organisation before its membership, consistently with team
       // changes. A revocation waits for in-flight work and blocks later work.
-      workspace = (await client.query<WorkspaceRow>(`SELECT w.id,w.principal_hash,w.role FROM valopay_workspaces w JOIN valopay_teams t ON t.workspace_id=w.id WHERE t.organization_id=$1 FOR ${access === 'team' ? 'UPDATE' : 'SHARE'} OF w`, [auth.orgId || ''])).rows[0];
+      const found = (await client.query<{ id: string }>('SELECT w.id FROM valopay_workspaces w JOIN valopay_teams t ON t.workspace_id=w.id WHERE t.organization_id=$1', [auth.orgId || ''])).rows[0];
+      if (!found) fail('This organisation has not been provisioned for the pilot.', 403);
+      await lockWorkspace(client, found.id, lockMode, write);
+      workspace = (await client.query<WorkspaceRow>(`SELECT w.id,w.principal_hash,w.role FROM valopay_workspaces w JOIN valopay_teams t ON t.workspace_id=w.id WHERE t.organization_id=$1 AND w.id=$2 FOR ${access === 'team' ? 'UPDATE' : 'SHARE'} OF w`, [auth.orgId || '', found.id])).rows[0];
       if (!workspace) fail('This organisation has not been provisioned for the pilot.', 403);
-      staff = (await client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE', [workspace.id, auth.userId])).rows[0];
+      try {
+        staff = (await client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE', [workspace.id, auth.userId])).rows[0];
+      } catch (error) {
+        // A repeatable-read request (runtime isolation) whose membership a team change altered while it waited behind it.
+        if ((error as { code?: unknown }).code === '40001') fail('Your access changed while this request was waiting. Refresh and try again.', 409);
+        throw error;
+      }
       if (!staff) fail('An active staff membership is required. Accept an invitation or contact your administrator.', 403);
       now = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();
       verifyStaff(auth, staffProvision(staff, auth.orgId!), access !== 'read', now);
-    } else workspace = (await client.query<WorkspaceRow>(workspaceQuery, [identity.principal])).rows[0];
+    } else workspace = await lockedSandbox();
     if (!workspace && !staffMode()) {
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [identity.principal]);
       // Another first visit may have finished seeding while we waited.
-      workspace = (await client.query<WorkspaceRow>(workspaceQuery, [identity.principal])).rows[0];
+      workspace = await lockedSandbox();
     }
     if (!workspace) {
       // A new anonymous sandbox seeds two lenders; creation is bounded per client address on top of the request limit.
@@ -497,10 +542,9 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
          ON CONFLICT (principal_hash) DO NOTHING RETURNING id,principal_hash,role`,
         [randomUUID(), identity.principal],
       )).rows[0];
-      workspace = inserted || (await client.query<WorkspaceRow>(
-        workspaceQuery,
-        [identity.principal],
-      )).rows[0];
+      // No other transaction can see the new row before this one commits, so its lock never waits.
+      if (inserted) await lockWorkspace(client, inserted.id, lockMode, write);
+      workspace = inserted || await lockedSandbox();
       if (!workspace) throw new Error("Workspace bootstrap could not be completed.");
       if (inserted) {
         await seedWorkspace(client, workspace, identity.principal, !identity.authenticated, now);
@@ -616,14 +660,41 @@ export async function loadState(context: StoreContext, merchantId: string, lock:
      FROM loaded r ORDER BY r.created_at,r.id`,
     [merchantId, session.workspace.id, session.principal, lock === "update", FULL_CLOSE_DAYS],
   )).rows;
-  const records = rows.map(rowToRecord);
-  const state: DomainState = { merchant: merchant.info, settings: merchant.settings, records:await Promise.all(records.map(revealRecordData)) };
+  // Protected source rows stay sealed: only the views that show or use them open them (revealImportPayloads).
+  const state: DomainState = { merchant: merchant.info, settings: merchant.settings, records: rows.map(rowToRecord) };
   if (state.merchant.id !== merchantId) conflict("Lender identity does not match its stored scope.");
   // A shared load is read-only, even in an otherwise write-capable context.
   // Avoid serialising the entire history just to serve a dashboard or export lookup.
   session.snapshot = lock === "update" ? snapshotOf(state) : undefined;
   session.summarised = lock === "update" ? new Set(rows.filter((row) => row.summarised).map((row) => row.id)) : undefined;
   return state;
+}
+
+/**
+ * Opens the protected source rows (original CSV and validation check) of this
+ * lender's import batches that `select` names, at most four key-service calls
+ * at a time, and returns how many batches it opened. A full-state load keeps
+ * them sealed, so overviews, lists, saves, the scheduled close and Paystack
+ * test deliveries never depend on the key service. Only a view that shows or
+ * uses raw source rows calls this, and in a write it must call it before the
+ * domain changes the batch: the opened form becomes the batch's loaded form,
+ * so an opened but unchanged batch is not written back and the immutability
+ * checks compare like with like. A field already open costs nothing.
+ */
+export async function revealImportPayloads(context: StoreContext, state: DomainState, select: (record: ValopayRecord) => boolean, fields: readonly ProtectedImportField[] = PROTECTED_IMPORT_FIELDS): Promise<number> {
+  const session = sessionFor(context);
+  if (!session.lockedMerchantId || session.lockedMerchantId !== state.merchant.id) conflict("Load this lender before opening its source rows.");
+  const targets = state.records.filter((record) => record.kind === "import-batches" && record.merchantId === session.lockedMerchantId
+    && fields.some((field) => isProtectedPayload(record.data[field])) && select(record));
+  if (!targets.length) return 0;
+  const snapshot = session.snapshot;
+  if (snapshot && targets.some((record) => snapshot.records.get(record.id) !== JSON.stringify(record))) throw new Error("Protected source rows must be opened before the batch changes.");
+  const opened = await revealRecordsData(targets, fields);
+  targets.forEach((record, index) => {
+    record.data = opened[index]!.data;
+    snapshot?.records.set(record.id, JSON.stringify(record));
+  });
+  return targets.length;
 }
 
 /**

@@ -63,15 +63,34 @@ async function kms(action: 'encrypt' | 'decrypt', key: string, data: Record<stri
 }
 export async function protectStored(value: unknown, scope: PayloadScope) { const key = payloadEncryptionKey(); return key ? sealPayload(value, scope, key, managedWrappingKeys) : value; }
 export async function revealStored(value: unknown, scope: PayloadScope):Promise<any> { return isProtectedPayload(value) ? openPayload(value, scope, managedWrappingKeys) : value; }
-export async function protectRecordData(record: {id:string;merchantId:string;kind:string;data:Record<string, any>}) {
+/** The import-batch fields that hold raw source rows: the original CSV and the validation check with its preview. */
+export const PROTECTED_IMPORT_FIELDS = ['csv', 'check'] as const;
+export type ProtectedImportField = typeof PROTECTED_IMPORT_FIELDS[number];
+type StoredRecord = { id: string; merchantId: string; kind: string; data: Record<string, any> };
+/** Seals an import batch's plaintext fields for storage. A field still sealed as it was loaded is kept as stored, never sealed again. */
+export async function protectRecordData(record: StoredRecord) {
   if (record.kind !== 'import-batches') return record.data;
   const data = {...record.data};
-  for (const field of ['csv', 'check']) if (data[field] !== undefined) data[field] = await protectStored(data[field], { lender:record.merchantId,record:record.id,field });
+  for (const field of PROTECTED_IMPORT_FIELDS) if (data[field] !== undefined && !isProtectedPayload(data[field])) data[field] = await protectStored(data[field], { lender:record.merchantId,record:record.id,field });
   return data;
 }
-export async function revealRecordData<T extends {id:string;merchantId:string;kind:string;data:Record<string, any>}>(record: T): Promise<T> {
-  if(record.kind !== 'import-batches')return record;
-  const data = {...record.data};
-  for(const field of ['csv','check']) if(data[field] !== undefined)data[field]=await revealStored(data[field],{lender:record.merchantId,record:record.id,field});
-  return {...record,data};
+/**
+ * Opens the named fields of import batches, returning copies in input order.
+ * Every field has its own data key, so each sealed field is one key-service
+ * call: at most `limit` run at once, and after one fails no other starts. A
+ * field already open costs nothing.
+ */
+export async function revealRecordsData<T extends StoredRecord>(records: readonly T[], fields: readonly ProtectedImportField[] = PROTECTED_IMPORT_FIELDS, limit = 4): Promise<T[]> {
+  const opened = records.map(record => record.kind === 'import-batches' ? { ...record, data: { ...record.data } } : record);
+  const tasks = opened.flatMap(record => record.kind === 'import-batches' ? fields.filter(field => isProtectedPayload(record.data[field])).map(field => ({ record, field })) : []);
+  let next = 0, failed = false;
+  const worker = async () => {
+    while (!failed && next < tasks.length) {
+      const { record, field } = tasks[next++]!;
+      try { record.data[field] = await revealStored(record.data[field], { lender: record.merchantId, record: record.id, field }); }
+      catch (error) { failed = true; throw error; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limit), tasks.length) }, worker));
+  return opened;
 }

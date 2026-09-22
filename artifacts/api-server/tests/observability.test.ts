@@ -64,7 +64,9 @@ assert.deepEqual({ level: busy.logged[0]!.level, event: busy.logged[0]!.fields["
 assert.equal(busy.logged[0]!.fields["err"], lockWait, "with the database's own error");
 const stopped = handled(markRolledBack(new DatabaseLimitError("statement_timeout")));
 assert.deepEqual([stopped.logged[0]!.level, stopped.logged[0]!.fields["limit"], stopped.headers["Retry-After"]], ["error", "statement_timeout", "5"], "a stopped statement is an error line");
-checks += 17;
+const waitedChange = handled(markRolledBack(new DatabaseLimitError("workspace_busy")));
+assert.deepEqual([waitedChange.status, waitedChange.headers["Retry-After"], waitedChange.body.committed, waitedChange.logged[0]!.level, waitedChange.logged[0]!.fields["limit"]], [503, "2", false, "warn", "workspace_busy"], "a team or persona change that could not start is a warning, retried, with nothing saved");
+checks += 18;
 
 // ---- Over HTTP: liveness, readiness, ids on answers, refusals in the log, nothing secret written ----
 const server = app.listen(0);

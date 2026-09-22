@@ -57,10 +57,18 @@ export function beginStatement(limits: TransactionLimits, mode?: 'ISOLATION LEVE
   return `BEGIN${mode ? ` ${mode}` : ''}; SET LOCAL statement_timeout = ${wholeMilliseconds(limits.statementMs, 'statementMs')}; SET LOCAL lock_timeout = ${wholeMilliseconds(limits.lockMs, 'lockMs')}; SET LOCAL idle_in_transaction_session_timeout = ${wholeMilliseconds(limits.idleMs, 'idleMs')}`;
 }
 
-/** Why a request was turned away without an answer from the database. */
-export type DatabaseLimit = 'lender_busy' | 'lock_timeout' | 'lock_conflict' | 'statement_timeout' | 'idle_timeout' | 'connection_lost' | 'pool_timeout' | 'database_unavailable';
+/**
+ * Why a request was turned away without an answer from the database. The two
+ * workspace limits are the workspace lock's lock limit: a team, lender-access,
+ * invitation or persona change that the requests already running in its
+ * workspace kept waiting (`workspace_busy`), and a request queued behind such
+ * a change (`workspace_changing`).
+ */
+export type DatabaseLimit = 'lender_busy' | 'lock_timeout' | 'lock_conflict' | 'workspace_busy' | 'workspace_changing' | 'statement_timeout' | 'idle_timeout' | 'connection_lost' | 'pool_timeout' | 'database_unavailable';
 const described: Record<DatabaseLimit, { what: string; next: string; retryAfterSeconds: number }> = {
   lender_busy: { what: 'This lender is busy with other requests.', next: 'Try again in a moment.', retryAfterSeconds: 2 },
+  workspace_busy: { what: 'Other requests in this workspace are still finishing.', next: 'Try this change again in a moment.', retryAfterSeconds: 2 },
+  workspace_changing: { what: 'This workspace is busy with a team or role change.', next: 'Try again in a moment.', retryAfterSeconds: 2 },
   lock_timeout: { what: 'This lender is busy with another change.', next: 'Try again in a moment.', retryAfterSeconds: 2 },
   lock_conflict: { what: 'This lender is busy with another change.', next: 'Try again in a moment.', retryAfterSeconds: 1 },
   statement_timeout: { what: 'This request took too long and was stopped.', next: 'Try again in a moment, and quote this reference if it happens again.', retryAfterSeconds: 5 },

@@ -23,11 +23,11 @@ import { DatabaseLimitError } from './database-limits';
  * 5xx answer says `committed: false`: nothing was saved, so the console need
  * not hold the request as unconfirmed.
  *
- * A request the store turned away at a database limit (a busy lender, a lock
- * or statement past its limit, an idle or lost connection, no free connection)
- * is a 503 with Retry-After in plain words. A raw PostgreSQL code is never
- * guessed at here: the store translates it where it knows whether COMMIT was
- * sent.
+ * A request the store turned away at a database limit (a busy lender or
+ * workspace, a lock or statement past its limit, an idle or lost connection,
+ * no free connection) is a 503 with Retry-After in plain words. A raw
+ * PostgreSQL code is never guessed at here: the store translates it where it
+ * knows whether COMMIT was sent.
  *
  * Before a definitive refusal, or any answer for a request that saved
  * nothing, is sent, the request's operations-journal entry (when the recovery
@@ -75,8 +75,8 @@ function describe(error: unknown, req: Parameters<ErrorRequestHandler>[1]): Answ
   }
   const notSaved = wasRolledBack(error);
   if (error instanceof DatabaseLimitError) {
-    // A busy lender or a lock wait is load, not a fault: a warning. A stopped statement, a lost connection or a full pool is an error.
-    const level = ["lender_busy", "lock_timeout", "lock_conflict"].includes(error.limit) ? "warn" : "error";
+    // A busy lender or workspace or a lock wait is load, not a fault: a warning. A stopped statement, a lost connection or a full pool is an error.
+    const level = ["lender_busy", "lock_timeout", "lock_conflict", "workspace_busy", "workspace_changing"].includes(error.limit) ? "warn" : "error";
     req.log[level]({ event: "request.busy", status: 503, limit: error.limit, reason: error.message, ...(error.cause === undefined ? {} : { err: error.cause }) }, "Request turned away: a database limit was reached");
     return { status: 503, headers: { "Retry-After": String(error.retryAfterSeconds) }, body: { error: error.message, ...(notSaved ? { committed: false } : {}), requestId } };
   }
