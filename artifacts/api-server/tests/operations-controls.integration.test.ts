@@ -36,9 +36,9 @@ const ok=(result:{status:number;data:any})=>{assert.equal(result.status,200,JSON
 const post=(path:string,body:unknown,key=randomUUID())=>call(path,"POST",body,key);
 try{
   for(const name of ["003_pilot_workflow.sql","004_staff_lender_access.sql"])await pool.query(await readFile(new URL(`../../../lib/db/migrations/${name}`,import.meta.url),"utf8"));
-  // Readiness finds every table, column and index this build needs (a missing one would answer 503 and name it).
+  // Readiness finds every table, column and index this build needs (a missing table or column would answer 503; the log, not the answer, names it).
   const readyz=await fetch(`${base}/readyz`),readyzBody=await readyz.json() as {status:string;checks:{database:{status:string};schema:unknown}};
-  assert.deepEqual([readyz.status,readyzBody.status,readyzBody.checks.database.status,readyzBody.checks.schema],[200,"ok","ok",{status:"ok",missing:[]}]);
+  assert.deepEqual([readyz.status,readyzBody.status,readyzBody.checks.database.status,readyzBody.checks.schema],[200,"ok","ok",{status:"ok"}]);
   const workspace=ok(await call("/v1/workspace")),lender=workspace.merchants[0].id,other=workspace.merchants[1].id;
   const workspaceId=(await pool.query("SELECT workspace_id FROM valopay_merchants WHERE id=$1",[lender])).rows[0].workspace_id;workspaces.add(workspaceId);
   const at=(days:number)=>new Date(Date.now()-days*86400000).toISOString();
