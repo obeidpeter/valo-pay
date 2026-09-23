@@ -9,10 +9,10 @@ import {
   findIdempotency,
   saveIdempotency,
   digest,
-  canonical,
   fail,
   completeOperation,
 } from "../lib/valopay-store";
+import { requestFingerprint } from "../lib/digests";
 import {
   connectedActionSchema,
   connectedView,
@@ -45,7 +45,7 @@ router.post("/v1/connected/actions", async (req, res) => {
       async (ctx) => {
         const state = await loadState(ctx, merchantId, "update");
         const id = digest(`connected:${merchantId}:${key}`),
-          fingerprint = digest(canonical({ input, actor: ctx.actor }));
+          fingerprint = requestFingerprint({ input, actor: ctx.actor });
         const prior = await findIdempotency(ctx, id);
         if (prior) {
           if (prior.request_hash !== fingerprint)

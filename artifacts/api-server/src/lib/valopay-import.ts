@@ -1,5 +1,5 @@
 import { parse } from "csv-parse/sync";
-import { createHash } from 'node:crypto';
+import { canonicalDigest } from './digests';
 import { makeRecord, validateRecord } from "../domain";
 import type { Context, DomainState } from "../domain/types";
 import { csvAmountToKobo, defaultStatus, importBooleanFields, importKinds as sharedImportKinds, importNumericFields } from "@workspace/valopay-schema";
@@ -56,7 +56,8 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
         if(topFields.has(target))record[target]=decoded;else record.data[target]=decoded;
       }
       const identity = input.identities && { source: input.identities.source, rowId: input.identities.ids[index], batchId: input.identities.batchId };
-      const identityFingerprint = createHash('sha256').update(JSON.stringify(record, (_key, value) => value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value)).digest('hex');
+      // Stored in the row's import identity and compared when the row is imported again: its first form.
+      const identityFingerprint = canonicalDigest(record, 'legacy-en-us-replacer');
       if (identity) {
         const prior = working.records.find(r => r.kind === input.kind && r.data.importIdentity?.source === identity.source && r.data.importIdentity?.rowId === identity.rowId);
         if (prior) {

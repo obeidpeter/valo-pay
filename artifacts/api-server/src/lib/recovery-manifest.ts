@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { sameJson } from "@workspace/valopay-schema";
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const keyId = z.string().regex(/^projects\/[a-zA-Z0-9_-]+\/locations\/[a-zA-Z0-9_-]+\/keyRings\/[a-zA-Z0-9_-]+\/cryptoKeys\/[a-zA-Z0-9_-]+$/);
@@ -31,14 +32,13 @@ export type RecoveryManifest = z.infer<typeof recoveryManifestSchema>;
 export type RecoveryObject = z.infer<typeof recoveryObjectSchema>;
 /** SHA-256 and length are computed from the exact restored bytes. */
 export function recoveryBytes(bytes: Uint8Array) { return { checksum: createHash("sha256").update(bytes).digest("hex"), byteLength: bytes.byteLength }; }
-const canonical = (value: unknown): string => JSON.stringify(value, (_key,item) => item && typeof item === "object" && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a],[b])=>a.localeCompare(b))) : item);
 /** Fail closed before the restored app is started. Callers supply measured bytes/inventory and independently reviewed target configuration. */
 export function verifyRecoveryManifest(raw: unknown, databaseBytes: Uint8Array, restoredObjects: RecoveryObject[], targetConfiguration: RecoveryConfiguration) {
   const manifest = recoveryManifestSchema.parse(raw), configuration = recoveryConfigurationSchema.parse(targetConfiguration);
-  if (canonical(recoveryBytes(databaseBytes)) !== canonical(manifest.database)) throw new Error("The restored database backup does not match its recovery manifest.");
+  if (!sameJson(recoveryBytes(databaseBytes), manifest.database)) throw new Error("The restored database backup does not match its recovery manifest.");
   const normaliseConfig = (config: RecoveryConfiguration) => ({ ...config, origins: [...config.origins].sort(), encryptionKeyIds: [...config.encryptionKeyIds].sort() });
-  if (canonical(normaliseConfig(configuration)) !== canonical(normaliseConfig(manifest.configuration))) throw new Error("The restored access, key or schema configuration does not match the reviewed recovery requirements.");
+  if (!sameJson(normaliseConfig(configuration), normaliseConfig(manifest.configuration))) throw new Error("The restored access, key or schema configuration does not match the reviewed recovery requirements.");
   const objects = restoredObjects.map(object => recoveryObjectSchema.parse(object)).sort((a,b)=>a.storageKey.localeCompare(b.storageKey));
-  if (canonical(objects) !== canonical([...manifest.objects].sort((a,b)=>a.storageKey.localeCompare(b.storageKey)))) throw new Error("A private evidence object is missing, changed, public or assigned to another lender.");
+  if (!sameJson(objects, [...manifest.objects].sort((a,b)=>a.storageKey.localeCompare(b.storageKey)))) throw new Error("A private evidence object is missing, changed, public or assigned to another lender.");
   return { verified: true as const, objects: objects.length, snapshotAt: manifest.snapshotAt, configurationVerified: true as const };
 }

@@ -1,12 +1,12 @@
-import { createHash } from 'node:crypto';
-import { retentionPolicySchema, retentionPolicyInputSchema, retentionHoldInputSchema, lifecycleCandidateSchema, lifecyclePreviewInputSchema, lifecycleApproveInputSchema, lifecycleRunViewSchema, lifecycleViewSchema, lifecycleReceiptStatusSchema, type LifecycleCandidate, type LifecycleEvidence, type LifecycleExternalCandidate, type RetentionPolicy } from '@workspace/valopay-schema';
+import { retentionPolicySchema, retentionPolicyInputSchema, retentionHoldInputSchema, lifecycleCandidateSchema, lifecyclePreviewInputSchema, lifecycleApproveInputSchema, lifecycleRunViewSchema, lifecycleViewSchema, lifecycleReceiptStatusSchema, type LifecycleCandidate, type LifecycleEvidence, type LifecycleExternalCandidate, type RetentionPolicy, canonicalJson, sameJson, legacyCollatedCompare } from '@workspace/valopay-schema';
 import type { Context, DomainState, ValopayRecord } from './types';
 import { makeRecord, touch, assertSourceOpened } from './records';
+import { canonicalDigest } from '../lib/digests';
 
 const DAY = 86400000;
 const defaults: RetentionPolicy = { rawCsvDays: null, journalPayloadDays: null, exportFileDays: null, auditTrail: 'retain' };
-const canonical = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
-const hash = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
+// Policy and hold revisions and candidate and preview digests are stored in runs and compared again: their first form.
+const hash = (value: unknown) => canonicalDigest(value, 'legacy-en-us-replacer');
 function refuse(message: string, status = 409): never { throw Object.assign(new Error(message), { status }); }
 function admin(ctx: Context) { if (ctx.role !== 'Admin') refuse('A currently authorised administrator is required for retention controls.', 403); }
 const rows = (state: DomainState, kind: string) => state.records.filter(record => record.kind === kind && record.merchantId === state.merchant.id);
@@ -23,7 +23,7 @@ export function lifecyclePolicy(state: DomainState) {
 export function lifecycleHolds(state: DomainState) {
   const latest = new Map<string, ValopayRecord>();
   for (const record of ordered(rows(state, 'retention-holds'))) if (!latest.has(`${record.data.kind}:${record.data.sourceId}`)) latest.set(`${record.data.kind}:${record.data.sourceId}`, record);
-  return { active: [...latest.values()].filter(record => record.data.held === true), revision: hash([...latest.values()].map(record => ({ id: record.id, data: record.data })).sort((a, b) => a.id.localeCompare(b.id))) };
+  return { active: [...latest.values()].filter(record => record.data.held === true), revision: hash([...latest.values()].map(record => ({ id: record.id, data: record.data })).sort((a, b) => legacyCollatedCompare(a.id, b.id))) };
 }
 /**
  * The export files this lender still relies on as evidence, whatever the
@@ -137,7 +137,7 @@ export function approveLifecycleRun(state: DomainState, ctx: Context, id: string
   const current = new Map(lifecycleCandidates(state, external).map(item => [candidateKey(item), item])), rules = rulesOf(state, ctx, policy.policy);
   for (const candidate of run.data.candidates as LifecycleCandidate[]) {
     const found = current.get(candidateKey(candidate));
-    if (!found || canonical(found) !== canonical(candidate) || !eligible(rules, found)) refuse('A previewed source changed, is held or is no longer eligible. Prepare a new preview.');
+    if (!found || !sameJson(found, candidate) || !eligible(rules, found)) refuse('A previewed source changed, is held or is no longer eligible. Prepare a new preview.');
   }
   run.status = 'approved'; Object.assign(run.data, { approvedBy: ctx.actor, approvedAt: ctx.now, approvalReason: input.reason }); advanceRun(run, ctx.now);
   return lifecycleRunView(state, run);
@@ -152,18 +152,18 @@ export function approveLifecycleRun(state: DomainState, ctx: Context, id: string
  * anything else. Prepare it again after the state changes.
  */
 export function lifecycleCandidateCheck(state: DomainState, ctx: Context, runId: string, external: LifecycleExternalCandidate[] = []) {
-  admin(ctx); const run = runOf(state, runId), latest = latestReceipts(state, runId), manifest = new Set((run.data.candidates as LifecycleCandidate[]).map(saved => canonical(saved)));
+  admin(ctx); const run = runOf(state, runId), latest = latestReceipts(state, runId), manifest = new Set((run.data.candidates as LifecycleCandidate[]).map(saved => canonicalJson(saved)));
   let revision: string | undefined, current: Map<string, LifecycleCandidate> | undefined, rules: Rules | undefined;
   return (candidate: LifecycleCandidate): boolean => {
     if (!['approved', 'running', 'attention', 'completed'].includes(run.status) || !run.data.approvedBy) refuse('Approve the exact retention preview before executing it.');
-    if (!manifest.has(canonical(candidate))) refuse('This source was not part of the approved preview.');
+    if (!manifest.has(canonicalJson(candidate))) refuse('This source was not part of the approved preview.');
     if (settled(latest.get(candidateKey(candidate)))) return false;
     revision ??= lifecyclePolicy(state).revision;
     if (revision !== run.data.policyRevision) refuse('Retention policy changed after approval. Prepare a new preview before deleting anything else.');
     current ??= new Map(lifecycleCandidates(state, external).map(item => [candidateKey(item), item]));
     rules ??= rulesOf(state, ctx);
     const found = current.get(candidateKey(candidate));
-    if (!found || canonical(found) !== canonical(candidate) || !eligible(rules, found)) refuse('This source changed, is held or is no longer eligible. Nothing was deleted by this check.');
+    if (!found || !sameJson(found, candidate) || !eligible(rules, found)) refuse('This source changed, is held or is no longer eligible. Nothing was deleted by this check.');
     return true;
   };
 }
@@ -186,7 +186,7 @@ export function eraseLifecycleRawCsv(state: DomainState, ctx: Context, runId: st
 export function recordLifecycleReceipt(state: DomainState, ctx: Context, runId: string, candidate: LifecycleCandidate, result: 'deleted' | 'already_absent' | 'blocked' | 'failed', detail: string) {
   admin(ctx); lifecycleReceiptStatusSchema.parse(result); const run = runOf(state, runId);
   if (!run.data.approvedBy || !['approved', 'running', 'attention', 'completed'].includes(run.status)) refuse('This deletion run is not approved.');
-  if (!run.data.candidates.some((saved: LifecycleCandidate) => canonical(saved) === canonical(candidate))) refuse('The receipt does not match the approved source identity.');
+  if (!run.data.candidates.some((saved: LifecycleCandidate) => sameJson(saved, candidate))) refuse('The receipt does not match the approved source identity.');
   const prior = latestReceipts(state, runId).get(candidateKey(candidate));
   if (prior && ['deleted', 'already_absent'].includes(prior.data.result)) return lifecycleRunView(state, run);
   makeRecord(state, 'retention-receipts', { name: 'Retention execution receipt', status: 'recorded', createdAt: ctx.now, updatedAt: ctx.now, data: { runId, kind: candidate.kind, sourceId: candidate.sourceId, sourceDigest: candidate.digest, version: candidate.version, result, detail: detail.slice(0, 500), actor: ctx.actor, sequence: nextSequence(state, 'retention-receipts'), synthetic: true } });

@@ -15,3 +15,4 @@ export * from './personal-work';
 export * from './staff-lender-access';
 export * from './lifecycle';
 export * from './import-corrections';
+export * from './canonical-json';

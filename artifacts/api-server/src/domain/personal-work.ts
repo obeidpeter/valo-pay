@@ -1,16 +1,16 @@
-import { createHash } from 'node:crypto';
 import { personalWorkQuerySchema, personalWorkViewSchema, workReceiptInputSchema, workReceiptSchema, type PersonalWorkItem, type PersonalWorkQuery, type WorkReceiptInput } from '@workspace/valopay-schema';
 import type { Context, DomainState, ValopayRecord } from './types';
 import { makeRecord } from './records';
 import { reviewIsCurrent } from './close-review';
+import { canonicalDigest } from '../lib/digests';
 
 export type WorkAssignee = { actor: string; name: string; role: string };
 const workRoles = ['Admin', 'Operations', 'Finance', 'Compliance reviewer'];
 const DAY = 24 * 60 * 60 * 1000;
 const rule = 'Follow-ups are overdue at their saved due time. Follow-ups, unacknowledged handovers and pending reviews are escalated in this lender’s administrator workload after 24 hours. Escalation is an in-app flag; it does not send a message or change financial records.';
 function refuse(message: string, status = 409): never { throw Object.assign(new Error(message), { status }); }
-function canonical(value: unknown): string { return JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item); }
-function digest(value: unknown): string { return createHash('sha256').update(canonical(value)).digest('hex'); }
+// A receipt stores the source digest it acknowledged and a repeated receipt is found by it: its first form.
+function digest(value: unknown): string { return canonicalDigest(value, 'legacy-en-us-replacer'); }
 function instant(value: unknown): string | null { return typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null; }
 function eligible(ctx: Context, people: WorkAssignee[]) { return workRoles.includes(ctx.role) && people.some(person => person.actor === ctx.actor && workRoles.includes(person.role)); }
 function localRecords(state: DomainState) { return state.records.filter(record => record.merchantId === state.merchant.id); }

@@ -1,12 +1,11 @@
 import type { PoolClient } from '@workspace/db';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { encryptField, decryptField, type FieldKeyRing } from './field-encryption';
+import { sha256Hex as digest, requestFingerprint, auditEntryData } from './digests';
 
 export interface PilotStagingScope { workspaceId: string; principalHash: string; tenantId: string; actor: string }
 export interface StagingPool { connect(): Promise<PoolClient> }
 export interface ProtectedNoteInput { recordId: string; note: string; expectedUpdatedAt: string; requestKey: string }
-const canonical = (value: any): string => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(',')}}` : JSON.stringify(value) ?? 'null';
-const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const refusal = (message: string, status = 403): never => { throw Object.assign(new Error(message), { status }); };
 
 /** Isolated rehearsal repository. Never uses the sandbox pool or changes schema/grants. */
@@ -53,7 +52,7 @@ export function createPilotStagingStore(pool: StagingPool, schema: string, keyPr
     write: (scope: PilotStagingScope, input: ProtectedNoteInput) => transaction(scope, async client => {
       if (!input.note?.startsWith('SYNTHETIC:') || input.note.length > 2000 || !/^[A-Za-z0-9._:-]{16,200}$/.test(input.requestKey)) refusal('Use a synthetic note and a valid request key.', 400);
       const requestId = digest(`${scope.tenantId}:${scope.actor}:${input.requestKey}`);
-      const fingerprint = digest(canonical(input));
+      const fingerprint = requestFingerprint(input);
       const previous = (await client.query(`SELECT request_hash,response FROM ${table('valopay_idempotency')} WHERE id=$1 AND merchant_id=$2`, [requestId, scope.tenantId])).rows[0];
       if (previous) {
         if (previous.request_hash !== fingerprint) refusal('The request key was used with different input.', 409);
@@ -65,8 +64,8 @@ export function createPilotStagingStore(pool: StagingPool, schema: string, keyPr
       const updated = (await client.query(`UPDATE ${table('valopay_records')} SET data=jsonb_set(data,'{protectedStagingNote}',$1::jsonb),updated_at=GREATEST(clock_timestamp(),updated_at+interval '1 millisecond') WHERE id=$2 AND merchant_id=$3 RETURNING id,name,data,updated_at`, [JSON.stringify(envelope), row.id, scope.tenantId])).rows[0];
       const previousAudit = (await client.query(`SELECT data FROM ${table('valopay_records')} WHERE merchant_id=$1 AND kind='audit' ORDER BY (data->>'sequence')::bigint DESC LIMIT 1`, [scope.tenantId])).rows[0]?.data;
       const now = new Date(updated.updated_at).toISOString();
-      const body = { sequence: Number(previousAudit?.sequence || 0) + 1, actor: scope.actor, action: 'staging.protected_note', objectId: row.id, summary: 'Synthetic protected note saved', changeDigest: digest(canonical(envelope)), previousHash: previousAudit?.hash || 'GENESIS', timestamp: now };
-      await client.query(`INSERT INTO ${table('valopay_records')}(id,merchant_id,kind,name,status,customer_id,data,created_at,updated_at) VALUES($1,$2,'audit','staging.protected_note','recorded',$3,$4,$5,$5)`, [randomUUID(), scope.tenantId, row.id, { ...body, hash: digest(canonical(body)) }, now]);
+      const entry = auditEntryData({ sequence: Number(previousAudit?.sequence || 0) + 1, actor: scope.actor, action: 'staging.protected_note', objectId: row.id, summary: 'Synthetic protected note saved', changes: envelope, previousHash: previousAudit?.hash || 'GENESIS', timestamp: now });
+      await client.query(`INSERT INTO ${table('valopay_records')}(id,merchant_id,kind,name,status,customer_id,data,created_at,updated_at) VALUES($1,$2,'audit','staging.protected_note','recorded',$3,$4,$5,$5)`, [randomUUID(), scope.tenantId, row.id, entry, now]);
       const result = await project(updated, scope);
       await client.query(`INSERT INTO ${table('valopay_idempotency')}(id,merchant_id,request_hash,response) VALUES($1,$2,$3,$4)`, [requestId, scope.tenantId, fingerprint, result]);
       return result;

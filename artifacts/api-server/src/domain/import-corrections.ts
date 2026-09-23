@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   importCorrectionPreviewInputSchema,
   importCorrectionProposalInputSchema,
@@ -8,21 +7,18 @@ import {
   type ImportCorrectionPreviewInput,
   type ImportCorrectionProposalInput,
   type ImportCorrectionDecisionInput,
+  legacyCollatedCompare,
+  sameJson,
 } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "./types";
 import { makeRecord, assertNoRealBankDetails } from "./records";
 import { validateRecord } from "./validation";
+import { canonicalDigest } from "../lib/digests";
 
-const canonical = (value: unknown) =>
-  JSON.stringify(value, (_key, item) =>
-    item && typeof item === "object" && !Array.isArray(item)
-      ? Object.fromEntries(
-          Object.entries(item).sort(([a], [b]) => a.localeCompare(b)),
-        )
-      : item,
-  );
+// Impact, preview and proposal digests are stored in a proposal and computed
+// again when it is approved and saved: their first form.
 const digest = (value: unknown) =>
-  createHash("sha256").update(canonical(value)).digest("hex");
+  canonicalDigest(value, "legacy-en-us-replacer");
 const principal = (ctx: Context) => ctx.principalId || ctx.actor;
 function refuse(message: string, status = 409): never {
   throw Object.assign(new Error(message), { status });
@@ -91,7 +87,7 @@ function affectedRecords(state: DomainState, target: ValopayRecord, asOf: string
                 r.data.originalDueItemId,
               ].includes(target.id)))),
     )
-    .sort((a, b) => a.id.localeCompare(b.id));
+    .sort((a, b) => legacyCollatedCompare(a.id, b.id));
 }
 function calculate(
   state: DomainState,
@@ -505,9 +501,8 @@ export function assertImportedCorrectionChange(
     proposal.data.proposedPrincipal === event!.data.principalId ||
     proposal.data.reviewer !== event!.data.actor ||
     proposal.data.proposalDigest !== event!.data.proposalDigest ||
-    canonical(proposal.data.before) !== canonical(before) ||
-    canonical({ ...proposal.data.after, updatedAt: after.updatedAt }) !==
-      canonical(after)
+    !sameJson(proposal.data.before, before) ||
+    !sameJson({ ...proposal.data.after, updatedAt: after.updatedAt }, after)
   )
     refuse(
       "Imported fields can change only through an independently approved import correction.",
@@ -529,7 +524,7 @@ export function assertImportedCorrectionChange(
   if (
     checked.preview.blockers.length ||
     checked.preview.previewDigest !== proposal.data.preview.previewDigest ||
-    canonical(checked.after) !== canonical(proposal.data.after) ||
+    !sameJson(checked.after, proposal.data.after) ||
     digest(affectedRecords(state, before, proposal.createdAt)) !==
       proposal.data.impactDigest
   )
@@ -547,7 +542,7 @@ export function assertNoDirectImportedCorrection(
     updatedAt: before.updatedAt,
     data: { ...after.data, synthetic: before.data.synthetic },
   };
-  if (canonical(before) !== canonical(normalised))
+  if (!sameJson(before, normalised))
     refuse(
       "Imported source records cannot be edited directly. Open the committed import batch for a supported correction and independent Finance review. For other changes, use the dedicated mandate, Collections, Reconciliation or Exceptions action; the original source remains preserved.",
     );

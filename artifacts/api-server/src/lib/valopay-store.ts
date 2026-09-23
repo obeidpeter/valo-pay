@@ -8,9 +8,11 @@ import { validateLenderAccessChange } from './staff-lender-access';
 import { bindRuntimeIdentity, bindRuntimeService, clearRuntimeInviteeGrants, runtimeIsolationConfiguration, runtimeIsolationEnabled, runtimeServiceRead } from './runtime-isolation';
 import type { StaffLenderAccessInput } from '@workspace/valopay-schema';
 import type { VerifiedClerkSession } from './pilot-access';
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
-import { closeTimeOf, definitiveRefusalStatuses, nextCloseInstant } from "@workspace/valopay-schema";
+import { closeTimeOf, definitiveRefusalStatuses, nextCloseInstant, sameJson } from "@workspace/valopay-schema";
+import { sha256Hex, canonicalDigest, requestFingerprint, auditEntryData, verifyAuditChain } from "./digests";
+import { recordChanged, nextRecordVersion } from "./edit-versions";
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { recordsOf } from "../domain/records";
 import { nextCloseRetry, type CloseRetry } from "../domain/close";
@@ -37,14 +39,7 @@ import { assertProviderEventChange } from '../providers/paystack-inbox';
 /** The demo persona roles, the same list as the shared schema's. */
 export const roles = ["Admin", "Operations", "Finance", "Compliance reviewer", "Read-only"];
 /** SHA-256 of a string, as hex. */
-export const digest = (value: string) => createHash("sha256").update(value).digest("hex");
-/** A stable JSON form with sorted keys, so two states with the same content hash the same. */
-export function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  // Preserve the historical byte format regardless of JSONB key order.
-  if (value && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(",")}}`;
-  return JSON.stringify(value) ?? "null";
-}
+export const digest = sha256Hex;
 
 type WorkspaceRow = { id: string; principal_hash: string; role: string };
 /**
@@ -58,11 +53,16 @@ const snapshotOf = (state: DomainState): StateSnapshot => ({
   merchant: JSON.stringify(state.merchant), settings: JSON.stringify(state.settings),
   records: new Map(state.records.map((record) => [record.id, JSON.stringify(record)])),
 });
-/** One JSON pass: the records added or changed since the lender was loaded, and the IDs left untouched. */
+/**
+ * One JSON pass: the records added or changed since the lender was loaded,
+ * and the IDs left untouched. Only a record whose JSON differs is compared in
+ * canonical form (recordChanged), so a reordering of keys is not a change.
+ */
 function changesSince(snapshot: StateSnapshot, state: DomainState): { changed: ValopayRecord[]; unchanged: Set<string> } {
   const changed: ValopayRecord[] = [], unchanged = new Set<string>();
   for (const record of state.records) {
-    if (snapshot.records.get(record.id) === JSON.stringify(record)) unchanged.add(record.id);
+    const loaded = snapshot.records.get(record.id);
+    if (loaded !== undefined && !recordChanged(loaded, record)) unchanged.add(record.id);
     else changed.push(record);
   }
   return { changed, unchanged };
@@ -72,8 +72,7 @@ function advanceChanged(snapshot: StateSnapshot, changed: ValopayRecord[], now: 
   for (const record of changed) {
     const original = snapshot.records.get(record.id);
     if (original === undefined) continue;
-    const previous = Date.parse((JSON.parse(original) as ValopayRecord).updatedAt);
-    record.updatedAt = new Date(Math.max(Date.parse(now), Date.parse(record.updatedAt), previous + 1)).toISOString();
+    record.updatedAt = nextRecordVersion(record, (JSON.parse(original) as ValopayRecord).updatedAt, now);
   }
 }
 type MerchantRow = { id: string; info: DomainState["merchant"]; settings: Record<string, any> };
@@ -158,7 +157,7 @@ const operationView = (row: OperationRow) => ({ id: row.id, label: row.label, ac
 export async function prepareOperation(ctx: StoreContext, merchantId: string, key: string, request: StoredRequest) {
   const session = sessionFor(ctx); await readMerchant(ctx, merchantId, 'update');
   const owner = session.owner || session.principal, id = digest(`operation:${merchantId}:${owner}:${key}`);
-  const hash = digest(canonical(request));
+  const hash = requestFingerprint(request);
   const prior = (await session.client.query<OperationRow>('SELECT * FROM valopay_operations WHERE id=$1 AND merchant_id=$2 AND owner=$3', [id, merchantId, owner])).rows[0];
   if (prior) {
     if (prior.request_hash !== hash) fail('This request key belongs to a different request. Recover the original request first.', 409);
@@ -449,7 +448,7 @@ export async function createPilotLender(ctx: StoreContext, input: { name: string
   const session = sessionFor(ctx);
   if (ctx.role !== 'Admin' || session.access !== 'team') fail('An administrator must set up a lender.', 403);
   // Workspace lock and deterministic ID make a repeated onboarding request safe.
-  const id = digest(`onboarding:${session.workspace.id}:${session.owner}:${key}`), fingerprint = digest(canonical(input));
+  const id = digest(`onboarding:${session.workspace.id}:${session.owner}:${key}`), fingerprint = requestFingerprint(input);
   const found = (await session.client.query<MerchantRow>('SELECT id,info,settings FROM valopay_merchants WHERE workspace_id=$1 AND id=$2', [session.workspace.id, id])).rows[0];
   if (found) { if (found.settings.onboardingFingerprint !== fingerprint) fail('This setup request was already used for different details.', 409); return found.info; }
   // 'team' access holds the workspace lock exclusively (lockWorkspace), so two creations at once are counted one after the other.
@@ -494,7 +493,7 @@ export async function verifyWorkspaceEncryption(context:StoreContext) {
   if(!payloadEncryptionKey())fail('Configure managed payload encryption before running this check.',503);
   const scope={lender:session.workspace.id,record:randomUUID(),field:'synthetic-key-check'},value={synthetic:true,nonce:randomUUID()};
   const sealed=await protectStored(value,scope),opened=await revealStored(sealed,scope);
-  if(canonical(value)!==canonical(opened))fail('The encryption check failed.',503);
+  if(!sameJson(value,opened))fail('The encryption check failed.',503);
   await staffEvent(session.client,session.workspace.id,context.actor,'encryption.verified','workspace',{synthetic:true,checkedAt:context.now});
   return {message:'Managed encryption and decryption succeeded for a synthetic payload.',checkedAt:context.now,verified:true};
 }
@@ -796,8 +795,9 @@ export function settleChanges(context: StoreContext, state: DomainState): { befo
   const byId = (a: ValopayRecord, b: ValopayRecord) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const previous = changed.filter((record) => snapshot.records.has(record.id)).map((record) => JSON.parse(snapshot.records.get(record.id)!) as ValopayRecord).sort(byId);
   return {
-    beforeDigest: digest(canonical({ merchant: JSON.parse(snapshot.merchant), settings: JSON.parse(snapshot.settings), records: previous })),
-    afterDigest: digest(canonical({ merchant: state.merchant, settings: state.settings, records: [...changed].sort(byId) })),
+    // In the audit entry's form: they are committed to by its change digest.
+    beforeDigest: canonicalDigest({ merchant: JSON.parse(snapshot.merchant), settings: JSON.parse(snapshot.settings), records: previous }, "legacy-en-us-null"),
+    afterDigest: canonicalDigest({ merchant: state.merchant, settings: state.settings, records: [...changed].sort(byId) }, "legacy-en-us-null"),
     changedRecords: changed.length,
   };
 }
@@ -1145,7 +1145,7 @@ function isExportRetry(before: ValopayRecord, after: ValopayRecord, now?: string
   const stableData = (record: ValopayRecord) => Object.fromEntries(Object.entries(record.data).filter(([key]) => ![...cleared, 'stage', 'lastProgressAt'].includes(key)));
   // A retry cannot change the request, private object identity, attempts,
   // checksum, customer or any prior evidence; it only clears the old lease/error.
-  return canonical({ ...after, status: before.status, updatedAt: before.updatedAt, data: stableData(after) }) === canonical({ ...before, data: stableData(before) });
+  return sameJson({ ...after, status: before.status, updatedAt: before.updatedAt, data: stableData(after) }, { ...before, data: stableData(before) });
 }
 
 /**
@@ -1179,23 +1179,23 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
       const expected=structuredClone(before);expected.updatedAt=present.updatedAt;
       if(kind==='raw_csv'){delete expected.data.csv;if(expected.data.check)delete expected.data.check.preview;expected.data.rawCsvRemovedAt=now;expected.data.rawCsvRetentionRunId=run.id;}
       else {expected.data.fileDeletedAt=now;expected.data.fileRetentionRunId=run.id;}
-      return canonical(expected)===canonical(present);
+      return sameJson(expected,present);
     };
-    if (["audit", "exports", "reviews", "closes", "retry-decisions", "invoices", "connected-credit-assessments", "connected-credit-reviews", "case-events", "import-revisions", "import-corrections", "import-correction-events", "source-manifests", "close-review-events", "work-events", "retention-policies", "retention-holds", "retention-receipts"].includes(before.kind) && canonical(present) !== canonical(before)
+    if (["audit", "exports", "reviews", "closes", "retry-decisions", "invoices", "connected-credit-assessments", "connected-credit-reviews", "case-events", "import-revisions", "import-corrections", "import-correction-events", "source-manifests", "close-review-events", "work-events", "retention-policies", "retention-holds", "retention-receipts"].includes(before.kind) && !sameJson(present, before)
       && !(before.kind === "exports" && (isExportRetry(before, present, now)||retentionChange()))) conflict("Evidence records are immutable.");
-    if (["policies", "templates", "experiments"].includes(before.kind) && ["approved", "preregistered", "closed"].includes(before.status) && canonical(present) !== canonical(before)) {
+    if (["policies", "templates", "experiments"].includes(before.kind) && ["approved", "preregistered", "closed"].includes(before.status) && !sameJson(present, before)) {
       conflict("Approved, preregistered, and closed versions are immutable.");
     }
     if (before.kind === 'provider-events') assertProviderEventChange(before,present);
-    if (before.kind === 'source-profiles' && ['source','kind'].some(key=>canonical(before.data[key])!==canonical(present.data[key]))) conflict('A source profile cannot change its source or record type.');
-    if (before.kind === 'import-batches' && before.status === 'committed' && canonical(present) !== canonical(before)&&!retentionChange()) conflict('Committed source batches are immutable.');
-    if(before.kind==='close-reviews'&&canonical(present)!==canonical(before)){
+    if (before.kind === 'source-profiles' && ['source','kind'].some(key=>!sameJson(before.data[key],present.data[key]))) conflict('A source profile cannot change its source or record type.');
+    if (before.kind === 'import-batches' && before.status === 'committed' && !sameJson(present, before)&&!retentionChange()) conflict('Committed source batches are immutable.');
+    if(before.kind==='close-reviews'&&!sameJson(present,before)){
       const expected=structuredClone(before);expected.status=present.status;expected.updatedAt=present.updatedAt;
       for(const field of ['decidedBy','decidedPrincipal','decidedAt','decisionNote','sourceExceptions'])expected.data[field]=present.data[field];
-      if(before.status!=='awaiting_review'||!['approved','changes_requested'].includes(present.status)||canonical(expected)!==canonical(present))conflict('The prepared close snapshot and recorded decision are immutable.');
+      if(before.status!=='awaiting_review'||!['approved','changes_requested'].includes(present.status)||!sameJson(expected,present))conflict('The prepared close snapshot and recorded decision are immutable.');
     }
-    if(before.kind==='retention-runs'&&['candidates','previewDigest','policyRevision','expiresAt','preparedBy'].some(key=>canonical(before.data[key])!==canonical(present.data[key])))conflict('The approved retention manifest is immutable.');
-    if (before.data.importIdentity && canonical(present.data.importIdentity) !== canonical(before.data.importIdentity)) conflict('Source row provenance is immutable.');
+    if(before.kind==='retention-runs'&&['candidates','previewDigest','policyRevision','expiresAt','preparedBy'].some(key=>!sameJson(before.data[key],present.data[key])))conflict('The approved retention manifest is immutable.');
+    if (before.data.importIdentity && !sameJson(present.data.importIdentity, before.data.importIdentity)) conflict('Source row provenance is immutable.');
     assertImportedCorrectionChange(before, present, snapshot, state);
   }
   const dueReferences = new Set<string>(), observations = new Set<string>(), inflight = new Set<string>();
@@ -1203,7 +1203,7 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
   const changed = (record: ValopayRecord, ...keys: string[]) => {
     if (unchanged.has(record.id)) return false;
     const before = original.get(record.id);
-    return !before || keys.some((key) => canonical(before.data[key]) !== canonical(record.data[key]));
+    return !before || keys.some((key) => !sameJson(before.data[key], record.data[key]));
   };
   const changedCustomer = (record: ValopayRecord) => {
     if (unchanged.has(record.id)) return false;
@@ -1367,8 +1367,8 @@ export async function lifecycleInventory(context:StoreContext,state:DomainState)
  if(context.role!=='Admin'||!merchantId||state.merchant.id!==merchantId)fail('An administrator in this lender is required.',403);
  const rows=(await session.client.query<OperationRow>("SELECT * FROM valopay_operations WHERE merchant_id=$1 AND status IN ('completed','cancelled') AND NOT(request ? 'purged') ORDER BY updated_at,id",[merchantId])).rows;
  return [
-  ...rows.map(row=>({kind:'journal_payload' as const,merchantId,sourceId:row.id,version:row.updated_at.toISOString(),createdAt:row.updated_at.toISOString(),label:'Terminal operation payload',digest:digest(canonical({request:row.request,receipt:row.receipt,key:row.request_key,hash:row.request_hash,status:row.status})),status:row.status as 'completed'|'cancelled'})),
-  ...state.records.filter(r=>r.kind==='exports'&&['ready','failed'].includes(r.status)&&!r.data.fileDeletedAt&&r.data.bucket&&r.data.objectName).map(r=>({kind:'export_file' as const,merchantId,sourceId:r.id,version:r.updatedAt,createdAt:String(r.data.generatedAt||r.updatedAt),label:'Private export file',digest:digest(canonical({id:r.id,status:r.status,data:r.data})),status:r.status as 'ready'|'failed'})),
+  ...rows.map(row=>({kind:'journal_payload' as const,merchantId,sourceId:row.id,version:row.updated_at.toISOString(),createdAt:row.updated_at.toISOString(),label:'Terminal operation payload',digest:canonicalDigest({request:row.request,receipt:row.receipt,key:row.request_key,hash:row.request_hash,status:row.status},"legacy-en-us-null"),status:row.status as 'completed'|'cancelled'})),
+  ...state.records.filter(r=>r.kind==='exports'&&['ready','failed'].includes(r.status)&&!r.data.fileDeletedAt&&r.data.bucket&&r.data.objectName).map(r=>({kind:'export_file' as const,merchantId,sourceId:r.id,version:r.updatedAt,createdAt:String(r.data.generatedAt||r.updatedAt),label:'Private export file',digest:canonicalDigest({id:r.id,status:r.status,data:r.data},"legacy-en-us-null"),status:r.status as 'ready'|'failed'})),
  ];
 }
 /** One candidate per request bounds external work and makes progress resumable.
@@ -1753,19 +1753,12 @@ export function appendAudit(state: DomainState, ctx: Context, action: string, ob
     length += 1;
     if (!previous || Number(record.data.sequence || 0) >= Number(previous.data.sequence || 0)) previous = record;
   }
-  const body = { sequence: length + 1, actor: ctx.actor, action, objectId, summary, changeDigest: digest(canonical(changes ?? {})), previousHash: previous?.data.hash ?? "GENESIS", timestamp: ctx.now };
-  const record: ValopayRecord = { id: randomUUID(), merchantId: state.merchant.id, kind: "audit", name: action, status: "recorded", reference: "", amountKobo: 0, customerId: state.records.find((item) => item.id === objectId)?.customerId || "", createdAt: ctx.now, updatedAt: ctx.now, data: { ...body, hash: digest(canonical(body)) } };
+  const data = auditEntryData({ sequence: length + 1, actor: ctx.actor, action, objectId, summary, changes, previousHash: previous?.data.hash, timestamp: ctx.now });
+  const record: ValopayRecord = { id: randomUUID(), merchantId: state.merchant.id, kind: "audit", name: action, status: "recorded", reference: "", amountKobo: 0, customerId: state.records.find((item) => item.id === objectId)?.customerId || "", createdAt: ctx.now, updatedAt: ctx.now, data };
   state.records.push(record);
   return record;
 }
 /** Walks the chain: valid when every entry's sequence, previous hash and digest agree; returns the count and the head hash. */
 export function verifyAudit(state: DomainState) {
-  const chain = recordsOf(state, "audit").sort((a, b) => Number(a.data.sequence) - Number(b.data.sequence));
-  let hash = "GENESIS", valid = true, index = 0;
-  for (const event of chain) {
-    const { hash: recorded, ...body } = event.data;
-    if (body.sequence !== ++index || body.previousHash !== hash || digest(canonical(body)) !== recorded) { valid = false; break; }
-    hash = String(recorded);
-  }
-  return { valid, count: chain.length, headHash: hash };
+  return verifyAuditChain(recordsOf(state, "audit"));
 }

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { canonicalDigest } from "../lib/digests";
 
 /** Synthetic/import planning domain. These functions never connect to a bank, post to an ERP,
  * file a return or pay an employee. All amounts are integer currency minor units. */
@@ -74,18 +74,10 @@ function unique(values: string[], label: string): void {
   if (new Set(values).size !== values.length)
     fail("duplicate_identity", `${label} must be unique.`);
 }
-function stable(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
-  if (value && typeof value === "object")
-    return `{${Object.entries(value)
-      .filter(([, v]) => v !== undefined)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([k, v]) => `${JSON.stringify(k)}:${stable(v)}`)
-      .join(",")}}`;
-  return JSON.stringify(value) ?? "null";
-}
+// Request, approval, frozen-plan and manifest hashes are stored and checked
+// again, so they keep the form they were first written in.
 export const cashEvidenceHash = (value: unknown): string =>
-  createHash("sha256").update(stable(value)).digest("hex");
+  canonicalDigest(value, "legacy-en-us-omit");
 const DAY = 86_400_000;
 
 export interface CashAccount extends CurrencyScope {

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { legacyCollatedCompare } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord, RecordOf } from "./types";
 import { makeRecord, recordsOf, touch } from "./records";
 import {
@@ -103,7 +104,7 @@ export function connectedRevision(state: DomainState): string {
       r.customerId,
       r.data,
     ])
-    .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    .sort((a, b) => legacyCollatedCompare(String(a[0]), String(b[0])));
   return createHash("sha256")
     .update(JSON.stringify([state.merchant, state.settings, rows]))
     .digest("hex");

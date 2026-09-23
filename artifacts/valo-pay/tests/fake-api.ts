@@ -17,9 +17,10 @@ import { pageReconciliation, pageCloseHistory } from '../../api-server/src/lib/c
 // routes, with every response validated by the same zod contract the server
 // uses, so a page is tested against what the API actually returns.  No
 // database and no network.  What the server owns and this stands in for: the
-// sandbox cookie and locks, the audit hash chain (a local chain here) and
-// object storage (exports get a descriptor and a record, no file).
-import { createHash, randomUUID } from "node:crypto";
+// sandbox cookie and locks, the audit hash chain (built here by the server's
+// entry builder over the whole state) and object storage (exports get a
+// descriptor and a record, no file).
+import { randomUUID } from "node:crypto";
 import * as S from "@workspace/api-zod";
 import { ZodError } from "zod";
 import {
@@ -37,6 +38,7 @@ import { importCsv } from "../../api-server/src/lib/valopay-import";
 import { exportJobView, publicExportRecord, queueExport, retryExport } from '../../api-server/src/lib/export-jobs';
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../../api-server/src/lib/valopay-close-views";
 import type { CloseRuntime } from "../../api-server/src/domain/effective-close-schedule";
+import { auditEntryData, canonicalDigest, verifyAuditChain } from "../../api-server/src/lib/digests";
 
 export interface FakeCall { method: string; path: string; query: Record<string, string>; body: unknown; status: number }
 export interface FakeApi {
@@ -70,27 +72,15 @@ const exportKinds = ["gate-pack", "billing", "reviewed-close", ...packKinds];
 /** A declared function returning never, so a check such as `if (!old) fail(...)` narrows the way the server's does. */
 function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
 
-/** Same shape of canonical digest the repository uses; only consistency within this fake matters. */
-const canonical = (value: unknown): string => JSON.stringify(value, (_key, item) => (item && typeof item === "object" && !Array.isArray(item) ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))) : item));
-const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
-
 function appendAudit(state: DomainState, ctx: Context, action: string, objectId: string, summary: string, changes?: unknown): ValopayRecord {
   const chain = state.records.filter((record) => record.kind === "audit").sort((a, b) => Number(a.data.sequence || 0) - Number(b.data.sequence || 0));
-  const previous = chain.at(-1);
-  const body = { sequence: chain.length + 1, actor: ctx.actor, action, objectId, summary, changeDigest: digest(canonical(changes ?? {})), previousHash: previous?.data.hash ?? "GENESIS", timestamp: ctx.now };
-  const record: ValopayRecord = { id: randomUUID(), merchantId: state.merchant.id, kind: "audit", name: action, status: "recorded", reference: "", amountKobo: 0, customerId: state.records.find((item) => item.id === objectId)?.customerId || "", createdAt: ctx.now, updatedAt: ctx.now, data: { ...body, hash: digest(canonical(body)) } };
+  const data = auditEntryData({ sequence: chain.length + 1, actor: ctx.actor, action, objectId, summary, changes, previousHash: chain.at(-1)?.data.hash, timestamp: ctx.now });
+  const record: ValopayRecord = { id: randomUUID(), merchantId: state.merchant.id, kind: "audit", name: action, status: "recorded", reference: "", amountKobo: 0, customerId: state.records.find((item) => item.id === objectId)?.customerId || "", createdAt: ctx.now, updatedAt: ctx.now, data };
   state.records.push(record);
   return record;
 }
 function verifyAudit(state: DomainState): { valid: boolean; count: number; headHash: string } {
-  const chain = state.records.filter((record) => record.kind === "audit").sort((a, b) => Number(a.data.sequence) - Number(b.data.sequence));
-  let hash = "GENESIS", valid = true, index = 0;
-  for (const event of chain) {
-    const { hash: recorded, ...body } = event.data;
-    if (body.sequence !== ++index || body.previousHash !== hash || digest(canonical(body)) !== recorded) { valid = false; break; }
-    hash = String(recorded);
-  }
-  return { valid, count: chain.length, headHash: hash };
+  return verifyAuditChain(state.records.filter((record) => record.kind === "audit"));
 }
 
 /** Mirrors the server's error handler: zod details, a status carried by the error, or the permission wording that maps to 403. */
@@ -142,12 +132,12 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
     const ctx = context();
     if (!audit) return fn(current, ctx);
     const draft = structuredClone(current);
-    const before = digest(canonical(draft));
+    const before = canonicalDigest(draft);
     const result = fn(draft, ctx);
     enrolEligibleFailures(draft, ctx);
     for (const close of draft.records.filter(r => r.kind === 'closes' && !current.records.some(old => old.id === r.id))) bindCloseReviewBasis(draft, close);
     advanceRecordVersions(current, draft, ctx.now);
-    appendAudit(draft, ctx, audit.action, audit.objectId, audit.summary, { beforeDigest: before, afterDigest: digest(canonical(draft)) });
+    appendAudit(draft, ctx, audit.action, audit.objectId, audit.summary, { beforeDigest: before, afterDigest: canonicalDigest(draft) });
     states.set(merchantId, draft);
     return result;
   }
@@ -294,7 +284,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
         if (body.customerId && !state.records.some((record) => record.kind === "customers" && record.id === body.customerId)) fail("Customer not found.", 404);
         const review = body.kind === 'reviewed-close' ? state.records.find(r=>r.kind==='close-reviews'&&r.id===(body as any).closeReviewId) : undefined;
         if(body.kind==='reviewed-close'&&(!review||review.status!=='approved'||!reviewIsCurrent(state,review)))fail('An approved, current close review is required.',409);
-        const checksum = digest(canonical({ kind: body.kind, format: body.format, customerId: body.customerId ?? null, at: ctx.now, records: state.records.length }));
+        const checksum = canonicalDigest({ kind: body.kind, format: body.format, customerId: body.customerId ?? null, at: ctx.now, records: state.records.length });
         const record = makeRecord(state, "exports", { name: `${body.kind} ${body.format}`, status: "ready", customerId: body.customerId ?? "", createdAt: ctx.now, data: { kind: body.kind, format: body.format, checksum, usedInRealCase: false, byteLength: 0, generationMs: 0, synthetic: true,...(review?{closeReviewId:review.id,closeSnapshotDigest:review.data.snapshotDigest}:{}) } });
         return { id: record.id, downloadUrl: `/api/v1/exports/${record.id}/download?merchantId=${merchantId}`, checksum, generatedAt: ctx.now };
       }, { action: "post.exports", objectId: "workspace", summary: "Synthetic workspace operation" }));

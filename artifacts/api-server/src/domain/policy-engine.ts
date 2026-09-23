@@ -7,6 +7,7 @@ import {
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { makeRecord, recordsOf } from "./records";
 import { holidaySet, isBusinessDay, nonBusinessDaysBetween } from "./calendar";
+import { canonicalDigest } from "../lib/digests";
 
 const HOUR = 60 * 60 * 1000;
 export type { RetryDecisionKind };
@@ -256,21 +257,6 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
     { purpose: "failed_debit", leadHours, requiredBy: Number.isFinite(deferred) ? iso(deferred - leadHours * HOUR) : null, noticeId: null, acceptedAt: null, evidenced: false });
 }
 
-/**
- * JSON with the keys of every object sorted, at every depth. An undefined
- * object value is left out and an undefined array element is null, as
- * JSON.stringify writes them, so a record read back from the database gives
- * the same text as the value it was written from.
- */
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map((item) => item === undefined ? "null" : stableJson(item)).join(",")}]`;
-  if (value && typeof value === "object") {
-    const object = value as Record<string, unknown>;
-    return `{${Object.keys(object).sort().filter((key) => object[key] !== undefined).map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
-
 /** The fields of an evaluation, or of a stored decision record, that decide whether it is the same decision. */
 type DecisionIdentity = Pick<RetryDecision, "dueItemId" | "decision" | "rule" | "policyId" | "policyVersion">
   & Partial<Pick<RetryDecision, "attemptId" | "nextAt" | "experimentArm" | "inputs" | "noticeRequired">>;
@@ -288,7 +274,10 @@ export function decisionFingerprint(decision: DecisionIdentity): string {
     dueItemId: decision.dueItemId, attemptId: decision.attemptId ?? null, decision: decision.decision, rule: decision.rule, nextAt: decision.nextAt ?? null,
     policyId: decision.policyId, policyVersion: Number(decision.policyVersion), experimentArm: decision.experimentArm ?? null, inputs, noticeRequired: decision.noticeRequired ?? null,
   };
-  return createHash("sha256").update(stableJson(identity)).digest("hex");
+  // The canonical form: keys sorted at every depth, an undefined object value left out and an undefined array element
+  // null, as JSON.stringify writes them, so a decision read back from the database gives the same text as the value it
+  // was written from.
+  return canonicalDigest(identity);
 }
 
 export function latestDecisionFor(state: DomainState, dueItemId: string): TypedRecord<"retry-decisions"> | undefined {

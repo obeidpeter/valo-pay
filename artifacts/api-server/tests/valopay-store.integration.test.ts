@@ -328,6 +328,23 @@ try {
       await pool.query(`DROP SCHEMA IF EXISTS "${scratch}" CASCADE`);
     }
   }
+  // Audit item 26: a record whose keys were only reordered holds the value PostgreSQL already stores. A save neither
+  // writes it nor gives it a new version, so evidence (a close, an audit entry) is not refused as changed.
+  const beforeReorder = await stamps();
+  await inWorkspace(requestFor(savesToken), response(), async (context) => {
+    const state = await loadState(context, savesMerchant);
+    const reordered = [
+      state.records.find((record) => record.id === `${savesMerchant}-close-recent`)!,
+      state.records.find((record) => record.kind === "audit")!,
+      state.records.find((record) => record.kind === "customers")!,
+    ];
+    const versions = reordered.map((record) => record.updatedAt);
+    for (const record of reordered) record.data = Object.fromEntries(Object.entries(record.data).reverse());
+    assert.equal(settleChanges(context, state).changedRecords, 0, "reordered keys are not a change");
+    assert.deepEqual(reordered.map((record) => record.updatedAt), versions, "and give no record a new version");
+    await saveState(context, state);
+  });
+  assert.deepEqual(await stamps(), beforeReorder, "nothing was written");
   console.log("valopay repository integration tests passed");
 } finally {
   delete process.env.VALOPAY_EXPIRED_WORKSPACE_CLEANUP;

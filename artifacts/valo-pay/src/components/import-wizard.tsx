@@ -8,7 +8,7 @@ import { DiscardOriginalRequest } from '@/components/discard-original-request';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { readableLabel } from '@/components/record-label';
 import { saidBy } from '@/lib/notify';
-import { koboToNaira } from '@workspace/valopay-schema';
+import { canonicalJson, koboToNaira } from '@workspace/valopay-schema';
 import { formatKobo } from '@/lib/formatters';
 import { useWorkspace } from '@/lib/workspace-context';
 import { permissionReason } from '@/lib/permissions';
@@ -30,7 +30,7 @@ const extraFields: Record<string, string[]> = {
 };
 const kindLabels: Record<string, string> = { customers: 'Customers', mandates: 'Mandates', 'due-items': 'Instalments', attempts: 'Collection attempts', observations: 'Payment evidence' };
 const fieldLabel = (field: string) => ({ amountKobo: 'Amount', customerId: 'Customer reference or ID', dueItemId: 'Instalment reference or ID', mandateId: 'Mandate reference or ID' }[field] || readableLabel(field));
-const signatureOf = (kind: string, csv: string, mapping: Record<string, string>, unit?: string) => JSON.stringify([kind, csv, Object.entries(mapping).sort(([a], [b]) => a.localeCompare(b)), kind === 'customers' ? null : unit]);
+const signatureOf = (kind: string, csv: string, mapping: Record<string, string>, unit?: string) => canonicalJson([kind, csv, mapping, kind === 'customers' ? null : unit]);
 function sampleCsv(kind: string, unit: string) {
   if (kind === 'customers') return samples[kind]!;
   const [header, line] = samples[kind]!.split('\n');

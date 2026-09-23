@@ -3,14 +3,15 @@ import assert from "node:assert/strict";
 // The pure guard does not connect, but the repository module verifies that a
 // database URL exists while it is loaded.
 process.env.DATABASE_URL ||= "postgres://unused:unused@127.0.0.1:1/unused";
-const { assertFinalState, canonical, appendAudit, expiredWorkspaceCleanupEnabled, verifyAudit, journalReceipt } = await import("../src/lib/valopay-store.js");
+const { assertFinalState, appendAudit, expiredWorkspaceCleanupEnabled, verifyAudit, journalReceipt } = await import("../src/lib/valopay-store.js");
+const { canonicalJson } = await import("@workspace/valopay-schema");
 const { seedMerchant } = await import("../src/lib/valopay-seed.js");
 
 const seed = () => seedMerchant("merchant-a");
 const expectConflict = (run: () => void) => assert.throws(run, (error: any) => error?.status === 409);
 
-assert.equal(canonical({ b: 2, a: 1 }), '{"a":1,"b":2}', "Historical canonical bytes must not change.");
-assert.equal(canonical({ b: 2, a: 1 }), canonical({ a: 1, b: 2 }), "JSONB key reordering must not affect digests.");
+assert.equal(canonicalJson({ b: 2, a: 1 }, "legacy-en-us-null"), '{"a":1,"b":2}', "Historical canonical bytes must not change.");
+assert.equal(canonicalJson({ b: 2, a: 1 }, "legacy-en-us-null"), canonicalJson({ a: 1, b: 2 }, "legacy-en-us-null"), "JSONB key reordering must not affect digests.");
 assert.equal(expiredWorkspaceCleanupEnabled(undefined), false, "Automatic workspace cleanup must default off.");
 assert.equal(expiredWorkspaceCleanupEnabled("off"), false, "Only the explicit opt-in may enable cleanup.");
 assert.equal(expiredWorkspaceCleanupEnabled("on"), true, "The documented opt-in must enable cleanup.");

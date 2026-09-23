@@ -1,11 +1,12 @@
-import { createHash } from "node:crypto";
-import { sourceManifestInputSchema, businessDateSchema, sourceBatchQualitySchema, type SourceManifestInput } from "@workspace/valopay-schema";
+import { sourceManifestInputSchema, businessDateSchema, sourceBatchQualitySchema, sameJson, legacyCollatedCompare, type SourceManifestInput } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "./types";
 import { makeRecord } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
+import { canonicalDigest } from "../lib/digests";
 
-const canonical = (value: any): string => Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : value && typeof value === "object" ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}` : JSON.stringify(value) ?? "null";
-const hash = (value: unknown) => createHash("sha256").update(canonical(value)).digest("hex");
+// File IDs and the basis digest are stored in declarations and closes. The basis is built from fields a batch or
+// profile may lack, and this form writes a missing one as null, as those stored digests do.
+const hash = (value: unknown) => canonicalDigest(value, "legacy-code-unit-null");
 const refuse = (message: string, status = 400): never => { throw Object.assign(new Error(message), { status }); };
 /** Dates refer to the source's business day, never its arrival or upload time. */
 export const watBusinessDate = (iso: string) => new Date(Date.parse(iso) + 3600000).toISOString().slice(0, 10);
@@ -21,8 +22,8 @@ export function saveSourceManifest(state: DomainState, ctx: Context, raw: Source
   if (new Set(files.map(file => file.id)).size !== files.length) refuse("Declare each source file once for this business date.");
   for (const file of files) {
     if (file.kind === "customers" && file.expectedAmountKobo !== 0) refuse("Customer files have no financial amount. Declare a total of zero.");
-    if (state.records.some(r => r.kind === "source-manifests" && r.data.businessDate !== input.businessDate && r.data.files?.some((other: any) => canonical(identity(other)) === canonical(identity(file))))) refuse("This source batch ID is already declared for another business date. Use the original date or a different source batch ID.", 409);
-    const batch = state.records.find(r => r.kind === "import-batches" && canonical(identity(r.data as any)) === canonical(identity(file)));
+    if (state.records.some(r => r.kind === "source-manifests" && r.data.businessDate !== input.businessDate && r.data.files?.some((other: any) => sameJson(identity(other), identity(file))))) refuse("This source batch ID is already declared for another business date. Use the original date or a different source batch ID.", 409);
+    const batch = state.records.find(r => r.kind === "import-batches" && sameJson(identity(r.data as any), identity(file)));
     if (batch?.data.businessDate && batch.data.businessDate !== input.businessDate) refuse("A saved source file belongs to another business date. Its arrival time cannot reassign it.", 409);
   }
   return makeRecord(state, "source-manifests", { name: `Expected source files · ${input.businessDate}`, status: "declared", createdAt: ctx.now, data: { businessDate: input.businessDate, timezone: "Africa/Lagos", files, noFilesExpected: input.noFilesExpected, reason: input.reason, evidence: input.evidence, revision: Number(previous?.data.revision || 0)+1, previousManifestId: previous?.id || null, declaredBy: ctx.actor, declaredAt: ctx.now, synthetic: true } });
@@ -30,7 +31,7 @@ export function saveSourceManifest(state: DomainState, ctx: Context, raw: Source
 /** Optional slot selection is checked against the lender's current declaration. */
 export function assertSourceExpectation(state: DomainState, input: { businessDate?: string; sourceExpectationId?: string; source: string; sourceBatchId: string; kind: string }) {
   if (input.sourceExpectationId && (!input.businessDate || !latestSourceManifest(state, input.businessDate)?.data.files?.some((file: any) => file.id === input.sourceExpectationId && file.id === sourceFileId(input.businessDate!, input)))) refuse("The selected expected file no longer matches this lender, business date or source batch. Refresh the source declaration.", 409);
-  for (const manifest of state.records.filter(r => r.kind === "source-manifests")) if (manifest.data.businessDate !== input.businessDate && manifest.data.files?.some((file: any) => canonical(identity(file)) === canonical(identity(input)))) refuse("This source batch is declared for a different business date. Select that date before saving.", 409);
+  for (const manifest of state.records.filter(r => r.kind === "source-manifests")) if (manifest.data.businessDate !== input.businessDate && manifest.data.files?.some((file: any) => sameJson(identity(file), identity(input)))) refuse("This source batch is declared for a different business date. Select that date before saving.", 409);
 }
 export interface SourceCompletenessIssue { id: string; label: string; detail: string; }
 /** Original committed totals remain authoritative after raw-file retention or an approved correction. */
@@ -40,7 +41,7 @@ export function sourceCompleteness(state: DomainState, rawDate: string) {
   if (!manifest) add("declaration", "Expected source files have not been declared", "Declare the files and control totals for this business date. No declaration does not establish a complete source set.");
   else if (manifest.data.noFilesExpected) add("excluded", "No source files expected for this date", "Finance must independently accept this exclusion and record supporting evidence. Existing synthetic records alone do not prove source completeness.");
   const files = (manifest?.data.files || []).map((file: any) => {
-    const batch = state.records.find(r => r.kind === "import-batches" && canonical(identity(r.data as any)) === canonical(identity(file))), problems: string[] = [];
+    const batch = state.records.find(r => r.kind === "import-batches" && sameJson(identity(r.data as any), identity(file))), problems: string[] = [];
     const quality = batch?.status === "committed" ? sourceBatchQualitySchema.safeParse(batch.data.sourceQuality) : undefined;
     if (!batch) problems.push("The expected file has not been saved.");
     else {
@@ -61,8 +62,8 @@ export function sourceCompleteness(state: DomainState, rawDate: string) {
   // A profile whose first delivery is expected after this business date has nothing to declare for it yet.
   const activeProfiles = state.records.filter(r => r.kind === "source-profiles" && r.status === "active" && (!r.data.firstExpectedAt || watBusinessDate(r.data.firstExpectedAt) <= businessDate)).map(r => ({id:r.id,source:r.data.source,kind:r.data.kind}));
   for (const profile of activeProfiles) if (!files.some((file:any) => file.source === profile.source && file.kind === profile.kind)) add(`profile:${profile.id}`, `No expected file for ${profile.source}`, "This active source profile expects deliveries by this business date but has no file in the declaration. Declare it or explicitly accept its exclusion with Finance evidence.");
-  const undeclared = state.records.filter(r => r.kind === "import-batches" && r.data.businessDate === businessDate && !files.some((file:any) => canonical(identity(file)) === canonical(identity(r.data as any)))).map(r => ({id:r.id,name:r.name,status:r.status,source:r.data.source,sourceBatchId:r.data.sourceBatchId,kind:r.data.kind}));
+  const undeclared = state.records.filter(r => r.kind === "import-batches" && r.data.businessDate === businessDate && !files.some((file:any) => sameJson(identity(file), identity(r.data as any)))).map(r => ({id:r.id,name:r.name,status:r.status,source:r.data.source,sourceBatchId:r.data.sourceBatchId,kind:r.data.kind}));
   for (const batch of undeclared) add(`batch:${batch.id}`, `Undeclared source file · ${batch.sourceBatchId}`, "This dated source batch is outside the declared file set. Reconcile the declaration with the original source evidence.");
-  const basis = { businessDate, manifest: manifest ? {id:manifest.id,updatedAt:manifest.updatedAt,data:manifest.data} : null, files, activeProfiles:activeProfiles.sort((a,b)=>a.id.localeCompare(b.id)), undeclared:undeclared.sort((a,b)=>a.id.localeCompare(b.id)) };
+  const basis = { businessDate, manifest: manifest ? {id:manifest.id,updatedAt:manifest.updatedAt,data:manifest.data} : null, files, activeProfiles:activeProfiles.sort((a,b)=>legacyCollatedCompare(a.id,b.id)), undeclared:undeclared.sort((a,b)=>legacyCollatedCompare(a.id,b.id)) };
   return { ...basis, status: issues.length ? "incomplete" : "complete", issues, basisDigest: hash(basis), expectedFiles: files.length, completeFiles: files.filter((file:any)=>file.status === "complete").length };
 }

@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { legacyCollatedCompare, sameJson } from "@workspace/valopay-schema";
+import { canonicalDigest } from "../lib/digests";
 
 /**
  * Synthetic Credit Desk. This module has no provider client, payment command or
@@ -341,18 +342,10 @@ function median(values: number[]): number {
     ? sorted[middle]!
     : checked((BigInt(sorted[middle - 1]!) + BigInt(sorted[middle]!)) / 2n);
 }
-function canonical(value: unknown): string {
-  if (value === undefined) return "null";
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  return `{${Object.entries(value)
-    .filter(([, item]) => item !== undefined)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`)
-    .join(",")}}`;
-}
+// Snapshot hashes and the IDs derived from them are stored with each
+// assessment and review: they keep the form they were first written in.
 function hash(value: unknown): string {
-  return createHash("sha256").update(canonical(value)).digest("hex");
+  return canonicalDigest(value, "legacy-en-us-omit");
 }
 function freeze<T>(value: T): T {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -772,7 +765,7 @@ export function assessCredit(
     const key = `${tx.sourceId}:${tx.id}`,
       prior = unique.get(key);
     if (prior) {
-      if (canonical(prior) !== canonical(tx))
+      if (!sameJson(prior, tx))
         issue(
           "CONFLICTING_DUPLICATE",
           "The same transaction reference has conflicting evidence.",
@@ -817,7 +810,7 @@ export function assessCredit(
   let grossInflows = 0,
     unknownInflows = 0;
   for (const tx of (authorisedToInfer ? [...unique.values()] : []).sort(
-    (a, b) => transactionRef(a).localeCompare(transactionRef(b)),
+    (a, b) => legacyCollatedCompare(transactionRef(a), transactionRef(b)),
   )) {
     const date = stamp(tx.bookedAt),
       ref = transactionRef(tx),
@@ -1188,10 +1181,10 @@ export function assessCredit(
     .sort();
   const inputSnapshot = {
     ...input,
-    sources: [...input.sources].sort((a, b) => a.id.localeCompare(b.id)),
-    grants: [...input.grants].sort((a, b) => a.id.localeCompare(b.id)),
+    sources: [...input.sources].sort((a, b) => legacyCollatedCompare(a.id, b.id)),
+    grants: [...input.grants].sort((a, b) => legacyCollatedCompare(a.id, b.id)),
     transactions: [...unique.values()].sort((a, b) =>
-      transactionRef(a).localeCompare(transactionRef(b)),
+      legacyCollatedCompare(transactionRef(a), transactionRef(b)),
     ),
   };
   const snapshotHash = hash(inputSnapshot);
