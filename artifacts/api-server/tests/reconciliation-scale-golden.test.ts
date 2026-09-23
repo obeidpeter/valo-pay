@@ -110,7 +110,8 @@ assert.equal(monthEnd.record!.data.report.allocated.count, customers * 6 - 4 + 1
 assert.equal(count("attempts", (attempt) => attempt.status === "cancelled"), 30, "a paid instalment's unsent attempt is cancelled");
 assert.equal(count("payments", (payment) => payment.data.reversalApplied === true), 4, "a reversal takes a payment's allocations off");
 assert.equal(count("settlement-batches", (batch) => batch.status === "reconciled"), 1, "the settlement lines and the statement credit reconcile the batch");
-assert.deepEqual([monthEnd.data.proposed, monthEnd.data.possibleDuplicates, monthEnd.data.unknownOutcomes, monthEnd.data.exceptionsOpened], [36, 30, 5, 86]);
+// The four reversals of applied money each open a customer_dispute exception that owns the instalment they reopen.
+assert.deepEqual([monthEnd.data.proposed, monthEnd.data.possibleDuplicates, monthEnd.data.unknownOutcomes, monthEnd.data.exceptionsOpened], [36, 30, 5, 90]);
 assert.deepEqual([monthEnd.data.retryDecisionsRecorded, monthEnd.data.finalAttemptExceptions, monthEnd.data.disputesFrozen, monthEnd.data.noticesNotEvidenced], [60, 17, 13, 13], "the retry rules decide the failed instalments");
 assert.equal(count("due-items", (due) => typeof due.data.experimentArm === "string"), 25, "failures are enrolled in the experiment");
 assert.deepEqual([nextDay.data.retryDecisionsRecorded, nextDay.data.agedUnallocated], [13, 3]);
@@ -121,11 +122,15 @@ const outcome = {
   nextDay: digest(nextDay.data),
 };
 if (process.env.VALOPAY_GOLDEN_PRINT === "1") console.log(JSON.stringify({ outcome, records, visits: [first.visits, second.visits] }, null, 2));
-/** Computed by the code at c22c229 for this scenario (VALOPAY_GOLDEN_PRINT=1 prints the current values). */
+/**
+ * Computed for this scenario by the code before its lookups were indexed: first at c22c229, then again by the dispute
+ * fixes' code without the index, since a reversal of applied money now raises an exception (VALOPAY_GOLDEN_PRINT=1
+ * prints the current values).
+ */
 const golden = {
-  records: "0fe0416047e86e1a27513fece75512989d0259995e748995104071d29c00789b",
-  monthEnd: "1d37e1b79367542a1475cbda8d19f9a284bc7eb308ec92ad47a52bc6ead26304",
-  nextDay: "5d204d76766407b62817d97e8e19bb49e233b8a7d04f5724924acb02f182ea5e",
+  records: "57b8061f5ef3ee0374e40289efc5d910071c517ee1c76530098050d05193a3e4",
+  monthEnd: "dff97eb6d50336fb650cf48652975f842fd2b85f14df835eb535a7dbb4a35a7d",
+  nextDay: "1a88e829ce6bd3940c6a5248e5bbdfddc0a7786480202fc138aca0a834c4a798",
 };
 assert.deepEqual(outcome, golden, "the closes write exactly the records and answers they wrote before their lookups were indexed");
 
