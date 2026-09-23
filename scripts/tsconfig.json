@@ -4,5 +4,5 @@
     "outDir": "dist",
     "types": ["node"]
   },
-  "include": ["src", "provision-pilot.ts"]
+  "include": ["src", "provision-pilot.ts", "rewrap-payloads.ts"]
 }

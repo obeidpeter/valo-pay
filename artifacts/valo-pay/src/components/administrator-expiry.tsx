@@ -17,7 +17,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * neither is close, or for anyone but an active administrator.
  */
 export function administratorExpiryWarnings(directory: StaffDirectory, now: number): string[] {
-  const active = directory.members.filter((member) => member.role === 'Admin' && member.status === 'active' && Date.parse(member.expiresAt) > now);
+  // An administrator's directory carries every expiry; one without (another person's, seen by someone else) is left out.
+  const active = directory.members.flatMap((member) => member.role === 'Admin' && member.status === 'active' && member.expiresAt && Date.parse(member.expiresAt) > now ? [{ ...member, expiresAt: member.expiresAt }] : []);
   const own = active.find((member) => member.actor === directory.actor);
   if (directory.mode !== 'staff' || !own) return [];
   const soon = (at: string) => Date.parse(at) - now <= ADMINISTRATOR_EXPIRY_WARNING_DAYS * DAY_MS;

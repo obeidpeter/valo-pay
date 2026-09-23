@@ -6,13 +6,14 @@
  * OpenAPI spec version: 1.1.0
  */
 import type { Merchant } from './merchant';
+import type { StaffChangeRequest } from './staffChangeRequest';
 import type { StaffDirectoryMember } from './staffDirectoryMember';
 import type { StaffDirectoryMode } from './staffDirectoryMode';
 import type { StaffEvent } from './staffEvent';
 import type { StaffInvitation } from './staffInvitation';
 
 /**
- * The team as the caller may see it: members for everyone; lenders, invitations and history for administrators. In the sandbox every list, lenders included, is empty and the message says why.
+ * The team as the caller may see it: members as StaffDirectoryMember describes; lenders, invitations, changes awaiting a second administrator and history for administrators. In the sandbox every list, lenders included, is empty and the message says why.
  */
 export interface StaffDirectory {
   mode: StaffDirectoryMode;
@@ -21,6 +22,8 @@ export interface StaffDirectory {
   lenders: Merchant[];
   /** @maxItems 100 */
   invitations: StaffInvitation[];
+  /** @maxItems 100 */
+  changes: StaffChangeRequest[];
   /** @maxItems 100 */
   events: StaffEvent[];
   message: string;

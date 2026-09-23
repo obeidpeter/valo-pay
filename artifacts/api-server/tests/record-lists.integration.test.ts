@@ -159,7 +159,8 @@ try {
   const jobs = await inWorkspace(request(editingToken), response(), async context => {
     const state = await loadState(context, editingMerchant);
     const result = ["failed", "running"].map(status => {
-      const job = queueExport(state, context, { kind: "customers", format: "csv" }, "/private/synthetic-tests");
+      // The persona is Operations now: it exports mandates, since the customer register is for Admin, Finance and Compliance reviewer (export_sensitive).
+      const job = queueExport(state, context, { kind: "mandates", format: "csv" }, "/private/synthetic-tests");
       const record = state.records.find(row => row.id === job.id)!;
       record.status = status; Object.assign(record.data, { lastError: "Synthetic failure", leaseToken: "expired-claim", leaseExpiresAt: new Date(Date.parse(context.now) - 1).toISOString() });
       return { id: job.id, objectName: record.data.objectName, updatedAt: record.updatedAt };

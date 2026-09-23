@@ -1941,7 +1941,7 @@ export const StaffMemberStatus = {
 } as const;
 
 /**
- * A staff membership as a change answers it: its role, state, expiry and version.
+ * A staff membership: its role, state, expiry and version.
  */
 export interface StaffMember {
   id: string;
@@ -1951,6 +1951,83 @@ export interface StaffMember {
   status: StaffMemberStatus;
   expiresAt: string;
   updatedAt: string;
+}
+
+export type StaffAccessRole = typeof StaffAccessRole[keyof typeof StaffAccessRole];
+
+
+export const StaffAccessRole = {
+  Admin: 'Admin',
+  Operations: 'Operations',
+  Finance: 'Finance',
+  Compliance_reviewer: 'Compliance reviewer',
+  'Read-only': 'Read-only',
+} as const;
+
+export type StaffAccessStatus = typeof StaffAccessStatus[keyof typeof StaffAccessStatus];
+
+
+export const StaffAccessStatus = {
+  active: 'active',
+  suspended: 'suspended',
+  revoked: 'revoked',
+} as const;
+
+/**
+ * A membership's role and state, before or after a change.
+ */
+export interface StaffAccess {
+  role: StaffAccessRole;
+  status: StaffAccessStatus;
+}
+
+/**
+ * A membership change that grants Admin, Finance or Compliance reviewer and waits for a second administrator: who asked, when and why. Approving it applies exactly this change; a later change to the membership leaves it out of date, and it is no longer listed.
+ */
+export interface StaffChangeRequest {
+  id: string;
+  memberId: string;
+  name: string;
+  from: StaffAccess;
+  to: StaffAccess;
+  reason: string;
+  requestedBy: string;
+  requestedAt: string;
+}
+
+export type StaffMemberChangeRole = typeof StaffMemberChangeRole[keyof typeof StaffMemberChangeRole];
+
+
+export const StaffMemberChangeRole = {
+  Admin: 'Admin',
+  Operations: 'Operations',
+  Finance: 'Finance',
+  Compliance_reviewer: 'Compliance reviewer',
+  'Read-only': 'Read-only',
+} as const;
+
+export type StaffMemberChangeStatus = typeof StaffMemberChangeStatus[keyof typeof StaffMemberChangeStatus];
+
+
+export const StaffMemberChangeStatus = {
+  active: 'active',
+  suspended: 'suspended',
+  revoked: 'revoked',
+} as const;
+
+/**
+ * A membership change's answer: the membership as it now stands, what happened in plain words, and the waiting request when the change needs a second administrator (the membership is then unchanged).
+ */
+export interface StaffMemberChange {
+  id: string;
+  actor: string;
+  name: string;
+  role: StaffMemberChangeRole;
+  status: StaffMemberChangeStatus;
+  expiresAt: string;
+  updatedAt: string;
+  message: string;
+  pendingChange: StaffChangeRequest | null;
 }
 
 export type StaffDirectoryMemberRole = typeof StaffDirectoryMemberRole[keyof typeof StaffDirectoryMemberRole];
@@ -1974,7 +2051,7 @@ export const StaffDirectoryMemberStatus = {
 } as const;
 
 /**
- * A membership in the team directory, with the lenders it may open; an administrator opens every lender and lists none.
+ * A membership in the team directory, with the lenders it may open; an administrator opens every lender and lists none. A viewer who is not an administrator sees only the colleagues who share a lender with them, only the lenders they share, and no one's expiry but their own (expiresAt null).
  */
 export interface StaffDirectoryMember {
   id: string;
@@ -1982,7 +2059,8 @@ export interface StaffDirectoryMember {
   name: string;
   role: StaffDirectoryMemberRole;
   status: StaffDirectoryMemberStatus;
-  expiresAt: string;
+  /** @nullable */
+  expiresAt: string | null;
   updatedAt: string;
   lenderIds: string[];
   allLenders: boolean;
@@ -2008,8 +2086,17 @@ export const StaffInvitationStatus = {
   revoked: 'revoked',
 } as const;
 
+export type StaffInvitationApproval = typeof StaffInvitationApproval[keyof typeof StaffInvitationApproval];
+
+
+export const StaffInvitationApproval = {
+  not_required: 'not_required',
+  awaiting: 'awaiting',
+  approved: 'approved',
+} as const;
+
 /**
- * A pending, accepted or revoked invitation; the token is shown once, at creation.
+ * A pending, accepted or revoked invitation, who sent it and whether it waits for, or has, the second administrator's approval an Admin, Finance or Compliance reviewer invitation needs; the token is shown once, at creation.
  */
 export interface StaffInvitation {
   id: string;
@@ -2017,6 +2104,10 @@ export interface StaffInvitation {
   role: StaffInvitationRole;
   status: StaffInvitationStatus;
   expiresAt: string;
+  invitedBy: string;
+  approval: StaffInvitationApproval;
+  /** @nullable */
+  approvedBy: string | null;
 }
 
 /**
@@ -2040,7 +2131,7 @@ export const StaffDirectoryMode = {
 } as const;
 
 /**
- * The team as the caller may see it: members for everyone; lenders, invitations and history for administrators. In the sandbox every list, lenders included, is empty and the message says why.
+ * The team as the caller may see it: members as StaffDirectoryMember describes; lenders, invitations, changes awaiting a second administrator and history for administrators. In the sandbox every list, lenders included, is empty and the message says why.
  */
 export interface StaffDirectory {
   mode: StaffDirectoryMode;
@@ -2049,6 +2140,8 @@ export interface StaffDirectory {
   lenders: Merchant[];
   /** @maxItems 100 */
   invitations: StaffInvitation[];
+  /** @maxItems 100 */
+  changes: StaffChangeRequest[];
   /** @maxItems 100 */
   events: StaffEvent[];
   message: string;
@@ -2074,13 +2167,22 @@ export interface InvitationInput {
   role: InvitationInputRole;
 }
 
+export type InvitationCreatedApproval = typeof InvitationCreatedApproval[keyof typeof InvitationCreatedApproval];
+
+
+export const InvitationCreatedApproval = {
+  not_required: 'not_required',
+  awaiting: 'awaiting',
+} as const;
+
 /**
- * The invitation and its one-time acceptance token; no email is sent.
+ * The invitation, its one-time acceptance token and whether it waits for a second administrator's approval; no email is sent.
  */
 export interface InvitationCreated {
   id: string;
   /** @pattern ^[a-f0-9]{64}$ */
   token: string;
+  approval: InvitationCreatedApproval;
   message: string;
 }
 
@@ -3533,6 +3635,15 @@ export type LifecycleViewPolicy = {
   auditTrail: 'retain';
 };
 
+export type LifecycleViewMinimumDays = {
+  /** @minimum 1 */
+  rawCsvDays: number;
+  /** @minimum 1 */
+  journalPayloadDays: number;
+  /** @minimum 1 */
+  exportFileDays: number;
+};
+
 export type LifecycleViewTargetsItemKind = typeof LifecycleViewTargetsItemKind[keyof typeof LifecycleViewTargetsItemKind];
 
 
@@ -3752,6 +3863,8 @@ export type LifecycleViewRunsItem = {
   /** @minimum 0 */
   moreEligible: number;
   /** @nullable */
+  preparedBy?: string | null;
+  /** @nullable */
   approvedBy: string | null;
   /** @nullable */
   approvedAt: string | null;
@@ -3767,7 +3880,7 @@ export type LifecycleViewRunsItem = {
 };
 
 /**
- * The lender's retention policy, holds, bounded inventory of what the policy would touch, and saved retention runs.
+ * The lender's retention policy, the shortest periods it may set (minimumDays) and whether a second administrator approves runs (secondApprover), holds, bounded inventory of what the policy would touch, and saved retention runs.
  */
 export interface LifecycleView {
   /**
@@ -3783,6 +3896,8 @@ export interface LifecycleView {
   actor: string;
   asOf: string;
   policy: LifecycleViewPolicy;
+  minimumDays?: LifecycleViewMinimumDays;
+  secondApprover?: boolean;
   /** @pattern ^[a-f0-9]{64}$ */
   policyRevision: string;
   /** @pattern ^[a-f0-9]{64}$ */
@@ -3909,7 +4024,7 @@ export type LifecycleRunViewReceiptsItem = {
 };
 
 /**
- * One retention run: its reviewed manifest, approval state and per-item receipts.
+ * One retention run: its reviewed manifest, who prepared it, approval state and per-item receipts.
  */
 export interface LifecycleRunView {
   /**
@@ -3936,6 +4051,8 @@ export interface LifecycleRunView {
   candidateCount: number;
   /** @minimum 0 */
   moreEligible: number;
+  /** @nullable */
+  preparedBy?: string | null;
   /** @nullable */
   approvedBy: string | null;
   /** @nullable */

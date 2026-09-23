@@ -9,7 +9,7 @@ import type { StaffMemberRole } from './staffMemberRole';
 import type { StaffMemberStatus } from './staffMemberStatus';
 
 /**
- * A staff membership as a change answers it: its role, state, expiry and version.
+ * A staff membership: its role, state, expiry and version.
  */
 export interface StaffMember {
   id: string;

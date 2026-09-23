@@ -19,8 +19,8 @@ import {
   messageSchema,
   operationListSchema,
   pilotJourneySchema,
+  staffChangeResultSchema,
   staffDirectorySchema,
-  staffMemberSchema,
   valopayRecordSchema,
 } from "@workspace/valopay-schema";
 import {
@@ -33,6 +33,9 @@ import {
   inviteStaff,
   updateStaff,
   revokeInvitation,
+  approveInvitation,
+  approveStaffChange,
+  declineStaffChange,
   acceptStaffInvitation,
   createPilotLender,
   revealImportPayloads,
@@ -372,6 +375,17 @@ router.post("/v1/team/invitations/:id/revoke", async (req, res) => {
     ),
   );
 });
+router.post("/v1/team/invitations/:id/approve", async (req, res) => {
+  const id = idOf(req.params.id);
+  res.json(
+    await inWorkspace(
+      req,
+      res,
+      async (ctx) => contractAnswer(messageSchema, await approveInvitation(ctx, id)),
+      "team",
+    ),
+  );
+});
 router.patch("/v1/team/members/:id", async (req, res) => {
   const input = membershipInputSchema.parse(req.body),
     id = idOf(req.params.id);
@@ -379,7 +393,29 @@ router.patch("/v1/team/members/:id", async (req, res) => {
     await inWorkspace(
       req,
       res,
-      async (ctx) => contractAnswer(staffMemberSchema, await updateStaff(ctx, id, input)),
+      async (ctx) => contractAnswer(staffChangeResultSchema, await updateStaff(ctx, id, input)),
+      "team",
+    ),
+  );
+});
+router.post("/v1/team/changes/:id/approve", async (req, res) => {
+  const id = idOf(req.params.id);
+  res.json(
+    await inWorkspace(
+      req,
+      res,
+      async (ctx) => contractAnswer(staffChangeResultSchema, await approveStaffChange(ctx, id)),
+      "team",
+    ),
+  );
+});
+router.post("/v1/team/changes/:id/decline", async (req, res) => {
+  const id = idOf(req.params.id);
+  res.json(
+    await inWorkspace(
+      req,
+      res,
+      async (ctx) => contractAnswer(messageSchema, await declineStaffChange(ctx, id)),
       "team",
     ),
   );

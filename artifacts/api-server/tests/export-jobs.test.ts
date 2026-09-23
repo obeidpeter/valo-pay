@@ -18,11 +18,18 @@ const objects = new Map<string, { bytes: Buffer; artifact: ExportArtifact }>();
 let uploads = 0, generations = 0, lostUploadResponse = false, failUpload = false;
 const job = queueExport(state, ctx, { kind: 'customers', format: 'json' }, '/private/test');
 assert.equal(job.status, 'queued'); assert.equal(objects.size, 0); checks += 2;
-// A read-only role downloads existing evidence; it neither queues nor requeues generation.
+// A read-only role downloads existing evidence; it neither queues nor requeues generation. The customer register is a
+// sensitive export (export_sensitive), which Read-only may not have at all, so it is refused in those words.
 const readOnly = { ...ctx, role: 'Read-only' };
-assert.throws(() => queueExport(state, readOnly, { kind: 'customers', format: 'json' }, '/private/test'), (error: any) => error.status === 403 && /read-only/.test(error.message));
-assert.throws(() => retryExport(state, readOnly, job.id), (error: any) => error.status === 403 && /read-only/.test(error.message));
-assert.equal(state.records.filter(record => record.kind === 'exports').length, 1); checks += 3;
+assert.throws(() => queueExport(state, readOnly, { kind: 'mandates', format: 'json' }, '/private/test'), (error: any) => error.status === 403 && /read-only/.test(error.message));
+assert.throws(() => queueExport(state, readOnly, { kind: 'customers', format: 'json' }, '/private/test'), (error: any) => error.status === 403 && /Only an Admin, Finance or Compliance reviewer/.test(error.message));
+assert.throws(() => retryExport(state, readOnly, job.id), (error: any) => error.status === 403 && /Only an Admin, Finance or Compliance reviewer/.test(error.message));
+assert.equal(state.records.filter(record => record.kind === 'exports').length, 1); checks += 4;
+{
+  // Another lender's mandate export: Read-only may download it, and is refused its retry as read-only.
+  const other = seedMerchant('export-jobs-read-only'), mandates = queueExport(other, ctx, { kind: 'mandates', format: 'json' }, '/private/test');
+  assert.throws(() => retryExport(other, readOnly, mandates.id), (error: any) => error.status === 403 && /read-only/.test(error.message)); checks++;
+}
 const repository: ExportJobRepository = {
   async candidates(limit) { return state.records.filter(record => record.kind === 'exports' && exportIsClaimable(record, new Date(clock).toISOString())).slice(0, limit).map(record => ({ merchantId: record.merchantId, id: record.id })); },
   async claim(merchantId, id) {

@@ -10,7 +10,7 @@ import type { StaffLenderAccessInput } from '@workspace/valopay-schema';
 import type { VerifiedClerkSession } from './pilot-access';
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
-import { closeTimeOf, definitiveRefusalStatuses, invitationAcceptedSchema, nextCloseInstant, sameJson } from "@workspace/valopay-schema";
+import { approvalRoles, closeTimeOf, definitiveRefusalStatuses, grantNeedsApproval, invitationAcceptedSchema, nextCloseInstant, sameJson } from "@workspace/valopay-schema";
 import { sha256Hex, canonicalDigest, requestFingerprint, auditEntryData, verifyAuditChain } from "./digests";
 import { recordChanged, nextRecordVersion } from "./edit-versions";
 import { contractAnswer } from './contract';
@@ -388,17 +388,48 @@ export async function caseAssignees(ctx: StoreContext) {
       AND (member.role='Admin' OR EXISTS (SELECT 1 FROM valopay_staff_lender_access grant_row WHERE grant_row.membership_id=member.id AND grant_row.merchant_id=$3))
     ORDER BY member.display_name,member.id`, [session.workspace.id, ctx.now, session.lockedMerchantId])).rows.map(row => { const { actor, name, role } = staffView(row); return { actor, name, role }; });
 }
+/** A membership change that grants one of `approvalRoles`, waiting for a second administrator: its request in the access history. */
+type ChangeRequestRow = { id: string; actor: string; subject: string; detail: { before: { role: string; status: string }; after: { role: string; status: string }; reason: string; version: string }; created_at: Date; name: string; member_version: Date };
+const changeView = (row: ChangeRequestRow) => ({ id: row.id, memberId: row.subject, name: row.name, from: row.detail.before, to: row.detail.after, reason: row.detail.reason, requestedBy: row.actor, requestedAt: row.created_at.toISOString() });
+/** Change requests nobody has approved or declined, with the membership they change as it stands now, newest first. */
+const changeRequestsSql = `SELECT request.id,request.actor,request.subject,request.detail,request.created_at,member.display_name AS name,member.updated_at AS member_version
+  FROM valopay_staff_events request JOIN valopay_staff_memberships member ON member.id=request.subject AND member.workspace_id=request.workspace_id
+  WHERE request.workspace_id=$1 AND request.action='staff.change_requested' AND ($2::text IS NULL OR request.id=$2) AND ($3::text IS NULL OR request.subject=$3)
+    AND NOT EXISTS (SELECT 1 FROM valopay_staff_events decision WHERE decision.workspace_id=request.workspace_id AND decision.action IN ('staff.change_approved','staff.change_declined') AND decision.detail->>'requestId'=request.id)
+  ORDER BY request.created_at DESC,request.id DESC LIMIT 200`;
+/** A request is current while the membership is still the version it was made against; any later change leaves it out of date. */
+const currentRequest = (row: ChangeRequestRow) => row.member_version.toISOString() === row.detail.version;
+/** The administrator who approved a pending invitation, never the one who sent it; undefined while it waits. */
+async function invitationApprover(client: PoolClient, workspaceId: string, invitation: { id: string; invited_by: string }): Promise<string | undefined> {
+  return (await client.query<{ actor: string }>("SELECT actor FROM valopay_staff_events WHERE workspace_id=$1 AND subject=$2 AND action='staff.invitation_approved' AND actor<>$3 ORDER BY created_at,id LIMIT 1", [workspaceId, invitation.id, invitation.invited_by])).rows[0]?.actor;
+}
+const needsApproval = (role: string) => (approvalRoles as readonly string[]).includes(role);
+/** What a person refused as their own approver is told: the rule, and how a pilot with one administrator gets a second. */
+const secondAdministrator = (what: string, who: string) => `A different administrator must approve this ${what}: the administrator who ${who} cannot approve it. A pilot with one administrator asks the operator to add a second with the provisioning command's --add-administrator mode.`;
 export async function staffDirectory(ctx: StoreContext) {
   const session = sessionFor(ctx);
-  if (ctx.accessMode !== 'staff') return { mode: 'sandbox', actor: ctx.actor, members: [], lenders: [], invitations: [], events: [], message: 'Real staff access is not enabled on this host. Demo roles are for practice only.' };
+  if (ctx.accessMode !== 'staff') return { mode: 'sandbox', actor: ctx.actor, members: [], lenders: [], invitations: [], changes: [], events: [], message: 'Real staff access is not enabled on this host. Demo roles are for practice only.' };
   const memberRows = (await session.client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 ORDER BY display_name,id', [session.workspace.id])).rows;
   const grants = (await session.client.query<{ membership_id: string; merchant_id: string }>(`SELECT grant_row.membership_id,grant_row.merchant_id FROM valopay_staff_lender_access grant_row JOIN valopay_staff_memberships member ON member.id=grant_row.membership_id JOIN valopay_merchants lender ON lender.id=grant_row.merchant_id WHERE member.workspace_id=$1 AND lender.workspace_id=$1 ORDER BY grant_row.merchant_id`, [session.workspace.id])).rows;
-  const members = memberRows.map(row => ({ ...staffView(row), lenderIds: row.role === 'Admin' ? [] : grants.filter(grant => grant.membership_id === row.id).map(grant => grant.merchant_id), allLenders: row.role === 'Admin' }));
-  const lenders = ctx.role === 'Admin' ? await listMerchants(ctx) : [];
+  const lendersOf = (id: string) => grants.filter(grant => grant.membership_id === id).map(grant => grant.merchant_id);
+  const admin = ctx.role === 'Admin', own = memberRows.find(row => row.user_id === session.userId), shared = new Set(own ? lendersOf(own.id) : []);
+  // An administrator sees everyone. Anyone else sees the colleagues who can open one of their lenders (an administrator opens
+  // every lender), only the lenders they share, and no one's expiry but their own.
+  const colleague = (row: StaffRow) => row.status === 'active' && row.expires_at.getTime() > Date.parse(ctx.now) && (row.role === 'Admin' ? shared.size > 0 : lendersOf(row.id).some(id => shared.has(id)));
+  const members = memberRows.filter(row => admin || row.id === own?.id || colleague(row)).map(row => {
+    const whole = admin || row.id === own?.id;
+    return { ...staffView(row), expiresAt: whole ? row.expires_at.toISOString() : null, lenderIds: row.role === 'Admin' ? [] : lendersOf(row.id).filter(id => whole || shared.has(id)), allLenders: row.role === 'Admin' };
+  });
+  if (!admin) return { mode: 'staff', actor: ctx.actor, members, lenders: [], invitations: [], changes: [], events: [], message: 'Verified staff access. Membership, lender access and MFA are checked for every request. You see the colleagues who work on your lenders. Financial records remain synthetic.' };
+  const lenders = await listMerchants(ctx);
   // Timestamps as the ISO text the answer carries, as every other view writes them.
-  const invitations = ctx.role === 'Admin' ? (await session.client.query<{ id: string; email: string; role: string; status: string; expiresAt: Date }>('SELECT id,email,role,status,expires_at AS "expiresAt" FROM valopay_staff_invitations WHERE workspace_id=$1 ORDER BY created_at DESC LIMIT 100', [session.workspace.id])).rows.map(row => ({ ...row, expiresAt: row.expiresAt.toISOString() })) : [];
-  const events = ctx.role === 'Admin' ? (await session.client.query<{ id: string; actor: string; action: string; subject: string; detail: unknown; createdAt: Date }>('SELECT id,actor,action,subject,detail,created_at AS "createdAt" FROM valopay_staff_events WHERE workspace_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100', [session.workspace.id])).rows.map(row => ({ ...row, createdAt: row.createdAt.toISOString() })) : [];
-  return { mode: 'staff', actor: ctx.actor, members, lenders, invitations, events, message: 'Verified staff access. Membership, lender access and MFA are checked for every request. Financial records remain synthetic.' };
+  const invitations = (await session.client.query<{ id: string; email: string; role: string; status: string; expiresAt: Date; invitedBy: string; approvedBy: string | null }>(`SELECT invitation.id,invitation.email,invitation.role,invitation.status,invitation.expires_at AS "expiresAt",invitation.invited_by AS "invitedBy",
+    (SELECT approval.actor FROM valopay_staff_events approval WHERE approval.workspace_id=invitation.workspace_id AND approval.subject=invitation.id AND approval.action='staff.invitation_approved' AND approval.actor<>invitation.invited_by ORDER BY approval.created_at,approval.id LIMIT 1) AS "approvedBy"
+    FROM valopay_staff_invitations invitation WHERE invitation.workspace_id=$1 ORDER BY invitation.created_at DESC LIMIT 100`, [session.workspace.id])).rows
+    .map(row => ({ ...row, expiresAt: row.expiresAt.toISOString(), approval: !needsApproval(row.role) ? 'not_required' : row.approvedBy ? 'approved' : 'awaiting' }));
+  const changes = (await session.client.query<ChangeRequestRow>(changeRequestsSql, [session.workspace.id, null, null])).rows.filter(currentRequest).slice(0, 100).map(changeView);
+  const events = (await session.client.query<{ id: string; actor: string; action: string; subject: string; detail: unknown; createdAt: Date }>('SELECT id,actor,action,subject,detail,created_at AS "createdAt" FROM valopay_staff_events WHERE workspace_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100', [session.workspace.id])).rows.map(row => ({ ...row, createdAt: row.createdAt.toISOString() }));
+  return { mode: 'staff', actor: ctx.actor, members, lenders, invitations, changes, events, message: 'Verified staff access. Membership, lender access and MFA are checked for every request. Financial records remain synthetic.' };
 }
 export function viewerScope(ctx: StoreContext) { const session = sessionFor(ctx); return digest(`viewer:${session.workspace.id}:${session.owner || session.principal}`); }
 function teamAdmin(ctx: StoreContext) {
@@ -406,16 +437,40 @@ function teamAdmin(ctx: StoreContext) {
   if (ctx.accessMode !== 'staff' || ctx.role !== 'Admin' || session.access !== 'team') fail('A verified pilot administrator with recent MFA is required.', 403);
   return session;
 }
-async function staffEvent(client: PoolClient, workspaceId: string, actor: string, action: string, subject: string, detail: unknown) {
-  await client.query('INSERT INTO valopay_staff_events(id,workspace_id,actor,action,subject,detail) VALUES($1,$2,$3,$4,$5,$6)', [randomUUID(), workspaceId, actor, action, subject, detail]);
+async function staffEvent(client: PoolClient, workspaceId: string, actor: string, action: string, subject: string, detail: unknown): Promise<{ id: string; createdAt: Date }> {
+  return (await client.query<{ id: string; createdAt: Date }>('INSERT INTO valopay_staff_events(id,workspace_id,actor,action,subject,detail) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,created_at AS "createdAt"', [randomUUID(), workspaceId, actor, action, subject, detail])).rows[0]!;
 }
 export async function inviteStaff(ctx: StoreContext, email: string, role: string) {
   const session = teamAdmin(ctx);
-  const token = randomBytes(32).toString('hex'), id = randomUUID();
+  const token = randomBytes(32).toString('hex'), id = randomUUID(), approval = needsApproval(role) ? 'awaiting' as const : 'not_required' as const;
   await session.client.query("UPDATE valopay_staff_invitations SET status='revoked' WHERE workspace_id=$1 AND email=$2 AND status='pending'", [session.workspace.id, email]);
   await session.client.query(`INSERT INTO valopay_staff_invitations(id,workspace_id,email,role,token_hash,invited_by,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, [id, session.workspace.id, email, role, digest(token), ctx.actor, new Date(Date.parse(ctx.now) + 7 * 86400000)]);
-  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.invited', id, { email, role });
-  return { id, token, message: 'Invitation created. Share the link directly with this person; no email has been sent. It expires in seven days.' };
+  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.invited', id, { email, role, ...(approval === 'awaiting' ? { approval } : {}) });
+  if (approval === 'not_required') return { id, token, approval, message: 'Invitation created. Share the link directly with this person; no email has been sent. It expires in seven days.' };
+  const administrators = Number((await session.client.query<{ count: string }>("SELECT count(*) FROM valopay_staff_memberships WHERE workspace_id=$1 AND role='Admin' AND status='active' AND expires_at>$2", [session.workspace.id, ctx.now])).rows[0]!.count);
+  return { id, token, approval, message: `Invitation created. It waits for a second administrator's approval before it can be accepted: an Admin, Finance or Compliance reviewer grant needs two administrators, and the one who sent it cannot approve it.${administrators < 2 ? " This pilot has one active administrator: ask the operator to add a second with the provisioning command's --add-administrator mode." : ''} Share the link directly; no email has been sent. It expires in seven days.` };
+}
+/** A second administrator's approval of an invitation to Admin, Finance or Compliance reviewer, recorded in the access history; the invitee can accept it afterwards. */
+export async function approveInvitation(ctx: StoreContext, id: string) {
+  const session = teamAdmin(ctx);
+  const invitation = (await session.client.query<{ id: string; email: string; role: string; invited_by: string; status: string; expires_at: Date }>('SELECT id,email,role,invited_by,status,expires_at FROM valopay_staff_invitations WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [session.workspace.id, id])).rows[0];
+  if (!invitation) fail('Invitation not found.', 404);
+  if (invitation.status !== 'pending' || invitation.expires_at.getTime() <= Date.parse(ctx.now)) fail('This invitation is no longer pending.', 409);
+  if (!needsApproval(invitation.role)) fail('This invitation needs no approval: only Admin, Finance and Compliance reviewer invitations do.', 409);
+  if (invitation.invited_by === ctx.actor) fail(secondAdministrator('invitation', 'sent it'), 403);
+  if (await invitationApprover(session.client, session.workspace.id, invitation)) fail('This invitation is already approved.', 409);
+  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.invitation_approved', id, { email: invitation.email, role: invitation.role, invitedBy: invitation.invited_by });
+  return { message: `Invitation approved: ${invitation.email} can now accept it as ${invitation.role}.` };
+}
+/** Applies a membership change, clearing lender grants on a role change or revocation and pending invitations on a suspension or revocation, with its event. */
+async function applyStaffChange(session: Session, ctx: StoreContext, row: StaffRow, after: { role: string; status: string }, action: string, detail: Record<string, unknown>) {
+  const result = await session.client.query<StaffRow>(`UPDATE valopay_staff_memberships SET role=$3,status=$4,updated_at=greatest(now(),updated_at+interval '1 millisecond') WHERE workspace_id=$1 AND id=$2 RETURNING *`, [session.workspace.id, row.id, after.role, after.status]);
+  if (after.status === 'revoked' || after.role !== row.role) await session.client.query('DELETE FROM valopay_staff_lender_access WHERE membership_id=$1', [row.id]);
+  // Suspension and revocation withdraw the person's pending invitations: an
+  // invitation sent earlier must not hand the access straight back.
+  const invitationsRevoked = after.status === 'active' ? 0 : (await session.client.query("UPDATE valopay_staff_invitations SET status='revoked' WHERE workspace_id=$1 AND lower(email)=lower($2) AND status='pending'", [session.workspace.id, row.display_name])).rowCount || 0;
+  await staffEvent(session.client, session.workspace.id, ctx.actor, action, row.id, { before: { role: row.role, status: row.status }, after, ...detail, ...(invitationsRevoked ? { invitationsRevoked } : {}) });
+  return result.rows[0]!;
 }
 export async function updateStaff(ctx: StoreContext, id: string, input: { role: string; status: string; expectedUpdatedAt: string; reason: string }) {
   const session = teamAdmin(ctx);
@@ -424,13 +479,46 @@ export async function updateStaff(ctx: StoreContext, id: string, input: { role: 
   if (row.user_id === session.userId) fail('Ask another administrator to change your membership.', 403);
   if (row.updated_at.toISOString() !== input.expectedUpdatedAt) fail('This membership changed. Refresh the team and review it again.', 409);
   if (row.status === 'revoked' && input.status !== 'revoked') fail('A revoked person must accept a new invitation before access is restored.', 409);
-  const result = await session.client.query<StaffRow>(`UPDATE valopay_staff_memberships SET role=$3,status=$4,updated_at=greatest(now(),updated_at+interval '1 millisecond') WHERE workspace_id=$1 AND id=$2 RETURNING *`, [session.workspace.id, id, input.role, input.status]);
-  if (input.status === 'revoked' || input.role !== row.role) await session.client.query('DELETE FROM valopay_staff_lender_access WHERE membership_id=$1', [id]);
-  // Suspension and revocation withdraw the person's pending invitations: an
-  // invitation sent earlier must not hand the access straight back.
-  const invitationsRevoked = input.status === 'active' ? 0 : (await session.client.query("UPDATE valopay_staff_invitations SET status='revoked' WHERE workspace_id=$1 AND lower(email)=lower($2) AND status='pending'", [session.workspace.id, row.display_name])).rowCount || 0;
-  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.changed', id, { before: { role: row.role, status: row.status }, after: { role: input.role, status: input.status }, reason: input.reason, ...(invitationsRevoked ? { invitationsRevoked } : {}) });
-  return staffView(result.rows[0]!);
+  const after = { role: input.role, status: input.status };
+  if (grantNeedsApproval(row, after)) {
+    // The grant waits for a second administrator: the request is recorded, and the membership stays as it is until one approves it.
+    const waiting = (await session.client.query<ChangeRequestRow>(changeRequestsSql, [session.workspace.id, null, id])).rows.find(request => currentRequest(request) && sameJson(request.detail.after, after));
+    const pending = waiting ? changeView(waiting) : await (async () => {
+      const request = await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.change_requested', id, { before: { role: row.role, status: row.status }, after, reason: input.reason, version: row.updated_at.toISOString() });
+      return changeView({ id: request.id, actor: ctx.actor, subject: id, detail: { before: { role: row.role, status: row.status }, after, reason: input.reason, version: row.updated_at.toISOString() }, created_at: request.createdAt, name: row.display_name, member_version: row.updated_at });
+    })();
+    return { ...staffView(row), message: `This change waits for a second administrator: an Admin, Finance or Compliance reviewer grant takes effect only when a different administrator approves it in Team & access. ${row.display_name} keeps their current access until then.`, pendingChange: pending };
+  }
+  const updated = await applyStaffChange(session, ctx, row, after, 'staff.changed', { reason: input.reason });
+  return { ...staffView(updated), message: 'Access change saved. Existing sessions must pass it on their next request.', pendingChange: null };
+}
+/** The request a second administrator approves or declines: current, not decided, in this workspace. */
+async function changeRequest(session: Session, requestId: string): Promise<ChangeRequestRow> {
+  const found = (await session.client.query<ChangeRequestRow>(`SELECT request.id,request.actor,request.subject,request.detail,request.created_at,member.display_name AS name,member.updated_at AS member_version
+    FROM valopay_staff_events request JOIN valopay_staff_memberships member ON member.id=request.subject AND member.workspace_id=request.workspace_id
+    WHERE request.workspace_id=$1 AND request.id=$2 AND request.action='staff.change_requested'`, [session.workspace.id, requestId])).rows[0];
+  if (!found) fail('Change request not found.', 404);
+  if (!(await session.client.query(changeRequestsSql, [session.workspace.id, requestId, null])).rows.length) fail('This change was already approved or declined.', 409);
+  return found;
+}
+/** A second administrator's approval of a waiting change: the exact change requested, applied now and recorded with who asked and who approved. */
+export async function approveStaffChange(ctx: StoreContext, requestId: string) {
+  const session = teamAdmin(ctx);
+  const request = await changeRequest(session, requestId);
+  const row = (await session.client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [session.workspace.id, request.subject])).rows[0];
+  if (!row) fail('Staff membership not found.', 404);
+  if (row.updated_at.toISOString() !== request.detail.version) fail('This membership changed after the change was requested. Review the membership and ask for the change again.', 409);
+  if (request.actor === ctx.actor) fail(secondAdministrator('change', 'asked for it'), 403);
+  if (row.user_id === session.userId) fail('Ask another administrator to approve a change to your own membership.', 403);
+  const updated = await applyStaffChange(session, ctx, row, request.detail.after, 'staff.change_approved', { reason: request.detail.reason, requestId, requestedBy: request.actor });
+  return { ...staffView(updated), message: `Change approved: ${row.display_name} is now ${updated.role} (${updated.status}). Existing sessions must pass it on their next request.`, pendingChange: null };
+}
+/** Declines a waiting change (or withdraws it, for the administrator who asked), recorded in the access history; the membership is unchanged. */
+export async function declineStaffChange(ctx: StoreContext, requestId: string) {
+  const session = teamAdmin(ctx);
+  const request = await changeRequest(session, requestId);
+  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.change_declined', request.subject, { requestId, before: request.detail.before, after: request.detail.after, requestedBy: request.actor });
+  return { message: request.actor === ctx.actor ? 'Change request withdrawn. The membership is unchanged.' : 'Change request declined. The membership is unchanged.' };
 }
 /** The workspace's exclusive team lock serialises grant changes with every
  * read/write transaction, so removing a grant blocks later requests using an
@@ -481,7 +569,7 @@ async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: strin
     if (!team) fail('Select the organisation named in your invitation.', 403);
     const checkedAt = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();
     verifyStaff(auth, { id: 'invitation-check', userId: auth.userId || '', organizationId: auth.orgId || '', tenantId: 'invitation-check', role: 'Read-only', status: 'active', validFrom: '2020-01-01T00:00:00.000Z', expiresAt: '2100-01-01T00:00:00.000Z' }, true, checkedAt);
-    const invite = (await client.query<{ id: string; email: string; role: string; created_at: Date }>(`SELECT id,email,role,created_at FROM valopay_staff_invitations WHERE workspace_id=$1 AND token_hash=$2 AND status='pending' AND expires_at>clock_timestamp() FOR UPDATE`, [team.workspace_id, digest(token)])).rows[0];
+    const invite = (await client.query<{ id: string; email: string; role: string; invited_by: string; created_at: Date }>(`SELECT id,email,role,invited_by,created_at FROM valopay_staff_invitations WHERE workspace_id=$1 AND token_hash=$2 AND status='pending' AND expires_at>clock_timestamp() FOR UPDATE`, [team.workspace_id, digest(token)])).rows[0];
     if (!invite || !verifiedEmails.includes(invite.email)) fail('This invitation is expired, used, revoked or belongs to another verified email address.', 403);
     const existing = (await client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND user_id=$2 FOR UPDATE', [team.workspace_id, auth.userId])).rows[0];
     if (existing?.status === 'active' && existing.expires_at > new Date(checkedAt)) fail('You already have an active membership. Ask an administrator to change its role.', 409);
@@ -492,6 +580,9 @@ async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: strin
       const withdrawnAt = (await client.query<{ at: Date | null }>(`SELECT max(created_at) AS at FROM valopay_staff_events WHERE workspace_id=$1 AND subject=$2 AND action='staff.changed' AND detail->'after'->>'status' IN ('suspended','revoked')`, [team.workspace_id, existing.id])).rows[0]?.at ?? existing.updated_at;
       if (invite.created_at <= withdrawnAt) fail('This invitation was sent before your access was suspended or revoked, so it cannot restore it. Ask an administrator for a new invitation.', 403);
     }
+    // An Admin, Finance or Compliance reviewer grant takes effect only once a second administrator approved the invitation.
+    const approvedBy = needsApproval(invite.role) ? await invitationApprover(client, team.workspace_id, invite) : undefined;
+    if (needsApproval(invite.role) && !approvedBy) fail("This invitation is waiting for a second administrator's approval. Ask the administrator who sent it to have another administrator approve it in Team & access, then accept it again.", 403);
     if(existing) {
       if (runtimeIsolationEnabled()) await clearRuntimeInviteeGrants(client);
       else await client.query('DELETE FROM valopay_staff_lender_access WHERE membership_id=$1',[existing.id]);
@@ -499,7 +590,7 @@ async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: strin
     await client.query(`INSERT INTO valopay_staff_memberships(id,workspace_id,user_id,display_name,role,status,expires_at) VALUES($1,$2,$3,$4,$5,'active',now()+interval '90 days')
       ON CONFLICT(workspace_id,user_id) DO UPDATE SET display_name=EXCLUDED.display_name,role=EXCLUDED.role,status='active',expires_at=EXCLUDED.expires_at,updated_at=greatest(now(),valopay_staff_memberships.updated_at+interval '1 millisecond')`, [randomUUID(), team.workspace_id, auth.userId, invite.email, invite.role]);
     await client.query("UPDATE valopay_staff_invitations SET status='accepted' WHERE id=$1 AND workspace_id=$2", [invite.id, team.workspace_id]);
-    await staffEvent(client, team.workspace_id, `Clerk:${auth.userId}`, 'staff.accepted', invite.id, { role: invite.role });
+    await staffEvent(client, team.workspace_id, `Clerk:${auth.userId}`, 'staff.accepted', invite.id, { role: invite.role, ...(approvedBy ? { approvedBy } : {}) });
     // Checked before COMMIT: an answer that does not match its contract saves nothing.
     const accepted = contractAnswer(invitationAcceptedSchema, { message: 'Invitation accepted. Your pilot membership lasts 90 days.', role: invite.role });
     committing = true;
@@ -680,6 +771,70 @@ export async function protectWorkspacePayloads(context:StoreContext) {
   for(const row of receipts){if(protectedCount)break;await session.client.query('UPDATE valopay_idempotency SET response=$3 WHERE id=$1 AND merchant_id=$2',[row.id,row.merchant_id,await protectStored(row.response,{lender:row.merchant_id,record:row.id,field:'response'})]);protectedCount++;}
   await staffEvent(session.client,session.workspace.id,context.actor,'encryption.protected','workspace',{protectedCount,at:context.now});
   return {message:protectedCount?'Protected another batch of stored payloads. Run again until no payloads remain.':'No unprotected import or recovery payloads remain in this workspace.',protectedCount,mayHaveMore:protectedCount>0};
+}
+/** What one run of the operator's re-wrap step did (scripts/rewrap-payloads.ts). */
+export type PayloadRewrap = { key: string; rewrapped: number; changed: number; remaining: number; remainingByKey: Array<{ key: string; payloads: number }>; message: string };
+/**
+ * Every protected payload and the scope it was sealed in, with the table it
+ * lives in: an import batch's source rows and check, a journal entry's request
+ * and receipt, and a replay copy's answer. The fields are fixed here, never
+ * input. $1 is the current key; $2, when not null, limits it to those
+ * workspaces (tests).
+ */
+const sealedPayloadsSql = `WITH sealed AS (
+    SELECT 'records' AS source, r.id, r.merchant_id, f.field, f.value FROM valopay_records r CROSS JOIN LATERAL (VALUES ('csv', r.data->'csv'), ('check', r.data->'check')) AS f(field, value) WHERE r.kind='import-batches'
+    UNION ALL SELECT 'operations', o.id, o.merchant_id, f.field, f.value FROM valopay_operations o CROSS JOIN LATERAL (VALUES ('request', o.request), ('receipt', o.receipt)) AS f(field, value)
+    UNION ALL SELECT 'idempotency', i.id, i.merchant_id, 'response', i.response FROM valopay_idempotency i)
+  SELECT sealed.source, sealed.id, sealed.merchant_id, sealed.field, sealed.value FROM sealed JOIN valopay_merchants m ON m.id=sealed.merchant_id
+  WHERE jsonb_typeof(sealed.value)='object' AND sealed.value ? 'protectedPayload' AND sealed.value->>'key' IS DISTINCT FROM $1 AND ($2::text[] IS NULL OR m.workspace_id=ANY($2::text[]))`;
+/** Writes a re-sealed payload back only while it is still the envelope that was read, so a request that changed it meanwhile wins. */
+const rewrapWrites: Record<string, string> = {
+  'records:csv': "UPDATE valopay_records SET data=jsonb_set(data,'{csv}',$3::jsonb) WHERE id=$1 AND merchant_id=$2 AND kind='import-batches' AND data->'csv'=$4::jsonb",
+  'records:check': "UPDATE valopay_records SET data=jsonb_set(data,'{check}',$3::jsonb) WHERE id=$1 AND merchant_id=$2 AND kind='import-batches' AND data->'check'=$4::jsonb",
+  'operations:request': 'UPDATE valopay_operations SET request=$3::jsonb WHERE id=$1 AND merchant_id=$2 AND request=$4::jsonb',
+  'operations:receipt': 'UPDATE valopay_operations SET receipt=$3::jsonb WHERE id=$1 AND merchant_id=$2 AND receipt=$4::jsonb',
+  'idempotency:response': 'UPDATE valopay_idempotency SET response=$3::jsonb WHERE id=$1 AND merchant_id=$2 AND response=$4::jsonb',
+};
+/**
+ * Operator-only (scripts/rewrap-payloads.ts); never called by an HTTP route.
+ * After the payload wrapping key changes name (VALOPAY_KMS_KEY), re-seals at
+ * most `limit` protected payloads that still name an earlier key: each is
+ * opened with the key it names, which must still be listed in
+ * VALOPAY_KMS_PREVIOUS_KEYS, and sealed again under the current key with a
+ * fresh data key, in the scope it was sealed in. Nothing is locked while the
+ * key service works: a payload is read, re-sealed, then written back in a
+ * short transaction of its own only if it is still the envelope that was read,
+ * so a run can stop at any point and be run again, and a payload a request
+ * rewrote meanwhile is left to it (counted as changed). Returns how many it
+ * re-sealed and how many still name each earlier key: the earlier key may be
+ * retired once none remain (docs/pilot-security.md, "Key rotation").
+ */
+export async function rewrapProtectedPayloads(options: { limit?: number; workspaces?: readonly string[] } = {}): Promise<PayloadRewrap> {
+  if (runtimeIsolationEnabled()) fail("Re-wrap payloads with the database owner's connection and VALOPAY_RUNTIME_ISOLATION unset: the restricted runtime login cannot read every workspace's payloads.", 503);
+  const key = payloadEncryptionKey();
+  if (!key) fail('Set VALOPAY_PAYLOAD_ENCRYPTION=kms and VALOPAY_KMS_KEY to the key payloads should be sealed under.', 503);
+  const limit = options.limit ?? 100, workspaces = options.workspaces ? [...options.workspaces] : null;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) fail('Re-wrap between 1 and 1000 payloads at a time.');
+  type Sealed = { source: string; id: string; merchant_id: string; field: string; value: { key?: string } };
+  const batch = await operatorTransaction(async client => (await client.query<Sealed>(`${sealedPayloadsSql} ORDER BY sealed.source,sealed.merchant_id,sealed.id,sealed.field LIMIT $3`, [key, workspaces, limit])).rows);
+  let rewrapped = 0, changed = 0;
+  for (const payload of batch) {
+    const scope = { lender: payload.merchant_id, record: payload.id, field: payload.field };
+    let sealed: unknown;
+    try { sealed = await protectStored(await revealStored(payload.value, scope), scope); }
+    catch (error) {
+      if ((error as { status?: unknown }).status !== 503) throw error;
+      fail(`A payload sealed under ${String(payload.value.key)} could not be opened, so the run stopped after re-sealing ${rewrapped}. Keep that key in VALOPAY_KMS_PREVIOUS_KEYS and check this service may decrypt with it, then run the command again.`, 503);
+    }
+    const written = await operatorTransaction(client => client.query(rewrapWrites[`${payload.source}:${payload.field}`]!, [payload.id, payload.merchant_id, JSON.stringify(sealed), JSON.stringify(payload.value)]));
+    if (rowsAffected(written)) rewrapped++; else changed++;
+  }
+  const remainingByKey = (await operatorTransaction(async client => (await client.query<{ key: string; payloads: string }>(`SELECT payload.value->>'key' AS key, count(*) AS payloads FROM (${sealedPayloadsSql}) payload GROUP BY 1 ORDER BY 1`, [key, workspaces])).rows)).map(row => ({ key: row.key, payloads: Number(row.payloads) }));
+  const remaining = remainingByKey.reduce((sum, row) => sum + row.payloads, 0);
+  const moved = `Re-sealed ${rewrapped} protected payload${rewrapped === 1 ? '' : 's'} under ${key}${changed ? `; ${changed} changed while this run worked and will be checked again` : ''}.`;
+  return { key, rewrapped, changed, remaining, remainingByKey, message: remaining
+    ? `${moved} ${remaining} still name an earlier key: run the command again until none remain, and keep the earlier keys in VALOPAY_KMS_PREVIOUS_KEYS until then.`
+    : `${moved} No protected payload names an earlier key: an earlier key may be retired once no backup you may restore still needs it.` };
 }
 function rowsAffected(result: { rowCount: number | null }): boolean { return (result.rowCount || 0) === 1; }
 function rowToRecord(row: RecordRow): ValopayRecord {

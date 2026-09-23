@@ -792,7 +792,7 @@ export const UpdateSettingsResponse = zod.object({
 
 
 /**
- * Durably saves a queued export job and returns immediately. Poll its status before downloading. Rendering and private storage run outside the database transaction; retries use the same immutable object key. A record kind, gate pack, billing statement or customer dispute pack supports JSON, CSV or PDF.
+ * Durably saves a queued export job and returns immediately. Poll its status before downloading. Rendering and private storage run outside the database transaction; retries use the same immutable object key. A record kind, gate pack, billing statement or customer dispute pack supports JSON, CSV or PDF. A dispute pack (either name), the customer register or the audit trail is queued only by an Admin, Finance or Compliance reviewer (403 otherwise).
  * @summary Queue a private export
  */
 export const createExportQueryMerchantIdMax = 100;
@@ -882,7 +882,7 @@ export const GetExportJobResponse = zod.object({
 
 
 /**
- * Requeues a failed or expired job while preserving its identity and private object key. Running and ready jobs are returned unchanged; retries cannot overwrite a completed file.
+ * Requeues a failed or expired job while preserving its identity and private object key. Running and ready jobs are returned unchanged; retries cannot overwrite a completed file. A dispute pack, the customer register or the audit trail is retried only by an Admin, Finance or Compliance reviewer (403 otherwise).
  * @summary Retry a saved export
  */
 export const RetryExportJobParams = zod.object({
@@ -930,7 +930,7 @@ export const RetryExportJobResponse = zod.object({
 
 
 /**
- * The bytes are read from private storage and checked against the recorded SHA-256 before any are sent.
+ * The bytes are read from private storage and checked against the recorded SHA-256 before any are sent. A dispute pack (either name), the customer register or the audit trail is downloaded only by an Admin, Finance or Compliance reviewer (403 otherwise); every role may read a job's status.
  * @summary Download an export
  */
 export const DownloadExportParams = zod.object({
@@ -2718,6 +2718,8 @@ export const VerifyStaffIdentityResponse = zod.object({
  */
 export const getTeamResponseInvitationsMax = 100;
 
+export const getTeamResponseChangesMax = 100;
+
 export const getTeamResponseEventsMax = 100;
 
 
@@ -2731,11 +2733,11 @@ export const GetTeamResponse = zod.object({
   "name": zod.string(),
   "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
   "status": zod.enum(['active', 'suspended', 'revoked']),
-  "expiresAt": zod.string(),
+  "expiresAt": zod.string().nullable(),
   "updatedAt": zod.string(),
   "lenderIds": zod.array(zod.string()),
   "allLenders": zod.boolean()
-}).describe('A membership in the team directory, with the lenders it may open; an administrator opens every lender and lists none.')),
+}).describe('A membership in the team directory, with the lenders it may open; an administrator opens every lender and lists none. A viewer who is not an administrator sees only the colleagues who share a lender with them, only the lenders they share, and no one\'s expiry but their own (expiresAt null).')),
   "lenders": zod.array(zod.object({
   "id": zod.string(),
   "name": zod.string(),
@@ -2754,8 +2756,27 @@ export const GetTeamResponse = zod.object({
   "email": zod.string(),
   "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
   "status": zod.enum(['pending', 'accepted', 'revoked']),
-  "expiresAt": zod.string()
-}).describe('A pending, accepted or revoked invitation; the token is shown once, at creation.')).max(getTeamResponseInvitationsMax),
+  "expiresAt": zod.string(),
+  "invitedBy": zod.string(),
+  "approval": zod.enum(['not_required', 'awaiting', 'approved']),
+  "approvedBy": zod.string().nullable()
+}).describe('A pending, accepted or revoked invitation, who sent it and whether it waits for, or has, the second administrator\'s approval an Admin, Finance or Compliance reviewer invitation needs; the token is shown once, at creation.')).max(getTeamResponseInvitationsMax),
+  "changes": zod.array(zod.object({
+  "id": zod.string(),
+  "memberId": zod.string(),
+  "name": zod.string(),
+  "from": zod.object({
+  "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
+  "status": zod.enum(['active', 'suspended', 'revoked'])
+}).describe('A membership\'s role and state, before or after a change.'),
+  "to": zod.object({
+  "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
+  "status": zod.enum(['active', 'suspended', 'revoked'])
+}).describe('A membership\'s role and state, before or after a change.'),
+  "reason": zod.string(),
+  "requestedBy": zod.string(),
+  "requestedAt": zod.string()
+}).describe('A membership change that grants Admin, Finance or Compliance reviewer and waits for a second administrator: who asked, when and why. Approving it applies exactly this change; a later change to the membership leaves it out of date, and it is no longer listed.')).max(getTeamResponseChangesMax),
   "events": zod.array(zod.object({
   "id": zod.string(),
   "actor": zod.string(),
@@ -2765,7 +2786,7 @@ export const GetTeamResponse = zod.object({
   "createdAt": zod.string()
 }).describe('One entry of the team\'s access history.')).max(getTeamResponseEventsMax),
   "message": zod.string()
-}).describe('The team as the caller may see it: members for everyone; lenders, invitations and history for administrators. In the sandbox every list, lenders included, is empty and the message says why.')
+}).describe('The team as the caller may see it: members as StaffDirectoryMember describes; lenders, invitations, changes awaiting a second administrator and history for administrators. In the sandbox every list, lenders included, is empty and the message says why.')
 
 
 /**
@@ -2787,8 +2808,9 @@ export const inviteStaffResponseTokenRegExp = new RegExp('^[a-f0-9]{64}$');
 export const InviteStaffResponse = zod.object({
   "id": zod.string(),
   "token": zod.string().regex(inviteStaffResponseTokenRegExp),
+  "approval": zod.enum(['not_required', 'awaiting']),
   "message": zod.string()
-}).describe('The invitation and its one-time acceptance token; no email is sent.')
+}).describe('The invitation, its one-time acceptance token and whether it waits for a second administrator\'s approval; no email is sent.')
 
 
 /**
@@ -2805,7 +2827,20 @@ export const RevokeInvitationResponse = zod.object({
 
 
 /**
- * Administrator with recent MFA; nobody changes their own membership. Records the reason in the access history.
+ * Administrator with recent MFA, other than the one who sent it (403); the approval is recorded in the access history. Only a pending Admin, Finance or Compliance reviewer invitation waits for one: any other, or one already approved, is refused (409). The invited person can accept it afterwards.
+ * @summary Approve an invitation as the second administrator
+ */
+export const ApproveInvitationParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const ApproveInvitationResponse = zod.object({
+  "message": zod.string()
+}).describe('A confirmation in plain words; nothing else changed that the caller needs to read back.')
+
+
+/**
+ * Administrator with recent MFA; nobody changes their own membership. Records the reason in the access history. A change that leaves the membership active as Admin, Finance or Compliance reviewer when it was not (a new role, or a reactivation) is saved as a request for a second administrator: the answer names it (pendingChange), the membership stays as it is until another administrator approves it, and the same request again answers the same waiting request. Every other change takes effect at once.
  * @summary Change a membership
  */
 export const UpdateStaffMemberParams = zod.object({
@@ -2831,8 +2866,74 @@ export const UpdateStaffMemberResponse = zod.object({
   "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
   "status": zod.enum(['active', 'suspended', 'revoked']),
   "expiresAt": zod.string(),
-  "updatedAt": zod.string()
-}).describe('A staff membership as a change answers it: its role, state, expiry and version.')
+  "updatedAt": zod.string(),
+  "message": zod.string(),
+  "pendingChange": zod.union([zod.object({
+  "id": zod.string(),
+  "memberId": zod.string(),
+  "name": zod.string(),
+  "from": zod.object({
+  "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
+  "status": zod.enum(['active', 'suspended', 'revoked'])
+}).describe('A membership\'s role and state, before or after a change.'),
+  "to": zod.object({
+  "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
+  "status": zod.enum(['active', 'suspended', 'revoked'])
+}).describe('A membership\'s role and state, before or after a change.'),
+  "reason": zod.string(),
+  "requestedBy": zod.string(),
+  "requestedAt": zod.string()
+}).describe('A membership change that grants Admin, Finance or Compliance reviewer and waits for a second administrator: who asked, when and why. Approving it applies exactly this change; a later change to the membership leaves it out of date, and it is no longer listed.'),zod.null()])
+}).describe('A membership change\'s answer: the membership as it now stands, what happened in plain words, and the waiting request when the change needs a second administrator (the membership is then unchanged).')
+
+
+/**
+ * Administrator with recent MFA, other than the one who asked and other than the person changed (403). Applies exactly the requested change and records who asked and who approved. A request already approved or declined, or whose membership changed since it was made, is refused (409).
+ * @summary Approve a membership change as the second administrator
+ */
+export const ApproveStaffChangeParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const ApproveStaffChangeResponse = zod.object({
+  "id": zod.string(),
+  "actor": zod.string(),
+  "name": zod.string(),
+  "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
+  "status": zod.enum(['active', 'suspended', 'revoked']),
+  "expiresAt": zod.string(),
+  "updatedAt": zod.string(),
+  "message": zod.string(),
+  "pendingChange": zod.union([zod.object({
+  "id": zod.string(),
+  "memberId": zod.string(),
+  "name": zod.string(),
+  "from": zod.object({
+  "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
+  "status": zod.enum(['active', 'suspended', 'revoked'])
+}).describe('A membership\'s role and state, before or after a change.'),
+  "to": zod.object({
+  "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
+  "status": zod.enum(['active', 'suspended', 'revoked'])
+}).describe('A membership\'s role and state, before or after a change.'),
+  "reason": zod.string(),
+  "requestedBy": zod.string(),
+  "requestedAt": zod.string()
+}).describe('A membership change that grants Admin, Finance or Compliance reviewer and waits for a second administrator: who asked, when and why. Approving it applies exactly this change; a later change to the membership leaves it out of date, and it is no longer listed.'),zod.null()])
+}).describe('A membership change\'s answer: the membership as it now stands, what happened in plain words, and the waiting request when the change needs a second administrator (the membership is then unchanged).')
+
+
+/**
+ * Administrator with recent MFA; the administrator who asked withdraws it the same way. Recorded in the access history; the membership is unchanged. A request already approved or declined is refused (409).
+ * @summary Decline or withdraw a membership change
+ */
+export const DeclineStaffChangeParams = zod.object({
+  "id": zod.coerce.string().describe('The record\'s id.')
+})
+
+export const DeclineStaffChangeResponse = zod.object({
+  "message": zod.string()
+}).describe('A confirmation in plain words; nothing else changed that the caller needs to read back.')
 
 
 /**
@@ -2873,7 +2974,7 @@ export const UpdateStaffLendersResponse = zod.object({
 
 
 /**
- * The signed-in person's verified email must match the invitation. Creates a 90-day membership.
+ * The signed-in person's verified email must match the invitation. Creates a 90-day membership. An Admin, Finance or Compliance reviewer invitation is refused (403) until a second administrator has approved it.
  * @summary Accept an invitation
  */
 export const acceptInvitationBodyTokenRegExp = new RegExp('^[a-f0-9]{64}$');
@@ -4439,6 +4540,9 @@ export const getLifecycleResponsePolicyJournalPayloadDaysMax = 3650;
 
 export const getLifecycleResponsePolicyExportFileDaysMax = 3650;
 
+
+
+
 export const getLifecycleResponsePolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
 export const getLifecycleResponseHoldRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
 export const getLifecycleResponseEligibleCountMin = 0;
@@ -4520,6 +4624,12 @@ export const GetLifecycleResponse = zod.object({
   "exportFileDays": zod.number().int().min(1).max(getLifecycleResponsePolicyExportFileDaysMax).nullable(),
   "auditTrail": zod.literal("retain")
 }),
+  "minimumDays": zod.object({
+  "rawCsvDays": zod.number().int().min(1),
+  "journalPayloadDays": zod.number().int().min(1),
+  "exportFileDays": zod.number().int().min(1)
+}).optional(),
+  "secondApprover": zod.boolean().optional(),
   "policyRevision": zod.string().regex(getLifecycleResponsePolicyRevisionRegExp),
   "holdRevision": zod.string().regex(getLifecycleResponseHoldRevisionRegExp),
   "eligibleCount": zod.number().int().min(getLifecycleResponseEligibleCountMin),
@@ -4570,6 +4680,7 @@ export const GetLifecycleResponse = zod.object({
 })).max(getLifecycleResponseRunsItemCandidatesMax),
   "candidateCount": zod.number().int().min(getLifecycleResponseRunsItemCandidateCountMin),
   "moreEligible": zod.number().int().min(getLifecycleResponseRunsItemMoreEligibleMin),
+  "preparedBy": zod.string().nullish(),
   "approvedBy": zod.string().nullable(),
   "approvedAt": zod.coerce.date().nullable(),
   "receipts": zod.array(zod.object({
@@ -4590,7 +4701,7 @@ export const GetLifecycleResponse = zod.object({
   "auditRetained": zod.literal(true),
   "financialRecordsRetained": zod.literal(true),
   "syntheticOnly": zod.literal(true)
-}).describe('The lender\'s retention policy, holds, bounded inventory of what the policy would touch, and saved retention runs.')
+}).describe('The lender\'s retention policy, the shortest periods it may set (minimumDays) and whether a second administrator approves runs (secondApprover), holds, bounded inventory of what the policy would touch, and saved retention runs.')
 
 
 /**
@@ -4665,6 +4776,7 @@ export const GetLifecycleRunResponse = zod.object({
 })).max(getLifecycleRunResponseCandidatesMax),
   "candidateCount": zod.number().int().min(getLifecycleRunResponseCandidateCountMin),
   "moreEligible": zod.number().int().min(getLifecycleRunResponseMoreEligibleMin),
+  "preparedBy": zod.string().nullish(),
   "approvedBy": zod.string().nullable(),
   "approvedAt": zod.coerce.date().nullable(),
   "receipts": zod.array(zod.object({
@@ -4681,11 +4793,11 @@ export const GetLifecycleRunResponse = zod.object({
   "auditRetained": zod.literal(true),
   "financialRecordsRetained": zod.literal(true),
   "syntheticOnly": zod.literal(true)
-}).describe('One retention run: its reviewed manifest, approval state and per-item receipts.')
+}).describe('One retention run: its reviewed manifest, who prepared it, approval state and per-item receipts.')
 
 
 /**
- * Administrators only. Keeps every previous policy version with its reason.
+ * Administrators only. Keeps every previous policy version with its reason. A period shorter than the workspace's minimum (minimumDays: 30 days in the sandbox; in a staff pilot, six years for original source files and export files and a year for recovery payloads) is refused (400).
  * @summary Change the retention policy
  */
 export const saveRetentionPolicyQueryMerchantIdMax = 100;
@@ -4737,6 +4849,9 @@ export const saveRetentionPolicyResponsePolicyRawCsvDaysMax = 3650;
 export const saveRetentionPolicyResponsePolicyJournalPayloadDaysMax = 3650;
 
 export const saveRetentionPolicyResponsePolicyExportFileDaysMax = 3650;
+
+
+
 
 export const saveRetentionPolicyResponsePolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
 export const saveRetentionPolicyResponseHoldRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
@@ -4819,6 +4934,12 @@ export const SaveRetentionPolicyResponse = zod.object({
   "exportFileDays": zod.number().int().min(1).max(saveRetentionPolicyResponsePolicyExportFileDaysMax).nullable(),
   "auditTrail": zod.literal("retain")
 }),
+  "minimumDays": zod.object({
+  "rawCsvDays": zod.number().int().min(1),
+  "journalPayloadDays": zod.number().int().min(1),
+  "exportFileDays": zod.number().int().min(1)
+}).optional(),
+  "secondApprover": zod.boolean().optional(),
   "policyRevision": zod.string().regex(saveRetentionPolicyResponsePolicyRevisionRegExp),
   "holdRevision": zod.string().regex(saveRetentionPolicyResponseHoldRevisionRegExp),
   "eligibleCount": zod.number().int().min(saveRetentionPolicyResponseEligibleCountMin),
@@ -4869,6 +4990,7 @@ export const SaveRetentionPolicyResponse = zod.object({
 })).max(saveRetentionPolicyResponseRunsItemCandidatesMax),
   "candidateCount": zod.number().int().min(saveRetentionPolicyResponseRunsItemCandidateCountMin),
   "moreEligible": zod.number().int().min(saveRetentionPolicyResponseRunsItemMoreEligibleMin),
+  "preparedBy": zod.string().nullish(),
   "approvedBy": zod.string().nullable(),
   "approvedAt": zod.coerce.date().nullable(),
   "receipts": zod.array(zod.object({
@@ -4889,7 +5011,7 @@ export const SaveRetentionPolicyResponse = zod.object({
   "auditRetained": zod.literal(true),
   "financialRecordsRetained": zod.literal(true),
   "syntheticOnly": zod.literal(true)
-}).describe('The lender\'s retention policy, holds, bounded inventory of what the policy would touch, and saved retention runs.')
+}).describe('The lender\'s retention policy, the shortest periods it may set (minimumDays) and whether a second administrator approves runs (secondApprover), holds, bounded inventory of what the policy would touch, and saved retention runs.')
 
 
 /**
@@ -4938,6 +5060,9 @@ export const setRetentionHoldResponsePolicyRawCsvDaysMax = 3650;
 export const setRetentionHoldResponsePolicyJournalPayloadDaysMax = 3650;
 
 export const setRetentionHoldResponsePolicyExportFileDaysMax = 3650;
+
+
+
 
 export const setRetentionHoldResponsePolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
 export const setRetentionHoldResponseHoldRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
@@ -5020,6 +5145,12 @@ export const SetRetentionHoldResponse = zod.object({
   "exportFileDays": zod.number().int().min(1).max(setRetentionHoldResponsePolicyExportFileDaysMax).nullable(),
   "auditTrail": zod.literal("retain")
 }),
+  "minimumDays": zod.object({
+  "rawCsvDays": zod.number().int().min(1),
+  "journalPayloadDays": zod.number().int().min(1),
+  "exportFileDays": zod.number().int().min(1)
+}).optional(),
+  "secondApprover": zod.boolean().optional(),
   "policyRevision": zod.string().regex(setRetentionHoldResponsePolicyRevisionRegExp),
   "holdRevision": zod.string().regex(setRetentionHoldResponseHoldRevisionRegExp),
   "eligibleCount": zod.number().int().min(setRetentionHoldResponseEligibleCountMin),
@@ -5070,6 +5201,7 @@ export const SetRetentionHoldResponse = zod.object({
 })).max(setRetentionHoldResponseRunsItemCandidatesMax),
   "candidateCount": zod.number().int().min(setRetentionHoldResponseRunsItemCandidateCountMin),
   "moreEligible": zod.number().int().min(setRetentionHoldResponseRunsItemMoreEligibleMin),
+  "preparedBy": zod.string().nullish(),
   "approvedBy": zod.string().nullable(),
   "approvedAt": zod.coerce.date().nullable(),
   "receipts": zod.array(zod.object({
@@ -5090,7 +5222,7 @@ export const SetRetentionHoldResponse = zod.object({
   "auditRetained": zod.literal(true),
   "financialRecordsRetained": zod.literal(true),
   "syntheticOnly": zod.literal(true)
-}).describe('The lender\'s retention policy, holds, bounded inventory of what the policy would touch, and saved retention runs.')
+}).describe('The lender\'s retention policy, the shortest periods it may set (minimumDays) and whether a second administrator approves runs (secondApprover), holds, bounded inventory of what the policy would touch, and saved retention runs.')
 
 
 /**
@@ -5177,6 +5309,7 @@ export const PreviewLifecycleRunResponse = zod.object({
 })).max(previewLifecycleRunResponseCandidatesMax),
   "candidateCount": zod.number().int().min(previewLifecycleRunResponseCandidateCountMin),
   "moreEligible": zod.number().int().min(previewLifecycleRunResponseMoreEligibleMin),
+  "preparedBy": zod.string().nullish(),
   "approvedBy": zod.string().nullable(),
   "approvedAt": zod.coerce.date().nullable(),
   "receipts": zod.array(zod.object({
@@ -5193,11 +5326,11 @@ export const PreviewLifecycleRunResponse = zod.object({
   "auditRetained": zod.literal(true),
   "financialRecordsRetained": zod.literal(true),
   "syntheticOnly": zod.literal(true)
-}).describe('One retention run: its reviewed manifest, approval state and per-item receipts.')
+}).describe('One retention run: its reviewed manifest, who prepared it, approval state and per-item receipts.')
 
 
 /**
- * Administrators only. The manifest digest must match the preview; a changed inventory must be previewed again.
+ * Administrators only; in a staff pilot, an administrator other than the one who prepared the preview (403). The manifest digest must match the preview; a changed inventory must be previewed again.
  * @summary Approve a retention run
  */
 export const ApproveLifecycleRunParams = zod.object({
@@ -5289,6 +5422,7 @@ export const ApproveLifecycleRunResponse = zod.object({
 })).max(approveLifecycleRunResponseCandidatesMax),
   "candidateCount": zod.number().int().min(approveLifecycleRunResponseCandidateCountMin),
   "moreEligible": zod.number().int().min(approveLifecycleRunResponseMoreEligibleMin),
+  "preparedBy": zod.string().nullish(),
   "approvedBy": zod.string().nullable(),
   "approvedAt": zod.coerce.date().nullable(),
   "receipts": zod.array(zod.object({
@@ -5305,7 +5439,7 @@ export const ApproveLifecycleRunResponse = zod.object({
   "auditRetained": zod.literal(true),
   "financialRecordsRetained": zod.literal(true),
   "syntheticOnly": zod.literal(true)
-}).describe('One retention run: its reviewed manifest, approval state and per-item receipts.')
+}).describe('One retention run: its reviewed manifest, who prepared it, approval state and per-item receipts.')
 
 
 /**
@@ -5396,6 +5530,7 @@ export const ExecuteLifecycleRunResponse = zod.object({
 })).max(executeLifecycleRunResponseCandidatesMax),
   "candidateCount": zod.number().int().min(executeLifecycleRunResponseCandidateCountMin),
   "moreEligible": zod.number().int().min(executeLifecycleRunResponseMoreEligibleMin),
+  "preparedBy": zod.string().nullish(),
   "approvedBy": zod.string().nullable(),
   "approvedAt": zod.coerce.date().nullable(),
   "receipts": zod.array(zod.object({
@@ -5412,6 +5547,6 @@ export const ExecuteLifecycleRunResponse = zod.object({
   "auditRetained": zod.literal(true),
   "financialRecordsRetained": zod.literal(true),
   "syntheticOnly": zod.literal(true)
-}).describe('One retention run: its reviewed manifest, approval state and per-item receipts.')
+}).describe('One retention run: its reviewed manifest, who prepared it, approval state and per-item receipts.')
 
 

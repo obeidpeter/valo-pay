@@ -14,7 +14,7 @@ import type { DomainState, ValopayRecord } from "../domain/types";
 import { getGates } from "../lib/valopay-readiness";
 import { importCsv } from "../lib/valopay-import";
 import { exportDescriptorForRecord, exportKinds, readExport } from "../lib/valopay-exports";
-import { exportJobView, publicExportRecord, queueExport, retryExport } from '../lib/export-jobs';
+import { assertExportPermitted, exportJobView, publicExportRecord, queueExport, retryExport } from '../lib/export-jobs';
 import { assertRecordVersion, assertSettingsVersion, mergeData } from "../lib/edit-versions";
 import { schedulerStatus } from "../lib/close-scheduler";
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../lib/valopay-close-views";
@@ -218,12 +218,13 @@ router.post("/v1/exports",async(req,res)=>{
  req.log.info({event:"export.queued",kind:body.kind,format:body.format,exportId:result.id},"Export queued durably");
  res.json(result);
 });
-/** An export of the request's lender, read in the tenant transaction and handed to `use` there, with the transaction clock. */
-async function authorisedExport<T>(req:Request,res:Response,use:(record:ValopayRecord,now:string)=>T){
+/** An export of the request's lender, read in the tenant transaction and handed to `use` there, with the transaction clock. A download also needs the role its kind requires (export_sensitive). */
+async function authorisedExport<T>(req:Request,res:Response,use:(record:ValopayRecord,now:string)=>T,download=false){
  const {merchantId}=lenderQuery(req);
  return inWorkspace(req,res,async ctx=>{
   const page=await listRecords(ctx,merchantId,'exports',{id:String(req.params.id),limit:1});
   if(!page.items[0])fail('Export not found in this lender.',404);
+  if(download)assertExportPermitted(ctx.role,page.items[0].data.kind);
   // The transaction clock decides whether the export is stalled or its lease expired.
   return use(page.items[0],ctx.now);
  },'read');
@@ -244,7 +245,7 @@ router.get("/v1/exports/:id/download",async(req,res)=>{
  res.once("close",close);
  try{
  // The authorised metadata is read inside the transaction; the object-storage read happens after it ends, so no merchant lock is held across the download.
- const descriptor=await authorisedExport(req,res,record=>exportDescriptorForRecord(record));
+ const descriptor=await authorisedExport(req,res,record=>exportDescriptorForRecord(record),true);
  if(cancellation.signal.aborted)return;
  const result=await readExport(descriptor,cancellation.signal);
  if(cancellation.signal.aborted)return;

@@ -5,13 +5,15 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
+import type { InvitationCreatedApproval } from './invitationCreatedApproval';
 
 /**
- * The invitation and its one-time acceptance token; no email is sent.
+ * The invitation, its one-time acceptance token and whether it waits for a second administrator's approval; no email is sent.
  */
 export interface InvitationCreated {
   id: string;
   /** @pattern ^[a-f0-9]{64}$ */
   token: string;
+  approval: InvitationCreatedApproval;
   message: string;
 }

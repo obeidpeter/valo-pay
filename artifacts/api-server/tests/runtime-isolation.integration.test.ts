@@ -281,6 +281,9 @@ try {
   try {
     await assert.rejects(() => store.acceptStaffInvitation(inviteeRequest, "token-workspace-a"), /organisation|invitation/i, "A verified but different email cannot accept the invitation.");
     verifiedEmail = "workspace-a@example.test";
+    // A Finance invitation is accepted only once a second administrator approved it; the restricted login reads that approval.
+    await assert.rejects(() => store.acceptStaffInvitation(inviteeRequest, "token-workspace-a"), /waiting for a second administrator's approval/, "An unapproved Finance invitation cannot be accepted.");
+    await admin.query(`INSERT INTO "${schema}".valopay_staff_events(id,workspace_id,actor,action,subject,detail) VALUES('approval-workspace-a','workspace-a','Clerk:user_adminA','staff.invitation_approved','invite-workspace-a','{}')`);
     const accepted = await Promise.allSettled([store.acceptStaffInvitation(inviteeRequest, "token-workspace-a"), store.acceptStaffInvitation(inviteeRequest, "token-workspace-a")]);
     assert.equal(accepted.filter(result => result.status === "fulfilled").length, 1, "Concurrent invitation acceptance commits exactly once.");
     assert.equal(accepted.filter(result => result.status === "rejected").length, 1);

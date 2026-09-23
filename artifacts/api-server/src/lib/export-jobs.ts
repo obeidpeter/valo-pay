@@ -4,6 +4,8 @@ import type { Context, DomainState, ValopayRecord } from '../domain/types';
 import { makeRecord } from '../domain/records';
 import type { ExportInput } from './valopay-exports';
 import { reviewedCloseEvidence } from '../domain/close-review';
+import { sensitiveExportKinds, sensitiveExportRefusal } from '@workspace/valopay-schema';
+import { rolePermits } from './pilot-access';
 
 export const EXPORT_LEASE_MS = 5 * 60_000;
 export const MAX_EXPORT_BYTES = 32 * 1024 * 1024;
@@ -38,6 +40,10 @@ export interface ExportJobView {
 }
 const fail = (message: string, status: number, details: { retryAfterSeconds?: number } = {}): never => { throw Object.assign(new Error(message), { status }, details); };
 
+/** export_sensitive (lib/pilot-access.ts): a dispute pack, the customer register or the audit trail is queued, retried and downloaded only by an Admin, Finance or Compliance reviewer; anyone else is refused (403) in plain words. */
+export function assertExportPermitted(role: string, kind: unknown): void {
+  if ((sensitiveExportKinds as readonly unknown[]).includes(kind) && !rolePermits(role, 'export_sensitive')) fail(sensitiveExportRefusal, 403);
+}
 export function findExportJob(state: DomainState, id: string): ValopayRecord {
   return state.records.find(record => record.kind === 'exports' && record.id === id) ?? fail('Export not found in this lender.', 404);
 }
@@ -67,6 +73,8 @@ export function exportJobView(record: ValopayRecord, now = new Date().toISOStrin
 }
 /** Queueing writes metadata only; no rendering, object-storage calls or credentials belong in this transaction. */
 export function queueExport(state: DomainState, ctx: Context, input: ExportInput, privateDirectory: string): ExportJobView {
+  // A sensitive kind is refused first, so a Read-only person is not told they may download it.
+  assertExportPermitted(ctx.role, input.kind);
   if (ctx.role === 'Read-only') fail('Your read-only role may download existing exports. Ask a colleague to generate new evidence.', 403);
   const review = input.kind === 'reviewed-close' ? reviewedCloseEvidence(state, input.closeReviewId || '', true) : undefined;
   if (!privateDirectory || !/^\/?[^/]+\/.+/.test(privateDirectory)) fail('Private export storage is not configured. Contact the workspace administrator.', 503);
@@ -82,8 +90,9 @@ export function exportIsClaimable(record: ValopayRecord, now: string): boolean {
   return record.status === 'queued' || (record.status === 'running' && (!record.data.leaseExpiresAt || Date.parse(record.data.leaseExpiresAt) <= Date.parse(now)));
 }
 export function retryExport(state: DomainState, ctx: Context, id: string): ExportJobView {
-  if (ctx.role === 'Read-only') fail('Your read-only role may download existing exports. Ask a colleague to retry evidence generation.', 403);
   const record = findExportJob(state, id);
+  assertExportPermitted(ctx.role, record.data.kind);
+  if (ctx.role === 'Read-only') fail('Your read-only role may download existing exports. Ask a colleague to retry evidence generation.', 403);
   if(record.data.fileDeletedAt)fail('This export file expired under the retention policy. Start a new export if current evidence is needed.',410);
   if (record.status === 'ready' || record.status === 'queued') return exportJobView(record, ctx.now);
   if (record.status === 'running' && !exportIsClaimable(record, ctx.now)) return exportJobView(record, ctx.now);

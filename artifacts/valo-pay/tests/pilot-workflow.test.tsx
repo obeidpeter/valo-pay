@@ -270,6 +270,9 @@ it("offers to check or discard a lost invitation revocation, and discarding it f
     role: "Operations",
     status: "pending",
     expiresAt: api.now,
+    invitedBy: "Sandbox Admin",
+    approval: "not_required",
+    approvedBy: null,
   }));
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -292,6 +295,7 @@ it("offers to check or discard a lost invitation revocation, and discarding it f
         members: [],
         lenders: [],
         invitations,
+        changes: [],
         events: [],
       });
     const revoke = /^\/api\/v1\/team\/invitations\/([^/]+)\/revoke$/.exec(path);
@@ -335,6 +339,45 @@ it("offers to check or discard a lost invitation revocation, and discarding it f
   await screen.findByText("Invitation revoked.");
   expect(revokes.map((r) => r.id)).toEqual(["invitation-1", "invitation-2"]);
   expect(revokes[1]!.key).not.toBe(revokes[0]!.key);
+});
+
+it("lists what waits for a second administrator and never offers the asker their own approval", async () => {
+  const send = globalThis.fetch;
+  const posted: string[] = [];
+  const pending = (id: string, email: string, role: string, invitedBy: string) => ({ id, email, role, status: "pending", expiresAt: api.now, invitedBy, approval: "awaiting", approvedBy: null });
+  const change = (id: string, requestedBy: string) => ({ id, memberId: `member-${id}`, name: `${id}@example.test`, from: { role: "Operations", status: "active" }, to: { role: "Compliance reviewer", status: "active" }, reason: "Move to compliance reviews.", requestedBy, requestedAt: api.now });
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  globalThis.fetch = async (input, options) => {
+    const path = new URL(typeof input === "string" ? input : input instanceof Request ? input.url : input.toString(), "http://localhost").pathname;
+    if (path === "/api/v1/team" && (options?.method ?? "GET") === "GET")
+      return json({
+        mode: "staff", actor: "Sandbox Admin", message: "Staff access is active.", lenders: [], events: [],
+        // Another member's expiry is not shown to everyone; this one arrives without it.
+        members: [{ id: "member-ops", actor: "Clerk:user_ops", name: "ops@example.test", role: "Operations", status: "active", expiresAt: null, updatedAt: api.now, lenderIds: [], allLenders: false }],
+        invitations: [pending("invite-theirs", "finance@example.test", "Finance", "Clerk:user_other"), pending("invite-mine", "admin@example.test", "Admin", "Sandbox Admin")],
+        changes: [change("change-theirs", "Clerk:user_other"), change("change-mine", "Sandbox Admin")],
+      });
+    if (options?.method === "POST" && /^\/api\/v1\/team\/(invitations|changes)\//.test(path)) {
+      posted.push(path);
+      return json(path.endsWith("/decline") ? { message: "Change request withdrawn. The membership is unchanged." } : { message: "Invitation approved: finance@example.test can now accept it as Finance." });
+    }
+    return send(input, options);
+  };
+  const user = userEvent.setup();
+  renderApp("/team");
+  const panel = (await screen.findByRole("heading", { name: "Waiting for a second administrator" })).closest("section")!;
+  expect(within(panel).getAllByRole("button", { name: "Approve invitation" })).toHaveLength(1);
+  expect(within(panel).getByText("You sent it: another administrator approves it.")).toBeTruthy();
+  expect(within(panel).getAllByRole("button", { name: "Approve change" })).toHaveLength(1);
+  expect(within(panel).getByText("You asked for it: another administrator approves it.")).toBeTruthy();
+  expect(within(panel).getByRole("button", { name: "Decline change" })).toBeTruthy();
+  expect(screen.getByText(/finance@example\.test · Finance/).parentElement?.textContent).toContain("waiting for a second administrator");
+  expect(screen.getByText("Operations · active").textContent).not.toContain("expires");
+  await user.click(within(panel).getByRole("button", { name: "Approve invitation" }));
+  expect(await within(panel).findByText("Invitation approved: finance@example.test can now accept it as Finance.")).toBeTruthy();
+  await user.click(within(panel).getByRole("button", { name: "Withdraw request" }));
+  expect(await within(panel).findByText("Change request withdrawn. The membership is unchanged.")).toBeTruthy();
+  expect(posted).toEqual(["/api/v1/team/invitations/invite-theirs/approve", "/api/v1/team/changes/change-mine/decline"]);
 });
 
 /** Saves the sample batch and waits until the editor holds the saved version. */

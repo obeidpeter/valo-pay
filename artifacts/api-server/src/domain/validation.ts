@@ -315,6 +315,15 @@ export function validateRecord(
   }
   if (["evidence", "experiments"].includes(kind)) requireRole(ctx, ["Admin"]);
   if (["commercial", "costs", "settlement-batches"].includes(kind)) requireRole(ctx, ["Admin", "Finance"]);
+  // SCH-04: the business calendar decides when collections run, so only the roles that run them maintain it.
+  if (kind === "calendar") requireRole(ctx, ["Admin", "Operations"]);
+  // MEA-05: a fortnightly review is recorded by its reviewer at the service's time; neither is typed in.
+  if (kind === "reviews" && !isUpdate) {
+    if (data.reviewer !== undefined && data.reviewer !== ctx.actor) throw new Error("The reviewer is the person recording the review. Sign in as the reviewer to record it, and leave the reviewer out.");
+    if (data.reviewedAt !== undefined) throw new Error("The review time is recorded by the service when the review is saved. Leave the review date out.");
+    data.reviewer = ctx.actor;
+    data.reviewedAt = ctx.now;
+  }
   if (kind === "settlement-batches") {
     for (const key of ["grossKobo", "feeKobo", "netKobo"]) positiveInteger(data[key], key, true);
     if (data.grossKobo - data.feeKobo !== data.netKobo) throw new Error("The net settlement amount must equal the gross amount minus fees.");
