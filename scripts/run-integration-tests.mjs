@@ -26,6 +26,7 @@ export const suites = [
   "artifacts/api-server/tests/pilot-workflow-migration.integration.test.ts",
   "artifacts/api-server/tests/valopay-store.integration.test.ts",
   "artifacts/api-server/tests/close-scheduler.integration.test.ts",
+  "artifacts/api-server/tests/background-worker.integration.test.ts",
   "artifacts/api-server/tests/pilot-administrators.integration.test.ts",
   "artifacts/api-server/tests/record-lists.integration.test.ts",
   "artifacts/api-server/tests/priority-queues.integration.test.ts",

@@ -24,6 +24,7 @@ const steps = [
   ["node", ["scripts/tooling.test.mjs"]],
   [tsx, ["artifacts/api-server/tests/startup-config.test.ts"]],
   [tsx, ["artifacts/api-server/tests/close-pass.test.ts"]],
+  [tsx, ["artifacts/api-server/tests/background-worker.test.ts"]],
   [tsx, ["artifacts/api-server/tests/edit-versions.test.ts"]],
   [tsx, ["artifacts/api-server/tests/canonical-json.test.ts"]],
   [tsx, ["artifacts/api-server/tests/canonical-json-golden.test.ts"]],

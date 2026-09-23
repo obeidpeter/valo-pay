@@ -1,11 +1,13 @@
 /**
  * REC-01: the daily close runs at each merchant's configured WAT time.  This
- * in-process scheduler looks for due closes every tick and runs each one in
- * its own system transaction through the scoped repository, so a close never
- * bypasses the tenant predicate or the merchant lock, and one lender's failure
- * never touches another.  A close missed while the process was down runs at
- * the first tick after recovery and is recorded as late (NFR-AVA-02); every
- * run carries a correlation id in its log lines (NFR-OBS-01).
+ * scheduler, which the API runs on its background worker thread
+ * (background.ts) so a long close never holds up a request, looks for due
+ * closes every tick and runs each one in its own system transaction through
+ * the scoped repository, so a close never bypasses the tenant predicate or the
+ * merchant lock, and one lender's failure never touches another.  A close
+ * missed while the process was down runs at the first tick after recovery and
+ * is recorded as late (NFR-AVA-02); every run carries a correlation id in its
+ * log lines (NFR-OBS-01).
  *
  * A pass reads due lenders in batches until none is left or its time budget
  * is spent, in a fair order (dueScheduledCloses): staff and signed-in lenders
@@ -46,8 +48,42 @@ export interface SchedulerStatus {
 const status: SchedulerStatus = { state: "not_started", intervalMs: null, ticks: 0, lastTickAt: null, lastSuccessAt: null, lastErrorAt: null, lastRun: null };
 /** A copy of the scheduler's state, for the health answer. */
 export function schedulerStatus(): SchedulerStatus & { observedAt: string } { return { ...structuredClone(status), observedAt: new Date().toISOString() }; }
+/**
+ * One change to the scheduler's state: it started, a pass began, a pass
+ * returned (with its counts when it found work) or failed, it stopped, or this
+ * process schedules no closes.
+ */
+export type SchedulerEvent =
+  | { type: "started"; intervalMs: number }
+  | { type: "ticked"; at: string }
+  | { type: "succeeded"; at: string; run: SchedulerStatus["lastRun"] }
+  | { type: "failed"; at: string }
+  | { type: "stopped" }
+  | { type: "off" };
+const observers = new Set<(event: SchedulerEvent) => void>();
+/**
+ * Applies a change to this thread's scheduler state and passes it to the
+ * observers. The scheduler runs on the background worker thread, which
+ * observes its own changes and posts them to the main thread; the main thread
+ * applies them here, so /api/healthz and the console read the state where they
+ * answer (background-worker.ts).
+ */
+export function applySchedulerEvent(event: SchedulerEvent): void {
+  if (event.type === "started") { status.state = "running"; status.intervalMs = event.intervalMs; }
+  else if (event.type === "ticked") { status.ticks += 1; status.lastTickAt = event.at; }
+  else if (event.type === "succeeded") { status.lastSuccessAt = event.at; status.lastErrorAt = null; if (event.run) status.lastRun = event.run; }
+  else if (event.type === "failed") status.lastErrorAt = event.at;
+  else if (event.type === "stopped") status.state = "stopped";
+  else status.state = "off";
+  for (const observer of observers) observer(event);
+}
+/** Calls `observer` with every later change to this thread's scheduler state; returns what ends that. */
+export function observeScheduler(observer: (event: SchedulerEvent) => void): () => void {
+  observers.add(observer);
+  return () => { observers.delete(observer); };
+}
 /** Recorded when the process is told not to schedule closes (VALOPAY_CLOSE_SCHEDULER=off), so the health answer says so. */
-export function markSchedulerOff(): void { status.state = "off"; }
+export function markSchedulerOff(): void { applySchedulerEvent({ type: "off" }); }
 /** What one scheduler pass did. */
 export interface CloseRun {
   runId: string;
@@ -210,17 +246,15 @@ export function startCloseScheduler(options: { intervalMs?: number; firstDelayMs
   let running: Promise<CloseRun | null> | null = null;
   const tick = (): Promise<CloseRun | null> => {
     if (running) return running;
-    status.ticks += 1;
-    status.lastTickAt = new Date().toISOString();
+    applySchedulerEvent({ type: "ticked", at: new Date().toISOString() });
     const started = Date.now();
     running = runDueCloses({ batchSize: options.batchSize, log: options.log, onlyMerchantIds: options.onlyMerchantIds, budgetMs, signal: stopping.signal })
       .then((run) => {
-        status.lastSuccessAt = new Date().toISOString();
-        status.lastErrorAt = null;
-        if (run.examined || run.failed.length) status.lastRun = { runId: run.runId, at: new Date().toISOString(), durationMs: Date.now() - started, initialised: run.initialised, batches: run.batches, examined: run.examined, closed: run.closed.length, skipped: run.skipped.length, paused: run.paused.length, failed: run.failed.length };
+        const at = new Date().toISOString();
+        applySchedulerEvent({ type: "succeeded", at, run: run.examined || run.failed.length ? { runId: run.runId, at, durationMs: Date.now() - started, initialised: run.initialised, batches: run.batches, examined: run.examined, closed: run.closed.length, skipped: run.skipped.length, paused: run.paused.length, failed: run.failed.length } : null });
         return run;
       })
-      .catch((error: unknown) => { status.lastErrorAt = new Date().toISOString(); options.log?.error({ event: "close.tick_failed", err: error }, "scheduled close tick failed"); return null; })
+      .catch((error: unknown) => { applySchedulerEvent({ type: "failed", at: new Date().toISOString() }); options.log?.error({ event: "close.tick_failed", err: error }, "scheduled close tick failed"); return null; })
       .finally(() => { running = null; });
     return running;
   };
@@ -229,11 +263,10 @@ export function startCloseScheduler(options: { intervalMs?: number; firstDelayMs
   const timer = setInterval(tick, intervalMs);
   first.unref();
   timer.unref();
-  status.state = "running";
-  status.intervalMs = intervalMs;
+  applySchedulerEvent({ type: "started", intervalMs });
   options.log?.info({ event: "scheduler.started", intervalMs, batchSize: options.batchSize ?? closeRules.batchSize, passBudgetMs: budgetMs }, "scheduled daily close running");
   return {
-    stop() { clearTimeout(first); clearInterval(timer); stopping.abort(); status.state = "stopped"; },
+    stop() { clearTimeout(first); clearInterval(timer); stopping.abort(); applySchedulerEvent({ type: "stopped" }); },
     tick,
     settle() { return running ? running.then(() => undefined) : Promise.resolve(); },
   };
