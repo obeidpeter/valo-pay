@@ -4,7 +4,7 @@
  * derived on every read and frozen into each daily close; they are never
  * stored on their own.
  */
-import { counted, alertRules, deadlinePassed, isBillableChannel, isOpenException, type AlertSeverity } from "@workspace/valopay-schema";
+import { counted, alertRules, deadlinePassed, isBillableChannel, isOpenException, paymentAwaitsAllocation, type AlertSeverity } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { DomainState } from "./types";
 import { paymentObservedAt } from "./reconciliation";
@@ -49,8 +49,9 @@ export function buildAlerts(state: DomainState, now: string, audit?: AuditVerifi
   const drift = positionMismatches(state);
   if (drift.length) alerts.push({ key: "position_drift", severity: "high", title: "Stored balances do not match payment allocations", detail: `${counted(drift.length, "instalment has", "instalments have")} an unpaid amount that does not match the confirmed payment allocations. Review reconciliation to investigate.`, count: drift.length, linkedRecordId: drift[0]!.dueItemId });
   const threshold = setting(state, "unallocatedAlertThreshold", alertRules.unallocatedThreshold);
-  const aged = recordsOf(state, "payments").filter((item) => item.status === "unallocated" && nowMs - paymentObservedAt(item) >= DAY_MS);
-  if (aged.length > threshold) alerts.push({ key: "unallocated_over_threshold", severity: "high", title: "Too many payments are waiting for allocation", detail: `${counted(aged.length, "payment has", "payments have")} been waiting to be assigned to an instalment for at least 24 hours. The lender's alert limit is ${threshold}. Review the unallocated payments.`, count: aged.length });
+  // Money waiting for Finance as the Finance queue and the daily close count it: an unallocated payment, or the unapplied rest of one applied in part.
+  const aged = recordsOf(state, "payments").filter((item) => paymentAwaitsAllocation(item) && nowMs - paymentObservedAt(item) >= DAY_MS);
+  if (aged.length > threshold) alerts.push({ key: "unallocated_over_threshold", severity: "high", title: "Too many payments are waiting for allocation", detail: `${counted(aged.length, "payment has", "payments have")} money that has waited at least 24 hours to be assigned to an instalment, including the unapplied rest of a payment applied in part. The lender's alert limit is ${threshold}. Review the payments waiting in the Finance queue.`, count: aged.length });
   // A date-only deadline lasts its whole WAT day, as in the queues (deadlinePassed).
   const overdue = recordsOf(state, "exceptions").filter((item) => isOpenException(item.status) && deadlinePassed(item.data.dueBy, nowMs));
   if (overdue.length) alerts.push({ key: "exceptions_overdue", severity: "medium", title: "Exceptions past their deadline", detail: `${counted(overdue.length, "open exception is", "open exceptions are")} overdue. Review each item with its assigned owner. Deadlines are calculated in business days.`, count: overdue.length, linkedRecordId: overdue[0]!.id });

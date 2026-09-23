@@ -1,4 +1,4 @@
-import { PLAN_GROSS_MARGIN, VARIABLE_COST_PER_COLLECTION_KOBO, deadlinePassed, experimentRules, isOpenException, measurementRules, paymentAppliedKobo, type RecordKind } from "@workspace/valopay-schema";
+import { PLAN_GROSS_MARGIN, VARIABLE_COST_PER_COLLECTION_KOBO, deadlinePassed, experimentRules, isOpenException, measurementRules, paymentAppliedKobo, paymentAwaitsAllocation, type RecordKind } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { DomainState, Metric, Report, TypedRecord, ValopayRecord } from "./types";
 import { allocationConfirmedAt, paymentObservedAt, paymentReversed } from "./reconciliation";
@@ -256,7 +256,8 @@ export function buildReports(state: DomainState, now: string): Report {
   const reviewed = automaticCertain.filter((item) => typeof item.data.reviewed === "boolean");
   const reviewedAll = allocations.filter((item) => typeof item.data.reviewed === "boolean");
   const precision = reviewedAll.length ? reviewedAll.filter((item) => item.data.reviewed === true).length / reviewedAll.length : 0;
-  const unallocated = payments.filter((item) => item.status === "unallocated");
+  // Money waiting for Finance, as the Finance queue, the alert and the daily close count it (paymentAwaitsAllocation).
+  const unallocated = payments.filter(paymentAwaitsAllocation);
   const openExceptions = exceptions.filter((item) => isOpenException(item.status));
   const metrics: Metric[] = [
     metric("allocation_rate", "Allocation rate", allocationRate, "ratio", `${allocated.length} of ${payments.length} payments are fully or partly allocated, or exceed the amount due.`),

@@ -3,6 +3,8 @@
 // date-only deadline lasts the whole West Africa Time day in the queues, the
 // alerts and the overview alike, an incremental sync names an instant, a
 // search reads values only, a name is never empty and indexed text is bounded.
+// Also the payments waiting for Finance, counted alike in the alert, the
+// reports and the daily close.
 process.env.DATABASE_URL ||= "postgres://unused:unused@127.0.0.1:1/unused";
 import assert from "node:assert/strict";
 import { deadlineEnds, deadlinePassed, instantInputSchema, isoDateOrTimestamp, isoDay, isRealDate } from "@workspace/valopay-schema";
@@ -12,7 +14,8 @@ import { validateRecord } from "../src/domain/validation.js";
 import { pageQueue } from "../src/lib/valopay-queues.js";
 import { pageRecords } from "../src/lib/valopay-list.js";
 import { buildAlerts } from "../src/domain/alerts.js";
-import { buildOverview } from "../src/domain/reports.js";
+import { buildOverview, buildReports } from "../src/domain/reports.js";
+import { buildCloseReport, openingSnapshot } from "../src/domain/close.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
 
 let checks = 0;
@@ -91,4 +94,23 @@ const refused = (run: () => unknown, pattern: RegExp, message: string) => { asse
   refused(() => validateRecord(state, ctx, "observations", { name: "Long event", reference: "OBS-1", customerId: customers()[0]!.id, amountKobo: 150000, data: { source: "webhook", eventId: "e".repeat(201) } }), /eventId: An event ID is at most 200 characters/, "an over-long event ID is refused");
 }
 
-console.log(`Input semantics checks passed (${checks}): dates are real calendar dates, a date-only deadline lasts its whole WAT day in the queues, the alerts and the overview, an incremental sync names an instant with its offset, a search reads values only, a name is never empty and indexed text is bounded.`);
+// ---- 5. Money waiting for Finance counts the same in the alert, the reports and the close (paymentAwaitsAllocation) ----
+{
+  const state = seedMerchant("input-awaiting"), now = wat("2026-09-23T12:53:00"), observedAt = new Date(Date.parse(now) - 2 * 24 * 60 * 60 * 1000).toISOString();
+  const customer = recordsOf(state, "customers")[0]!;
+  const aged = () => buildReports(state, now).operational.unallocatedOlderThan24Hours;
+  const before = aged();
+  const pay = (reference: string, status: string, data: Record<string, unknown>) => makeRecord(state, "payments", { name: `Payment ${reference}`, reference, status, customerId: customer.id, amountKobo: 5_000_000, data: { observedAt, ...data } });
+  pay("AWAIT-PARTIAL", "partial", { allocatedKobo: 1_000_000 });
+  pay("AWAIT-OVERPAID", "overpaid", { allocatedKobo: 4_000_000 });
+  pay("AWAIT-APPLIED", "allocated", { allocatedKobo: 5_000_000 });
+  pay("AWAIT-REFUNDED", "partial", { allocatedKobo: 1_000_000, refundStatus: "refunded", refundedKobo: 4_000_000 });
+  eq(aged() - before, 2, "the unapplied rest of a partial and of an overpaid payment waits, as in Finance's queue; one fully applied, or whose rest was refunded, does not");
+  eq(buildCloseReport(state, ctxAt(now, "Finance"), openingSnapshot(state), {}).unallocated.olderThan24Hours, aged(), "the reports count what the daily close counts");
+  state.settings.unallocatedAlertThreshold = before + 1;
+  const alert = buildAlerts(state, now).find((item) => item.key === "unallocated_over_threshold");
+  eq(alert?.count, before + 2, "the alert counts the same payments, so the rests take it over the lender's limit");
+  eq(/applied in part/.test(String(alert?.detail)), true, "and says a payment applied in part is waiting too");
+}
+
+console.log(`Input semantics checks passed (${checks}): dates are real calendar dates, a date-only deadline lasts its whole WAT day in the queues, the alerts and the overview, an incremental sync names an instant with its offset, a search reads values only, a name is never empty, indexed text is bounded and money waiting for Finance counts the same in the alert, the reports and the close.`);
