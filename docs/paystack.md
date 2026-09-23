@@ -60,7 +60,7 @@ The answers, in the order they are checked:
 
 | Answer | When |
 | --- | --- |
-| 429 | More than 120 deliveries a minute from one client address. |
+| 429 | More than 120 deliveries a minute from one client network (an IPv4 address, or an IPv6 /64). |
 | 413 | The body is larger than 256 KiB. |
 | 400 | The connection ID is malformed, or the body is not `application/json`. |
 | 503 | The ingress is off, or the test key is missing or not an `sk_test_` key. |

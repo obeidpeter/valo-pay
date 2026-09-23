@@ -3,14 +3,15 @@ import type { IncomingHttpHeaders } from "node:http";
 import express, { type Express } from "express";
 import pinoHttp from "pino-http";
 import router from "./routes";
+import healthRouter from "./routes/health";
 import { logger } from "./lib/logger";
 import { clerkMiddleware } from "@clerk/express";
-import { publishableKeyFromHost } from "@clerk/shared/keys";
 import { errorHandler } from "./lib/error-handler";
-import { staffMode, staffPolicy } from './lib/staff-access';
+import { clerkOptions, signInEnabled, staffMode, staffPolicy } from './lib/staff-access';
 import { CLERK_PROXY_PATH,clerkProxyMiddleware,getClerkProxyHost } from "./middlewares/clerkProxyMiddleware";
 import { createPaystackIngress } from './routes/sources';
 import { paystackIngress } from './lib/paystack-connection';
+import { clientNetwork, createRequestLimits, createWindowCounter } from './lib/request-limits';
 
 /** The path of the first key or string in a parsed body that carries a NUL character, "" for the body itself. */
 export function nulField(value: unknown, path = "", depth = 0): string | undefined {
@@ -30,14 +31,17 @@ app.set("trust proxy",1);
 app.disable("x-powered-by");
 
 /**
- * Every request has an id: the one the host's edge already gave it, when that is
- * a plain token, so the two logs line up, or a short random one. It is on every
- * log line of the request, on the answer as X-Request-Id, and in every error body
- * as requestId, so the reference a person quotes finds the lines.
+ * Every request has an id: a short random one, or, on a host whose edge sets
+ * X-Request-Id on every request (VALOPAY_EDGE_REQUEST_ID=on), the edge's own
+ * when it is a plain token, so the two logs line up. A client's header is
+ * never trusted otherwise: it could reuse the reference someone else quoted.
+ * The id is on every log line of the request, on the answer as X-Request-Id,
+ * and in every error body as requestId, so the reference a person quotes finds
+ * the lines.
  */
 const REQUEST_ID = /^[A-Za-z0-9._-]{8,64}$/;
-export function requestIdFor(req: { headers: IncomingHttpHeaders }): string {
-  const given = req.headers["x-request-id"];
+export function requestIdFor(req: { headers: IncomingHttpHeaders }, edgeSetsId = process.env.VALOPAY_EDGE_REQUEST_ID === "on"): string {
+  const given = edgeSetsId ? req.headers["x-request-id"] : undefined;
   const first = Array.isArray(given) ? given[0] : given;
   return first && REQUEST_ID.test(first) ? first : randomBytes(8).toString("hex");
 }
@@ -45,7 +49,7 @@ export function requestIdFor(req: { headers: IncomingHttpHeaders }): string {
 app.use(
   pinoHttp({
     logger,
-    genReqId: requestIdFor,
+    genReqId: (req) => requestIdFor(req),
     // A failed answer is an error line; a 503 that says when to retry (a busy lender, a database limit) is a
     // warning, so a busy moment does not page anyone; every other request is one info line with its status and time.
     customLogLevel: (_req, res, error) => (error ? "error" : res.statusCode === 503 && res.getHeader("Retry-After") ? "warn" : res.statusCode >= 500 ? "error" : "info"),
@@ -67,21 +71,22 @@ app.use(
 );
 app.use((req,res,next)=>{res.setHeader("X-Request-Id",String(req.id));next();});
 app.use(CLERK_PROXY_PATH,clerkProxyMiddleware());
-const webhookLimits=new Map<string,{count:number;until:number}>();
+// Liveness and readiness answer before anything else reads the request: no sign-in, no body, their own per-network limit.
+app.use("/api", healthRouter);
+// Paystack test deliveries: 120 a minute per client network.
+const deliveries=createWindowCounter({limit:120,windowMs:60_000});
 app.use('/api/v1/providers/paystack',(req,res,next)=>{
   res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');
-  const now=Date.now(),key=req.ip||'unknown',old=webhookLimits.get(key);
-  if(webhookLimits.size>10000)for(const [ip,value]of webhookLimits)if(value.until<now)webhookLimits.delete(ip);
-  if(!old||old.until<now)webhookLimits.set(key,{count:1,until:now+60000});
-  else if(++old.count>120){res.setHeader('Retry-After','60');res.status(429).json({error:'Test event delivery limit reached.',requestId:req.id});return;}
+  if(!deliveries.take(clientNetwork(req.ip))){res.setHeader('Retry-After','60');res.status(429).json({error:'Test event delivery limit reached.',requestId:req.id});return;}
   next();
 });
 // The Paystack test ingress reads its own raw body and checks its signature before it touches a lender.
 app.use('/api',createPaystackIngress(paystackIngress));
-// The response headers, the origin rule and the request limit come before the
-// body is read, so a malformed or oversized body is answered with the same
-// headers as any other request, and a refused client never has its body parsed.
-const limits=new Map<string,{count:number;reset:number}>();
+// The response headers, the origin rule, sign-in and the request limits come
+// before the body is read, so a malformed or oversized body is answered with the
+// same headers as any other request, and a refused client never has its body parsed.
+const requestLimits=createRequestLimits();
+const clerk=clerkMiddleware((req)=>clerkOptions(req));
 app.use("/api/v1",(req,res,next)=>{
   res.setHeader("Cache-Control","private, no-store");
   res.setHeader("X-Content-Type-Options","nosniff");
@@ -95,17 +100,18 @@ app.use("/api/v1",(req,res,next)=>{
     try{if(new URL(origin).host!==host){req.log.warn({event:"request.refused",reason:"origin"},"Cross-origin request refused");res.status(403).json({error:"Cross-origin requests are not permitted.",requestId:req.id});return;}}
     catch{req.log.warn({event:"request.refused",reason:"origin_malformed"},"Malformed request origin refused");res.status(403).json({error:"Invalid request origin.",requestId:req.id});return;}
   }
-  const now=Date.now(),key=req.ip||"unknown";
-  if(limits.size>10000)for(const [ip,value]of limits)if(value.reset<now)limits.delete(ip);
-  const limit=limits.get(key);
-  if(!limit||limit.reset<now)limits.set(key,{count:1,reset:now+60000});
-  else if(++limit.count>300){
-    // Named once per client and window, not once per refused request, so a flood does not double its own log.
-    if(limit.count===301)req.log.warn({event:"request.refused",reason:"rate_limit"},"Request limit reached for a client address");
-    res.setHeader("Retry-After","60");res.status(429).json({error:"Request limit reached. Please try again in one minute.",requestId:req.id});return;
-  }
-  next();
+  // A client network's ceiling, before a session is checked: it also bounds what checking forged sessions costs.
+  requestLimits.network(req,res,next);
 });
+// Sign-in: Clerk checks the session where this host can (signInEnabled); otherwise every request is anonymous.
+// A staff host refuses anonymous requests, and does not start without Clerk (index.ts).
+app.use((req,res,next)=>{
+  if(signInEnabled())return clerk(req,res,next);
+  if(staffMode())return next(Object.assign(new Error("Staff sign-in is not configured on this host."),{status:503}));
+  return next();
+});
+// Each principal's own quota: a signed-in person, a sandbox this process has served, otherwise the network.
+app.use("/api/v1",(req,res,next)=>requestLimits.principal(req,res,next));
 app.use(express.json({limit:"2mb"}));
 app.use(express.urlencoded({ extended: false,limit:"2mb" }));
 app.use((req,res,next)=>{
@@ -114,11 +120,6 @@ app.use((req,res,next)=>{
   if(field!==undefined){req.log.info({event:"request.rejected",status:400,reason:"nul_character"},"Request body refused");res.status(400).json({error:`Text cannot contain the NUL character (\\u0000). Remove it from ${field || "the request"} and try again.`,requestId:req.id});return;}
   next();
 });
-app.use(clerkMiddleware((req)=>({
-  publishableKey:publishableKeyFromHost(getClerkProxyHost(req)??"",process.env.CLERK_PUBLISHABLE_KEY),
-  ...(staffMode() ? { authorizedParties: [...staffPolicy().authorisedParties] } : {}),
-})));
-
 app.use("/api", router);
 // An address under /api that no route answers is a JSON answer with the request id, not the framework's HTML page.
 app.use("/api",(req,res)=>{res.status(404).json({error:"Unknown resource.",requestId:req.id});});

@@ -1,9 +1,10 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type RequestHandler } from "express";
 import { HealthCheckResponse, ReadinessCheckResponse } from "@workspace/api-zod";
 import { BUILD, STARTED_AT } from "../lib/build-info";
 import { schedulerStatus } from "../lib/close-scheduler";
 import { pingDatabase, type DatabaseReadiness } from "../lib/valopay-store";
 import { contractAnswer } from "../lib/contract";
+import { clientNetwork, createWindowCounter, refuseRequest } from "../lib/request-limits";
 
 const router: IRouter = Router();
 
@@ -40,6 +41,44 @@ export function readinessWarning(database: DatabaseReadiness): { fields: Record<
   return undefined;
 }
 
+/** How long a finished readiness check answers for: a burst of probes shares one database round trip. */
+export const READINESS_REUSE_MS = 1_000;
+/**
+ * Readiness checks coalesced: while one runs, every caller waits for it, and
+ * for READINESS_REUSE_MS after it finishes its answer is reused, so a burst
+ * of probes makes one round trip instead of queueing on the check's single
+ * connection until they time out. Its warning, if any, is written once per
+ * check, on the line of the request that started it.
+ */
+export function createReadinessCheck(ping: () => Promise<DatabaseReadiness> = pingDatabase, reuseMs = READINESS_REUSE_MS, clock: () => number = Date.now) {
+  let latest: { result: Promise<DatabaseReadiness>; settledAt?: number } | undefined;
+  return (log?: { warn(fields: object, message: string): void }): Promise<DatabaseReadiness> => {
+    if (latest && (latest.settledAt === undefined || clock() - latest.settledAt < reuseMs)) return latest.result;
+    const check: { result: Promise<DatabaseReadiness>; settledAt?: number } = {
+      result: ping().then((database) => {
+        check.settledAt = clock();
+        const warning = readinessWarning(database);
+        if (warning) log?.warn(warning.fields, warning.message);
+        return database;
+      }),
+    };
+    latest = check;
+    return check.result;
+  };
+}
+const readiness = createReadinessCheck();
+
+/** Health checks one client network may make a minute, both addresses together; a host probe makes a few. */
+export const HEALTH_CHECK_LIMIT = 120;
+const healthChecks = createWindowCounter({ limit: HEALTH_CHECK_LIMIT, windowMs: 60_000 });
+/** The health addresses sit outside /api/v1 and its limits, and ahead of sign-in, so they carry their own per-network limit. */
+const limited: RequestHandler = (req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  const key = clientNetwork(req.ip);
+  if (!healthChecks.take(key)) return refuseRequest(req, res, healthChecks, key, "health", "Too many health checks from this network. Try again in one minute.");
+  next();
+};
+
 /**
  * Two questions a host or a person can ask without a sandbox or a sign-in.
  * Liveness (/healthz): the process answers, and says which build it is, how
@@ -49,17 +88,15 @@ export function readinessWarning(database: DatabaseReadiness): { fields: Record<
  * a busy request pool does not read as an unreachable database, which also
  * reads whether the database holds the tables and columns this build needs,
  * so a migration not yet applied is not ready; 503 while either fails, so
- * traffic can be held back from an instance that cannot serve it.
+ * traffic can be held back from an instance that cannot serve it. Neither
+ * needs Clerk: app.ts mounts them before sign-in.
  */
-router.get("/healthz", (_req, res) => {
-  res.setHeader("Cache-Control", "no-store");
+router.get("/healthz", limited, (_req, res) => {
   res.json(contractAnswer(HealthCheckResponse, { status: "ok", build: BUILD, startedAt: STARTED_AT, uptimeSeconds: Math.round(process.uptime()), scheduler: schedulerStatus() }));
 });
 
-router.get("/readyz", async (req, res) => {
-  res.setHeader("Cache-Control", "no-store");
-  const database = await pingDatabase(), answer = readinessAnswer(database), warning = readinessWarning(database);
-  if (warning) req.log.warn(warning.fields, warning.message);
+router.get("/readyz", limited, async (req, res) => {
+  const answer = readinessAnswer(await readiness(req.log));
   res.status(answer.httpStatus).json(answer.body);
 });
 

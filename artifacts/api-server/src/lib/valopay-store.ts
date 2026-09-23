@@ -3,7 +3,7 @@ import { pool, Pool, poolSize, type PoolClient } from "@workspace/db";
 import * as tables from "@workspace/db/schema";
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { getAuth, clerkClient } from "@clerk/express";
-import { staffMode, verifyStaff } from './staff-access';
+import { signedInUser, staffMode, verifyStaff } from './staff-access';
 import { validateLenderAccessChange } from './staff-lender-access';
 import { bindRuntimeIdentity, bindRuntimeService, clearRuntimeInviteeGrants, runtimeIsolationConfiguration, runtimeIsolationEnabled, runtimeServiceRead } from './runtime-isolation';
 import type { StaffLenderAccessInput } from '@workspace/valopay-schema';
@@ -18,7 +18,9 @@ import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { recordsOf } from "../domain/records";
 import { nextCloseRetry, type CloseRetry } from "../domain/close";
 import { seedMerchant } from "./valopay-seed";
-import { createCreationLimiter, WORKSPACE_CREATION_RETRY_AFTER_SECONDS } from "./creation-limit";
+import { createSandboxCreationLimits, creationRefusalMessage, WORKSPACE_CREATION_RETRY_AFTER_SECONDS } from "./creation-limit";
+import { readSandboxCookie, sandboxPrincipal, secureRequest, writeSandboxCookie } from "./sandbox-cookie";
+import { rememberSandbox } from "./request-limits";
 import { foldForSearch, LIST_PAGE_CEILING, type ListQuery } from "./valopay-list";
 import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
 import { validateCloseRange, pageOffset, type ReadPageQuery, type ReconciliationQueue } from './console-read-models';
@@ -138,11 +140,7 @@ export const expiredWorkspaceCleanupEnabled = (value: string | undefined) => val
 export const SYSTEM_ACTOR_PREFIX = "System · ";
 /** A UTC ISO instant as the platform writes it; guards the timestamptz cast on the stored close cursor. */
 const ISO_INSTANT_PATTERN = "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$";
-const creationLimiter = createCreationLimiter();
-const sandboxCookieName = "valopay_sandbox";
-const legacySandboxCookieName = "valo_sandbox";
-const cookieValue = (cookies: string, name: string) => cookies.split(";").map((cookie) => cookie.trim()).find((cookie) => cookie.startsWith(`${name}=`))?.slice(name.length + 1);
-const isSandboxToken = (value: string | undefined): value is string => !!value && /^[a-f0-9]{64}$/.test(value);
+const sandboxCreation = createSandboxCreationLimits();
 
 export interface StoredRequest { method: 'POST' | 'PATCH'; path: string; body: unknown; }
 type OperationRow = { id: string; merchant_id: string; owner: string; actor: string; role: string; request_key: string; request_hash: string; request: StoredRequest; label: string; status: string; receipt: any; created_at: Date; updated_at: Date };
@@ -485,16 +483,15 @@ export async function createPilotLender(ctx: StoreContext, input: { name: string
 }
 
 function principalFor(req: Request, res: Response) {
-  const auth = getAuth(req);
-  if (staffMode() && !auth.userId) fail('Sign in with your pilot staff account. Anonymous access is unavailable in this environment.', 401);
-  if (auth.userId) return { principal: digest(`clerk:${auth.userId}`), authenticated: true, address: req.ip || "unknown" };
-  const cookies = req.headers.cookie || "";
-  const currentToken = cookieValue(cookies, sandboxCookieName);
-  const legacyToken = cookieValue(cookies, legacySandboxCookieName);
-  const token = isSandboxToken(currentToken) ? currentToken : isSandboxToken(legacyToken) ? legacyToken : randomBytes(32).toString("hex");
+  const userId = signedInUser(req);
+  if (staffMode() && !userId) fail('Sign in with your pilot staff account. Anonymous access is unavailable in this environment.', 401);
+  if (userId) return { principal: digest(`clerk:${userId}`), authenticated: true, address: req.ip };
+  // A request with two different sandbox tokens is refused here, before anything is read (sandbox-cookie.ts).
+  const secure = secureRequest(req), cookie = readSandboxCookie(req.headers.cookie, secure);
+  const token = cookie.token ?? randomBytes(32).toString("hex");
   // The cookie slides: an active sandbox keeps its 30 days from the last visit, matching the expiry sweep below.
-  res.cookie(sandboxCookieName, token, { httpOnly: true, secure: req.secure || req.headers["x-forwarded-proto"] === "https", sameSite: "lax", maxAge: ANONYMOUS_WORKSPACE_DAYS * 86400000, path: "/" });
-  return { principal: digest(`demo:${token}`), authenticated: false, address: req.ip || "unknown" };
+  writeSandboxCookie(res, cookie, token, secure, ANONYMOUS_WORKSPACE_DAYS * 86400000);
+  return { principal: sandboxPrincipal(token), authenticated: false, address: req.ip };
 }
 
 function sessionFor(context: StoreContext): Session {
@@ -633,8 +630,9 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       workspace = await lockedSandbox();
     }
     if (!workspace) {
-      // A new anonymous sandbox seeds two lenders; creation is bounded per client address on top of the request limit.
-      if (!identity.authenticated && !creationLimiter.take(identity.address, Date.now())) throw Object.assign(new Error("Too many new sandboxes from this address; please try again in an hour."), { status: 429, retryAfterSeconds: WORKSPACE_CREATION_RETRY_AFTER_SECONDS });
+      // A new anonymous sandbox seeds two lenders; creation is bounded per client network, per IPv6 /48 and per process on top of the request limit.
+      const refused = identity.authenticated ? undefined : sandboxCreation.take(identity.address);
+      if (refused) throw Object.assign(new Error(creationRefusalMessage(refused)), { status: 429, retryAfterSeconds: WORKSPACE_CREATION_RETRY_AFTER_SECONDS });
       const inserted = (await client.query<WorkspaceRow>(
         `INSERT INTO valopay_workspaces(id,principal_hash,role) VALUES($1,$2,'Admin')
          ON CONFLICT (principal_hash) DO NOTHING RETURNING id,principal_hash,role`,
@@ -673,6 +671,8 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
     // PostgreSQL accepts COMMIT after a caught statement error by returning
     // ROLLBACK.  Do not let a caller that swallowed that error observe success.
     if (committed.command !== "COMMIT") throw markRolledBack(new Error("The workspace transaction was rolled back."));
+    // The sandbox exists now: requests that name it are limited as it, not as their network (request-limits.ts).
+    if (!staff && !identity.authenticated) rememberSandbox(identity.principal);
     return result;
   } catch (error) {
     if (guard) try { await guard.client.query("ROLLBACK"); } catch { /* transaction is already closed */ }

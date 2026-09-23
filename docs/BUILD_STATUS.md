@@ -1,4 +1,14 @@
 # Valo Pay — build status
+## Audit fixes, 23 September audit · September 2026
+
+The findings of the 23 September 2026 audit are fixed and covered by tests:
+
+- **Request limits by network and principal.** The request and new-sandbox limits no longer count each exact address, which let an IPv6 client pick a fresh address in its /64 for every request: an IPv6 client is counted by its /64. A signed-in person and an anonymous sandbox the process has already served each have their own 300 requests a minute, so colleagues behind one office or carrier address no longer share one quota, and a network has 1,200 a minute whoever sends them, so rotating cookies or accounts cannot escape it. New sandboxes are limited to 20 an hour per network, 60 per IPv6 /48 and 300 per process. The counts stay in each process, and the README says what that means for a host running several instances; every limiter's map is bounded in size and swept on a timer instead of being scanned by requests.
+- **Clerk proxy and accepted origins.** The production Clerk proxy tells Clerk the client address the host's edge saw, not the one the client wrote, and names its own address from a configured origin, not from the request's forwarded host; a production publishable key is derived only for a configured host. Clerk accepts sessions only from the configured origins in every mode, not only for staff: `VALOPAY_STAFF_ORIGINS` in staff mode, otherwise the new `VALOPAY_APP_ORIGINS` or, on Replit, `REPLIT_DOMAINS`. With Clerk's keys but no origin, sign-in is off and every request is an anonymous sandbox, and a warning at start-up says so.
+- **Health without Clerk, and readiness bursts.** `/api/healthz` and `/api/readyz` answer before sign-in, so they work without `CLERK_SECRET_KEY`; without Clerk and outside staff mode the API serves the sandbox anonymously, which also lets it run on a local host, and a staff host without `CLERK_SECRET_KEY` does not start, with one fatal line. Readiness probes share one database check, reused for a second after it finishes, and each client network may make 120 health checks a minute, so a burst from one address no longer makes readiness answer 503.
+- **Request ids.** An `X-Request-Id` sent with a request is kept only where the deployment says its edge sets the header (`VALOPAY_EDGE_REQUEST_ID=on`); otherwise every request gets a fresh id, so a client cannot reuse a reference someone else quoted.
+- **Sandbox cookie.** Behind TLS the sandbox cookie is `__Host-valopay_sandbox`, which no other host can set or shadow. A request carrying two different sandbox tokens is refused with a way to recover instead of taking the first, and the older cookie names are read once to move a browser's sandbox, then cleared, and are not read after 2026.
+
 ## Audit fixes, items 21 to 31 · September 2026
 
 Items 21 to 31 of the 22 September 2026 audit are fixed and covered by tests:
