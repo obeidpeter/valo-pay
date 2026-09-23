@@ -10,6 +10,8 @@ import { recoveryBytes, recoveryManifestSchema, verifyRecoveryManifest, type Rec
 import type { WrappingKeyProvider } from '../src/lib/protected-payloads';
 
 if (process.env.VALOPAY_RUN_INTEGRATION !== '1' || process.env.VALOPAY_RUN_RECOVERY !== '1') {
+  // CI runs this to measure a recovery and keep its evidence: there, a missing opt-in fails instead of passing with no evidence.
+  if (process.env.CI) { console.error('Recovery rehearsal cannot run: CI needs VALOPAY_RUN_INTEGRATION=1 and VALOPAY_RUN_RECOVERY=1, and a skipped rehearsal leaves no evidence.'); process.exit(1); }
   console.log('Recovery rehearsal requires two opt-ins and a disposable local PostgreSQL instance.'); process.exit(0);
 }
 const connection = new URL(process.env.DATABASE_URL || '');
@@ -179,9 +181,14 @@ try {
   }
   assert.equal(Number((await target.query('SELECT count(*) AS n FROM valopay_idempotency WHERE id=$1',['post-snapshot-write'])).rows[0].n),0);
   const finalVerification=verifyRecoveryManifest(restoredManifest,restoredDatabaseBytes,await measuredObjects(),configuration);
-  const evidence = { version: 2, scope: 'disposable synthetic PostgreSQL, private local object backups and an independently restored fixture wrapping-key provider', snapshotAt, databaseBackupMs:backupMs, completeBackupMs, databaseRestoreMs:restoreMs, completeRestoreMs:Math.round(performance.now()-restoreStart), recoverableSnapshotAgeMs:Date.now()-Date.parse(snapshotAt), simulatedWritesAfterSnapshot:1, observedDataLossRecords:1, totalMs: Math.round(performance.now() - started), counts, privateObjectsRestored:finalVerification.objects, checks: ['all ten application tables and settings', 'outstanding amounts and allocations', 'close snapshots', 'encrypted idempotency and recovery payloads', 'audit chains', 'lender-specific access grants and revocations', 'restored encrypted source files', 'retained wrapping-key access and missing-key refusal', 'wrong-lender envelope refusal', 'private export ownership and checksum inventory', 'missing/corrupt file refusal', 'reviewed issuer/origin/runtime-role/key manifest', 'post-snapshot data-loss measurement'], externalObjectStorageVerified: false, externalKeyCustodyVerified:false, productionRestoreVerified: false };
+  const evidence = { version: 2, outcome: 'passed', scope: 'disposable synthetic PostgreSQL, private local object backups and an independently restored fixture wrapping-key provider', snapshotAt, databaseBackupMs:backupMs, completeBackupMs, databaseRestoreMs:restoreMs, completeRestoreMs:Math.round(performance.now()-restoreStart), recoverableSnapshotAgeMs:Date.now()-Date.parse(snapshotAt), simulatedWritesAfterSnapshot:1, observedDataLossRecords:1, totalMs: Math.round(performance.now() - started), counts, privateObjectsRestored:finalVerification.objects, checks: ['all ten application tables and settings', 'outstanding amounts and allocations', 'close snapshots', 'encrypted idempotency and recovery payloads', 'audit chains', 'lender-specific access grants and revocations', 'restored encrypted source files', 'retained wrapping-key access and missing-key refusal', 'wrong-lender envelope refusal', 'private export ownership and checksum inventory', 'missing/corrupt file refusal', 'reviewed issuer/origin/runtime-role/key manifest', 'post-snapshot data-loss measurement'], externalObjectStorageVerified: false, externalKeyCustodyVerified:false, productionRestoreVerified: false };
   if (process.env.VALOPAY_REHEARSAL_REPORT) await writeFile(resolve(process.env.VALOPAY_REHEARSAL_REPORT), JSON.stringify(evidence, null, 2));
   console.log(JSON.stringify(evidence));
+} catch (error) {
+  // A failed rehearsal leaves its report too, so CI keeps evidence either way: that it failed and after how long,
+  // never the error itself, which could quote a synthetic record.
+  if (process.env.VALOPAY_REHEARSAL_REPORT) await writeFile(resolve(process.env.VALOPAY_REHEARSAL_REPORT), JSON.stringify({ version: 2, outcome: 'failed', failedAfterMs: Math.round(performance.now() - started), productionRestoreVerified: false }, null, 2));
+  throw error;
 } finally {
   oldKey.fill(0); newKey.fill(0); wrappingKey.fill(0); restoredWrappingKey?.fill(0);
   await source?.end(); await target?.end();
