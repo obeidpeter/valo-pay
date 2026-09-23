@@ -12,6 +12,7 @@ import { SavedQueueViews } from '@/components/saved-queue-views';
 import { FileText, Upload } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { RecordDialog } from '@/components/record-dialog';
+import { notifyDone } from '@/lib/notify';
 import { ImportWizard } from '@/components/import-wizard';
 import { confirmUnsavedChanges } from '@/lib/unsaved-changes';
 import { failureCodeList } from '@workspace/valopay-schema';
@@ -175,6 +176,7 @@ export default function CollectionsPage() {
                         <td className="max-w-56 px-4 py-3 text-xs leading-relaxed">{nextAction(item, attempt)}</td>
                         <td className="px-4 py-3 text-right">
                           {item && <div className="flex flex-col items-end gap-2"><Button size="sm" variant="outline" className="h-7 text-xs" action="backtest_policy" record={item} onClick={() => handleAction(item, 'backtest_policy')}>Test policy</Button>
+                          {item.status === 'in_dispute' && <Button size="sm" variant="outline" className="h-7 text-xs" action="release_dispute" record={item} onClick={() => handleAction(item, 'release_dispute')}>Release from dispute</Button>}
                           {isUnpaid(item.status) && <Button size="sm" variant="ghost" className="h-7 text-xs" action="simulate_failure" record={item} onClick={() => handleAction(item, 'simulate_failure')}>Simulate failure</Button>}</div>}
                         </td>
                       </tr>
@@ -193,8 +195,13 @@ export default function CollectionsPage() {
         record={selectedItem}
         isOpen={isDialogOpen}
         onOpenChange={setIsDialogOpen}
-        title={actionKind === 'simulate_failure' ? 'Simulate collection failure' : 'Test retry policy'}
+        title={actionKind === 'simulate_failure' ? 'Simulate collection failure' : actionKind === 'release_dispute' ? 'Release instalment from dispute' : 'Test retry policy'}
         actionMutation={actionKind}
+        onDone={response => { if (actionKind === 'release_dispute' && response?.message) notifyDone('Released from dispute', String(response.message)); }}
+        context={actionKind === 'release_dispute' && selectedItem ? <section aria-label="Release context" className="space-y-2 rounded-lg border bg-secondary/10 p-4 text-sm">
+          <p className="font-medium">{selectedItem.reference} · {formatKobo(Number(selectedItem.data?.outstandingKobo ?? selectedItem.amountKobo))} outstanding</p>
+          <p>Releasing takes the instalment out of dispute. Its status then follows its balance, and collection and allocation resume, so a payment waiting for it can be applied. An open customer dispute exception for it is closed because its condition cleared. Record why the instalment may be collected again; the reason is saved in the audit log.</p>
+        </section> : undefined}
         fields={
           actionKind === 'simulate_failure' ? 
             [{ name: 'failureCode', label: 'Failure reason', type: 'select', options: failureCodeList.map(code => ({ label: readableLabel(code), value: code })), isData: true, required: true }] :

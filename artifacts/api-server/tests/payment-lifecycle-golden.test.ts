@@ -117,8 +117,9 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   equal([closed.data.report.unallocated.kobo, exceptionsFor(state, "unallocated_payment", over.id).map((item) => item.amountKobo)], [waiting + GROSS, [GROSS]], "the close and its exception count the NGN 25,000 it holds, not the NGN 30,000 received");
   refused(() => executeAction(state, finance(wat("2027-07-05T09:30:00")), { action: "record_refund", recordId: over.id, reason: "Again", data: { reference: "RF-OVER-2" } }), /already recorded/, 409, "one refund per payment, even when the payment holds money again");
   refused(() => executeAction(state, finance(wat("2027-07-05T10:00:00")), { action: "manual_allocate", recordId: over.id, reason: "Whole receipt", data: { dueItemId: third.id, amountKobo: 3_000_000 } }), /in part: NGN 5,000\.00 went back, so only NGN 25,000\.00 is left to allocate/, 409, "the refunded part still cannot be allocated");
+  // The overpayment exception closed when its excess was refunded: its condition cleared (console decision on exceptions).
+  equal([exceptionsFor(state, "overpayment", over.id)[0]!.status, exceptionsFor(state, "overpayment", over.id)[0]!.data.resolutionCode], ["closed", "condition_cleared"], "the refunded excess closed its overpayment exception");
   // Finance applies what stayed: it settles instalment 6 and the rest is an overpayment of what the payment still holds.
-  executeAction(state, finance(wat("2027-07-05T10:02:00")), { action: "resolve_exception", recordId: exceptionsFor(state, "overpayment", over.id)[0]!.id, reason: "The excess was refunded to the payer.", data: { resolutionCode: "refund_requested" } });
   const sixth = recordsOf(state, "due-items").find((item) => item.reference === "DEMO-LOAN-2006")!;
   executeAction(state, finance(wat("2027-07-05T10:05:00")), { action: "manual_allocate", recordId: over.id, reason: "Right loan", data: { dueItemId: sixth.id, amountKobo: 1_234_500 } });
   const overpayment = exceptionsFor(state, "overpayment", over.id).at(-1)!;

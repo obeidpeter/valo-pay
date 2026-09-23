@@ -273,7 +273,8 @@ check(() => {
   assert.throws(() => run(s, "payment.refund_confirm", {}, i.id), /Finance/);
   run(s, "payment.refund_confirm", {}, i.id, finance);
   assert.equal(i.status, "refunded");
-  assert.equal(openDue(s).status, "in_dispute");
+  // A refund reopens the instalment by its balance, not in dispute; only a reversal puts it in dispute.
+  assert.equal(openDue(s).status, "scheduled");
   assert.equal(openDue(s).data.outstandingKobo, openDue(s).amountKobo);
   // The refunded money left the allocation queues and is no customer credit.
   const refunded = s.records.find((r) => r.id === i.data.paymentId)!;

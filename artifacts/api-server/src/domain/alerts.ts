@@ -7,7 +7,7 @@
 import { counted, alertRules, isBillableChannel, isOpenException, type AlertSeverity } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { DomainState } from "./types";
-import { paymentObservedAt } from "./reconciliation";
+import { UNKNOWN_OUTCOME_AGE_MS, checkoutUnknownSince, paymentObservedAt } from "./reconciliation";
 import { closeSchedule, owedCloseDates, positionMismatches } from "./close";
 import { attemptTime } from "./policy-engine";
 import { collectionSucceeded, monthOf } from "./billing";
@@ -53,6 +53,10 @@ export function buildAlerts(state: DomainState, now: string, audit?: AuditVerifi
   if (aged.length > threshold) alerts.push({ key: "unallocated_over_threshold", severity: "high", title: "Too many payments are waiting for allocation", detail: `${counted(aged.length, "payment has", "payments have")} been waiting to be assigned to an instalment for at least 24 hours. The lender's alert limit is ${threshold}. Review the unallocated payments.`, count: aged.length });
   const overdue = recordsOf(state, "exceptions").filter((item) => isOpenException(item.status) && Date.parse(String(item.data.dueBy)) < nowMs);
   if (overdue.length) alerts.push({ key: "exceptions_overdue", severity: "medium", title: "Exceptions past their deadline", detail: `${counted(overdue.length, "open exception is", "open exceptions are")} overdue. Review each item with its assigned owner. Deadlines are calculated in business days.`, count: overdue.length, linkedRecordId: overdue[0]!.id });
+  // Item 10: a pay-by-bank checkout whose outcome stays unknown holds its instalment until Finance records the outcome.
+  const heldCheckouts = recordsOf(state, "connected-intents").filter((item) => item.status === "unknown" && nowMs - Date.parse(checkoutUnknownSince(item)) >= UNKNOWN_OUTCOME_AGE_MS)
+    .sort((a, b) => checkoutUnknownSince(a).localeCompare(checkoutUnknownSince(b)));
+  if (heldCheckouts.length) alerts.push({ key: "pay_by_bank_outcome_unknown", severity: "high", title: "Pay-by-bank outcomes unknown for over 24 hours", detail: `${counted(heldCheckouts.length, "pay-by-bank checkout has", "pay-by-bank checkouts have")} had an unknown outcome for at least 24 hours. Each one holds its instalment: no new checkout or retry is planned until Finance confirms the payment with its evidence or marks it failed. The daily close raises an unknown-outcome exception for Finance for each one.`, count: heldCheckouts.length, linkedRecordId: heldCheckouts[0]!.id, since: checkoutUnknownSince(heldCheckouts[0]!) });
   const deferred = recordsOf(state, "exceptions").filter((item) => isOpenException(item.status) && item.data.type === "notice_not_evidenced");
   if (deferred.length) alerts.push({ key: "attempts_deferred", severity: "medium", title: "Collection attempts delayed: notice evidence missing", detail: `${counted(deferred.length, "planned attempt passed its", "planned attempts passed their")} notice deadline without a record that the provider accepted the customer notice. Review the missing evidence before a retry.`, count: deferred.length, linkedRecordId: deferred[0]!.id });
   // This WAT month's message cost per collection: a direct debit collected by webhook or settlement line counts.

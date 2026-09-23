@@ -193,7 +193,10 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
   inputs.rawCode = last.data.failureCode;
   inputs.attemptAt = attemptTime(last);
   const retry = retryRuleFor(code);
-  if (retry === "never") return explain("stop", "customer_disputed", "The customer disputed the debit. Collection is paused and a dispute exception is raised with a one-business-day deadline.");
+  // A disputed debit is never retried; once its dispute was not upheld or Finance released the instalment, it no longer freezes it.
+  if (retry === "never") return due.data.disputeRelease?.attemptId === last.id
+    ? explain("stop", "dispute_released", "The customer's dispute of this debit was not upheld, or Finance released the instalment from dispute. A disputed debit is never retried automatically: collect the instalment through another channel.")
+    : explain("stop", "customer_disputed", "The customer disputed the debit. Collection is paused and a dispute exception is raised with a one-business-day deadline.");
   if (retry === "unresolved") return explain("blocked", "timeout_unknown", "The outcome is unknown. Check with the provider using the payment reference. An exception is raised after 24 hours without a confirmed outcome.");
   // Row 3: non-retryable code.
   if (retry === "no") return explain("give_up", "non_retryable", `${code} does not allow a retry. Follow-up requires a final notice, an exception and an update to the loan management system.`, null, finalNotice);

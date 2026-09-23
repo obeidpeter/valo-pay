@@ -153,6 +153,14 @@ export const recordDataSchemas = {
     giveUpRule: z.string().optional(),
     lastActionReason: z.string().optional(),
     handedBackAt: isoDateOrTimestamp.optional(),
+    /**
+     * The latest release from dispute: a customer dispute resolved as not upheld, or Finance's release with a reason; who,
+     * when, why, the status the balance gave it and the last counted attempt, whose disputed debit does not freeze it again.
+     */
+    disputeRelease: z.object({
+      via: z.enum(["not_upheld", "finance_release"]), releasedAt: isoDateOrTimestamp, releasedBy: z.string(), reason: z.string(),
+      exceptionId: z.string().optional(), attemptId: z.string().nullable(), status: z.string(), outstandingKobo: kobo,
+    }).optional(),
   }).passthrough(),
   attempts: z.object({
     ...common,
@@ -250,6 +258,8 @@ export const recordDataSchemas = {
     evidenceConflict: z.object({ paymentId: z.string(), exceptionId: z.string(), resolutionCode: z.string() }).optional(),
     /** The amount came from a settlement line that stated only what it paid out: the debit's own gross may raise it while nothing is applied. */
     grossUnstated: z.boolean().optional(),
+    /** A pay-by-bank receipt Finance confirmed after its outcome stayed unknown: the masked reference of the evidence that it arrived. */
+    evidenceReference: z.string().optional(),
     duplicateSettlementLine: z.boolean().optional(),
     statementObservationId: z.string().optional(),
     settlementBatchId: z.string().optional(),
@@ -340,6 +350,10 @@ export const recordDataSchemas = {
     condition: z.string().optional(),
     /** For an unknown outcome resolved as failed: the failure code the provider confirmed. */
     confirmedFailureCode: z.string().optional(),
+    /** The kind of the linked record when it is not the kind the type usually names: connected-intents for a pay-by-bank checkout. */
+    linkedKind: z.string().optional(),
+    /** Set when the platform closed the exception because its condition cleared (resolutionCode condition_cleared): when, in whose action and why. */
+    conditionCleared: z.object({ at: isoDateOrTimestamp, by: z.string(), reason: z.string() }).optional(),
   }).passthrough(),
   policies: z.object({
     ...common,
@@ -654,6 +668,13 @@ export const recordDataSchemas = {
     events: z.array(z.object({ at: isoDateOrTimestamp, status: z.string(), detail: z.string() }).passthrough()), consentId: z.string(), paymentId: z.string(),
     observationId: z.string(), receiptReference: z.string(), confirmedAt: isoDateOrTimestamp,
     refundRequest: z.object({ maker: z.string(), reason: z.string(), at: isoDateOrTimestamp }).passthrough(),
+    /** The unknown-outcome exception a checkout whose outcome stayed unknown for 24 hours was raised under. */
+    outcomeExceptionId: z.string(),
+    /** Finance's resolution of an outcome that stayed unknown: the outcome it recorded, with the evidence for a payment confirmed as received. */
+    outcomeResolution: z.object({
+      exceptionId: z.string(), resolutionCode: z.string(), outcome: z.enum(["confirmed", "failed"]), evidenceReference: z.string().optional(),
+      resolvedBy: z.string(), resolvedAt: isoDateOrTimestamp, reason: z.string(),
+    }).passthrough(),
   }).partial().passthrough(),
   /** A synthetic credit assessment (immutable): the engine's result (connected-credit.ts) and how it was started. */
   "connected-credit-assessments": z.object({

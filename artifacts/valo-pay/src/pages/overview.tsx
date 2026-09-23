@@ -18,6 +18,7 @@ const queueDestinations: Record<string, string> = {
 };
 
 function alertDestination(key: string): { href: string; label: string } {
+  if (key.includes('pay_by_bank')) return { href: '/pay-by-bank', label: 'Review pay-by-bank checkouts' };
   if (key.includes('export')) return { href: '/exports', label: 'Check saved exports' };
   if (key.includes('close')) return { href: '/reports', label: 'View daily closes' };
   if (key.includes('audit')) return { href: '/audit', label: 'Review audit log' };

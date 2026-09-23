@@ -119,7 +119,8 @@ export const mandateTransitions: Record<MandateStatus, readonly MandateStatus[]>
 
 /**
  * TRD 4.2 exception machine.  "resolved" is reached only through the
- * resolve action with a controlled code (EXC-03); "closed" follows resolution.
+ * resolve action with a controlled code (EXC-03); "closed" follows resolution,
+ * or the platform closes an open exception whose condition cleared.
  */
 export const exceptionTransitions: Record<ExceptionStatus, readonly ExceptionStatus[]> = {
   open: ["assigned", "in_progress"],
