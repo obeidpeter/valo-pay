@@ -3,6 +3,7 @@ import {
   editableKinds, exceptionCatalogue, exceptionTransitions, experimentRules, isActionOnlyStatus, mandateTransitions, normaliseFailureCode,
   normaliseOwner, policyGuardrails, recordDataSchemas, recordStatuses, resolveExceptionType, roles, isKnownFailureCode, templateTextProblems,
 } from "@workspace/valopay-schema";
+import { isDeepStrictEqual } from "node:util";
 import { assertNoRealBankDetails, findRecord, masked, recordsOf } from "./records";
 import type { Context, DomainState, RecordOf, TypedRecord, ValopayRecord } from "./types";
 import { addBusinessDays } from "./calendar";
@@ -287,6 +288,11 @@ export function validateRecord(
     for (const key of ["grossKobo", "feeKobo", "netKobo"]) positiveInteger(data[key], key, true);
     if (data.grossKobo - data.feeKobo !== data.netKobo) throw new Error("The net settlement amount must equal the gross amount minus fees.");
     if (!isUpdate && input.status !== (defaultStatus["settlement-batches"] ?? "pending")) throw new Error("New settlement batches must start as pending. Reconciliation updates their status.");
+    // Reconciliation copies these from the provider's lines, the fee schedule and the linked statement credit, and derives the status from them.
+    // Compared by value: jsonb returns enteredTotals' keys in its own order.
+    for (const key of ["statementObservationId", "statementNetKobo", "lineObservationIds", "linePaymentIds", "expectedFeeKobo", "feeVarianceKobo", "enteredTotals"]) {
+      if (!isDeepStrictEqual(data[key], existing?.data[key])) throw new Error(`Settlement batch ${key} is recorded by reconciliation and cannot be changed here.`);
+    }
   }
 }
 

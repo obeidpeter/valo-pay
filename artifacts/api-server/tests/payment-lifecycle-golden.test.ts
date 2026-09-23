@@ -280,6 +280,25 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   }
 }
 {
+  // Resolutions stored before the batch evaluator: an earlier build keyed a variance found when the statement credit was linked on
+  // the statement (settlement_variance:<batch>:statement:<credit>:<net>:<fees>), and one found by the fee check on the fees
+  // (settlement_variance:<batch>:fees:<fees>:<expected fees>). Accepted under either spelling, the variance is not raised again.
+  for (const spelling of ["statement", "fees"] as const) {
+    const { state, due } = liveFixture({ withFailure: false, merchantId: `stored-variance-${spelling}` });
+    addObservation(state, { reference: "L1", amountKobo: GROSS - 30_000, grossAmountKobo: GROSS, feeKobo: 30_000, batchReference: "B-STORED", source: "settlement", customerId: due.customerId, dueItemId: due.id, eventId: "l1", occurredAt: wat("2027-07-01T07:00:00") });
+    addObservation(state, { reference: "STMT-STORED", amountKobo: GROSS - 30_000, batchReference: "B-STORED", source: "statement", eventId: "st", occurredAt: wat("2027-07-01T08:00:00") });
+    reconcile(state, finance(wat("2027-07-01T09:00:00")));
+    const batch = recordsOf(state, "settlement-batches").find((item) => item.reference === "B-STORED")!;
+    const [stored] = exceptionsFor(state, "settlement_variance", batch.id);
+    stored!.data.condition = spelling === "statement" ? `settlement_variance:${batch.id}:statement:2470000:2470000:30000` : `settlement_variance:${batch.id}:fees:30000:12500`;
+    resolve(state, stored!, wat("2027-07-01T10:00:00"), "accepted_variance");
+    reconcile(state, finance(wat("2027-07-02T07:05:00")));
+    reconcile(state, finance(wat("2027-07-05T07:05:00")));
+    equal([batch.status, batch.data.statementNetKobo, batch.data.netKobo, batch.data.feeVarianceKobo], ["variance", 2_470_000, 2_470_000, 17_500], `the credit matches the net and only the fees differ (${spelling} spelling)`);
+    equal(exceptionsFor(state, "settlement_variance", batch.id).length, 1, `a variance accepted under the ${spelling} spelling is not raised again`);
+  }
+}
+{
   const { state, due } = liveFixture({ withFailure: false, merchantId: "durable-mapping" });
   const attempt = addAttempt(state, due, { status: "failed", failureCode: "R42", occurredAt: wat("2027-06-28T06:16:00") });
   attempt.data.rawFailureCode = "R42";

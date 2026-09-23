@@ -1,7 +1,7 @@
 import { DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_TOLERANCE_KOBO, exceptionCatalogue, isKobo, isOpenException, normaliseFailureCode, normaliseRefundStatus, normaliseReversalStatus, paymentMoneyReturned, providerFeeKobo, resolveExceptionType, type ExceptionType, type ProviderFeeSchedule, type PaymentChannel } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
-import { addBusinessDays } from "./calendar";
+import { addBusinessDays, watDate } from "./calendar";
 import { validateRecord } from "./validation";
 import { approvedPolicyFor, attemptTime, attemptsFor, enrolEligibleFailures, evaluateRetry, recordRetryDecision } from "./policy-engine";
 
@@ -199,7 +199,9 @@ export function settlementBatchState(batch: TypedRecord<"settlement-batches">): 
  * Every batch is re-evaluated from its current totals at every reconciliation,
  * so a line imported after its statement credit matched, or an edit, moves it.
  * Only what changed is written. A variance is a settlement_variance exception,
- * never forced; an exception raised for an earlier state stays for Finance.
+ * never forced; an exception raised for an earlier state stays for Finance,
+ * and its notes gain a dated line whenever the batch moves, so the text it was
+ * raised with is not read as the batch's current state.
  * Returns the number of batches in variance.
  */
 function evaluateSettlementBatches(state: DomainState, ctx: Context): number {
@@ -213,11 +215,19 @@ function evaluateSettlementBatches(state: DomainState, ctx: Context): number {
     }
     const next = settlementBatchState(batch);
     const previous = batch.status;
+    const moved = previous !== next.status || (next.explanation !== undefined && batch.data.explanation !== next.explanation);
     if (previous !== next.status) { batch.status = next.status; changed = true; }
     if (next.explanation !== undefined && batch.data.explanation !== next.explanation) { batch.data.explanation = next.explanation; changed = true; }
     // Back to waiting for its statement credit: the variance explanation no longer applies.
     if (next.explanation === undefined && previous !== next.status && batch.data.explanation !== undefined) { delete batch.data.explanation; changed = true; }
     if (changed) touch(batch, ctx.now);
+    // The exception raised for an earlier state stays open for Finance; a dated line says where the batch now stands.
+    const open = moved ? recordsOf(state, "exceptions").find((item) => isOpenException(item.status) && item.data.linkedRecordId === batch.id && resolveExceptionType(item.data.type) === "settlement_variance") : undefined;
+    if (open) {
+      const current = `the batch is now ${next.status === "variance" ? "in variance" : next.status}. ${next.explanation ?? "Its fees are within the schedule and it waits for its statement credit."}`;
+      open.data.notes = `${open.data.notes ? `${open.data.notes}\n` : ""}Update on ${watDate(Date.parse(ctx.now))} (WAT): ${current}`;
+      touch(open, ctx.now);
+    }
     if (next.status !== "variance") continue;
     raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, notes: next.explanation!, condition: next.condition, settledBy: next.settledBy });
     variances += 1;
