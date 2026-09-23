@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import path from "node:path";
 
-// Every route, audited as a whole page at the two widths the Chromium projects use (a desktop and a phone):
+// Every route, audited as a whole page at each project's width (a desktop and a phone, in each engine):
 // the WCAG 2.2 AA rules and the best-practice landmark rules. The landmark rules are page-level, so axe runs
 // them only over the whole document: a scan scoped to #main cannot see a duplicate between the sidebar and a
 // page, a complementary landmark inside main, or a scrolling frame named like the region around it.

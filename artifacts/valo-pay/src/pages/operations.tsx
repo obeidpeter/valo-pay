@@ -132,7 +132,11 @@ export default function OperationsPage() {
       {list.data?.total === 0 && (
         <p className="rounded-xl border bg-card p-8 text-sm text-muted-foreground">
           No received requests yet. Saved imports, case changes, reconciliation
-          and evidence requests will appear here.
+          and evidence requests will appear here.{" "}
+          {/* The next step, and something to focus: a keyboard user can then scroll the page on a short screen. */}
+          <Link className="text-primary underline" href="/imports">
+            Start with an import batch
+          </Link>
         </p>
       )}
       {list.data && list.data.total > 25 && (
