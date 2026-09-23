@@ -8,7 +8,7 @@
 import {
   counted,
   DEFAULT_REVERSAL_WINDOW_DAYS, DEFAULT_VAT_BPS, DESIGN_PARTNER_DISCOUNT, DESIGN_PARTNER_DISCOUNT_YEAR, RECOVERY_FEE_KOBO, USAGE_FEE_BPS, USAGE_FEE_CAP_KOBO,
-  billableChannels, experimentRules, isBillableChannel, isKobo, licenceTierFor, paymentAppliedKobo, usageFeeKobo, vatKobo, type AdjustmentReason,
+  billableChannels, experimentRules, isBillableChannel, isKobo, licenceTierFor, nairaText, paymentAppliedKobo, usageFeeKobo, vatKobo, type AdjustmentReason,
 } from "@workspace/valopay-schema";
 import { makeRecord, recordsOf } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
@@ -19,7 +19,6 @@ import { watMonth, watMonthStart } from "./calendar";
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** The billing month (YYYY-MM) of an instant: calendar months are counted in West Africa Time. */
 export const monthOf = (value: string): string => watMonth(value);
-const naira = (kobo: number): string => `NGN ${(kobo / 100).toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /** The WAT calendar month before the one containing `now`, the default invoice period. */
 export function previousMonth(now: string): string {
@@ -207,7 +206,7 @@ export function pendingAdjustments(state: DomainState): AdjustmentLine[] {
       feeDeltaKobo: fee.feeKobo - entry.netFeeKobo, discountRate: entry.discountRate, billedChargedKobo: entry.netChargedKobo,
       billedFeeKobo: entry.netFeeKobo, currentFeeKobo: fee.feeKobo, billedAllocatedKobo: entry.allocatedKobo, currentAllocatedKobo: fee.allocatedKobo,
       allocationIds: recordsOf(state, "allocations").filter((item) => item.data.paymentId === paymentId).map((item) => item.id),
-      explanation: `Collection ${payment.reference} (${naira(entry.allocatedKobo)} billed ${naira(entry.netChargedKobo)} on ${entry.originalInvoiceReference}${discount}) ${reasonText[reason]}; ${kobo < 0 ? "credit" : "debit"} of ${naira(Math.abs(kobo))}.`,
+      explanation: `Collection ${payment.reference} (${nairaText(entry.allocatedKobo)} billed ${nairaText(entry.netChargedKobo)} on ${entry.originalInvoiceReference}${discount}) ${reasonText[reason]}; ${kobo < 0 ? "credit" : "debit"} of ${nairaText(Math.abs(kobo))}.`,
     });
   }
   return lines.sort((a, b) => a.paymentReference.localeCompare(b.paymentReference));
@@ -341,7 +340,7 @@ export function issueInvoice(state: DomainState, ctx: Context, input: { period?:
       adjustments, recoveryFee,
       subtotals: { licenceKobo: contractedLicence, usageKobo, adjustmentsKobo, discountKobo, recoveryKobo: recoveryFee.kobo },
       totals: { netKobo, vatBps, vatKobo: vat, totalKobo, creditNote: totalKobo < 0 },
-      statement: `${counted(usageLines.length, "collection")} counted at ${USAGE_FEE_BPS / 100}% capped at ${naira(USAGE_FEE_CAP_KOBO)}; ${counted(adjustments.length, "adjustment line")}; VAT at ${vatBps / 100}% shown separately.`,
+      statement: `${counted(usageLines.length, "collection")} counted at ${USAGE_FEE_BPS / 100}% capped at ${nairaText(USAGE_FEE_CAP_KOBO)}; ${counted(adjustments.length, "adjustment line")}; VAT at ${vatBps / 100}% shown separately.`,
       disputeRoute: "Dispute a count by raising it with your Valo Pay contact quoting the invoice reference and the collection reference; the count is derived from records and reproducible (BIL-01).",
       synthetic: true,
     },

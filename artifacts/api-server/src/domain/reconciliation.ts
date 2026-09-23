@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_TOLERANCE_KOBO, exceptionCatalogue, isKobo, isOpenException, normaliseFailureCode, normaliseRefundStatus, normaliseReversalStatus, paymentMoneyReturned, providerFeeKobo, resolveExceptionType, type ExceptionType, type ProviderFeeSchedule, type PaymentChannel } from "@workspace/valopay-schema";
+import { DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_TOLERANCE_KOBO, exceptionCatalogue, isKobo, isOpenException, nairaText, normaliseFailureCode, normaliseRefundStatus, normaliseReversalStatus, paymentMoneyReturned, paymentRefundedKobo, paymentUnappliedKobo, providerFeeKobo, resolveExceptionType, type ExceptionType, type ProviderFeeSchedule, type PaymentChannel } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { addBusinessDays, watDate } from "./calendar";
@@ -13,8 +13,8 @@ export const UNALLOCATED_AGE_MS = DAY_MS;
 
 export const paymentReversed = (payment: TypedRecord<"payments">): boolean => normaliseReversalStatus(payment.data.reversalStatus) === "reversed";
 export const paymentRefunded = (payment: TypedRecord<"payments">): boolean => normaliseRefundStatus(payment.data.refundStatus) === "refunded";
-/** Reversed or refunded: the money went back to the payer, so nothing it has not already applied can be allocated or held as credit. */
-export const paymentReturned = (payment: TypedRecord<"payments">): boolean => paymentMoneyReturned(payment.data);
+/** Reversed, or refunded in full: the money went back to the payer, so nothing it has not already applied can be allocated or held as credit. */
+export const paymentReturned = (payment: TypedRecord<"payments">): boolean => paymentMoneyReturned(payment);
 export const paymentObservedAt = (payment: TypedRecord<"payments">): number => Date.parse(String(payment.data.observedAt || payment.createdAt));
 /** When an allocation was applied (REC-07, REC-09): confirmedAt, or its creation for records written before confirmedAt was kept. A review or a reinstatement never moves it. */
 export const allocationConfirmedAt = (allocation: TypedRecord<"allocations">): string => String(allocation.data.confirmedAt || allocation.createdAt);
@@ -268,8 +268,8 @@ export function allocatePayment(
   explanation?: string,
 ): TypedRecord<"allocations"> {
   assertAllocationEligible(due);
-  assertPaymentAllocatable(payment);
-  if (!Number.isInteger(amount) || amount <= 0 || amount > payment.amountKobo - Number(payment.data.allocatedKobo || 0)) {
+  assertPaymentAllocatable(payment, amount);
+  if (!Number.isInteger(amount) || amount <= 0 || amount > paymentUnappliedKobo(payment)) {
     throw new Error("Enter a positive whole number in kobo, no more than the payment has left to allocate.");
   }
   const remaining = outstanding(due);
@@ -290,11 +290,20 @@ export function allocatePayment(
   return allocation;
 }
 
-/** Reversed or refunded money went back to the payer: no proposal, confirmation or manual allocation may apply it. */
-function assertPaymentAllocatable(payment: TypedRecord<"payments">): void {
-  if (!paymentReturned(payment)) return;
-  const how = paymentReversed(payment) ? "reversed by the provider" : "refunded to the payer";
-  throw Object.assign(new Error(`Payment ${payment.reference} was ${how}. Its money went back, so it cannot be allocated to an instalment.`), { status: 409 });
+/**
+ * Reversed or refunded money went back to the payer: no proposal, confirmation
+ * or manual allocation may apply it. After a refund of part of a payment, such
+ * as an overpayment's excess, only the money that stayed can be applied.
+ */
+function assertPaymentAllocatable(payment: TypedRecord<"payments">, amount: number): void {
+  if (paymentReturned(payment)) {
+    const how = paymentReversed(payment) ? "reversed by the provider" : "refunded to the payer";
+    throw Object.assign(new Error(`Payment ${payment.reference} was ${how}. Its money went back, so it cannot be allocated to an instalment.`), { status: 409 });
+  }
+  const refunded = paymentRefundedKobo(payment), left = paymentUnappliedKobo(payment);
+  if (refunded > 0 && amount > left) {
+    throw Object.assign(new Error(`Payment ${payment.reference} was refunded to the payer in part: ${nairaText(refunded)} went back, so ${left > 0 ? `only ${nairaText(left)} is` : "nothing is"} left to allocate to an instalment.`), { status: 409 });
+  }
 }
 
 function assertAllocationEligible(due: TypedRecord<'due-items'>): void {
@@ -305,11 +314,11 @@ export function applyConfirmedAllocation(state: DomainState, ctx: Context, alloc
   const payment = findRecord(state, String(allocation.data.paymentId), "payments");
   const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
   assertAllocationEligible(due);
-  assertPaymentAllocatable(payment);
+  assertPaymentAllocatable(payment, allocation.amountKobo);
   if (allocation.status === "superseded") throw new Error("This allocation is no longer applied and cannot be confirmed. Review the payment to create a new match.");
   if (allocation.status === "confirmed") throw Object.assign(new Error("This allocation is already applied. Refresh the payment to see its current position."), { status: 409 });
   const amount = allocation.amountKobo;
-  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > payment.amountKobo - Number(payment.data.allocatedKobo || 0)) {
+  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > paymentUnappliedKobo(payment)) {
     throw new Error("This allocation is more than the payment has left to allocate. Refresh the payment and review the proposed amount.");
   }
   if (amount > outstanding(due)) throw Object.assign(new Error("The proposed allocation exceeds the instalment balance now outstanding. Refresh the queue and review the changed balances."), { status: 409 });
@@ -320,7 +329,7 @@ export function applyConfirmedAllocation(state: DomainState, ctx: Context, alloc
   const remaining = Math.max(0, outstanding(due) - amount);
   due.data.outstandingKobo = remaining;
   due.status = remaining === 0 ? "paid" : "partially_paid";
-  const unapplied = payment.amountKobo - Number(payment.data.allocatedKobo);
+  const unapplied = paymentUnappliedKobo(payment);
   if (unapplied === 0) payment.status = "allocated";
   else if (remaining === 0) {
     // 7.3: the excess is unapplied credit on the customer position and an exception; never auto-applied elsewhere.
@@ -422,7 +431,7 @@ export function supersededByReview(allocation: TypedRecord<"allocations">): bool
 export function reinstateAllocation(state: DomainState, ctx: Context, allocation: TypedRecord<"allocations">): void {
   const payment = findRecord(state, String(allocation.data.paymentId), "payments");
   const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
-  const left = payment.amountKobo - Number(payment.data.allocatedKobo || 0);
+  const left = paymentUnappliedKobo(payment);
   const blocker = paymentReturned(payment) ? `payment ${payment.reference} was ${paymentReversed(payment) ? "reversed" : "refunded"}`
     : ["cancelled", "closed", "in_dispute"].includes(due.status) ? `instalment ${due.reference} is ${due.status.replace(/_/g, " ")}`
     : allocation.amountKobo > left ? `payment ${payment.reference} no longer has that much left to allocate`
@@ -446,7 +455,8 @@ export function reinstateAllocation(state: DomainState, ctx: Context, allocation
 export function settlePaymentStatus(state: DomainState, ctx: Context, payment: TypedRecord<"payments">, reason = "Superseded: the proposal no longer fits what the payment has left."): void {
   paymentDimensions(payment);
   const allocated = Number(payment.data.allocatedKobo || 0);
-  const left = payment.amountKobo - allocated;
+  // What it still holds: a refund of part of it, such as an overpayment's excess, is not left to allocate.
+  const left = paymentUnappliedKobo(payment);
   const returned = paymentReturned(payment);
   const proposals = recordsOf(state, "allocations").filter((item) => item.data.paymentId === payment.id && item.status === "proposed");
   for (const proposal of proposals) {
@@ -466,7 +476,7 @@ export function settlePaymentStatus(state: DomainState, ctx: Context, payment: T
     delete payment.data.proposedDueItemId; delete payment.data.proposedAmountKobo;
     if (allocated === 0) payment.status = returned ? "returned" : "unallocated";
     // Refunded after part of it was applied: the rest went back, so what stayed is all applied.
-    else if (left <= 0 || returned) payment.status = "allocated";
+    else if (left <= 0) payment.status = "allocated";
     else payment.status = previous === "overpaid" ? "overpaid" : "partial";
   }
   touch(payment, ctx.now);
@@ -508,14 +518,16 @@ const rejectedMatches = (payment: TypedRecord<"payments">): Set<string> => new S
 
 /**
  * Payments whose status contradicts their records: "unallocated" with money
- * applied, "proposed" with no live proposal, or money returned while still
+ * applied, "proposed" with no live proposal, money returned while still
  * waiting in an allocation queue, carrying a proposal, or shown as holding
- * unapplied money ("partial" or "overpaid" after a refund).
+ * unapplied money ("partial" or "overpaid" after a refund), or "returned"
+ * while it holds money a refund of part of it did not return.
  */
 function paymentsToSettle(state: DomainState): TypedRecord<"payments">[] {
   const proposed = new Set(recordsOf(state, "allocations").filter((item) => item.status === "proposed").map((item) => String(item.data.paymentId)));
   return recordsOf(state, "payments").filter((payment) => {
     if (paymentReturned(payment)) return ["unallocated", "proposed", "possible_duplicate", "partial", "overpaid"].includes(payment.status) || proposed.has(payment.id);
+    if (payment.status === "returned") return true;
     if (payment.status === "unallocated") return Number(payment.data.allocatedKobo || 0) > 0 || proposed.has(payment.id);
     return payment.status === "proposed" && !proposed.has(payment.id);
   });
@@ -650,6 +662,12 @@ function matchPayment(state: DomainState, ctx: Context, payment: TypedRecord<"pa
     payment.data.explanation = explanation;
     touch(payment, ctx.now);
   };
+  // The rules compare the gross amount, which a payment refunded in part no longer holds.
+  const refunded = paymentRefundedKobo(payment);
+  if (refunded > 0) {
+    leaveForFinance(`A refund returned ${nairaText(refunded)} of this payment. Automatic matching leaves the ${nairaText(paymentUnappliedKobo(payment))} it still holds for Finance to allocate.`);
+    return;
+  }
   // Finance's "this is the wrong instalment" stands: a strong reference to a
   // rejected instalment is not matched anywhere else automatically either.
   if (intended && rejected.has(intended.due.id)) {
@@ -781,7 +799,7 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
   }
   const now = Date.parse(ctx.now);
   const aged = recordsOf(state, "payments").filter((item) => item.status === "unallocated" && !paymentReturned(item) && now - paymentObservedAt(item) >= UNALLOCATED_AGE_MS);
-  aged.forEach((payment) => raiseException(state, ctx, "unallocated_payment", { linkedRecordId: payment.id, customerId: payment.customerId, amountKobo: payment.amountKobo, notes: "No certain or confirmed allocation after 24 hours.", condition: identityCondition("unallocated_payment", payment.id) }));
+  aged.forEach((payment) => raiseException(state, ctx, "unallocated_payment", { linkedRecordId: payment.id, customerId: payment.customerId, amountKobo: paymentUnappliedKobo(payment), notes: "No certain or confirmed allocation after 24 hours.", condition: identityCondition("unallocated_payment", payment.id) }));
   // Outcomes resolved before resolutions updated the attempt are applied now, the latest resolution first,
   // so those instalments stop waiting as in flight.
   const unknownAttempts = new Set(recordsOf(state, "attempts").filter((attempt) => attempt.status === "unknown").map((attempt) => attempt.id));

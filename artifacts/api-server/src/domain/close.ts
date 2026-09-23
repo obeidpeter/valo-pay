@@ -177,6 +177,8 @@ export function positionSnapshot(state: DomainState): Map<string, CustomerPositi
 }
 
 const sumOf = (items: ValopayRecord[]) => ({ count: items.length, kobo: items.reduce((sum, item) => sum + item.amountKobo, 0) });
+/** Unallocated payments by the money they hold: what a refund of part of one returned is not waiting for Finance. */
+const heldOf = (items: TypedRecord<"payments">[]) => ({ count: items.length, kobo: items.reduce((sum, item) => sum + paymentUnappliedKobo(item), 0) });
 const inPeriod = (at: string | undefined, from: string | null, to: string) => Boolean(at) && (from === null || String(at) > from) && String(at) <= to;
 
 /** What the close needs to remember from before reconciliation ran. */
@@ -188,7 +190,7 @@ export interface OpeningSnapshot {
 
 export function openingSnapshot(state: DomainState): OpeningSnapshot {
   const closes = recordsOf(state, "closes").map((close) => String(close.data.closedAt || close.createdAt)).sort();
-  return { since: closes.at(-1) ?? null, unallocated: sumOf(recordsOf(state, "payments").filter((item) => item.status === "unallocated")), positions: positionSnapshot(state) };
+  return { since: closes.at(-1) ?? null, unallocated: heldOf(recordsOf(state, "payments").filter((item) => item.status === "unallocated")), positions: positionSnapshot(state) };
 }
 
 /**
@@ -251,7 +253,7 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
     allocatedByRule,
     allocated: sumOf(confirmed),
     proposed: sumOf(payments.filter((item) => item.status === "proposed")),
-    unallocated: { ...sumOf(unallocated), olderThan24Hours: unallocated.filter((item) => Date.parse(to) - paymentObservedAt(item) >= DAY_MS).length },
+    unallocated: { ...heldOf(unallocated), olderThan24Hours: unallocated.filter((item) => Date.parse(to) - paymentObservedAt(item) >= DAY_MS).length },
     possibleDuplicates: sumOf(payments.filter((item) => item.status === "possible_duplicate")),
     variances: { count: variances.length, feeVarianceKobo: variances.reduce((sum, item) => sum + item.feeVarianceKobo, 0), batches: variances },
     exceptions: {

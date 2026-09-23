@@ -193,6 +193,24 @@ checks += 5;
   assert.deepEqual(pendingAdjustments(state), [], "each correction is billed once");
   checks += 12;
 }
+{
+  // Invoices issued before each line kept its rate: usage lines carry only the public fee, an adjustment line
+  // only the public-price change, and the invoice's 50% discount applied to all of them. A credit returns what was charged.
+  const { state, collection } = fixture("legacy-invoices");
+  const whole = collection("PSK-LEG-A", wat("2027-04-10T06:20:00"), 10_000_000);
+  const cut = collection("PSK-LEG-B", wat("2027-04-11T06:20:00"));
+  const legacyInvoice = (period: string, data: Record<string, unknown>) => makeRecord(state, "invoices", { name: `Invoice ${period}`, status: "issued", reference: `INV-${period}-001`, createdAt: wat(`${period}-28T09:00:00`), data: { period, issuedAt: wat(`${period}-28T09:00:00`), usageLines: [], adjustments: [], designPartnerDiscount: { rate: 0.5, kobo: 0, note: "Design-partner discount of 50% in 2027." }, ...data } });
+  const april = legacyInvoice("2027-04", { usageLines: [whole, cut].map((payment) => ({ paymentId: payment.id, paymentReference: payment.reference, allocatedKobo: payment.amountKobo, feeKobo: payment.amountKobo === 10_000_000 ? 15_000 : 7_500 })) });
+  // PSK-LEG-B's allocation fell to NGN 10,000 in May: the old line carried the public-price change of NGN 45, which the invoice then halved.
+  legacyInvoice("2027-05", { adjustments: [{ reason: "wrong_allocation", paymentId: cut.id, paymentReference: cut.reference, originalInvoiceId: april.id, originalInvoiceReference: april.reference, kobo: -4_500, billedFeeKobo: 7_500, currentFeeKobo: 3_000, billedAllocatedKobo: 2_500_000, currentAllocatedKobo: 1_000_000, allocationIds: [], explanation: "legacy" }] });
+  whole.data.reversalStatus = "reversed"; cut.data.reversalStatus = "reversed";
+  assert.deepEqual(pendingAdjustments(state).map((line) => [line.paymentReference, line.reason, line.kobo, line.discountRate, line.billedChargedKobo, line.billedFeeKobo]),
+    [["PSK-LEG-A", "reversal", -7_500, 0.5, 7_500, 15_000], ["PSK-LEG-B", "reversal", -1_500, 0.5, 1_500, 3_000]],
+    "the capped fee charged at half is credited as NGN 75; the NGN 37.50 charged less the NGN 22.50 already credited leaves NGN 15");
+  const june = invoiceFor(state, "2027-06", wat("2027-07-01T09:00:00"));
+  assert.equal(june.data.totals.netKobo, LICENCE / 2 - 9_000, "the credits are not discounted again");
+  checks += 2;
+}
 
 // ---------- BIL-01 and BIL-07: a refund returns what the payment had not applied, so the fee on the money that stayed still stands ----------
 {

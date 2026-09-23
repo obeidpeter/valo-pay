@@ -141,6 +141,31 @@ try {
       confirmedAt: `${month}-01`,
     },
   });
+  // Customer credit in SQL reads refunds as paymentUnappliedKobo does: a refund
+  // with its amount recorded returned that much, one recorded before the amount
+  // was kept returned the whole payment, and a reversal returned everything.
+  const paymentTemplate = state.records.find(
+    (r) => r.id === proposal.data.paymentId,
+  )!;
+  for (const [reference, status, amountKobo, data] of [
+    ["READ-REFUND-PART", "unallocated", 3_000_000, { allocatedKobo: 0, refundStatus: "refunded", refundedKobo: 500_000 }],
+    ["READ-REFUND-APPLIED", "allocated", 3_000_000, { allocatedKobo: 2_500_000, refundStatus: "refunded", refundedKobo: 500_000 }],
+    ["READ-REFUND-LEGACY", "returned", 1_000_000, { allocatedKobo: 0, refundStatus: "recorded_externally" }],
+    ["READ-REFUND-WHOLE", "returned", 700_000, { allocatedKobo: 0, refundStatus: "refunded", refundedKobo: 700_000 }],
+    ["READ-REVERSED", "returned", 900_000, { allocatedKobo: 0, reversalStatus: "reversed" }],
+  ] as const) {
+    const { proposedDueItemId: _due, proposedAmountKobo: _amount, ...kept } =
+      paymentTemplate.data;
+    rows.push({
+      ...paymentTemplate,
+      id: randomUUID(),
+      reference,
+      status,
+      amountKobo,
+      customerId: due.customerId,
+      data: Object.assign({ ...kept, refundStatus: "none", reversalStatus: "none" }, data),
+    });
+  }
   await pool.query(
     `INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at)
     SELECT id,"merchantId",kind,name,status,reference,"amountKobo","customerId",data,"createdAt","updatedAt" FROM jsonb_to_recordset($1::jsonb) AS x(id text,"merchantId" text,kind text,name text,status text,reference text,"amountKobo" bigint,"customerId" text,data jsonb,"createdAt" timestamptz,"updatedAt" timestamptz)`,

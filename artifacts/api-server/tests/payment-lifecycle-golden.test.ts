@@ -13,6 +13,7 @@ import { precisionAudit } from "../src/domain/reports.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
 import type { DomainState, TypedRecord } from "../src/domain/types.js";
+import { paymentMoneyReturned, paymentUnappliedKobo } from "@workspace/valopay-schema";
 
 const { assertFinalState } = await import("../src/lib/valopay-store.js");
 let checks = 0;
@@ -95,12 +96,50 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   const over = paymentByReference(state, "TRF-OVER");
   executeAction(state, finance(wat("2027-07-03T10:00:00")), { action: "manual_allocate", recordId: over.id, reason: "Customer paid instalment 5 with extra", data: { dueItemId: due.id, amountKobo: GROSS } });
   equal([over.status, due.status, positionFor(state, due.customerId).unallocatedKobo], ["overpaid", "paid", 500_000], "the excess is the customer's credit until it is refunded");
-  executeAction(state, finance(wat("2027-07-03T11:00:00")), { action: "record_refund", recordId: over.id, reason: "Excess returned to the payer", data: { reference: "RF-OVER" } });
+  const refundedExcess = executeAction(state, finance(wat("2027-07-03T11:00:00")), { action: "record_refund", recordId: over.id, reason: "Excess returned to the payer", data: { reference: "RF-OVER" } });
+  equal(refundedExcess.message, "External refund of NGN 5,000.00 recorded: the money this payment had not applied. Valo Pay did not move funds.", "the amount reads like the other money in the API");
   equal([over.status, over.data.refundStatus, over.data.allocatedKobo], ["allocated", "refunded", GROSS], "the refund returns the excess; what was applied stays applied");
   equal(over.data.refundedKobo, 500_000, "only the excess is recorded as refunded");
   equal([due.status, allocationsFor(state, over).map((item) => item.status)], ["paid", ["confirmed"]], "the instalment stays paid by the money that stayed");
   equal(positionFor(state, due.customerId).unallocatedKobo, 0, "the refunded excess is no longer credit");
-  refused(() => executeAction(state, finance(wat("2027-07-03T12:00:00")), { action: "manual_allocate", recordId: over.id, reason: "Apply the rest", data: { dueItemId: recordsOf(state, "due-items").find((item) => item.reference === "DEMO-LOAN-2006")!.id, amountKobo: 500_000 } }), /refunded to the payer\. Its money went back/, 409, "the refunded excess cannot be allocated");
+  refused(() => executeAction(state, finance(wat("2027-07-03T12:00:00")), { action: "manual_allocate", recordId: over.id, reason: "Apply the rest", data: { dueItemId: recordsOf(state, "due-items").find((item) => item.reference === "DEMO-LOAN-2006")!.id, amountKobo: 500_000 } }), /Payment TRF-OVER was refunded to the payer in part: NGN 5,000\.00 went back, so nothing is left to allocate/, 409, "the refunded excess cannot be allocated");
+  // The match is then found wrong. The ₦25,000 that stayed never went back: it is the customer's credit again, and Finance may allocate it.
+  const [overMatch] = allocationsFor(state, over);
+  executeAction(state, finance(wat("2027-07-04T09:00:00")), { action: "review_allocation", recordId: overMatch!.id, reason: "Wrong loan", data: { correct: false } });
+  equal([over.status, over.data.allocatedKobo, over.data.refundedKobo, over.data.refundStatus], ["unallocated", 0, 500_000, "refunded"], "only the excess went back, so the payment waits for Finance with the rest");
+  equal([paymentMoneyReturned(over), paymentUnappliedKobo(over), positionFor(state, due.customerId).unallocatedKobo], [false, GROSS, GROSS], "what the refund did not return is credit and can be allocated");
+  // An instalment for the gross ₦30,000, due the next day, is what R5 would propose if it read the payment as whole.
+  const third = makeRecord(state, "due-items", { name: "Ngozi Eze · instalment 7", status: "scheduled", customerId: due.customerId, amountKobo: 3_000_000, reference: "DEMO-LOAN-2007", data: { dueDate: "2027-07-04", mandateId: due.data.mandateId, owner: "lms", outstandingKobo: 3_000_000 } });
+  const closed = executeAction(state, finance(wat("2027-07-05T07:00:00")), { action: "daily_close" }).record!;
+  equal([over.status, allocationsFor(state, over).filter((item) => item.status === "proposed").length, closed.data.report.reconciliation.paymentsSkipped], ["unallocated", 0, 0], "automatic matching, which reads the gross amount, leaves it for Finance without failing");
+  equal(over.data.explanation, "A refund returned NGN 5,000.00 of this payment. Automatic matching leaves the NGN 25,000.00 it still holds for Finance to allocate.", "and says why");
+  const waiting = recordsOf(state, "payments").filter((item) => item.status === "unallocated" && item.id !== over.id).reduce((sum, item) => sum + item.amountKobo, 0);
+  equal([closed.data.report.unallocated.kobo, exceptionsFor(state, "unallocated_payment", over.id).map((item) => item.amountKobo)], [waiting + GROSS, [GROSS]], "the close and its exception count the NGN 25,000 it holds, not the NGN 30,000 received");
+  refused(() => executeAction(state, finance(wat("2027-07-05T09:30:00")), { action: "record_refund", recordId: over.id, reason: "Again", data: { reference: "RF-OVER-2" } }), /already recorded/, 409, "one refund per payment, even when the payment holds money again");
+  refused(() => executeAction(state, finance(wat("2027-07-05T10:00:00")), { action: "manual_allocate", recordId: over.id, reason: "Whole receipt", data: { dueItemId: third.id, amountKobo: 3_000_000 } }), /in part: NGN 5,000\.00 went back, so only NGN 25,000\.00 is left to allocate/, 409, "the refunded part still cannot be allocated");
+  // Finance applies what stayed: it settles instalment 6 and the rest is an overpayment of what the payment still holds.
+  executeAction(state, finance(wat("2027-07-05T10:02:00")), { action: "resolve_exception", recordId: exceptionsFor(state, "overpayment", over.id)[0]!.id, reason: "The excess was refunded to the payer.", data: { resolutionCode: "refund_requested" } });
+  const sixth = recordsOf(state, "due-items").find((item) => item.reference === "DEMO-LOAN-2006")!;
+  executeAction(state, finance(wat("2027-07-05T10:05:00")), { action: "manual_allocate", recordId: over.id, reason: "Right loan", data: { dueItemId: sixth.id, amountKobo: 1_234_500 } });
+  const overpayment = exceptionsFor(state, "overpayment", over.id).at(-1)!;
+  equal([over.status, sixth.status, overpayment.amountKobo, positionFor(state, due.customerId).unallocatedKobo], ["overpaid", "paid", 1_265_500, 1_265_500], "the overpayment is the NGN 12,655 left, not the refunded NGN 5,000 as well");
+  executeAction(state, finance(wat("2027-07-05T10:10:00")), { action: "manual_allocate", recordId: over.id, reason: "Rest to the next loan", data: { dueItemId: third.id, amountKobo: 1_265_500 } });
+  equal([over.status, over.data.allocatedKobo, outstandingOf(third), third.status, positionFor(state, due.customerId).unallocatedKobo], ["allocated", GROSS, 1_734_500, "partially_paid", 0], "what stayed is all applied again, and the payment has nothing left");
+  invariant(state);
+}
+{
+  // A refund recorded before its amount was kept is read as the whole payment: after its match is found wrong, nothing is left.
+  const { state, due } = liveFixture({ withFailure: false, merchantId: "legacy-refund" });
+  const legacy = makeRecord(state, "payments", { name: "legacy", status: "allocated", reference: "LEG-REFUND", customerId: due.customerId, amountKobo: 3_000_000, data: { allocatedKobo: GROSS, observedAt: wat("2027-07-01T09:00:00"), channel: "transfer", refundStatus: "refunded" } });
+  const match = makeRecord(state, "allocations", { name: "Allocation R7", status: "confirmed", customerId: due.customerId, amountKobo: GROSS, data: { paymentId: legacy.id, dueItemId: due.id, rule: "R7", confidence: "manual", automatic: false, reviewed: null } });
+  due.data.outstandingKobo = 0; due.status = "paid";
+  equal([paymentMoneyReturned(legacy), paymentUnappliedKobo(legacy)], [true, 0], "a refund with no recorded amount returned the whole payment");
+  executeAction(state, finance(wat("2027-07-02T09:00:00")), { action: "review_allocation", recordId: match.id, reason: "Wrong loan", data: { correct: false } });
+  equal([legacy.status, paymentUnappliedKobo(legacy), positionFor(state, due.customerId).unallocatedKobo], ["returned", 0, 0], "so its money is not credit once the match is superseded");
+  refused(() => executeAction(state, finance(wat("2027-07-02T10:00:00")), { action: "manual_allocate", recordId: legacy.id, reason: "By hand", data: { dueItemId: due.id, amountKobo: GROSS } }), /refunded to the payer\. Its money went back/, 409, "and it cannot be allocated");
+  // A refund whose recorded amount covers the whole payment reads the same.
+  const whole = makeRecord(state, "payments", { name: "whole", status: "returned", reference: "WHOLE-REFUND", customerId: due.customerId, amountKobo: 700_000, data: { allocatedKobo: 0, observedAt: wat("2027-07-01T09:00:00"), channel: "transfer", refundStatus: "refunded", refundedKobo: 700_000 } });
+  equal([paymentMoneyReturned(whole), paymentUnappliedKobo(whole)], [true, 0], "a refund of the whole amount returned the payment");
   invariant(state);
 }
 
@@ -148,9 +187,11 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   Object.assign(refundedExcess.data, { refundStatus: "recorded_externally" });
   makeRecord(state, "allocations", { name: "Allocation R7", status: "confirmed", customerId: due.customerId, amountKobo: GROSS, data: { paymentId: refundedExcess.id, dueItemId: second.id, rule: "R7", confidence: "manual", automatic: false, reviewed: null } });
   second.data.outstandingKobo = 0; second.status = "paid";
+  // Its excess was refunded and its match then superseded, when an earlier build read any refund as returning the whole payment.
+  const heldBack = makeRecord(state, "payments", { name: "legacy", status: "returned", reference: "LEG-PART-REFUND", customerId: due.customerId, amountKobo: 3_000_000, data: { allocatedKobo: 0, observedAt: wat("2027-07-01T09:00:00"), channel: "transfer", refundStatus: "refunded", refundedKobo: 500_000 } });
   const run = reconcile(state, finance(wat("2027-07-02T07:00:00")));
-  equal([applied.status, stuck.status, reversed.status, refundedExcess.status], ["allocated", "unallocated", "returned", "allocated"], "each status now matches its records");
-  equal(run.data.paymentStatusesRepaired, 4, "the close reports the repairs");
+  equal([applied.status, stuck.status, reversed.status, refundedExcess.status, heldBack.status], ["allocated", "unallocated", "returned", "allocated", "unallocated"], "each status now matches its records");
+  equal(run.data.paymentStatusesRepaired, 5, "the close reports the repairs");
   equal(stuck.data.proposedDueItemId, undefined, "the dead proposal pointer is cleared");
   invariant(state);
 }

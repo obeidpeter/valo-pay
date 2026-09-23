@@ -987,8 +987,14 @@ export async function loadReportsView(context:StoreContext,merchantId:string):Pr
   return {merchant:merchant.info,settings:merchant.settings,records:rows.map(rowToRecord)};
 }
 
-/** paymentMoneyReturned in SQL: reversed by the provider, or refunded (including the legacy spelling). Returned money is no customer's credit. */
-const paymentReturnedSql = "(coalesce(r.data->>'reversalStatus','')='reversed' OR coalesce(r.data->>'refundStatus','') IN ('refunded','recorded_externally'))";
+/** paymentRefundedKobo in SQL: for a refund (including the legacy spelling), data.refundedKobo when it is a whole non-negative safe number, else the whole payment. */
+const paymentRefundedSql = `(CASE WHEN coalesce(r.data->>'refundStatus','') IN ('refunded','recorded_externally') THEN CASE WHEN jsonb_typeof(r.data->'refundedKobo')='number'
+  THEN CASE WHEN (r.data->>'refundedKobo')::numeric BETWEEN 0 AND ${Number.MAX_SAFE_INTEGER} AND (r.data->>'refundedKobo')::numeric=trunc((r.data->>'refundedKobo')::numeric) THEN (r.data->>'refundedKobo')::numeric ELSE r.amount_kobo END
+  ELSE r.amount_kobo END ELSE 0 END)`;
+/** paymentMoneyReturned in SQL: reversed by the provider, or refunded in full. Returned money is no customer's credit. */
+const paymentReturnedSql = `(coalesce(r.data->>'reversalStatus','')='reversed' OR (coalesce(r.data->>'refundStatus','') IN ('refunded','recorded_externally') AND ${paymentRefundedSql}>=r.amount_kobo))`;
+/** paymentUnappliedKobo in SQL: what a payment holds that is neither applied nor returned by a refund. */
+const paymentUnappliedSql = `CASE WHEN ${paymentReturnedSql} THEN 0 ELSE greatest(0,r.amount_kobo-coalesce((r.data->>'allocatedKobo')::numeric,0)-${paymentRefundedSql}) END`;
 
 /** Read-only customer cards and events are paged; balances aggregate every related record. */
 export async function getCustomerHistory(context: StoreContext, merchantId: string, id: string, query: CustomerHistoryQuery) {
@@ -1001,7 +1007,7 @@ export async function getCustomerHistory(context: StoreContext, merchantId: stri
     count(*) FILTER(WHERE r.kind='mandates') AS mandates, count(*) FILTER(WHERE r.kind='due-items') AS "dueItems", count(*) FILTER(WHERE r.kind='payments') AS payments,
     coalesce(sum(r.amount_kobo) FILTER(WHERE r.kind='due-items' AND r.status<>'cancelled'),0) AS obligations,
     coalesce(sum(r.amount_kobo) FILTER(WHERE r.kind='allocations' AND r.status='confirmed'),0) AS allocated,
-    coalesce(sum(greatest(0,r.amount_kobo-coalesce((r.data->>'allocatedKobo')::numeric,0))) FILTER(WHERE r.kind='payments' AND NOT ${paymentReturnedSql}),0) AS credit
+    coalesce(sum(${paymentUnappliedSql}) FILTER(WHERE r.kind='payments'),0) AS credit
     ${base} AND r.customer_id=$4`,values)).rows[0]!;
   const totals = {} as Record<HistorySection,number>, offsets = {} as Record<HistorySection,number>;
   const pages = {} as Record<HistorySection,ValopayRecord[]>;
