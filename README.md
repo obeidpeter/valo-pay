@@ -96,7 +96,6 @@ Provide credentials through your environment's secret manager, never through com
 | `CLERK_PUBLISHABLE_KEY` | Server-side Clerk configuration |
 | `VITE_CLERK_PUBLISHABLE_KEY` | Frontend Clerk configuration for sign-in; on a local host without it the console runs the anonymous sandbox, sign-in links inside the console are hidden and `/sign-in` explains that sign-in is not available on this host |
 | `PRIVATE_OBJECT_DIR` | Private App Storage location |
-| `PUBLIC_OBJECT_SEARCH_PATHS` | App Storage public search locations |
 | `PORT` | Port for each process, supplied by its managed workflow |
 | `BASE_PATH` | Frontend mount path, `/` for this application |
 | `NODE_ENV` | Development or production behaviour |
