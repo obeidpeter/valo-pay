@@ -1,4 +1,12 @@
 # Valo Pay — build status
+## Audit fixes, 23 September audit · September 2026
+
+The findings of the 23 September 2026 audit are fixed and covered by tests:
+
+- **Hand-back ends the cutover contract.** After a hand-back the old contract stayed ready, so Operations could set an instalment's owner to Valo Pay again and, once the emergency stop was lifted, the engine would have planned collections. A hand-back now ends every cutover contract recorded before it: owner Valo Pay needs a new contract recorded and made ready after the last hand-back, and a contract drafted before it cannot be made ready afterwards (400). Lenders that handed back earlier are covered by the same rule without a data change.
+- **Consented mandate limits.** A plain edit could raise a mandate's limit (₦50,000 to ₦10,000,000) under the same consent. The limit is part of the customer's consent: an edit that changes it is refused (400), and `mandate_reissue` takes an optional `data.amountKobo`, the limit the new consent covers, which the console's Reissue dialog asks for, starting from the current limit.
+- **Submitted policies are frozen.** An author could change a submitted policy's rules (3 attempts 48 hours apart to 4 attempts 24 hours apart) before the reviewer approved it. A submitted policy now refuses every edit (400) until a reviewer rejects it, as submitted templates already did.
+
 ## Audit fixes, items 21 to 31 · September 2026
 
 Items 21 to 31 of the 22 September 2026 audit are fixed and covered by tests:

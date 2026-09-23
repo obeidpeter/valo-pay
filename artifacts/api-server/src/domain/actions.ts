@@ -134,12 +134,15 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     const old = findRecord(state, String(input.recordId), "mandates");
     if (!["pending_activation", "expired", "cancelled", "failed"].includes(old.status)) throw new Error("You can reissue a mandate only if it expired, was cancelled, failed or is still awaiting activation.");
     if (!data.consentEvidence || typeof data.consentEvidence !== "string") throw new Error("Enter a new consent evidence reference to reissue this mandate.");
+    // MAN-02: the new consent may cover a new limit; the limit of an existing mandate never changes.
+    const limitKobo = data.amountKobo === undefined || data.amountKobo === null || data.amountKobo === "" ? old.amountKobo : data.amountKobo;
+    if (!Number.isSafeInteger(limitKobo) || Number(limitKobo) < 1) throw new Error("Enter the debit limit the new consent covers, a whole number of kobo greater than 0.");
     // RET-07: fresh consent covers the current approved version of the same policy, or the version named in data.policyId.
     const target = data.policyId ? findRecord(state, String(data.policyId), "policies") : recordsOf(state, "policies").find((item) => item.id === old.data.policyId);
     if (data.policyId && (target!.status !== "approved" || (old.data.policyId && !samePolicyLineage(state, String(old.data.policyId), target!.id)))) throw new Error("Choose an approved version of this mandate's existing policy.");
     // MAN-06: a new mandate and a new consent record; the old records are never edited.
     const fresh = makeRecord(state, "mandates", {
-      name: `${old.name} · reissued`, status: "pending_activation", customerId: old.customerId, amountKobo: old.amountKobo, createdAt: now,
+      name: `${old.name} · reissued`, status: "pending_activation", customerId: old.customerId, amountKobo: Number(limitKobo), createdAt: now,
       data: {
         workflow: old.data.workflow, frequency: old.data.frequency, policyId: target?.id ?? old.data.policyId, origin: "reissued", reissuedFrom: old.id,
         consentPolicyId: target?.id, consentPolicyVersion: target ? Number(target.data.version || 1) : undefined, consentPolicySummary: target ? policySummary(target) : undefined,
