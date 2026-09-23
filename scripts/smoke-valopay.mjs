@@ -1,7 +1,10 @@
 // API smoke checks use a fresh, synthetic sandbox only; never production data.
+// This script must never be pointed at a production host.
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-const base=`https://${process.env.REPLIT_DEV_DOMAIN}`;
+const domain=process.env.REPLIT_DEV_DOMAIN;
+if(!domain||!/^[a-z0-9.-]+\.replit\.dev(?::\d+)?$/i.test(domain))throw new Error("Refusing to run: REPLIT_DEV_DOMAIN must be a *.replit.dev host.");
+const base=`https://${domain}`;
 // Compatibility test: an existing browser must keep its sandbox after the rename.
 const legacyToken=randomBytes(32).toString("hex");
 let cookie=`valo_sandbox=${legacyToken}`,merchantId="",checks=0;

@@ -235,7 +235,7 @@ NODE_ENV=development VALOPAY_RUN_INTEGRATION=1 \
 
 `test:integration` (`scripts/run-integration-tests.mjs`) refuses to run without `VALOPAY_RUN_INTEGRATION=1` and a `DATABASE_URL`, sets `NODE_ENV=development` unless set, and runs the record-index, repository, list paging, priority queues, console read models, concurrency, export-job, performance, scheduled-close and contract (`api-contract.integration.test.ts`: every console-facing operation's answers checked against the published contract) suites in turn. The database must be disposable and carry the pushed schema; the pull-request workflow runs the same command against its own PostgreSQL service container.
 
-The HTTP suites require Replit's `REPLIT_DEV_DOMAIN`. Never use real lender data for tests.
+The HTTP suites require Replit's `REPLIT_DEV_DOMAIN` and refuse, before they send anything, any host that is not a `*.replit.dev` development domain. Never use real lender data for tests.
 
 The API contract is generated, never edited by hand: change `scripts/create-valopay-spec.cjs`, run it to rewrite `lib/api-spec/openapi.json`, then regenerate the zod validators and the typed client from it. The generated packages (`lib/api-zod/src/generated`, `lib/api-client-react/src/generated`) are written by this command and nothing else:
 

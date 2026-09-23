@@ -1,10 +1,13 @@
 // The operator commands as an operator runs them, offline: each script's own
 // entry point, its options after the `--` that `pnpm run x -- --flag` passes
-// on, a mistyped option, and the refusals that come before any provider or
-// database is reached. Nothing here leaves this machine: the monitor probes a
-// closed loopback port, and the other checks stop before they would connect.
+// on, a mistyped option, and the refusals that come before any provider,
+// database or host is reached. Nothing here leaves this machine: the monitor
+// probes a closed loopback port, and the other checks stop before they would
+// connect.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { createServer } from "node:net";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -75,4 +78,22 @@ assert.equal(result.status, 1);
 assert.match(result.stderr, /Provide a staging organisation, administrator user ID and workspace name\./);
 assert.doesNotMatch(result.output, /ERR_MODULE_NOT_FOUND|ECONNREFUSED/);
 
-console.log("Operator commands passed offline: options after pnpm's --, a named mistyped option, uncopied values, the monitor's dry run and careful failure, the Paystack check's refusals before any request, and provision-pilot's usage, staff-access check and store refusal before any connection.");
+// ---- pnpm run test:smoke and test:security-api ----
+// Both refuse any host but a Replit development domain before they send anything: a loopback listener counts every connection.
+let connections = 0;
+const listener = createServer((socket) => { connections += 1; socket.destroy(); });
+listener.listen(0, "127.0.0.1");
+await once(listener, "listening");
+const local = `127.0.0.1:${listener.address().port}`;
+try {
+  for (const script of ["scripts/smoke-valopay.mjs", "scripts/security-valopay.mjs"]) {
+    for (const domain of [undefined, local, `${local}/sandbox.replit.dev`]) {
+      result = await run(script, [], domain === undefined ? {} : { REPLIT_DEV_DOMAIN: domain });
+      assert.notEqual(result.status, 0, `${script} with ${domain}`);
+      assert.match(result.stderr, /Refusing to run: REPLIT_DEV_DOMAIN must be a \*\.replit\.dev host\./, `${script} with ${domain}`);
+    }
+  }
+  assert.equal(connections, 0, "nothing was sent to a host that is not a Replit development domain");
+} finally { listener.close(); }
+
+console.log("Operator commands passed offline: options after pnpm's --, a named mistyped option, uncopied values, the monitor's dry run and careful failure, the Paystack check's refusals before any request, provision-pilot's usage, staff-access check and store refusal before any connection, and the smoke and security scripts' refusal of any host but a Replit development domain.");
