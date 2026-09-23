@@ -23,7 +23,7 @@ const actionLabels: Record<string, string> = {
   new_policy_version: 'Create draft version', submit_template: 'Submit for review', approve_template: 'Approve template',
   reject_template: 'Reject template', new_template_version: 'Create draft version',
   confirm_allocation: 'Confirm allocation', reject_allocation: 'Reject allocation', manual_allocate: 'Allocate payment',
-  review_allocation: 'Record review', resolve_exception: 'Resolve exception', record_refund: 'Record external refund',
+  review_allocation: 'Record review', resolve_exception: 'Resolve exception', record_refund: 'Record external refund', release_dispute: 'Release from dispute',
   simulate_failure: 'Simulate failure', backtest_policy: 'Run policy simulation',
   preregister_experiment: 'Register experiment plan', hand_back: 'Return collection ownership', issue_invoice: 'Issue invoice',
 };

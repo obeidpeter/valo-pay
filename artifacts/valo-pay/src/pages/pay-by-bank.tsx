@@ -30,6 +30,7 @@ export default function PayByBank() {
   return <PaymentContent key={merchantId} api={api} />;
 }
 function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
+  const { merchantId } = useWorkspace();
   const [dueId, setDueId] = useState(""),
     [amount, setAmount] = useState<string | null>(null),
     [amountError, setAmountError] = useState(""),
@@ -74,9 +75,9 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
         "payment.refund_request":
           "Sample refund request recorded. A different Finance reviewer must confirm the evidence; no refund was sent.",
         "payment.refund_confirm":
-          "Sample refund evidence recorded. Review the reopened obligation in reconciliation. No funds were sent.",
+          "Sample refund evidence recorded. An instalment the receipt paid owes that amount again and is open for collection, not in dispute. No funds were sent.",
         "payment.reverse":
-          "Sample reversal evidence recorded. Review the reopened obligation in reconciliation. No money moved.",
+          "Sample reversal evidence recorded. An instalment the receipt paid owes that amount again and is in dispute, with a customer dispute exception for Operations. No money moved.",
       };
       setSuccess(
         action === "payment.outcome"
@@ -116,6 +117,11 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
     checkoutExpired =
       !!intent &&
       Date.parse(intent.data.expiresAt) <= Date.parse(api.data.asOf);
+  // When the outcome became unknown: after 24 hours the daily close raises an exception for Finance, which the checkout names.
+  const unknownSince = (intent?.data.events as { at: string; status: string }[] | undefined)?.find(
+      (e) => e.status === "unknown",
+    )?.at,
+    outcomeExceptionId = intent?.data.outcomeExceptionId as string | undefined;
   const openReview = (
     action: string,
     title: string,
@@ -521,9 +527,21 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
               </div>
               {intent.status === "unknown" && (
                 <p className="connected-note">
-                  The result is unknown. A new collection is blocked until a
-                  status query confirms whether this payment succeeded or
-                  failed.
+                  The result has been unknown
+                  {unknownSince ? ` since ${formatDate(unknownSince)}` : ""}. A
+                  new collection is blocked until the outcome is known. Query
+                  the provider again; once the outcome has been unknown for 24
+                  hours, the daily close raises an unknown-outcome exception
+                  for Finance, who confirms the payment with its evidence or
+                  marks it failed. Either one releases the instalment.{" "}
+                  {outcomeExceptionId && (
+                    <Link
+                      className="font-medium underline underline-offset-4"
+                      href={`/exceptions?${new URLSearchParams({ record: outcomeExceptionId, lender: merchantId || "" })}`}
+                    >
+                      Open the unknown-outcome exception
+                    </Link>
+                  )}
                 </p>
               )}
               {intent.status === "confirmed" && (

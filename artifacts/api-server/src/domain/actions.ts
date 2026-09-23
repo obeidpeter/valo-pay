@@ -6,9 +6,11 @@ import {
 } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import {
-  REVIEW_SUPERSESSION, allocatePayment, applyConfirmedAllocation, confirmAttemptOutcome, forgetRejectedMatch, paymentRefunded, paymentReversed, reconcile,
-  recordPaymentRefund, reinstateAllocation, releaseDuplicateHold, rememberRejectedMatch, settlePaymentStatus, supersedeAllocation, supersededByReview,
+  REVIEW_SUPERSESSION, allocatePayment, applyConfirmedAllocation, clearSettledExceptions, clearedExceptionsNote, confirmAttemptOutcome, dueStatusText, forgetRejectedMatch,
+  paymentRefunded, paymentReversed, reconcile, recordPaymentRefund, reinstateAllocation, releaseDispute, releaseDuplicateHold, rememberRejectedMatch, settlePaymentStatus,
+  supersedeAllocation, supersededByReview,
 } from "./reconciliation";
+import { resolveUnknownCheckout } from "./connected";
 import { buildReports } from "./reports";
 import { buildCloseReport, closeSchedule, followingCloseInstant, openingSnapshot, owedCloseDates, scheduledCloseBusinessDate, storedCloseCursor } from "./close";
 import { watDate } from "./calendar";
@@ -21,7 +23,7 @@ import { buildAlerts } from "./alerts";
 const requiresReason = new Set([
   "kill_switch", "mandate_suspend", "mandate_cancel", "mandate_reinstate", "mandate_reissue", "activation_reminder",
   "submit_policy", "approve_policy", "reject_policy", "new_policy_version", "submit_template", "approve_template", "reject_template", "new_template_version",
-  "confirm_allocation", "reject_allocation", "manual_allocate", "review_allocation", "resolve_exception", "record_refund",
+  "confirm_allocation", "reject_allocation", "manual_allocate", "review_allocation", "resolve_exception", "record_refund", "release_dispute",
   "simulate_failure", "backtest_policy", "preregister_experiment", "hand_back", "mark_pack_used", "issue_invoice", "notify_policy_change", "apply_policy_version",
 ]);
 const DAY_MS = 24 * 60 * 60 * 1000, MINUTE_MS = 60 * 1000;
@@ -114,7 +116,34 @@ export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTr
   return result(message, close, { ...reconciled.data, closeId: close.id, positionAlert: report.positionRebuild.alert, schedule: close.data.schedule });
 }
 
+/** Actions that can settle what an open exception waits for: an exception whose condition cleared closes in the same action. */
+const settlingActions = new Set(["confirm_allocation", "manual_allocate", "review_allocation", "resolve_exception", "record_refund", "release_dispute"]);
+
+/**
+ * Runs a domain action. After one that moves money or a dispute, each open
+ * exception whose condition cleared is closed, and the audit entry names them
+ * (data.auditNote, added to the reason). A reconciliation or close does the
+ * same itself.
+ */
 export function executeAction(state: DomainState, ctx: Context, input: ActionInput): ActionResult {
+  const answer = runAction(state, ctx, input);
+  if (!settlingActions.has(input.action)) return answer;
+  const note = clearedExceptionsNote(clearSettledExceptions(state, ctx));
+  if (!note) return answer;
+  return { ...answer, data: { ...answer.data, auditNote: [answer.data.auditNote, note].filter(Boolean).join(" ") } };
+}
+
+/** The answer when an instalment left dispute: where it stands now, and the audit note that records how it left. */
+function releasedAnswer(record: ValopayRecord, due: TypedRecord<"due-items">, via: "not_upheld" | "finance_release"): ActionResult {
+  const standing = due.status === "paid" ? "paid" : `${dueStatusText(due.status)} with ${nairaText(Number(due.data.outstandingKobo ?? due.amountKobo))} outstanding`;
+  const next = due.status === "paid" ? "nothing is outstanding" : "collection and allocation can resume";
+  return result(`${via === "not_upheld" ? "Exception resolution recorded. " : ""}Instalment ${due.reference} is out of dispute and is now ${standing}: ${next}.`, record, {
+    dueStatus: due.status,
+    auditNote: via === "not_upheld" ? `Dispute not upheld: instalment ${due.reference} is out of dispute, now ${standing}.` : `Instalment ${due.reference} released from dispute by Finance, now ${standing}.`,
+  });
+}
+
+function runAction(state: DomainState, ctx: Context, input: ActionInput): ActionResult {
   if (!input.action) throw new Error("action is required.");
   if (requiresReason.has(input.action)) reason(input);
   const data = input.data || {};
@@ -371,6 +400,15 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     touch(allocation, now);
     return result(message, allocation);
   }
+  if (input.action === "release_dispute") {
+    // Decision on leaving a dispute: Finance releases an instalment from dispute with a reason; its status then follows its balance.
+    assertActionRole(ctx, ["Admin", "Finance"]);
+    const due = findRecord(state, String(input.recordId), "due-items");
+    const closed = releaseDispute(state, ctx, due, { via: "finance_release", reason: reason(input) });
+    const answer = releasedAnswer(due, due, "finance_release");
+    const note = clearedExceptionsNote(closed);
+    return note ? { ...answer, data: { ...answer.data, auditNote: `${answer.data.auditNote} ${note}` } } : answer;
+  }
   if (input.action === "resolve_exception") {
     assertActionRole(ctx, ["Admin", "Finance", "Operations"]);
     const item = findRecord(state, String(input.recordId), "exceptions");
@@ -379,6 +417,16 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     const allowed = resolutionCodesFor(item.data.type);
     if (!allowed.includes(String(data.resolutionCode))) throw new Error(`Resolution code must be one of: ${allowed.join(", ")}.`);
     const type = resolveExceptionType(item.data.type);
+    // Item 10: an unknown outcome of a pay-by-bank checkout is Finance's to record, with the evidence when it was paid.
+    const checkout = type === "unknown_outcome" ? recordsOf(state, "connected-intents").find((record) => record.id === item.data.linkedRecordId) : undefined;
+    const evidenceReference = typeof data.evidenceReference === "string" && data.evidenceReference.trim() ? data.evidenceReference.trim() : undefined;
+    if (checkout) {
+      if (!["Admin", "Finance"].includes(ctx.role)) throw Object.assign(new Error("Only Finance, or an administrator, records the outcome of a pay-by-bank payment: confirming it as received records a receipt."), { status: 403 });
+      if (data.confirmedFailureCode !== undefined && data.confirmedFailureCode !== null && data.confirmedFailureCode !== "") throw new Error("A failure code belongs to a debit attempt. For a pay-by-bank checkout, choose confirmed successful with its evidence reference, or confirmed failed.");
+      if (data.resolutionCode === "resolved_succeeded" && !evidenceReference) throw new Error("Enter the evidence reference that shows the payment arrived, such as a masked bank statement line.");
+      if (evidenceReference && /\d{8,}/.test(evidenceReference)) throw new Error("Enter a masked evidence reference, such as STMT-***4411. Do not enter a full account or statement number.");
+      if (evidenceReference && data.resolutionCode !== "resolved_succeeded") throw new Error("An evidence reference is recorded only when the payment is confirmed as received.");
+    } else if (evidenceReference) throw new Error("An evidence reference is recorded only when a pay-by-bank payment whose outcome stayed unknown is confirmed as received.");
     const confirmedCode = data.confirmedFailureCode === undefined || data.confirmedFailureCode === null || data.confirmedFailureCode === "" ? undefined : data.confirmedFailureCode;
     if (confirmedCode !== undefined) {
       if (type !== "unknown_outcome" || data.resolutionCode !== "resolved_failed") throw new Error("A confirmed failure code is recorded only when an unknown outcome is resolved as failed.");
@@ -388,6 +436,26 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     if (confirmedCode !== undefined) item.data.confirmedFailureCode = normaliseFailureCode(confirmedCode);
     if (!type) item.data.legacyType = true;
     touch(item, now);
+    if (checkout) {
+      const settled = resolveUnknownCheckout(state, ctx, item, checkout, { reason: reason(input), evidenceReference });
+      const receipt = settled === "confirmed" ? recordsOf(state, "payments").find((record) => record.id === checkout.data.paymentId) : undefined;
+      const applied = receipt ? (paymentUnappliedKobo(receipt) === 0 ? " and applied to its instalment" : "; what it could not apply to its instalment waits for Finance with an exception") : "";
+      const instalment = recordsOf(state, "due-items").find((record) => record.id === checkout.data.dueItemId)?.reference ?? String(checkout.data.dueItemId);
+      const auditNote = settled === "confirmed" ? `Pay-by-bank payment of ${nairaText(checkout.amountKobo)} for instalment ${instalment} recorded as received, with evidence ${evidenceReference}.`
+        : settled === "failed" ? `Pay-by-bank payment of ${nairaText(checkout.amountKobo)} for instalment ${instalment} recorded as failed.` : undefined;
+      return result(settled === "confirmed"
+        ? `Exception resolution recorded. The pay-by-bank payment is recorded as received with evidence ${evidenceReference}${applied}. Its instalment is released: the checkout no longer holds it.`
+        : settled === "failed"
+          ? "Exception resolution recorded. The pay-by-bank payment is recorded as failed, and its instalment is released: a new checkout or retry may be planned."
+          : "Exception resolution recorded. The checkout's outcome was already recorded.", item, settled ? { checkoutStatus: settled, auditNote } : {});
+    }
+    // Decision on leaving a dispute: not upheld takes the instalment out of dispute; another resolution leaves it for Finance to release.
+    const disputed = type === "customer_dispute" ? recordsOf(state, "due-items").find((record) => record.id === item.data.linkedRecordId && record.status === "in_dispute") : undefined;
+    if (disputed && data.resolutionCode === "not_upheld") {
+      releaseDispute(state, ctx, disputed, { via: "not_upheld", reason: reason(input), exceptionId: item.id });
+      return releasedAnswer(item, disputed, "not_upheld");
+    }
+    if (disputed) return result(`Exception resolution recorded. Instalment ${disputed.reference} stays in dispute, so collection and allocation stay paused until Finance releases it from dispute with a reason.`, item, { dueStatus: disputed.status });
     // An unknown outcome's resolution is what the provider confirmed, so the attempt takes that outcome.
     const outcome = type === "unknown_outcome" ? confirmAttemptOutcome(state, ctx, item) : undefined;
     if (outcome) return result(`Exception resolution recorded. The attempt is now recorded as ${outcome}.`, item, { attemptStatus: outcome });
