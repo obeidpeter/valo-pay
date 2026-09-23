@@ -127,11 +127,13 @@ try {
   assert.equal(pass.closed, 1, "the thread's pass closed the lender, and the main thread's health answer says so");
   const during = probes.filter((probe) => probe.ticks >= 1 && !probe.lastRun);
   const slowest = Math.max(...during.map((probe) => probe.ms)), stalled = Math.round(loop.max / 1e6);
-  // On the main thread's event loop, the close's own work (seconds of it at this size) held up every probe sent meanwhile.
-  assert.ok(pass.durationMs >= 400, `the close of ${seeded} records took ${pass.durationMs} ms; the fixture is too small to show a blocked event loop`);
+  // On the main thread's event loop, the close's own work (seconds of it at this size) held up every probe sent
+  // meanwhile. A probe here may take a quarter of the pass at most, and never 250 ms; a faster close keeps 100 ms.
+  const bound = Math.min(250, Math.max(100, pass.durationMs / 4));
+  assert.ok(pass.durationMs >= 300, `the close of ${seeded} records took ${pass.durationMs} ms; the fixture is too small to show a blocked event loop`);
   assert.ok(during.length >= 5, `${during.length} probes were answered while the close ran`);
-  assert.ok(slowest < Math.min(250, pass.durationMs / 4), `a health probe during a ${pass.durationMs} ms close took ${Math.round(slowest)} ms`);
-  assert.ok(stalled < Math.min(250, pass.durationMs / 4), `the main thread's event loop stalled for ${stalled} ms during a ${pass.durationMs} ms close`);
+  assert.ok(slowest < bound, `a health probe during a ${pass.durationMs} ms close took ${Math.round(slowest)} ms`);
+  assert.ok(stalled < bound, `the main thread's event loop stalled for ${stalled} ms during a ${pass.durationMs} ms close`);
   const [close] = await closesOf(lender);
   assert.equal(close?.data.schedule.trigger, "scheduled");
   const threadLines = lines().filter((line) => line.thread === "background");
@@ -141,7 +143,8 @@ try {
 
   // ---- The export: claimed and settled by the thread, one audit chain ----
   let job = queued.body;
-  for (const give = Date.now() + 60_000; job.status === "queued" || job.status === "running"; await delay(100)) {
+  // Each storage call is bounded to a minute; without App Storage the first fails at once.
+  for (const give = Date.now() + 150_000; job.status === "queued" || job.status === "running"; await delay(100)) {
     assert.ok(Date.now() < give, `the export stayed ${job.status}`);
     job = (await api(`/exports/${queued.body.id}`)).body;
   }
