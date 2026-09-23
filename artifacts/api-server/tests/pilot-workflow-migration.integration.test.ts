@@ -6,18 +6,20 @@
 // database built by either route behaves the same; the files must be repeatable; and
 // the rules they declare must hold.
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { requireCreateDatabase, requireLoopback, throwawayDatabaseName } from './throwaway-database';
 
 if (process.env.VALOPAY_RUN_INTEGRATION !== '1') {
   console.log('Pilot workflow migration rehearsal requires a disposable local PostgreSQL instance.'); process.exit(0);
 }
+// Any loopback database whose login can create databases, carrying the pushed schema to compare with: the
+// rehearsal builds its own throwaway database beside it.
+const suite = 'Pilot workflow migration rehearsal';
 const connection = new URL(process.env.DATABASE_URL || '');
-assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(connection.hostname), 'migration rehearsal refuses remote hosts');
-assert.equal(connection.pathname, '/valopay', 'use the disposable CI database named valopay, which carries the pushed schema to compare with');
+requireLoopback(suite, connection);
 const { pool, Pool } = await import('@workspace/db');
-const database = `valopay_pilot_rehearsal_${randomUUID().replaceAll('-', '')}`;
-assert.match(database, /^valopay_pilot_rehearsal_[a-f0-9]{32}$/);
+await requireCreateDatabase(suite, pool);
+const database = throwawayDatabaseName(connection, 'pilot_rehearsal');
 const targetUrl = new URL(connection); targetUrl.pathname = `/${database}`;
 const migrations = await Promise.all(['003_pilot_workflow.sql', '004_staff_lender_access.sql', '007_journal_and_lender_indexes.sql'].map((name) => readFile(new URL(`../../../lib/db/migrations/${name}`, import.meta.url), 'utf8')));
 const tables = ['valopay_operations', 'valopay_teams', 'valopay_staff_memberships', 'valopay_staff_invitations', 'valopay_staff_events', 'valopay_staff_lender_access'];

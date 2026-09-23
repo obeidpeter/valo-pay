@@ -10,6 +10,9 @@ const repository = "artifacts/api-server/src/lib/valopay-store.ts";
 const exportRepository = "artifacts/api-server/src/lib/export-job-store.ts";
 // Opt-in restricted runtime transactions verify and bind the forced-RLS scope.
 const isolatedRuntime = "artifacts/api-server/src/lib/runtime-isolation.ts";
+// The startup check reads DATABASE_URL only to refuse a missing or malformed value before anything starts;
+// like every other module, it may not import the database or query it.
+const startupCheck = "artifacts/api-server/src/lib/startup-config.ts";
 const violations = [];
 let checked = 0;
 const databaseImport = /(?:^@workspace\/db(?:\/|$)|^(?:pg|postgres|postgresql|drizzle-orm)(?:\/|$)|(?:^|\/)lib\/db(?:\/|$))/;
@@ -49,8 +52,9 @@ for (const file of [...await walk(path.join(root, "artifacts")), ...await walk(p
         : ts.isElementAccessExpression(target) && ts.isStringLiteral(target.argumentExpression) ? target.argumentExpression.text : "";
       if (member === "query" && !allowed) reject(node, "Raw query calls belong only in the scoped repository.");
     }
-    if (!allowed && ts.isPropertyAccessExpression(node) && connectionKey.test(node.name.text)) reject(node, "Database connection settings belong only in the repository.");
-    if (!allowed && ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression)
+    const namesConnection = allowed || relative === startupCheck;
+    if (!namesConnection && ts.isPropertyAccessExpression(node) && connectionKey.test(node.name.text)) reject(node, "Database connection settings belong only in the repository.");
+    if (!namesConnection && ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression)
       && connectionKey.test(node.argumentExpression.text)) reject(node, "Database connection settings belong only in the repository.");
     ts.forEachChild(node, visit);
   }

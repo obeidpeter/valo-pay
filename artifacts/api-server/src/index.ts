@@ -1,3 +1,6 @@
+// First, before any module that reads a setting: the settings are checked
+// together and a bad value ends the process with one fatal line.
+import { serverSettings } from "./lib/server-settings";
 import app from "./app";
 import { logger } from "./lib/logger";
 import { BUILD } from "./lib/build-info";
@@ -5,19 +8,7 @@ import { markSchedulerOff, startCloseScheduler, type CloseScheduler } from "./li
 import { closeDatabase, watchDatabase } from "./lib/valopay-store";
 import { startExportWorker } from './lib/export-worker';
 
-const rawPort = process.env["PORT"];
-
-if (!rawPort) {
-  throw new Error(
-    "PORT environment variable is required but was not provided.",
-  );
-}
-
-const port = Number(rawPort);
-
-if (Number.isNaN(port) || port <= 0) {
-  throw new Error(`Invalid PORT value: "${rawPort}"`);
-}
+const port = serverSettings.port!;
 
 // A connection that fails while idle is a log line, not the end of the process.
 watchDatabase(logger);
@@ -32,10 +23,11 @@ const server = app.listen(port, (err) => {
 
   logger.info({ event: "server.started", port, build: BUILD, node: process.version }, "Server listening");
   exportWorker = startExportWorker({ log: logger });
-  // REC-01: the daily close runs at each lender's configured time unless this process is told not to schedule it.
-  if (process.env["VALOPAY_CLOSE_SCHEDULER"] === "off") {
+  // REC-01: the daily close runs at each lender's configured time unless this process is told not to schedule it
+  // (VALOPAY_CLOSE_SCHEDULER=off in any case; any value but on or off was refused at startup).
+  if (serverSettings.closeScheduler === "off") {
     markSchedulerOff();
-    logger.warn({ event: "scheduler.off" }, "VALOPAY_CLOSE_SCHEDULER=off: daily closes must be triggered by hand from this process.");
+    logger.warn({ event: "scheduler.off" }, "VALOPAY_CLOSE_SCHEDULER=off: this process runs no scheduled close; run closes by hand or with the one-shot close pass.");
   } else {
     scheduler = startCloseScheduler({ log: logger });
   }

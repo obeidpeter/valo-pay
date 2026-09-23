@@ -6,9 +6,10 @@
 // until nothing is due, sharing each batch across workspaces and putting
 // lenders being retried after the rest; pauses an idle anonymous sandbox
 // instead of closing it; stops between lenders when told to; gives legacy
-// lenders a cursor without a close; and its audit entries never keep an
-// abandoned sandbox alive. Every pass is scoped to this test's own lenders, so
-// other due lenders in a reused database never crowd them out.
+// lenders a cursor without a close; runs once, as the one-shot close pass,
+// with an exit status; and its audit entries never keep an abandoned sandbox
+// alive. Every pass is scoped to this test's own lenders, so other due
+// lenders in a reused database never crowd them out.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 
@@ -20,7 +21,7 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
 const { pool } = await import("@workspace/db");
 const { nextCloseInstant } = await import("@workspace/valopay-schema");
 const { SYSTEM_ACTOR_PREFIX, appendAudit, dueScheduledCloses, inWorkspace, listMerchants, loadState, recordScheduledCloseFailure, saveState } = await import("../src/lib/valopay-store.js");
-const { SCHEDULED_CLOSE_ACTOR, runDueCloses, startCloseScheduler, schedulerStatus } = await import("../src/lib/close-scheduler.js");
+const { SCHEDULED_CLOSE_ACTOR, runClosePassOnce, runDueCloses, startCloseScheduler, schedulerStatus } = await import("../src/lib/close-scheduler.js");
 
 const requestFor = (token: string) => ({ headers: { cookie: `valopay_sandbox=${token}` }, secure: false, auth: Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true }) }) as any;
 const response = () => ({ cookie() { /* a valid test cookie is already supplied */ } }) as any;
@@ -350,6 +351,28 @@ try {
   assert.equal((await pass)!.closed.length, 0, "stop ends a pass that has not reached a lender");
   assert.equal(await cursorOf(left), stopAt);
   assert.deepEqual(closedIds(await runDueCloses({ onlyMerchantIds: [left] })), [left], "the next pass closes it");
+
+  // The one-shot pass (close-pass.ts), which a host without an in-process scheduler runs on a schedule: the same
+  // pass and the same scheduled closes, exit 2 while a close failed and is waiting for its retry, then 0.
+  const [o1, o2] = await sandboxLenders();
+  clock = await databaseNow();
+  await setCursor(o1, hoursAgo(clock, 1)); await setCursor(o2, hoursAgo(clock, 1));
+  const brokenOnce = await breakLender(o2);
+  const oneShotLines: Array<Record<string, any>> = [];
+  const oneShotLog: any = { info: (fields: object) => oneShotLines.push(fields), error: (fields: object) => oneShotLines.push(fields), debug() {}, child: () => oneShotLog };
+  const withFailure = await runClosePassOnce({ onlyMerchantIds: [o1, o2], log: oneShotLog });
+  assert.equal(withFailure.exitCode, 2, "a failed close makes the scheduled run fail");
+  assert.deepEqual(closedIds(withFailure.run!), [o1], "the healthy lender is closed");
+  assert.deepEqual(withFailure.run!.failed.map((item) => [item.merchantId, item.failures]), [[o2, 1]], "the failure is recorded for its retry");
+  const oneShotClose = (await closesOf(o1))[0]!;
+  assert.equal(oneShotClose.data.schedule.trigger, "scheduled", "a one-shot close is a scheduled close");
+  assert.equal(oneShotClose.data.schedule.late, true);
+  await pool.query("UPDATE valopay_records SET data = $2 WHERE id=$1", [brokenOnce.id, brokenOnce.data]);
+  await retryNow(o2);
+  const afterRetry = await runClosePassOnce({ onlyMerchantIds: [o1, o2], log: oneShotLog });
+  assert.equal(afterRetry.exitCode, 0);
+  assert.deepEqual(closedIds(afterRetry.run!), [o2]);
+  assert.deepEqual(oneShotLines.filter((line) => line.event === "close.one_shot").map((line) => line.exitCode), [2, 0], "one close.one_shot line a run, with its exit status");
 
   // Expiry: scheduled-close audit entries never keep an abandoned sandbox alive.
   const workspace = (await pool.query<{ workspace_id: string }>("SELECT workspace_id FROM valopay_merchants WHERE id=$1", [a])).rows[0]!.workspace_id;

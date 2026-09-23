@@ -95,8 +95,10 @@ export async function sendEmail(event, { apiKey, from, to, fetchImpl = fetch, ti
 }
 
 const USAGE = 'Use: pnpm run check:operations [--deliver], with the origin and receiver in the environment (docs/operational-rehearsals.md).';
-/** A mistake on the command line: the one failure described in its own words. */
+/** A mistake on the command line, described in its own words. */
 export class UsageError extends Error {}
+/** A setting the monitor cannot run without, named but never shown with a value. */
+export class MissingSetting extends Error {}
 /** The one option. A leading `--`, which `pnpm run check:operations -- --deliver` passes on, is skipped. An unknown option is named; any other word is only counted, since it could be a receiver address or a key pasted by mistake. */
 export function monitorArguments(argv) {
   const args = argv[0] === '--' ? argv.slice(1) : argv;
@@ -111,7 +113,7 @@ export function monitorArguments(argv) {
 async function main() {
   const { deliver } = monitorArguments(process.argv.slice(2));
   const origin = process.env.VALOPAY_MONITOR_ORIGIN;
-  if (!origin) throw new Error('Set VALOPAY_MONITOR_ORIGIN.');
+  if (!origin) throw new MissingSetting('VALOPAY_MONITOR_ORIGIN is not set: set it to the HTTPS origin of the service to probe (docs/operational-rehearsals.md).');
   const probe = await probeService({ origin, expectScheduler: process.env.VALOPAY_MONITOR_EXPECT_SCHEDULER === 'on' });
   if (!deliver) { console.log(JSON.stringify({ ...probe, mode: 'dry-run', delivery: 'not attempted' })); return; }
   const receiver = process.env.VALOPAY_MONITOR_ALERT_URL;
@@ -132,5 +134,5 @@ async function main() {
   await rename(temporary, target);
   console.log(JSON.stringify({ ...probe, delivered: result.delivered }));
 }
-// Only a usage mistake is described: any other failure could carry a receiver address, a key or a response body.
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => { console.error(error instanceof UsageError ? `${error.message} ${USAGE}` : 'Operational monitoring failed. Check configuration, probe connectivity and the alert receiver. Credentials and response bodies are not logged.'); process.exitCode = 1; });
+// Only a usage mistake or a missing origin is described: any other failure could carry a receiver address, a key or a response body.
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => { console.error(error instanceof UsageError ? `${error.message} ${USAGE}` : error instanceof MissingSetting ? error.message : 'Operational monitoring failed. Check configuration, probe connectivity and the alert receiver. Credentials and response bodies are not logged.'); process.exitCode = 1; });

@@ -149,6 +149,45 @@ export async function runDueCloses(options: CloseRunOptions = {}): Promise<Close
   return run;
 }
 
+/**
+ * How long a one-shot pass (close-pass.ts) may keep starting closes. A host
+ * that runs no in-process scheduler runs it every few minutes, so it can
+ * drain a longer backlog than an in-process pass, which must finish before
+ * the next tick; a close that has started is always finished.
+ */
+export const ONE_SHOT_PASS_BUDGET_MS = 10 * 60_000;
+/** What a one-shot pass did, and the exit status that says so. */
+export interface OneShotCloseRun {
+  /** 0: every due lender was closed, paused or left to another process; 2: the pass finished but at least one close failed (recorded and retried by a later pass); 1: the pass could not run, or was stopped before it finished. */
+  exitCode: 0 | 1 | 2;
+  run: CloseRun | null;
+}
+
+/**
+ * The scheduled daily close run once, for a host that runs no in-process
+ * scheduler (VALOPAY_CLOSE_SCHEDULER=off), such as a Replit Scheduled
+ * Deployment next to an Autoscale deployment: the same pass the tick loop
+ * runs (runDueCloses), through the same repository, locks and audit, with a
+ * longer budget, ending with one close.one_shot line that carries its exit
+ * status. Another process closing at the same time never closes the same
+ * lender twice (SKIP LOCKED, and each close re-checks under its lock).
+ */
+export async function runClosePassOnce(options: CloseRunOptions = {}, pass: (options: CloseRunOptions) => Promise<CloseRun> = runDueCloses): Promise<OneShotCloseRun> {
+  const started = Date.now();
+  try {
+    const run = await pass({ ...options, budgetMs: options.budgetMs ?? ONE_SHOT_PASS_BUDGET_MS });
+    const stopped = options.signal?.aborted === true;
+    const exitCode = stopped ? 1 : run.failed.length ? 2 : 0;
+    const fields = { event: "close.one_shot", exitCode, runId: run.runId, durationMs: Date.now() - started, stopped, examined: run.examined, closed: run.closed.length, skipped: run.skipped.length, paused: run.paused.length, failed: run.failed.length };
+    if (exitCode === 0) options.log?.info(fields, "One-shot close pass finished");
+    else options.log?.error(fields, stopped ? "One-shot close pass stopped before it finished; the lenders it did not reach are still due" : "One-shot close pass finished, but some closes failed; each is retried by a later pass");
+    return { exitCode, run };
+  } catch (error) {
+    options.log?.error({ event: "close.one_shot", exitCode: 1, durationMs: Date.now() - started, err: error }, "One-shot close pass could not read what was due");
+    return { exitCode: 1, run: null };
+  }
+}
+
 /** The running scheduler: stop it, run a pass now, or wait for the pass in progress. */
 export interface CloseScheduler {
   /** Stops the timers and ends the pass in progress after the lender it is closing. */

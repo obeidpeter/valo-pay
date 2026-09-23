@@ -37,6 +37,10 @@ result = await run(monitor, ["--", "--deliver"], { VALOPAY_MONITOR_ORIGIN: "http
 assert.equal(result.status, 1);
 assert.match(result.stderr, /^Operational monitoring failed\. Check configuration/);
 assert.ok(!result.output.includes("synthetic-provider-key"));
+// Without its origin the monitor says which setting is missing, rather than the general failure.
+result = await run(monitor, []);
+assert.equal(result.status, 1);
+assert.equal(result.stderr.trim(), "VALOPAY_MONITOR_ORIGIN is not set: set it to the HTTPS origin of the service to probe (docs/operational-rehearsals.md).");
 result = await run(monitor, ["--", "--delivr"]);
 assert.equal(result.status, 1);
 assert.match(result.stderr, /^Unknown option --delivr\. Use: pnpm run check:operations \[--deliver\]/, "a mistyped option is named, with the usage");
@@ -110,4 +114,4 @@ try {
   assert.equal(connections, 0, "nothing was sent to a host that is not a Replit development domain");
 } finally { listener.close(); }
 
-console.log("Operator commands passed offline: options after pnpm's --, a named mistyped option, uncopied values, the monitor's dry run and careful failure, the Paystack check's refusals before any request, provision-pilot's usage, staff-access check and store refusal before any connection, and the smoke and security scripts' refusal of any host but a Replit development domain.");
+console.log("Operator commands passed offline: options after pnpm's --, a named mistyped option, uncopied values, the monitor's dry run, its missing origin named and its careful failure, the Paystack check's refusals before any request, provision-pilot's usage, staff-access check and store refusal before any connection, and the smoke and security scripts' refusal of any host but a Replit development domain.");
