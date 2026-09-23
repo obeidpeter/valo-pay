@@ -86,7 +86,7 @@ assert.ok(!JSON.stringify(unreachable.body).includes("ECONNREFUSED"), "the conne
 // The log names what is missing: a failing check every time, missing indexes once until the set changes, so a host polling every few seconds does not repeat it.
 const warned = (database: Parameters<typeof readinessWarning>[0]) => readinessWarning(database)?.fields;
 const indexesOnly = { status: "ok" as const, latencyMs: 3, schema: { status: "indexes_missing" as const, missing: [missingIndex] } };
-assert.deepEqual(warned(indexesOnly), { event: "readiness.indexes_missing", missing: [missingIndex] });
+assert.deepEqual(warned(indexesOnly), { event: "readiness.indexes_missing", schema: "search_path", missing: [missingIndex] });
 assert.equal(warned(indexesOnly), undefined, "the same missing index is not written again");
 const bothIndexes = { ...indexesOnly, schema: { status: "indexes_missing" as const, missing: [missingIndex, "index valopay_merchants_workspace: apply lib/db/migrations/007_journal_and_lender_indexes.sql"] } };
 assert.equal(warned(bothIndexes)?.["event"], "readiness.indexes_missing", "a changed set is written");
@@ -94,8 +94,9 @@ assert.equal(warned({ status: "ok", latencyMs: 3, schema: { status: "ok", missin
 assert.equal(warned(indexesOnly)?.["event"], "readiness.indexes_missing", "and an index missing again after that is written again");
 const incompleteCheck = { status: "ok" as const, latencyMs: 3, schema: { status: "incomplete" as const, missing: [missingColumn] } };
 assert.deepEqual([warned(incompleteCheck), warned(incompleteCheck)].map((fields) => [fields?.["event"], fields?.["reason"], fields?.["missing"]]), [["readiness.failed", "schema incomplete", [missingColumn]], ["readiness.failed", "schema incomplete", [missingColumn]]], "a missing column fails every check and is written every time");
+assert.equal(warned({ ...incompleteCheck, searched: "valopay_runtime_staging" })?.["schema"], "valopay_runtime_staging", "and the line names the isolated schema it read");
 assert.deepEqual(warned({ status: "failed", latencyMs: 2000, error: "connect ECONNREFUSED 127.0.0.1:5432", schema: { status: "unchecked", missing: [] } }), { event: "readiness.failed", latencyMs: 2000, reason: "connect ECONNREFUSED 127.0.0.1:5432" });
-checks += 15;
+checks += 16;
 
 // ---- Over HTTP: liveness, readiness, ids on answers, refusals in the log, nothing secret written ----
 const server = app.listen(0);

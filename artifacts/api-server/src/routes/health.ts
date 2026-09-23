@@ -32,9 +32,11 @@ export function readinessWarning(database: DatabaseReadiness): { fields: Record<
   const indexes = database.status === "ok" && database.schema.status === "indexes_missing" ? database.schema.missing.join("\n") : "";
   const repeated = indexes === reportedIndexes;
   reportedIndexes = indexes;
+  // Which schema was read: the isolated runtime schema, or the tables the connection's search path reaches.
+  const schema = database.searched ?? "search_path";
   if (database.status !== "ok") return { fields: { event: "readiness.failed", latencyMs: database.latencyMs, reason: database.error }, message: "Readiness check failed: the database did not answer" };
-  if (database.schema.status === "incomplete") return { fields: { event: "readiness.failed", latencyMs: database.latencyMs, reason: "schema incomplete", missing: database.schema.missing }, message: "Readiness check failed: the database lacks a table or column this build needs" };
-  if (indexes && !repeated) return { fields: { event: "readiness.indexes_missing", missing: database.schema.missing }, message: "Ready, but the database lacks an index this build expects: some reads are slower until its migration is applied" };
+  if (database.schema.status === "incomplete") return { fields: { event: "readiness.failed", latencyMs: database.latencyMs, reason: "schema incomplete", schema, missing: database.schema.missing }, message: "Readiness check failed: the database lacks a table or column this build needs" };
+  if (indexes && !repeated) return { fields: { event: "readiness.indexes_missing", schema, missing: database.schema.missing }, message: "Ready, but the database lacks an index this build expects: some reads are slower until its migration is applied" };
   return undefined;
 }
 

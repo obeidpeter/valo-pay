@@ -113,25 +113,28 @@ try{
   const customerPath=`/v1/records/customers?merchantId=${lender}`,customerKey=randomUUID(),customerBody={name:"Retention request fixture",reference:`RETAIN-${randomUUID()}`,data:{consentProvenance:"Synthetic retention consent"}};
   const customer=ok(await post(customerPath,customerBody,customerKey));
   const completed=(await pool.query("SELECT * FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2",[lender,customerKey])).rows[0];
-  assert.equal(completed.request.protectedPayload,1);assert.equal(completed.receipt.protectedPayload,1);
+  assert.equal(completed.request.protectedPayload,1);
   const idempotent=(await pool.query("SELECT * FROM valopay_idempotency WHERE merchant_id=$1 AND response->>'protectedPayload'='1'",[lender])).rows;
   assert.ok(idempotent.length>0);
   // A completed request's answer is stored once, as the replay copy under its key; the journal keeps only a reference
   // to what it saved, which is what Operations shows. A daily close answers with its whole record (about 100 KB for a
   // pilot-scale lender), and both tables used to hold it. A retried key still replays the copy and never runs twice.
-  const opened=async(row:{id:string;receipt:unknown})=>openPayload(row.receipt,{lender,record:row.id,field:"receipt"},managedWrappingKeys);
   const replayCopy=async(key:string)=>{const row=(await pool.query("SELECT id,response,pg_column_size(response) AS size FROM valopay_idempotency WHERE merchant_id=$1 AND id=$2",[lender,digest(`${lender}:${key}`)])).rows[0];return {size:Number(row.size),response:await openPayload(row.response,{lender,record:row.id,field:"response"},managedWrappingKeys)};};
-  assert.deepEqual(await opened(completed),{id:customer.id,kind:"customers"},"the journal keeps a reference to the saved record");
+  // The reference names only the record's ID and kind, so it is not sealed: Operations links to the saved result
+  // without the key service, as it does with encryption off.
+  assert.deepEqual(completed.receipt,{id:customer.id,kind:"customers"},"the journal keeps a reference to the saved record, unsealed");
+  const listed=(ok(await call(`/v1/operations?merchantId=${lender}`)) as {items:Array<{id:string;recordId:string|null;recordKind:string|null}>}).items.find(item=>item.id===completed.id);
+  assert.deepEqual([listed?.recordId,listed?.recordKind],[customer.id,"customers"],"so Operations offers the saved result while payloads are encrypted");
   assert.deepEqual((await replayCopy(customerKey)).response,customer,"the replay copy is the whole answer");
   assert.deepEqual(ok(await post(customerPath,customerBody,customerKey)),customer,"a retried key replays the saved answer");
   assert.deepEqual(ok(await post(`/v1/operations/${completed.id}/retry?merchantId=${lender}`,{})),customer,"so does a retry from Operations");
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM valopay_records WHERE merchant_id=$1 AND kind='customers' AND reference=$2",[lender,customerBody.reference])).rows[0].n,1,"and neither ran the request again");
   const closeKey=randomUUID(),closed=ok(await post(`/v1/actions?merchantId=${lender}`,{action:"daily_close"},closeKey));
   const closeEntry=(await pool.query("SELECT id,receipt,pg_column_size(receipt) AS size FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2",[lender,closeKey])).rows[0];
-  assert.deepEqual(await opened(closeEntry),{record:{id:closed.record.id,kind:"closes"}},"a close's journal entry keeps a reference to the close");
+  assert.deepEqual(closeEntry.receipt,{record:{id:closed.record.id,kind:"closes"}},"a close's journal entry keeps a reference to the close");
   const closeCopy=await replayCopy(closeKey);
   assert.deepEqual(closeCopy.response,closed,"its replay copy is the whole answer");
-  assert.ok(Number(closeEntry.size)<1024&&closeCopy.size>4*Number(closeEntry.size),`the journal's sealed reference (${closeEntry.size} bytes) is a fraction of the answer (${closeCopy.size} bytes)`);
+  assert.ok(Number(closeEntry.size)<1024&&closeCopy.size>4*Number(closeEntry.size),`the journal's reference (${closeEntry.size} bytes) is a fraction of the answer (${closeCopy.size} bytes)`);
   const closes=(await pool.query("SELECT count(*)::int AS n FROM valopay_records WHERE merchant_id=$1 AND kind='closes'",[lender])).rows[0].n;
   assert.deepEqual(ok(await post(`/v1/operations/${closeEntry.id}/retry?merchantId=${lender}`,{})),closed,"a retried close replays its answer");
   assert.equal((await pool.query("SELECT count(*)::int AS n FROM valopay_records WHERE merchant_id=$1 AND kind='closes'",[lender])).rows[0].n,closes,"and closes nothing again");

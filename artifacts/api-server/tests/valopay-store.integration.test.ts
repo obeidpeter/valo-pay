@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
 if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
   console.log("Set VALOPAY_RUN_INTEGRATION=1 to run repository integration tests.");
@@ -8,7 +9,7 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
 
 const { pool } = await import("@workspace/db");
 const { getAuth } = await import("@clerk/express");
-const { inWorkspace, listMerchants, loadState, saveState, findIdempotency, saveIdempotency, changeRole, appendAudit, settleChanges, addedRecords, closeDatabase, prepareOperation, digest, inMerchantAsSystem, SYSTEM_ACTOR_PREFIX, pingDatabase } = await import("../src/lib/valopay-store.js");
+const { inWorkspace, listMerchants, loadState, saveState, findIdempotency, saveIdempotency, changeRole, appendAudit, settleChanges, addedRecords, closeDatabase, prepareOperation, digest, inMerchantAsSystem, SYSTEM_ACTOR_PREFIX, pingDatabase, sweepExpiredWorkspaces } = await import("../src/lib/valopay-store.js");
 const { overrideDatabaseLimits } = await import("../src/lib/database-limits.js");
 
 const requestFor = (token: string) => {
@@ -204,6 +205,27 @@ try {
       return customer.id;
     });
     await held;
+    // A sandbox left for later is undone at once: while the sweeping transaction is still open, its free lender and
+    // its row can be taken by anyone else, so they are not held for the rest of a stranger's request.
+    {
+      const otherLender = (await pool.query<{ id: string }>("SELECT id FROM valopay_merchants WHERE workspace_id=$1 AND id<>$2", [heldWorkspace, heldLender])).rows[0]!.id;
+      const sweeper = await pool.connect(), probe = await pool.connect();
+      try {
+        await sweeper.query("BEGIN");
+        await sweepExpiredWorkspaces(sweeper, 50);
+        await probe.query("BEGIN");
+        await probe.query("SELECT 1 FROM valopay_merchants WHERE id=$1 FOR UPDATE NOWAIT", [otherLender]);
+        await probe.query("SELECT 1 FROM valopay_workspaces WHERE id=$1 FOR UPDATE NOWAIT", [heldWorkspace]);
+        await probe.query("ROLLBACK");
+        assert.equal((await sweeper.query("SELECT 1 FROM valopay_workspaces WHERE id=$1", [heldWorkspace])).rowCount, 1, "the busy sandbox is still there inside the sweep's own transaction");
+      } catch (error) {
+        release(); // let the close finish, so the failure is reported rather than left waiting
+        throw error;
+      } finally {
+        await sweeper.query("ROLLBACK"); await probe.query("ROLLBACK").catch(() => undefined);
+        sweeper.release(); probe.release();
+      }
+    }
     const warnings: Array<{ event?: string }> = [];
     const visitor = inWorkspace({ ...requestFor(token()), log: { warn: (fields: { event?: string }) => warnings.push(fields) } }, response(), listMerchants);
     const sweepWaits = async () => {
@@ -326,6 +348,21 @@ try {
       ], "and names each missing table, column and index with the migration that adds it");
     } finally {
       await pool.query(`DROP SCHEMA IF EXISTS "${scratch}" CASCADE`);
+    }
+    // Unqualified queries reach the tables along the search path, which is not always its first schema: by default a
+    // schema named after the login comes first, and it may exist without the tables. Readiness reads the tables the
+    // queries reach, and migration 007 checks its indexes on those tables, so such a schema does not make a working
+    // database read as incomplete or stop the migration.
+    const login = (await pool.query<{ login: string }>("SELECT current_user AS login")).rows[0]!.login, quoted = `"${login.replaceAll('"', '""')}"`;
+    if (!(await pool.query("SELECT 1 FROM pg_namespace WHERE nspname=$1", [login])).rowCount) {
+      await pool.query(`CREATE SCHEMA ${quoted}`);
+      try {
+        assert.equal((await pool.query<{ schema: string }>("SELECT current_schema() AS schema")).rows[0]!.schema, login, "the login's own empty schema now comes first");
+        assert.deepEqual((await pingDatabase()).schema, { status: "ok", missing: [] }, "readiness reads the tables the queries reach");
+        await pool.query(await readFile(new URL("../../../lib/db/migrations/007_journal_and_lender_indexes.sql", import.meta.url), "utf8"));
+      } finally {
+        await pool.query(`DROP SCHEMA IF EXISTS ${quoted}`);
+      }
     }
   }
   // Audit item 26: a record whose keys were only reordered holds the value PostgreSQL already stores. A save neither

@@ -265,7 +265,13 @@ export async function rejectOperation(req: Request, bound: { id: string; merchan
  * Operations replays. A daily close answers with its whole record, about
  * 100 KB for a pilot-scale lender, and used to be stored in both tables.
  * Entries completed earlier keep their whole answer until retention removes it.
+ * The reference names only the saved record's ID and kind, so it is stored
+ * unsealed: sealed, Operations could not read it without the key service.
  */
+/** A journal receipt that is only such a reference, which is never sealed. */
+function isJournalReference(value: unknown): boolean {
+  return !!value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).every((key) => key === "record" || key === "id" || key === "kind");
+}
 export function journalReceipt(response: unknown): { id?: string; kind?: string; record?: { id: string; kind?: string } } {
   const reference = (value: unknown) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -289,7 +295,7 @@ export async function completeOperation(ctx: StoreContext, receipt: unknown) {
   if (!session.operationId) return;
   const merchantId = lockedMerchant(session), owner = session.owner || session.principal;
   const result = await session.client.query(`UPDATE valopay_operations SET status='completed',receipt=$5,updated_at=$6
-    WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND actor=$4 AND status<>'cancelled'`, [session.operationId, merchantId, owner, ctx.actor, await protectStored(journalReceipt(receipt),{lender:merchantId,record:session.operationId,field:'receipt'}), ctx.now]);
+    WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND actor=$4 AND status<>'cancelled'`, [session.operationId, merchantId, owner, ctx.actor, journalReceipt(receipt), ctx.now]);
   if (rowsAffected(result)) return;
   const current = (await session.client.query<{ status: string }>('SELECT status FROM valopay_operations WHERE id=$1 AND merchant_id=$2 AND owner=$3', [session.operationId, merchantId, owner])).rows[0];
   if (current?.status === 'cancelled') fail('This request was cancelled before it completed. Nothing was saved, and it cannot run again.', 409);
@@ -516,8 +522,8 @@ export async function protectWorkspacePayloads(context:StoreContext) {
   const batch=1;let protectedCount=0;
   const imports=(await session.client.query<RecordRow>(`SELECT r.* FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id WHERE m.workspace_id=$1 AND r.kind='import-batches' AND (r.data ? 'csv' AND NOT (jsonb_typeof(r.data->'csv')='object' AND r.data->'csv' ? 'protectedPayload')) ORDER BY r.id LIMIT $2 FOR UPDATE OF r`,[session.workspace.id,batch])).rows;
   for(const row of imports){await session.client.query('UPDATE valopay_records SET data=$3 WHERE id=$1 AND merchant_id=$2',[row.id,row.merchant_id,await protectRecordData(rowToRecord(row))]);protectedCount++;}
-  const operations=(await session.client.query<OperationRow>(`SELECT o.* FROM valopay_operations o JOIN valopay_merchants m ON m.id=o.merchant_id WHERE m.workspace_id=$1 AND ((NOT(o.request ? 'protectedPayload') AND NOT(o.request ? 'purged')) OR (o.receipt IS NOT NULL AND NOT(o.receipt ? 'protectedPayload') AND NOT(o.receipt ? 'purged'))) ORDER BY o.id LIMIT $2 FOR UPDATE OF o`,[session.workspace.id,batch])).rows;
-  for(const row of operations){if(protectedCount)break;const scope={lender:row.merchant_id,record:row.id};const request=isProtectedPayload(row.request)?row.request:await protectStored(row.request,{...scope,field:'request'});const receipt=row.receipt===null||isProtectedPayload(row.receipt)?row.receipt:await protectStored(row.receipt,{...scope,field:'receipt'});await session.client.query('UPDATE valopay_operations SET request=$3,receipt=$4 WHERE id=$1 AND merchant_id=$2',[row.id,row.merchant_id,request,receipt]);protectedCount++;}
+  const operations=(await session.client.query<OperationRow>(`SELECT o.* FROM valopay_operations o JOIN valopay_merchants m ON m.id=o.merchant_id WHERE m.workspace_id=$1 AND ((NOT(o.request ? 'protectedPayload') AND NOT(o.request ? 'purged')) OR (o.receipt IS NOT NULL AND NOT(o.receipt ? 'protectedPayload') AND NOT(o.receipt ? 'purged') AND CASE WHEN jsonb_typeof(o.receipt)='object' THEN o.receipt-'record'-'id'-'kind'<>'{}'::jsonb ELSE true END)) ORDER BY o.id LIMIT $2 FOR UPDATE OF o`,[session.workspace.id,batch])).rows;
+  for(const row of operations){if(protectedCount)break;const scope={lender:row.merchant_id,record:row.id};const request=isProtectedPayload(row.request)?row.request:await protectStored(row.request,{...scope,field:'request'});const receipt=row.receipt===null||isProtectedPayload(row.receipt)||isJournalReference(row.receipt)?row.receipt:await protectStored(row.receipt,{...scope,field:'receipt'});await session.client.query('UPDATE valopay_operations SET request=$3,receipt=$4 WHERE id=$1 AND merchant_id=$2',[row.id,row.merchant_id,request,receipt]);protectedCount++;}
   const receipts=(await session.client.query<{id:string;merchant_id:string;response:unknown}>(`SELECT i.* FROM valopay_idempotency i JOIN valopay_merchants m ON m.id=i.merchant_id WHERE m.workspace_id=$1 AND NOT(i.response ? 'protectedPayload') AND NOT(i.response ? 'purged') ORDER BY i.id LIMIT $2 FOR UPDATE OF i`,[session.workspace.id,batch])).rows;
   for(const row of receipts){if(protectedCount)break;await session.client.query('UPDATE valopay_idempotency SET response=$3 WHERE id=$1 AND merchant_id=$2',[row.id,row.merchant_id,await protectStored(row.response,{lender:row.merchant_id,record:row.id,field:'response'})]);protectedCount++;}
   await staffEvent(session.client,session.workspace.id,context.actor,'encryption.protected','workspace',{protectedCount,at:context.now});
@@ -1430,32 +1436,37 @@ export async function executeLifecycleRun(context:StoreContext,state:DomainState
  * actor) never keeps an abandoned sandbox alive.  Ordinary DML inside the
  * caller's transaction.
  *
- * Nothing is deleted until every lender of the workspace is locked, in lender
- * order and without waiting (SKIP LOCKED), like the workspace rows before
- * them. The scheduled close, the export worker, Paystack test deliveries and
- * requests all hold a lender's row while they write its records, so a
- * workspace with a lender held elsewhere is left whole for a later sweep.
- * Deleting the records first and then waiting for such a lender deadlocked
- * with a close that saved it. The skipped workspace's other lenders stay
- * locked until the caller's transaction ends; a scheduled close skips them.
+ * Nothing is deleted until the workspace row and every one of its lenders
+ * are locked, in lender order and without waiting (SKIP LOCKED). The
+ * scheduled close, the export worker, Paystack test deliveries and requests
+ * all hold a lender's row while they write its records, and a request holds
+ * its workspace row, so a sandbox with either held elsewhere is left whole
+ * for a later sweep. Deleting the records first and then waiting for such a
+ * lender deadlocked with a close that saved it. Each sandbox is locked in a
+ * savepoint of its own and a busy one is undone at once, so its free lenders
+ * and its row are not held for the rest of the caller's transaction.
  */
 export async function sweepExpiredWorkspaces(client: PoolClient, limit: number): Promise<number> {
-  const stale = (await client.query<{ id: string }>(
-    `SELECT w.id FROM valopay_workspaces w
-     WHERE w.created_at < now() - make_interval(days => $1)
+  const staleness = `w.created_at < now() - make_interval(days => $1)
        AND EXISTS (SELECT 1 FROM valopay_merchants m WHERE m.workspace_id=w.id AND m.settings->>'anonymousWorkspace'='true')
        AND NOT EXISTS (SELECT 1 FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id
                        WHERE m.workspace_id=w.id AND r.kind='audit' AND r.created_at >= now() - make_interval(days => $1)
-                         AND COALESCE(r.data->>'actor','') NOT LIKE $3)
-     ORDER BY w.created_at LIMIT $2 FOR UPDATE OF w SKIP LOCKED`,
-    [ANONYMOUS_WORKSPACE_DAYS, limit, `${SYSTEM_ACTOR_PREFIX}%`],
+                         AND COALESCE(r.data->>'actor','') NOT LIKE $2)`;
+  const candidates = (await client.query<{ id: string }>(
+    `SELECT w.id FROM valopay_workspaces w WHERE ${staleness} ORDER BY w.created_at LIMIT $3`,
+    [ANONYMOUS_WORKSPACE_DAYS, `${SYSTEM_ACTOR_PREFIX}%`, limit],
   )).rows.map((row) => row.id);
-  if (!stale.length) return 0;
-  // The workspace rows locked above keep each lender list fixed: adding a lender needs its workspace.
-  const lenders = (await client.query<{ id: string; workspace_id: string }>("SELECT id,workspace_id FROM valopay_merchants WHERE workspace_id = ANY($1::text[])", [stale])).rows;
-  const locked = new Set((await client.query<{ id: string }>("SELECT id FROM valopay_merchants WHERE workspace_id = ANY($1::text[]) ORDER BY id FOR UPDATE SKIP LOCKED", [stale])).rows.map((row) => row.id));
-  const busy = new Set(lenders.filter((lender) => !locked.has(lender.id)).map((lender) => lender.workspace_id));
-  const expired = stale.filter((id) => !busy.has(id));
+  const expired: string[] = [];
+  for (const id of candidates) {
+    await client.query("SAVEPOINT expired_workspace");
+    // Read again once locked: a person may have used the sandbox since the list above was read.
+    const still = rowsAffected(await client.query(`SELECT w.id FROM valopay_workspaces w WHERE w.id=$3 AND ${staleness} FOR UPDATE OF w SKIP LOCKED`, [ANONYMOUS_WORKSPACE_DAYS, `${SYSTEM_ACTOR_PREFIX}%`, id]));
+    // The workspace row, once locked, keeps the lender list fixed: adding a lender needs its workspace.
+    const lenders = still ? (await client.query<{ total: number }>("SELECT count(*)::int AS total FROM valopay_merchants WHERE workspace_id=$1", [id])).rows[0]!.total : 0;
+    const locked = still ? (await client.query("SELECT id FROM valopay_merchants WHERE workspace_id=$1 ORDER BY id FOR UPDATE SKIP LOCKED", [id])).rowCount || 0 : 0;
+    if (still && locked === lenders) { await client.query("RELEASE SAVEPOINT expired_workspace"); expired.push(id); }
+    else await client.query("ROLLBACK TO SAVEPOINT expired_workspace");
+  }
   if (!expired.length) return 0;
   await client.query("DELETE FROM valopay_idempotency WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id = ANY($1::text[]))", [expired]);
   await client.query("DELETE FROM valopay_records WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id = ANY($1::text[]))", [expired]);
@@ -1667,14 +1678,19 @@ const requiredIndexes = [
   { name: "valopay_operations_pending", table: "valopay_operations", definition: "USING btree (merchant_id, owner) WHERE (status = 'pending'::text)", migration: "007_journal_and_lender_indexes.sql" },
   { name: "valopay_merchants_workspace", table: "valopay_merchants", definition: "USING btree (workspace_id, id)", migration: "007_journal_and_lender_indexes.sql" },
 ] as const;
-/** The columns and valid indexes of the application's tables in one schema (by default the connection's own), in one catalogue read. */
+/**
+ * The columns and valid indexes of the application's tables, in one catalogue
+ * read: in the schema named, or else the tables the connection's unqualified
+ * queries reach along its search path (pg_table_is_visible), which is not
+ * always the first schema on it.
+ */
 const schemaCatalogue = `SELECT
   (SELECT coalesce(json_agg(json_build_object('table',c.relname,'column',a.attname)),'[]') FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
     JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
-    WHERE n.nspname=coalesce($1::text,current_schema()) AND c.relname=ANY($2::text[]) AND c.relkind IN ('r','p')) AS columns,
+    WHERE CASE WHEN $1::text IS NULL THEN pg_table_is_visible(c.oid) ELSE n.nspname=$1::text END AND c.relname=ANY($2::text[]) AND c.relkind IN ('r','p')) AS columns,
   (SELECT coalesce(json_agg(json_build_object('table',t.relname,'definition',regexp_replace(pg_get_indexdef(i.indexrelid),'^CREATE (UNIQUE )?INDEX \\S+ ON (ONLY )?\\S+ ',''))),'[]')
     FROM pg_index i JOIN pg_class t ON t.oid=i.indrelid JOIN pg_namespace n ON n.oid=t.relnamespace
-    WHERE n.nspname=coalesce($1::text,current_schema()) AND t.relname=ANY($2::text[]) AND i.indisvalid AND i.indisready) AS indexes`;
+    WHERE CASE WHEN $1::text IS NULL THEN pg_table_is_visible(t.oid) ELSE n.nspname=$1::text END AND t.relname=ANY($2::text[]) AND i.indisvalid AND i.indisready) AS indexes`;
 /**
  * What the catalogue lacks of what this build needs, each with where it comes
  * from: the tables and columns the queries use, then the indexes; at most 20
@@ -1703,6 +1719,8 @@ function schemaGaps(catalogue: { columns: Array<{ table: string; column: string 
  */
 export interface DatabaseReadiness {
   status: "ok" | "failed"; latencyMs: number; error?: string;
+  /** The schema checked, when one is named (the isolated runtime schema); absent when the connection's search path decides. */
+  searched?: string;
   schema: { status: "ok" | "indexes_missing" | "incomplete" | "unchecked"; missing: string[] };
 }
 let readiness: InstanceType<typeof Pool> | undefined;
@@ -1734,7 +1752,7 @@ export async function pingDatabase(options: { timeoutMs?: number; schema?: strin
     ])).rows[0]!;
     const gaps = schemaGaps(catalogue);
     const status = gaps.required.length ? "incomplete" : gaps.indexes.length ? "indexes_missing" : "ok";
-    return { status: "ok", latencyMs: Math.round(performance.now() - started), schema: { status, missing: [...gaps.required, ...gaps.indexes] } };
+    return { status: "ok", latencyMs: Math.round(performance.now() - started), ...(schema ? { searched: schema } : {}), schema: { status, missing: [...gaps.required, ...gaps.indexes] } };
   } catch (error) {
     return { status: "failed", latencyMs: Math.round(performance.now() - started), error: error instanceof Error ? error.message : String(error), schema: { status: "unchecked", missing: [] } };
   } finally {
