@@ -543,7 +543,7 @@ it("asks for confirmation before revoking a staff member, and keeps their access
     const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
     const path = new URL(url, "http://localhost").pathname;
     if (path === "/api/v1/team" && (options?.method ?? "GET") === "GET")
-      return json({ mode: "staff", actor: "Pilot Admin", message: "Staff access is active.", members: [member], lenders: [], invitations: [], events: [] });
+      return json({ mode: "staff", actor: "Pilot Admin", message: "Staff access is active.", members: [member], lenders: [], invitations: [], changes: [], events: [] });
     if (path === `/api/v1/team/members/${member.id}` && options?.method === "PATCH") {
       const body = JSON.parse(String(options.body));
       changes.push(body);
