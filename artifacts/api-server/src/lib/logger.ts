@@ -1,5 +1,5 @@
 import { hostname } from "node:os";
-import { isMainThread, parentPort } from "node:worker_threads";
+import { isMainThread, parentPort, workerData } from "node:worker_threads";
 import pino from "pino";
 import { BUILD } from "./build-info";
 
@@ -29,7 +29,8 @@ const options: pino.LoggerOptions = {
 
 /** A line the background thread's logger formatted, posted to the main thread (background-worker.ts). */
 export interface LogLineMessage { type: "log"; line: string }
-const toMainThread = isMainThread ? undefined : parentPort;
+/** The background thread's name, which the main thread gives it (background-worker.ts); any other thread writes its own lines. */
+const toMainThread = !isMainThread && (workerData as { thread?: unknown } | null)?.thread === "background" ? parentPort : null;
 
 export const logger = toMainThread
   ? pino({ ...options, base: { ...options.base, thread: "background" } }, { write: (line: string) => toMainThread.postMessage({ type: "log", line } satisfies LogLineMessage) })

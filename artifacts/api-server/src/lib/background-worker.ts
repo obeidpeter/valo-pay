@@ -21,7 +21,7 @@ export const BACKGROUND_MAX_RESTART_MS = 60_000;
 /** A thread that ran this long before it crashed starts its waits again from the first. */
 export const BACKGROUND_STEADY_MS = 60_000;
 
-/** What the thread runs, sent as its workerData. */
+/** What the thread runs, sent as its workerData with its name (`thread`, by which its logger writes through this thread). */
 export interface BackgroundOptions {
   /** The scheduled daily close, with its options (tests narrow it to their own lenders), or null when this process schedules none. */
   closes: { intervalMs?: number; firstDelayMs?: number; batchSize?: number; budgetMs?: number; onlyMerchantIds?: string[] } | null;
@@ -77,7 +77,7 @@ function sourceWorker(entry: URL, options: WorkerOptions): Worker | undefined {
  */
 export function startBackgroundWorker(options: BackgroundOptions & { log: Logger; entry?: URL; restartMs?: number; maxRestartMs?: number; steadyMs?: number }): BackgroundWorker {
   const { log } = options, entry = options.entry ?? backgroundEntry();
-  const workerData: BackgroundOptions = { closes: options.closes, exports: options.exports };
+  const workerData: BackgroundOptions & { thread: "background" } = { thread: "background", closes: options.closes, exports: options.exports };
   // The database module sizes its pool from this setting when the thread loads it: the thread's pool, not the requests'.
   const settings: WorkerOptions = { workerData, env: { ...process.env, VALOPAY_DATABASE_POOL_SIZE: String(BACKGROUND_POOL_SIZE) } };
   let current: Worker | undefined, restart: ReturnType<typeof setTimeout> | undefined;
