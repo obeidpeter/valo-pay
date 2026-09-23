@@ -4,6 +4,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { renderApp, screen, userEvent, waitFor, within } from './harness';
 import { formatKobo } from '@/lib/formatters';
+import { executeAction } from '../../api-server/src/domain/actions';
+import { makeRecord } from '../../api-server/src/domain/records';
+import { reconcile } from '../../api-server/src/domain/reconciliation';
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -224,5 +227,88 @@ describe('allocation picker search', () => {
     await act(async () => { window.history.back(); });
     await screen.findByRole('heading', { name: 'Operations overview' });
     expect(window.location.pathname).toBe('/overview');
+  });
+});
+
+describe('payer confirmation', () => {
+  const finance = () => ({ actor: 'Sandbox Finance', role: 'Finance', now: api.now });
+
+  it('records the payer when Finance allocates a payment whose evidence named none', async () => {
+    const user = userEvent.setup();
+    const payment = api.state().records.find(record => record.kind === 'payments' && record.reference === 'SBX-UNIDENTIFIED-001')!;
+    const due = api.state().records.find(record => record.kind === 'due-items' && Number(record.data.outstandingKobo) > 0 && Number(record.data.outstandingKobo) < payment.amountKobo)!;
+    renderApp('/reconciliation');
+    const payments = (await screen.findByRole('heading', { name: 'Unallocated payments' })).parentElement!.parentElement!;
+    const row = (await within(payments).findByText('SBX-UNIDENTIFIED-001')).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: 'Allocate' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Allocate payment' });
+    const preview = within(dialog).getByRole('region', { name: 'Allocation preview' });
+    expect(preview.textContent).toContain('Recorded payer: Not identified');
+    expect(preview.textContent).toContain('Allocating records that customer as the payer, with your reason, in the same action.');
+    await waitFor(() => expect(within(within(dialog).getByLabelText(/^Instalment/)).getAllByRole('option').some(option => (option as HTMLOptionElement).value === due.id)).toBe(true));
+    await user.selectOptions(within(dialog).getByLabelText(/^Instalment/), due.id);
+    expect(preview.textContent).toContain('Payer to be recorded:');
+    const amount = within(dialog).getByLabelText(/Amount to allocate \(₦\)/);
+    await user.clear(amount);
+    await user.type(amount, (Number(due.data.outstandingKobo) / 100).toFixed(2));
+    await user.type(within(dialog).getByLabelText(/^Reason/), 'Payer confirmed from the transfer narration.');
+    await user.click(within(dialog).getByRole('button', { name: 'Allocate payment' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.calls.find(call => (call.body as { action?: string })?.action === 'manual_allocate')?.status).toBe(200);
+    const saved = api.state().records.find(record => record.id === payment.id)!;
+    expect(saved.customerId).toBe(due.customerId);
+    expect(saved.data.payerIdentification).toMatchObject({ customerId: due.customerId, identifiedBy: 'Sandbox Admin', reason: 'Payer confirmed from the transfer narration.', dueItemId: due.id });
+    expect((await screen.findAllByText('Payer recorded')).length).toBeGreaterThan(0);
+  });
+
+  it('confirms a debit match whose settlement line named no payer, recording the payer', async () => {
+    const user = userEvent.setup();
+    const due = api.state().records.find(record => record.kind === 'due-items' && record.reference === 'DEMO-LOAN-1006')!;
+    const customer = api.state().records.find(record => record.id === due.customerId)!;
+    api.mutate(state => {
+      makeRecord(state, 'attempts', { name: 'External debit', status: 'sent', customerId: due.customerId, amountKobo: due.amountKobo, data: { dueItemId: due.id, number: 1, source: 'external', simulated: true, providerReference: 'PSK-NO-PAYER', occurredAt: api.now } });
+      makeRecord(state, 'observations', { name: 'Settlement line', status: 'unresolved', reference: 'PSK-NO-PAYER', amountKobo: due.amountKobo - 30_000, customerId: '', data: { source: 'settlement', grossAmountKobo: due.amountKobo, feeKobo: 30_000, batchReference: 'B-NO-PAYER', eventId: 'no-payer-line', provider: 'Sandbox Rail' } });
+      reconcile(state, finance());
+    });
+    const payment = api.state().records.find(record => record.kind === 'payments' && record.reference === 'PSK-NO-PAYER')!;
+    expect([payment.customerId, payment.status]).toEqual(['', 'proposed']);
+    renderApp('/reconciliation?view=review');
+    const row = (await screen.findByText('PSK-NO-PAYER')).closest('tr')!;
+    expect(row.textContent).toContain('Payer to confirm');
+    expect(row.textContent).toContain(customer.name);
+    await user.click(within(row).getByRole('button', { name: 'Confirm' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Confirm payment allocation' });
+    const evidence = within(dialog).getByRole('region', { name: 'Match evidence' });
+    expect(evidence.textContent).toContain(`The payment evidence names no payer. Confirming records ${customer.name} as the payer, with your reason, in the same action.`);
+    await user.type(within(dialog).getByLabelText(/^Reason/), 'Our debit reference names this instalment.');
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm allocation' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.calls.find(call => (call.body as { action?: string })?.action === 'confirm_allocation')?.status).toBe(200);
+    const saved = api.state().records.find(record => record.id === payment.id)!;
+    expect([saved.customerId, saved.status, saved.data.payerIdentification?.reason]).toEqual([due.customerId, 'allocated', 'Our debit reference names this instalment.']);
+    expect(api.state().records.find(record => record.id === due.id)?.status).toBe('paid');
+  });
+
+  it("offers only a known payer's instalments, and shows what a partly allocated payment still holds", async () => {
+    const user = userEvent.setup();
+    const due = api.state().records.find(record => record.kind === 'due-items' && record.reference === 'DEMO-LOAN-1006')!;
+    api.mutate(state => {
+      makeRecord(state, 'observations', { name: 'Transfer', status: 'unresolved', reference: 'TRF-PART-PAID', amountKobo: 5_000_000, customerId: due.customerId, data: { source: 'transfer', eventId: 'part-paid', provider: 'Sandbox Rail' } });
+      reconcile(state, finance());
+      const payment = state.records.find(record => record.kind === 'payments' && record.reference === 'TRF-PART-PAID')!;
+      executeAction(state, finance(), { action: 'manual_allocate', recordId: payment.id, reason: 'Part of the transfer pays this instalment.', data: { dueItemId: due.id, amountKobo: 1_000_000 } });
+    });
+    renderApp('/reconciliation');
+    const payments = (await screen.findByRole('heading', { name: 'Unallocated payments' })).parentElement!.parentElement!;
+    const row = (await within(payments).findByText('TRF-PART-PAID')).closest('tr')!;
+    expect(row.textContent).toContain(`${formatKobo(4_000_000)} left to allocate`);
+    await user.click(within(row).getByRole('button', { name: 'Allocate' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Allocate payment' });
+    expect(within(dialog).getByRole('region', { name: 'Allocation preview' }).textContent).toContain("Only this payer's instalments are offered.");
+    await waitFor(() => expect(api.calls.some(call => call.path === '/v1/records/due-items' && call.query.customerId === due.customerId)).toBe(true));
+    await waitFor(() => expect(within(dialog).queryByText('Loading instalment choices…')).toBeNull());
+    const options = within(within(dialog).getByLabelText(/^Instalment/)).getAllByRole('option').filter(option => (option as HTMLOptionElement).value);
+    expect(options.length).toBeGreaterThan(0);
+    expect(options.every(option => api.state().records.find(record => record.id === (option as HTMLOptionElement).value)?.customerId === due.customerId)).toBe(true);
   });
 });
