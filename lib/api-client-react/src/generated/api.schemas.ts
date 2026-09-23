@@ -889,16 +889,10 @@ export interface CreditReview {
   authentication: 'simulated_sandbox_review';
 }
 
-export type CreditDeskCustomersItemPermissions = {
+export type CreditDeskPermissionsItem = {
+  customerId: string;
   accountRead: boolean;
   creditAssessment: boolean;
-};
-
-export type CreditDeskCustomersItem = {
-  id: string;
-  name: string;
-  reference: string;
-  permissions: CreditDeskCustomersItemPermissions;
 };
 
 export type CreditDeskAssessmentsItem = {
@@ -944,7 +938,7 @@ export type CreditDeskGate = {
 };
 
 /**
- * The Credit Desk: applicants with their current permissions, assessments with their reviews, the illustrative rulecard and the closed credit gate.
+ * The Credit Desk: the current permissions of each applicant holding any (the applicants are the workspace's customers, listed once; one not listed here holds neither), assessments with their reviews, the illustrative rulecard and the closed credit gate.
  */
 export interface CreditDesk {
   mode: 'synthetic';
@@ -952,7 +946,7 @@ export interface CreditDesk {
   canAssess: boolean;
   canReview: boolean;
   actor: string;
-  customers: CreditDeskCustomersItem[];
+  permissions: CreditDeskPermissionsItem[];
   assessments: CreditDeskAssessmentsItem[];
   scenarios: CreditDeskScenariosItem[];
   model: CreditDeskModel;
@@ -1612,7 +1606,7 @@ export interface ConnectedWorkspace {
 export type ConnectedActionInputData = {[key: string]: unknown};
 
 /**
- * Action-specific data is validated by the server. Names use consent, payment, credit or cash prefixes. Every action requires a current whole-workspace revision and a reason. No input can enable live routes.
+ * Action-specific data is validated by the server. Names use consent, payment, credit or cash prefixes. Every action requires the workspace's current revision and a reason: the revision changes with anything the workspace shows or its actions read (the lender and its settings, customers, the instalments it offers, a checkout names or a receipt was applied to and their attempts, connected records, and pay-by-bank receipts with their allocations), not with the lender's history (closes, the audit trail, exports, settled instalments or other payments). No input can enable live routes.
  */
 export interface ConnectedActionInput {
   /**

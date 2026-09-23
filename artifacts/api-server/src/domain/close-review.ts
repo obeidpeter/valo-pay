@@ -24,7 +24,20 @@ export function closeReviewBasis(state: DomainState) {
   const proposals = ofKind(state, "import-corrections").filter(r => approvedCorrections.some(event => event.data.proposalId === r.id));
   return digest({ merchantId: state.merchant.id, records: [...state.records.filter(r => basisKinds.has(r.kind)), ...approvedCorrections, ...proposals].map(({ updatedAt: _, ...record }) => record).sort((a, b) => legacyCollatedCompare(a.id, b.id)) });
 }
-const pendingFinancialCorrections = (state: DomainState) => ofKind(state, "import-corrections").filter(record => record.data.preview?.financial && !ofKind(state, "import-correction-events").some(event => event.data.proposalId === record.id));
+/**
+ * The input digest of a state a read does not change, computed the first time
+ * it is asked for: a read makes one and passes it to every currency check it
+ * makes, so it pays for the digest once however many closes and reviews it
+ * checks. It lives only as long as that read.
+ */
+export function closeReviewBasisOnce(state: DomainState): () => string {
+  let basis: string | undefined;
+  return () => (basis ??= closeReviewBasis(state));
+}
+const pendingFinancialCorrections = (state: DomainState) => {
+  const decided = new Set(ofKind(state, "import-correction-events").map(event => event.data.proposalId));
+  return ofKind(state, "import-corrections").filter(record => record.data.preview?.financial && !decided.has(record.id));
+};
 export interface CloseReviewIssue { id: string; label: string; detail: string; unresolved: boolean; }
 export function bindCloseReviewBasis(state: DomainState, close: ValopayRecord) {
   const completeness = sourceCompleteness(state, close.data.sourceBusinessDate || watBusinessDate(close.data.closedAt || close.createdAt));
@@ -53,15 +66,15 @@ function latestClose(state: DomainState) { return newest(ofKind(state, "closes")
 const closeBusinessDate = (close: ValopayRecord): string | undefined => close.data.reviewBasis?.sourceCompleteness?.businessDate;
 /** The newest close of one business date: each missed date's catch-up close is reviewed on its own. */
 function latestCloseOf(state: DomainState, businessDate: string | undefined) { return newest(ofKind(state, "closes").filter(record => closeBusinessDate(record) === businessDate))[0]; }
-export function reviewIsCurrent(state: DomainState, review: ValopayRecord) {
+export function reviewIsCurrent(state: DomainState, review: ValopayRecord, basis = closeReviewBasisOnce(state)) {
   const close = ofKind(state, "closes").find(r => r.id === review.data.closeId);
-  return Boolean(close && !closeReviewCurrentProblem(state, close) && review.data.inputDigest === close.data.reviewBasis.inputDigest && review.data.snapshotDigest === digest(close) && review.data.snapshotDigest === digest(review.data.snapshot));
+  return Boolean(close && !closeReviewCurrentProblem(state, close, basis) && review.data.inputDigest === close.data.reviewBasis.inputDigest && review.data.snapshotDigest === digest(close) && review.data.snapshotDigest === digest(review.data.snapshot));
 }
-export function closeReviewCurrentProblem(state: DomainState, close: ValopayRecord): string | null {
+export function closeReviewCurrentProblem(state: DomainState, close: ValopayRecord, basis = closeReviewBasisOnce(state)): string | null {
   if (!close.data.reviewBasis?.inputDigest) return "This older close has no recorded input fingerprint. Run a new daily close before preparing a review.";
   if (latestCloseOf(state, closeBusinessDate(close))?.id !== close.id) return "A newer close exists for this business date. Review the latest close; this evidence remains available for the historical record.";
   if (pendingFinancialCorrections(state).length) return "Financial import corrections await a decision. Resolve them before preparing, approving or exporting the current close.";
-  if (close.data.reviewBasis.inputDigest !== closeReviewBasis(state)) return "Records changed after this close. Run a new daily close and prepare a new review; the earlier evidence stays unchanged.";
+  if (close.data.reviewBasis.inputDigest !== basis()) return "Records changed after this close. Run a new daily close and prepare a new review; the earlier evidence stays unchanged.";
   const sources = close.data.reviewBasis.sourceCompleteness;
   if (!sources?.basisDigest) return "This older close has no business-date source completeness evidence. Declare the expected files and run a new daily close.";
   if (sources.basisDigest !== sourceCompleteness(state, sources.businessDate).basisDigest) return "Source expectations or delivered files changed after this close. Run a new daily close and prepare a new review; the earlier source evidence stays unchanged.";
@@ -110,8 +123,8 @@ export function decideCloseReview(state: DomainState, ctx: Context, id: string, 
   return review;
 }
 export function closeReviewList(state: DomainState) {
-  const reviews = newest(ofKind(state, "close-reviews"));
-  return { closes: newest(ofKind(state, "closes")).slice(0, 25).map(close => ({ close, issues: closeReviewIssues(close), problem: closeReviewCurrentProblem(state, close), pendingFinancialCorrections: pendingFinancialCorrections(state).length, reviews: reviews.filter(r => r.data.closeId === close.id).map(review => ({ ...review, current: reviewIsCurrent(state, review) })) })), total: ofKind(state, "closes").length };
+  const reviews = newest(ofKind(state, "close-reviews")), basis = closeReviewBasisOnce(state);
+  return { closes: newest(ofKind(state, "closes")).slice(0, 25).map(close => ({ close, issues: closeReviewIssues(close), problem: closeReviewCurrentProblem(state, close, basis), pendingFinancialCorrections: pendingFinancialCorrections(state).length, reviews: reviews.filter(r => r.data.closeId === close.id).map(review => ({ ...review, current: reviewIsCurrent(state, review, basis) })) })), total: ofKind(state, "closes").length };
 }
 export function reviewedCloseEvidence(state: DomainState, id: string, requireCurrent = false) {
   const review = ofKind(state, 'close-reviews').find(r => r.id === id);
@@ -127,7 +140,7 @@ export function pilotProgress(state: DomainState, accessMode = "sandbox") {
   const pendingAllocations = allocations.filter(r => r.status === "proposed"), confirmed = allocations.filter(r => r.status === "confirmed");
   const unresolvedObservations = observations.filter(r => r.status !== "resolved");
   const cases = ofKind(state, "exceptions"), openCases = cases.filter(open), unowned = openCases.filter(r => !r.data.case?.assignee), resolved = cases.filter(r => !open(r));
-  const close = latestClose(state), reviews = newest(ofKind(state, "close-reviews")), currentReview = reviews.find(r => r.data.closeId === close?.id && reviewIsCurrent(state, r)), approved = currentReview?.status === "approved" ? currentReview : undefined;
+  const close = latestClose(state), reviews = newest(ofKind(state, "close-reviews")), basis = closeReviewBasisOnce(state), currentReview = reviews.find(r => r.data.closeId === close?.id && reviewIsCurrent(state, r, basis)), approved = currentReview?.status === "approved" ? currentReview : undefined;
   const readyExports = ofKind(state, "exports").filter(r => r.status === "ready" && !!r.data.checksum && !r.data.fileDeletedAt);
   // Root export integration stamps the immutable review ID and digest on the
   // receipt. Timestamp proximity or a customer pack is never enough evidence.
@@ -138,7 +151,7 @@ export function pilotProgress(state: DomainState, accessMode = "sandbox") {
     { id: "ingest", name: "Ingest records", href: "/imports", state: batches.some(r => r.status === "needs_correction") ? "blocked" : committed.length && customers.length ? "completed" : batches.length ? "in_progress" : "not_started", evidence: [`${committed.length} committed import batches; ${customers.length} customer records.`], missing: [...(!committed.length ? ["Save, validate and commit a source batch."] : []), ...(!customers.length ? ["Import the sample customer records."] : []), ...(batches.some(r => r.status === "needs_correction") ? ["Correct the saved batches with invalid source rows."] : [])] },
     { id: "reconcile", name: "Reconcile payments", href: "/reconciliation", state: reconciled ? "completed" : pendingAllocations.length ? "awaiting_review" : payments.length || observations.length ? "in_progress" : "not_started", evidence: [`${confirmed.length} confirmed allocations; ${payments.length} payment records.`, `${unsettled.length} payments need a match; ${unresolvedObservations.length} evidence records remain unresolved.`], missing: [...(!confirmed.length ? ["Confirm at least one payment allocation against an instalment."] : []), ...(pendingAllocations.length ? ["Finance must decide the proposed payment matches."] : []), ...(unsettled.length || unresolvedObservations.length ? ["Resolve the remaining payment and evidence records."] : [])] },
     { id: "resolve", name: "Resolve exceptions", href: "/exceptions", state: unowned.length ? "blocked" : openCases.length ? "in_progress" : resolved.length || reconciled ? "completed" : "not_started", evidence: [`${resolved.length} resolved cases; ${openCases.length} open; ${unowned.length} without an assignee.`], missing: openCases.length ? [`Resolve ${openCases.length} open cases; a handover alone does not resolve a case.`] : !resolved.length && !reconciled ? ["Reconcile the ingested payments before concluding that there are no exceptions."] : [] },
-    { id: "close", name: "Review the close", href: "/close-review", state: approved ? "completed" : close && closeReviewCurrentProblem(state, close) ? "blocked" : currentReview?.status === "awaiting_review" ? "awaiting_review" : close ? "in_progress" : "not_started", evidence: close ? [close.name, approved ? `Approved by ${approved.data.decidedBy}; exact snapshot ${approved.data.snapshotDigest}.` : "A recorded close is not yet an approved close."] : [], missing: approved ? [] : close ? [closeReviewCurrentProblem(state, close) || (currentReview?.status === "awaiting_review" ? "The named independent Finance reviewer must record a decision." : "Prepare this close with explanations and an independent Finance reviewer.")] : ["Run a daily close after reconciling and handling the exceptions."] },
+    { id: "close", name: "Review the close", href: "/close-review", state: approved ? "completed" : close && closeReviewCurrentProblem(state, close, basis) ? "blocked" : currentReview?.status === "awaiting_review" ? "awaiting_review" : close ? "in_progress" : "not_started", evidence: close ? [close.name, approved ? `Approved by ${approved.data.decidedBy}; exact snapshot ${approved.data.snapshotDigest}.` : "A recorded close is not yet an approved close."] : [], missing: approved ? [] : close ? [closeReviewCurrentProblem(state, close, basis) || (currentReview?.status === "awaiting_review" ? "The named independent Finance reviewer must record a decision." : "Prepare this close with explanations and an independent Finance reviewer.")] : ["Run a daily close after reconciling and handling the exceptions."] },
     { id: "export", name: "Export evidence", href: "/close-review", state: reviewedExports.length ? "completed" : readyExports.length ? "blocked" : approved ? "in_progress" : "not_started", evidence: [`${reviewedExports.length} ready exports reference the current approved close and its exact snapshot.`], missing: reviewedExports.length ? [] : [approved ? "Generate an evidence export for this approved review and wait for its checksum confirmation." : "Approve the current close before generating its reviewed evidence."] },
   ];
   return { lender: state.merchant, syntheticOnly: true, access: { mode: accessMode, state: accessMode === "staff" ? "configured" : "not_configured", message: accessMode === "staff" ? "Staff access is enabled for this synthetic rehearsal. Real-data readiness requires separate acceptance testing." : "Real staff access is not enabled. Demo progress does not establish independent staff approval or real-data readiness." }, steps };

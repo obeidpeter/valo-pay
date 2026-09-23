@@ -6,7 +6,8 @@
  * OpenAPI spec version: 1.1.0
  */
 
-export type CreditDeskCustomersItemPermissions = {
+export type CreditDeskPermissionsItem = {
+  customerId: string;
   accountRead: boolean;
   creditAssessment: boolean;
 };

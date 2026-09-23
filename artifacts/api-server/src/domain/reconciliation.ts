@@ -1,5 +1,6 @@
 import { DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_TOLERANCE_KOBO, exceptionCatalogue, isKobo, isOpenException, nairaText, normaliseFailureCode, normaliseRefundStatus, normaliseReversalStatus, paymentAwaitsAllocation, paymentMoneyReturned, paymentRefundedKobo, paymentUnappliedKobo, providerFeeKobo, resolveExceptionType, type ExceptionType, type ProviderFeeSchedule, type PaymentChannel } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
+import { indexedPass, recordById, recordsWhere } from "./record-index";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { addBusinessDays, watDate } from "./calendar";
 import { validateRecord } from "./validation";
@@ -66,13 +67,14 @@ const identityCondition = (type: ExceptionType, linkedRecordId: string): string 
 export function raiseException(state: DomainState, ctx: Context, type: ExceptionType, options: { linkedRecordId?: string; customerId?: string; amountKobo?: number; notes: string; condition?: string; settledBy?: readonly string[] }): TypedRecord<"exceptions"> {
   const definition = exceptionCatalogue[type];
   const linkedRecordId = options.linkedRecordId || "";
-  const sameRecord = (item: TypedRecord<"exceptions">) => item.data.linkedRecordId === linkedRecordId && resolveExceptionType(item.data.type) === type;
-  const existing = recordsOf(state, "exceptions").find((item) => isOpenException(item.status) && sameRecord(item));
+  const linked = recordsWhere(state, "exceptions", "data.linkedRecordId", linkedRecordId);
+  const sameType = (item: TypedRecord<"exceptions">) => resolveExceptionType(item.data.type) === type;
+  const existing = linked.find((item) => isOpenException(item.status) && sameType(item));
   if (existing) return existing;
   if (options.condition !== undefined) {
     // A resolution with no stored condition (an event-driven raise, or one recorded before conditions were stored) settles the record.
     const settles = (condition: unknown) => condition === undefined || condition === options.condition || (options.settledBy ?? []).includes(String(condition));
-    const settled = recordsOf(state, "exceptions").find((item) => sameRecord(item) && settles(item.data.condition));
+    const settled = linked.find((item) => sameType(item) && settles(item.data.condition));
     if (settled) return settled;
   }
   return makeRecord(state, "exceptions", {
@@ -131,7 +133,7 @@ function channelFor(source: unknown): PaymentChannel {
 }
 
 function cancelUnsentAttempts(state: DomainState, dueItemId: string, now: string): void {
-  recordsOf(state, "attempts").filter((item) => item.data.dueItemId === dueItemId && item.status === "scheduled").forEach((item) => {
+  recordsWhere(state, "attempts", "data.dueItemId", dueItemId).filter((item) => item.status === "scheduled").forEach((item) => {
     item.status = "cancelled";
     item.data.cancellationReason = "Due item settled by another channel; no instruction was sent.";
     touch(item, now);
@@ -143,7 +145,7 @@ function settlementBatch(state: DomainState, ctx: Context, observation: TypedRec
   if (!batchReference) return;
   const provider = String(observation.data.provider || payment.data.providerConnection || state.merchant.provider);
   const schedule = feeScheduleFor(state, provider);
-  let batch = recordsOf(state, "settlement-batches").find((item) => item.reference === batchReference);
+  let batch = recordsWhere(state, "settlement-batches", "reference", batchReference)[0];
   if (!batch) {
     batch = makeRecord(state, "settlement-batches", {
       name: `Settlement batch ${batchReference}`, status: "pending", reference: batchReference, createdAt: ctx.now,
@@ -418,8 +420,8 @@ function assertAllocationEligible(due: TypedRecord<'due-items'>): void {
  * `payerReason` is Finance's reason, and applying it identifies the payer.
  */
 export function applyConfirmedAllocation(state: DomainState, ctx: Context, allocation: TypedRecord<"allocations">, payerReason?: string): void {
-  const payment = findRecord(state, String(allocation.data.paymentId), "payments");
-  const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
+  const payment = recordById(state, String(allocation.data.paymentId), "payments");
+  const due = recordById(state, String(allocation.data.dueItemId), "due-items");
   assertAllocationEligible(due);
   assertPaymentAllocatable(payment, allocation.amountKobo);
   assertSamePayer(state, payment, due, { automatic: allocation.data.automatic === true, reason: payerReason });
@@ -568,7 +570,7 @@ export function settlePaymentStatus(state: DomainState, ctx: Context, payment: T
   // What it still holds: a refund of part of it, such as an overpayment's excess, is not left to allocate.
   const left = paymentUnappliedKobo(payment);
   const returned = paymentReturned(payment);
-  const proposals = recordsOf(state, "allocations").filter((item) => item.data.paymentId === payment.id && item.status === "proposed");
+  const proposals = recordsWhere(state, "allocations", "data.paymentId", payment.id).filter((item) => item.status === "proposed");
   for (const proposal of proposals) {
     if (!returned && proposal.amountKobo <= left) continue;
     proposal.status = "superseded";
@@ -1031,7 +1033,17 @@ function applyDecisions(state: DomainState, ctx: Context): { finalFailures: numb
   return { finalFailures, disputes, decisionsRecorded, deferred };
 }
 
+/**
+ * One reconciliation pass over the lender's records, run with its lookups
+ * indexed (indexedPass): a close that confirms many matches, or evaluates many
+ * instalments, costs what its records do rather than their number times the
+ * items it handles.
+ */
 export function reconcile(state: DomainState, ctx: Context): { message: string; data: Record<string, any> } {
+  return indexedPass(state, () => reconcileRecords(state, ctx));
+}
+
+function reconcileRecords(state: DomainState, ctx: Context): { message: string; data: Record<string, any> } {
   const observations = recordsOf(state, "observations").filter((item) => item.status === "unresolved");
   const exceptionsBefore = recordsOf(state, "exceptions").length;
   const canonicalPayments = new CanonicalPaymentIndex(state), settlementLines = new SettlementLines(state);

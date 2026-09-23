@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { connectedActionInputSchema, connectedConsentPurposes, legacyCollatedCompare } from "@workspace/valopay-schema";
+import { connectedActionInputSchema, connectedConsentPurposes } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord, RecordOf } from "./types";
 import { makeRecord, recordsOf, touch } from "./records";
 import {
@@ -76,18 +76,46 @@ const gates = [
 function reject(message: string, status = 400): never {
   throw Object.assign(new Error(message), { status });
 }
+/** An instalment Pay-by-bank offers: money is owed and nothing holds it. */
+function payable(r: ValopayRecord) {
+  return (
+    Number(r.data.outstandingKobo ?? r.amountKobo) > 0 &&
+    !["paid", "closed", "cancelled", "in_dispute"].includes(r.status)
+  );
+}
+/**
+ * The revision an action names: it changes whenever anything the workspace
+ * shows or its actions read changes, and nothing else does. It covers the
+ * lender and its settings, the customers, every connected record, each
+ * pay-by-bank receipt with its allocations, and the instalments the workspace
+ * offers, a checkout names or a receipt was applied to, with their attempts,
+ * each record whole. The lender's history (closes, the audit trail, exports,
+ * settled instalments, other payments) is left out, so the revision costs what
+ * the workspace does, and a write, which loads older closes as summaries,
+ * computes the revision its view did. It does not change with the clock.
+ */
 export function connectedRevision(state: DomainState): string {
-  // Stable over clock changes; also catches a collection or lender setting changed in another tab.
+  const receipts = new Set<string>(),
+    dues = new Set<unknown>();
+  for (const r of state.records) {
+    if (r.kind === "payments" && r.data.connectedIntentId) receipts.add(r.id);
+    else if (r.kind === "due-items" && payable(r)) dues.add(r.id);
+    else if (r.kind === "connected-intents") dues.add(r.data.dueItemId);
+  }
+  for (const r of state.records)
+    if (r.kind === "allocations" && receipts.has(r.data.paymentId))
+      dues.add(r.data.dueItemId);
   const rows = state.records
-    .map((r) => [
-      r.id,
-      r.updatedAt,
-      r.status,
-      r.amountKobo,
-      r.customerId,
-      r.data,
-    ])
-    .sort((a, b) => legacyCollatedCompare(String(a[0]), String(b[0])));
+    .filter(
+      (r) =>
+        r.kind === "customers" ||
+        r.kind.startsWith("connected-") ||
+        (r.kind === "due-items" && dues.has(r.id)) ||
+        (r.kind === "attempts" && dues.has(r.data.dueItemId)) ||
+        (r.kind === "payments" && receipts.has(r.id)) ||
+        (r.kind === "allocations" && receipts.has(r.data.paymentId)),
+    )
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return createHash("sha256")
     .update(JSON.stringify([state.merchant, state.settings, rows]))
     .digest("hex");
@@ -551,6 +579,19 @@ export function connectedView(state: DomainState, ctx: Context) {
     name: r.name,
     reference: r.reference,
   }));
+  // Built once for the whole view: each customer's name, and the instalments an
+  // open checkout or an attempt scheduled elsewhere or in flight holds.
+  const customerNames = new Map<string, string>();
+  for (const c of customers)
+    if (!customerNames.has(c.id)) customerNames.set(c.id, c.name);
+  const held = new Set<unknown>();
+  for (const a of state.records)
+    if (
+      intentOpen(a) ||
+      externalScheduled(a) ||
+      (a.kind === "attempts" && ["sent", "unknown"].includes(a.status))
+    )
+      held.add(a.data.dueItemId);
   return {
     mode: "synthetic" as const,
     revision: connectedRevision(state),
@@ -585,27 +626,15 @@ export function connectedView(state: DomainState, ctx: Context) {
         .filter((r) => r.kind === "connected-intents")
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
       dues: recordsOf(state, "due-items")
-        .filter(
-          (r) =>
-            Number(r.data.outstandingKobo ?? r.amountKobo) > 0 &&
-            !["paid", "closed", "cancelled", "in_dispute"].includes(r.status),
-        )
+        .filter(payable)
         .map((r) => ({
           id: r.id,
           name: r.name,
           reference: r.reference,
           customerId: r.customerId,
-          customerName:
-            customers.find((c) => c.id === r.customerId)?.name ?? r.name,
+          customerName: customerNames.get(r.customerId) ?? r.name,
           outstandingKobo: Number(r.data.outstandingKobo ?? r.amountKobo),
-          blocked: state.records.some(
-            (a) =>
-              a.data.dueItemId === r.id &&
-              (intentOpen(a) ||
-                externalScheduled(a) ||
-                (a.kind === "attempts" &&
-                  ["sent", "unknown"].includes(a.status))),
-          ),
+          blocked: held.has(r.id),
         })),
     },
     credit: creditView(state, ctx),
