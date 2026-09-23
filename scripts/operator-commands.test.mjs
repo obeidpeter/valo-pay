@@ -106,6 +106,25 @@ for (const [args, refusal] of [[["--synthetic-staging", "organisation", "user_Sy
   assert.doesNotMatch(result.output, /ERR_MODULE_NOT_FOUND|ECONNREFUSED|\n\s+at /);
 }
 
+// ---- rewrap-payloads.ts: re-seal protected payloads under the current wrapping key ----
+const rewrap = "scripts/rewrap-payloads.ts";
+for (const args of [["--limit"], ["--limit", "0"], ["--limit", "1001"], ["--limit", "ten"], ["--limt", "10"], ["10"], ["--limit", "5", "--limit", "6"]]) {
+  result = await run(rewrap, args);
+  assert.equal(result.status, 1, args.join(" "));
+  assert.match(result.stderr, /^Usage: pnpm --filter @workspace\/scripts exec tsx \.\/rewrap-payloads\.ts \[--limit N\]/);
+}
+// Right arguments without the key settings stop before the store loads: there is no DATABASE_URL, which loading it would need.
+for (const [args, env] of [[[], {}], [["--", "--limit", "5"], { VALOPAY_PAYLOAD_ENCRYPTION: "kms" }], [["--limit", "5"], { VALOPAY_KMS_KEY: "projects/p/locations/l/keyRings/r/cryptoKeys/k" }]]) {
+  result = await run(rewrap, args, env);
+  assert.equal(result.status, 1, args.join(" "));
+  assert.match(result.stderr, /^Set VALOPAY_PAYLOAD_ENCRYPTION=kms and VALOPAY_KMS_KEY to the key payloads move to/);
+}
+// With the key settings the store loads, and refuses the restricted runtime login before it opens a connection, in its own words.
+result = await run(rewrap, ["--limit", "5"], { VALOPAY_PAYLOAD_ENCRYPTION: "kms", VALOPAY_KMS_KEY: "projects/p/locations/l/keyRings/r/cryptoKeys/k", VALOPAY_RUNTIME_ISOLATION: "staging", DATABASE_URL: unusableDatabase });
+assert.equal(result.status, 1);
+assert.equal(result.stderr.split("\n").filter((line) => line && !/DEP0040|trace-deprecation/.test(line)).join("\n"), "Re-wrap payloads with the database owner's connection and VALOPAY_RUNTIME_ISOLATION unset: the restricted runtime login cannot read every workspace's payloads.");
+assert.doesNotMatch(result.output, /ERR_MODULE_NOT_FOUND|ECONNREFUSED|\n\s+at /);
+
 // ---- pnpm run test:smoke and test:security-api ----
 // Both refuse any host but a Replit development domain before they send anything: a loopback listener counts every connection.
 let connections = 0;
@@ -124,4 +143,4 @@ try {
   assert.equal(connections, 0, "nothing was sent to a host that is not a Replit development domain");
 } finally { listener.close(); }
 
-console.log("Operator commands passed offline: options after pnpm's --, a named mistyped option, uncopied values, the monitor's dry run, its missing origin named and its careful failure, the Paystack check's refusals before any request, provision-pilot's three modes with their usage, staff-access check and store refusal before any connection, and the smoke and security scripts' refusal of any host but a Replit development domain.");
+console.log("Operator commands passed offline: options after pnpm's --, a named mistyped option, uncopied values, the monitor's dry run, its missing origin named and its careful failure, the Paystack check's refusals before any request, provision-pilot's three modes with their usage, staff-access check and store refusal before any connection, rewrap-payloads' usage, key settings and restricted-runtime refusal before any connection, and the smoke and security scripts' refusal of any host but a Replit development domain.");

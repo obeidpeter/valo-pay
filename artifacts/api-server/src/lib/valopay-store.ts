@@ -697,6 +697,70 @@ export async function protectWorkspacePayloads(context:StoreContext) {
   await staffEvent(session.client,session.workspace.id,context.actor,'encryption.protected','workspace',{protectedCount,at:context.now});
   return {message:protectedCount?'Protected another batch of stored payloads. Run again until no payloads remain.':'No unprotected import or recovery payloads remain in this workspace.',protectedCount,mayHaveMore:protectedCount>0};
 }
+/** What one run of the operator's re-wrap step did (scripts/rewrap-payloads.ts). */
+export type PayloadRewrap = { key: string; rewrapped: number; changed: number; remaining: number; remainingByKey: Array<{ key: string; payloads: number }>; message: string };
+/**
+ * Every protected payload and the scope it was sealed in, with the table it
+ * lives in: an import batch's source rows and check, a journal entry's request
+ * and receipt, and a replay copy's answer. The fields are fixed here, never
+ * input. $1 is the current key; $2, when not null, limits it to those
+ * workspaces (tests).
+ */
+const sealedPayloadsSql = `WITH sealed AS (
+    SELECT 'records' AS source, r.id, r.merchant_id, f.field, f.value FROM valopay_records r CROSS JOIN LATERAL (VALUES ('csv', r.data->'csv'), ('check', r.data->'check')) AS f(field, value) WHERE r.kind='import-batches'
+    UNION ALL SELECT 'operations', o.id, o.merchant_id, f.field, f.value FROM valopay_operations o CROSS JOIN LATERAL (VALUES ('request', o.request), ('receipt', o.receipt)) AS f(field, value)
+    UNION ALL SELECT 'idempotency', i.id, i.merchant_id, 'response', i.response FROM valopay_idempotency i)
+  SELECT sealed.source, sealed.id, sealed.merchant_id, sealed.field, sealed.value FROM sealed JOIN valopay_merchants m ON m.id=sealed.merchant_id
+  WHERE jsonb_typeof(sealed.value)='object' AND sealed.value ? 'protectedPayload' AND sealed.value->>'key' IS DISTINCT FROM $1 AND ($2::text[] IS NULL OR m.workspace_id=ANY($2::text[]))`;
+/** Writes a re-sealed payload back only while it is still the envelope that was read, so a request that changed it meanwhile wins. */
+const rewrapWrites: Record<string, string> = {
+  'records:csv': "UPDATE valopay_records SET data=jsonb_set(data,'{csv}',$3::jsonb) WHERE id=$1 AND merchant_id=$2 AND kind='import-batches' AND data->'csv'=$4::jsonb",
+  'records:check': "UPDATE valopay_records SET data=jsonb_set(data,'{check}',$3::jsonb) WHERE id=$1 AND merchant_id=$2 AND kind='import-batches' AND data->'check'=$4::jsonb",
+  'operations:request': 'UPDATE valopay_operations SET request=$3::jsonb WHERE id=$1 AND merchant_id=$2 AND request=$4::jsonb',
+  'operations:receipt': 'UPDATE valopay_operations SET receipt=$3::jsonb WHERE id=$1 AND merchant_id=$2 AND receipt=$4::jsonb',
+  'idempotency:response': 'UPDATE valopay_idempotency SET response=$3::jsonb WHERE id=$1 AND merchant_id=$2 AND response=$4::jsonb',
+};
+/**
+ * Operator-only (scripts/rewrap-payloads.ts); never called by an HTTP route.
+ * After the payload wrapping key changes name (VALOPAY_KMS_KEY), re-seals at
+ * most `limit` protected payloads that still name an earlier key: each is
+ * opened with the key it names, which must still be listed in
+ * VALOPAY_KMS_PREVIOUS_KEYS, and sealed again under the current key with a
+ * fresh data key, in the scope it was sealed in. Nothing is locked while the
+ * key service works: a payload is read, re-sealed, then written back in a
+ * short transaction of its own only if it is still the envelope that was read,
+ * so a run can stop at any point and be run again, and a payload a request
+ * rewrote meanwhile is left to it (counted as changed). Returns how many it
+ * re-sealed and how many still name each earlier key: the earlier key may be
+ * retired once none remain (docs/pilot-security.md, "Key rotation").
+ */
+export async function rewrapProtectedPayloads(options: { limit?: number; workspaces?: readonly string[] } = {}): Promise<PayloadRewrap> {
+  if (runtimeIsolationEnabled()) fail("Re-wrap payloads with the database owner's connection and VALOPAY_RUNTIME_ISOLATION unset: the restricted runtime login cannot read every workspace's payloads.", 503);
+  const key = payloadEncryptionKey();
+  if (!key) fail('Set VALOPAY_PAYLOAD_ENCRYPTION=kms and VALOPAY_KMS_KEY to the key payloads should be sealed under.', 503);
+  const limit = options.limit ?? 100, workspaces = options.workspaces ? [...options.workspaces] : null;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) fail('Re-wrap between 1 and 1000 payloads at a time.');
+  type Sealed = { source: string; id: string; merchant_id: string; field: string; value: { key?: string } };
+  const batch = await operatorTransaction(async client => (await client.query<Sealed>(`${sealedPayloadsSql} ORDER BY sealed.source,sealed.merchant_id,sealed.id,sealed.field LIMIT $3`, [key, workspaces, limit])).rows);
+  let rewrapped = 0, changed = 0;
+  for (const payload of batch) {
+    const scope = { lender: payload.merchant_id, record: payload.id, field: payload.field };
+    let sealed: unknown;
+    try { sealed = await protectStored(await revealStored(payload.value, scope), scope); }
+    catch (error) {
+      if ((error as { status?: unknown }).status !== 503) throw error;
+      fail(`A payload sealed under ${String(payload.value.key)} could not be opened, so the run stopped after re-sealing ${rewrapped}. Keep that key in VALOPAY_KMS_PREVIOUS_KEYS and check this service may decrypt with it, then run the command again.`, 503);
+    }
+    const written = await operatorTransaction(client => client.query(rewrapWrites[`${payload.source}:${payload.field}`]!, [payload.id, payload.merchant_id, JSON.stringify(sealed), JSON.stringify(payload.value)]));
+    if (rowsAffected(written)) rewrapped++; else changed++;
+  }
+  const remainingByKey = (await operatorTransaction(async client => (await client.query<{ key: string; payloads: string }>(`SELECT payload.value->>'key' AS key, count(*) AS payloads FROM (${sealedPayloadsSql}) payload GROUP BY 1 ORDER BY 1`, [key, workspaces])).rows)).map(row => ({ key: row.key, payloads: Number(row.payloads) }));
+  const remaining = remainingByKey.reduce((sum, row) => sum + row.payloads, 0);
+  const moved = `Re-sealed ${rewrapped} protected payload${rewrapped === 1 ? '' : 's'} under ${key}${changed ? `; ${changed} changed while this run worked and will be checked again` : ''}.`;
+  return { key, rewrapped, changed, remaining, remainingByKey, message: remaining
+    ? `${moved} ${remaining} still name an earlier key: run the command again until none remain, and keep the earlier keys in VALOPAY_KMS_PREVIOUS_KEYS until then.`
+    : `${moved} No protected payload names an earlier key: an earlier key may be retired once no backup you may restore still needs it.` };
+}
 function rowsAffected(result: { rowCount: number | null }): boolean { return (result.rowCount || 0) === 1; }
 function rowToRecord(row: RecordRow): ValopayRecord {
   return {
