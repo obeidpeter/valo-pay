@@ -29,6 +29,25 @@
               }
             }
           },
+          "429": {
+            "description": "More than 120 health checks a minute from this client network; retry after the Retry-After seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait: 60, the health limit's window.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
           "500": {
             "description": "The service could not prepare this answer; a read changes nothing, so it can be tried again.",
             "content": {
@@ -41,7 +60,7 @@
           }
         },
         "summary": "Liveness: the process answers, with its build, uptime and scheduler state",
-        "description": "Never touches the database, so a database outage does not read as a dead process. Needs no sandbox or sign-in."
+        "description": "Never touches the database, so a database outage does not read as a dead process. Needs no sandbox or sign-in, and answers whether or not Clerk is configured. At most 120 health checks a minute per client network, both health addresses together (an IPv6 client's network is its /64)."
       }
     },
     "/readyz": {
@@ -58,6 +77,25 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ReadinessStatus"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "More than 120 health checks a minute from this client network; retry after the Retry-After seconds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait: 60, the health limit's window.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
                 }
               }
             }
@@ -84,7 +122,7 @@
           }
         },
         "summary": "Readiness: one bounded round trip to the database, which also checks its schema",
-        "description": "Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table or column this build needs. A missing index leaves the answer ready, with checks.schema.status indexes_missing, since every request still works, only slower. The log names what is missing and the migration that adds it, and any connection error; the answer does not. Needs no sandbox or sign-in."
+        "description": "Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table or column this build needs. A missing index leaves the answer ready, with checks.schema.status indexes_missing, since every request still works, only slower. The log names what is missing and the migration that adds it, and any connection error; the answer does not. Probes share one check: while it runs every probe waits for it, and its answer is reused for a second after it finishes, so a burst makes one database round trip. Needs no sandbox or sign-in, and answers whether or not Clerk is configured. At most 120 health checks a minute per client network, both health addresses together."
       }
     },
     "/v1/workspace": {
@@ -136,7 +174,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -185,7 +223,7 @@
           }
         },
         "summary": "The caller's workspace: its lenders, roles and actor",
-        "description": "On a first visit an anonymous caller gets a new synthetic sandbox with two lenders; a signed-in person gets their own workspace. New sandboxes are limited per client address."
+        "description": "On a first visit an anonymous caller gets a new synthetic sandbox with two lenders; a signed-in person gets their own workspace. New sandboxes are limited per client network (20 an hour; an IPv6 client's network is its /64, and a /48 starts at most 60) and per server (300 an hour). A browser that sends two different sandbox cookies is refused (400) rather than guessed between."
       }
     },
     "/v1/overview": {
@@ -269,7 +307,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -470,7 +508,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -651,7 +689,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -853,7 +891,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1037,7 +1075,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1221,7 +1259,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1373,7 +1411,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1518,7 +1556,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1651,7 +1689,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1784,7 +1822,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1956,7 +1994,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2140,7 +2178,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: the lender already has ten exports waiting or running (Retry-After 30, about the time one takes to finish), more than 300 requests came from this address in a minute, or too many new sandboxes came from it (try again in an hour).",
+            "description": "Too many requests: the lender already has ten exports waiting or running (Retry-After 30, about the time one takes to finish), more than 300 requests came from this client or 1,200 from its network in a minute, or too many new sandboxes came from its network or were started on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2292,7 +2330,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2475,7 +2513,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2628,7 +2666,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2729,7 +2767,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2821,7 +2859,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3031,7 +3069,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3218,7 +3256,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3389,7 +3427,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3531,7 +3569,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3762,7 +3800,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3895,7 +3933,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4069,7 +4107,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4222,7 +4260,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4394,7 +4432,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour), or, repeating an export, the lender already has ten exports waiting or running (Retry-After 30, about the time one takes to finish).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour), or, repeating an export, the lender already has ten exports waiting or running (Retry-After 30, about the time one takes to finish).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4566,7 +4604,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4699,7 +4737,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4842,7 +4880,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4995,7 +5033,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5167,7 +5205,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5319,7 +5357,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5502,7 +5540,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5695,7 +5733,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5847,7 +5885,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6028,7 +6066,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6166,7 +6204,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6248,7 +6286,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6379,7 +6417,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6540,7 +6578,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6691,7 +6729,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6852,7 +6890,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6993,7 +7031,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7104,7 +7142,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7235,7 +7273,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7366,7 +7404,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7499,7 +7537,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7632,7 +7670,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7806,7 +7844,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7999,7 +8037,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8153,7 +8191,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8325,7 +8363,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8488,7 +8526,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8681,7 +8719,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8833,7 +8871,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9007,7 +9045,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9200,7 +9238,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9384,7 +9422,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9568,7 +9606,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9761,7 +9799,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -9923,7 +9961,7 @@
             }
           },
           "429": {
-            "description": "More than 120 deliveries a minute from this client address; retry after the Retry-After seconds",
+            "description": "More than 120 deliveries a minute from this client network, or more than 60 signed deliveries a minute to this connection; retry after the Retry-After seconds",
             "content": {
               "application/json": {
                 "schema": {
@@ -9982,7 +10020,7 @@
           }
         },
         "summary": "Receive a signed Paystack test event",
-        "description": "The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key, and at most 120 deliveries a minute per client address."
+        "description": "The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key. At most 120 deliveries a minute per client network and, once signed, 60 a minute per connection. A repeat of a saved event is acknowledged without an audit entry, and its delivery count is written at most once a minute."
       }
     },
     "/v1/work": {
@@ -10115,7 +10153,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10289,7 +10327,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10473,7 +10511,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10626,7 +10664,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10768,7 +10806,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10942,7 +10980,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -11126,7 +11164,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -11310,7 +11348,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -11503,7 +11541,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {
@@ -11696,7 +11734,7 @@
             }
           },
           "429": {
-            "description": "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
             "content": {
               "application/json": {
                 "schema": {

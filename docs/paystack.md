@@ -60,7 +60,7 @@ The answers, in the order they are checked:
 
 | Answer | When |
 | --- | --- |
-| 429 | More than 120 deliveries a minute from one client address. |
+| 429 | More than 120 deliveries a minute from one client network (an IPv4 address, or an IPv6 /64). |
 | 413 | The body is larger than 256 KiB. |
 | 400 | The connection ID is malformed, or the body is not `application/json`. |
 | 503 | The ingress is off, or the test key is missing or not an `sk_test_` key. |
@@ -68,12 +68,15 @@ The answers, in the order they are checked:
 | 400 | The signed event is not JSON, is inconsistent, or comes from live mode. |
 | 503 | The connection map is not valid. |
 | 404 | No lender is mapped to the connection ID. |
+| 429 | More than 60 signed deliveries a minute to this connection, whichever addresses they come from, so a replayed capture cannot evade the limit by rotating addresses. Paystack delivers the event again. |
 | 404 | The mapped lender could not be locked, and a read without the lock does not find it in the mapped workspace: it was removed, or the mapping names the wrong lender or workspace. The answer says the mapped lender was not found; correct or remove the mapping, because delivering again will not help. |
 | 503 | The mapped lender is in the mapped workspace but busy with another change. Paystack delivers the event again. |
 | 403 | The lender was locked, and the mapping names another workspace or the lender is not in sandbox or observation mode with its kill switch on. |
 | 200 | `{"accepted":true,"duplicate":false}` when the event is saved, and `duplicate: true` for a repeat delivery of an event already saved. |
 
-A verified event is saved in the mapped lender's inbox as a receipt, with the audit entry `paystack.test_event`, and appears in the Paystack test connection panel on the Sources page. `charge.success` waits for independent verification, and evidence that conflicts with an earlier receipt or the lender's saved expectation is quarantined. The two `direct_debit.authorization.*` events record mandate evidence only, and any other signed event is recorded as ignored. None of them creates a payment, allocation, debit or mandate authority.
+Paystack's signature carries no time, so a captured delivery can be sent again at will. A repeat of a saved event is acknowledged without an audit entry, and nothing is written for it within a minute of its receipt's last write: the API process tallies such repeats and adds them to the receipt's delivery count at its next write, at most once a minute. A burst of replays therefore costs at most one write a minute per receipt and never lengthens the audit chain; a tally not yet written when the process stops is lost, so the count shown is a floor.
+
+A verified event is saved in the mapped lender's inbox as a receipt, with the audit entry `paystack.test_event` (a repeat delivery adds none), and appears in the Paystack test connection panel on the Sources page. `charge.success` waits for independent verification, and evidence that conflicts with an earlier receipt or the lender's saved expectation is quarantined. The two `direct_debit.authorization.*` events record mandate evidence only, and any other signed event is recorded as ignored. None of them creates a payment, allocation, debit or mandate authority.
 
 ## Applying evidence later
 

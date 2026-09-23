@@ -7,8 +7,17 @@ import { BUILD } from "./lib/build-info";
 import { markSchedulerOff, startCloseScheduler, type CloseScheduler } from "./lib/close-scheduler";
 import { closeDatabase, watchDatabase } from "./lib/valopay-store";
 import { startExportWorker } from './lib/export-worker';
+import { signInConfiguration } from "./lib/staff-access";
 
 const port = serverSettings.port!;
+
+// Sign-in must work where it is required: a staff host without Clerk does not start (one fatal line).
+const signIn = signInConfiguration();
+if (signIn.fatal) {
+  logger.fatal({ event: "server.misconfigured" }, signIn.fatal);
+  process.exit(1);
+}
+if (signIn.warning) logger.warn({ event: "sign_in.off" }, signIn.warning);
 
 // A connection that fails while idle is a log line, not the end of the process.
 watchDatabase(logger);

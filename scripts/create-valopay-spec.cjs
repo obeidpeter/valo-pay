@@ -104,9 +104,9 @@ add('/v1/exports/{id}/retry','post','retryExportJob','ExportResult',null,[pathPa
 paths["/v1/exports/{id}/download"]={get:{operationId:"downloadExport",tags:["valopay"],parameters:[pathParam("id"),merchant],responses:{"200":{description:"Private verified export bytes",content:{"application/octet-stream":{schema:{type:"string",format:"binary"}}}},"404":{description:"Export not found in tenant"}}}};
 paths["/v1/openapi.json"]={get:{operationId:"getOpenApiDocument",tags:["valopay"],responses:{"200":{description:"Versioned public API specification",content:{"application/json":{schema:{type:"object",additionalProperties:true}}}}}}};
 paths["/v1/webhooks/{provider}"]={post:{operationId:"disabledProviderWebhook",tags:["valopay"],parameters:[pathParam("provider")],responses:{"403":{description:"Disabled until a provider-specific signed adapter is configured. No events are processed."}}}};
-describe("/healthz","get","Liveness: the process answers, with its build, uptime and scheduler state","Never touches the database, so a database outage does not read as a dead process. Needs no sandbox or sign-in.");
-describe("/readyz","get","Readiness: one bounded round trip to the database, which also checks its schema","Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table or column this build needs. A missing index leaves the answer ready, with checks.schema.status indexes_missing, since every request still works, only slower. The log names what is missing and the migration that adds it, and any connection error; the answer does not. Needs no sandbox or sign-in.");
-describe("/v1/workspace","get","The caller's workspace: its lenders, roles and actor","On a first visit an anonymous caller gets a new synthetic sandbox with two lenders; a signed-in person gets their own workspace. New sandboxes are limited per client address.");
+describe("/healthz","get","Liveness: the process answers, with its build, uptime and scheduler state","Never touches the database, so a database outage does not read as a dead process. Needs no sandbox or sign-in, and answers whether or not Clerk is configured. At most 120 health checks a minute per client network, both health addresses together (an IPv6 client's network is its /64).");
+describe("/readyz","get","Readiness: one bounded round trip to the database, which also checks its schema","Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table or column this build needs. A missing index leaves the answer ready, with checks.schema.status indexes_missing, since every request still works, only slower. The log names what is missing and the migration that adds it, and any connection error; the answer does not. Probes share one check: while it runs every probe waits for it, and its answer is reused for a second after it finishes, so a burst makes one database round trip. Needs no sandbox or sign-in, and answers whether or not Clerk is configured. At most 120 health checks a minute per client network, both health addresses together.");
+describe("/v1/workspace","get","The caller's workspace: its lenders, roles and actor","On a first visit an anonymous caller gets a new synthetic sandbox with two lenders; a signed-in person gets their own workspace. New sandboxes are limited per client network (20 an hour; an IPv6 client's network is its /64, and a /48 starts at most 60) and per server (300 an hour). A browser that sends two different sandbox cookies is refused (400) rather than guessed between.");
 describe("/v1/overview","get","The operations overview for one lender","Metrics, queues, recent activity, upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02).");
 describe("/v1/records/{kind}","get","Records of one kind for one lender, newest first","Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync.");
 describe("/v1/records/{kind}","post","Create a record of an editable kind","Validated against the kind's data schema; a status only a domain action may set is refused.");
@@ -601,14 +601,14 @@ described("PaystackTestEvent", obj({ event: str, data: { type: "object", additio
 described("PaystackDeliveryReceipt", obj({ accepted: { type: "boolean", const: true }, duplicate: bool }), "The acknowledgement Paystack receives: the signed event is saved in the mapped lender's inbox, or recognised as a repeat delivery of one already saved.");
 const connectionIdParam = { name: "connectionId", in: "path", required: true, schema: { type: "string", pattern: "^[a-f0-9]{64}$" }, description: "The opaque ID an operator mapped to one synthetic lender in VALOPAY_PAYSTACK_CONNECTIONS; it alone selects the lender, and it is not a credential." };
 const paystackSignature = { name: "x-paystack-signature", in: "header", required: true, schema: { type: "string", pattern: "^[a-fA-F0-9]{128}$" }, description: "HMAC-SHA512 of the exact request bytes under the configured test secret key, in hexadecimal." };
-operation("/v1/providers/paystack/{connectionId}/events", "post", "receivePaystackTestEvent", "PaystackDeliveryReceipt", "PaystackTestEvent", [connectionIdParam, paystackSignature], "Receive a signed Paystack test event", "The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key, and at most 120 deliveries a minute per client address.");
+operation("/v1/providers/paystack/{connectionId}/events", "post", "receivePaystackTestEvent", "PaystackDeliveryReceipt", "PaystackTestEvent", [connectionIdParam, paystackSignature], "Receive a signed Paystack test event", "The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key. At most 120 deliveries a minute per client network and, once signed, 60 a minute per connection. A repeat of a saved event is acknowledged without an audit entry, and its delivery count is written at most once a minute.");
 Object.assign(paths["/v1/providers/paystack/{connectionId}/events"].post.responses, {
   "400": { description: "The body is not JSON bytes, the connection ID is malformed, or the signed event is inconsistent or from live mode" },
   "401": { description: "The signature does not match the exact bytes under the configured test key; nothing was locked, read or saved" },
   "403": { description: "With the lender locked, the mapping names another workspace, or the lender is not a synthetic lender in sandbox or observation mode with its kill switch on" },
   "404": { description: "No lender is mapped to this connection ID, or, when the lender cannot be locked, it is not in the mapped workspace (removed, or the mapping names the wrong lender or workspace); correct the connection mapping, since delivering again will not help" },
   "413": { description: "The body is larger than 256 KiB" },
-  "429": { description: "More than 120 deliveries a minute from this client address; retry after the Retry-After seconds" },
+  "429": { description: "More than 120 deliveries a minute from this client network, or more than 60 signed deliveries a minute to this connection; retry after the Retry-After seconds" },
   "503": { description: "The ingress is off or misconfigured, or the mapped lender is in its workspace but busy; Paystack delivers again" },
 });
 
@@ -642,8 +642,8 @@ operation("/v1/lifecycle/runs/{id}/approve", "post", "approveLifecycleRun", "Lif
 operation("/v1/lifecycle/runs/{id}/execute", "post", "executeLifecycleRun", "LifecycleRunView", "LifecycleExecuteInput", [pathParam("id"), merchant, requiredKey], "Execute an approved run", "Administrators only. Deletes in bounded batches with a receipt per item; blocked and failed items are reported, never skipped silently.");
 
 // ---- The refusals and failures each operation can answer ----
-// Listed from what its route does: the /api/v1 middleware (the origin rule and the per-address
-// request limit), the body parser, the workspace transaction and its database limits, the lender
+// Listed from what its route does: the /api/v1 middleware (the origin rule and the request
+// limits), the body parser, the workspace transaction and its database limits, the lender
 // scope, the journal and the route's own refusals. Every one carries ErrorBody (lib/error-handler.ts
 // and the app's own refusals) except readiness's 503 and the identity provider's re-verification.
 const failures = {
@@ -655,7 +655,7 @@ const failures = {
   410: "Gone: a request with this Idempotency-Key already completed, and the lender's retention policy has since removed its stored result, so it cannot run again. Its entry in Operations remains.",
   413: "The body is larger than 2 MB.",
   415: "The body's character set or encoding is not supported; send UTF-8 JSON.",
-  429: "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
+  429: "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
   500: "The service failed. With committed false nothing was saved; otherwise the outcome is unconfirmed: check Operations, or repeat the same request with its Idempotency-Key.",
   502: "Private storage answered with an error; nothing was sent.",
   503: "Busy or unavailable: a database limit turned the request away (a busy lender or workspace, a lock or statement past its limit, a lost or unavailable connection), or a service it needs, such as the key service or private storage, is unavailable or not configured. committed false says nothing was saved.",
@@ -673,6 +673,8 @@ const ownStatuses = {
   "GET /v1/exports/{id}/download": [409, 410, 502, 503, 504],
   "POST /v1/exports/{id}/retry": [410],
   "POST /v1/providers/paystack/{connectionId}/events": [400, 401, 403, 404, 413, 429, 503],
+  "GET /healthz": [429],
+  "GET /readyz": [429],
 };
 const exportQueue = "the lender already has ten exports waiting or running (Retry-After 30, about the time one takes to finish)";
 const expiredRequest = "Gone: the stored request expired under the lender's retention policy and cannot run again.";
@@ -680,13 +682,16 @@ const expiredRequest = "Gone: the stored request expired under the lender's rete
 const ownDescriptions = {
   "POST /v1/operations/{id}/retry": { 410: `${expiredRequest.replace(/\.$/, "")}; or the request it repeats is gone itself, as an export whose file retention deleted is.`, 429: `${failures[429].replace(/\.$/, "")}, or, repeating an export, ${exportQueue}.` },
   "POST /v1/operations/{id}/cancel": { 410: expiredRequest },
-  "POST /v1/exports": { 429: `Too many requests: ${exportQueue}, more than 300 requests came from this address in a minute, or too many new sandboxes came from it (try again in an hour).` },
+  "POST /v1/exports": { 429: `Too many requests: ${exportQueue}, more than 300 requests came from this client or 1,200 from its network in a minute, or too many new sandboxes came from its network or were started on this server (try again in an hour).` },
+  "GET /healthz": { 429: "More than 120 health checks a minute from this client network; retry after the Retry-After seconds." },
+  "GET /readyz": { 429: "More than 120 health checks a minute from this client network; retry after the Retry-After seconds." },
   "GET /v1/exports/{id}/download": { 410: "Gone: the lender's retention policy removed this export's file. Its checksum and deletion receipt are kept; start a new export if current evidence is needed." },
   "POST /v1/exports/{id}/retry": { 410: "Gone: the lender's retention policy removed this export's file, so it cannot be generated again under the same identity (start a new export); or a request with this Idempotency-Key already completed and retention has since removed its stored result." },
 };
 /** What a 429's Retry-After says: the request limit's minute, the new-sandbox limit's hour and, where the export queue applies, about the time a queued export takes. */
 function retryAfter429(name) {
   if (name === "POST /v1/providers/paystack/{connectionId}/events") return retryAfter("Seconds to wait: 60, the delivery limit's window.");
+  if (name === "GET /healthz" || name === "GET /readyz") return retryAfter("Seconds to wait: 60, the health limit's window.");
   const queue = name === "POST /v1/exports" || name === "POST /v1/operations/{id}/retry" ? ", and 30 when the lender's export queue is full" : "";
   return retryAfter(`Seconds to wait: 60 after the request limit, 3600 after the new-sandbox limit${queue}.`);
 }

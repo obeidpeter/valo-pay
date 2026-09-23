@@ -25,12 +25,13 @@ const { readinessAnswer, readinessWarning } = await import("../src/routes/health
 let checks = 0;
 const lines = (): Array<Record<string, any>> => readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
 
-// ---- Request ids: kept when the edge supplied a plain one, replaced otherwise ----
+// ---- Request ids: kept when the deployment's edge sets them and they are plain, replaced otherwise ----
 assert.match(requestIdFor({ headers: {} }), /^[0-9a-f]{16}$/, "a fresh id is 16 hex characters");
-assert.equal(requestIdFor({ headers: { "x-request-id": "edge-7f3a9c2b" } }), "edge-7f3a9c2b", "a plain id from the edge is kept");
-assert.equal(requestIdFor({ headers: { "x-request-id": ["edge-first-of-two", "edge-second"] } }), "edge-first-of-two");
-for (const bad of ["<script>", "a b", "short", "x".repeat(65), ""]) assert.match(requestIdFor({ headers: { "x-request-id": bad } }), /^[0-9a-f]{16}$/, `"${bad}" is replaced`);
-checks += 7;
+assert.match(requestIdFor({ headers: { "x-request-id": "edge-7f3a9c2b" } }), /^[0-9a-f]{16}$/, "a client's id is replaced unless the edge is said to set it");
+assert.equal(requestIdFor({ headers: { "x-request-id": "edge-7f3a9c2b" } }, true), "edge-7f3a9c2b", "a plain id from an edge that sets it is kept");
+assert.equal(requestIdFor({ headers: { "x-request-id": ["edge-first-of-two", "edge-second"] } }, true), "edge-first-of-two");
+for (const bad of ["<script>", "a b", "short", "x".repeat(65), ""]) assert.match(requestIdFor({ headers: { "x-request-id": bad } }, true), /^[0-9a-f]{16}$/, `"${bad}" is replaced`);
+checks += 8;
 
 // ---- The error handler: the id in every body, the stack for a failure, the reason for a rejection ----
 const handled = (error: unknown) => {
@@ -141,11 +142,15 @@ try {
   assert.deepEqual(unreachableBody, { error: "The database is not available. Try again shortly.", committed: false, requestId: unreachable.headers.get("x-request-id") }, "in plain words, naming the request");
   checks += 3;
 
+  const quoted = await fetch(`${base}/api/healthz`, { headers: { "X-Request-Id": "support-ticket-4711" } });
+  assert.match(quoted.headers.get("x-request-id") ?? "", /^[0-9a-f]{16}$/, "by default a client's id is never taken");
+  process.env["VALOPAY_EDGE_REQUEST_ID"] = "on";
   const kept = await fetch(`${base}/api/healthz`, { headers: { "X-Request-Id": "edge-0123456789" } });
-  assert.equal(kept.headers.get("x-request-id"), "edge-0123456789", "the edge's id comes back on the answer");
+  assert.equal(kept.headers.get("x-request-id"), "edge-0123456789", "with VALOPAY_EDGE_REQUEST_ID=on the edge's id comes back on the answer");
   const replaced = await fetch(`${base}/api/healthz`, { headers: { "X-Request-Id": "<not a token>" } });
   assert.match(replaced.headers.get("x-request-id") ?? "", /^[0-9a-f]{16}$/);
-  checks += 2;
+  delete process.env["VALOPAY_EDGE_REQUEST_ID"];
+  checks += 3;
 
   const unknown = await fetch(`${base}/api/v1/no-such-resource`, { headers: { Cookie: "valopay_sandbox=SECRET-COOKIE-VALUE" } });
   const unknownBody = await unknown.json() as { error: string; requestId: string };

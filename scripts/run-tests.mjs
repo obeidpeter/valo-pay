@@ -32,6 +32,7 @@ const steps = [
   [tsx, ["artifacts/api-server/tests/export-download.test.ts"]],
   [tsx, ["artifacts/api-server/tests/export-jobs.test.ts"]],
   [tsx, ["artifacts/api-server/tests/api-security.test.ts"]],
+  [tsx, ["artifacts/api-server/tests/edge-security.test.ts"]],
   [tsx, ["artifacts/api-server/tests/api-contract.test.ts"]],
   [tsx, ["artifacts/api-server/tests/answer-schemas.test.ts"]],
   [tsx, ["artifacts/api-server/tests/i18n.test.ts"]],

@@ -231,7 +231,14 @@ try{
   // A test delivery loads the lender without opening its protected source rows, so it is received while the key service is down.
   const workingUnwrap=managedWrappingKeys.unwrap,workingIngressWrap=managedWrappingKeys.wrap;managedWrappingKeys.unwrap=managedWrappingKeys.wrap=async()=>{throw new Error("key service unavailable");};
   let receipt:Awaited<ReturnType<typeof ingest>>;try{receipt=await ingest();}finally{managedWrappingKeys.unwrap=workingUnwrap;managedWrappingKeys.wrap=workingIngressWrap;}
+  const audits=async()=>Number((await pool.query("SELECT count(*) AS n FROM valopay_records WHERE merchant_id=$1 AND kind='audit'",[lender])).rows[0].n);
+  const storedReceipt=async()=>(await pool.query("SELECT data->>'deliveryCount' AS count,updated_at FROM valopay_records WHERE merchant_id=$1 AND kind='provider-events'",[lender])).rows[0];
+  const auditsBefore=await audits(),receiptBefore=await storedReceipt();
   const duplicate=await ingest();assert.equal(receipt.event.id,duplicate.event.id);assert.equal(duplicate.duplicate,true);
+  // A replayed delivery appends no audit entry, and within a minute of its receipt's last write it writes nothing at all.
+  for(let replay=0;replay<5;replay++)assert.equal((await ingest()).duplicate,true);
+  assert.equal(await audits(),auditsBefore,"repeat deliveries append no audit entry");
+  assert.deepEqual(await storedReceipt(),receiptBefore,"and leave the receipt unwritten within a minute of its last write");
   assert.equal(Number((await pool.query("SELECT count(*) AS n FROM valopay_records WHERE merchant_id=$1 AND kind='provider-events'",[lender])).rows[0].n),1);
   await assert.rejects(()=>paystackConnectionTransaction("f".repeat(64),()=>true),/not found/);
   // Over HTTP: the signature is checked on the raw bytes before the lender is locked, loaded or decrypted.
