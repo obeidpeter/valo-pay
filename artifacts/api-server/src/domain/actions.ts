@@ -104,7 +104,7 @@ export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTr
       sourceBusinessDate: businessDate, schedule: { trigger, scheduledFor, delayMinutes, late, nextAt: state.settings.nextCloseAt }, synthetic: true,
     },
   });
-  const lateness = late ? ` ${delayMinutes} minutes after its ${schedule.time} WAT time` : "";
+  const lateness = late ? ` ${counted(delayMinutes, "minute")} after its ${schedule.time} WAT time` : "";
   const stillOwed = owed ? ` ${counted(owed, "missed business date is", "missed business dates are")} still to close.` : "";
   const message = trigger === "scheduled"
     ? `Scheduled daily close of ${businessDate} completed${lateness}.${stillOwed} No data was fetched from the provider or sent to the loan management system.`
@@ -462,7 +462,7 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     const reverted = recordsOf(state, "due-items").filter((item) => item.data.owner === PLATFORM_OWNER).map((item) => { item.data.owner = fallbackOwner; item.data.handBackAt = now; touch(item, now); return item.id; });
     const cancelled = cancelScheduledAttempts(state, now, "Hand-back: no future instruction is held.", () => true);
     state.merchant.killSwitch = true;
-    const checklist = [`Ownership of ${reverted.length} obligations reverted to ${fallbackOwner}`, `${cancelled.length} scheduled attempts cancelled with notices`, "Incumbent schedules re-enabled by the merchant against this checklist", "Full export delivered", "No future instructions are held for this merchant"];
+    const checklist = [`Ownership of ${counted(reverted.length, "obligation")} reverted to ${fallbackOwner}`, `${counted(cancelled.length, "scheduled attempt")} cancelled with notices`, "Incumbent schedules re-enabled by the merchant against this checklist", "Full export delivered", "No future instructions are held for this merchant"];
     const cutover = makeRecord(state, "cutovers", { name: "Hand-back", status: "handed_back", createdAt: now, data: { checklist, fallbackOwner, confirmation: reason(input), revertedDueItemIds: reverted, cancelledAttemptIds: cancelled, handedBackAt: now } });
     return result("Collection ownership returned to the configured fallback owner. Scheduled attempts were cancelled and no future instructions remain queued.", cutover, { fallbackOwner, reverted: reverted.length, cancelled: cancelled.length });
   }
@@ -505,7 +505,7 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     assertActionRole(ctx, ["Admin", "Finance"]);
     const invoice = issueInvoice(state, ctx, { period: data.period });
     invoice.data.issueReason = reason(input);
-    return result(`Invoice ${invoice.reference} issued for ${invoice.data.period}: ${invoice.data.collectionsCounted} collections counted, ${invoice.data.adjustments.length} adjustment lines. Issued invoices cannot be changed. Corrections appear on the next invoice.`, invoice, { invoiceId: invoice.id, period: invoice.data.period, totals: invoice.data.totals });
+    return result(`Invoice ${invoice.reference} issued for ${invoice.data.period}: ${counted(Number(invoice.data.collectionsCounted), "collection")} counted, ${counted(invoice.data.adjustments.length, "adjustment line")}. Issued invoices cannot be changed. Corrections appear on the next invoice.`, invoice, { invoiceId: invoice.id, period: invoice.data.period, totals: invoice.data.totals });
   }
   if (input.action === "mark_pack_used") throw new Error("Synthetic exports can never be counted as real cases.");
   throw new Error(`Unsupported domain action: ${input.action}.`);

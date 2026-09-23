@@ -130,7 +130,7 @@ it("claims a case and hands it to Finance with an immutable note, without alloca
     "Finance should check the proposed allocation.",
   );
   await user.click(screen.getByRole("button", { name: "Save handover" }));
-  await screen.findByText(/Case handed over · Demo Finance/);
+  await screen.findByText(/Case handed over · Sandbox Finance/);
   expect(
     api.state().records.find((r) => r.id === item.id)?.data.case.assignee,
   ).toBe("Sandbox Finance");

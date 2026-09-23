@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   ABSOLUTE_TICKET_FLOOR_KOBO, DEFAULT_MINIMUM_TICKET_KOBO, PLATFORM_OWNER, WAT_OFFSET_MS,
-  clampExecutionHour, executionWindow, experimentRules, normaliseFailureCode, policyGuardrails, retryRuleFor,
+  clampExecutionHour, counted as countedText, executionWindow, experimentRules, normaliseFailureCode, policyGuardrails, retryRuleFor,
   type ExperimentArm, type FailureCode, type RetryDecisionKind,
 } from "@workspace/valopay-schema";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
@@ -46,7 +46,7 @@ export interface RetryDecision {
 /** The policy parameters as a sentence: what a consent record stores as the policy text as it stood (MAN-02, RET-07). */
 export function policySummary(policy: TypedRecord<"policies">): string {
   const d = policy.data;
-  return `Version ${d.version ?? 1}: up to ${d.maxAttempts ?? policyGuardrails.defaultMaxAttempts} attempts in total across all collection systems; at least ${d.spacingHours ?? policyGuardrails.defaultSpacingHours} hours between attempts; first notice ${d.firstNoticeHours ?? policyGuardrails.defaultFirstNoticeHours} hours before the first attempt; failed-debit notice ${d.retryNoticeHours ?? policyGuardrails.defaultRetryNoticeHours} hours before any retry; partial debits ${d.partialAllowed ? "allowed" : "not allowed"}.`;
+  return `Version ${d.version ?? 1}: up to ${countedText(Number(d.maxAttempts ?? policyGuardrails.defaultMaxAttempts), "attempt")} in total across all collection systems; at least ${d.spacingHours ?? policyGuardrails.defaultSpacingHours} hours between attempts; first notice ${d.firstNoticeHours ?? policyGuardrails.defaultFirstNoticeHours} hours before the first attempt; failed-debit notice ${d.retryNoticeHours ?? policyGuardrails.defaultRetryNoticeHours} hours before any retry; partial debits ${d.partialAllowed ? "allowed" : "not allowed"}.`;
 }
 
 /** Two policy records are versions of the same policy when their previousVersionId chains share a root, or they carry the same name. */
@@ -197,7 +197,7 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
   // Row 3: non-retryable code.
   if (retry === "no") return explain("give_up", "non_retryable", `${code} does not allow a retry. Follow-up requires a final notice, an exception and an update to the loan management system.`, null, finalNotice);
   // Row 4: attempt ceiling across every source.
-  if (counted.length >= policyCeiling(policy)) return explain("give_up", "ceiling", `The limit of ${policyCeiling(policy)} attempts has been reached across all collection systems. Follow-up requires a final notice, an exception and an update to the loan management system.`, null, finalNotice);
+  if (counted.length >= policyCeiling(policy)) return explain("give_up", "ceiling", `The limit of ${countedText(policyCeiling(policy), "attempt")} has been reached across all collection systems. Follow-up requires a final notice, an exception and an update to the loan management system.`, null, finalNotice);
   // Row 5: ACCOUNT_RESTRICTED is retried once only.
   if (retry === "once" && counted.filter((attempt) => attempt.status === "failed" && normaliseFailureCode(attempt.data.failureCode) === code).length >= 2) {
     return explain("give_up", "restricted_once", `${code} has already had its one permitted retry. Follow-up requires a final notice, an exception and an update to the loan management system.`, null, finalNotice);

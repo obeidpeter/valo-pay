@@ -70,7 +70,7 @@ test("saved import and case handover work across reload with accessible responsi
     .getByLabel("Handover or progress note")
     .fill("Finance to check the proposed allocation.");
   await page.getByRole("button", { name: "Save handover" }).click();
-  await expect(page.getByText("Case handed over · Demo Finance")).toBeVisible();
+  await expect(page.getByText("Case handed over · Sandbox Finance")).toBeVisible();
   await page.reload();
   await expect(
     page.getByText("Finance to check the proposed allocation."),

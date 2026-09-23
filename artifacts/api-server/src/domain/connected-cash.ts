@@ -1,3 +1,4 @@
+import { counted } from "@workspace/valopay-schema";
 import { canonicalDigest } from "../lib/digests";
 
 /** Synthetic/import planning domain. These functions never connect to a bank, post to an ERP,
@@ -225,7 +226,7 @@ export function consolidateCashPositions(
     const omitted = all.filter((a) => !ids.has(a.id)).map((a) => a.id);
     if (omitted.length)
       warnings.push(
-        `${omitted.length} account(s) omitted: missing authority or not known at this as-of time.`,
+        `${counted(omitted.length, "account")} omitted: missing authority or not known at this as-of time.`,
       );
     if (
       usable.some(

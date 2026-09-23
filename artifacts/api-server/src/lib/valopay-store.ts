@@ -380,7 +380,8 @@ const staffProvision = (row: StaffRow, organizationId: string) => ({ id: row.id,
 const staffView = (row: StaffRow) => ({ id: row.id, actor: `Clerk:${row.user_id}`, name: row.display_name, role: row.role, status: row.status, expiresAt: row.expires_at.toISOString(), updatedAt: row.updated_at.toISOString() });
 export async function caseAssignees(ctx: StoreContext) {
   const session = sessionFor(ctx);
-  if (ctx.accessMode !== 'staff') return roles.filter(role => role !== 'Read-only').map(role => ({ actor: `Sandbox ${role}`, name: `Demo ${role}`, role }));
+  // A demo persona is named as its changes are recorded (the context's actor), so the lists and the history agree.
+  if (ctx.accessMode !== 'staff') return roles.filter(role => role !== 'Read-only').map(role => ({ actor: `Sandbox ${role}`, name: `Sandbox ${role}`, role }));
   if (!session.lockedMerchantId) fail('Select a lender before looking up available assignees.', 409);
   // The same three fields as a demo role: who, their name and their role; the membership's other details stay in the team directory.
   return (await session.client.query<StaffRow>(`SELECT member.* FROM valopay_staff_memberships member
