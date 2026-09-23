@@ -215,17 +215,32 @@ try{
   const signedBody=JSON.stringify({event:"charge.success",data:{domain:"test",id:"90211",status:"success",amount:2500,currency:"NGN",reference:"SYNTHETIC-MAPPED-002",channel:"direct_debit"}});
   const deliver=(signature:string)=>fetch(`${base}/v1/providers/paystack/${connectionId}/events`,{method:"POST",headers:{"Content-Type":"application/json","X-Paystack-Signature":signature},body:signedBody});
   const signed=createHmac("sha512",process.env.PAYSTACK_TEST_SECRET_KEY!).update(signedBody).digest("hex"),forged="f".repeat(128);
+  // Every connection taken from the pool is counted: a load no longer opens payloads, so only this tells the orders apart.
+  let checkouts=0;const countCheckout=()=>{checkouts++;};pool.on("acquire",countCheckout);
   unwraps=0;
   const refused=await deliver(forged);
   assert.equal(refused.status,401);assert.equal(((await refused.json()) as {error:string}).error,"The Paystack webhook signature is invalid.");
+  assert.equal(checkouts,0,"a forged delivery takes no database connection");
   assert.equal(unwraps,0,"a forged delivery opens no protected payload");
+  const answer=async(response:Response)=>({status:response.status,error:((await response.json()) as {error:string}).error});
   const holder=await pool.connect();
   try{
     await holder.query("BEGIN");await holder.query("SELECT 1 FROM valopay_merchants WHERE id=$1 FOR UPDATE",[lender]);
+    checkouts=0;
     assert.equal((await deliver(forged)).status,401,"a forged delivery never waits for or reports on the lender lock");
-    const busy=await deliver(signed);
-    assert.equal(busy.status,503);assert.match(((await busy.json()) as {error:string}).error,/The test lender is busy/);
-  }finally{await holder.query("ROLLBACK");holder.release();}
+    assert.equal(checkouts,0,"a forged delivery to a locked lender takes no database connection");
+    const busy=await answer(await deliver(signed));
+    assert.equal(busy.status,503);assert.match(busy.error,/The test lender is busy/);
+    // The lock is taken before the workspace and mode checks, so a busy lender answers 503 even to a mapping it would refuse (docs/paystack.md).
+    process.env.VALOPAY_PAYSTACK_CONNECTIONS=JSON.stringify({[connectionId]:{workspaceId:"wrong-workspace",merchantId:lender}});
+    assert.deepEqual(await answer(await deliver(signed)),busy,"a busy lender answers 503 before the 403 checks");
+  }finally{await holder.query("ROLLBACK");holder.release();process.env.VALOPAY_PAYSTACK_CONNECTIONS=JSON.stringify({[connectionId]:{workspaceId,merchantId:lender}});}
+  pool.off("acquire",countCheckout);
+  // A mapping whose lender no longer exists matches no row to lock either, so it answers busy too, not 404 (docs/paystack.md).
+  process.env.VALOPAY_PAYSTACK_CONNECTIONS=JSON.stringify({[connectionId]:{workspaceId,merchantId:`gone-${randomUUID()}`}});
+  const gone=await answer(await deliver(signed));
+  assert.equal(gone.status,503);assert.match(gone.error,/The test lender is busy/);
+  process.env.VALOPAY_PAYSTACK_CONNECTIONS=JSON.stringify({[connectionId]:{workspaceId,merchantId:lender}});
   assert.equal(unwraps,0);assert.equal(await providerEvents(),1,"refused deliveries save nothing");
   const accepted=await deliver(signed);
   assert.equal(accepted.status,200);assert.deepEqual(await accepted.json(),{accepted:true,duplicate:false});
@@ -234,6 +249,7 @@ try{
   assert.equal(await providerEvents(),2);
   process.env.VALOPAY_PAYSTACK_CONNECTIONS=JSON.stringify({[connectionId]:{workspaceId:"wrong-workspace",merchantId:lender}});
   await assert.rejects(ingest,/unavailable/);
+  assert.equal((await deliver(signed)).status,403,"a free lender mapped to another workspace is refused");
   assert.equal(Number((await pool.query("SELECT count(*) AS n FROM valopay_records WHERE merchant_id=$1 AND kind='provider-events'",[other])).rows[0].n),0);
   console.log("Operations controls PostgreSQL integration passed: source checks, encrypted payloads opened only by the views that need them (overviews, lists, unkeyed saves, the scheduled close and test receipts work while the key service is down, older batches without their counts; keyed saves fail closed), holds/stale previews, verified retention receipts, preserved request tombstones, mapped Paystack test receipts and forged deliveries refused before the lender is locked or decrypted.");
 }finally{

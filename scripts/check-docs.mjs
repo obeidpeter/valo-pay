@@ -120,10 +120,12 @@ for (const match of appSource.matchAll(/import\s+(?:(\w+)|\{([^}]*)\})\s+from\s+
   for (const name of match[1] ? [match[1]] : match[2].split(",").map((part) => part.trim().split(/\s+as\s+/).pop()).filter(Boolean)) imported.set(name, match[3]);
 }
 const routers = new Map(); // routes file -> its path prefix below /api
+const followed = new Set(); // what app.ts imports from routes/ and mounts at a literal /api path
 for (const [, mount, name] of appSource.matchAll(/app\.use\(\s*["'](\/api(?:\/[^"']*)?)["']\s*,\s*([A-Za-z_$][\w$]*)/g)) {
   const specifier = imported.get(name), file = specifier?.startsWith("./routes") ? moduleFile(appFile, specifier) : undefined;
   check(file, `app.ts mounts ${name} at ${mount}, which the documentation check cannot follow to a file under routes/`);
   if (!file) continue;
+  followed.add(name);
   const prefix = mount.slice("/api".length);
   routers.set(file, prefix);
   if (file.endsWith("/index.ts")) for (const [, local] of read(file).matchAll(/from ["']\.\/([\w-]+)["']/g)) routers.set(moduleFile(file, `./${local}`), prefix);
@@ -134,6 +136,9 @@ for (const [file, prefix] of routers) for (const match of read(file).matchAll(/\
   served.add(route);
   check(operations.has(route), `${file} serves ${route}, which lib/api-spec/openapi.json does not describe`);
 }
+// A router mounted any other way, such as at a path held in a constant, would be skipped silently, so fail instead.
+for (const [name, specifier] of imported) if (specifier.startsWith("./routes")) check(followed.has(name), `app.ts imports ${name} from ${specifier} but does not mount it at a literal /api path, so the documentation check cannot follow its routes`);
+check(routers.has(`${apiSource}/routes/index.ts`), "the mounted-route check no longer reaches routes/index.ts, the main router app.ts mounts under /api");
 check(served.has("POST /v1/providers/paystack/{connectionId}/events"), "the mounted-route check no longer reaches the routers app.ts mounts directly, such as the Paystack test ingress");
 check(!read(`${apiSource}/lib/operation-recovery.ts`).includes("/retry$/") || operations.has("POST /v1/operations/{id}/retry"), "the recovery middleware serves POST /v1/operations/{id}/retry, which lib/api-spec/openapi.json does not describe");
 
