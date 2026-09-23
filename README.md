@@ -53,7 +53,7 @@ Keep the workspace together: the frontend and API depend on shared packages.
 
 ## Prerequisites and installation
 
-The current supported environment is Replit's Linux workspace with **Node.js 24**, **pnpm 10**, **PostgreSQL 16 or later**, managed Clerk authentication and private App Storage. `package.json` requires Node 22 or later; CI runs on Node 24 with pnpm 10.26.1.
+The current supported environment is Replit's Linux workspace with **Node.js 24**, **pnpm 10**, **PostgreSQL 16 or later**, managed Clerk authentication and private App Storage. `package.json` requires Node 22.22.2 or a later 22 release, 24.15.0 or a later 24 release, or 26 and later. That is the range jsdom 30 (the console tests' browser environment) supports, and it covers what undici 8 and orval 8 need; pnpm warns on an older Node. Its `packageManager` field pins pnpm 10.26.1, which a newer pnpm switches to by itself (fetching it once) and CI installs. CI runs on Node 24.
 
 Reports has Operations, Billing and Pilot evidence views. Operations can filter recorded daily closes by inclusive West Africa Time dates and compare the first and latest closing positions in the range. Current totals and the current billing statement are not recalculated for that range. Missing historical measures remain unavailable; closing positions are never summed as collections.
 
@@ -244,10 +244,12 @@ node scripts/create-valopay-spec.cjs
 pnpm --filter @workspace/api-spec run codegen
 ```
 
+`pnpm run check:contract` runs the same two commands and fails when git then sees any difference under `lib/api-spec`, `lib/api-zod` or `lib/api-client-react`, naming the fix; CI runs it on every pull request.
+
 ## Making a change
 
 - A rule lives in `lib/valopay-schema` (statuses, catalogues, money and policy guardrails) or in `artifacts/api-server/src/domain`; add a golden case when one changes. A record field is declared in `lib/valopay-schema/src/records.ts` before it is read or written.
-- An API change starts in `scripts/create-valopay-spec.cjs` and ends with the regeneration above; the route checks its answer with `contractAnswer` (`artifacts/api-server/src/lib/contract.ts`) before COMMIT, against the generated zod schema or, for a pilot, team, operations or connected answer, the shared schema in `lib/valopay-schema` that the generator describes the component from.
+- An API change starts in `scripts/create-valopay-spec.cjs` and ends with the regeneration above, which `pnpm run check:contract` confirms; the route checks its answer with `contractAnswer` (`artifacts/api-server/src/lib/contract.ts`) before COMMIT, against the generated zod schema or, for a pilot, team, operations or connected answer, the shared schema in `lib/valopay-schema` that the generator describes the component from.
 - A console change keeps `docs/frontend-contract.md` true and adds or amends a console test; a change to how a page looks or behaves records its reasoning in `docs/design/console.md`.
 - A new environment variable is read in one place and documented in the table above; a new document is listed in the Documentation table and in the snapshot tool's list; the documentation check fails otherwise.
 - British spelling in every document and in the console; lender, not merchant, in anything a person reads.

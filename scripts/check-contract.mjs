@@ -1,0 +1,21 @@
+// The committed contract and its generated packages must be exactly what the
+// generator writes. Regenerates them in place, as the README's command does,
+// then fails if git sees any difference, a file added or removed included.
+// Run by `pnpm run check:contract` and by CI; needs no network or database.
+import { execFileSync, spawnSync } from "node:child_process";
+import path from "node:path";
+
+const root = path.resolve(import.meta.dirname, "..");
+const generated = ["lib/api-spec", "lib/api-zod", "lib/api-client-react"];
+const regenerate = "node scripts/create-valopay-spec.cjs && pnpm --filter @workspace/api-spec run codegen";
+for (const [command, args] of [[process.execPath, ["scripts/create-valopay-spec.cjs"]], ["pnpm", ["--filter", "@workspace/api-spec", "run", "codegen"]]]) {
+  const result = spawnSync(command, args, { cwd: root, stdio: "inherit" });
+  if (result.status !== 0) { console.error(`✕ ${regenerate} failed`); process.exit(result.status ?? 1); }
+}
+const changed = execFileSync("git", ["status", "--porcelain", "--untracked-files=all", "--", ...generated], { cwd: root, encoding: "utf8" });
+if (changed) {
+  spawnSync("git", ["--no-pager", "diff", "--stat", "--", ...generated], { cwd: root, stdio: "inherit" });
+  console.error(`${changed}\n✕ The committed contract or its generated packages differ from what the generator writes. Change scripts/create-valopay-spec.cjs, never the generated files, then run \`${regenerate}\` and commit what it writes.`);
+  process.exit(1);
+}
+console.log("The committed contract (lib/api-spec/openapi.json) and its generated packages match what scripts/create-valopay-spec.cjs and the codegen write.");

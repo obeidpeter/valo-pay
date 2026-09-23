@@ -53,4 +53,4 @@ The README, `docs/BUILD_STATUS.md`, `docs/DATABASE_SECURITY.md`, `docs/frontend-
 
 ## How to re-run
 
-`pnpm run test:pure` runs the check. `node scripts/create-valopay-spec.cjs && pnpm --filter @workspace/api-spec run codegen` regenerates the contract and its packages; a diff after that means a package was edited by hand.
+`pnpm run test:pure` runs the check. `node scripts/create-valopay-spec.cjs && pnpm --filter @workspace/api-spec run codegen` regenerates the contract and its packages; a diff after that means a package was edited by hand. `pnpm run check:contract` runs both and fails on such a diff, and CI runs it on every pull request.

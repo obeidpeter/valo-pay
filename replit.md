@@ -7,7 +7,7 @@ Observation-first collections operations for Nigerian lenders. The current appli
 - Use the managed `artifacts/api-server: API Server` and `artifacts/valo-pay: web` workflows; their ports are injected.
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
+- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec; `pnpm run check:contract` regenerates and fails if the committed files differ
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - The schema source includes the ordinary foreign keys, unique indexes and money/floor checks. No custom role, policy, function or trigger setup is required. Do not run DDL at app startup, in publishing build commands or against production automatically.
 - `node scripts/smoke-valopay.mjs` — API smoke checks against a fresh synthetic workspace on the development domain; no real lender data.
