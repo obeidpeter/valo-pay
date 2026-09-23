@@ -101,7 +101,9 @@ export class UsageError extends Error {}
 export function monitorArguments(argv) {
   const args = argv[0] === '--' ? argv.slice(1) : argv;
   for (const [index, arg] of args.entries()) {
-    if (arg !== '--deliver') throw new UsageError(/^--?[A-Za-z][\w-]{0,40}$/.test(arg) ? `Unknown option ${arg}.` : `Argument ${index + 1} is not an option (not repeated here, in case it is a credential).`);
+    // An option is named, but not a value given with it (--name=value), which could be a credential.
+    const option = /^(--?[A-Za-z][\w-]{0,40})(=?)/.exec(arg), named = option && (option[2] || option[0] === arg) ? option[1] : undefined;
+    if (arg !== '--deliver') throw new UsageError(named ? `${named === '--deliver' ? 'The option --deliver takes no value' : `Unknown option ${named}`}${option[2] ? ' (its value is not repeated here)' : ''}.` : `Argument ${index + 1} is not an option (not repeated here, in case it is a credential).`);
   }
   return { deliver: args.includes('--deliver') };
 }

@@ -40,6 +40,13 @@ assert.ok(!result.output.includes("synthetic-provider-key"));
 result = await run(monitor, ["--", "--delivr"]);
 assert.equal(result.status, 1);
 assert.match(result.stderr, /^Unknown option --delivr\. Use: pnpm run check:operations \[--deliver\]/, "a mistyped option is named, with the usage");
+// An option given a value is named without it; the value could be a credential.
+result = await run(monitor, ["--deliver=synthetic-secret-value"]);
+assert.equal(result.status, 1);
+assert.match(result.stderr, /^The option --deliver takes no value \(its value is not repeated here\)\./);
+result = await run(monitor, ["--token=synthetic-secret-value"]);
+assert.match(result.stderr, /^Unknown option --token \(its value is not repeated here\)\./);
+assert.ok(!result.output.includes("synthetic-secret-value"));
 // A word that is not an option is counted, not repeated: it could be a receiver address or a key.
 result = await run(monitor, ["https://alerts.example/synthetic-receiver-token"], { VALOPAY_MONITOR_ORIGIN: "https://127.0.0.1:1" });
 assert.equal(result.status, 1);
@@ -56,6 +63,13 @@ assert.ok(!result.output.includes("SYNTHETIC_MANDATE_REFERENCE"));
 result = await run(paystack, ["--", "--reference", "SYNTHETIC_REFERENCE"]);
 assert.equal(result.status, 1);
 assert.equal(JSON.parse(result.stderr).code, "invalid_input", "a reference needs its expected amount");
+assert.ok(!result.output.includes("SYNTHETIC_REFERENCE"));
+// A mistyped option is named; a value joined with "=" is shown the spaced form; neither repeats the value.
+result = await run(paystack, ["--refrence", "SYNTHETIC_REFERENCE"]);
+assert.equal(result.status, 1);
+assert.match(JSON.parse(result.stderr).message, /^Unknown option --refrence\. Use: check-paystack/);
+result = await run(paystack, ["--reference=SYNTHETIC_REFERENCE", "--amount-kobo", "100"]);
+assert.match(JSON.parse(result.stderr).message, /^Give --reference's value after a space/);
 assert.ok(!result.output.includes("SYNTHETIC_REFERENCE"));
 result = await run(paystack, ["--", "--help"]);
 assert.equal(result.status, 0);

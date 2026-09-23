@@ -202,6 +202,13 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   assert.equal(saved("IMP-D-BLANK").data.outstandingKobo, 1000000, "the whole instalment is outstanding");
   assert.equal(saved("IMP-A-BLANK").data.number, 2, "a blank attempt number is worked out after the instalment's earlier attempt");
   assert.deepEqual([saved("IMP-O-BLANK").data.feeKobo, saved("IMP-O-BLANK").data.grossAmountKobo], [undefined, undefined], "blank fees are absent, not ₦0");
+  // A quoted cell of spaces survives the parser's trim; it is blank all the same.
+  for (const [kind, csv] of [
+    ["customers", 'name,reference,consentProvenance,payDay\nSpaced pay day,IMP-C-SPACED,Synthetic consent," "'],
+    ["observations", 'name,reference,customerId,amountKobo,source,feeKobo,grossAmountKobo\nSpaced fees,IMP-O-SPACED,DEMO-C1001,2500000,webhook," ","\t"'],
+  ] as const) { const result = rows(kind, csv); assert.equal(result.imported, 1, `${kind} with quoted spaces: ${JSON.stringify(result.rows)}`); }
+  assert.equal(saved("IMP-C-SPACED").data.payDay, undefined, "a pay day of spaces is absent");
+  assert.deepEqual([saved("IMP-O-SPACED").data.feeKobo, saved("IMP-O-SPACED").data.grossAmountKobo], [undefined, undefined], "fees of spaces are absent");
   // A blank count was read as 0, so such a row could be valid: its fingerprint is still the one the previous build stored.
   const identities = { source: "blank-lms", batchId: "blank-batch", ids: ["row-1"] };
   const mandate = "name,reference,customerId,amountKobo,workflow,consentEvidence,reminderCount\nBlank reminders,IMP-M-BLANK,DEMO-C1001,5000000,hosted_consent,SYNTHETIC-CONSENT-BLANK,";

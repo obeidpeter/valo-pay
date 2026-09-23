@@ -42,7 +42,7 @@ To inspect an existing test mandate without creating or charging one:
 pnpm run check:paystack --mandate-reference TEST_MANDATE_REFERENCE
 ```
 
-A `--` before the options, as `npm run` needs, is skipped. The checker prints only safe check results and states. It never prints the secret, transaction reference, amount, customer details, authorisation code or full provider response. `webhookIngestion` (`disabled`, `test_only` or `misconfigured`) and `mappedConnections` (a count, never the IDs) report the ingress setting of the process the check runs in, so run it with the API's environment to see what the API would do. Exit 0 means the requested read checks succeeded; it does not mark the Valo Pay integration connected. Missing or rejected credentials and failed/mismatched checks exit 1.
+A `--` before the options is skipped, since pnpm passes one on to the script where npm would not. The checker prints only safe check results and states. It never prints the secret, transaction reference, amount, customer details, authorisation code or full provider response. `webhookIngestion` (`disabled`, `test_only` or `misconfigured`) and `mappedConnections` (a count, never the IDs) report the ingress setting of the process the check runs in, so run it with the API's environment to see what the API would do. Exit 0 means the requested read checks succeeded; it does not mark the Valo Pay integration connected. Missing or rejected credentials and failed/mismatched checks exit 1.
 
 ## Signed test ingress
 

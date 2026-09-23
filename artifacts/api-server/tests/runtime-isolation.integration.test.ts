@@ -170,7 +170,13 @@ try {
     for (const sql of blockedInserts) { await assert.rejects(() => client.query(sql), /row-level security/); await client.query("ROLLBACK TO SAVEPOINT reader_write"); }
     await client.query("ROLLBACK");
     await client.query("BEGIN"); await isolation.bindRuntimeIdentity(client, { organizationId: "org_runtimeA", userId: "user_adminA" });
-    assert.equal((await client.query("UPDATE valopay_idempotency SET response='{}'::jsonb WHERE merchant_id='lender-a'")).rowCount, 1, "Admin lifecycle redaction can replace the scoped idempotency response."); await client.query("ROLLBACK");
+    assert.equal((await client.query("UPDATE valopay_idempotency SET response='{}'::jsonb WHERE merchant_id='lender-a'")).rowCount, 1, "Admin lifecycle redaction can replace the scoped idempotency response.");
+    // An administrator adds lenders to its own workspace only: the workspace scope, not the role, refuses another's.
+    await client.query("SAVEPOINT admin_scope");
+    await assert.rejects(() => client.query("INSERT INTO valopay_merchants(id,workspace_id,info,settings) VALUES('admin-foreign','workspace-b','{}','{}')"), /row-level security/, "An administrator of workspace A cannot add a lender to workspace B.");
+    await client.query("ROLLBACK TO SAVEPOINT admin_scope");
+    assert.equal((await client.query("INSERT INTO valopay_merchants(id,workspace_id,info,settings) VALUES('admin-own','workspace-a','{}','{}')")).rowCount, 1, "It can add one to its own.");
+    await client.query("ROLLBACK");
     await client.query("BEGIN"); await client.query(`SET LOCAL search_path TO "${schema}", pg_catalog`);
     for (const table of tables) assert.equal((await client.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count, 0, `${table}: transaction scope does not leak through the pool.`);
     await client.query("SAVEPOINT unscoped");
@@ -183,7 +189,8 @@ try {
     }
     await client.query("ROLLBACK");
     await client.query("BEGIN"); await isolation.bindRuntimeIdentity(client, { organizationId: "org_runtimeB", userId: "user_financeA" });
-    assert.equal((await client.query("SELECT count(*)::int AS count FROM valopay_records")).rows[0].count, 0, "User/organisation mixing produces no authorised rows."); await client.query("ROLLBACK");
+    for (const table of tables) assert.equal((await client.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count, 0, `${table}: user/organisation mixing produces no authorised rows.`);
+    await client.query("ROLLBACK");
     await client.query("BEGIN"); await isolation.bindRuntimeIdentity(client, { organizationId: "org_runtimeA", userId: "user_invitee" }, { token: "token-workspace-a", verifiedEmails: ["workspace-a@example.test"] });
     assert.equal((await client.query("SELECT id FROM valopay_staff_invitations")).rows[0].id, "invite-workspace-a");
     assert.equal((await client.query("SELECT count(*)::int AS count FROM valopay_merchants")).rows[0].count, 0, "An invitation scope has no lender grants."); await client.query("ROLLBACK");

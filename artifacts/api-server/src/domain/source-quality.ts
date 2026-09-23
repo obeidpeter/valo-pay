@@ -48,7 +48,7 @@ export function batchSourceQuality(state: DomainState, batch: ValopayRecord): So
     const columns = Object.keys(rows[0] || {});
     const amountColumn = columns.find(column => ["amount", "amountKobo"].includes(Object.hasOwn(batch.data.mapping || {}, column) ? batch.data.mapping[column] : column));
     // As in the import, a customer row's amount is optional: a blank one counts for nothing.
-    if (amountColumn) quality.sourceAmountKobo = safeSum(rows.map(row => batch.data.kind === "customers" && !row[amountColumn] ? 0 : csvAmountToKobo(row[amountColumn] || "", batch.data.amountUnit)));
+    if (amountColumn) quality.sourceAmountKobo = safeSum(rows.map(row => batch.data.kind === "customers" && !row[amountColumn]?.trim() ? 0 : csvAmountToKobo(row[amountColumn] || "", batch.data.amountUnit)));
     else if (batch.data.kind === "customers") quality.sourceAmountKobo = 0;
     else issues.push("Map an amount column to compare source and imported totals.");
     const imported = state.records.filter(r => r.kind === batch.data.kind && r.data.importIdentity?.batchId === batch.id);

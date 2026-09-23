@@ -47,7 +47,8 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
         if (!target) continue;
         if (unsafeKey(target)) throw new Error('Reserved object names are not allowed as import fields.');
         // A blank number is absent. Only the amount, which every kind but customers needs, is still refused when blank.
-        if (numeric.has(target) && !value && !(target === 'amountKobo' && input.kind !== 'customers')) {
+        // Quoted spaces are kept by the parser's trim, so a cell of spaces counts as blank too.
+        if (numeric.has(target) && !value.trim() && !(target === 'amountKobo' && input.kind !== 'customers')) {
           // Earlier builds read a blank number other than an amount as 0, and the fingerprints of the rows they imported include it.
           if (!target.endsWith('Kobo')) blankAsZero[target] = 0;
           continue;
