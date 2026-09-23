@@ -452,6 +452,11 @@ function twin(name, zodSchema) {
     if (Array.isArray(value)) return value.map(plain);
     if (!value || typeof value !== "object") return value;
     if (value.$ref) return plain(schemas[value.$ref.replace("#/components/schemas/", "")]);
+    // A nullable enum is written either way: as a type list with null among its values, or as anyOf the enum and null.
+    if (Array.isArray(value.type) && value.type.includes("null") && Array.isArray(value.enum) && value.enum.includes(null)) {
+      const types = value.type.filter((type) => type !== "null");
+      return plain({ anyOf: [{ ...value, type: types.length === 1 ? types[0] : types, enum: value.enum.filter((item) => item !== null) }, { type: "null" }] });
+    }
     return Object.fromEntries(Object.entries(value).filter(([key]) => key !== "description" && key !== "additionalProperties").map(([key, item]) => [key, plain(item)]));
   };
   const written = plain(schemas[name]), translated = plain(fromZod(zodSchema, zodSchema));
@@ -462,6 +467,13 @@ function twin(name, zodSchema) {
 twin("RecordData", shared.recordDataSchema);
 twin("ValopayRecord", shared.valopayRecordSchema);
 twin("Merchant", shared.merchantSchema);
+// The record API's confirmations, which the console checks with these shared twins rather than the generated contract.
+twin("ActionResult", shared.actionResultSchema);
+twin("ImportRow", shared.importRowSchema);
+twin("ImportResult", shared.importResultSchema);
+twin("EffectiveCloseSchedule", shared.effectiveCloseScheduleSchema);
+twin("Settings", shared.settingsViewSchema);
+twin("ExportResult", shared.exportResultSchema);
 const journalOffset = { name: "offset", in: "query", schema: { type: "integer", minimum: 0, maximum: 100000 }, description: "Rows to skip in the newest-first order; pages hold 25 rows." };
 const operation = (path, method, id, response, body, params, summary, description) => { add(path, method, id, response, body, params); describe(path, method, summary, description); };
 

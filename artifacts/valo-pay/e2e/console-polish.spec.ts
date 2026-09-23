@@ -69,8 +69,8 @@ test("loading and error states keep an h1", async ({ page }) => {
   await expect(page.getByRole("status").filter({ hasText: "Loading your workspace…" })).toBeVisible();
   expect(await headingOne(page)).toEqual([]);
   release();
-  await page.unroute("**/api/v1/workspace");
   await expect(page.getByRole("heading", { level: 1, name: "Operations overview" })).toBeVisible();
+  await page.unroute("**/api/v1/workspace");
 
   // A page whose first load failed, with nothing to show.
   for (const [route, api, problem] of [
@@ -105,4 +105,20 @@ test("on a phone the presentation guide keeps its title on a line or two and lea
   const action = guide.getByRole("link", { name: "Open the sample customer" });
   expect((await action.boundingBox())!.y).toBeGreaterThan(titleBox.y + titleBox.height - 1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+});
+
+test("the anonymous sandbox on a host without sign-in never fetches Clerk's code", async ({ page, request }) => {
+  const scripts = new Set<string>();
+  page.on("request", (sent) => { if (sent.resourceType() === "script" || sent.url().endsWith(".js")) scripts.add(sent.url()); });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await page.goto("/overview");
+  await expect(page.getByRole("heading", { level: 1, name: "Operations overview" })).toBeVisible();
+  // The console fetches every page's code while the browser is idle, Team & access among them.
+  await expect.poll(() => [...scripts].some((url) => /\/team-[\w-]+\.js$/.test(url)), { timeout: 15_000 }).toBe(true);
+  await page.waitForLoadState("networkidle");
+  const withClerk: string[] = [];
+  for (const url of scripts) if ((await (await request.get(url)).text()).includes('"@clerk/react"')) withClerk.push(url);
+  expect(withClerk).toEqual([]);
+  expect(scripts.size).toBeGreaterThan(5);
 });

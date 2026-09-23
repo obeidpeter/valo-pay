@@ -1,8 +1,5 @@
-import { useEffect, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Link } from "wouter";
-import { SignIn, SignUp } from "@clerk/react";
-import { dark } from "@clerk/themes";
-import { useTheme } from "@/lib/theme";
 import {
   ArrowLeftRight,
   ArrowRight,
@@ -16,7 +13,7 @@ import {
 } from "lucide-react";
 import { PublicFrame } from "@/components/public-frame";
 import { Button } from "@/components/ui/button";
-import { authEnabled } from "@/lib/auth";
+import { authEnabled, ClerkSlot } from "@/lib/auth";
 import "@/sign-in.css";
 
 /**
@@ -31,48 +28,10 @@ import "@/sign-in.css";
 
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-/** Clerk's form in the console's colours, type and radius. */
-const appearance = {
-  variables: {
-    colorPrimary: "hsl(var(--primary))",
-    colorText: "hsl(var(--foreground))",
-    colorTextSecondary: "hsl(var(--muted-foreground))",
-    colorBackground: "hsl(var(--card))",
-    colorInputBackground: "hsl(var(--background))",
-    colorInputText: "hsl(var(--foreground))",
-    colorTextOnPrimaryBackground: "hsl(var(--primary-foreground))",
-    colorDanger: "hsl(var(--destructive))",
-    borderRadius: "0.75rem",
-    fontFamily: "'Plus Jakarta Sans', sans-serif",
-  },
-  elements: {
-    rootBox: "auth-clerk-root",
-    cardBox: "auth-clerk-box",
-    card: "auth-clerk-card",
-    headerTitle: "auth-clerk-title",
-    headerSubtitle: "auth-clerk-subtitle",
-    formFieldInput: "auth-clerk-input",
-    formButtonPrimary: "auth-clerk-submit",
-    socialButtonsBlockButton: "auth-clerk-social",
-    footer: "auth-clerk-footer",
-    footerActionLink: "auth-clerk-link",
-  },
-} as const;
+// Clerk's forms and their theme load only where sign-in is available, and render under Clerk's provider.
+const ClerkSignIn = lazy(() => import("@/components/clerk-forms").then((module) => ({ default: module.ClerkSignIn })));
+const ClerkSignUp = lazy(() => import("@/components/clerk-forms").then((module) => ({ default: module.ClerkSignUp })));
 
-/** The same form on a dark console: Clerk's dark base theme with the console's dark tokens, so the door matches the room. */
-const darkAppearance = {
-  ...appearance,
-  baseTheme: dark,
-  variables: {
-    ...appearance.variables,
-    colorTextOnPrimaryBackground: "hsl(var(--primary-foreground))",
-  },
-};
-
-function useClerkAppearance() {
-  const { theme } = useTheme();
-  return theme === "dark" ? darkAppearance : appearance;
-}
 
 function Shell({
   title,
@@ -252,7 +211,6 @@ function SandboxOption() {
 
 /** The sign-in page: Clerk's form beside what signing in changes, or the unavailable notice on a host without a key. */
 export function SignInPage() {
-  const clerkAppearance = useClerkAppearance();
   return (
     <Shell
       title="Sign in to your workspace"
@@ -260,13 +218,15 @@ export function SignInPage() {
     >
       {authEnabled ? (
         <>
-          <SignIn
-            routing="path"
-            path={`${basePath}/sign-in`}
-            signUpUrl={`${basePath}/sign-up`}
-            fallbackRedirectUrl={`${basePath}/overview`}
-            appearance={clerkAppearance}
-          />
+          <ClerkSlot>
+            <Suspense fallback={null}>
+              <ClerkSignIn
+                path={`${basePath}/sign-in`}
+                signUpUrl={`${basePath}/sign-up`}
+                fallbackRedirectUrl={`${basePath}/overview`}
+              />
+            </Suspense>
+          </ClerkSlot>
           <SandboxOption />
         </>
       ) : (
@@ -278,7 +238,6 @@ export function SignInPage() {
 
 /** The sign-up page, in the same shell. */
 export function SignUpPage() {
-  const clerkAppearance = useClerkAppearance();
   return (
     <Shell
       title="Create your workspace"
@@ -286,13 +245,15 @@ export function SignUpPage() {
     >
       {authEnabled ? (
         <>
-          <SignUp
-            routing="path"
-            path={`${basePath}/sign-up`}
-            signInUrl={`${basePath}/sign-in`}
-            fallbackRedirectUrl={`${basePath}/overview`}
-            appearance={clerkAppearance}
-          />
+          <ClerkSlot>
+            <Suspense fallback={null}>
+              <ClerkSignUp
+                path={`${basePath}/sign-up`}
+                signInUrl={`${basePath}/sign-in`}
+                fallbackRedirectUrl={`${basePath}/overview`}
+              />
+            </Suspense>
+          </ClerkSlot>
           <SandboxOption />
         </>
       ) : (

@@ -8,7 +8,8 @@ import { Button } from './ui/button';
 import { DiscardOriginalRequest } from './discard-original-request';
 import { formatDate, formatNumber } from '@/lib/formatters';
 import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
-import { GetExportJobResponse } from '@workspace/api-zod';
+import { exportResultSchema } from '@workspace/valopay-schema';
+import { readAnswer } from '@/lib/answers';
 import { Link } from 'wouter';
 
 type Format = 'pdf' | 'csv' | 'json';
@@ -36,7 +37,7 @@ export function ExportJobControl({ kind, customerId, closeReviewId, savedJobId, 
   const selectedJob = selected?.scope === scope ? selected.job : undefined;
   const id = savedJobId || selectedJob?.id || previous[0]?.id || '';
   const status = useGetExportJob(id, { merchantId: merchantId! }, { query: { enabled: !!merchantId && !!id, queryKey: getGetExportJobQueryKey(id, { merchantId: merchantId! }), select: value => {
-    if (!GetExportJobResponse.safeParse(value).success || value.id !== id || !['queued','running','ready','failed'].includes(value.status || '') || (value.status === 'ready' && !/^[a-f0-9]{64}$/i.test(value.checksum || ''))) throw new Error('The saved export status could not be verified. Refresh this job.');
+    if (readAnswer(exportResultSchema, value) === undefined || value.id !== id || !['queued','running','ready','failed'].includes(value.status || '') || (value.status === 'ready' && !/^[a-f0-9]{64}$/i.test(value.checksum || ''))) throw new Error('The saved export status could not be verified. Refresh this job.');
     const download = new URL(value.downloadUrl, window.location.origin);
     if (download.origin !== window.location.origin || download.pathname !== `/api/v1/exports/${encodeURIComponent(id)}/download` || download.searchParams.get('merchantId') !== merchantId) throw new Error('The saved export download could not be verified. Refresh this job.');
     return value;

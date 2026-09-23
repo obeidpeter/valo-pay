@@ -15,8 +15,7 @@ import {
   useRouter,
   Router as WouterRouter
 } from 'wouter';
-import { ClerkProvider } from '@clerk/react';
-import { authEnabled, clerkPublishableKey } from '@/lib/auth';
+import { AuthProvider } from '@/lib/auth';
 
 import { WorkspaceProvider } from '@/lib/workspace-context';
 import { Layout } from '@/components/layout';
@@ -123,14 +122,7 @@ export const QUERY_STALE_MS = 30_000;
 export const queryDefaults = { queries: { staleTime: QUERY_STALE_MS, retry: retryQuery } } satisfies DefaultOptions;
 export const queryClient = new QueryClient({ defaultOptions: queryDefaults });
 
-const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
-
-function stripBase(path: string): string {
-  return basePath && path.startsWith(basePath)
-    ? path.slice(basePath.length) || "/"
-    : path;
-}
 
 /** Every address the console has a page for. Anything else is not found, and gets no workspace. */
 const consoleRoutes: Array<{ path: string; load: PageLoader }> = [
@@ -212,11 +204,12 @@ function RoutedErrorBoundary({ children }: { children: ReactNode }) {
   return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>;
 }
 
-function ClerkProviderWithRoutes() {
-  const [, setLocation] = useLocation();
-
-  const routes = (
-      <QueryClientProvider client={queryClient}>
+function App() {
+  // Sign-in, where it is wanted, loads beside the routes and never remounts them (lib/auth.tsx).
+  return (
+    <WouterRouter base={basePath}>
+      <AuthProvider>
+        <QueryClientProvider client={queryClient}>
           <RoutedErrorBoundary>
             <Switch>
               {/* The public pages sit outside the workspace provider: reading about the product or
@@ -232,29 +225,8 @@ function ClerkProviderWithRoutes() {
           </RoutedErrorBoundary>
           <RouteFocus />
           <Toaster />
-      </QueryClientProvider>
-  );
-
-  // Without a reachable Clerk the anonymous sandbox still runs; see lib/auth.tsx.
-  if (!authEnabled || !clerkPublishableKey) return routes;
-  return (
-    <ClerkProvider
-      publishableKey={clerkPublishableKey}
-      proxyUrl={clerkProxyUrl}
-      signInUrl={`${basePath}/sign-in`}
-      signUpUrl={`${basePath}/sign-up`}
-      routerPush={(to) => setLocation(stripBase(to))}
-      routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
-    >
-      {routes}
-    </ClerkProvider>
-  );
-}
-
-function App() {
-  return (
-    <WouterRouter base={basePath}>
-      <ClerkProviderWithRoutes />
+        </QueryClientProvider>
+      </AuthProvider>
     </WouterRouter>
   );
 }

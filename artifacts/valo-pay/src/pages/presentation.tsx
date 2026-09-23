@@ -3,7 +3,8 @@ import { Link } from 'wouter';
 import { ArrowRight, Check, Download, FileText, Play, Presentation } from 'lucide-react';
 import { useWorkspace } from '@/lib/workspace-context';
 import { usePresentation, usePresentationHref } from '@/components/presentation-guide';
-import { presentationChecks, presentationSteps, presentationSamples, presenterBrief, downloadPresentationFile } from '@/lib/presentation';
+import { presentationChecks, presentationSteps } from '@/lib/presentation';
+import { presentationSamples, presenterBrief, downloadPresentationFile } from '@/lib/presenter-brief';
 import { Button } from '@/components/ui/button';
 
 export default function PresentationPage() {
