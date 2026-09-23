@@ -27,7 +27,7 @@ const { cashEvidenceHash } = await import("../src/domain/connected-cash.js");
 const { assessCredit, createSyntheticCreditInput } = await import("../src/domain/connected-credit.js");
 const { connectedRevision } = await import("../src/domain/connected.js");
 const { appendAudit, verifyAudit } = await import("../src/lib/valopay-store.js");
-const { requestFingerprint } = await import("../src/lib/digests.js");
+const { canonicalDigest, requestFingerprint } = await import("../src/lib/digests.js");
 
 const date = "2026-09-22";
 const ops = { actor: "Clerk:operator", principalId: "person-operator", role: "Operations", now: "2026-09-23T09:00:00.000Z" };
@@ -79,6 +79,13 @@ const correction = { batchId: batch.id, targetId: target.id, expectedUpdatedAt: 
 const preview = previewImportCorrection(state, ops, correction);
 proposeImportCorrection(state, ops, { ...correction, previewDigest: preview.previewDigest, reviewer: finance.actor, reason: "Correct the misspelled source name", evidence: "SOURCE-CORRECTION-GOLDEN" }, [{ actor: finance.actor, role: "Finance" }]);
 const proposal = state.records.find((record) => record.kind === "import-corrections")!;
+// A proposal records its proposer's role since the 23 September audit (item 20), and its digest covers it: checked
+// here against the same rules. The golden values are pinned on the proposal as earlier builds stored it, without the
+// role, so they still prove the digest rules unchanged.
+const { proposalDigest: storedDigest, proposedRole, ...earlierProposal } = proposal.data;
+assert.equal(proposedRole, ops.role);
+assert.equal(storedDigest, canonicalDigest({ ...earlierProposal, proposedRole }, "legacy-en-us-replacer"));
+proposal.data = { ...earlierProposal, proposalDigest: canonicalDigest(earlierProposal, "legacy-en-us-replacer") };
 values.correction = { preview: preview.previewDigest, impact: proposal.data.impactDigest, proposal: proposal.data.proposalDigest };
 
 // Retention: policy and hold revisions, candidate digests and a preview.

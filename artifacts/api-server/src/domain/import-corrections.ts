@@ -21,6 +21,12 @@ import { contractAnswer } from "../lib/contract";
 const digest = (value: unknown) =>
   canonicalDigest(value, "legacy-en-us-replacer");
 const principal = (ctx: Context) => ctx.principalId || ctx.actor;
+/** The role the correction is checked as: its proposer's (MAN-07 lets only an Admin set a new sub-minimum amount).
+ * A proposal recorded before the role was kept is checked as a writer who is not an Admin. */
+const proposerRole = (proposal: ValopayRecord): string =>
+  typeof proposal.data.proposedRole === "string"
+    ? proposal.data.proposedRole
+    : "Operations";
 function refuse(message: string, status = 409): never {
   throw Object.assign(new Error(message), { status });
 }
@@ -95,6 +101,7 @@ function calculate(
   ctx: Context,
   raw: ImportCorrectionPreviewInput,
   asOf = ctx.now,
+  role = ctx.role,
 ) {
   const input = importCorrectionPreviewInputSchema.parse(raw),
     batch = ownedBatch(state, input.batchId),
@@ -164,13 +171,8 @@ function calculate(
   }
   if (!blockers.length) {
     try {
-      validateRecord(
-        state,
-        { ...ctx, role: "Admin" },
-        target.kind,
-        after,
-        true,
-      );
+      // Checked with the proposer's authority, as their own direct edit would be, whoever views or decides it.
+      validateRecord(state, { ...ctx, role }, target.kind, after, true);
     } catch (error) {
       blockers.push(
         error instanceof Error
@@ -247,8 +249,13 @@ export function importCorrectionView(
   let current = false;
   try {
     current =
-      calculate(state, ctx, proposal.data.input, proposal.createdAt).preview
-        .previewDigest === proposal.data.preview.previewDigest;
+      calculate(
+        state,
+        ctx,
+        proposal.data.input,
+        proposal.createdAt,
+        proposerRole(proposal),
+      ).preview.previewDigest === proposal.data.preview.previewDigest;
   } catch {
     /* changed source or dependencies */
   }
@@ -373,6 +380,7 @@ export function proposeImportCorrection(
     preview: checked.preview,
     proposedBy: ctx.actor,
     proposedPrincipal: principal(ctx),
+    proposedRole: ctx.role,
     reviewer,
     reason,
     evidence,
@@ -431,6 +439,7 @@ export function decideImportCorrection(
       ctx,
       proposal.data.input,
       proposal.createdAt,
+      proposerRole(proposal),
     );
     if (
       checked.preview.blockers.length ||
@@ -522,6 +531,7 @@ export function assertImportedCorrectionChange(
     },
     proposal.data.input,
     proposal.createdAt,
+    proposerRole(proposal),
   );
   if (
     checked.preview.blockers.length ||
