@@ -27,6 +27,7 @@ The README, `docs/BUILD_STATUS.md`, `docs/DATABASE_SECURITY.md`, `docs/frontend-
 | 8 | Nothing checked that a path, command or environment variable a document names exists, that a variable the code reads is documented, or that the contract lists every route and action. | Drift | **Fixed.** `scripts/check-docs.mjs`, below. |
 | 9 | The scripts package carried a `hello` scaffold, a source file and a script with no purpose beyond satisfying its TypeScript configuration. | Hygiene | **Fixed.** Removed with its script: the configuration covers the Paystack check and `scripts/provision-pilot.ts`, so it no longer needs a placeholder. |
 | 10 | `replit.md` repeats parts of the README for the Replit agent. | Duplication | **Left**, as the agent reads it; the check covers its paths, commands and spelling so it cannot drift silently. |
+| 11 | The documents had drifted from the code again (September 2026 audit, item 28): the observability table listed an `export.generated` event nothing logs and missed four that are logged; the security documents described the boundary before staff access, the four database modules and the restricted runtime migrations, and said the browser stores only the theme; restore checks named four or nine tables where there are ten; the README listed 10 of the 27 files under `docs/`, described an older CI and integration run, and said the console build needs the Clerk key; the build status named Chromium only; and the design rationale's entry script size was out of date. | Accuracy | **Fixed**, each against the code, and the check now fails when a file under `docs/` is missing from the README's table, when the log's events and the observability table differ in either direction, or when the integration runner gains a suite the README does not name. |
 
 ## The check
 
@@ -36,9 +37,11 @@ The README, `docs/BUILD_STATUS.md`, `docs/DATABASE_SECURITY.md`, `docs/frontend-
 - the code reads an environment variable the README does not mention, or the README's table documents one that nothing reads;
 - an operation, parameter or schema of the contract has no description, or the contract keeps the generator's placeholder title;
 - an export of `lib/valopay-schema` has no doc comment;
-- a document under `docs/` is not on the snapshot tool's list;
+- a document under `docs/` is not on the snapshot tool's list, or a file under `docs/` is not in the README's Documentation table;
 - a console route or a domain action is missing from `docs/frontend-contract.md`, or the contract describes an action the code does not have;
 - a route served by a router `app.ts` mounts under `/api`, whatever its variable is called and including the Paystack test ingress mounted outside `routes/index.ts`, is missing from the contract, `app.ts` mounts something under `/api` the check cannot follow to a file under `routes/`, `app.ts` imports a router from `routes/` without mounting it at a literal `/api` path (a path held in a constant, say), or the check no longer reaches `routes/index.ts`;
+- the API logs an `event` that `docs/observability.md` does not list, or the document lists one the API does not log (the providers' webhook event names are left out);
+- `scripts/run-integration-tests.mjs` runs a suite the README does not name;
 - the prose of a document uses an American spelling from its list.
 
 ## Where to document what
@@ -49,7 +52,7 @@ The README, `docs/BUILD_STATUS.md`, `docs/DATABASE_SECURITY.md`, `docs/frontend-
 - **An API operation**: its summary and description in `scripts/create-valopay-spec.cjs`, then the regeneration.
 - **A console behaviour**: `docs/frontend-contract.md`; the reasoning behind a design choice: `docs/design/console.md`.
 - **A review** (security, observability, this one): its own document with findings and status, listed in the README's table and on the snapshot tool's list.
-- **An operator's question**: `docs/observability.md`.
+- **An operator's question**: `docs/observability.md`; a new log `event` gets its row there in the same change.
 
 ## How to re-run
 

@@ -6,7 +6,7 @@ This is a **staging-only foundation**, not an enabled control on the deployed sa
 
 ## What the isolation rehearsal provides
 
-The migration creates `valopay_pilot_app`, a role with no login, superuser, database creation, role creation, replication or RLS-bypass capability. It enables and forces row-level security on the four Valo Pay tables in the selected schema. The role does not own these tables.
+The migration creates `valopay_pilot_app`, a role with no login, superuser, database creation, role creation, replication or RLS-bypass capability. It enables and forces row-level security on the four tables it was written for (workspaces, merchants, records and idempotency) in the selected schema. The role does not own these tables. The six tables added since are outside this rehearsal; the restricted runtime migrations, 005 and 006, cover all ten (`docs/pilot-operations-controls.md`).
 
 Both `valopay.workspace_id` and `valopay.principal_hash` must be set for the transaction. A workspace ID alone is insufficient. Merchant visibility follows the visible workspace; records and idempotency entries follow the visible merchant. Missing, empty or mismatched settings expose no rows. Insert policies apply the same checks.
 
@@ -80,6 +80,6 @@ pg_restore --dbname="$EMPTY_RESTORE_REHEARSAL_URL" --no-owner --no-acl \
   --exit-on-error --single-transaction valopay-synthetic-recovery.dump
 ```
 
-After restoring, compare row counts and IDs for all four tables; compare lender settings, outstanding amounts, allocations, daily-close snapshots, and idempotency responses. Verify the complete audit chain with the application verifier. Run the existing repository and scheduler integration suites against the restored target, then perform a UI smoke test using synthetic data. Record elapsed backup and restore time, the snapshot timestamp, verification results, operator and evidence references. Agree acceptable recovery time and data loss with the pilot owner; do not treat an unmeasured target as a successful recovery claim.
+After restoring, compare row counts and IDs for all ten application tables; compare lender settings, outstanding amounts, allocations, daily-close snapshots, and idempotency responses. Verify the complete audit chain with the application verifier. Run the existing repository and scheduler integration suites against the restored target, then perform a UI smoke test using synthetic data. Record elapsed backup and restore time, the snapshot timestamp, verification results, operator and evidence references. Agree acceptable recovery time and data loss with the pilot owner; do not treat an unmeasured target as a successful recovery claim.
 
 This logical dump does not establish point-in-time recovery, restore external object storage or export files, recover encryption keys, or reproduce roles/grants (`--no-acl` intentionally excludes those for the rehearsal). A pilot needs separate tested procedures for each, with restricted backup access, retention, restore credentials, key recovery and a full disaster rehearsal. A successful database test alone does not satisfy the production security or restore readiness gates.

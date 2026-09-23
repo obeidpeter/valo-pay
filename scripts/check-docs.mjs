@@ -1,7 +1,9 @@
 // The documentation check: what a document names must exist, what the code
 // reads must be documented, the contract must describe itself, the shared
-// schema must be documented, every document must reach the snapshot, and the
-// prose must keep the spelling the console uses. Pure, run by `test:pure`.
+// schema must be documented, every document must reach the snapshot and the
+// README's table, the log's events and the integration suites must be the
+// ones documented, and the prose must keep the spelling the console uses.
+// Pure, run by `test:pure`.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
@@ -149,8 +151,33 @@ for (const doc of documents) {
 }
 checks += 1;
 
+// ---- 10. Every file under docs/ is in the README's Documentation table ----
+const documentation = readme.slice(readme.indexOf("## Documentation"), readme.indexOf("\n## ", readme.indexOf("## Documentation")));
+for (const file of walk("docs", () => true)) check(documentation.includes(`| \`${file}\` |`), `README.md's Documentation table does not list ${file}`);
+
+// ---- 11. The log's events and docs/observability.md agree ----
+// Every `event` the API logs is in the document's table, and every event the table lists is logged. The
+// providers' `event` fields name a provider's webhook events, not log lines, so that directory is left out.
+const logged = new Set();
+for (const file of walk(apiSource, (p) => p.endsWith(".ts") && !p.startsWith(`${apiSource}/providers/`))) {
+  for (const match of read(file).matchAll(/\bevent\s*:\s*(["'`])([a-z]+(?:\.[a-z_]+)+)\1/g)) logged.add(match[2]);
+}
+const observability = read("docs/observability.md"), listed = new Set();
+for (const row of observability.slice(observability.indexOf("| Event | Level | Fields | Meaning |")).split("\n").slice(2)) {
+  if (!row.startsWith("|")) break;
+  for (const match of row.split("|")[1].matchAll(/`([a-z]+(?:\.[a-z_]+)+)`/g)) listed.add(match[1]);
+}
+check(logged.size >= 20, `the event check found only ${logged.size} events in ${apiSource}; its pattern no longer matches how events are logged`);
+for (const event of logged) check(listed.has(event), `${apiSource} logs the event ${event}, which docs/observability.md does not list`);
+for (const event of listed) check(logged.has(event), `docs/observability.md lists the event ${event}, which ${apiSource} does not log`);
+
+// ---- 12. The README names every suite the integration runner runs ----
+const suites = [...read("scripts/run-integration-tests.mjs").matchAll(/tests\/([\w-]+)\.integration\.test\.ts/g)].map((m) => m[1]);
+check(suites.length > 0, "the suite check found no suites in scripts/run-integration-tests.mjs");
+for (const suite of suites) check(readme.includes(`\`${suite}\``), `README.md does not name the integration suite ${suite}, which scripts/run-integration-tests.mjs runs`);
+
 if (problems.length) {
   console.error(problems.join("\n"));
   assert.fail(`Documentation check found ${problems.length} problem(s)`);
 }
-console.log(`Documentation checks passed (${checks} checks): paths, links and commands the documents name exist, environment variables are documented and read, the contract describes every operation, parameter and schema, the shared schema's exports are documented, every document reaches the snapshot, the contract lists every route and action, every route app.ts mounts is in the contract, and the prose is British.`);
+console.log(`Documentation checks passed (${checks} checks): paths, links and commands the documents name exist, environment variables are documented and read, the contract describes every operation, parameter and schema, the shared schema's exports are documented, every document reaches the snapshot, the contract lists every route and action, every route app.ts mounts is in the contract, the prose is British, the README lists every document and every integration suite, and the observability table lists exactly the events the API logs.`);
