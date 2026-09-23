@@ -546,7 +546,7 @@ test("segment policy mismatch never borrows salaried score", () => {
   blocked(input, "SEGMENT_NOT_VALIDATED");
 });
 
-function serviceFixture(customerId = "customer-a") {
+function serviceFixture(customerId = "customer-a", at = now) {
   const state: DomainState = {
     merchant: {
       id: "lender-a",
@@ -569,18 +569,18 @@ function serviceFixture(customerId = "customer-a") {
     name: "Synthetic Applicant",
     reference: "SYN-APPLICANT",
     status: "active",
-    createdAt: now,
+    createdAt: at,
   });
   for (const purpose of ["account_read", "credit_assessment"])
     makeRecord(state, "connected-consents", {
       name: purpose,
       status: "active",
-      createdAt: now,
+      createdAt: at,
       data: {
         purpose,
         subjectId: customer.id,
         entityId: state.merchant.id,
-        expiresAt: "2026-10-21T10:00:00.000Z",
+        expiresAt: new Date(Date.parse(at) + 30 * 86_400_000).toISOString(),
         version: 1,
       },
     });
@@ -590,9 +590,9 @@ function serviceFixture(customerId = "customer-a") {
     operator: {
       actor: "Sandbox Operations",
       role: "Operations",
-      now,
+      now: at,
     } as Context,
-    finance: { actor: "Sandbox Finance", role: "Finance", now } as Context,
+    finance: { actor: "Sandbox Finance", role: "Finance", now: at } as Context,
   };
 }
 const assessAction = {
@@ -759,5 +759,39 @@ test("service accepts complete explicit schedule but rejects partial terms", () 
     },
   });
   assert.equal(record.data.result.affordability.scheduledTotalKobo, 24_000_000);
+});
+test("a synthetic schedule falls due once a calendar month in West Africa Time, so no month carries two repayments", () => {
+  const assess = (at: string, repaymentKobo: number, termMonths: number) => {
+    const { state, operator } = serviceFixture("customer-a", at);
+    const affordability = runCreditAction(state, operator, {
+      ...assessAction,
+      data: { ...assessAction.data, principalKobo: repaymentKobo, repaymentKobo, termMonths },
+    }).data.result.affordability;
+    return {
+      peak: affordability.peakScheduledMonthlyKobo,
+      termDays: affordability.termDays,
+      months: affordability.repaymentMonths.map((item: { month: string; amountKobo: number }) => `${item.month}:${item.amountKobo}`),
+    };
+  };
+  // From 09:00 WAT on 1 January 2027, 30-day steps put two repayments in May and none in February.
+  const year = assess("2027-01-01T08:00:00.000Z", 5_500_000, 12);
+  assert.deepEqual(year.months, ["2027-02", "2027-03", "2027-04", "2027-05", "2027-06", "2027-07", "2027-08", "2027-09", "2027-10", "2027-11", "2027-12", "2028-01"].map((month) => `${month}:5500000`));
+  assert.equal(year.peak, 5_500_000, "the peak month is one instalment");
+  // From 00:30 WAT on 31 January (still 30 January in UTC), each repayment is on the WAT month's last day when it has no 31st.
+  const monthEnd = assess("2027-01-30T23:30:00.000Z", 8_000_000, 3);
+  assert.deepEqual(monthEnd.months, ["2027-02:8000000", "2027-03:8000000", "2027-04:8000000"]);
+  assert.equal(monthEnd.termDays, 89, "the last repayment is at 00:30 WAT on 30 April");
+  // The longest term, 24 months, may span 29 February and still fits the two-year horizon.
+  const longest = assess("2027-03-01T08:00:00.000Z", 1_000_000, 24);
+  assert.equal(longest.months.length, 24);
+  assert.equal(longest.termDays, 731);
+  // The sample schedule an assessment uses without explicit terms steps by calendar month too: from 30 January, February, March and April.
+  const sampleAt = "2027-01-30T10:00:00.000Z";
+  const sample = assessCredit(
+    createSyntheticCreditInput({ tenantId: ctx.tenantId, applicantId: "applicant-a", applicationRef: "synthetic-application-a", now: sampleAt }),
+    { ...ctx, now: sampleAt },
+  ).affordability!;
+  assert.deepEqual(sample.repaymentMonths.map((item) => item.month), ["2027-02", "2027-03", "2027-04"]);
+  assert.equal(sample.peakScheduledMonthlyKobo, 9_000_000);
 });
 console.log(`Connected Credit: ${checks} scenarios passed.`);

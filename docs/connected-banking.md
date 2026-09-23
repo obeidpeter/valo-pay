@@ -33,7 +33,7 @@ Checkout creation/authorisation checks scheduled external instructions and exist
 ### Credit Desk
 
 1. In **Permissions & readiness**, grant **Read applicant accounts** and **Assess an application** to the same sample applicant. The permissions are separate.
-2. Open **Credit Desk**, select the applicant and a sample scenario. Assess as Admin or Operations.
+2. Open **Credit Desk**, select the applicant and a sample scenario, and enter the principal, the repayment and the number of monthly repayments. Assess as Admin or Operations. One repayment falls due each calendar month, on the assessment's day in West Africa Time or the month's last day when it is shorter, so no month carries two; the affordability check takes each month's total, and a schedule may run up to two calendar years.
 3. Inspect evidence quality, coverage, recurring income, commitments, affordability, score factors and policy reasons. Thin or stale evidence is shown as incomplete; missing authority blocks use.
 4. Switch to a different permitted reviewer persona: Finance, Compliance reviewer or another authorised Admin actor. Record the outcome, rationale and an explanation suitable for the applicant.
 5. Changed terms require a new assessment. Results and reviews are retained as immutable versions; a review cannot silently overwrite its predecessor.

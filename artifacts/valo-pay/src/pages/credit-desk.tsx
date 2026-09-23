@@ -408,7 +408,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
               </div>
               <div>
                 <label htmlFor="credit-repayment">
-                  Repayment per period (₦)
+                  Repayment per month (₦)
                 </label>
                 <input
                   id="credit-repayment"
@@ -435,7 +435,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
               </div>
             </div>
             <div>
-              <label htmlFor="credit-term">Number of 30-day repayments</label>
+              <label htmlFor="credit-term">Number of monthly repayments</label>
               <select
                 id="credit-term"
                 value={months}
@@ -448,8 +448,9 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
                 ))}
               </select>
               <p className="mt-1 text-xs text-muted-foreground">
-                Include all charges. Payments falling in the same calendar month
-                are combined for the affordability check.
+                Include all charges. One repayment falls due each calendar month,
+                on today’s date or the month’s last day when it is shorter; the
+                affordability check takes each month’s total.
               </p>
             </div>
             <div>
