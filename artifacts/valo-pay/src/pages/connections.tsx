@@ -86,6 +86,7 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
         setRevoke("");
         setReason("");
       }}
+      onReleased={() => setFailure("")}
     >
       <div className="connected-metrics">
         <div className="connected-metric">

@@ -9,6 +9,18 @@ export function watDate(epochMs: number): string {
   return new Date(epochMs + WAT_OFFSET_MS).toISOString().slice(0, 10);
 }
 
+/** Calendar month (YYYY-MM) of an instant in West Africa Time; a value that is not a date keeps its first seven characters. */
+export function watMonth(value: string | number): string {
+  const time = typeof value === "number" ? value : Date.parse(value);
+  return Number.isFinite(time) ? new Date(time + WAT_OFFSET_MS).toISOString().slice(0, 7) : String(value).slice(0, 7);
+}
+
+/** The instant a YYYY-MM month starts: midnight West Africa Time on the 1st, 23:00 UTC the day before. */
+export function watMonthStart(period: string): number {
+  const [year, month] = period.split("-").map(Number);
+  return Date.UTC(year!, month! - 1, 1) - WAT_OFFSET_MS;
+}
+
 /** Nigerian public holidays and non-banking days are data (SCH-04), one calendar record per date. */
 export function holidaySet(state: DomainState): Set<string> {
   return new Set(recordsOf(state, "calendar").map((record) => String(record.data.date)));

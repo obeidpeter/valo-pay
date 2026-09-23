@@ -492,6 +492,7 @@ export default function CashDeskPage() {
         setAction(null);
         setReason("");
       }}
+      onReleased={() => setProblem("")}
     >
       {success && (
         <p className="connected-note" role="status">
@@ -1577,6 +1578,7 @@ export default function CashDeskPage() {
           </DialogHeader>
           <ConnectedRecovery
             recovery={api}
+            onReleased={() => setProblem("")}
             onRecovered={() => {
               setProblem("");
               setAction(null);

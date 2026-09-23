@@ -1,6 +1,6 @@
 import type { Logger } from 'pino';
 import { exportJobRepository } from './export-job-store';
-import { EXPORT_CONCURRENCY, processExportJob, type ExportJobRepository, type ExportJobStorage, type ClaimedExport, type ExportArtifact } from './export-jobs';
+import { EXPORT_CONCURRENCY, processExportJob, type ExportAttemptResult, type ExportJobRepository, type ExportJobStorage, type ClaimedExport, type ExportArtifact } from './export-jobs';
 import { exportJobStorage, generateExportArtifact } from './valopay-exports';
 
 type Dependencies = { repository?: ExportJobRepository; storage?: ExportJobStorage; generate?: (claim: ClaimedExport, signal?: AbortSignal) => Promise<{ bytes: Buffer; artifact: ExportArtifact }>; log?: Logger; signal?: AbortSignal };
@@ -9,7 +9,7 @@ export async function runExportPass(deps: Dependencies = {}) {
   if (deps.signal?.aborted) return [];
   const repository = deps.repository || exportJobRepository;
   const targets = await repository.candidates(20);
-  const results: Array<'ready'|'failed'|'skipped'>=[];
+  const results: ExportAttemptResult[]=[];
   let next=0;
   await Promise.all(Array.from({length:EXPORT_CONCURRENCY},async()=>{
    while(next<targets.length && !deps.signal?.aborted){
@@ -26,6 +26,7 @@ export async function runExportPass(deps: Dependencies = {}) {
   }));
   return results;
 }
+/** stop() cancels the attempts in progress, which hand their jobs back to the queue; settle() waits for those writes. */
 export function startExportWorker(deps: Dependencies & { intervalMs?: number } = {}) {
   const cancellation = new AbortController();
   let running: Promise<unknown> | null = null, stopped = false;

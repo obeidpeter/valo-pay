@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, waitFor } from "./harness";
 import { connectedRevision } from "../../api-server/src/domain/connected";
@@ -262,3 +262,172 @@ it("a definite stale-version rejection releases the old revision for an explicit
       ),
   ).toHaveLength(1);
 });
+
+/** Drops the first connected action before it reaches the fake API; later ones pass through, optionally reshaped. */
+function loseFirstAction(reshape?: (response: Response) => Promise<Response>) {
+  const send = globalThis.fetch;
+  const submissions: Array<{ key: string; body: string; status: number | "lost" }> = [];
+  globalThis.fetch = async (input, options) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof Request
+          ? input.url
+          : input.toString();
+    if (options?.method !== "POST" || !url.includes("/connected/actions"))
+      return send(input, options);
+    const key = new Headers(options.headers).get("Idempotency-Key")!;
+    if (!submissions.length) {
+      submissions.push({ key, body: String(options.body), status: "lost" });
+      throw new TypeError("Failed to fetch");
+    }
+    const response = await send(input, options);
+    submissions.push({ key, body: String(options.body), status: response.status });
+    return reshape ? reshape(response) : response;
+  };
+  return submissions;
+}
+
+async function startAssessment(user: ReturnType<typeof userEvent.setup>) {
+  renderApp("/credit-desk");
+  await screen.findByRole("heading", { name: "Credit Desk", level: 1 });
+  await user.type(
+    screen.getByLabelText("Reason for this assessment"),
+    "Check the synthetic evidence before reviewer handoff",
+  );
+  await user.click(
+    screen.getByRole("button", { name: /Run sample assessment/ }),
+  );
+  await screen.findByText("Previous action outcome unconfirmed");
+}
+
+it("a refusal the service marks as cancelled releases the held action", async () => {
+  // The service cancels the key of a request it refuses and says so, so a
+  // retried request that met a changed workspace is known not to have saved.
+  const submissions = loseFirstAction(async (response) => {
+    if (response.status !== 409) return response;
+    const body = await response.json();
+    return new Response(JSON.stringify({ ...body, operation: "cancelled" }), {
+      status: 409,
+      headers: { "Content-Type": "application/json" },
+    });
+  });
+  const user = userEvent.setup();
+  await startAssessment(user);
+  api.mutate((state) => {
+    state.settings.minimumTicketKobo =
+      Number(state.settings.minimumTicketKobo ?? 0) + 1;
+  });
+  await user.click(
+    screen.getByRole("button", { name: "Retry original sample request" }),
+  );
+  await screen.findByText(
+    /^The original request was not saved\. The workspace changed/,
+  );
+  expect(screen.queryByText("Previous action outcome unconfirmed")).toBeNull();
+  // The page's own error from the lost attempt does not come back once the request is released.
+  expect(screen.queryByText("Failed to fetch")).toBeNull();
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  const reason = screen.getByLabelText("Reason for this assessment");
+  expect(reason.closest("fieldset")?.disabled).toBe(false);
+  expect(submissions.map((s) => s.status)).toEqual(["lost", 409]);
+  expect(submissions[1]!.key).toBe(submissions[0]!.key);
+  await user.click(
+    screen.getByRole("button", { name: /Run sample assessment/ }),
+  );
+  await screen.findByText(/A new immutable sample assessment has been recorded/);
+  expect(submissions).toHaveLength(3);
+  expect(submissions[2]!.key).not.toBe(submissions[0]!.key);
+  expect(JSON.parse(submissions[2]!.body).expectedRevision).not.toBe(
+    JSON.parse(submissions[0]!.body).expectedRevision,
+  );
+  expect(
+    api
+      .state()
+      .records.filter((r) => r.kind === "connected-credit-assessments"),
+  ).toHaveLength(1);
+});
+
+it("offers a deliberate discard of the original request", async () => {
+  const submissions = loseFirstAction();
+  const user = userEvent.setup();
+  await startAssessment(user);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  await user.click(
+    screen.getByRole("button", { name: "Discard original request" }),
+  );
+  expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Check Operations"));
+  expect(screen.getByText("Previous action outcome unconfirmed")).toBeTruthy();
+  expect(
+    screen.getByRole("link", { name: "Open Operations" }).getAttribute("href"),
+  ).toBe("/operations");
+  confirm.mockReturnValue(true);
+  await user.click(
+    screen.getByRole("button", { name: "Discard original request" }),
+  );
+  await waitFor(() =>
+    expect(screen.queryByText("Previous action outcome unconfirmed")).toBeNull(),
+  );
+  expect(
+    screen.getByLabelText("Reason for this assessment").closest("fieldset")
+      ?.disabled,
+  ).toBe(false);
+  await user.click(
+    screen.getByRole("button", { name: /Run sample assessment/ }),
+  );
+  await screen.findByText(/A new immutable sample assessment has been recorded/);
+  expect(submissions).toHaveLength(2);
+  expect(submissions[1]!.key).not.toBe(submissions[0]!.key);
+});
+
+it.each([
+  [401, "Sign in again to continue."],
+  [429, "Too many requests. Wait a minute, then try again."],
+])(
+  "a %i keeps the action's key, so the identical next attempt is the same request",
+  async (status, error) => {
+    // A 401 or 429 is not final: any journal entry it left stays pending until the same key settles it.
+    const send = globalThis.fetch;
+    const submissions: Array<{ key: string; body: string }> = [];
+    globalThis.fetch = async (input, options) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof Request
+            ? input.url
+            : input.toString();
+      if (options?.method !== "POST" || !url.includes("/connected/actions"))
+        return send(input, options);
+      submissions.push({
+        key: new Headers(options.headers).get("Idempotency-Key")!,
+        body: String(options.body),
+      });
+      if (submissions.length === 1)
+        return new Response(JSON.stringify({ error }), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        });
+      return send(input, options);
+    };
+    const user = userEvent.setup();
+    renderApp("/credit-desk");
+    await screen.findByRole("heading", { name: "Credit Desk", level: 1 });
+    await user.type(
+      screen.getByLabelText("Reason for this assessment"),
+      "Check the synthetic evidence after a refusal to wait",
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Run sample assessment/ }),
+    );
+    await screen.findByText(error);
+    expect(screen.queryByText("Previous action outcome unconfirmed")).toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: /Run sample assessment/ }),
+    );
+    await screen.findByText(
+      /A new immutable sample assessment has been recorded/,
+    );
+    expect(submissions).toHaveLength(2);
+    expect(submissions[1]).toEqual(submissions[0]);
+  },
+);

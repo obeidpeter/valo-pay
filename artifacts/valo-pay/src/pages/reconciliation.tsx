@@ -498,7 +498,7 @@ export default function ReconciliationPage() {
             <p>Selected instalment outstanding: <strong>{due ? formatKobo(outstanding) : 'Choose an instalment'}</strong></p>
             {due && amount !== null && amount > 0 && amount <= available && amount <= outstanding && <p className="text-xs text-muted-foreground">After allocation: {formatKobo(available - amount)} unapplied payment; {formatKobo(outstanding - amount)} still due.</p>}
           </section>;
-        } : undefined}
+        } : actionKind === 'record_refund' && selectedRecord ? <p className="text-sm">This records a refund of <strong>{formatKobo(paymentAvailable(selectedRecord))}</strong>, the money this payment has not applied. Valo Pay does not move money.</p> : undefined}
         validate={(values): Record<string, string> => {
           if ((isProposalDecision || isAllocationReview) && (!selectedPayment || !selectedInstalment)) return { reason: 'Payment or instalment details are unavailable. Close this dialog and reload before deciding.' };
           if (actionKind === 'confirm_allocation' && (selectedRecord.amountKobo > paymentAvailable(selectedPayment) || selectedRecord.amountKobo > instalmentOutstanding(selectedInstalment))) return { reason: 'The proposed amount exceeds the payment available or instalment outstanding. Close this dialog, refresh the queue and review the changed balances.' };

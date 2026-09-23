@@ -58,7 +58,7 @@ async function call(
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  const data = await result.json();
+  const data: any = await result.json();
   return { status: result.status, data };
 }
 const ok = (result: { status: number; data: any }) => {
@@ -161,16 +161,17 @@ try {
   assert.equal(new Set(parallel.map((answer) => ok(answer).id)).size, 1);
 
   const rejectedKey = randomUUID();
+  const refused = await call(
+    path,
+    "POST",
+    { name: "Missing required consent" },
+    rejectedKey,
+  );
+  assert.equal(refused.status, 400);
   assert.equal(
-    (
-      await call(
-        path,
-        "POST",
-        { name: "Missing required consent" },
-        rejectedKey,
-      )
-    ).status,
-    400,
+    refused.data.operation,
+    "cancelled",
+    "A definitive refusal says its journal entry is cancelled, so the console may release the request.",
   );
   // A definitive refusal closes the journal entry with its reason; it never
   // lingers as pending, so refused requests cannot exhaust the pending limit.
@@ -193,26 +194,168 @@ try {
       {},
     ),
   );
+  const resubmitted = await call(
+    path,
+    "POST",
+    { name: "Missing required consent" },
+    rejectedKey,
+  );
+  assert.equal(resubmitted.status, 409);
+  assert.equal(resubmitted.data.operation, "cancelled", "A cancelled key says so again.");
+  assert.match(
+    resubmitted.data.error,
+    /refused this request and saved nothing: .*consent/i,
+    "The same person hears the original reason.",
+  );
+  const replayed = await call(
+    `/v1/operations/${pending.id}/retry?merchantId=${lender}`,
+    "POST",
+    {},
+  );
+  assert.equal(replayed.status, 409);
+  assert.equal(replayed.data.operation, "cancelled");
+
+  // A connected action lost before it arrived, retried after someone else changed
+  // the workspace: the stale-revision refusal cancels its key and says so.
+  const connectedView = ok(
+    await call(`/v1/connected?merchantId=${lender}`),
+  );
+  const grant = {
+    action: "consent.grant",
+    reason: "Grant a synthetic permission for the retry check",
+    data: {
+      purpose: "account_read",
+      subjectId: connectedView.customers[0].id,
+      days: 30,
+    },
+    expectedRevision: connectedView.revision,
+  };
+  ok(
+    await call(
+      `/v1/connected/actions?merchantId=${lender}`,
+      "POST",
+      { ...grant, reason: "Another person grants a permission first" },
+      randomUUID(),
+    ),
+  );
+  const connectedKey = randomUUID();
+  for (const attempt of [1, 2]) {
+    const retried = await call(
+      `/v1/connected/actions?merchantId=${lender}`,
+      "POST",
+      grant,
+      connectedKey,
+    );
+    assert.equal(retried.status, 409, JSON.stringify(retried.data));
+    assert.equal(
+      retried.data.operation,
+      "cancelled",
+      `Connected retry ${attempt} says its key is cancelled.`,
+    );
+  }
+
+  // An outcome that is still unknown is never marked: a refusal before the
+  // journal entry exists, or a pending entry checked under another role.
+  const unfinishedBody = {
+    name: "Unfinished request",
+    reference: `UNFINISHED-${randomUUID()}`,
+    data: { consentProvenance: "Synthetic fixture" },
+  };
+  const unfinishedKey = randomUUID();
+  const sandboxRequest = () =>
+    ({
+      headers: { cookie },
+      secure: false,
+      auth: Object.assign(() => ({ userId: null }), {
+        [Symbol.for("@clerk/express.auth")]: true,
+      }),
+    }) as any;
+  await store.inWorkspace(sandboxRequest(), response, (ctx) =>
+    store.prepareOperation(ctx, lender, unfinishedKey, {
+      method: "POST",
+      path: "/v1/records/customers",
+      body: unfinishedBody,
+    }),
+  );
+  const switchRole = async (role: string) =>
+    ok(
+      await call(
+        `/v1/actions?merchantId=${lender}`,
+        "POST",
+        { action: "set_role", data: { role } },
+        randomUUID(),
+      ),
+    );
+  await switchRole("Read-only");
+  const readOnly = await call(path, "POST", unfinishedBody, randomUUID());
+  assert.equal(readOnly.status, 403);
+  assert.equal(readOnly.data.operation, undefined, "No entry was written, so nothing is marked.");
+  const otherRole = await call(path, "POST", unfinishedBody, unfinishedKey);
+  assert.equal(otherRole.status, 403);
+  assert.match(otherRole.data.error, /original role/);
+  assert.equal(otherRole.data.operation, undefined, "A pending entry checked under another role is not marked.");
+  await switchRole("Admin");
+
+  // A cancelled entry is final: an attempt already past its checks when a
+  // retry's refusal cancelled the entry is refused at completion and saves nothing.
+  const racedKey = randomUUID();
+  const original = sandboxRequest();
+  const racedId = await store.inWorkspace(original, response, (ctx) =>
+    store.prepareOperation(ctx, lender, racedKey, {
+      method: "POST",
+      path: "/v1/records/customers",
+      body: { name: "Race sample" },
+    }),
+  );
+  store.bindOperation(original, racedId, lender);
+  let cancelledMeanwhile: boolean | undefined;
+  await assert.rejects(
+    store.inWorkspace(original, response, async (ctx) => {
+      const state = await store.loadState(ctx, lender, "update");
+      cancelledMeanwhile = await store.rejectOperation(
+        sandboxRequest(),
+        { id: racedId, merchantId: lender },
+        {
+          status: 409,
+          message: "The workspace changed. Refresh and review before trying again.",
+        },
+      );
+      await store.saveState(ctx, state);
+      await store.saveIdempotency(
+        ctx,
+        store.digest(`${lender}:${racedKey}`),
+        "fingerprint",
+        { id: "receipt" },
+      );
+    }),
+    /cancelled before it completed/,
+  );
+  assert.equal(cancelledMeanwhile, true, "The refusal reports the entry it cancelled.");
   assert.equal(
     (
-      await call(
-        path,
-        "POST",
-        { name: "Missing required consent" },
-        rejectedKey,
-      )
-    ).status,
-    409,
+      await pool.query("SELECT status FROM valopay_operations WHERE id=$1", [
+        racedId,
+      ])
+    ).rows[0].status,
+    "cancelled",
   );
   assert.equal(
     (
-      await call(
-        `/v1/operations/${pending.id}/retry?merchantId=${lender}`,
-        "POST",
-        {},
-      )
-    ).status,
-    409,
+      await pool.query("SELECT 1 FROM valopay_idempotency WHERE id=$1", [
+        store.digest(`${lender}:${racedKey}`),
+      ])
+    ).rows.length,
+    0,
+    "Nothing the cancelled attempt did was saved.",
+  );
+  assert.equal(
+    await store.rejectOperation(
+      sandboxRequest(),
+      { id: history.items[0].id, merchantId: lender },
+      { status: 409, message: "Late refusal" },
+    ),
+    false,
+    "A refusal after completion leaves the completed entry alone and is not marked.",
   );
   assert.equal(
     (
@@ -224,6 +367,105 @@ try {
     ).status,
     409,
   );
+
+  // An entry cancelled while its own request is past its checks (a concurrent
+  // retry's refusal, or Cancel if unfinished) is refused at completion; that
+  // refusal finds the entry already cancelled and still says so.
+  const midwayBody = {
+    name: "Cancelled midway",
+    reference: `MIDWAY-${randomUUID()}`,
+    data: { consentProvenance: "Synthetic fixture" },
+  };
+  const midwayKey = randomUUID();
+  const midwayId = await store.inWorkspace(sandboxRequest(), response, (ctx) =>
+    store.prepareOperation(ctx, lender, midwayKey, {
+      method: "POST",
+      path: "/v1/records/customers",
+      body: midwayBody,
+    }),
+  );
+  const canceller = await pool.connect();
+  let midway: { status: number; data: any };
+  try {
+    await canceller.query("BEGIN");
+    const cancellerPid = (await canceller.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+    await canceller.query(
+      "UPDATE valopay_operations SET status='cancelled',updated_at=now() WHERE id=$1 AND status='pending'",
+      [midwayId],
+    );
+    const answer = call(path, "POST", midwayBody, midwayKey);
+    // The request reaches completeOperation and waits for the cancellation to commit.
+    for (let waited = 0; ; waited += 20) {
+      const blocked = await pool.query(
+        "SELECT count(*)::int AS n FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+        [cancellerPid],
+      );
+      if (blocked.rows[0].n > 0) break;
+      assert.ok(waited < 4000, "The request should wait for the cancellation.");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await canceller.query("COMMIT");
+    midway = await answer;
+  } finally {
+    canceller.release();
+  }
+  assert.equal(midway.status, 409, JSON.stringify(midway.data));
+  assert.match(midway.data.error, /cancelled before it completed/);
+  assert.equal(
+    midway.data.operation,
+    "cancelled",
+    "A refusal of an entry already cancelled says so: nothing sent with the key was saved.",
+  );
+  assert.equal(
+    (
+      await pool.query("SELECT 1 FROM valopay_records WHERE reference=$1", [
+        midwayBody.reference,
+      ])
+    ).rows.length,
+    0,
+  );
+
+  // A write that committed before the journal existed has a receipt and no
+  // entry; its retry creates a pending entry. A refusal before the receipt is
+  // read must not cancel that entry or say the request was not saved.
+  for (const prefix of ["", "connected:"]) {
+    const legacyKey = randomUUID();
+    await store.inWorkspace(sandboxRequest(), response, async (ctx) => {
+      await store.loadState(ctx, lender, "update");
+      await store.saveIdempotency(
+        ctx,
+        store.digest(`${prefix}${lender}:${legacyKey}`),
+        "legacy fingerprint",
+        { id: "legacy receipt" },
+      );
+    });
+    const legacyId = await store.inWorkspace(sandboxRequest(), response, (ctx) =>
+      store.prepareOperation(ctx, lender, legacyKey, {
+        method: "POST",
+        path: prefix ? "/v1/connected/actions" : "/v1/records/customers",
+        body: { name: "Saved before the journal" },
+      }),
+    );
+    assert.equal(
+      await store.rejectOperation(
+        sandboxRequest(),
+        { id: legacyId, merchantId: lender },
+        { status: 404, message: "Lender not found in your permitted workspace access." },
+      ),
+      false,
+      `A refused retry of a ${prefix || "record "}key with an earlier receipt is not marked.`,
+    );
+    assert.equal(
+      (
+        await pool.query("SELECT status FROM valopay_operations WHERE id=$1", [
+          legacyId,
+        ])
+      ).rows[0].status,
+      "pending",
+      "Its entry is not cancelled: the original request was saved.",
+    );
+    await pool.query("DELETE FROM valopay_operations WHERE id=$1", [legacyId]);
+  }
 
   const setupKey = randomUUID();
   const empty = ok(
@@ -249,6 +491,38 @@ try {
     ok(await call(`/v1/records/customers?merchantId=${empty.id}`)).total,
     0,
   );
+  // A sandbox holds at most five lenders, the two samples included. Creation
+  // takes the workspace lock exclusively, so creations at once are counted one
+  // after another and never pass the limit together.
+  const concurrent = await Promise.all(
+    [1, 2, 3, 4].map((n) =>
+      call(
+        "/v1/pilot/lenders",
+        "POST",
+        { name: `Extra pilot lender ${n}`, segment: "Cooperative" },
+        randomUUID(),
+      ),
+    ),
+  );
+  assert.deepEqual(
+    concurrent.map((result) => result.status).sort(),
+    [200, 200, 409, 409],
+  );
+  for (const refused of concurrent.filter((result) => result.status === 409))
+    assert.match(String((refused.data as { error?: unknown }).error), /most a sandbox can have/);
+  assert.equal(
+    ok(
+      await call(
+        "/v1/pilot/lenders",
+        "POST",
+        { name: "Empty pilot lender", segment: "Cooperative" },
+        setupKey,
+      ),
+    ).id,
+    empty.id,
+    "a repeated setup request still returns its lender at the limit",
+  );
+  assert.equal(ok(await call("/v1/workspace")).merchants.length, 5);
   const batchInput = {
     name: "Pilot customers",
     kind: "customers",
@@ -509,6 +783,22 @@ try {
       randomUUID(),
       "admin",
     ),
+  );
+  // The five-lender limit is the sandbox's: a staff workspace takes a sixth.
+  for (const n of [2, 3, 4, 5, 6])
+    ok(
+      await call(
+        "/v1/pilot/lenders",
+        "POST",
+        { name: `Staff pilot ${n}`, segment: "Consumer lending" },
+        randomUUID(),
+        "admin",
+      ),
+    );
+  assert.equal(
+    ok(await call("/v1/workspace", "GET", undefined, undefined, "admin"))
+      .merchants.length,
+    6,
   );
   assert.equal(
     (

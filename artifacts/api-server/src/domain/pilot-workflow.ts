@@ -6,7 +6,7 @@ import {
   type CaseInput,
 } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "./types";
-import { makeRecord, assertNoRealBankDetails } from "./records";
+import { makeRecord, assertNoRealBankDetails, assertSourceOpened, isSealedPayload } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
 import { importCsv } from "../lib/valopay-import";
 import { batchSourceQuality, assertSourceBatchReady } from './source-quality';
@@ -19,7 +19,21 @@ function writer(ctx: Context, allowed = ["Admin", "Operations", "Finance"]) {
   if (!allowed.includes(ctx.role))
     refuse("Your role is not permitted to change this workflow.", 403);
 }
-export function batchView(batch: ValopayRecord, detail = false) {
+/** The check's counts, stored in plaintext beside the protected check so the batch list never opens it. */
+const checkSummaryOf = (check: { valid: number; invalid: number; imported: number; skipped: number }) => ({
+  valid: check.valid,
+  invalid: check.invalid,
+  imported: check.imported,
+  skipped: check.skipped,
+});
+/**
+ * A batch as the list or its detail shows it. `sealedCheck` is what the list
+ * does with a check that is still sealed and has no summary (a batch saved
+ * before summaries were stored): "refuse" (500) when the route should have
+ * opened it, "omit" when the key service could not, so the batch is listed
+ * without counts instead of failing the whole list.
+ */
+export function batchView(batch: ValopayRecord, detail = false, sealedCheck: "refuse" | "omit" = "refuse") {
   return {
     ...batch,
     data: detail
@@ -35,12 +49,17 @@ export function batchView(batch: ValopayRecord, detail = false) {
           committedAt: batch.data.committedAt,
           synthetic: true,
           sourceQuality: batch.data.sourceQuality,
-          check: {
-            valid: batch.data.check?.valid,
-            invalid: batch.data.check?.invalid,
-            imported: batch.data.check?.imported,
-            skipped: batch.data.check?.skipped,
-          },
+          // Batches saved before the summary existed open their check for the list.
+          check:
+            batch.data.checkSummary ??
+            (sealedCheck === "omit" && isSealedPayload(batch.data.check)
+              ? undefined
+              : (assertSourceOpened(batch, ["check"]), {
+                  valid: batch.data.check?.valid,
+                  invalid: batch.data.check?.invalid,
+                  imported: batch.data.check?.imported,
+                  skipped: batch.data.check?.skipped,
+                })),
         },
   };
 }
@@ -164,6 +183,7 @@ export function saveImportBatch(
     checkedBy: ctx.actor,
     checkedAt: ctx.now,
     check,
+    checkSummary: checkSummaryOf(check),
     synthetic: true,
   };
   delete current.data.expectedUpdatedAt;
@@ -198,6 +218,7 @@ export function commitImportBatch(
   if (!batch) refuse("Import batch not found in this lender.", 404);
   assertRecordVersion(batch, expectedUpdatedAt);
   if (batch.status === "committed") return batch;
+  assertSourceOpened(batch, ["csv", "check"]);
   assertSourceBatchReady(state, batch);
   const input = batchInputSchema.parse({
     ...Object.fromEntries(
@@ -229,6 +250,7 @@ export function commitImportBatch(
   // importCsv swaps a working clone on commit; update the stored clone.
   const saved = state.records.find((r) => r.id === batch.id)!;
   saved.data.check = result;
+  saved.data.checkSummary = checkSummaryOf(result);
   saved.data.checkedAt = ctx.now;
   saved.status = result.invalid ? "needs_correction" : "committed";
   if (!result.invalid)

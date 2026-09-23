@@ -1,8 +1,9 @@
 import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
 import { PilotAccessError } from './pilot-access';
-import { closeRefusedOperation } from './refused-operations';
+import { closeRefusedOperation, operationClosed } from './refused-operations';
 import { wasRolledBack } from './transaction-outcome';
+import { DatabaseLimitError } from './database-limits';
 
 /**
  * One place that turns a thrown error into an HTTP answer.
@@ -22,11 +23,24 @@ import { wasRolledBack } from './transaction-outcome';
  * 5xx answer says `committed: false`: nothing was saved, so the console need
  * not hold the request as unconfirmed.
  *
+ * A request the store turned away at a database limit (a busy lender or
+ * workspace, a lock or statement past its limit, an idle or lost connection,
+ * no free connection) is a 503 with Retry-After in plain words. A raw
+ * PostgreSQL code is never guessed at here: the store translates it where it
+ * knows whether COMMIT was sent.
+ *
  * Before a definitive refusal, or any answer for a request that saved
  * nothing, is sent, the request's operations-journal entry (when the recovery
  * middleware bound one) is closed, so it never lingers as pending. The
  * middleware registers how; this module never imports the store or the
  * database, so the offline suites can load it.
+ *
+ * When the request's journal entry is cancelled after the refusal, or the
+ * refusal is of a key whose entry was already cancelled, the answer says
+ * `operation: "cancelled"`. A cancelled entry never completes, so neither this
+ * request nor any earlier one with its key was saved or can be: the console
+ * may release a request it holds as unconfirmed. An entry that could not be
+ * closed, or that an earlier attempt completed, is never marked.
  */
 const programmingErrors = [TypeError, RangeError, ReferenceError, SyntaxError, URIError, EvalError];
 const databaseCodes = ["23503", "23505", "23514", "P0001"];
@@ -42,7 +56,7 @@ const bodyRefusals: Record<string, { status: number; error: string }> = {
   "charset.unsupported": { status: 415, error: "The request body's character set is not supported. Send UTF-8 JSON." },
   "request.aborted": { status: 400, error: "The request was cancelled before its body arrived." },
 };
-type Answer = { status: number; body: Record<string, unknown> & { error: string } };
+type Answer = { status: number; headers?: Record<string, string>; body: Record<string, unknown> & { error: string } };
 type Raised = Error & { code?: unknown; status?: unknown; expose?: unknown; type?: unknown };
 
 /** A body-parser error: a client error the parser marks safe to expose, with its type. */
@@ -67,6 +81,12 @@ function describe(error: unknown, req: Parameters<ErrorRequestHandler>[1]): Answ
     return { status: unreadable.status, body: { error: unreadable.error, requestId } };
   }
   const notSaved = wasRolledBack(error);
+  if (error instanceof DatabaseLimitError) {
+    // A busy lender or workspace or a lock wait is load, not a fault: a warning. A stopped statement, a lost connection or a full pool is an error.
+    const level = ["lender_busy", "lock_timeout", "lock_conflict", "workspace_busy", "workspace_changing"].includes(error.limit) ? "warn" : "error";
+    req.log[level]({ event: "request.busy", status: 503, limit: error.limit, reason: error.message, ...(error.cause === undefined ? {} : { err: error.cause }) }, "Request turned away: a database limit was reached");
+    return { status: 503, headers: { "Retry-After": String(error.retryAfterSeconds) }, body: { error: error.message, ...(notSaved ? { committed: false } : {}), requestId } };
+  }
   const general = (): Answer => ({ status: 500, body: notSaved ? { error: NOT_SAVED, committed: false, requestId } : { error: GENERAL_FAILURE, requestId } });
   // A failure is logged with its stack, which is what locates it; the answer stays general.
   if (!(error instanceof Error) || programmingErrors.some((kind) => error instanceof kind)) {
@@ -109,8 +129,15 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
   if (res.headersSent) return;
   // Every error body carries the request id, so the reference a person quotes finds the request's log lines.
   const answer = describe(error, req);
-  const send = () => { if (!res.headersSent) res.status(answer.status).json(answer.body); };
+  const send = () => {
+    if (res.headersSent) return;
+    for (const [name, value] of Object.entries(answer.headers ?? {})) res.setHeader(name, value);
+    res.status(answer.status).json(answer.body);
+  };
+  const flagged = operationClosed(error);
+  const mark = (closed?: boolean) => { if (closed === true || flagged) answer.body.operation = "cancelled"; };
   // A refusal with a journal entry waits for the entry to close; every other refusal is answered at once.
   const closing = closeRefusedOperation(req, answer.status, answer.body.error, answer.body.committed === false);
-  if (closing) void closing.then(send, send); else send();
+  if (closing) void closing.then((closed) => { mark(closed); send(); }, () => { mark(); send(); });
+  else { mark(); send(); }
 };

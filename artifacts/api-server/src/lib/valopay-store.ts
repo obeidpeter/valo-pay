@@ -1,5 +1,5 @@
 import { historySections, historyKind, positionNote, type CustomerHistoryQuery, type HistorySection } from './customer-history';
-import { pool, type PoolClient } from "@workspace/db";
+import { pool, Pool, poolSize, type PoolClient } from "@workspace/db";
 import { getAuth, clerkClient } from "@clerk/express";
 import { staffMode, verifyStaff } from './staff-access';
 import { validateLenderAccessChange } from './staff-lender-access';
@@ -8,19 +8,23 @@ import type { StaffLenderAccessInput } from '@workspace/valopay-schema';
 import type { VerifiedClerkSession } from './pilot-access';
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
-import { closeTimeOf, nextCloseInstant } from "@workspace/valopay-schema";
+import { closeTimeOf, definitiveRefusalStatuses, nextCloseInstant } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { recordsOf } from "../domain/records";
+import { nextCloseRetry, type CloseRetry } from "../domain/close";
 import { seedMerchant } from "./valopay-seed";
 import { createCreationLimiter } from "./creation-limit";
 import { foldForSearch, LIST_PAGE_CEILING, type ListQuery } from "./valopay-list";
 import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
 import { validateCloseRange, pageOffset, type ReadPageQuery, type ReconciliationQueue } from './console-read-models';
 import { precisionAudit } from '../domain/reports';
-import { previousMonth } from '../domain/billing';
+import { periodBounds, previousMonth } from '../domain/billing';
 import { measurementRules } from '@workspace/valopay-schema';
-import { protectStored, revealStored, protectRecordData, revealRecordData, payloadEncryptionKey, isProtectedPayload } from './protected-payloads';
+import { protectStored, revealStored, protectRecordData, revealRecordsData, payloadEncryptionKey, isProtectedPayload, PROTECTED_IMPORT_FIELDS, type ProtectedImportField } from './protected-payloads';
 import { markRolledBack } from './transaction-outcome';
+import { markOperationClosed } from './refused-operations';
+import { beginStatement, checkOut, databaseLimits, failedTransaction, DatabaseLimitError, type Checkout } from './database-limits';
+import { createLenderGate } from './lender-gate';
 import { assertImportedCorrectionChange } from '../domain/import-corrections';
 import type { LifecycleExternalCandidate, LifecycleCandidate } from '@workspace/valopay-schema';
 import { assertLifecycleCandidate, eraseLifecycleRawCsv, recordLifecycleReceipt, lifecycleRunView } from '../domain/lifecycle';
@@ -80,6 +84,8 @@ type Session = {
   access: WorkspaceAccess;
   lockedMerchantId?: string; snapshot?: StateSnapshot; summarised?: Set<string>;
   owner?: string; operationId?: string; userId?: string; organizationId?: string;
+  /** This transaction passed the restricted-database self-check (runtime isolation). */
+  isolationVerified?: boolean;
 };
 
 /**
@@ -97,6 +103,21 @@ export function bindOperation(req: Request, id: string, merchantId: string) { re
 /** The journal entry the recovery middleware bound to this request, if any. */
 export function boundOperation(req: Request) { return requestOperations.get(req); }
 const databaseConflictCodes = new Set(["23503", "23505", "23514", "P0001"]);
+/** One workspace's requests for one lender hold at most half this process's connections; a request past that waits, without one, for up to the lock limit. */
+const lenderGate = createLenderGate({ capacity: Math.max(1, Math.floor(poolSize / 2)), waitMs: () => databaseLimits().request.lockMs });
+/**
+ * The gate lane of the lender a request names: every lender-scoped route
+ * carries it as the merchantId query value. The value is read before anything
+ * is authorised, so the lane is the caller's own (the staff organisation, or
+ * the sandbox principal) as well as the lender's: a caller that names another
+ * tenant's lender only queues behind its own requests, never that tenant's.
+ */
+function gatedLender(req: Request, principal: string): string | undefined {
+  const lender = (req.query as Record<string, unknown> | undefined)?.merchantId;
+  if (typeof lender !== "string" || lender.length < 1 || lender.length > 100) return undefined;
+  const caller = staffMode() ? `org:${getAuth(req).orgId || ""}` : `principal:${principal}`;
+  return `${caller}\u0000${lender}`;
+}
 
 /** Throws an error carrying the HTTP status the error handler answers with (400 unless given). */
 export function fail(message: string, status = 400): never {
@@ -105,6 +126,8 @@ export function fail(message: string, status = 400): never {
 const conflict = (message = "Operation conflicts with the current lender state."): never => fail(message, 409);
 /** Anonymous sandboxes expire after this many days without a change; the cookie carries the same lifetime. */
 export const ANONYMOUS_WORKSPACE_DAYS = 30;
+/** Lenders a sandbox workspace can hold, the two samples included, so one visitor cannot fill the scheduler's queue. */
+export const SANDBOX_LENDER_LIMIT = 5;
 /** How many expired sandboxes one bootstrap removes, so a request never pays for a large backlog. */
 const SWEEP_BATCH = 5;
 /** Automatic deletion is opt-in so importing the application cannot remove existing workspaces. */
@@ -137,8 +160,10 @@ export async function prepareOperation(ctx: StoreContext, merchantId: string, ke
   const prior = (await session.client.query<OperationRow>('SELECT * FROM valopay_operations WHERE id=$1 AND merchant_id=$2 AND owner=$3', [id, merchantId, owner])).rows[0];
   if (prior) {
     if (prior.request_hash !== hash) fail('This request key belongs to a different request. Recover the original request first.', 409);
+    // A cancelled entry is final (completeOperation refuses it), whatever the role now: the answer says so, and the
+    // person who sent it hears the original reason.
+    if (prior.status === 'cancelled') throw markOperationClosed(Object.assign(new Error(await cancelledRefusal(ctx, merchantId, prior)), { status: 409 }));
     if (prior.actor !== ctx.actor || prior.role !== ctx.role) fail('Return to the original role before checking this request.', 403);
-    if (prior.status === 'cancelled') fail('This request was cancelled and cannot run again.', 409);
     return prior.id;
   }
   if (ctx.role === 'Read-only') fail('Your read-only role cannot submit operations.', 403);
@@ -150,6 +175,21 @@ export async function prepareOperation(ctx: StoreContext, merchantId: string, ke
   await session.client.query(`INSERT INTO valopay_operations(id,merchant_id,owner,actor,role,request_key,request_hash,request,label,created_at,updated_at)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`, [id, merchantId, owner, ctx.actor, ctx.role, key, hash, await protectStored(request,{lender:merchantId,record:id,field:'request'}), label, ctx.now]);
   return id;
+}
+/** Why a cancelled request cannot run again, in the words of its original refusal when the same person and role
+ * ask and it was refused outright. The receipt may be absent (cancelled from Operations), expired under retention,
+ * unreadable or a failure that saved nothing ("try again" would mislead here), so a general sentence stands in. */
+async function cancelledRefusal(ctx: StoreContext, merchantId: string, prior: OperationRow): Promise<string> {
+  let reason: unknown;
+  if (prior.actor === ctx.actor && prior.role === ctx.role) {
+    try {
+      const rejected = (await revealStored(prior.receipt, { lender: merchantId, record: prior.id, field: 'receipt' }))?.rejected;
+      if ((definitiveRefusalStatuses as readonly unknown[]).includes(rejected?.status)) reason = rejected.message;
+    } catch { reason = undefined; }
+  }
+  return typeof reason === 'string' && reason.trim()
+    ? `The service refused this request and saved nothing: ${reason.trim()} It cannot run again; review the latest records and submit a new request.`
+    : 'This request was cancelled before it completed and saved nothing. It cannot run again; review the latest records and submit a new request.';
 }
 export async function listOperations(ctx: StoreContext, merchantId: string, offset = 0) {
   const session = sessionFor(ctx); await readMerchant(ctx, merchantId);
@@ -166,44 +206,70 @@ export async function readOperation(ctx: StoreContext, merchantId: string, id: s
   if((row.request as any)?.purged)fail('This terminal request payload expired under the lender retention policy. Its identity and completion history are retained; it cannot run again.',410);
   return {...row, request:await revealStored(row.request,{lender:merchantId,record:id,field:'request'}), receipt:await revealStored(row.receipt,{lender:merchantId,record:id,field:'receipt'})};
 }
+/** Whether a receipt is stored under this request key. An entry that is not completed but has one belongs to a
+ * write saved outside the journal, before it existed: that request was saved, so its entry is never cancelled. */
+async function receiptStored(client: PoolClient, merchantId: string, key: string): Promise<boolean> {
+  return (await client.query('SELECT 1 FROM valopay_idempotency WHERE merchant_id=$1 AND id=ANY($2::text[])', [merchantId, [digest(`${merchantId}:${key}`), digest(`connected:${merchantId}:${key}`)]])).rows.length > 0;
+}
 export async function cancelOperation(ctx: StoreContext, merchantId: string, id: string) {
   const session = sessionFor(ctx); await readMerchant(ctx, merchantId, 'update');
   const row = await readOperation(ctx, merchantId, id);
   if (row.status === 'completed') fail('This request already completed. Refresh Operations to see its saved result.', 409);
-  const legacy = await session.client.query('SELECT 1 FROM valopay_idempotency WHERE merchant_id=$1 AND id=ANY($2::text[])', [merchantId, [digest(`${merchantId}:${row.request_key}`), digest(`connected:${merchantId}:${row.request_key}`)]]);
-  if (legacy.rows.length) fail('A receipt already exists for this request. Check the original request to recover it.', 409);
+  if (await receiptStored(session.client, merchantId, row.request_key)) fail('A receipt already exists for this request. Check the original request to recover it.', 409);
   await session.client.query("UPDATE valopay_operations SET status='cancelled',updated_at=$4 WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND status='pending'", [id, merchantId, session.owner || session.principal, ctx.now]);
   return { message: 'The server confirmed this request has not completed and cancelled it. It cannot run again.' };
 }
-/** A definitive refusal (a 4xx the same request would receive again) closes
- * the journal entry: it neither waits for confirmation nor counts towards the
- * pending limit, and its key cannot run again. Runs in its own transaction
- * after the refused request's transaction rolled back. */
-export async function rejectOperation(req: Request, bound: { id: string; merchantId: string }, rejection: { status: number; message: string }) {
-  const client = await pool.connect();
+/** A definitive refusal (a 4xx the same request would receive again), or a
+ * failure that saved nothing, closes the journal entry: it neither waits for
+ * confirmation nor counts towards the pending limit, and its key cannot run
+ * again. Runs in its own transaction after the refused request's transaction
+ * rolled back, and resolves to whether the entry is cancelled afterwards: an
+ * entry an earlier attempt already completed stays completed, and is not; one
+ * cancelled meanwhile (by another attempt's refusal, or from Operations) is.
+ * As in cancelOperation, an entry whose key already has a stored receipt (a
+ * write saved before the journal existed) stays pending, and is not. */
+export async function rejectOperation(req: Request, bound: { id: string; merchantId: string }, rejection: { status: number; message: string }): Promise<boolean> {
+  const guard = await checkOut(() => pool.connect()), client = guard.client;
   try {
-    await client.query('BEGIN');
+    await client.query(beginStatement(databaseLimits().request));
     if (runtimeIsolationEnabled()) {
       const verified = getAuth(req) as unknown as VerifiedClerkSession;
       await bindRuntimeIdentity(client, { organizationId: verified.orgId || '', userId: verified.userId || '' });
     }
     const receipt = await protectStored({ rejected: rejection }, { lender: bound.merchantId, record: bound.id, field: 'receipt' });
-    await client.query("UPDATE valopay_operations SET status='cancelled',receipt=$3,updated_at=now() WHERE id=$1 AND merchant_id=$2 AND status='pending'", [bound.id, bound.merchantId, receipt]);
-    await client.query('COMMIT');
+    // The row lock orders this against an attempt completing the entry: whichever commits first decides.
+    const entry = (await client.query<{ status: string; request_key: string }>('SELECT status,request_key FROM valopay_operations WHERE id=$1 AND merchant_id=$2 FOR UPDATE', [bound.id, bound.merchantId])).rows[0];
+    let status = entry?.status;
+    if (entry?.status === 'pending' && !(await receiptStored(client, bound.merchantId, entry.request_key))) {
+      await client.query("UPDATE valopay_operations SET status='cancelled',receipt=$3,updated_at=now() WHERE id=$1 AND merchant_id=$2 AND status='pending'", [bound.id, bound.merchantId, receipt]);
+      status = 'cancelled';
+    }
+    const committed = await client.query('COMMIT');
+    return committed.command === 'COMMIT' && status === 'cancelled';
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch { /* the transaction is already closed */ }
     throw error;
-  } finally { client.release(); }
+  } finally { guard.release(); }
 }
 /** Receipt and domain writes commit together. A process crash cannot leave a
- * completed journal entry without the corresponding business write. */
+ * completed journal entry without the corresponding business write.
+ *
+ * A cancelled entry never completes. This guard is what makes cancellation
+ * final: an attempt already past its checks when a retry's refusal (or
+ * Cancel if unfinished) cancelled its entry is refused here and rolls back,
+ * so an answer that says `operation: "cancelled"` proves that nothing sent
+ * with the key was saved. Every journaled write must commit through this
+ * function for that to hold. */
 export async function completeOperation(ctx: StoreContext, receipt: unknown) {
   const session = sessionFor(ctx);
   if (!session.operationId) return;
-  const merchantId = lockedMerchant(session);
+  const merchantId = lockedMerchant(session), owner = session.owner || session.principal;
   const result = await session.client.query(`UPDATE valopay_operations SET status='completed',receipt=$5,updated_at=$6
-    WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND actor=$4`, [session.operationId, merchantId, session.owner || session.principal, ctx.actor, await protectStored(receipt,{lender:merchantId,record:session.operationId,field:'receipt'}), ctx.now]);
-  if (!rowsAffected(result)) fail('The recovery request no longer belongs to this session.', 409);
+    WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND actor=$4 AND status<>'cancelled'`, [session.operationId, merchantId, owner, ctx.actor, await protectStored(receipt,{lender:merchantId,record:session.operationId,field:'receipt'}), ctx.now]);
+  if (rowsAffected(result)) return;
+  const current = (await session.client.query<{ status: string }>('SELECT status FROM valopay_operations WHERE id=$1 AND merchant_id=$2 AND owner=$3', [session.operationId, merchantId, owner])).rows[0];
+  if (current?.status === 'cancelled') fail('This request was cancelled before it completed. Nothing was saved, and it cannot run again.', 409);
+  fail('The recovery request no longer belongs to this session.', 409);
 }
 
 type StaffRow = { id: string; workspace_id: string; user_id: string; display_name: string; role: string; status: 'active' | 'suspended' | 'revoked'; expires_at: Date; created_at: Date; updated_at: Date };
@@ -297,11 +363,16 @@ export async function acceptStaffInvitation(req: Request, token: string) {
   return acceptVerifiedInvitation(auth, token, emails);
 }
 async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: string, verifiedEmails: string[]) {
-  const client = await pool.connect();
+  const guard = await checkOut(() => pool.connect()), client = guard.client;
+  let committing = false;
   try {
-    await client.query('BEGIN');
+    await client.query(beginStatement(databaseLimits().request));
     await bindRuntimeIdentity(client, { organizationId: auth.orgId || '', userId: auth.userId || '' }, { token, verifiedEmails });
-    const team = (await client.query<{ workspace_id: string }>(`SELECT t.workspace_id FROM valopay_teams t JOIN valopay_workspaces w ON w.id=t.workspace_id WHERE t.organization_id=$1 FOR UPDATE OF w`, [auth.orgId])).rows[0];
+    // A membership change, like a team change: the workspace lock exclusively (waiting only for work already running), then its row.
+    const found = (await client.query<{ workspace_id: string }>('SELECT t.workspace_id FROM valopay_teams t WHERE t.organization_id=$1', [auth.orgId])).rows[0];
+    if (!found) fail('Select the organisation named in your invitation.', 403);
+    await lockWorkspace(client, found.workspace_id, 'exclusive', true);
+    const team = (await client.query<{ workspace_id: string }>(`SELECT t.workspace_id FROM valopay_teams t JOIN valopay_workspaces w ON w.id=t.workspace_id WHERE t.organization_id=$1 AND w.id=$2 FOR UPDATE OF w`, [auth.orgId, found.workspace_id])).rows[0];
     if (!team) fail('Select the organisation named in your invitation.', 403);
     const checkedAt = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();
     verifyStaff(auth, { id: 'invitation-check', userId: auth.userId || '', organizationId: auth.orgId || '', tenantId: 'invitation-check', role: 'Read-only', status: 'active', validFrom: '2020-01-01T00:00:00.000Z', expiresAt: '2100-01-01T00:00:00.000Z' }, true, checkedAt);
@@ -324,23 +395,32 @@ async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: strin
       ON CONFLICT(workspace_id,user_id) DO UPDATE SET display_name=EXCLUDED.display_name,role=EXCLUDED.role,status='active',expires_at=EXCLUDED.expires_at,updated_at=greatest(now(),valopay_staff_memberships.updated_at+interval '1 millisecond')`, [randomUUID(), team.workspace_id, auth.userId, invite.email, invite.role]);
     await client.query("UPDATE valopay_staff_invitations SET status='accepted' WHERE id=$1 AND workspace_id=$2", [invite.id, team.workspace_id]);
     await staffEvent(client, team.workspace_id, `Clerk:${auth.userId}`, 'staff.accepted', invite.id, { role: invite.role });
+    committing = true;
     await client.query('COMMIT'); return { message: 'Invitation accepted. Your pilot membership lasts 90 days.', role: invite.role };
-  } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch { /* the transaction is already closed */ }
+    throw failedTransaction(error, { committing, lost: guard.lost(), write: true });
+  } finally { guard.release(); }
 }
 
 /** Operator-only bootstrap; never called by an HTTP route. */
 export async function provisionStaffWorkspace(organizationId: string, userId: string, name: string) {
   if (runtimeIsolationEnabled()) fail('Provision isolated staff workspaces through the separate migration-owner connection before starting the restricted runtime.', 503);
   if (!staffMode() || !/^org_[A-Za-z0-9]+$/.test(organizationId) || !/^user_[A-Za-z0-9]+$/.test(userId) || !name.trim() || name.length > 100) fail('Provide a staging organisation, administrator user ID and workspace name.');
-  const client = await pool.connect(), workspaceId = randomUUID();
+  const guard = await checkOut(() => pool.connect()), client = guard.client, workspaceId = randomUUID();
+  let committing = false;
   try {
-    await client.query('BEGIN');
+    await client.query(beginStatement(databaseLimits().request));
     await client.query("INSERT INTO valopay_workspaces(id,principal_hash,role) VALUES($1,$2,'Read-only')", [workspaceId, digest(`staff-org:${organizationId}`)]);
     await client.query('INSERT INTO valopay_teams(workspace_id,organization_id,name) VALUES($1,$2,$3)', [workspaceId, organizationId, name]);
     await client.query("INSERT INTO valopay_staff_memberships(id,workspace_id,user_id,display_name,role,expires_at) VALUES($1,$2,$3,$4,'Admin',now()+interval '90 days')", [randomUUID(), workspaceId, userId, 'Pilot administrator']);
     await staffEvent(client, workspaceId, 'System · operator provisioning', 'staff.provisioned', userId, { organizationId });
+    committing = true;
     await client.query('COMMIT'); return { workspaceId };
-  } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch { /* the transaction is already closed */ }
+    throw failedTransaction(error, { committing, lost: guard.lost(), write: true });
+  } finally { guard.release(); }
 }
 
 export async function createPilotLender(ctx: StoreContext, input: { name: string; segment: string }, key: string) {
@@ -350,6 +430,11 @@ export async function createPilotLender(ctx: StoreContext, input: { name: string
   const id = digest(`onboarding:${session.workspace.id}:${session.owner}:${key}`), fingerprint = digest(canonical(input));
   const found = (await session.client.query<MerchantRow>('SELECT id,info,settings FROM valopay_merchants WHERE workspace_id=$1 AND id=$2', [session.workspace.id, id])).rows[0];
   if (found) { if (found.settings.onboardingFingerprint !== fingerprint) fail('This setup request was already used for different details.', 409); return found.info; }
+  // 'team' access holds the workspace lock exclusively (lockWorkspace), so two creations at once are counted one after the other.
+  if (ctx.accessMode !== 'staff') {
+    const held = (await session.client.query<{ count: number }>('SELECT count(*)::int AS count FROM valopay_merchants WHERE workspace_id=$1', [session.workspace.id])).rows[0]!.count;
+    if (held >= SANDBOX_LENDER_LIMIT) fail(`This sandbox already holds ${SANDBOX_LENDER_LIMIT} lenders, the most a sandbox can have. Continue with an existing lender; a staff workspace can hold more.`, 409);
+  }
   const state = seedMerchant(id, true);
   state.records = [];
   Object.assign(state.merchant, { name: input.name, shortName: input.name, segment: input.segment, provider: 'Paystack', mode: 'observation', status: 'onboarding', monthlyVolume: 0, killSwitch: true, preDataReady: false, preLiveReady: false });
@@ -379,6 +464,8 @@ function sessionFor(context: StoreContext): Session {
   if (!session || !session.active) fail("This workspace transaction is no longer available.", 409);
   return session;
 }
+/** Whether this request's own transaction verified the restricted database: the readiness page reports this, never the configuration alone. */
+export function runtimeIsolationVerified(context: StoreContext): boolean { return sessionFor(context).isolationVerified === true; }
 export function systemWorkspaceMatches(context:StoreContext,workspaceId:string):boolean {return context.actor.startsWith(SYSTEM_ACTOR_PREFIX)&&sessionFor(context).workspace.id===workspaceId;}
 export async function verifyWorkspaceEncryption(context:StoreContext) {
   const session=teamAdmin(context);
@@ -397,7 +484,7 @@ export async function protectWorkspacePayloads(context:StoreContext) {
   // One record per request bounds managed-key calls and keeps progress restartable.
   const batch=1;let protectedCount=0;
   const imports=(await session.client.query<RecordRow>(`SELECT r.* FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id WHERE m.workspace_id=$1 AND r.kind='import-batches' AND (r.data ? 'csv' AND NOT (jsonb_typeof(r.data->'csv')='object' AND r.data->'csv' ? 'protectedPayload')) ORDER BY r.id LIMIT $2 FOR UPDATE OF r`,[session.workspace.id,batch])).rows;
-  for(const row of imports){const record=await revealRecordData(rowToRecord(row));await session.client.query('UPDATE valopay_records SET data=$3 WHERE id=$1 AND merchant_id=$2',[row.id,row.merchant_id,await protectRecordData(record)]);protectedCount++;}
+  for(const row of imports){await session.client.query('UPDATE valopay_records SET data=$3 WHERE id=$1 AND merchant_id=$2',[row.id,row.merchant_id,await protectRecordData(rowToRecord(row))]);protectedCount++;}
   const operations=(await session.client.query<OperationRow>(`SELECT o.* FROM valopay_operations o JOIN valopay_merchants m ON m.id=o.merchant_id WHERE m.workspace_id=$1 AND ((NOT(o.request ? 'protectedPayload') AND NOT(o.request ? 'purged')) OR (o.receipt IS NOT NULL AND NOT(o.receipt ? 'protectedPayload') AND NOT(o.receipt ? 'purged'))) ORDER BY o.id LIMIT $2 FOR UPDATE OF o`,[session.workspace.id,batch])).rows;
   for(const row of operations){if(protectedCount)break;const scope={lender:row.merchant_id,record:row.id};const request=isProtectedPayload(row.request)?row.request:await protectStored(row.request,{...scope,field:'request'});const receipt=row.receipt===null||isProtectedPayload(row.receipt)?row.receipt:await protectStored(row.receipt,{...scope,field:'receipt'});await session.client.query('UPDATE valopay_operations SET request=$3,receipt=$4 WHERE id=$1 AND merchant_id=$2',[row.id,row.merchant_id,request,receipt]);protectedCount++;}
   const receipts=(await session.client.query<{id:string;merchant_id:string;response:unknown}>(`SELECT i.* FROM valopay_idempotency i JOIN valopay_merchants m ON m.id=i.merchant_id WHERE m.workspace_id=$1 AND NOT(i.response ? 'protectedPayload') AND NOT(i.response ? 'purged') ORDER BY i.id LIMIT $2 FOR UPDATE OF i`,[session.workspace.id,batch])).rows;
@@ -422,22 +509,62 @@ function scopedMerchantQuery(lock: MerchantLock = "none") {
     WHERE m.id=$1 AND m.workspace_id=$2 AND w.id=$2 AND w.principal_hash=$3${lock === "update" ? " FOR UPDATE OF m" : lock === "share" ? " FOR SHARE OF m" : ""}`;
 }
 
-/** Persona changes lock the workspace exclusively. Ordinary work shares that
- * lock, fixing the persona for the transaction while lender locks serialize
- * mutations. Only first-visit bootstrap needs the principal advisory lock. */
+/**
+ * The workspace's own lock, taken before its row: shared by ordinary work,
+ * exclusive for a team, lender-access, invitation or persona change.
+ * PostgreSQL grants advisory locks in arrival order, so a request that arrives
+ * while a change waits queues behind it; a row share lock is granted past a
+ * waiting exclusive one, so steady polling could hold a revocation off for
+ * ever. The wait is the transaction's own lock limit (database-limits.ts):
+ * past it a change answers 503 and nothing changed, and a request queued
+ * behind a change that holds the lock too long is turned away the same way.
+ * The key's prefix keeps it apart from the principal's bootstrap lock.
+ */
+async function lockWorkspace(client: PoolClient, workspaceId: string, mode: "shared" | "exclusive", write: boolean): Promise<void> {
+  try {
+    await client.query(`SELECT ${mode === "exclusive" ? "pg_advisory_xact_lock" : "pg_advisory_xact_lock_shared"}(hashtextextended('valopay.workspace:' || $1, 0))`, [workspaceId]);
+  } catch (error) {
+    if ((error as { code?: unknown }).code !== "55P03") throw error;
+    throw markRolledBack(new DatabaseLimitError(mode === "exclusive" ? "workspace_busy" : "workspace_changing", { write, cause: error }));
+  }
+}
+
+/** Persona, team, lender-access and invitation changes take the workspace
+ * lock exclusively (lockWorkspace). Ordinary work shares it, fixing the
+ * persona and memberships for the transaction while lender locks serialize
+ * mutations; a change waits only for the work already running, and work that
+ * arrives meanwhile waits behind the change. The workspace row is still locked
+ * after it (shared or exclusive), so the expiry sweep skips busy workspaces.
+ * Only first-visit bootstrap needs the principal advisory lock. Every
+ * transaction is bounded (database-limits.ts): a lock wait, a statement and
+ * idle time each have a limit, and one lender holds at most half the pool, so
+ * one busy lender turns its own requests away with a 503 instead of taking
+ * every connection (two busy at once can still fill it). */
 export async function inWorkspace<T>(req: Request, res: Response, fn: (context: StoreContext) => Promise<T>, access: WorkspaceAccess = "write"): Promise<T> {
   const identity = principalFor(req, res);
-  const client = await pool.connect();
-  let context: StoreContext | undefined, committing = false;
+  const write = access !== "read", lender = gatedLender(req, identity.principal);
+  const leave = lender ? await lenderGate.enter(lender, write) : undefined;
+  let guard: Checkout<PoolClient> | undefined;
+  let context: StoreContext | undefined, committing = false, isolationVerified = false;
   try {
-    await client.query(runtimeIsolationEnabled() && access === 'read' ? 'BEGIN ISOLATION LEVEL REPEATABLE READ' : 'BEGIN');
+    guard = await checkOut(() => pool.connect(), write);
+    const client = guard.client;
+    await client.query(beginStatement(databaseLimits().request, runtimeIsolationEnabled() && access === 'read' ? 'ISOLATION LEVEL REPEATABLE READ' : undefined));
     if (runtimeIsolationEnabled()) {
       const verified = getAuth(req) as unknown as VerifiedClerkSession;
-      await bindRuntimeIdentity(client, { organizationId: verified.orgId || '', userId: verified.userId || '' });
+      isolationVerified = await bindRuntimeIdentity(client, { organizationId: verified.orgId || '', userId: verified.userId || '' });
     }
     // Single source of time: the database clock, read once per transaction.
     let now = (await client.query<{ now: Date }>("SELECT now() AS now")).rows[0]!.now.toISOString();
-    const workspaceQuery = `SELECT id,principal_hash,role FROM valopay_workspaces WHERE principal_hash=$1 FOR ${access === "persona" || access === 'team' ? "UPDATE" : "SHARE"}`;
+    const exclusive = access === "persona" || access === 'team', lockMode = exclusive ? "exclusive" : "shared";
+    const workspaceQuery = `SELECT id,principal_hash,role FROM valopay_workspaces WHERE principal_hash=$1 AND id=$2 FOR ${exclusive ? "UPDATE" : "SHARE"}`;
+    /** The principal's sandbox, found without a lock and then locked; one removed meanwhile (the expiry sweep) is created afresh. */
+    const lockedSandbox = async (): Promise<WorkspaceRow | undefined> => {
+      const found = (await client.query<{ id: string }>("SELECT id FROM valopay_workspaces WHERE principal_hash=$1", [identity.principal])).rows[0];
+      if (!found) return undefined;
+      await lockWorkspace(client, found.id, lockMode, write);
+      return (await client.query<WorkspaceRow>(workspaceQuery, [identity.principal, found.id])).rows[0];
+    };
     let workspace: WorkspaceRow | undefined;
     let staff: StaffRow | undefined;
     let auth: VerifiedClerkSession | undefined;
@@ -446,17 +573,26 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       if (access === 'persona') fail('Staff roles are assigned by an administrator. Demo role switching is unavailable.', 403);
       // Lock the organisation before its membership, consistently with team
       // changes. A revocation waits for in-flight work and blocks later work.
-      workspace = (await client.query<WorkspaceRow>(`SELECT w.id,w.principal_hash,w.role FROM valopay_workspaces w JOIN valopay_teams t ON t.workspace_id=w.id WHERE t.organization_id=$1 FOR ${access === 'team' ? 'UPDATE' : 'SHARE'} OF w`, [auth.orgId || ''])).rows[0];
+      const found = (await client.query<{ id: string }>('SELECT w.id FROM valopay_workspaces w JOIN valopay_teams t ON t.workspace_id=w.id WHERE t.organization_id=$1', [auth.orgId || ''])).rows[0];
+      if (!found) fail('This organisation has not been provisioned for the pilot.', 403);
+      await lockWorkspace(client, found.id, lockMode, write);
+      workspace = (await client.query<WorkspaceRow>(`SELECT w.id,w.principal_hash,w.role FROM valopay_workspaces w JOIN valopay_teams t ON t.workspace_id=w.id WHERE t.organization_id=$1 AND w.id=$2 FOR ${access === 'team' ? 'UPDATE' : 'SHARE'} OF w`, [auth.orgId || '', found.id])).rows[0];
       if (!workspace) fail('This organisation has not been provisioned for the pilot.', 403);
-      staff = (await client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE', [workspace.id, auth.userId])).rows[0];
+      try {
+        staff = (await client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE', [workspace.id, auth.userId])).rows[0];
+      } catch (error) {
+        // A repeatable-read request (runtime isolation) whose membership a team change altered while it waited behind it.
+        if ((error as { code?: unknown }).code === '40001') fail('Your access changed while this request was waiting. Refresh and try again.', 409);
+        throw error;
+      }
       if (!staff) fail('An active staff membership is required. Accept an invitation or contact your administrator.', 403);
       now = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();
       verifyStaff(auth, staffProvision(staff, auth.orgId!), access !== 'read', now);
-    } else workspace = (await client.query<WorkspaceRow>(workspaceQuery, [identity.principal])).rows[0];
+    } else workspace = await lockedSandbox();
     if (!workspace && !staffMode()) {
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [identity.principal]);
       // Another first visit may have finished seeding while we waited.
-      workspace = (await client.query<WorkspaceRow>(workspaceQuery, [identity.principal])).rows[0];
+      workspace = await lockedSandbox();
     }
     if (!workspace) {
       // A new anonymous sandbox seeds two lenders; creation is bounded per client address on top of the request limit.
@@ -466,16 +602,24 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
          ON CONFLICT (principal_hash) DO NOTHING RETURNING id,principal_hash,role`,
         [randomUUID(), identity.principal],
       )).rows[0];
-      workspace = inserted || (await client.query<WorkspaceRow>(
-        workspaceQuery,
-        [identity.principal],
-      )).rows[0];
+      // No other transaction can see the new row before this one commits, so its lock never waits.
+      if (inserted) await lockWorkspace(client, inserted.id, lockMode, write);
+      workspace = inserted || await lockedSandbox();
       if (!workspace) throw new Error("Workspace bootstrap could not be completed.");
       if (inserted) {
         await seedWorkspace(client, workspace, identity.principal, !identity.authenticated, now);
         // When explicitly enabled, each new anonymous sandbox pays for a few expired ones without a scheduler.
+        // The sweep runs inside a savepoint: one that is slow, meets a lock or deadlocks is undone and left to
+        // a later bootstrap, and never fails this visitor's.
         if (!identity.authenticated && expiredWorkspaceCleanupEnabled(process.env["VALOPAY_EXPIRED_WORKSPACE_CLEANUP"])) {
-          await sweepExpiredWorkspaces(client, SWEEP_BATCH);
+          await client.query("SAVEPOINT expired_workspace_sweep");
+          try {
+            await sweepExpiredWorkspaces(client, SWEEP_BATCH);
+            await client.query("RELEASE SAVEPOINT expired_workspace_sweep");
+          } catch (error) {
+            try { await client.query("ROLLBACK TO SAVEPOINT expired_workspace_sweep"); } catch { throw error; }
+            (req as { log?: { warn?(fields: object, message: string): void } }).log?.warn?.({ event: "workspace.sweep_failed", err: error }, "Expired sandboxes were left for a later sweep");
+          }
         }
       }
     }
@@ -484,7 +628,7 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       actor: staff ? `Clerk:${staff.user_id}` : `Sandbox ${workspace.role}`, now, accessMode: staff ? 'staff' : 'sandbox',
     });
     sessions.set(context, { client, workspace, principal: workspace.principal_hash, owner: identity.principal, active: true, access,
-      operationId: requestOperations.get(req)?.id, userId: staff?.user_id, organizationId: auth?.orgId || undefined });
+      operationId: requestOperations.get(req)?.id, userId: staff?.user_id, organizationId: auth?.orgId || undefined, isolationVerified });
     const result = await fn(context);
     committing = true;
     const committed = await client.query("COMMIT");
@@ -493,7 +637,10 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
     if (committed.command !== "COMMIT") throw markRolledBack(new Error("The workspace transaction was rolled back."));
     return result;
   } catch (error) {
-    try { await client.query("ROLLBACK"); } catch { /* transaction is already closed */ }
+    if (guard) try { await guard.client.query("ROLLBACK"); } catch { /* transaction is already closed */ }
+    // A limit reached before COMMIT is a 503 that says nothing was saved; a connection lost during COMMIT stays unconfirmed.
+    const failed = failedTransaction(error, { committing, lost: guard?.lost(), write });
+    if (failed !== error) throw failed;
     // Before COMMIT was sent nothing was saved; a failed COMMIT's outcome is unknown.
     if (!committing) markRolledBack(error);
     if (databaseConflictCodes.has((error as { code?: string } | undefined)?.code || "")) {
@@ -505,7 +652,8 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       const session = sessions.get(context);
       if (session) { session.active = false; session.snapshot = undefined; session.summarised = undefined; session.lockedMerchantId = undefined; }
     }
-    client.release();
+    guard?.release();
+    leave?.();
   }
 }
 
@@ -572,14 +720,42 @@ export async function loadState(context: StoreContext, merchantId: string, lock:
      FROM loaded r ORDER BY r.created_at,r.id`,
     [merchantId, session.workspace.id, session.principal, lock === "update", FULL_CLOSE_DAYS],
   )).rows;
-  const records = rows.map(rowToRecord);
-  const state: DomainState = { merchant: merchant.info, settings: merchant.settings, records:await Promise.all(records.map(revealRecordData)) };
+  // Protected source rows stay sealed: only the views that show or use them open them (revealImportPayloads).
+  const state: DomainState = { merchant: merchant.info, settings: merchant.settings, records: rows.map(rowToRecord) };
   if (state.merchant.id !== merchantId) conflict("Lender identity does not match its stored scope.");
   // A shared load is read-only, even in an otherwise write-capable context.
   // Avoid serialising the entire history just to serve a dashboard or export lookup.
   session.snapshot = lock === "update" ? snapshotOf(state) : undefined;
   session.summarised = lock === "update" ? new Set(rows.filter((row) => row.summarised).map((row) => row.id)) : undefined;
   return state;
+}
+
+/**
+ * Opens the protected source rows (original CSV and validation check) of this
+ * lender's import batches that `select` names, at most four key-service calls
+ * at a time, and returns how many batches it opened. A full-state load keeps
+ * them sealed, so overviews, saves, the scheduled close and Paystack test
+ * deliveries never need the key service to open them (a keyed save still seals
+ * its journal entry, and a batch save its rows). Only a view that shows or
+ * uses raw source rows calls this, and in a write it must call it before the
+ * domain changes the batch: the opened form becomes the batch's loaded form,
+ * so an opened but unchanged batch is not written back and the immutability
+ * checks compare like with like. A field already open costs nothing.
+ */
+export async function revealImportPayloads(context: StoreContext, state: DomainState, select: (record: ValopayRecord) => boolean, fields: readonly ProtectedImportField[] = PROTECTED_IMPORT_FIELDS): Promise<number> {
+  const session = sessionFor(context);
+  if (!session.lockedMerchantId || session.lockedMerchantId !== state.merchant.id) conflict("Load this lender before opening its source rows.");
+  const targets = state.records.filter((record) => record.kind === "import-batches" && record.merchantId === session.lockedMerchantId
+    && fields.some((field) => isProtectedPayload(record.data[field])) && select(record));
+  if (!targets.length) return 0;
+  const snapshot = session.snapshot;
+  if (snapshot && targets.some((record) => snapshot.records.get(record.id) !== JSON.stringify(record))) throw new Error("Protected source rows must be opened before the batch changes.");
+  const opened = await revealRecordsData(targets, fields);
+  targets.forEach((record, index) => {
+    record.data = opened[index]!.data;
+    snapshot?.records.set(record.id, JSON.stringify(record));
+  });
+  return targets.length;
 }
 
 /**
@@ -688,10 +864,16 @@ export async function listQueue(context: StoreContext, merchantId: string, queue
   // by primary key from the same lender, one index probe per attempt: joining
   // the scoped set to itself made PostgreSQL compare every attempt with every
   // instalment (38 million pairs for one page of a 6,000-instalment lender).
+  // OFFSET 0 keeps the lookup a primary-key probe whatever the statistics say:
+  // as a plain join, a lender loaded since the last ANALYZE was estimated at
+  // one row and each attempt scanned all its instalments (22 s for a
+  // 25,000-record lender, past the statement limit). The lender and kind are
+  // checked on the row the probe found.
   const cte = `WITH scoped AS (SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND ${kind}),
     b AS (SELECT r.*, ${deadline} AS deadline, ${timestamp(deadline)} AS deadline_at, ${owner} AS queue_owner,
       ${unpaid} AS unpaid, ${timestamp("r.data->>'occurredAt'")} AS attempt_at
-      FROM scoped r LEFT JOIN valopay_records d ON r.kind='attempts' AND d.id=r.data->>'dueItemId' AND d.merchant_id=r.merchant_id AND d.kind='due-items' WHERE ${kind}),
+      FROM scoped r LEFT JOIN LATERAL (SELECT d.merchant_id,d.kind,d.status,d.data FROM valopay_records d WHERE r.kind='attempts' AND d.id=r.data->>'dueItemId' OFFSET 0) d
+        ON d.merchant_id=r.merchant_id AND d.kind='due-items' WHERE ${kind}),
     q AS (SELECT b.*,coalesce(${overdue},false) AS overdue,
       coalesce(CASE WHEN length(deadline)=10 THEN deadline ELSE to_char(deadline_at AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD') END = to_char($4::timestamptz AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD'),false) AS today FROM b)`;
   const conditions: Record<string, string> = queue === 'exceptions' ? {
@@ -748,10 +930,13 @@ export async function listReconciliation(context: StoreContext, merchantId: stri
   let precision: ReturnType<typeof precisionAudit> | undefined;
   let sampledIds: string[] = [];
   if (queue === 'audit') {
-    const month = previousMonth(context.now), seed = `${merchantId}:${month}`;
-    const predicate = "r.kind='allocations' AND r.status IN ('confirmed','superseded') AND r.data->'automatic'='true'::jsonb AND r.data->>'confidence'='certain' AND left(coalesce(nullif(r.data->>'confirmedAt',''),to_char(r.created_at AT TIME ZONE 'UTC','YYYY-MM-DD')),7)=$4";
-    const population = Number((await session.client.query<{total:string}>(`SELECT count(*) AS total ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND ${predicate}`, [...scope,month])).rows[0]!.total);
-    const sample = (await session.client.query<RecordRow>(`${select(predicate)} ORDER BY sha256(convert_to($5 || ':' || r.id,'UTF8')),r.id COLLATE "C" LIMIT $6`, [...scope,month,seed,measurementRules.precisionSampleSize])).rows.map(rowToRecord);
+    const month = previousMonth(context.now), seed = `${merchantId}:${month}`, { start, end } = periodBounds(month);
+    // The audit month is a WAT month: confirmedAt (or the creation time) as a UTC ISO string inside [start, end). Stored
+    // instants are UTC timestamps or dates, which compare as strings in the "C" collation the way the domain parses them.
+    const at = `coalesce(nullif(r.data->>'confirmedAt',''),to_char(r.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) COLLATE "C"`;
+    const predicate = `r.kind='allocations' AND r.status IN ('confirmed','superseded') AND r.data->'automatic'='true'::jsonb AND r.data->>'confidence'='certain' AND ${at}>=$4 AND ${at}<$5`;
+    const population = Number((await session.client.query<{total:string}>(`SELECT count(*) AS total ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND ${predicate}`, [...scope,start,end])).rows[0]!.total);
+    const sample = (await session.client.query<RecordRow>(`${select(predicate)} ORDER BY sha256(convert_to($6 || ':' || r.id,'UTF8')),r.id COLLATE "C" LIMIT $7`, [...scope,start,end,seed,measurementRules.precisionSampleSize])).rows.map(rowToRecord);
     precision = { ...precisionAudit({merchant:merchant.info,settings:merchant.settings,records:sample},context.now), population, requiredSample:Math.min(measurementRules.precisionSampleSize,population) };
     sampledIds = precision.sampledAllocationIds;
   }
@@ -814,8 +999,14 @@ export async function loadReportsView(context:StoreContext,merchantId:string):Pr
   return {merchant:merchant.info,settings:merchant.settings,records:rows.map(rowToRecord)};
 }
 
-/** paymentMoneyReturned in SQL: reversed by the provider, or refunded (including the legacy spelling). Returned money is no customer's credit. */
-const paymentReturnedSql = "(coalesce(r.data->>'reversalStatus','')='reversed' OR coalesce(r.data->>'refundStatus','') IN ('refunded','recorded_externally'))";
+/** paymentRefundedKobo in SQL: for a refund (including the legacy spelling), data.refundedKobo when it is a whole non-negative safe number, else the whole payment. */
+const paymentRefundedSql = `(CASE WHEN coalesce(r.data->>'refundStatus','') IN ('refunded','recorded_externally') THEN CASE WHEN jsonb_typeof(r.data->'refundedKobo')='number'
+  THEN CASE WHEN (r.data->>'refundedKobo')::numeric BETWEEN 0 AND ${Number.MAX_SAFE_INTEGER} AND (r.data->>'refundedKobo')::numeric=trunc((r.data->>'refundedKobo')::numeric) THEN (r.data->>'refundedKobo')::numeric ELSE r.amount_kobo END
+  ELSE r.amount_kobo END ELSE 0 END)`;
+/** paymentMoneyReturned in SQL: reversed by the provider, or refunded in full. Returned money is no customer's credit. */
+const paymentReturnedSql = `(coalesce(r.data->>'reversalStatus','')='reversed' OR (coalesce(r.data->>'refundStatus','') IN ('refunded','recorded_externally') AND ${paymentRefundedSql}>=r.amount_kobo))`;
+/** paymentUnappliedKobo in SQL: what a payment holds that is neither applied nor returned by a refund. */
+const paymentUnappliedSql = `CASE WHEN ${paymentReturnedSql} THEN 0 ELSE greatest(0,r.amount_kobo-coalesce((r.data->>'allocatedKobo')::numeric,0)-${paymentRefundedSql}) END`;
 
 /** Read-only customer cards and events are paged; balances aggregate every related record. */
 export async function getCustomerHistory(context: StoreContext, merchantId: string, id: string, query: CustomerHistoryQuery) {
@@ -828,7 +1019,7 @@ export async function getCustomerHistory(context: StoreContext, merchantId: stri
     count(*) FILTER(WHERE r.kind='mandates') AS mandates, count(*) FILTER(WHERE r.kind='due-items') AS "dueItems", count(*) FILTER(WHERE r.kind='payments') AS payments,
     coalesce(sum(r.amount_kobo) FILTER(WHERE r.kind='due-items' AND r.status<>'cancelled'),0) AS obligations,
     coalesce(sum(r.amount_kobo) FILTER(WHERE r.kind='allocations' AND r.status='confirmed'),0) AS allocated,
-    coalesce(sum(greatest(0,r.amount_kobo-coalesce((r.data->>'allocatedKobo')::numeric,0))) FILTER(WHERE r.kind='payments' AND NOT ${paymentReturnedSql}),0) AS credit
+    coalesce(sum(${paymentUnappliedSql}) FILTER(WHERE r.kind='payments'),0) AS credit
     ${base} AND r.customer_id=$4`,values)).rows[0]!;
   const totals = {} as Record<HistorySection,number>, offsets = {} as Record<HistorySection,number>;
   const pages = {} as Record<HistorySection,ValopayRecord[]>;
@@ -1256,14 +1447,16 @@ async function seedWorkspace(client: PoolClient, workspace: WorkspaceRow, princi
  * query keeps its tenant predicate.  The merchant row is taken with SKIP
  * LOCKED: two instances never close the same lender at once and a request in
  * flight is never queued behind the scheduler.  Returns undefined when the
- * merchant is locked elsewhere or no longer exists.
+ * merchant is locked elsewhere or no longer exists.  It carries the system
+ * limits (database-limits.ts) and is not gated: SKIP LOCKED already keeps it
+ * from waiting on a busy lender.
  */
 export async function inMerchantAsSystem<T>(merchantId: string, actor: string, fn: (context: StoreContext) => Promise<T>): Promise<T | undefined> {
   if (!actor.startsWith(SYSTEM_ACTOR_PREFIX)) throw new Error("A system transaction needs a system actor.");
-  const client = await pool.connect();
-  let context: StoreContext | undefined;
+  const guard = await checkOut(() => pool.connect()), client = guard.client;
+  let context: StoreContext | undefined, committing = false;
   try {
-    await client.query("BEGIN");
+    await client.query(beginStatement(databaseLimits().system));
     await bindRuntimeService(client);
     const scope = (await client.query<{ id: string; workspace_id: string; principal_hash: string; role: string }>(
       `SELECT m.id,m.workspace_id,w.principal_hash,w.role FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id
@@ -1275,39 +1468,103 @@ export async function inMerchantAsSystem<T>(merchantId: string, actor: string, f
     context = Object.freeze({ authenticated: true, role: "Operations", actor, now });
     sessions.set(context, { client, workspace: { id: scope.workspace_id, principal_hash: scope.principal_hash, role: scope.role }, principal: scope.principal_hash, active: true, access: "write" });
     const result = await fn(context);
+    committing = true;
     const committed = await client.query("COMMIT");
     if (committed.command !== "COMMIT") throw new Error("The system transaction was rolled back.");
     return result;
   } catch (error) {
     try { await client.query("ROLLBACK"); } catch { /* transaction is already closed */ }
-    throw error;
+    throw failedTransaction(error, { committing, lost: guard.lost(), write: true });
   } finally {
     if (context) {
       const session = sessions.get(context);
       if (session) { session.active = false; session.snapshot = undefined; session.summarised = undefined; session.lockedMerchantId = undefined; }
     }
-    client.release();
+    guard.release();
   }
 }
 
 /**
- * Merchants whose scheduled close is due by their stored cursor, oldest first.
- * A plain read: the caller re-checks under the merchant lock before closing.
+ * Whether a lender exists in a workspace, read without its lock: when
+ * inMerchantAsSystem finds no row to lock, this tells a lender busy elsewhere
+ * from one that is not there.  A plain read with the system limits; under
+ * runtime isolation it runs as the service member, as the lock does.
  */
-export async function dueScheduledCloses(limit: number): Promise<string[]> {
-  if (runtimeIsolationEnabled()) return runtimeServiceRead(async client => (await client.query<{ id: string }>(
-    `SELECT m.id FROM valopay_merchants m WHERE COALESCE(m.settings->>'scheduledCloseEnabled','true') <> 'false'
-      AND (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END)<=now()
-      ORDER BY (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END),m.id LIMIT $1`,
-    [limit, ISO_INSTANT_PATTERN])).rows.map(row => row.id));
-  return (await pool.query<{ id: string }>(
-    `SELECT m.id FROM valopay_merchants m
-     WHERE COALESCE(m.settings->>'scheduledCloseEnabled','true') <> 'false'
-       AND (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END) <= now()
-     ORDER BY (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END), m.id
-     LIMIT $1`,
-    [limit, ISO_INSTANT_PATTERN],
-  )).rows.map((row) => row.id);
+export async function merchantInWorkspace(merchantId: string, workspaceId: string): Promise<boolean> {
+  return runtimeServiceRead(async client => Boolean((await client.query("SELECT 1 FROM valopay_merchants WHERE id=$1 AND workspace_id=$2", [merchantId, workspaceId])).rows[0]));
+}
+
+/**
+ * The next lenders whose scheduled close is due, in a fair order: staff and
+ * signed-in lenders before anonymous sandboxes; lenders waiting to retry a
+ * failed attempt after the rest; one lender per workspace per turn, so one
+ * workspace's many lenders never hold another's back; then the earliest
+ * time.  A lender waiting for its retry time is not due.  `exclude` leaves
+ * out lenders a pass has already dealt with; `only` limits the read to the
+ * lenders named (tests and operator tooling).  A plain read with the system
+ * limits (runtimeServiceRead binds the service identity only under runtime
+ * isolation): the caller re-checks under the merchant lock before closing.
+ */
+export async function dueScheduledCloses(limit: number, options: { exclude?: readonly string[]; only?: readonly string[] } = {}): Promise<string[]> {
+  return runtimeServiceRead(async client => (await client.query<{ id: string }>(
+    `WITH ready AS (
+       SELECT m.id, m.workspace_id,
+         (CASE WHEN m.settings->>'nextCloseAt' ~ $2 THEN (m.settings->>'nextCloseAt')::timestamptz END) AS due_at,
+         -- A retry counts only for the pending time and when well formed, as closeRetryOf reads it.
+         CASE WHEN m.settings->'closeRetry'->>'cursor' = m.settings->>'nextCloseAt' AND m.settings->'closeRetry'->>'failures' ~ '^[1-9][0-9]{0,5}$' AND m.settings->'closeRetry'->>'retryAt' ~ $2
+              THEN (m.settings->'closeRetry'->>'failures')::int ELSE 0 END AS failures,
+         CASE WHEN m.settings->'closeRetry'->>'cursor' = m.settings->>'nextCloseAt' AND m.settings->'closeRetry'->>'failures' ~ '^[1-9][0-9]{0,5}$' AND m.settings->'closeRetry'->>'retryAt' ~ $2
+              THEN (m.settings->'closeRetry'->>'retryAt')::timestamptz END AS retry_at,
+         COALESCE(m.settings->>'anonymousWorkspace', 'false') = 'true' AS anonymous
+       FROM valopay_merchants m
+       WHERE COALESCE(m.settings->>'scheduledCloseEnabled','true') <> 'false'
+         AND NOT (m.id = ANY($3::text[])) AND ($4::text[] IS NULL OR m.id = ANY($4::text[]))
+     ), due AS (
+       SELECT * FROM ready WHERE due_at <= now() AND (retry_at IS NULL OR retry_at <= now())
+     ), ranked AS (
+       SELECT id, anonymous, failures, due_at, row_number() OVER (PARTITION BY workspace_id ORDER BY failures > 0, due_at, id) AS turn FROM due
+     )
+     SELECT id FROM ranked ORDER BY anonymous, failures > 0, turn, due_at, id LIMIT $1`,
+    [limit, ISO_INSTANT_PATTERN, [...(options.exclude ?? [])], options.only ? [...options.only] : null],
+  )).rows.map((row) => row.id));
+}
+
+/**
+ * Records a failed scheduled attempt on the lender (settings.closeRetry): one
+ * more failure at its pending close time and when to try again, from the
+ * database clock.  Its own small service transaction, after the failed close
+ * rolled back; the row is taken with SKIP LOCKED, so a request or another
+ * instance holding the lender is never waited for.  Returns undefined when
+ * nothing was recorded: the lender is gone or locked, or its close is no
+ * longer pending because someone closed it meanwhile.  The error text is never
+ * stored, because the lender's settings are shown to its users.
+ */
+export async function recordScheduledCloseFailure(merchantId: string): Promise<CloseRetry | undefined> {
+  return runtimeServiceRead(async client => {
+    const row = (await client.query<{ settings: Record<string, unknown>; now: Date }>("SELECT settings, now() AS now FROM valopay_merchants WHERE id=$1 FOR UPDATE SKIP LOCKED", [merchantId])).rows[0];
+    const retry = row ? nextCloseRetry(row.settings, row.now.toISOString()) : null;
+    if (!retry) return undefined;
+    const updated = await client.query("UPDATE valopay_merchants SET settings = settings || jsonb_build_object('closeRetry', $2::jsonb) WHERE id=$1", [merchantId, JSON.stringify(retry)]);
+    return rowsAffected(updated) ? retry : undefined;
+  });
+}
+
+/**
+ * Whether nobody has changed this context's workspace for `days`: it is older
+ * than that and no audit entry by a person was written within it.  The same
+ * definition of activity as the expiry sweep, so the scheduled close's own
+ * entries never count.
+ */
+export async function sandboxInactiveFor(context: StoreContext, days: number): Promise<boolean> {
+  const session = sessionFor(context);
+  return (await session.client.query<{ idle: boolean }>(
+    `SELECT (w.created_at < now() - make_interval(days => $2)) AND NOT EXISTS (
+       SELECT 1 FROM valopay_merchants m JOIN valopay_records r ON r.merchant_id=m.id
+       WHERE m.workspace_id=w.id AND r.kind='audit' AND r.created_at >= now() - make_interval(days => $2)
+         AND COALESCE(r.data->>'actor','') NOT LIKE $3) AS idle
+     FROM valopay_workspaces w WHERE w.id=$1`,
+    [session.workspace.id, days, `${SYSTEM_ACTOR_PREFIX}%`],
+  )).rows[0]?.idle === true;
 }
 
 /**
@@ -1316,31 +1573,43 @@ export async function dueScheduledCloses(limit: number): Promise<string[]> {
  * first scheduled close comes at its time rather than at the next tick.
  */
 export async function initialiseCloseCursors(): Promise<number> {
-  if (runtimeIsolationEnabled()) return runtimeServiceRead(async client => {
-    const rows = (await client.query<{ id: string; settings: Record<string, unknown>; now: Date }>("SELECT m.id,m.settings,now() AS now FROM valopay_merchants m WHERE m.settings->>'nextCloseAt' IS NULL FOR UPDATE", [])).rows;
-    for (const row of rows) await client.query("UPDATE valopay_merchants SET settings=settings || jsonb_build_object('nextCloseAt',$2::text) WHERE id=$1 AND settings->>'nextCloseAt' IS NULL", [row.id, nextCloseInstant(row.now.toISOString(), closeTimeOf(row.settings))]);
-    return rows.length;
+  return runtimeServiceRead(async client => {
+    if (runtimeIsolationEnabled()) {
+      const rows = (await client.query<{ id: string; settings: Record<string, unknown>; now: Date }>("SELECT m.id,m.settings,now() AS now FROM valopay_merchants m WHERE m.settings->>'nextCloseAt' IS NULL FOR UPDATE", [])).rows;
+      for (const row of rows) await client.query("UPDATE valopay_merchants SET settings=settings || jsonb_build_object('nextCloseAt',$2::text) WHERE id=$1 AND settings->>'nextCloseAt' IS NULL", [row.id, nextCloseInstant(row.now.toISOString(), closeTimeOf(row.settings))]);
+      return rows.length;
+    }
+    const rows = (await client.query<{ id: string; settings: Record<string, unknown>; now: Date }>(
+      "SELECT m.id,m.settings,now() AS now FROM valopay_merchants m WHERE m.settings->>'nextCloseAt' IS NULL",
+    )).rows;
+    if (!rows.length) return 0;
+    const updated = await client.query(
+      `UPDATE valopay_merchants m SET settings = m.settings || jsonb_build_object('nextCloseAt', v.next_at)
+       FROM (SELECT unnest($1::text[]) AS id, unnest($2::text[]) AS next_at) v
+       WHERE m.id = v.id AND m.settings->>'nextCloseAt' IS NULL`,
+      [rows.map((row) => row.id), rows.map((row) => nextCloseInstant(row.now.toISOString(), closeTimeOf(row.settings)))],
+    );
+    return updated.rowCount || 0;
   });
-  const rows = (await pool.query<{ id: string; settings: Record<string, unknown>; now: Date }>(
-    "SELECT m.id,m.settings,now() AS now FROM valopay_merchants m WHERE m.settings->>'nextCloseAt' IS NULL",
-  )).rows;
-  if (!rows.length) return 0;
-  const updated = await pool.query(
-    `UPDATE valopay_merchants m SET settings = m.settings || jsonb_build_object('nextCloseAt', v.next_at)
-     FROM (SELECT unnest($1::text[]) AS id, unnest($2::text[]) AS next_at) v
-     WHERE m.id = v.id AND m.settings->>'nextCloseAt' IS NULL`,
-    [rows.map((row) => row.id), rows.map((row) => nextCloseInstant(row.now.toISOString(), closeTimeOf(row.settings)))],
-  );
-  return updated.rowCount || 0;
 }
 
-/** Readiness: one bounded round trip to the database. Never throws; the reason stays in the caller's log, not in an answer. */
+let readiness: InstanceType<typeof Pool> | undefined;
+/**
+ * Readiness: one bounded round trip to the database, on its own connection,
+ * so a request pool that is busy does not read as a database that cannot be
+ * reached. Never throws; the reason stays in the caller's log, not in an answer.
+ */
 export async function pingDatabase(timeoutMs = 2000): Promise<{ status: "ok" | "failed"; latencyMs: number; error?: string }> {
   const started = performance.now();
   let timer: NodeJS.Timeout | undefined;
   try {
+    if (!readiness) {
+      readiness = new Pool({ connectionString: process.env.DATABASE_URL, max: 1, connectionTimeoutMillis: timeoutMs, idleTimeoutMillis: 10_000, allowExitOnIdle: true });
+      // An idle connection that fails is replaced; the next ping reports whether the database answers.
+      readiness.on("error", () => {});
+    }
     await Promise.race([
-      pool.query("SELECT 1"),
+      readiness.query("SELECT 1"),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${timeoutMs} ms`)), timeoutMs); }),
     ]);
     return { status: "ok", latencyMs: Math.round(performance.now() - started) };
@@ -1356,9 +1625,11 @@ export function watchDatabase(log: { error: (fields: object, message: string) =>
   pool.on("error", (error) => log.error({ event: "database.pool_error", err: error }, "Database connection error on an idle client"));
 }
 
-/** Ends the pool on shutdown, after the last transaction. */
+/** Ends the pools on shutdown, after the last transaction. */
 export async function closeDatabase(): Promise<void> {
-  await pool.end();
+  const ending = readiness;
+  readiness = undefined;
+  await Promise.all([pool.end(), ending?.end()]);
 }
 
 /** Appends a hash-chained audit entry for an action to the lender's state. */

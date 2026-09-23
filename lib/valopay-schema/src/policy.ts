@@ -94,8 +94,20 @@ export const closeRules = {
   defaultTime: "07:00",
   lateAfterMinutes: 30,
   tickSeconds: 60,
-  /** Merchants closed per tick, so one tick stays short and a backlog drains over a few ticks. */
+  /** Lenders read per batch; a pass keeps reading batches while the last one was full and its budget remains. */
   batchSize: 25,
+  /** A pass starts no new lender's close after this long, so its heartbeat stays well inside the two-minute staleness limit. */
+  passBudgetSeconds: 45,
+  /**
+   * After the n-th failed scheduled attempt at one close time, the next waits
+   * min(retryMaxMinutes, retryBaseMinutes × 2^(n−1)) minutes: 2, 4, 8, 16, 32,
+   * then hourly.  The close stays pending, and missed after
+   * `lateAfterMinutes`, until an attempt succeeds or a person closes.
+   */
+  retryBaseMinutes: 2,
+  retryMaxMinutes: 60,
+  /** An anonymous sandbox older than this, with no change by a person within it, has its automatic close paused. */
+  idleSandboxDays: 7,
 } as const;
 
 const closeTimePattern = /^([01]\d|2[0-3]):[0-5]\d$/;

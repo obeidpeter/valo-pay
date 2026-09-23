@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { expectedRuntimeDefinition, normaliseRuntimeDefinition, reviewedRuntimeHelpers, reviewedRuntimePolicies, reviewedRuntimeTrigger } from "../src/lib/runtime-isolation-policy";
 
 if (process.env.VALOPAY_RUN_INTEGRATION !== "1") { console.log("Opt in on disposable PostgreSQL to run restricted runtime isolation checks."); process.exit(0); }
 const { Pool } = createRequire(new URL("../../../lib/db/package.json", import.meta.url))("pg") as Pick<typeof import("@workspace/db"), "Pool">;
@@ -65,6 +66,25 @@ try {
     await upgrade.query("ROLLBACK");
     await upgrade.query("SELECT set_config('valopay.runtime_migration','',false)");
   } finally { upgrade.release(); }
+  // The reviewed set in runtime-isolation-policy.ts is exactly what 005 and 006
+  // install, as PostgreSQL renders it with the search path the self-check uses.
+  // A migration, or a PostgreSQL major version, that changes it fails here with
+  // the difference to review. {role} is spelt out in the reviewed text, so a
+  // migration that wrote the placeholder itself fails too.
+  const golden = await admin.connect();
+  try {
+    await golden.query(`SET search_path TO pg_catalog, "${schema}", pg_temp`);
+    const scope = { schema, role: appRole }, reviewed = (text: string | null) => expectedRuntimeDefinition(text, scope);
+    const policies = (await golden.query(`SELECT tablename,policyname,cmd,permissive,roles::text[] AS roles,qual,with_check FROM pg_policies WHERE schemaname=$1 AND tablename=ANY($2::text[])`, [schema, tables])).rows;
+    assert.deepEqual(Object.fromEntries(policies.map(row => [`${row.tablename}:${row.policyname}:${row.cmd}`, { using: normaliseRuntimeDefinition(row.qual, scope), check: normaliseRuntimeDefinition(row.with_check, scope) }])),
+      Object.fromEntries(Object.entries(reviewedRuntimePolicies).map(([key, want]) => [key, { using: reviewed(want.using), check: reviewed(want.check) }])), "The reviewed policies are what 005 and 006 install.");
+    assert.ok(policies.every(row => row.permissive === "PERMISSIVE" && row.roles.length === 1 && row.roles[0] === appRole), "Every installed policy is permissive and names only the runtime login.");
+    const helpers = (await golden.query(`SELECT p.proname,pg_get_function_identity_arguments(p.oid) AS args,pg_get_function_result(p.oid) AS result,p.provolatile::text AS volatility,l.lanname AS language,p.prosrc AS source FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang WHERE n.nspname=$1`, [schema])).rows;
+    assert.deepEqual(Object.fromEntries(helpers.map(row => [row.proname, { args: row.args, result: row.result, volatility: row.volatility, language: row.language, source: normaliseRuntimeDefinition(row.source, scope) }])),
+      Object.fromEntries(Object.entries(reviewedRuntimeHelpers).map(([name, want]) => [name, { ...want, source: reviewed(want.source) }])), "The reviewed helpers are the schema's only functions, as 005 and 006 define them.");
+    const triggers = (await golden.query(`SELECT t.tgname,c.relname,pg_get_triggerdef(t.oid) AS definition FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND NOT t.tgisinternal`, [schema])).rows;
+    assert.deepEqual(triggers.map(row => ({ name: row.tgname, table: row.relname, definition: normaliseRuntimeDefinition(row.definition, scope) })), [{ ...reviewedRuntimeTrigger, definition: reviewed(reviewedRuntimeTrigger.definition) }], "The workspace guard is the only trigger, as 005 defines it.");
+  } finally { await golden.query("RESET search_path"); golden.release(); }
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -124,6 +144,65 @@ try {
   // synthetic fixture; encryption has its own injected-adapter acceptance suite.
   const now = Math.floor(Date.now() / 1000), auth = { userId: "user_financeA", orgId: "org_runtimeA", sessionId: "sess_runtime", tokenType: "session_token", sessionStatus: "active", factorVerificationAge: [0, 0], sessionClaims: { sub: "user_financeA", sid: "sess_runtime", iss: "https://identity.example", azp: "https://pilot.example", iat: now - 1, exp: now + 3600 } };
   const req = { headers: {}, auth: Object.assign(() => auth, { [Symbol.for("@clerk/express.auth")]: true }) } as any;
+  // The self-check compares what each policy, helper and the workspace guard do,
+  // not only their names. Every weakening below keeps the names and used to pass,
+  // so the readiness page called the database verified while, for instance,
+  // Finance A's SQL saw every workspace's lenders. Each is now refused with a 503
+  // whose logged differences name it, and the restored set is accepted again.
+  const readinessRoute = ((await import("../src/routes/access-readiness")).default as any).stack.find((layer: any) => layer.route?.path === "/v1/team/readiness" && layer.route.methods.get).route.stack[0].handle;
+  const databaseReadiness = async () => { let body: any; const res: any = { cookie() {}, json(value: unknown) { body = value; return res; } }; await readinessRoute(req, res); return body.checks.find((check: any) => check.id === "database"); };
+  const verified = await databaseReadiness();
+  assert.equal(verified.state, "verified_this_request"); assert.match(verified.detail, /reviewed/, "Readiness says what this request verified.");
+  const bindFinance = async () => { const probe = await pool.connect(); try { await probe.query("BEGIN"); await isolation.bindRuntimeIdentity(probe, { organizationId: "org_runtimeA", userId: "user_financeA" }); } finally { await probe.query("ROLLBACK"); probe.release(); } };
+  const dba = await admin.connect();
+  try {
+    await dba.query(`SET search_path TO pg_catalog, "${schema}", pg_temp`);
+    const rendered = async (table: string, policy: string, column: "qual" | "with_check") => (await dba.query(`SELECT ${column} AS expression FROM pg_policies WHERE schemaname=$1 AND tablename=$2 AND policyname=$3`, [schema, table, policy])).rows[0].expression as string;
+    const merchantsScope = await rendered("valopay_merchants", "valopay_runtime_scope", "qual"), recordsScope = await rendered("valopay_records", "valopay_runtime_scope", "qual");
+    const recordsInsert = await rendered("valopay_records", "valopay_runtime_insert", "with_check"), eventsInsert = await rendered("valopay_staff_events", "valopay_runtime_insert", "with_check");
+    const functionDefinition = async (name: string) => (await dba.query("SELECT pg_get_functiondef(p.oid) AS definition FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=$1 AND p.proname=$2", [schema, name])).rows[0].definition as string;
+    const lendersDefinition = await functionDefinition("valopay_runtime_lenders"), guardFunction = await functionDefinition("valopay_runtime_guard_workspace");
+    // CREATE OR REPLACE keeps the owner, SECURITY DEFINER and the fixed search path: only the body changes.
+    const placeholderGuard = guardFunction.replace(`session_user='${appRole}'`, "session_user='{role}'");
+    assert.notEqual(placeholderGuard, guardFunction, "The guard tests the runtime login by name.");
+    const guard = "CREATE TRIGGER valopay_runtime_workspace_guard BEFORE UPDATE ON valopay_workspaces FOR EACH ROW EXECUTE FUNCTION valopay_runtime_guard_workspace()";
+    const policyRefusal = /differ from the reviewed runtime policy set/, helperRefusal = /differs from the reviewed runtime helper set/;
+    const weakenings = [
+      { name: "a lender scope that admits every lender", apply: "ALTER POLICY valopay_runtime_scope ON valopay_merchants USING (true)", restore: `ALTER POLICY valopay_runtime_scope ON valopay_merchants USING (${merchantsScope})`, refusal: policyRefusal, differences: ["valopay_merchants:valopay_runtime_scope:SELECT: USING expression differs"] },
+      { name: "an insert check that admits any lender", apply: "ALTER POLICY valopay_runtime_insert ON valopay_records WITH CHECK (true)", restore: `ALTER POLICY valopay_runtime_insert ON valopay_records WITH CHECK (${recordsInsert})`, refusal: policyRefusal, differences: ["valopay_records:valopay_runtime_insert:INSERT: WITH CHECK expression differs"] },
+      { name: "a scope widened to every role", apply: "ALTER POLICY valopay_runtime_scope ON valopay_records TO public", restore: `ALTER POLICY valopay_runtime_scope ON valopay_records TO "${appRole}"`, refusal: policyRefusal, differences: ["valopay_records:valopay_runtime_scope:SELECT: applies to public instead of the runtime login"] },
+      { name: "a scope recreated as restrictive", apply: `DROP POLICY valopay_runtime_scope ON valopay_records; CREATE POLICY valopay_runtime_scope ON valopay_records AS RESTRICTIVE FOR SELECT TO "${appRole}" USING (${recordsScope})`, restore: `DROP POLICY valopay_runtime_scope ON valopay_records; CREATE POLICY valopay_runtime_scope ON valopay_records FOR SELECT TO "${appRole}" USING (${recordsScope})`, refusal: policyRefusal, differences: ["valopay_records:valopay_runtime_scope:SELECT: restrictive instead of permissive"] },
+      { name: "a lender helper that lists every lender", apply: `CREATE OR REPLACE FUNCTION "${schema}".valopay_runtime_lenders() RETURNS SETOF text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog,"${schema}",pg_temp AS $body$ SELECT id FROM "${schema}".valopay_merchants $body$`, restore: lendersDefinition, refusal: helperRefusal, differences: ["valopay_runtime_lenders: body differs"] },
+      // Compares the session with the string '{role}', so it never fires; the runtime login could rewrite its workspace row.
+      { name: "a workspace guard that watches the placeholder, not the login", apply: placeholderGuard, restore: guardFunction, refusal: helperRefusal, differences: ["valopay_runtime_guard_workspace: body differs"] },
+      { name: "a disabled workspace guard", apply: "ALTER TABLE valopay_workspaces DISABLE TRIGGER valopay_runtime_workspace_guard", restore: "ALTER TABLE valopay_workspaces ENABLE TRIGGER valopay_runtime_workspace_guard", refusal: policyRefusal, differences: ["valopay_runtime_workspace_guard: disabled (state D)"] },
+      { name: "a workspace guard narrowed to one column", apply: `DROP TRIGGER valopay_runtime_workspace_guard ON valopay_workspaces; ${guard.replace("UPDATE ON", "UPDATE OF principal_hash ON")}`, restore: `DROP TRIGGER valopay_runtime_workspace_guard ON valopay_workspaces; ${guard}`, refusal: policyRefusal, differences: ["valopay_runtime_workspace_guard: definition differs"] },
+      // Read with the runtime schema first, this policy would render exactly as reviewed.
+      { name: "a built-in shadowed from the runtime schema", apply: `CREATE FUNCTION "${schema}".current_setting(text, boolean) RETURNS text LANGUAGE sql STABLE AS $body$ SELECT pg_catalog.current_setting($1, $2) $body$; ALTER POLICY valopay_runtime_insert ON valopay_staff_events WITH CHECK (${eventsInsert.replace("current_setting(", `"${schema}".current_setting(`)})`, restore: `ALTER POLICY valopay_runtime_insert ON valopay_staff_events WITH CHECK (${eventsInsert}); DROP FUNCTION "${schema}".current_setting(text, boolean)`, refusal: policyRefusal, differences: ["valopay_staff_events:valopay_runtime_insert:INSERT: WITH CHECK expression differs"] },
+    ];
+    for (const weakening of weakenings) {
+      await dba.query(weakening.apply);
+      try {
+        await assert.rejects(bindFinance, (error: any) => { assert.equal(error.status, 503, weakening.name); assert.match(error.message, weakening.refusal, weakening.name); assert.deepEqual(error.differences, weakening.differences, weakening.name); return true; }, `Refused: ${weakening.name}.`);
+        if (weakening === weakenings[0]) {
+          await assert.rejects(databaseReadiness, policyRefusal, "Readiness cannot call a weakened database verified.");
+          await assert.rejects(() => store.inWorkspace(req, { cookie() {} } as any, ctx => store.listMerchants(ctx), "read"), policyRefusal, "No staff request runs on a weakened database.");
+        }
+      } finally { await dba.query(weakening.restore); }
+      await bindFinance();
+    }
+  } finally { await dba.query("RESET search_path"); dba.release(); }
+  assert.equal((await databaseReadiness()).state, "verified_this_request", "The restored set is verified again.");
+  // Readiness reports the check its own transaction recorded, never the configuration:
+  // a system transaction records none, so with isolation still set to staging its
+  // database check is not configured.
+  const { readinessChecks } = await import("../src/routes/access-readiness");
+  assert.equal(process.env.VALOPAY_RUNTIME_ISOLATION, "staging");
+  const unrecorded = await store.inMerchantAsSystem("lender-a", `${store.SYSTEM_ACTOR_PREFIX}readiness probe`, readinessChecks);
+  assert.equal(unrecorded?.checks.find(check => check.id === "database")?.state, "not_configured", "Readiness follows the transaction's own check, not the environment.");
+  // The Paystack ingress's read without the lock runs as the service member too, so it finds only what the lock could take.
+  assert.deepEqual(await Promise.all([["lender-a", "workspace-a"], ["lender-a", "workspace-b"], ["lender-b", "workspace-b"], ["lender-gone", "workspace-a"]].map(([merchant, workspace]) => store.merchantInWorkspace(merchant!, workspace!))), [true, false, false, false], "A lender is found only in its own workspace, and never outside the service member's organisation.");
+  assert.equal(await store.inMerchantAsSystem("lender-b", `${store.SYSTEM_ACTOR_PREFIX}isolation probe`, async () => true), undefined, "The lock cannot take another organisation's lender either.");
   // Actual acceptance and ON CONFLICT renewal under the restricted LOGIN.
   // Only Clerk's verified-email lookup is replaced; no external call is made.
   const { clerkClient } = await import("@clerk/express"), previousGetUser = clerkClient.users.getUser;
@@ -164,6 +243,29 @@ try {
   const readerRequest = { headers: {}, auth: Object.assign(() => readerAuth, { [Symbol.for("@clerk/express.auth")]: true }) } as any;
   const readerState = await store.inWorkspace(readerRequest, { cookie() {} } as any, ctx => store.loadState(ctx, "lender-a", "share"), "read");
   assert.equal(readerState.records[0]?.name, "Synthetic customer", "Restricted Read-only users can still inspect a consistent lender snapshot.");
+  // A read here is REPEATABLE READ, with its snapshot taken before it waits for
+  // the workspace lock. One that queued behind a team change to its own
+  // membership is told its access changed; it is not answered from the older
+  // snapshot, and the retry sees the change.
+  {
+    const adminAuth = { ...auth, userId: "user_adminA", sessionClaims: { ...auth.sessionClaims, sub: "user_adminA" } };
+    const adminRequest = { headers: {}, auth: Object.assign(() => adminAuth, { [Symbol.for("@clerk/express.auth")]: true }) } as any;
+    const waiting = async (count: number) => { for (let tries = 0; tries < 100; tries++) { if ((await admin.query("SELECT count(*)::int AS count FROM pg_locks WHERE locktype='advisory' AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database())")).rows[0].count === count) return; await new Promise(resolve => setTimeout(resolve, 20)); } throw new Error(`${count} requests never queued for the workspace lock`); };
+    let releaseHeld!: () => void, heldIn!: () => void;
+    const hold = new Promise<void>(resolve => { releaseHeld = resolve; }), entered = new Promise<void>(resolve => { heldIn = resolve; });
+    const held = store.inWorkspace(readerRequest, { cookie() {} } as any, async () => { heldIn(); await hold; }, "read");
+    await entered;
+    const version = (await admin.query(`SELECT updated_at FROM "${schema}".valopay_staff_memberships WHERE id='finance-a'`)).rows[0].updated_at as Date;
+    const change = store.inWorkspace(adminRequest, { cookie() {} } as any, ctx => store.updateStaff(ctx, "finance-a", { role: "Finance", status: "active", expectedUpdatedAt: version.toISOString(), reason: "Re-confirm the Finance membership for the rehearsal." }), "team");
+    await waiting(1);
+    const late = store.inWorkspace(req, { cookie() {} } as any, ctx => store.listMerchants(ctx), "read").then(() => undefined, (error: unknown) => error);
+    await waiting(2);
+    releaseHeld(); await held; await change;
+    const refused = await late as { status?: number; message?: string } | undefined;
+    assert.equal(refused?.status, 409, "A request whose membership changed while it waited is refused, not answered from its older snapshot.");
+    assert.match(String(refused?.message), /access changed while this request was waiting/);
+    assert.deepEqual((await store.inWorkspace(req, { cookie() {} } as any, ctx => store.listMerchants(ctx), "read")).map(lender => lender.id), ["lender-a"], "The retry reads the current membership.");
+  }
   await assert.rejects(() => store.inWorkspace(req, { cookie() {} } as any, ctx => store.loadState(ctx, "lender-a-private", "share"), "read"), /not found/);
   // Pilot scale: a lender with 13,000 records loads through the policies in one
   // pass. The visible lenders are a hashed set built once per statement, never a
@@ -189,7 +291,7 @@ try {
   await assert.rejects(() => store.inWorkspace(req, { cookie() {} } as any, ctx => store.loadState(ctx, "lender-a", "share"), "read"), /not found/);
   const elevated = await admin.connect(); try { await elevated.query("BEGIN"); await assert.rejects(() => isolation.bindRuntimeIdentity(elevated, { organizationId: "org_runtimeA", userId: "user_adminA" }), /elevated/); await elevated.query("ROLLBACK"); } finally { elevated.release(); }
   const configured = process.env.VALOPAY_RUNTIME_SCHEMA; process.env.VALOPAY_RUNTIME_SCHEMA = "public"; assert.throws(() => isolation.runtimeIsolationConfiguration(), /public/); process.env.VALOPAY_RUNTIME_SCHEMA = configured;
-  console.log("Runtime isolation passed: actual restricted login, ten forced-RLS tables, once-per-statement lender scope at pilot scale, pooled-scope reset, mixed-tenant denial, per-lender grants, concurrent invitation acceptance and renewal, service requester checks and real repository/MFA integration.");
+  console.log("Runtime isolation passed: actual restricted login, ten forced-RLS tables, the reviewed policies, helpers and workspace guard compared by definition (nine weakenings refused), readiness from the transaction's own check, once-per-statement lender scope at pilot scale, pooled-scope reset, mixed-tenant denial, per-lender grants, concurrent invitation acceptance and renewal, a read queued behind a change to its own membership refused with a 409, service requester checks and real repository/MFA integration.");
 } finally {
   if (runtimePool) await runtimePool.end();
   if (!/^valopay_runtime_test_[a-f0-9]+$/.test(schema) || !/^runtime_(app|helper)_[a-f0-9]+$/.test(appRole) || !/^runtime_(app|helper)_[a-f0-9]+$/.test(helperRole)) throw new Error("Unsafe generated test cleanup target.");

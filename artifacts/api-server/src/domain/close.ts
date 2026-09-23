@@ -1,7 +1,7 @@
 import { closeRules, closeTimeOf, isOpenException, nextCloseInstant, paymentUnappliedKobo, type CloseReport } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
-import { paymentObservedAt } from "./reconciliation";
+import { allocationConfirmedAt, paymentObservedAt } from "./reconciliation";
 
 const DAY_MS = 24 * 60 * 60 * 1000, MINUTE_MS = 60 * 1000;
 
@@ -19,31 +19,91 @@ export interface CloseSchedule {
   lateAfterMinutes: number;
   lastAt: string | null;
   lastTrigger: string | null;
+  /** Failed scheduled attempts at the pending close time; 0 when none failed or the automatic close is off. */
+  failedAttempts: number;
+  /** When the scheduler tries the pending close again after a failure; null when it is not waiting to retry. */
+  retryAt: string | null;
+  /** When the scheduler switched the automatic close off because nobody changed the sandbox; null unless it is still off for that reason. */
+  pausedForInactivityAt: string | null;
 }
+
+/**
+ * The scheduler's record of failed attempts at one pending close time
+ * (settings.closeRetry): that time, how many attempts failed, when to try
+ * again and when the last one failed.  It never holds the error, because the
+ * lender's settings are shown to its users; the error stays in the log.
+ */
+export interface CloseRetry { cursor: string; failures: number; retryAt: string; lastFailedAt: string }
+
+const validInstant = (value: unknown): value is string => typeof value === "string" && Number.isFinite(Date.parse(value));
 
 /** The scheduler cursor the merchant carries (settings.nextCloseAt), when it is a valid instant. */
 export function storedCloseCursor(state: DomainState): string | null {
   const value = state.settings.nextCloseAt;
-  return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null;
+  return validInstant(value) ? value : null;
 }
 
-/** Whether the scheduled close is due now: the automatic close is on and the stored cursor is at or before `now`. */
+/** The recorded retry, only while it belongs to the pending close time: one left from an earlier time is inert. */
+export function closeRetryOf(settings: Record<string, unknown>): CloseRetry | null {
+  const retry = settings.closeRetry as Partial<CloseRetry> | null | undefined;
+  if (!retry || typeof retry !== "object" || !validInstant(settings.nextCloseAt) || retry.cursor !== settings.nextCloseAt) return null;
+  if (!Number.isInteger(retry.failures) || Number(retry.failures) < 1 || !validInstant(retry.retryAt)) return null;
+  return retry as CloseRetry;
+}
+
+/**
+ * The retry to record after a scheduled attempt failed at `now`: one more
+ * failure at the pending close time, and the next attempt after
+ * min(retryMaxMinutes, retryBaseMinutes × 2^(failures−1)) minutes.  Null when
+ * nothing is pending (no cursor, or its time has not come), so a close that
+ * moved the cursor meanwhile is never marked as failing.
+ */
+export function nextCloseRetry(settings: Record<string, unknown>, now: string): CloseRetry | null {
+  const cursor = settings.nextCloseAt;
+  if (!validInstant(cursor) || Date.parse(cursor) > Date.parse(now)) return null;
+  const failures = (closeRetryOf(settings)?.failures ?? 0) + 1;
+  const minutes = Math.min(closeRules.retryMaxMinutes, closeRules.retryBaseMinutes * 2 ** Math.min(failures - 1, 20));
+  return { cursor, failures, retryAt: new Date(Date.parse(now) + minutes * MINUTE_MS).toISOString(), lastFailedAt: now };
+}
+
+/**
+ * Whether the scheduled close is due now: the automatic close is on, the
+ * stored cursor is at or before `now`, and no retry is waiting.  The retry
+ * wait is part of the check, so another instance cannot try a failing lender
+ * again before its time.
+ */
 export function scheduledCloseDue(state: DomainState, now: string): boolean {
-  const cursor = storedCloseCursor(state);
-  return state.settings.scheduledCloseEnabled !== false && cursor !== null && Date.parse(cursor) <= Date.parse(now);
+  const cursor = storedCloseCursor(state), retry = closeRetryOf(state.settings);
+  return state.settings.scheduledCloseEnabled !== false && cursor !== null && Date.parse(cursor) <= Date.parse(now)
+    && (retry === null || Date.parse(retry.retryAt) <= Date.parse(now));
+}
+
+/**
+ * An anonymous sandbox nobody has changed for closeRules.idleSandboxDays: the
+ * scheduler switches its automatic close off instead of closing it, and says
+ * when, so the console can explain it.  Switching it on again in Settings
+ * resumes from the next configured time (rescheduleAfterSettings).
+ */
+export function pauseIdleSandboxClose(state: DomainState, now: string): void {
+  state.settings.scheduledCloseEnabled = false;
+  state.settings.closePausedForInactivityAt = now;
+  delete state.settings.closeRetry;
 }
 
 /**
  * After a settings change, the cursor restarts from the next occurrence only
- * when the close time changed or the automatic close was switched on.  Saving
- * unchanged settings never moves it, so a pending missed close stays pending
- * and is still caught up; switching the close off leaves the cursor for the
- * next switch-on to replace.
+ * when the close time changed or the automatic close was switched on, and a
+ * retry recorded for the old time goes with it.  Saving unchanged settings
+ * never moves it, so a pending missed or failing close stays pending and is
+ * still caught up; switching the close off leaves the cursor for the next
+ * switch-on to replace.  Switching on also ends a pause for inactivity.
  */
 export function rescheduleAfterSettings(state: DomainState, previous: { time: string; enabled: boolean }, now: string): boolean {
   const time = closeTimeOf(state.settings), enabled = state.settings.scheduledCloseEnabled !== false;
+  if (enabled) delete state.settings.closePausedForInactivityAt;
   if (time === previous.time && (!enabled || previous.enabled)) return false;
   state.settings.nextCloseAt = nextCloseInstant(now, time);
+  delete state.settings.closeRetry;
   return true;
 }
 
@@ -53,10 +113,13 @@ export function closeSchedule(state: DomainState, now: string): CloseSchedule {
   const cursor = storedCloseCursor(state);
   const overdueMinutes = cursor ? Math.max(0, Math.floor((Date.parse(now) - Date.parse(cursor)) / MINUTE_MS)) : 0;
   const last = recordsOf(state, "closes").sort((a, b) => String(a.data.closedAt || a.createdAt).localeCompare(String(b.data.closedAt || b.createdAt))).at(-1);
+  const retry = enabled ? closeRetryOf(state.settings) : null, pausedAt = state.settings.closePausedForInactivityAt;
   return {
     time, enabled, nextAt: cursor ?? nextCloseInstant(now, time),
     missed: enabled && overdueMinutes > closeRules.lateAfterMinutes, overdueMinutes, lateAfterMinutes: closeRules.lateAfterMinutes,
     lastAt: last ? String(last.data.closedAt || last.createdAt) : null, lastTrigger: last ? String(last.data.schedule?.trigger ?? "manual") : null,
+    failedAttempts: retry?.failures ?? 0, retryAt: retry?.retryAt ?? null,
+    pausedForInactivityAt: !enabled && validInstant(pausedAt) ? pausedAt : null,
   };
 }
 
@@ -114,6 +177,8 @@ export function positionSnapshot(state: DomainState): Map<string, CustomerPositi
 }
 
 const sumOf = (items: ValopayRecord[]) => ({ count: items.length, kobo: items.reduce((sum, item) => sum + item.amountKobo, 0) });
+/** Unallocated payments by the money they hold: what a refund of part of one returned is not waiting for Finance. */
+const heldOf = (items: TypedRecord<"payments">[]) => ({ count: items.length, kobo: items.reduce((sum, item) => sum + paymentUnappliedKobo(item), 0) });
 const inPeriod = (at: string | undefined, from: string | null, to: string) => Boolean(at) && (from === null || String(at) > from) && String(at) <= to;
 
 /** What the close needs to remember from before reconciliation ran. */
@@ -125,7 +190,7 @@ export interface OpeningSnapshot {
 
 export function openingSnapshot(state: DomainState): OpeningSnapshot {
   const closes = recordsOf(state, "closes").map((close) => String(close.data.closedAt || close.createdAt)).sort();
-  return { since: closes.at(-1) ?? null, unallocated: sumOf(recordsOf(state, "payments").filter((item) => item.status === "unallocated")), positions: positionSnapshot(state) };
+  return { since: closes.at(-1) ?? null, unallocated: heldOf(recordsOf(state, "payments").filter((item) => item.status === "unallocated")), positions: positionSnapshot(state) };
 }
 
 /**
@@ -153,7 +218,8 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
   }
   const paymentsResolved = new Set(received.filter((item) => item.status === "resolved" && item.data.paymentId).map((item) => item.data.paymentId)).size;
 
-  const confirmed = recordsOf(state, "allocations").filter((item) => item.status === "confirmed" && inPeriod(item.updatedAt, from, to));
+  // A match counts in the close whose period confirmed it; a later review or edit moves updatedAt, not the confirmation.
+  const confirmed = recordsOf(state, "allocations").filter((item) => item.status === "confirmed" && inPeriod(allocationConfirmedAt(item), from, to));
   const allocatedByRule: Record<string, { count: number; kobo: number; automatic: number }> = {};
   for (const allocation of confirmed) {
     const row = (allocatedByRule[String(allocation.data.rule)] ||= { count: 0, kobo: 0, automatic: 0 });
@@ -187,7 +253,7 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
     allocatedByRule,
     allocated: sumOf(confirmed),
     proposed: sumOf(payments.filter((item) => item.status === "proposed")),
-    unallocated: { ...sumOf(unallocated), olderThan24Hours: unallocated.filter((item) => Date.parse(to) - paymentObservedAt(item) >= DAY_MS).length },
+    unallocated: { ...heldOf(unallocated), olderThan24Hours: unallocated.filter((item) => Date.parse(to) - paymentObservedAt(item) >= DAY_MS).length },
     possibleDuplicates: sumOf(payments.filter((item) => item.status === "possible_duplicate")),
     variances: { count: variances.length, feeVarianceKobo: variances.reduce((sum, item) => sum + item.feeVarianceKobo, 0), batches: variances },
     exceptions: {

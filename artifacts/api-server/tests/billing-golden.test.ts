@@ -3,8 +3,8 @@
 import assert from "node:assert/strict";
 import { ctxAt, wat } from "./helpers.js";
 import { executeAction } from "../src/domain/actions.js";
-import { buildReports } from "../src/domain/reports.js";
-import { issueInvoice, pendingAdjustments, previousMonth, periodEnd } from "../src/domain/billing.js";
+import { buildOverview, buildReports } from "../src/domain/reports.js";
+import { issueInvoice, monthOf, pendingAdjustments, previousMonth, periodEnd } from "../src/domain/billing.js";
 import { supersedeAllocation } from "../src/domain/reconciliation.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
@@ -32,11 +32,13 @@ function fixture(id: string): { state: DomainState; collection: (reference: stri
   return { state, collection };
 }
 
-// ---------- Helpers ----------
+// ---------- Helpers: billing months are calendar months in West Africa Time ----------
 assert.equal(previousMonth("2027-07-01T09:00:00.000Z"), "2027-06");
 assert.equal(previousMonth("2027-01-15T09:00:00.000Z"), "2026-12");
-assert.equal(periodEnd("2027-06"), "2027-06-30T23:59:59.999Z");
-checks += 3;
+assert.equal(periodEnd("2027-06"), "2027-06-30T22:59:59.999Z", "June ends at midnight WAT, 23:00 UTC");
+assert.equal(monthOf(wat("2028-01-01T00:30:00")), "2028-01", "00:30 WAT on 1 January is January, though it is still December in UTC");
+assert.equal(previousMonth(wat("2028-02-01T00:30:00")), "2028-01", "at 00:30 WAT on 1 February the previous month is January");
+checks += 5;
 
 // ---------- BIL-04: the first invoice: licence from the signed terms, one usage line per billable collection, discount, VAT shown ----------
 {
@@ -48,6 +50,7 @@ checks += 3;
   assert.equal(invoice.data.collectionsCounted, 1, "the collection still inside its reversal window is not counted");
   assert.equal(invoice.data.usageLines[0].paymentId, paid.id);
   assert.equal(invoice.data.usageLines[0].feeKobo, 7_500, "0.3% of NGN 25,000");
+  assert.deepEqual([invoice.data.usageLines[0].discountRate, invoice.data.usageLines[0].chargedKobo], [0.5, 3_750], "the line keeps the discount it was billed under and what it charged");
   assert.equal(invoice.data.licence.kobo, LICENCE, "the contracted licence is billed");
   assert.equal(invoice.data.licence.tierMismatch, true, "one collection is the entry tier; the contract governs and the mismatch is shown");
   assert.equal(invoice.data.designPartnerDiscount.kobo, -Math.floor((LICENCE + 7_500) / 2), "50% design-partner discount in 2027");
@@ -65,10 +68,11 @@ checks += 3;
   assert.throws(() => issueInvoice(state, finance(wat("2027-07-02T09:00:00")), { period: "2027-08" }), /future period/);
   assert.throws(() => issueInvoice(state, finance(wat("2027-07-02T09:00:00")), { period: "June" }), /YYYY-MM/);
   assert.throws(() => executeAction(state, ctxAt(wat("2027-07-02T09:00:00"), "Operations"), { action: "issue_invoice", reason: "x", data: { period: "2027-07" } }), /not permitted/);
-  checks += 20;
+  assert.throws(() => invoiceFor(state, "2027-07", wat("2027-07-31T23:30:00")), /once the month has ended/, "a month is invoiced only after it has ended");
+  checks += 22;
 
   // The withheld collection is billed on the next invoice once its window has passed; the issued invoice is immutable.
-  const next = invoiceFor(state, "2027-07", wat("2027-08-01T09:00:00"));
+  const next = invoiceFor(state, "2027-07", wat("2027-08-01T00:30:00")); // July ended at midnight WAT
   assert.equal(next.reference, "INV-2027-07-002");
   assert.equal(next.data.collectionsCounted, 1);
   assert.equal(next.data.usageLines[0].paymentReference, "PSK-2", "billed once, on the first invoice after its reversal window closed");
@@ -90,34 +94,41 @@ checks += 3;
   const first = invoiceFor(state, "2027-06", wat("2027-07-01T09:00:00"));
   assert.equal(first.data.collectionsCounted, 5);
   assert.deepEqual(pendingAdjustments(state), [], "nothing to adjust right after issue");
+  const reconciled = () => buildOverview(state, wat("2027-07-10T09:00:00")).metrics.find((item) => item.key === "settled")!.value;
+  const reconciledBefore = reconciled();
   reversed.data.reversalStatus = "reversed";
   refunded.data.refundStatus = "refunded";
   makeRecord(state, "exceptions", { name: "dup", status: "resolved", customerId: duplicate.customerId, data: { type: "suspected_duplicate", linkedRecordId: duplicate.id, resolutionCode: "confirmed_duplicate_refund", owner: "Finance", severity: "medium" } });
   supersedeAllocation(state, finance(wat("2027-07-10T09:00:00")), recordsOf(state, "allocations").find((item) => item.data.paymentId === wrong.id)!, "Precision audit: wrong match");
+  assert.equal(reconciled(), reconciledBefore - 7_500_000, "the overview reads the same applied money as billing: the reversed, refunded and wrongly allocated collections leave it");
   const pending = pendingAdjustments(state);
-  assert.deepEqual(pending.map((line) => [line.paymentReference, line.reason, line.kobo]), [["PSK-D", "confirmed_duplicate", -7_500], ["PSK-F", "refund", -7_500], ["PSK-R", "reversal", -7_500], ["PSK-W", "wrong_allocation", -7_500]], "one credit per affected collection, the untouched one is not adjusted");
+  // Each fee was billed at the 2027 design-partner rate, so each credit is the NGN 37.50 charged, not the NGN 75 public fee.
+  // PSK-F's refund was recorded without an amount, as refunds were before refundedKobo existed: it is read as the whole payment.
+  assert.deepEqual(pending.map((line) => [line.paymentReference, line.reason, line.kobo]), [["PSK-D", "confirmed_duplicate", -3_750], ["PSK-F", "refund", -3_750], ["PSK-R", "reversal", -3_750], ["PSK-W", "wrong_allocation", -3_750]], "one credit per affected collection, the untouched one is not adjusted");
   assert.ok(pending.every((line) => line.originalInvoiceId === first.id && line.originalInvoiceReference === first.reference), "every line references the invoice it corrects");
-  assert.match(pending[2]!.explanation, /PSK-R .*reversed by the provider.*credit of NGN 75\.00/);
+  assert.match(pending[2]!.explanation, /PSK-R .*at the 50% design-partner discount.*reversed by the provider.*credit of NGN 37\.50/);
+  assert.deepEqual([pending[2]!.feeDeltaKobo, pending[2]!.discountRate, pending[2]!.billedChargedKobo], [-7_500, 0.5, 3_750], "the line shows the public fee it takes off and the rate it was billed at");
   assert.ok(pending[3]!.allocationIds.length >= 1, "the superseded allocation is referenced");
-  assert.equal(buildReports(state, wat("2027-07-15T09:00:00")).billing.pendingAdjustmentsKobo, -30_000, "the statement shows what the next invoice will carry");
-  checks += 6;
+  assert.equal(buildReports(state, wat("2027-07-15T09:00:00")).billing.pendingAdjustmentsKobo, -15_000, "the statement shows what the next invoice will carry");
+  checks += 8;
 
   const second = invoiceFor(state, "2027-07", wat("2027-08-01T09:00:00"));
   assert.equal(second.data.adjustments.length, 4);
-  assert.equal(second.data.subtotals.adjustmentsKobo, -30_000);
+  assert.equal(second.data.subtotals.adjustmentsKobo, -15_000);
   assert.equal(second.data.collectionsCounted, 0, "no new collections in July");
   assert.equal(second.data.subtotals.licenceKobo, LICENCE);
-  assert.equal(second.data.designPartnerDiscount.kobo, -Math.floor((LICENCE - 30_000) / 2), "the discount applies to the net of licence and adjustments");
+  assert.equal(second.data.designPartnerDiscount.kobo, -LICENCE / 2, "the discount applies to this invoice's licence; the credits already carry the rate they were billed at");
+  assert.equal(second.data.totals.netKobo, LICENCE / 2 - 15_000);
   assert.equal(first.data.adjustments.length, 0, "the first invoice is untouched");
   assert.deepEqual(pendingAdjustments(state), [], "adjustments are billed once");
-  checks += 7;
+  checks += 8;
 
   // A wrong match re-allocated at a higher value is a debit line; re-allocated at the same value there is nothing to adjust.
   wrong.status = "allocated"; wrong.data.allocatedKobo = 4_000_000; wrong.amountKobo = 4_000_000;
   const debit = pendingAdjustments(state);
-  assert.deepEqual(debit.map((line) => [line.paymentReference, line.reason, line.kobo]), [["PSK-W", "re_allocation", 12_000]], "usage on NGN 40,000 is NGN 120, nothing billed net so far");
+  assert.deepEqual(debit.map((line) => [line.paymentReference, line.reason, line.kobo]), [["PSK-W", "re_allocation", 6_000]], "usage on NGN 40,000 is NGN 120, charged at 50% as it was first billed, nothing billed net so far");
   const third = invoiceFor(state, "2027-08", wat("2027-09-01T09:00:00"));
-  assert.equal(third.data.subtotals.adjustmentsKobo, 12_000);
+  assert.equal(third.data.subtotals.adjustmentsKobo, 6_000);
   assert.equal(third.data.adjustments[0].originalInvoiceReference, first.reference, "still references the invoice that first billed the collection");
   assert.deepEqual(pendingAdjustments(state), []);
   void untouched;
@@ -135,6 +146,110 @@ checks += 3;
   assert.equal(note.data.totals.creditNote, true);
   assert.equal(note.amountKobo, 0, "record amounts stay non-negative; the credit is in the totals");
   checks += 4;
+}
+
+// ---------- BIL-04: months are West Africa Time: a collection at 00:30 WAT on 1 January is January's, and so is the default period at 00:30 WAT on 1 February ----------
+{
+  const { state, collection } = fixture("wat-months");
+  collection("PSK-NYE", wat("2027-12-31T23:30:00"));
+  collection("PSK-NY", wat("2028-01-01T00:30:00"));
+  const december = invoiceFor(state, "2027-12", wat("2028-01-09T09:00:00"));
+  assert.deepEqual(december.data.usageLines.map((line: any) => line.paymentReference), ["PSK-NYE"], "the collection at 00:30 WAT on 1 January is not December's");
+  assert.equal(december.data.periodEnd, "2027-12-31T22:59:59.999Z", "December ends at midnight WAT");
+  const january = executeAction(state, finance(wat("2028-02-01T00:30:00")), { action: "issue_invoice", reason: "month end" }).record!;
+  assert.equal(january.data.period, "2028-01", "with no period given, the invoice is for the WAT month that has just ended");
+  assert.deepEqual(january.data.usageLines.map((line: any) => line.paymentReference), ["PSK-NY"]);
+  checks += 4;
+}
+
+// ---------- BIL-07: a correction is priced at the rate of the invoice that first billed the collection ----------
+{
+  const { state, collection } = fixture("adjustment-rates");
+  recordsOf(state, "commercial")[0]!.data.effectiveDate = "2026-01-01";
+  // Billed at the public price in 2026 and reversed in 2027: the whole fee is credited, not half of it.
+  const fullPrice = collection("PSK-2026", wat("2026-12-10T06:20:00"), 10_000_000);
+  const december2026 = invoiceFor(state, "2026-12", wat("2027-01-09T09:00:00"));
+  fullPrice.data.reversalStatus = "reversed";
+  const january2027 = invoiceFor(state, "2027-01", wat("2027-02-01T09:00:00"));
+  assert.deepEqual(january2027.data.adjustments.map((line: any) => [line.paymentReference, line.reason, line.kobo]), [["PSK-2026", "reversal", -15_000]], "the capped NGN 150 fee billed in full is credited in full");
+  assert.equal(january2027.data.totals.netKobo, LICENCE / 2 - 15_000, "the 2027 discount halves the licence, not the credit for a fee billed at the public price");
+  assert.equal(january2027.data.designPartnerDiscount.kobo, -LICENCE / 2);
+  // Billed at half price in 2027 and corrected in 2028: the credit is what was charged, and a debit is charged at the same rate.
+  const reversed = collection("PSK-2027", wat("2027-12-10T06:20:00"), 10_000_000);
+  const raised = collection("PSK-UP", wat("2027-12-11T06:20:00"));
+  const december2027 = invoiceFor(state, "2027-12", wat("2028-01-09T09:00:00"));
+  reversed.data.reversalStatus = "reversed";
+  raised.amountKobo = 4_000_000; raised.data.allocatedKobo = 4_000_000;
+  const january2028 = invoiceFor(state, "2028-01", wat("2028-02-01T09:00:00"));
+  assert.deepEqual(january2028.data.adjustments.map((line: any) => [line.paymentReference, line.reason, line.kobo]), [["PSK-2027", "reversal", -7_500], ["PSK-UP", "re_allocation", 2_250]], "the NGN 75 charged is credited, not the NGN 150 public fee; the increase is debited at 50% (NGN 60 less the NGN 37.50 charged)");
+  assert.equal(january2028.data.totals.netKobo, LICENCE - 7_500 + 2_250, "2028 is at the public price, and nothing discounts the corrections again");
+  assert.equal(january2028.data.designPartnerDiscount.kobo, 0);
+  // Each line records the rate it was billed at, the public fee, what it charged, and the fee change a correction carries.
+  assert.deepEqual([december2026.data.usageLines[0].feeKobo, december2026.data.usageLines[0].discountRate, december2026.data.usageLines[0].chargedKobo], [15_000, 0, 15_000]);
+  assert.deepEqual(december2027.data.usageLines.map((line: any) => [line.paymentReference, line.feeKobo, line.discountRate, line.chargedKobo]), [["PSK-2027", 15_000, 0.5, 7_500], ["PSK-UP", 7_500, 0.5, 3_750]]);
+  assert.deepEqual(january2028.data.adjustments.map((line: any) => [line.feeDeltaKobo, line.discountRate, line.billedChargedKobo]), [[-15_000, 0.5, 7_500], [4_500, 0.5, 3_750]]);
+  assert.match(january2028.data.adjustments[0].explanation, /billed NGN 75\.00 on INV-2027-12-003 at the 50% design-partner discount\) was reversed by the provider after it was billed; credit of NGN 75\.00\./);
+  assert.match(january2028.data.designPartnerDiscount.note, /Adjustment lines carry the rate of the invoice that first billed each collection/);
+  assert.deepEqual(pendingAdjustments(state), [], "each correction is billed once");
+  checks += 12;
+}
+{
+  // Invoices issued before each line kept its rate: usage lines carry only the public fee, an adjustment line
+  // only the public-price change, and the invoice's 50% discount applied to all of them. A credit returns what was charged.
+  const { state, collection } = fixture("legacy-invoices");
+  const whole = collection("PSK-LEG-A", wat("2027-04-10T06:20:00"), 10_000_000);
+  const cut = collection("PSK-LEG-B", wat("2027-04-11T06:20:00"));
+  const legacyInvoice = (period: string, data: Record<string, unknown>) => makeRecord(state, "invoices", { name: `Invoice ${period}`, status: "issued", reference: `INV-${period}-001`, createdAt: wat(`${period}-28T09:00:00`), data: { period, issuedAt: wat(`${period}-28T09:00:00`), usageLines: [], adjustments: [], designPartnerDiscount: { rate: 0.5, kobo: 0, note: "Design-partner discount of 50% in 2027." }, ...data } });
+  const april = legacyInvoice("2027-04", { usageLines: [whole, cut].map((payment) => ({ paymentId: payment.id, paymentReference: payment.reference, allocatedKobo: payment.amountKobo, feeKobo: payment.amountKobo === 10_000_000 ? 15_000 : 7_500 })) });
+  // PSK-LEG-B's allocation fell to NGN 10,000 in May: the old line carried the public-price change of NGN 45, which the invoice then halved.
+  legacyInvoice("2027-05", { adjustments: [{ reason: "wrong_allocation", paymentId: cut.id, paymentReference: cut.reference, originalInvoiceId: april.id, originalInvoiceReference: april.reference, kobo: -4_500, billedFeeKobo: 7_500, currentFeeKobo: 3_000, billedAllocatedKobo: 2_500_000, currentAllocatedKobo: 1_000_000, allocationIds: [], explanation: "legacy" }] });
+  whole.data.reversalStatus = "reversed"; cut.data.reversalStatus = "reversed";
+  assert.deepEqual(pendingAdjustments(state).map((line) => [line.paymentReference, line.reason, line.kobo, line.discountRate, line.billedChargedKobo, line.billedFeeKobo]),
+    [["PSK-LEG-A", "reversal", -7_500, 0.5, 7_500, 15_000], ["PSK-LEG-B", "reversal", -1_500, 0.5, 1_500, 3_000]],
+    "the capped fee charged at half is credited as NGN 75; the NGN 37.50 charged less the NGN 22.50 already credited leaves NGN 15");
+  const june = invoiceFor(state, "2027-06", wat("2027-07-01T09:00:00"));
+  assert.equal(june.data.totals.netKobo, LICENCE / 2 - 9_000, "the credits are not discounted again");
+  checks += 2;
+}
+
+// ---------- BIL-01 and BIL-07: a refund returns what the payment had not applied, so the fee on the money that stayed still stands ----------
+{
+  const { state, collection } = fixture("refund-excess");
+  /** A NGN 30,000 direct debit with NGN 25,000 applied to its instalment and NGN 5,000 of excess. */
+  const overpaid = (reference: string, observedAt: string) => {
+    const payment = collection(reference, observedAt, 3_000_000);
+    payment.status = "overpaid"; payment.data.allocatedKobo = 2_500_000;
+    recordsOf(state, "allocations").find((item) => item.data.paymentId === payment.id)!.amountKobo = 2_500_000;
+    return payment;
+  };
+  const refund = (payment: ValopayRecord, now: string) => executeAction(state, finance(now), { action: "record_refund", recordId: payment.id, reason: "Excess returned to the payer", data: { reference: `RF-${payment.reference}` } });
+  const over = overpaid("PSK-OVER", wat("2027-06-10T06:20:00"));
+  const june = invoiceFor(state, "2027-06", wat("2027-07-01T09:00:00"));
+  assert.deepEqual(june.data.usageLines.map((line: any) => [line.paymentReference, line.allocatedKobo, line.feeKobo]), [["PSK-OVER", 2_500_000, 7_500]]);
+  refund(over, wat("2027-07-03T11:00:00"));
+  assert.deepEqual(pendingAdjustments(state), [], "the NGN 25,000 that stayed on its instalment is still billed, so nothing is credited");
+  // Refunded before it was invoiced: the collection is billed on the money that stayed.
+  const early = overpaid("PSK-EARLY", wat("2027-07-05T06:20:00"));
+  refund(early, wat("2027-07-06T10:00:00"));
+  const july = invoiceFor(state, "2027-07", wat("2027-08-01T09:00:00"));
+  assert.deepEqual(july.data.usageLines.map((line: any) => [line.paymentReference, line.allocatedKobo, line.feeKobo]), [["PSK-EARLY", 2_500_000, 7_500]], "a refunded excess does not make the collection unbillable");
+  assert.equal(july.data.adjustments.length, 0);
+  assert.deepEqual([over.data.refundedKobo, early.data.refundedKobo], [500_000, 500_000], "each refund records what went back");
+  checks += 5;
+}
+
+// ---------- BIL-01: a direct debit whose settlement line arrived without its webhook succeeded, so it is withheld inside its window and then billed ----------
+{
+  const { state, collection } = fixture("settled-only");
+  const settled = collection("PSK-SETTLED", wat("2027-06-28T06:20:00"));
+  settled.data.collectionStatus = "received"; // stored before a settlement line set it to succeeded
+  state.settings.billingPeriod = "2027-06";
+  assert.equal(buildReports(state, wat("2027-06-30T09:00:00")).billing.withheldInsideReversalWindow, 1, "inside its reversal window it is withheld, not lost");
+  const july = invoiceFor(state, "2027-07", wat("2027-08-01T09:00:00"));
+  assert.deepEqual(july.data.usageLines.map((line: any) => line.paymentReference), ["PSK-SETTLED"], "billed once its window has passed");
+  settled.data.collectionStatus = "failed";
+  assert.equal(buildReports(state, wat("2027-06-30T09:00:00")).billing.withheldInsideReversalWindow, 0, "a failed collection is never billed, whatever its settlement says");
+  checks += 3;
 }
 
 // ---------- BIL-03: the recovery fee is billed only after the 30-day window closes, engine arm only, and only when the gate is open ----------
@@ -159,4 +274,4 @@ checks += 3;
   checks += 8;
 }
 
-console.log(`Billing golden tests passed (${checks} checks): invoice lines, VAT, period rules, withheld collections, adjustment credits and debits with references, credit note, recovery fee gate and window.`);
+console.log(`Billing golden tests passed (${checks} checks): invoice lines, VAT, WAT months and period rules, withheld collections, adjustment credits and debits with references at the rate first billed, refunds of unapplied money, debits settled without a webhook, credit note, recovery fee gate and window.`);

@@ -104,6 +104,18 @@ const finance = (now: string) => ctxAt(now, "Finance");
   assert.equal(buildReports(state, now).operational.liveDays, 70);
   checks += 7;
 }
+{
+  // Month ends are West Africa Time: a close at 00:30 WAT on 1 August (23:30 UTC on 31 July) is August's, not July's.
+  const state = seedMerchant("test5-wat");
+  const close = (at: string, openAtClose: number, overdueAtClose: number) => makeRecord(state, "closes" as string, { name: "Daily close", status: "completed", createdAt: at, data: { closedAt: at, report: { exceptions: { openAtClose, overdueAtClose } } } });
+  const julyLast = close(wat("2027-07-31T23:30:00"), 4, 1);
+  const augustFirst = close(wat("2027-08-01T00:30:00"), 5, 5);
+  // 00:30 WAT on 1 September is still 31 August in UTC, yet August has ended.
+  const rows = test5Report(state, wat("2027-09-01T00:30:00")).overdueShareAtMonthEnds;
+  assert.deepEqual(rows.map((row: any) => [row.month, row.closeId, row.share]), [["2027-07", julyLast.id, 0.25], ["2027-08", augustFirst.id, 1]], "July ends with its 23:30 WAT close; the 00:30 WAT close on the 1st counts toward August");
+  assert.deepEqual(test5Report(state, wat("2027-08-31T23:30:00")).overdueShareAtMonthEnds.map((row: any) => row.month), ["2027-07"], "August is still open until 00:00 WAT on 1 September");
+  checks += 2;
+}
 
 // ---------- MEA-03: unit economics against the plan ----------
 {

@@ -98,17 +98,45 @@ export function normaliseRefundStatus(raw: unknown): (typeof refundStatuses)[num
   return "none";
 }
 /**
- * Money that went back to the payer: a provider reversal, or a refund
- * recorded outside Valo Pay. What such a payment has not already applied is
- * neither allocatable nor customer credit, and it is nobody's open work.
+ * All of a payment's money went back to the payer: a provider reversal, or a
+ * refund recorded outside Valo Pay that returned the whole amount. A refund
+ * recorded before its amount was kept is read as the whole payment. What such
+ * a payment has not already applied is neither allocatable nor customer
+ * credit, and it is nobody's open work. A refund of part of it, such as an
+ * overpayment's excess, leaves the rest with the lender.
  */
-export function paymentMoneyReturned(data: { reversalStatus?: unknown; refundStatus?: unknown } | null | undefined): boolean {
-  return normaliseReversalStatus(data?.reversalStatus) === "reversed" || normaliseRefundStatus(data?.refundStatus) === "refunded";
+export function paymentMoneyReturned(payment: { amountKobo?: unknown; data?: { reversalStatus?: unknown; refundStatus?: unknown; refundedKobo?: unknown } | null } | null | undefined): boolean {
+  if (!payment) return false;
+  if (normaliseReversalStatus(payment.data?.reversalStatus) === "reversed") return true;
+  return normaliseRefundStatus(payment.data?.refundStatus) === "refunded" && paymentRefundedKobo(payment) >= Number(payment.amountKobo || 0);
 }
-/** What a payment still holds that is not applied to an instalment: the customer's credit, and what Finance may allocate. */
-export function paymentUnappliedKobo(payment: { amountKobo?: unknown; data?: { allocatedKobo?: unknown; reversalStatus?: unknown; refundStatus?: unknown } | null } | null | undefined): number {
-  if (!payment || paymentMoneyReturned(payment.data)) return 0;
-  return Math.max(0, Number(payment.amountKobo || 0) - Number(payment.data?.allocatedKobo || 0));
+/**
+ * What a payment still holds that is not applied to an instalment: the
+ * customer's credit, and what Finance may allocate. What a refund returned is
+ * not held, so after a refund of an overpayment's excess only the money that
+ * stayed can be applied again if its allocation is superseded.
+ */
+export function paymentUnappliedKobo(payment: { amountKobo?: unknown; data?: { allocatedKobo?: unknown; reversalStatus?: unknown; refundStatus?: unknown; refundedKobo?: unknown } | null } | null | undefined): number {
+  if (!payment || paymentMoneyReturned(payment)) return 0;
+  return Math.max(0, Number(payment.amountKobo || 0) - Number(payment.data?.allocatedKobo || 0) - paymentRefundedKobo(payment));
+}
+/**
+ * What a refund returned to the payer: data.refundedKobo as recorded, or the
+ * whole payment for a refund recorded before the amount was kept.
+ */
+export function paymentRefundedKobo(payment: { amountKobo?: unknown; data?: { refundStatus?: unknown; refundedKobo?: unknown } | null } | null | undefined): number {
+  if (!payment || normaliseRefundStatus(payment.data?.refundStatus) !== "refunded") return 0;
+  const recorded = payment.data?.refundedKobo;
+  return typeof recorded === "number" && Number.isSafeInteger(recorded) && recorded >= 0 ? recorded : Number(payment.amountKobo || 0);
+}
+/**
+ * The applied money that stands: what a payment applied to instalments, less
+ * whatever of it a refund returned, and nothing once the payment was reversed.
+ * Billing, the uplift report and the overview read collections through this.
+ */
+export function paymentAppliedKobo(payment: { amountKobo?: unknown; data?: { allocatedKobo?: unknown; reversalStatus?: unknown; refundStatus?: unknown; refundedKobo?: unknown } | null } | null | undefined): number {
+  if (!payment || normaliseReversalStatus(payment.data?.reversalStatus) === "reversed") return 0;
+  return Math.max(0, Math.min(Number(payment.data?.allocatedKobo || 0), Number(payment.amountKobo || 0) - paymentRefundedKobo(payment)));
 }
 
 /** Why a customer message was sent. */

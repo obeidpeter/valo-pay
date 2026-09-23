@@ -30,8 +30,10 @@ export const HealthCheckResponse = zod.object({
   "examined": zod.number().int(),
   "closed": zod.number().int(),
   "skipped": zod.number().int(),
-  "failed": zod.number().int()
-}).describe('The last scheduler pass that found work: its id, when it ran, how long it took and what it did.'),zod.null()]),
+  "failed": zod.number().int(),
+  "paused": zod.number().int().optional(),
+  "batches": zod.number().int().optional()
+}).describe('The last scheduler pass that found work: its id, when it ran, how long it took, how many batches it read and what it did, including idle sandboxes whose automatic close it paused.'),zod.null()]),
   "lastSuccessAt": zod.string().nullish(),
   "lastErrorAt": zod.string().nullish()
 }).describe('Whether closes are scheduled in this process, how often it looks, when it last looked and its last pass with work.')
@@ -160,8 +162,11 @@ export const GetOverviewResponse = zod.object({
   "lastAt": zod.string().nullable(),
   "lastTrigger": zod.string().nullable(),
   "lastCheckedAt": zod.string().nullable(),
-  "lastErrorAt": zod.string().nullable()
-}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.')
+  "lastErrorAt": zod.string().nullable(),
+  "failedAttempts": zod.number().int().optional(),
+  "retryAt": zod.string().nullish(),
+  "pausedForInactivityAt": zod.string().nullish()
+}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender. failedAttempts and retryAt describe failed automatic attempts at the pending time (retryAt only while automatic closes are available); pausedForInactivityAt says when the scheduler switched off the automatic close of a sandbox nobody changed. Answers from earlier builds may lack these three fields.')
 }).describe('The overview: metrics, queues, recent activity, upcoming due items, the close schedule and the alerts.')
 
 
@@ -587,8 +592,11 @@ export const GetSettingsResponse = zod.object({
   "lastAt": zod.string().nullable(),
   "lastTrigger": zod.string().nullable(),
   "lastCheckedAt": zod.string().nullable(),
-  "lastErrorAt": zod.string().nullable()
-}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.'),
+  "lastErrorAt": zod.string().nullable(),
+  "failedAttempts": zod.number().int().optional(),
+  "retryAt": zod.string().nullish(),
+  "pausedForInactivityAt": zod.string().nullish()
+}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender. failedAttempts and retryAt describe failed automatic attempts at the pending time (retryAt only while automatic closes are available); pausedForInactivityAt says when the scheduler switched off the automatic close of a sandbox nobody changed. Answers from earlier builds may lack these three fields.'),
   "revision": zod.string().optional()
 }).describe('A lender\'s settings and the caller\'s permissions, with integrations, members and the business calendar.')
 
@@ -684,8 +692,11 @@ export const UpdateSettingsResponse = zod.object({
   "lastAt": zod.string().nullable(),
   "lastTrigger": zod.string().nullable(),
   "lastCheckedAt": zod.string().nullable(),
-  "lastErrorAt": zod.string().nullable()
-}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.'),
+  "lastErrorAt": zod.string().nullable(),
+  "failedAttempts": zod.number().int().optional(),
+  "retryAt": zod.string().nullish(),
+  "pausedForInactivityAt": zod.string().nullish()
+}).optional().describe('Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender. failedAttempts and retryAt describe failed automatic attempts at the pending time (retryAt only while automatic closes are available); pausedForInactivityAt says when the scheduler switched off the automatic close of a sandbox nobody changed. Answers from earlier builds may lack these three fields.'),
   "revision": zod.string().optional()
 }).describe('A lender\'s settings and the caller\'s permissions, with integrations, members and the business calendar.')
 
@@ -821,11 +832,11 @@ export const GetOpenApiDocumentResponse = zod.record(zod.string(), zod.unknown()
 
 
 /**
- * Always 403: no provider adapter is configured and no event is processed.
- * @summary Provider webhook ingress, disabled in the sandbox
+ * Always 403: no event is processed here. Paystack test events go to POST /v1/providers/paystack/{connectionId}/events.
+ * @summary Generic provider webhook address, always refused
  */
 export const DisabledProviderWebhookParams = zod.object({
-  "provider": zod.coerce.string().describe('Provider name; every provider\'s ingress is disabled in the sandbox.')
+  "provider": zod.coerce.string().describe('Provider name; this generic address refuses every provider (the Paystack test ingress has its own address).')
 })
 
 export const DisabledProviderWebhookResponse = zod.void()
@@ -1393,7 +1404,7 @@ export const GetPilotJourneyResponse = zod.object({
 
 
 /**
- * Administrator with recent MFA on a staff host. The key makes creation repeatable; the same key with different details is refused.
+ * An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused.
  * @summary Create a synthetic lender
  */
 export const createPilotLenderHeaderIdempotencyKeyMin = 8;
@@ -1413,7 +1424,7 @@ export const createPilotLenderBodyNameMax = 100;
 export const CreatePilotLenderBody = zod.object({
   "name": zod.string().min(createPilotLenderBodyNameMin).max(createPilotLenderBodyNameMax),
   "segment": zod.enum(['Consumer lending', 'Cooperative', 'Asset finance', 'Business finance'])
-}).describe('A new synthetic lender for a staff workspace: name and segment.')
+}).describe('A new synthetic lender: name and segment. A sandbox workspace holds at most five lenders, the two samples included.')
 
 export const CreatePilotLenderResponse = zod.object({
   "id": zod.string(),
@@ -1460,7 +1471,7 @@ export const ListImportBatchesResponse = zod.object({
 }).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
   "total": zod.number().int(),
   "offset": zod.number().int()
-}).describe('Import batches newest first, 25 a page, with their source identity, quality totals and check counts but not their rows.')
+}).describe('Import batches newest first, 25 a page, with their source identity, quality totals and check counts but not their rows. A batch saved before check summaries were stored is listed without check counts while the key service cannot open its check.')
 
 
 /**
@@ -3052,6 +3063,35 @@ export const ReplayProviderEventResponse = zod.object({
   "replayCount": zod.number().int(),
   "financialRecordsCreated": zod.literal(0)
 }).describe('A stored provider event: fixture or test mode, how often it was delivered and replayed, and the guarantee that it created no financial record.')
+
+
+/**
+ * The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key, and at most 120 deliveries a minute per client address.
+ * @summary Receive a signed Paystack test event
+ */
+export const receivePaystackTestEventPathConnectionIdRegExp = new RegExp('^[a-f0-9]{64}$');
+
+
+export const ReceivePaystackTestEventParams = zod.object({
+  "connectionId": zod.coerce.string().regex(receivePaystackTestEventPathConnectionIdRegExp).describe('The opaque ID an operator mapped to one synthetic lender in VALOPAY_PAYSTACK_CONNECTIONS; it alone selects the lender, and it is not a credential.')
+})
+
+export const receivePaystackTestEventHeaderXPaystackSignatureRegExp = new RegExp('^[a-fA-F0-9]{128}$');
+
+
+export const ReceivePaystackTestEventHeader = zod.object({
+  "x-paystack-signature": zod.string().regex(receivePaystackTestEventHeaderXPaystackSignatureRegExp).describe('HMAC-SHA512 of the exact request bytes under the configured test secret key, in hexadecimal.')
+})
+
+export const ReceivePaystackTestEventBody = zod.object({
+  "event": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('The event\'s payload as Paystack sent it.')
+}).describe('A Paystack test event exactly as Paystack signed it. The signature covers these bytes, so the body is authenticated before it is parsed. charge.success and the two direct-debit authorisation events are recorded; any other signed event is acknowledged and recorded as ignored.')
+
+export const ReceivePaystackTestEventResponse = zod.object({
+  "accepted": zod.literal(true),
+  "duplicate": zod.boolean()
+}).describe('The acknowledgement Paystack receives: the signed event is saved in the mapped lender\'s inbox, or recognised as a repeat delivery of one already saved.')
 
 
 /**

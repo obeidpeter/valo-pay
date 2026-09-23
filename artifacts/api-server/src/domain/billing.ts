@@ -8,26 +8,34 @@
 import {
   counted,
   DEFAULT_REVERSAL_WINDOW_DAYS, DEFAULT_VAT_BPS, DESIGN_PARTNER_DISCOUNT, DESIGN_PARTNER_DISCOUNT_YEAR, RECOVERY_FEE_KOBO, USAGE_FEE_BPS, USAGE_FEE_CAP_KOBO,
-  billableChannels, experimentRules, isBillableChannel, licenceTierFor, usageFeeKobo, vatKobo, type AdjustmentReason,
+  billableChannels, experimentRules, isBillableChannel, isKobo, licenceTierFor, nairaText, paymentAppliedKobo, usageFeeKobo, vatKobo, type AdjustmentReason,
 } from "@workspace/valopay-schema";
 import { makeRecord, recordsOf } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { paymentObservedAt, paymentRefunded, paymentReversed } from "./reconciliation";
 import { attemptTime } from "./policy-engine";
+import { watMonth, watMonthStart } from "./calendar";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-export const monthOf = (value: string): string => value.slice(0, 7);
-const naira = (kobo: number): string => `NGN ${(kobo / 100).toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/** The billing month (YYYY-MM) of an instant: calendar months are counted in West Africa Time. */
+export const monthOf = (value: string): string => watMonth(value);
 
-/** The calendar month before the one containing `now`, the default invoice period. */
+/** The WAT calendar month before the one containing `now`, the default invoice period. */
 export function previousMonth(now: string): string {
-  const current = new Date(now);
-  return new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), 1) - DAY_MS).toISOString().slice(0, 7);
+  return watMonth(watMonthStart(watMonth(now)) - 1);
 }
-/** Last instant of a YYYY-MM period. */
+/** Last instant of a YYYY-MM period: one millisecond before midnight WAT on the next month's 1st. */
 export function periodEnd(period: string): string {
+  return new Date(watMonthStart(nextPeriodAfter(period)) - 1).toISOString();
+}
+/** A YYYY-MM period as ISO instants: its WAT start, and the next month's start, which it excludes. */
+export function periodBounds(period: string): { start: string; end: string } {
+  return { start: new Date(watMonthStart(period)).toISOString(), end: new Date(watMonthStart(nextPeriodAfter(period))).toISOString() };
+}
+/** The month after a YYYY-MM period. */
+export function nextPeriodAfter(period: string): string {
   const [year, month] = period.split("-").map(Number);
-  return new Date(Date.UTC(year!, month!, 1) - 1).toISOString();
+  return new Date(Date.UTC(year!, month!, 1)).toISOString().slice(0, 7);
 }
 
 /** BIL-01: the provider's own reversal window when configured, else the merchant's, else the plan's seven days. */
@@ -41,16 +49,27 @@ export function reversalWindowDays(state: DomainState, provider: unknown): numbe
 }
 
 /**
+ * A direct debit was collected when its webhook said so or a settlement line
+ * paid it out, unless the provider reported it failed. The settlement test
+ * also covers debits stored as "received" before a settlement line set them.
+ */
+export function collectionSucceeded(payment: TypedRecord<"payments">): boolean {
+  if (payment.data.collectionStatus === "succeeded") return true;
+  return isBillableChannel(payment.data.channel) && payment.data.settlementStatus === "settled" && payment.data.collectionStatus !== "failed";
+}
+
+/**
  * BIL-01: a collection is billable when its attempt succeeded (a direct debit
- * the platform observed), the Payment is settled and allocated, carries no
- * reversal or refund at the invoice date, and the provider's reversal window
- * has passed.  Transfers, card receipts and statement credits are reconciled
- * and reported, never billed as collections.
+ * the platform observed by webhook or settlement line), the Payment is settled
+ * and allocated, still has applied money that no reversal or refund took back
+ * at the invoice date, and the provider's reversal window has passed.
+ * Transfers, card receipts and statement credits are reconciled and reported,
+ * never billed as collections.
  */
 export function billableCollection(state: DomainState, payment: TypedRecord<"payments">, now: string, checkWindow = true): boolean {
-  if (!isBillableChannel(payment.data.channel) || payment.data.collectionStatus !== "succeeded") return false;
+  if (!isBillableChannel(payment.data.channel) || !collectionSucceeded(payment)) return false;
   if (!["allocated", "overpaid", "partial"].includes(payment.status) || payment.data.settlementStatus !== "settled") return false;
-  if (paymentReversed(payment) || paymentRefunded(payment)) return false;
+  if (paymentReversed(payment) || paymentAppliedKobo(payment) <= 0) return false;
   return !checkWindow || Date.parse(now) - paymentObservedAt(payment) >= reversalWindowDays(state, payment.data.providerConnection || state.merchant.provider) * DAY_MS;
 }
 
@@ -66,31 +85,56 @@ function confirmedDuplicate(state: DomainState, payment: TypedRecord<"payments">
   return payment.status === "possible_duplicate" || recordsOf(state, "exceptions").some((item) => item.data.linkedRecordId === payment.id && item.data.type === "suspected_duplicate" && item.data.resolutionCode === "confirmed_duplicate_refund");
 }
 
-/** What a collection that was already billed is worth today: its usage fee, or nothing with the reason it is no longer billable. */
+/**
+ * What a collection that was already billed is worth today: the usage fee on
+ * its applied money that stands, or nothing with the reason it is no longer
+ * billable. A refund of money the payment never applied, such as an
+ * overpayment's excess, changes nothing.
+ */
 export function collectionFeeNow(state: DomainState, payment: TypedRecord<"payments">): { feeKobo: number; allocatedKobo: number; reason: AdjustmentReason | null } {
-  const allocatedKobo = Number(payment.data.allocatedKobo || 0);
+  const allocatedKobo = paymentAppliedKobo(payment);
   if (paymentReversed(payment)) return { feeKobo: 0, allocatedKobo, reason: "reversal" };
-  if (paymentRefunded(payment)) return { feeKobo: 0, allocatedKobo, reason: "refund" };
+  const refundTookApplied = paymentRefunded(payment) && allocatedKobo < Number(payment.data.allocatedKobo || 0);
+  if (refundTookApplied && allocatedKobo <= 0) return { feeKobo: 0, allocatedKobo, reason: "refund" };
   if (confirmedDuplicate(state, payment)) return { feeKobo: 0, allocatedKobo, reason: "confirmed_duplicate" };
   // The reversal window was already respected when the collection was first billed.
   if (!billableCollection(state, payment, payment.updatedAt, false) || allocatedKobo <= 0) return { feeKobo: 0, allocatedKobo, reason: "wrong_allocation" };
-  return { feeKobo: usageFeeKobo(allocatedKobo), allocatedKobo, reason: null };
+  return { feeKobo: usageFeeKobo(allocatedKobo), allocatedKobo, reason: refundTookApplied ? "refund" : null };
 }
 
-interface LedgerEntry { netFeeKobo: number; allocatedKobo: number; originalInvoiceId: string; originalInvoiceReference: string; invoiceIds: string[] }
+/** What a line charges after a design-partner discount of `rate` (the share taken off), in whole basis points, rounded down in the lender's favour. */
+export const chargedAtRate = (kobo: number, rate: number): number => Math.floor((kobo * (10_000 - Math.round(rate * 10_000))) / 10_000);
+/** A stored discount rate, or the fallback when it is missing or out of range. */
+const rateOf = (value: unknown, fallback: number): number => typeof value === "number" && value >= 0 && value <= 1 ? value : fallback;
 
-/** Net usage fee billed so far per collection across every issued invoice: usage lines plus later adjustment lines. */
+interface LedgerEntry { netFeeKobo: number; netChargedKobo: number; discountRate: number; allocatedKobo: number; originalInvoiceId: string; originalInvoiceReference: string; invoiceIds: string[] }
+
+/**
+ * What each collection has been billed so far across every issued invoice:
+ * the net public-price fee, the net amount charged, and the design-partner
+ * rate of the invoice that first billed it, from its usage line and any later
+ * adjustment lines. Lines issued before the rate and charge were kept on each
+ * line take their invoice's rate.
+ */
 export function billedLedger(state: DomainState): Map<string, LedgerEntry> {
   const ledger = new Map<string, LedgerEntry>();
   for (const invoice of issuedInvoices(state)) {
-    for (const line of (invoice.data.usageLines || []) as Array<{ paymentId: string; feeKobo: number; allocatedKobo: number }>) {
-      const entry = ledger.get(line.paymentId) ?? { netFeeKobo: 0, allocatedKobo: 0, originalInvoiceId: invoice.id, originalInvoiceReference: invoice.reference, invoiceIds: [] };
-      entry.netFeeKobo += Number(line.feeKobo || 0); entry.allocatedKobo = Number(line.allocatedKobo || 0); entry.invoiceIds.push(invoice.id);
+    const invoiceRate = rateOf(invoice.data.designPartnerDiscount?.rate, 0);
+    const entryFor = (paymentId: string, discountRate: number): LedgerEntry => ledger.get(paymentId) ?? { netFeeKobo: 0, netChargedKobo: 0, discountRate, allocatedKobo: 0, originalInvoiceId: invoice.id, originalInvoiceReference: invoice.reference, invoiceIds: [] };
+    for (const line of (invoice.data.usageLines || []) as Array<{ paymentId: string; feeKobo: number; allocatedKobo: number; discountRate?: number; chargedKobo?: number }>) {
+      const rate = rateOf(line.discountRate, invoiceRate), feeKobo = Number(line.feeKobo || 0);
+      const entry = entryFor(line.paymentId, rate);
+      entry.netFeeKobo += feeKobo; entry.netChargedKobo += isKobo(line.chargedKobo) ? line.chargedKobo : chargedAtRate(feeKobo, rate);
+      entry.allocatedKobo = Number(line.allocatedKobo || 0); entry.invoiceIds.push(invoice.id);
       ledger.set(line.paymentId, entry);
     }
-    for (const line of (invoice.data.adjustments || []) as Array<{ paymentId: string; kobo: number; currentAllocatedKobo?: number }>) {
-      const entry = ledger.get(line.paymentId) ?? { netFeeKobo: 0, allocatedKobo: 0, originalInvoiceId: invoice.id, originalInvoiceReference: invoice.reference, invoiceIds: [] };
-      entry.netFeeKobo += Number(line.kobo || 0); if (line.currentAllocatedKobo !== undefined) entry.allocatedKobo = Number(line.currentAllocatedKobo); entry.invoiceIds.push(invoice.id);
+    for (const line of (invoice.data.adjustments || []) as Array<{ paymentId: string; kobo: number; feeDeltaKobo?: number; currentAllocatedKobo?: number }>) {
+      const entry = entryFor(line.paymentId, invoiceRate), kobo = Number(line.kobo || 0);
+      if (line.feeDeltaKobo !== undefined) { entry.netFeeKobo += Number(line.feeDeltaKobo); entry.netChargedKobo += kobo; }
+      // An earlier line carried the public-price change, and its invoice's discount applied to it with everything else.
+      else { entry.netFeeKobo += kobo; entry.netChargedKobo += kobo - Math.trunc(kobo * invoiceRate); }
+      if (line.currentAllocatedKobo !== undefined) entry.allocatedKobo = Number(line.currentAllocatedKobo);
+      entry.invoiceIds.push(invoice.id);
       ledger.set(line.paymentId, entry);
     }
   }
@@ -113,8 +157,14 @@ export interface AdjustmentLine {
   paymentReference: string;
   originalInvoiceId: string;
   originalInvoiceReference: string;
-  /** Negative for a credit, positive for a debit. */
+  /** What this invoice carries, priced at the rate of the invoice that first billed the collection: negative for a credit, positive for a debit. */
   kobo: number;
+  /** The change in the public-price fee. */
+  feeDeltaKobo: number;
+  /** The design-partner share taken off when the collection was first billed. */
+  discountRate: number;
+  /** What the collection had been charged net before this line. */
+  billedChargedKobo: number;
   billedFeeKobo: number;
   currentFeeKobo: number;
   billedAllocatedKobo: number;
@@ -133,10 +183,12 @@ const reasonText: Record<AdjustmentReason, string> = {
 
 /**
  * BIL-07: for every collection billed on an issued invoice, the difference
- * between what it is worth today and what has been billed net so far.  A
+ * between what it is worth today and what has been charged net so far.  A
  * reversal, refund, confirmed duplicate or superseded allocation credits the
- * fee; a re-allocation at a higher value debits the difference.  Computed from
- * the ledger, so it is idempotent and never touches an issued invoice.
+ * fee; a re-allocation at a higher value debits the difference.  Both are
+ * priced at the rate of the invoice that first billed the collection, so a
+ * credit returns what was charged.  Computed from the ledger, so it is
+ * idempotent and never touches an issued invoice.
  */
 export function pendingAdjustments(state: DomainState): AdjustmentLine[] {
   const lines: AdjustmentLine[] = [];
@@ -145,14 +197,16 @@ export function pendingAdjustments(state: DomainState): AdjustmentLine[] {
     const payment = payments.get(paymentId);
     if (!payment) continue;
     const fee = collectionFeeNow(state, payment);
-    const kobo = fee.feeKobo - entry.netFeeKobo;
+    const kobo = chargedAtRate(fee.feeKobo, entry.discountRate) - entry.netChargedKobo;
     if (kobo === 0) continue;
     const reason: AdjustmentReason = kobo > 0 ? "re_allocation" : (fee.reason ?? "wrong_allocation");
+    const discount = entry.discountRate > 0 ? ` at the ${Math.round(entry.discountRate * 100)}% design-partner discount` : "";
     lines.push({
       reason, paymentId, paymentReference: payment.reference, originalInvoiceId: entry.originalInvoiceId, originalInvoiceReference: entry.originalInvoiceReference, kobo,
+      feeDeltaKobo: fee.feeKobo - entry.netFeeKobo, discountRate: entry.discountRate, billedChargedKobo: entry.netChargedKobo,
       billedFeeKobo: entry.netFeeKobo, currentFeeKobo: fee.feeKobo, billedAllocatedKobo: entry.allocatedKobo, currentAllocatedKobo: fee.allocatedKobo,
       allocationIds: recordsOf(state, "allocations").filter((item) => item.data.paymentId === paymentId).map((item) => item.id),
-      explanation: `Collection ${payment.reference} (${naira(entry.allocatedKobo)} billed ${naira(entry.netFeeKobo)} on ${entry.originalInvoiceReference}) ${reasonText[reason]}; ${kobo < 0 ? "credit" : "debit"} of ${naira(Math.abs(kobo))}.`,
+      explanation: `Collection ${payment.reference} (${nairaText(entry.allocatedKobo)} billed ${nairaText(entry.netChargedKobo)} on ${entry.originalInvoiceReference}${discount}) ${reasonText[reason]}; ${kobo < 0 ? "credit" : "debit"} of ${nairaText(Math.abs(kobo))}.`,
     });
   }
   return lines.sort((a, b) => a.paymentReference.localeCompare(b.paymentReference));
@@ -180,9 +234,10 @@ export function recoveryFeeLines(state: DomainState, period: string) {
 
 /** The signed design-partner terms that price this merchant, if any; prospects are evidence, not subscriptions. */
 function signedTerms(state: DomainState, period: string): TypedRecord<"commercial"> | undefined {
-  return recordsOf(state, "commercial").find((item) => item.name === state.merchant.name && item.data.designPartner === true && item.data.signed && String(item.data.effectiveDate || "").slice(0, 7) <= period);
+  return recordsOf(state, "commercial").find((item) => item.name === state.merchant.name && item.data.designPartner === true && item.data.signed && monthOf(String(item.data.effectiveDate || "")) <= period);
 }
-const designDiscountFor = (terms: TypedRecord<"commercial"> | undefined, period: string): number => terms?.data.designPartner === true && period.startsWith(DESIGN_PARTNER_DISCOUNT_YEAR) ? DESIGN_PARTNER_DISCOUNT : 1;
+/** The design-partner share taken off a period's licence and usage: half in the discount year, nothing otherwise. */
+const discountRateFor = (terms: TypedRecord<"commercial"> | undefined, period: string): number => terms?.data.designPartner === true && period.startsWith(DESIGN_PARTNER_DISCOUNT_YEAR) ? 1 - DESIGN_PARTNER_DISCOUNT : 0;
 
 /** The monthly statement for the console and the billing export: what the period's receipts are worth and what the next invoice will carry. */
 export function buildBillingStatement(state: DomainState, now: string): Record<string, any> {
@@ -191,23 +246,23 @@ export function buildBillingStatement(state: DomainState, now: string): Record<s
   const terms = signedTerms(state, period);
   const inPeriod = payments.filter((item) => monthOf(String(item.data.observedAt || item.createdAt)) === period);
   const billablePayments = inPeriod.filter((item) => billableCollection(state, item, now));
-  const usageBase = billablePayments.reduce((sum, item) => sum + Number(item.data.allocatedKobo || item.amountKobo), 0);
-  const usageFee = billablePayments.reduce((sum, item) => sum + usageFeeKobo(Number(item.data.allocatedKobo || item.amountKobo)), 0);
+  const usageBase = billablePayments.reduce((sum, item) => sum + paymentAppliedKobo(item), 0);
+  const usageFee = billablePayments.reduce((sum, item) => sum + usageFeeKobo(paymentAppliedKobo(item)), 0);
   const tier = licenceTierFor(billablePayments.length);
   const channelBreakdown: Record<string, { count: number; kobo: number; billable: number; reason: string }> = {};
   for (const payment of inPeriod) {
     const channel = String(payment.data.channel || "manual");
-    const row = (channelBreakdown[channel] ||= { count: 0, kobo: 0, billable: 0, reason: isBillableChannel(channel) ? "A successful direct debit can be billed after settlement, provided it has not been reversed and the reversal window has passed." : "This payment is included in reconciliation reports but is not charged a collection fee." });
+    const row = (channelBreakdown[channel] ||= { count: 0, kobo: 0, billable: 0, reason: isBillableChannel(channel) ? "A successful direct debit can be billed after settlement on the money it applied, provided that money has not been reversed or refunded and the reversal window has passed." : "This payment is included in reconciliation reports but is not charged a collection fee." });
     row.count += 1; row.kobo += payment.amountKobo; if (billableCollection(state, payment, now)) row.billable += 1;
   }
   // Collections that pass every BIL-01 check except the reversal window are billed on a later statement, never lost.
   const withheld = inPeriod.filter((item) => billableCollection(state, item, now, false) && !billableCollection(state, item, now));
   const lines = terms ? [(() => {
-    const designDiscount = designDiscountFor(terms, period);
-    const usage = Math.floor(usageFee * designDiscount);
+    const rate = discountRateFor(terms, period);
+    const usage = billablePayments.reduce((sum, item) => sum + chargedAtRate(usageFeeKobo(paymentAppliedKobo(item)), rate), 0);
     const contractedLicence = Number(terms.data.licenceKobo || 0);
-    const licence = Math.floor(contractedLicence * designDiscount);
-    return { commercialId: terms.id, prospect: terms.name, implementationKobo: 0, licenceKobo: licence, contractedLicenceKobo: contractedLicence, volumeTier: tier.name, volumeTierLicenceKobo: tier.licenceKobo, tierMismatch: contractedLicence !== tier.licenceKobo, usageKobo: usage, totalKobo: licence + usage, designPartnerDiscount: designDiscount < 1 };
+    const licence = chargedAtRate(contractedLicence, rate);
+    return { commercialId: terms.id, prospect: terms.name, implementationKobo: 0, licenceKobo: licence, contractedLicenceKobo: contractedLicence, volumeTier: tier.name, volumeTierLicenceKobo: tier.licenceKobo, tierMismatch: contractedLicence !== tier.licenceKobo, usageKobo: usage, totalKobo: licence + usage, designPartnerDiscount: rate > 0 };
   })()] : [];
   const invoices = issuedInvoices(state).map((invoice) => ({
     id: invoice.id, reference: invoice.reference, period: invoice.data.period, issuedAt: invoice.data.issuedAt, issuedBy: invoice.data.issuedBy, collectionsCounted: invoice.data.collectionsCounted,
@@ -217,35 +272,34 @@ export function buildBillingStatement(state: DomainState, now: string): Record<s
   const adjustments = pendingAdjustments(state);
   return {
     period, usageRateBps: USAGE_FEE_BPS, usageCapKobo: USAGE_FEE_CAP_KOBO, reversalWindowDays: reversalWindowDays(state, state.merchant.provider), vatBps: vatBpsFor(state),
-    billableChannels: [...billableChannels], billableRule: "A collection can be billed when the direct debit succeeded, the payment is settled and has not been reversed at the invoice date, and the provider's reversal window has passed.",
+    billableChannels: [...billableChannels], billableRule: "A collection can be billed when the direct debit succeeded (its webhook or its settlement line says so), the payment is settled and still has applied money that was not reversed or refunded at the invoice date, and the provider's reversal window has passed.",
     eligibleAllocatedKobo: usageBase, successfulCollections: billablePayments.length, usageFeeKobo: usageFee, volumeTier: tier.name,
     channelBreakdown, withheldInsideReversalWindow: withheld.length,
     lines, totalKobo: lines.reduce((sum, line) => sum + line.totalKobo, 0),
     invoices, nextInvoicePeriod: invoices.length ? nextPeriodAfter(String(invoices.at(-1)!.period)) : previousMonth(now),
     pendingAdjustments: adjustments, pendingAdjustmentsKobo: adjustments.reduce((sum, line) => sum + line.kobo, 0),
-    adjustmentRule: "If a billed collection is reversed, refunded, confirmed as a duplicate or affected by an invalidated allocation, the correction appears as a credit or debit on the next invoice. Issued invoices are never changed.",
+    adjustmentRule: "If a billed collection is reversed, refunded, confirmed as a duplicate or affected by an invalidated allocation, the correction appears as a credit or debit on the next invoice. Issued invoices are never changed. A correction is priced at the rate of the invoice that first billed the collection.",
     recoveryFee: recoveryFeeLines(state, period).note,
     implementationExcludedFromRecurring: true, synthetic: true,
   };
 }
 
-function nextPeriodAfter(period: string): string {
-  const [year, month] = period.split("-").map(Number);
-  return new Date(Date.UTC(year!, month!, 1)).toISOString().slice(0, 7);
-}
-
 /**
- * BIL-04: issue the invoice for a period as an immutable record: the licence
- * from the signed terms, one usage line per billable collection not billed
- * before and observed by the period end (so a collection withheld inside its
- * reversal window is billed on the next invoice), the design-partner discount,
- * the BIL-07 adjustment lines, the gated recovery fee, then VAT on the net.
+ * BIL-04: issue the invoice for a WAT calendar month that has ended as an
+ * immutable record: the licence from the signed terms, one usage line per
+ * billable collection not billed before and observed by the period end (so a
+ * collection withheld inside its reversal window is billed on the next
+ * invoice), the design-partner discount on the licence and those usage lines,
+ * the BIL-07 adjustment lines at the rate each collection was first billed
+ * under, the gated recovery fee, then VAT on the net.
  */
 export function issueInvoice(state: DomainState, ctx: Context, input: { period?: unknown }): TypedRecord<"invoices"> {
   const now = ctx.now;
   const period = input.period ? String(input.period) : previousMonth(now);
   if (!/^\d{4}-\d{2}$/.test(period) || Number.isNaN(Date.parse(`${period}-01T00:00:00Z`))) throw new Error("Enter the billing month as YYYY-MM, for example 2026-09.");
-  if (period > monthOf(now)) throw new Error("An invoice cannot be issued for a future period.");
+  const current = monthOf(now);
+  if (period > current) throw new Error("An invoice cannot be issued for a future period.");
+  if (period === current) throw new Error(`The ${period} invoice can be issued once the month has ended, from 00:00 WAT on ${nextPeriodAfter(period)}-01.`);
   const existing = issuedInvoices(state);
   const duplicate = existing.find((invoice) => invoice.data.period === period);
   if (duplicate) throw new Error(`Invoice ${duplicate.reference} has already been issued for ${period}. Any correction will appear on the next invoice.`);
@@ -253,20 +307,23 @@ export function issueInvoice(state: DomainState, ctx: Context, input: { period?:
   if (latest && String(latest.data.period) > period) throw new Error(`Invoices are issued in period order; ${latest.reference} already covers ${latest.data.period}.`);
   const end = Date.parse(periodEnd(period));
   const ledger = billedLedger(state);
+  const terms = signedTerms(state, period);
+  const rate = discountRateFor(terms, period);
   const usageLines = recordsOf(state, "payments")
     .filter((payment) => !ledger.has(payment.id) && paymentObservedAt(payment) <= end && billableCollection(state, payment, now))
     .sort((a, b) => paymentObservedAt(a) - paymentObservedAt(b) || a.reference.localeCompare(b.reference))
-    .map((payment) => ({ paymentId: payment.id, paymentReference: payment.reference, customerId: payment.customerId, channel: payment.data.channel, observedAt: payment.data.observedAt || payment.createdAt, settledAt: payment.data.settledAt ?? null, allocatedKobo: Number(payment.data.allocatedKobo || 0), feeKobo: usageFeeKobo(Number(payment.data.allocatedKobo || 0)), allocationIds: recordsOf(state, "allocations").filter((item) => item.data.paymentId === payment.id && item.status === "confirmed").map((item) => item.id) }));
+    .map((payment) => {
+      const allocatedKobo = paymentAppliedKobo(payment), feeKobo = usageFeeKobo(allocatedKobo);
+      return { paymentId: payment.id, paymentReference: payment.reference, customerId: payment.customerId, channel: payment.data.channel, observedAt: payment.data.observedAt || payment.createdAt, settledAt: payment.data.settledAt ?? null, allocatedKobo, feeKobo, discountRate: rate, chargedKobo: chargedAtRate(feeKobo, rate), allocationIds: recordsOf(state, "allocations").filter((item) => item.data.paymentId === payment.id && item.status === "confirmed").map((item) => item.id) };
+    });
   const adjustments = pendingAdjustments(state);
   const recoveryFee = recoveryFeeLines(state, period);
-  const terms = signedTerms(state, period);
   const tier = licenceTierFor(usageLines.length);
   const contractedLicence = Number(terms?.data.licenceKobo || 0);
-  const designDiscount = designDiscountFor(terms, period);
   const usageKobo = usageLines.reduce((sum, line) => sum + line.feeKobo, 0);
+  // Adjustment lines already carry the rate their collection was first billed under, so the discount leaves them alone.
   const adjustmentsKobo = adjustments.reduce((sum, line) => sum + line.kobo, 0);
-  const discountBase = contractedLicence + usageKobo + adjustmentsKobo;
-  const discountKobo = designDiscount < 1 ? -Math.floor(discountBase * (1 - designDiscount)) : 0;
+  const discountKobo = 0 - ((contractedLicence - chargedAtRate(contractedLicence, rate)) + usageLines.reduce((sum, line) => sum + line.feeKobo - line.chargedKobo, 0));
   const netKobo = contractedLicence + usageKobo + adjustmentsKobo + discountKobo + recoveryFee.kobo;
   const vatBps = vatBpsFor(state);
   const vat = Math.trunc((netKobo * vatBps) / 10_000);
@@ -279,11 +336,11 @@ export function issueInvoice(state: DomainState, ctx: Context, input: { period?:
       terms: terms ? { commercialId: terms.id, prospect: terms.name, contractedLicenceKobo: contractedLicence, designPartner: terms.data.designPartner === true, effectiveDate: terms.data.effectiveDate ?? null } : null,
       licence: { kobo: contractedLicence, volumeTier: tier.name, volumeTierLicenceKobo: tier.licenceKobo, tierMismatch: contractedLicence !== tier.licenceKobo, note: terms ? "Contracted monthly licence from the signed terms; the tier for this month's count is shown for comparison." : "No signed terms: no licence is billed." },
       usageLines, collectionsCounted: usageLines.length, usageRateBps: USAGE_FEE_BPS, usageCapKobo: USAGE_FEE_CAP_KOBO,
-      designPartnerDiscount: { rate: 1 - designDiscount, kobo: discountKobo, note: designDiscount < 1 ? `Design-partner discount of ${Math.round((1 - designDiscount) * 100)}% in ${DESIGN_PARTNER_DISCOUNT_YEAR}; full public price from 1 January ${Number(DESIGN_PARTNER_DISCOUNT_YEAR) + 1}.` : "Full public price." },
+      designPartnerDiscount: { rate, kobo: discountKobo, note: `${rate > 0 ? `Design-partner discount of ${Math.round(rate * 100)}% in ${DESIGN_PARTNER_DISCOUNT_YEAR} on the licence and this invoice's usage lines; full public price from 1 January ${Number(DESIGN_PARTNER_DISCOUNT_YEAR) + 1}.` : "Full public price."}${adjustments.length ? " Adjustment lines carry the rate of the invoice that first billed each collection." : ""}` },
       adjustments, recoveryFee,
       subtotals: { licenceKobo: contractedLicence, usageKobo, adjustmentsKobo, discountKobo, recoveryKobo: recoveryFee.kobo },
       totals: { netKobo, vatBps, vatKobo: vat, totalKobo, creditNote: totalKobo < 0 },
-      statement: `${counted(usageLines.length, "collection")} counted at ${USAGE_FEE_BPS / 100}% capped at ${naira(USAGE_FEE_CAP_KOBO)}; ${counted(adjustments.length, "adjustment line")}; VAT at ${vatBps / 100}% shown separately.`,
+      statement: `${counted(usageLines.length, "collection")} counted at ${USAGE_FEE_BPS / 100}% capped at ${nairaText(USAGE_FEE_CAP_KOBO)}; ${counted(adjustments.length, "adjustment line")}; VAT at ${vatBps / 100}% shown separately.`,
       disputeRoute: "Dispute a count by raising it with your Valo Pay contact quoting the invoice reference and the collection reference; the count is derived from records and reproducible (BIL-01).",
       synthetic: true,
     },

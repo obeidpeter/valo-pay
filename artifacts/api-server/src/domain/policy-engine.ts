@@ -67,6 +67,14 @@ export function samePolicyLineage(state: DomainState, aId: string, bId: string):
   return Boolean(a && b && a.name === b.name);
 }
 
+/** Every version of the same policy as this one (samePolicyLineage), itself included, whatever its status. */
+export function policyLineage(state: DomainState, policy: TypedRecord<"policies">): TypedRecord<"policies">[] {
+  return recordsOf(state, "policies").filter((item) => samePolicyLineage(state, policy.id, item.id));
+}
+
+/** A policy version's number; a record written before versions were numbered is version 1. */
+export const policyVersionOf = (policy: TypedRecord<"policies">): number => Number(policy.data.version || 1);
+
 export function policyIdFor(state: DomainState, due: TypedRecord<"due-items">): string | undefined {
   return due.data.policyId || recordsOf(state, "mandates").find((r) => r.id === due.data.mandateId)?.data.policyId;
 }
@@ -248,10 +256,39 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
     { purpose: "failed_debit", leadHours, requiredBy: Number.isFinite(deferred) ? iso(deferred - leadHours * HOUR) : null, noticeId: null, acceptedAt: null, evidenced: false });
 }
 
-/** What makes two evaluations the same decision: the same attempt, row, outcome, time, policy version and evidence. */
-export function decisionFingerprint(decision: RetryDecision): string {
-  const { evaluatedAt: _evaluatedAt, reason: _reason, ...rest } = decision;
-  return createHash("sha256").update(JSON.stringify(rest, Object.keys(rest).sort())).digest("hex");
+/**
+ * JSON with the keys of every object sorted, at every depth. An undefined
+ * object value is left out and an undefined array element is null, as
+ * JSON.stringify writes them, so a record read back from the database gives
+ * the same text as the value it was written from.
+ */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((item) => item === undefined ? "null" : stableJson(item)).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object).sort().filter((key) => object[key] !== undefined).map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** The fields of an evaluation, or of a stored decision record, that decide whether it is the same decision. */
+type DecisionIdentity = Pick<RetryDecision, "dueItemId" | "decision" | "rule" | "policyId" | "policyVersion">
+  & Partial<Pick<RetryDecision, "attemptId" | "nextAt" | "experimentArm" | "inputs" | "noticeRequired">>;
+
+/**
+ * What makes two evaluations the same decision: the same attempt, row, outcome,
+ * planned time, policy version, arm, inputs and notice evidence, compared at
+ * every depth. The evaluation time and the wording are not part of it, nor is
+ * the calendar working, which follows the evaluation clock and whose effect is
+ * the planned time.
+ */
+export function decisionFingerprint(decision: DecisionIdentity): string {
+  const { calendar: _calendar, ...inputs } = decision.inputs ?? {};
+  const identity = {
+    dueItemId: decision.dueItemId, attemptId: decision.attemptId ?? null, decision: decision.decision, rule: decision.rule, nextAt: decision.nextAt ?? null,
+    policyId: decision.policyId, policyVersion: Number(decision.policyVersion), experimentArm: decision.experimentArm ?? null, inputs, noticeRequired: decision.noticeRequired ?? null,
+  };
+  return createHash("sha256").update(stableJson(identity)).digest("hex");
 }
 
 export function latestDecisionFor(state: DomainState, dueItemId: string): TypedRecord<"retry-decisions"> | undefined {
@@ -261,12 +298,14 @@ export function latestDecisionFor(state: DomainState, dueItemId: string): TypedR
 /**
  * RET-03: persist a decision as an immutable record on the customer's timeline.
  * A close that re-evaluates an item and reaches the same decision writes nothing;
- * any change of row, outcome, scheduled time, evidence or policy version is a new record.
+ * any change of row, outcome, scheduled time, policy version, inputs or notice
+ * evidence is a new record.
  */
 export function recordRetryDecision(state: DomainState, ctx: Context, due: TypedRecord<"due-items">, decision: RetryDecision): TypedRecord<"retry-decisions"> | undefined {
   const fingerprint = decisionFingerprint(decision);
   const latest = latestDecisionFor(state, due.id);
-  if (latest && latest.data.fingerprint === fingerprint) return undefined;
+  // Recomputed from the stored fields: a decision recorded before nested inputs counted carries an older fingerprint.
+  if (latest && decisionFingerprint(latest.data as DecisionIdentity) === fingerprint) return undefined;
   const rowLabel = decision.rule.replace(/_/g, " ");
   return makeRecord(state, "retry-decisions", {
     name: `Retry decision · ${decision.decision.replace(/_/g, " ")} (${rowLabel})`, status: "recorded", customerId: due.customerId, amountKobo: due.amountKobo,

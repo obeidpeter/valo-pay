@@ -104,8 +104,10 @@ import type {
   OperationReplayResult,
   Overview,
   PayloadProtection,
+  PaystackDeliveryReceipt,
   PaystackFixtureInput,
   PaystackFixtureResult,
+  PaystackTestEvent,
   PerformActionParams,
   PerformConnectedActionParams,
   PersonalWorkView,
@@ -1877,8 +1879,8 @@ export const getDisabledProviderWebhookUrl = (provider: string,) => {
 }
 
 /**
- * Always 403: no provider adapter is configured and no event is processed.
- * @summary Provider webhook ingress, disabled in the sandbox
+ * Always 403: no event is processed here. Paystack test events go to POST /v1/providers/paystack/{connectionId}/events.
+ * @summary Generic provider webhook address, always refused
  */
 export const disabledProviderWebhook = async (provider: string, options?: Parameters<typeof customFetch>[1]): Promise<unknown> => {
 
@@ -1930,7 +1932,7 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
     export type DisabledProviderWebhookMutationVariables = {provider: string}
 
     /**
- * @summary Provider webhook ingress, disabled in the sandbox
+ * @summary Generic provider webhook address, always refused
  */
 export const useDisabledProviderWebhook = <TError = ErrorType<void>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof disabledProviderWebhook>>, TError,DisabledProviderWebhookMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
@@ -2917,7 +2919,7 @@ export const getCreatePilotLenderUrl = () => {
 }
 
 /**
- * Administrator with recent MFA on a staff host. The key makes creation repeatable; the same key with different details is refused.
+ * An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused.
  * @summary Create a synthetic lender
  */
 export const createPilotLender = async (pilotLenderInput: PilotLenderInput, options?: Parameters<typeof customFetch>[1]): Promise<Merchant> => {
@@ -5786,6 +5788,96 @@ export const useReplayProviderEvent = <TError = ErrorType<void>,
         TContext
       > => {
       return useMutation(getReplayProviderEventMutationOptions(options));
+    }
+
+export const getReceivePaystackTestEventUrl = (connectionId: string,) => {
+
+
+
+
+  return `/api/v1/providers/paystack/${connectionId}/events`
+}
+
+/**
+ * The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key, and at most 120 deliveries a minute per client address.
+ * @summary Receive a signed Paystack test event
+ */
+export const receivePaystackTestEvent = async (connectionId: string,
+    paystackTestEvent: PaystackTestEvent, options?: Parameters<typeof customFetch>[1]): Promise<PaystackDeliveryReceipt> => {
+
+    const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(h as Iterable<Iterable<string>>, (entry) => Array.from(entry) as [string, string]),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+return customFetch<PaystackDeliveryReceipt>(getReceivePaystackTestEventUrl(connectionId),
+  {
+    ...options,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+    body: JSON.stringify(paystackTestEvent)
+  }
+);}
+
+
+
+
+
+export const getReceivePaystackTestEventMutationKey = () => ['receivePaystackTestEvent'] as const;
+
+export const getReceivePaystackTestEventMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof receivePaystackTestEvent>>, TError,ReceivePaystackTestEventMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof receivePaystackTestEvent>>, TError,ReceivePaystackTestEventMutationVariables, TContext> => {
+
+const mutationKey = getReceivePaystackTestEventMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof receivePaystackTestEvent>>, ReceivePaystackTestEventMutationVariables> = (props) => {
+          const {connectionId,data} = props ?? {};
+
+          return  receivePaystackTestEvent(connectionId,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ReceivePaystackTestEventMutationResult = NonNullable<Awaited<ReturnType<typeof receivePaystackTestEvent>>>
+    export type ReceivePaystackTestEventMutationBody = BodyType<PaystackTestEvent>
+    export type ReceivePaystackTestEventMutationError = ErrorType<void>
+    export type ReceivePaystackTestEventMutationVariables = {connectionId: string;data: BodyType<PaystackTestEvent>}
+
+    /**
+ * @summary Receive a signed Paystack test event
+ */
+export const useReceivePaystackTestEvent = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof receivePaystackTestEvent>>, TError,ReceivePaystackTestEventMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof receivePaystackTestEvent>>,
+        TError,
+        ReceivePaystackTestEventMutationVariables,
+        TContext
+      > => {
+      return useMutation(getReceivePaystackTestEventMutationOptions(options));
     }
 
 export const getGetPersonalWorkUrl = (params: GetPersonalWorkParams,) => {

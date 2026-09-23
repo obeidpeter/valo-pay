@@ -40,7 +40,7 @@ if (typeof Element.prototype.hasPointerCapture !== "function") Element.prototype
 if (typeof Element.prototype.setPointerCapture !== "function") Element.prototype.setPointerCapture = () => { /* no pointer capture in tests */ };
 if (typeof Element.prototype.releasePointerCapture !== "function") Element.prototype.releasePointerCapture = () => { /* no pointer capture in tests */ };
 
-// The app retries failed queries with backoff; a test asserting an error state must see it at once.
+// The app repeats a failed read only after a network failure or a 5xx; a test asserting an error state must see it at once.
 // Everything else (the thirty-second staleness) stays as production configures it.
 queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } });
 

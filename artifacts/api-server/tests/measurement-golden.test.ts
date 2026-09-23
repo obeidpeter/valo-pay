@@ -2,11 +2,13 @@
 // records, REC-07 close report, RET-06 uplift report with its 90% interval and
 // BIL-01 billable collections (TRD v1.1 sections 5.6, 5.8, 5.15, 6.6 and 7.5).
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { DAY, HOUR, addAttempt, addHoliday, addNotice, addObservation, ctxAt, liveFixture, toWat, wat } from "./helpers.js";
 import { reconcile } from "../src/domain/reconciliation.js";
 import { executeAction } from "../src/domain/actions.js";
-import { buildReports, upliftReport, billableCollection } from "../src/domain/reports.js";
-import { latestDecisionFor } from "../src/domain/policy-engine.js";
+import { armStatistics, buildReports, precisionAudit, timeToClose, upliftReport, billableCollection } from "../src/domain/reports.js";
+import { monthOf } from "../src/domain/billing.js";
+import { decisionFingerprint, evaluateRetry, latestDecisionFor, type RetryDecision } from "../src/domain/policy-engine.js";
 import { positionFor } from "../src/domain/close.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
@@ -17,6 +19,16 @@ const { assertFinalState } = await import("../src/lib/valopay-store.js");
 let checks = 0;
 const check = (condition: unknown, message: string) => { assert.ok(condition, message); checks += 1; };
 const decisionsFor = (state: DomainState, due: ValopayRecord) => recordsOf(state, "retry-decisions").filter((item) => item.data.dueItemId === due.id);
+/**
+ * Every record read back as the store reads it: the data is jsonb, which
+ * leaves out undefined values and gives every object's keys back shorter
+ * first, then by their bytes, not in the order they were written.
+ */
+const throughDatabase = (state: DomainState) => {
+  const jsonbOrder = ([a]: [string, unknown], [b]: [string, unknown]) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
+  state.records = state.records.map((record) => ({ ...record, data: JSON.parse(JSON.stringify(record.data), (_key, value: unknown) => (
+    value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(jsonbOrder)) : value)) }));
+};
 
 // ---------- RET-03: every close records the decision with its version, row, inputs, time and notice; unchanged decisions are not repeated ----------
 {
@@ -63,6 +75,66 @@ const decisionsFor = (state: DomainState, due: ValopayRecord) => recordsOf(state
   moved[0]!.data.reason = "edited";
   assert.throws(() => assertFinalState(before, state, state.merchant.id), /immutable/, "decision records are immutable evidence");
   checks += 7;
+}
+
+// ---------- RET-03 (audit item 13): new notice evidence, or any other changed input, is a new decision; the evaluation clock is not ----------
+{
+  const { state, due, policy } = liveFixture({ merchantId: "decision-evidence" });
+  const failed = recordsOf(state, "attempts").find((item) => item.data.dueItemId === due.id)!;
+  reconcile(state, ctxAt(wat("2027-06-28T09:01:00"), "Finance"));
+  const [pending] = decisionsFor(state, due);
+  assert.equal(pending!.data.noticeRequired!.evidenced, false, "planned before the failed-debit notice was accepted");
+  failed.data.noticeId = addNotice(state, due, wat("2027-06-28T10:00:00")).id;
+  reconcile(state, ctxAt(wat("2027-06-28T11:00:00"), "Finance"));
+  const evidenced = decisionsFor(state, due);
+  assert.equal(evidenced.length, 2, "the provider's acceptance of the notice is a new decision");
+  assert.equal(evidenced[1]!.data.nextAt, pending!.data.nextAt, "even though the planned time is the same");
+  assert.deepEqual([evidenced[1]!.data.noticeRequired!.evidenced, evidenced[1]!.data.noticeRequired!.noticeId], [true, failed.data.noticeId], "the new record carries the evidence");
+  assert.equal(evidenced[1]!.data.previousDecisionId, pending!.id, "and chains to the decision it replaces");
+  reconcile(state, ctxAt(wat("2027-06-28T12:00:00"), "Finance"));
+  assert.equal(decisionsFor(state, due).length, 2, "nothing changed afterwards, so nothing is written");
+  checks += 6;
+
+  // What makes two evaluations the same decision, compared at every depth.
+  const base = evaluateRetry(state, ctxAt(wat("2027-06-28T12:00:00")), due, policy);
+  const same = (variant: RetryDecision) => decisionFingerprint(variant) === decisionFingerprint(base);
+  assert.equal(same({ ...base, inputs: { ...base.inputs, code: "ACCOUNT_CLOSED" } }), false, "a different failure code");
+  assert.equal(same({ ...base, inputs: { ...base.inputs, attemptNumber: 2 } }), false, "a different attempt number");
+  assert.equal(same({ ...base, noticeRequired: { ...base.noticeRequired!, evidenced: false, noticeId: null, acceptedAt: null } }), false, "notice evidence withdrawn");
+  assert.equal(same({ ...base, evaluatedAt: wat("2027-06-28T13:00:00"), reason: "Reworded." }), true, "the evaluation time and wording are not part of the decision");
+  assert.equal(same({ ...base, inputs: { ...base.inputs, calendar: { earliestAt: wat("2027-06-28T13:00:00"), rolledForward: true } } }), true, "nor is the calendar working, which follows the evaluation clock");
+  checks += 5;
+}
+{
+  // Outside the collection window the calendar working moves with the clock, but the plan does not: one decision.
+  const { state, due } = liveFixture({ merchantId: "decision-clock", failureAt: wat("2027-06-25T06:16:00") });
+  const failed = recordsOf(state, "attempts").find((item) => item.data.dueItemId === due.id)!;
+  failed.data.noticeId = addNotice(state, due, wat("2027-06-25T07:00:00")).id;
+  reconcile(state, ctxAt(wat("2027-06-28T11:00:00"), "Finance"));
+  reconcile(state, ctxAt(wat("2027-06-28T15:00:00"), "Finance"));
+  assert.equal(decisionsFor(state, due).length, 1, "a close later the same day reaches the same decision");
+  checks += 1;
+}
+{
+  // A decision recorded by an earlier build carries the fingerprint that left out nested inputs; after the database round trip, which reorders its keys, it is still recognised.
+  const { state, due } = liveFixture({ merchantId: "decision-legacy" });
+  reconcile(state, ctxAt(wat("2027-06-28T09:01:00"), "Finance"));
+  const stored = decisionsFor(state, due)[0]!;
+  const { evaluatedAt: _evaluatedAt, reason: _reason, fingerprint: _fingerprint, previousDecisionId: _previous, synthetic: _synthetic, ...rest } = stored.data;
+  stored.data.fingerprint = createHash("sha256").update(JSON.stringify(rest, Object.keys(rest).sort())).digest("hex");
+  throughDatabase(state);
+  assert.notDeepEqual(Object.keys(decisionsFor(state, due)[0]!.data.inputs), Object.keys(rest.inputs), "the round trip gives the inputs back in another key order");
+  reconcile(state, ctxAt(wat("2027-06-28T12:00:00"), "Finance"));
+  assert.equal(decisionsFor(state, due).length, 1, "the stored decision is not written again");
+  // An input left undefined (the code of an attempt still in flight) is absent after the round trip, and is the same decision.
+  addAttempt(state, due, { status: "unknown", occurredAt: wat("2027-06-30T07:00:00") });
+  reconcile(state, ctxAt(wat("2027-06-30T09:00:00"), "Finance"));
+  const inFlight = decisionsFor(state, due);
+  assert.equal(inFlight.at(-1)!.data.rule, "in_flight", "an attempt in flight blocks the plan");
+  throughDatabase(state);
+  reconcile(state, ctxAt(wat("2027-06-30T09:30:00"), "Finance"));
+  assert.equal(decisionsFor(state, due).length, inFlight.length, "and is not written again after the round trip");
+  checks += 4;
 }
 
 // ---------- RET-03 and 6.3 row 8: a notice deadline that passes unevidenced defers the attempt and raises the exception ----------
@@ -147,7 +219,60 @@ const decisionsFor = (state: DomainState, due: ValopayRecord) => recordsOf(state
   assert.equal(drifted.data.positionAlert, true, "REC-05: a rebuild that differs from the stored view is an alert");
   assert.equal(drifted.data.report.positionRebuild.mismatches[0].dueItemId, due.id);
   assert.equal(buildReports(state, wat("2027-08-01T09:00:00")).operational.timeToClose?.month, "2027-07", "MEA-01 time to close looks at the last month end");
-  checks += 9;
+  assert.equal(buildReports(state, wat("2027-08-01T00:30:00")).operational.timeToClose?.month, "2027-07", "July has ended at 00:30 WAT on 1 August, though it is still July in UTC");
+  checks += 10;
+}
+
+// ---------- MEA-01 and REC-09 count months in West Africa Time ----------
+{
+  const { state, customer, due } = liveFixture({ withFailure: false, merchantId: "wat-months" });
+  // A clean close at 00:30 WAT on 1 August is the first close after July's month end.
+  makeRecord(state, "closes" as string, { name: "Synthetic close", status: "completed", data: { closedAt: wat("2027-08-01T00:30:00"), report: { unallocated: { count: 0, kobo: 0, olderThan24Hours: 0 } } } });
+  const closed = timeToClose(state, wat("2027-08-02T09:00:00"))!;
+  assert.deepEqual([closed.month, closed.days], ["2027-07", 0.02], "July's books closed half an hour after its WAT month end");
+  // An automatic match confirmed at 00:30 WAT on 1 July is July's; one at 00:15 WAT on 1 August is August's.
+  const confirmed = (confirmedAt: string) => makeRecord(state, "allocations", { name: "R1", status: "confirmed", customerId: customer.id, amountKobo: 100, createdAt: confirmedAt, data: { paymentId: "p", dueItemId: due.id, rule: "R1", confidence: "certain", automatic: true, confirmedAt } });
+  const july = confirmed(wat("2027-07-01T00:30:00"));
+  confirmed(wat("2027-08-01T00:15:00"));
+  const audit = precisionAudit(state, wat("2027-08-01T00:30:00"));
+  assert.deepEqual([audit.month, audit.sampledAllocationIds], ["2027-07", [july.id]], "at 00:30 WAT on 1 August the audit month is July, and it holds July's WAT matches");
+  checks += 2;
+}
+
+// ---------- REC-07: a close counts the matches confirmed in its period, not matches reviewed or edited in it ----------
+{
+  const { state, due, customer } = liveFixture({ withFailure: false, merchantId: "close-confirmed-at" });
+  const finance = (now: string) => ctxAt(now, "Finance");
+  const close = (now: string) => executeAction(state, finance(now), { action: "daily_close" }).record!.data.report;
+  addObservation(state, { reference: "PSK-CONF-1", amountKobo: due.amountKobo, source: "webhook", customerId: customer.id, dueItemId: due.id, eventId: "conf-1", occurredAt: wat("2027-06-30T06:20:00"), createdAt: wat("2027-06-30T06:20:01") });
+  close(wat("2027-06-30T07:00:00"));
+  const matched = recordsOf(state, "allocations").find((item) => item.status === "confirmed" && item.data.dueItemId === due.id)!;
+  assert.equal(matched.data.confirmedAt, wat("2027-06-30T07:00:00"), "the automatic match records when it was confirmed");
+  // A proposal made in one period and confirmed in the next counts in the period it was confirmed in.
+  const other = recordsOf(state, "due-items").find((item) => item.amountKobo === 6_000_000)!;
+  other.data.dueDate = "2027-07-01";
+  addObservation(state, { reference: "TRF-CONF-2", amountKobo: 6_000_000, source: "transfer", customerId: other.customerId, eventId: "conf-2", occurredAt: wat("2027-07-01T09:00:00"), createdAt: wat("2027-07-01T09:00:01") });
+  const proposing = close(wat("2027-07-01T10:00:00"));
+  const proposal = recordsOf(state, "allocations").find((item) => item.data.dueItemId === other.id)!;
+  assert.deepEqual([proposal.status, proposal.data.rule, proposing.allocated.count], ["proposed", "R5", 0], "a proposal is not an allocation");
+  const payment = recordsOf(state, "payments").find((item) => item.reference === "TRF-CONF-2")!;
+  executeAction(state, finance(wat("2027-07-02T09:00:00")), { action: "confirm_allocation", recordId: payment.id, reason: "Payer confirmed by phone" });
+  const confirming = close(wat("2027-07-03T07:00:00"));
+  assert.deepEqual([confirming.allocated, confirming.allocatedByRule], [{ count: 1, kobo: 6_000_000 }, { R5: { count: 1, kobo: 6_000_000, automatic: 0 } }], "the confirmation counts once, in its own period");
+  // Reviewing earlier matches changes them, but confirms nothing new.
+  executeAction(state, finance(wat("2027-07-03T09:00:00")), { action: "review_allocation", recordId: matched.id, reason: "Checked against the bank line", data: { correct: true } });
+  executeAction(state, finance(wat("2027-07-03T09:05:00")), { action: "review_allocation", recordId: proposal.id, reason: "Checked against the bank line", data: { correct: true } });
+  const reviewed = close(wat("2027-07-04T07:00:00"));
+  assert.deepEqual([reviewed.allocated, reviewed.allocatedByRule], [{ count: 0, kobo: 0 }, {}], "a review in this period is not a match confirmed in it");
+  assert.match(String(recordsOf(state, "closes").at(-1)!.data.summary), /0 allocations confirmed/);
+  // A match marked wrong and later applied again keeps its original confirmation time.
+  executeAction(state, finance(wat("2027-07-04T09:00:00")), { action: "review_allocation", recordId: matched.id, reason: "Wrong instalment", data: { correct: false } });
+  assert.equal(close(wat("2027-07-05T07:00:00")).allocated.count, 0, "a superseded match is not counted");
+  executeAction(state, finance(wat("2027-07-05T09:00:00")), { action: "review_allocation", recordId: matched.id, reason: "It was right after all", data: { correct: true } });
+  const reinstated = close(wat("2027-07-06T07:00:00"));
+  assert.equal(matched.status, "confirmed", "the reviewed match is applied again");
+  assert.equal(reinstated.allocated.count, 0, "applying it again does not count as a new confirmation");
+  checks += 8;
 }
 
 // ---------- RET-06: uplift report with the ratio-estimator interval, evaluated against the pre-registered rule ----------
@@ -217,6 +342,19 @@ function settle(state: DomainState, due: ValopayRecord, amountKobo: number, sett
   checks += 8;
 }
 
+{
+  // A refund of an overpayment's excess leaves the recovery on the money that stayed.
+  const { state, policy } = liveFixture({ withFailure: false, merchantId: "uplift-refund" });
+  const experiment = makeRecord(state, "experiments", { name: "Test 2", status: "preregistered", data: { policyId: policy.id, holdoutShare: 0.5, minPerArm: 1, seed: "seed", baselineRate: 0.4, analysisDate: "2027-12-31", enrolmentClose: "2027-12-31", preregisteredAt: "2027-02-01T00:00:00.000Z" } });
+  const due = enrolledDue(state, experiment, "engine", 2_500_000, wat("2027-06-01T06:16:00"), 0);
+  const transfer = makeRecord(state, "payments", { name: "Canonical payment", status: "unallocated", customerId: due.customerId, amountKobo: 3_000_000, reference: "TRF-EXCESS", data: { channel: "transfer", collectionStatus: "succeeded", settlementStatus: "settled", settledAt: wat("2027-06-05T10:00:00"), observedAt: wat("2027-06-05T10:00:00"), reversalStatus: "none", refundStatus: "none", allocatedKobo: 0 } });
+  const finance = (now: string) => ctxAt(now, "Finance");
+  executeAction(state, finance(wat("2027-06-05T11:00:00")), { action: "manual_allocate", recordId: transfer.id, reason: "The customer paid the instalment and a little more", data: { dueItemId: due.id, amountKobo: 2_500_000 } });
+  executeAction(state, finance(wat("2027-06-06T10:00:00")), { action: "record_refund", recordId: transfer.id, reason: "Excess returned to the payer", data: { reference: "RF-EXCESS" } });
+  assert.equal(armStatistics(state, recordsOf(state, "due-items").filter((item) => item.id === due.id), wat("2027-07-15T09:00:00")).recoveredKobo, 2_500_000, "the NGN 25,000 applied to the instalment is still recovered");
+  checks += 1;
+}
+
 // ---------- BIL-01: only direct-debit attempts that succeeded are billable; transfers and card receipts are reported, never billed ----------
 {
   const state = seedMerchant("billing");
@@ -224,7 +362,7 @@ function settle(state: DomainState, due: ValopayRecord, amountKobo: number, sett
   const ada = payments.find((item) => item.reference === "SBX-PAY-1001")!; // direct debit, allocated, settled
   const tunde = payments.find((item) => item.reference === "SBX-PAY-1002")!; // transfer, allocated, settled
   const observed = Date.parse(ada.createdAt);
-  state.settings.billingPeriod = ada.createdAt.slice(0, 7);
+  state.settings.billingPeriod = monthOf(ada.createdAt);
   const afterWindow = new Date(observed + 10 * DAY).toISOString();
   const insideWindow = new Date(observed + 3 * DAY).toISOString();
   assert.equal(billableCollection(state, ada, afterWindow), true, "a settled direct debit past the reversal window is billable");
@@ -261,4 +399,4 @@ function settle(state: DomainState, due: ValopayRecord, amountKobo: number, sett
 }
 
 void HOUR; void addAttempt;
-console.log(`Measurement golden tests passed (${checks} checks): decision records, deferral deadline, arm on decision, close report, position rebuild, uplift interval and rule, billable channels, pack counts.`);
+console.log(`Measurement golden tests passed (${checks} checks): decision records and what makes a new one, deferral deadline, arm on decision, close report and the matches it counts, position rebuild, uplift interval and rule, billable channels, pack counts.`);

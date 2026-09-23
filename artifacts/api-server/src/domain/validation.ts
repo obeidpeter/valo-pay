@@ -3,6 +3,7 @@ import {
   editableKinds, exceptionCatalogue, exceptionTransitions, experimentRules, isActionOnlyStatus, mandateTransitions, normaliseFailureCode,
   normaliseOwner, policyGuardrails, recordDataSchemas, recordStatuses, resolveExceptionType, roles, isKnownFailureCode, templateTextProblems,
 } from "@workspace/valopay-schema";
+import { isDeepStrictEqual } from "node:util";
 import { assertNoRealBankDetails, findRecord, masked, recordsOf } from "./records";
 import type { Context, DomainState, RecordOf, TypedRecord, ValopayRecord } from "./types";
 import { addBusinessDays } from "./calendar";
@@ -226,6 +227,11 @@ export function validateRecord(
     requireRole(ctx, ["Admin"]);
     if (!isUpdate && input.status && input.status !== "draft") throw new Error("Policies are created as drafts only.");
     if (data.reviewer !== undefined && data.reviewer !== existing?.data.reviewer) throw new Error("The policy reviewer is recorded during approval and cannot be changed here.");
+    for (const key of ["previousVersionId", "approvedAt", "submittedAt", "rejectedAt"]) {
+      if (JSON.stringify(data[key]) !== JSON.stringify(existing?.data[key])) throw new Error(`Policy ${key} is recorded by its review or version action and cannot be changed here.`);
+    }
+    // The API numbers versions: 1 on create, and new_policy_version after the whole history.
+    if (existing && JSON.stringify(data.version) !== JSON.stringify(existing.data.version)) throw new Error("Policy version numbers are assigned when a new draft version is created.");
     const maxAttempts = data.maxAttempts ?? policyGuardrails.defaultMaxAttempts;
     const spacing = data.spacingHours ?? policyGuardrails.defaultSpacingHours;
     const firstNotice = data.firstNoticeHours ?? policyGuardrails.defaultFirstNoticeHours;
@@ -282,6 +288,11 @@ export function validateRecord(
     for (const key of ["grossKobo", "feeKobo", "netKobo"]) positiveInteger(data[key], key, true);
     if (data.grossKobo - data.feeKobo !== data.netKobo) throw new Error("The net settlement amount must equal the gross amount minus fees.");
     if (!isUpdate && input.status !== (defaultStatus["settlement-batches"] ?? "pending")) throw new Error("New settlement batches must start as pending. Reconciliation updates their status.");
+    // Reconciliation copies these from the provider's lines, the fee schedule and the linked statement credit, and derives the status from them.
+    // Compared by value: jsonb returns enteredTotals' keys in its own order.
+    for (const key of ["statementObservationId", "statementNetKobo", "lineObservationIds", "linePaymentIds", "expectedFeeKobo", "feeVarianceKobo", "enteredTotals"]) {
+      if (!isDeepStrictEqual(data[key], existing?.data[key])) throw new Error(`Settlement batch ${key} is recorded by reconciliation and cannot be changed here.`);
+    }
   }
 }
 

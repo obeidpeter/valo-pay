@@ -43,6 +43,9 @@ const schemas = {
 };
 // Additive metadata remains optional for clients reading an older service response.
 for (const field of ["lastSuccessAt", "lastErrorAt"]) schemas.SchedulerStatus.properties[field] = { type: ["string", "null"] };
+// Optional too: a settings answer stored as an idempotency receipt by an earlier build is parsed again on replay.
+Object.assign(schemas.EffectiveCloseSchedule.properties, { failedAttempts: num, retryAt: { type: ["string", "null"] }, pausedForInactivityAt: { type: ["string", "null"] } });
+Object.assign(schemas.SchedulerRun.properties, { paused: num, batches: num });
 for (const name of ["Overview", "Settings"]) schemas[name].properties.closeSchedule = ref("EffectiveCloseSchedule");
 const paths = {};
 schemas.Settings.properties.revision = str;
@@ -57,7 +60,7 @@ function add(path, method, id, response, body, params = []) {
  if(body)op.requestBody={required:true,content:{"application/json":{schema:ref(body)}}};
  (paths[path]??={})[method]=op;
 }
-const pathDescriptions = { kind: "Record kind: one of the shared schema's recordKinds (customers, mandates, due-items, attempts, observations, payments, ...).", id: "The record's id.", provider: "Provider name; every provider's ingress is disabled in the sandbox." };
+const pathDescriptions = { kind: "Record kind: one of the shared schema's recordKinds (customers, mandates, due-items, attempts, observations, payments, ...).", id: "The record's id.", provider: "Provider name; this generic address refuses every provider (the Paystack test ingress has its own address)." };
 const pathParam = (name) => ({name,in:"path",required:true,schema:str,description:pathDescriptions[name]});
 const merchant = {name:"merchantId",in:"query",required:true,schema:str,description:"The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants."};
 const search = {name:"search",in:"query",schema:str,description:"Text matched, ignoring case and accents, against the name, reference, status and data."};
@@ -108,10 +111,10 @@ describe('/v1/exports/{id}','get','Check a saved export','Tenant-authorised stat
 describe('/v1/exports/{id}/retry','post','Retry a saved export','Requeues a failed or expired job while preserving its identity and private object key. Running and ready jobs are returned unchanged; retries cannot overwrite a completed file.');
 describe("/v1/exports/{id}/download","get","Download an export","The bytes are read from private storage and checked against the recorded SHA-256 before any are sent.");
 describe("/v1/openapi.json","get","This specification","The versioned public contract the console and the generated clients are built from.");
-describe("/v1/webhooks/{provider}","post","Provider webhook ingress, disabled in the sandbox","Always 403: no provider adapter is configured and no event is processed.");
+describe("/v1/webhooks/{provider}","post","Generic provider webhook address, always refused","Always 403: no event is processed here. Paystack test events go to POST /v1/providers/paystack/{connectionId}/events.");
 const schemaDescriptions = {
   HealthStatus: "The liveness answer: the build, when the process started, its uptime and what the close scheduler is doing.",
-  SchedulerRun: "The last scheduler pass that found work: its id, when it ran, how long it took and what it did.",
+  SchedulerRun: "The last scheduler pass that found work: its id, when it ran, how long it took, how many batches it read and what it did, including idle sandboxes whose automatic close it paused.",
   SchedulerStatus: "Whether closes are scheduled in this process, how often it looks, when it last looked and its last pass with work.",
   DatabaseCheck: "One round trip to the database and how long it took.",
   ReadinessStatus: "The readiness answer: ok, or degraded while the database does not answer.",
@@ -138,7 +141,7 @@ const schemaDescriptions = {
   SettingsInput: "The execution settings to change; every field is optional.",
   ExportInput: "What to export (a record kind, gate-pack, billing, dispute-pack or customer-pack with a customerId) and in which format.",
   ExportResult: "Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.",
-  EffectiveCloseSchedule: "Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.",
+  EffectiveCloseSchedule: "Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender. failedAttempts and retryAt describe failed automatic attempts at the pending time (retryAt only while automatic closes are available); pausedForInactivityAt says when the scheduler switched off the automatic close of a sandbox nobody changed. Answers from earlier builds may lack these three fields.",
 };
 for (const [name, description] of Object.entries(schemaDescriptions)) schemas[name].description = description;
 // Priority queues keep complete counts while returning only a bounded page and its linked records.
@@ -451,7 +454,7 @@ operation("/v1/operations/{id}/cancel", "post", "cancelOperation", "Message", nu
 // Pilot journey, import batches and case handover.
 described("JourneyCounts", obj({ customers: num, batches: num, receipts: num, openCases: num, unassignedCases: num, closes: num, exports: num }), "Record counts that place the lender on the pilot journey: customers, committed batches, receipts, open and unassigned cases, closes and ready exports.");
 described("PilotJourney", obj({ lender: ref("Merchant"), accessMode: { type: "string", enum: ["sandbox", "staff"] }, actor: str, syntheticOnly: { type: "boolean", const: true }, counts: ref("JourneyCounts") }), "The lender, the caller's access mode and the counts behind the journey view. Synthetic throughout.");
-described("ImportBatchList", obj({ items: arr("ValopayRecord"), total: num, offset: num }), "Import batches newest first, 25 a page, with their source identity, quality totals and check counts but not their rows.");
+described("ImportBatchList", obj({ items: arr("ValopayRecord"), total: num, offset: num }), "Import batches newest first, 25 a page, with their source identity, quality totals and check counts but not their rows. A batch saved before check summaries were stored is listed without check counts while the key service cannot open its check.");
 described("ImportBatchDetail", obj({ batch: ref("ValopayRecord"), revisions: arr("ValopayRecord") }), "One batch with its source rows (import operator roles only) and every saved revision.");
 described("BatchVersion", obj({ expectedUpdatedAt: str }), "The batch version being committed; a stale version is refused (409).");
 derived("ImportBatchInput", shared.batchInputSchema, "A synthetic source batch: source, source batch ID, record kind, mapping, identity column, amount unit and up to 500 CSV rows. syntheticOnly must be true; raw bank details are refused.");
@@ -459,9 +462,9 @@ described("Assignee", obj({ actor: str, name: str, role: str }), "A person who c
 described("EvidenceLink", obj({ id: str, name: str, reference: str, kind: str }), "A record the case can cite as evidence.");
 described("CaseDetail", obj({ record: ref("ValopayRecord"), assignees: arr("Assignee"), events: arr("ValopayRecord"), evidence: arr("EvidenceLink") }), "One exception with the people it can be handed to, its handover events and the records it can cite.");
 derived("CaseInput", shared.caseInputSchema, "A case handover or update: assignee, next action and its time, note and evidence, with the version being changed.");
-derived("PilotLenderInput", shared.lenderInputSchema, "A new synthetic lender for a staff workspace: name and segment.");
+derived("PilotLenderInput", shared.lenderInputSchema, "A new synthetic lender: name and segment. A sandbox workspace holds at most five lenders, the two samples included.");
 operation("/v1/pilot/journey", "get", "getPilotJourney", "PilotJourney", null, [merchant], "Read the pilot journey counts", "Counts of the records each pilot step needs, for the journey page. No record is created by reading.");
-operation("/v1/pilot/lenders", "post", "createPilotLender", "Merchant", "PilotLenderInput", [keyHeader], "Create a synthetic lender", "Administrator with recent MFA on a staff host. The key makes creation repeatable; the same key with different details is refused.");
+operation("/v1/pilot/lenders", "post", "createPilotLender", "Merchant", "PilotLenderInput", [keyHeader], "Create a synthetic lender", "An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused.");
 operation("/v1/pilot/batches", "get", "listImportBatches", "ImportBatchList", null, [merchant, journalOffset], "List import batches", "Newest first, 25 a page, without source rows.");
 operation("/v1/pilot/batches/{id}", "get", "getImportBatch", "ImportBatchDetail", null, [pathParam("id"), merchant], "Open an import batch", "The batch with its source rows and revisions. Import operator roles only (403); unknown batches are 404.");
 operation("/v1/pilot/batches", "post", "saveImportBatch", "ValopayRecord", "ImportBatchInput", [merchant, keyHeader], "Save a source batch", "Parses and checks the rows, screens them for raw bank details, and records the batch as ready or needing correction. A batch with the same source identity is refused (409).");
@@ -546,6 +549,21 @@ operation("/v1/sources/profiles/{id}/save", "post", "saveSourceProfile", "Valopa
 operation("/v1/sources/manifests", "post", "saveSourceManifest", "ValopayRecord", "SourceManifestInput", [merchant, keyHeader], "Declare the expected source files", "Records what must arrive for a business date. A revision must name the current declaration; a source batch declared for another date is refused.");
 operation("/v1/sources/paystack/fixtures", "post", "runPaystackFixture", "PaystackFixtureResult", "PaystackFixtureInput", [merchant, keyHeader], "Deliver a recorded Paystack scenario", "Runs a test-only fixture through the inbox. No external call is made and no financial record is created.");
 operation("/v1/sources/events/{id}/replay", "post", "replayProviderEvent", "ProviderEvent", "ProviderReplayInput", [pathParam("id"), merchant, keyHeader], "Replay a stored provider event", "Re-processes the event with the reason recorded; duplicates are recognised and counted.");
+// The Paystack test ingress: the address an operator registers with a Paystack test account, not a console call.
+described("PaystackTestEvent", obj({ event: str, data: { type: "object", additionalProperties: {}, description: "The event's payload as Paystack sent it." } }), "A Paystack test event exactly as Paystack signed it. The signature covers these bytes, so the body is authenticated before it is parsed. charge.success and the two direct-debit authorisation events are recorded; any other signed event is acknowledged and recorded as ignored.");
+described("PaystackDeliveryReceipt", obj({ accepted: { type: "boolean", const: true }, duplicate: bool }), "The acknowledgement Paystack receives: the signed event is saved in the mapped lender's inbox, or recognised as a repeat delivery of one already saved.");
+const connectionIdParam = { name: "connectionId", in: "path", required: true, schema: { type: "string", pattern: "^[a-f0-9]{64}$" }, description: "The opaque ID an operator mapped to one synthetic lender in VALOPAY_PAYSTACK_CONNECTIONS; it alone selects the lender, and it is not a credential." };
+const paystackSignature = { name: "x-paystack-signature", in: "header", required: true, schema: { type: "string", pattern: "^[a-fA-F0-9]{128}$" }, description: "HMAC-SHA512 of the exact request bytes under the configured test secret key, in hexadecimal." };
+operation("/v1/providers/paystack/{connectionId}/events", "post", "receivePaystackTestEvent", "PaystackDeliveryReceipt", "PaystackTestEvent", [connectionIdParam, paystackSignature], "Receive a signed Paystack test event", "The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key, and at most 120 deliveries a minute per client address.");
+Object.assign(paths["/v1/providers/paystack/{connectionId}/events"].post.responses, {
+  "400": { description: "The body is not JSON bytes, the connection ID is malformed, or the signed event is inconsistent or from live mode" },
+  "401": { description: "The signature does not match the exact bytes under the configured test key; nothing was locked, read or saved" },
+  "403": { description: "With the lender locked, the mapping names another workspace, or the lender is not a synthetic lender in sandbox or observation mode with its kill switch on" },
+  "404": { description: "No lender is mapped to this connection ID, or, when the lender cannot be locked, it is not in the mapped workspace (removed, or the mapping names the wrong lender or workspace); correct the connection mapping, since delivering again will not help" },
+  "413": { description: "The body is larger than 256 KiB" },
+  "429": { description: "More than 120 deliveries a minute from this client address; retry after the Retry-After seconds" },
+  "503": { description: "The ingress is off or misconfigured, or the mapped lender is in its workspace but busy; Paystack delivers again" },
+});
 
 // Personal work.
 derived("PersonalWorkView", shared.personalWorkViewSchema, "The caller's (or, for administrators, the team's) cases, handovers, reviews and notifications, paged and counted.");

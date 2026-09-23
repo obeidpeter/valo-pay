@@ -20,7 +20,7 @@ const oldDirectory=process.env.PRIVATE_OBJECT_DIR;
 process.env.PRIVATE_OBJECT_DIR='/private/synthetic-export-tests';
 let server:Server|undefined;
 function gate(){let resolve!:()=>void;const promise=new Promise<void>(done=>{resolve=done;});return {promise,resolve};}
-async function within<T>(promise:Promise<T>){let timer:ReturnType<typeof setTimeout>;try{return await Promise.race([promise,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('Export held a database lock during storage I/O.')),3000);})]);}finally{clearTimeout(timer!);}}
+async function within<T>(promise:Promise<T>,message='Export held a database lock during storage I/O.',ms=3000){let timer:ReturnType<typeof setTimeout>;try{return await Promise.race([promise,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error(message)),ms);})]);}finally{clearTimeout(timer!);}}
 const objects=new Map<string,{bytes:Buffer;artifact:ExportArtifact}>();
 let uploads=0;
 const storage:ExportJobStorage={existing:async claim=>objects.get(claim.location.objectName)?.artifact||null,put:async(claim,bytes,artifact)=>{assert.equal(objects.has(claim.location.objectName),false);objects.set(claim.location.objectName,{bytes,artifact});uploads++;}};
@@ -109,7 +109,66 @@ try{
  assert.deepEqual(await api(`/exports/${thirdTarget.id}/retry`,{method:'POST',body:{},key:'retry-third'}),retried);
  assert.equal(await processExportJob(repository,storage,generateExportArtifact,thirdTarget),'ready');
  state=await read();assert.equal(verifyAudit(state).valid,true,'fail/retry/start/ready append valid sequential audit entries');
- console.log('Durable export DB checks passed: queue replay, tenant isolation, private metadata, lock-free upload, audit chain, crash recovery, stable object adoption and retriable failures.');
+
+ // A stopping worker hands its claim back: queued again with an audit entry,
+ // never failed, and the next worker resumes it without waiting for the lease.
+ const stopReason=()=>new Error('Export worker is stopping.');
+ const blockedUpload=(onUpload:()=>void):ExportJobStorage=>({existing:async()=>null,put:async(_claim,_bytes,_artifact,signal)=>new Promise((_resolve,reject)=>{
+  signal!.addEventListener('abort',()=>reject(signal!.reason),{once:true});onUpload();
+ })});
+ const handed=await api('/exports',{method:'POST',body:input,key:'released-export'});
+ const handedTarget={merchantId,id:handed.body.id},stop=new AbortController();
+ assert.equal(await processExportJob(repository,blockedUpload(()=>stop.abort(stopReason())),generateExportArtifact,handedTarget,{signal:stop.signal}),'released');
+ const handedView=(await api(`/exports/${handedTarget.id}`)).body;
+ assert.equal(handedView.status,'queued');assert.equal(handedView.stage,'queued');assert.equal(handedView.error,undefined);
+ assert.equal(handedView.retryAllowed,false);assert.equal(handedView.stalled,false);assert.equal(handedView.recoveryAt,undefined);
+ state=await read();assert.equal(verifyAudit(state).valid,true,'queue/start/release share the lender audit chain');
+ const handedActions=()=>state.records.filter(record=>record.kind==='audit'&&record.data.objectId===handedTarget.id).map(record=>record.data.action);
+ assert.deepEqual(handedActions().slice(-2),['export.started','export.released']);
+ assert.equal(await processExportJob(repository,storage,generateExportArtifact,handedTarget),'ready');
+ state=await read();assert.equal(state.records.find(record=>record.id===handedTarget.id)!.data.attempts,2);assert.deepEqual(handedActions().slice(-3),['export.released','export.started','export.ready']);
+
+ // The hand-back is fenced by the lease token: a superseded worker cannot
+ // requeue its successor's job.
+ const fenced=await api('/exports',{method:'POST',body:input,key:'fenced-release'});
+ const staleClaim=(await repository.claim(merchantId,fenced.body.id))!;
+ await pool.query("UPDATE valopay_records SET data=jsonb_set(data,'{leaseExpiresAt}',to_jsonb('2000-01-01T00:00:00.000Z'::text)) WHERE merchant_id=$1 AND id=$2",[merchantId,fenced.body.id]);
+ const currentClaim=(await repository.claim(merchantId,fenced.body.id))!;
+ assert.equal(await repository.release(staleClaim),'lost');assert.equal((await api(`/exports/${fenced.body.id}`)).body.status,'running');
+ assert.equal(await repository.release(currentClaim),'saved');assert.equal((await api(`/exports/${fenced.body.id}`)).body.status,'queued');
+
+ // When the lender stays locked for every attempt, the job is not failed: it
+ // keeps its lease and recovers when the lease expires.
+ const locked=await api('/exports',{method:'POST',body:input,key:'interrupted-export'});
+ const lockedTarget={merchantId,id:locked.body.id},lockedStop=new AbortController(),lockHolder=await pool.connect();
+ try{
+  const lockAndStop=async()=>{await lockHolder.query('BEGIN');await lockHolder.query('SELECT id FROM valopay_merchants WHERE id=$1 FOR SHARE',[merchantId]);lockedStop.abort(stopReason());};
+  assert.equal(await processExportJob(repository,blockedUpload(()=>{void lockAndStop();}),generateExportArtifact,lockedTarget,{signal:lockedStop.signal,backoffMs:0}),'interrupted');
+ }finally{await lockHolder.query('ROLLBACK');lockHolder.release();}
+ const lockedView=(await api(`/exports/${lockedTarget.id}`)).body;
+ assert.equal(lockedView.status,'running');assert.equal(lockedView.error,undefined);assert.ok(lockedView.recoveryAt,'the lease stays for recovery');
+ assert.equal(await repository.claim(merchantId,lockedTarget.id),null,'the unexpired lease still holds the job');
+ await pool.query("UPDATE valopay_records SET data=jsonb_set(data,'{leaseExpiresAt}',to_jsonb('2000-01-01T00:00:00.000Z'::text)) WHERE merchant_id=$1 AND id=$2",[merchantId,lockedTarget.id]);
+ assert.equal(await processExportJob(repository,storage,generateExportArtifact,lockedTarget),'ready');
+
+ // The worker's stop() takes the same path and logs each hand-back. Both jobs
+ // belong to one lender, so the two hand-backs may contend for its lock and retry.
+ // Claims are serialised, and a claim that finds the lender locked (by the other
+ // job's progress write) is tried again, only so that both attempts start: the
+ // worker itself skips such a job and a later poll picks it up.
+ const {startExportWorker}=await import('../src/lib/export-worker');
+ const stoppedIds=[await api('/exports',{method:'POST',body:input,key:'stopped-one'}),await api('/exports',{method:'POST',body:input,key:'stopped-two'})].map(queued=>queued.body.id as string);
+ let uploading=0,bothUploading!:()=>void;const bothBlocked=new Promise<void>(resolve=>{bothUploading=resolve;});
+ const lines:Array<{event:string;status?:string}>=[];
+ const claimWhenFree=async(merchant:string,id:string)=>{for(let attempt=0;attempt<50;attempt++){const claimed=await repository.claim(merchant,id);if(claimed)return claimed;await delay(20);}return null;};
+ let claims:Promise<unknown>=Promise.resolve();
+ const worker=startExportWorker({intervalMs:60_000,log:{info:(line:any)=>lines.push(line),error:(line:any)=>lines.push(line)} as any,
+  repository:{...repository,candidates:async()=>stoppedIds.map(id=>({merchantId,id})),claim:(merchant,id)=>{const next=claims.then(()=>claimWhenFree(merchant,id));claims=next.catch(()=>null);return next;}},storage:blockedUpload(()=>{if(++uploading===2)bothUploading();}),generate:generateExportArtifact});
+ try{await within(bothBlocked,'Both exports in the stop() check must reach their uploads.',10_000);}finally{worker.stop();await worker.settle();}
+ assert.deepEqual(lines.map(line=>[line.event,line.status]),[['export.job','released'],['export.job','released']]);
+ for(const id of stoppedIds){const view=(await api(`/exports/${id}`)).body;assert.equal(view.status,'queued');assert.equal(view.error,undefined);}
+ state=await read();assert.equal(verifyAudit(state).valid,true,'released and interrupted attempts keep one valid audit chain');
+ console.log('Durable export DB checks passed: queue replay, tenant isolation, private metadata, lock-free upload, audit chain, crash recovery, stable object adoption, retriable failures and hand-back on stop.');
 }finally{
  if(oldDirectory===undefined)delete process.env.PRIVATE_OBJECT_DIR;else process.env.PRIVATE_OBJECT_DIR=oldDirectory;
  if(server)await new Promise<void>((resolve,reject)=>server!.close(error=>error?reject(error):resolve()));

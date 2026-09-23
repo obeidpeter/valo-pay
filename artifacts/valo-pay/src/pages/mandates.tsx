@@ -25,6 +25,7 @@ import { useHashTarget } from '@/lib/use-hash-target';
 import { usePagedQueue } from '@/lib/use-paged-queue';
 import { SavedQueueViews } from '@/components/saved-queue-views';
 import { RecordPagination } from '@/components/record-pagination';
+import { DiscardOriginalRequest } from '@/components/discard-original-request';
 
 const mandateViews = ['all', 'awaiting-activation', 'overdue', 'due-today'] as const;
 const emptyMandate = { name: '', customerId: '', amountKobo: '', reference: '', workflow: 'hosted_consent', consentEvidence: '', consentGaps: '', policyId: '', frequency: 'monthly' };
@@ -283,7 +284,7 @@ export default function MandatesPage() {
             <Dialog.Title className="text-lg font-semibold">Create synthetic mandate</Dialog.Title>
             <Dialog.Description className="mt-1 text-sm text-muted-foreground">Use synthetic details only. This records a mandate in the sandbox; it sends no instruction to a bank.</Dialog.Description>
             <form noValidate className="mt-5 space-y-4" onSubmit={submitCreate}>
-              {createMandate.hasUnconfirmedOutcome && <FormAlert title="Mandate creation outcome unconfirmed">The response was lost or unavailable. This mandate may already exist. Keep these details unchanged and retry the original request to recover its result without creating a second mandate.</FormAlert>}
+              {createMandate.hasUnconfirmedOutcome && <FormAlert title="Mandate creation outcome unconfirmed"><p>The response was lost or unavailable. This mandate may already exist. Keep these details unchanged and retry the original request to recover its result without creating a second mandate.</p><div className="mt-2"><DiscardOriginalRequest disabled={createMandate.isPending} onDiscard={() => { createMandate.abandonUnconfirmed(); setFormErrors([]); setFieldErrors({}); }} /></div></FormAlert>}
               <fieldset disabled={createMandate.isPending || createMandate.hasUnconfirmedOutcome} className="contents">
               {!createMandate.hasUnconfirmedOutcome && (formErrors.length > 0 || Object.keys(fieldErrors).length > 0) && (
                 <FormAlert title={formErrors[0] ?? attentionTitle(Object.keys(fieldErrors).length)}>{formErrors.slice(1).map(message => <p key={message}>{message}</p>)}</FormAlert>

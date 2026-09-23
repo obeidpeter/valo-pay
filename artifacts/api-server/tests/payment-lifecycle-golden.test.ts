@@ -1,10 +1,11 @@
 // Golden tests for the payment and exception rules corrected after the
 // September 2026 audit: money that went back to the payer, payment status
-// after a stale or rejected proposal, precision reviews that stick, and
-// exception resolutions that hold across daily closes.
+// after a stale or rejected proposal, precision reviews that stick,
+// exception resolutions that hold across daily closes, and an instalment's
+// status after its amount is edited.
 import assert from "node:assert/strict";
 import { addAttempt, addObservation, ctxAt, liveFixture, outstandingOf, wat } from "./helpers.js";
-import { allocatePayment, reconcile } from "../src/domain/reconciliation.js";
+import { allocatePayment, amendDueItem, reconcile } from "../src/domain/reconciliation.js";
 import { executeAction } from "../src/domain/actions.js";
 import { positionFor } from "../src/domain/close.js";
 import { countedAttempts, evaluateRetry } from "../src/domain/policy-engine.js";
@@ -12,6 +13,7 @@ import { precisionAudit } from "../src/domain/reports.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
 import type { DomainState, TypedRecord } from "../src/domain/types.js";
+import { paymentMoneyReturned, paymentUnappliedKobo } from "@workspace/valopay-schema";
 
 const { assertFinalState } = await import("../src/lib/valopay-store.js");
 let checks = 0;
@@ -80,6 +82,7 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   equal(positionFor(state, due.customerId).unallocatedKobo, 1_234_500, "while it waits, it is the customer's credit");
   executeAction(state, finance(wat("2027-07-01T11:00:00")), { action: "record_refund", recordId: payment.id, reason: "Returned to the payer", data: { reference: "RF-ODD-1" } });
   equal([payment.status, payment.data.refundStatus], ["returned", "refunded"], "a recorded refund returns the payment");
+  equal(payment.data.refundedKobo, 1_234_500, "the refund records the amount that went back");
   equal(positionFor(state, due.customerId).unallocatedKobo, 0, "refunded money is not customer credit");
   refused(() => executeAction(state, finance(wat("2027-07-01T12:00:00")), { action: "record_refund", recordId: payment.id, reason: "Again", data: { reference: "RF-ODD-2" } }), /already recorded/, 409, "one refund per payment");
   // A new instalment for exactly that amount appears; R5 must not propose the refunded money against it.
@@ -93,11 +96,50 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   const over = paymentByReference(state, "TRF-OVER");
   executeAction(state, finance(wat("2027-07-03T10:00:00")), { action: "manual_allocate", recordId: over.id, reason: "Customer paid instalment 5 with extra", data: { dueItemId: due.id, amountKobo: GROSS } });
   equal([over.status, due.status, positionFor(state, due.customerId).unallocatedKobo], ["overpaid", "paid", 500_000], "the excess is the customer's credit until it is refunded");
-  executeAction(state, finance(wat("2027-07-03T11:00:00")), { action: "record_refund", recordId: over.id, reason: "Excess returned to the payer", data: { reference: "RF-OVER" } });
+  const refundedExcess = executeAction(state, finance(wat("2027-07-03T11:00:00")), { action: "record_refund", recordId: over.id, reason: "Excess returned to the payer", data: { reference: "RF-OVER" } });
+  equal(refundedExcess.message, "External refund of NGN 5,000.00 recorded: the money this payment had not applied. Valo Pay did not move funds.", "the amount reads like the other money in the API");
   equal([over.status, over.data.refundStatus, over.data.allocatedKobo], ["allocated", "refunded", GROSS], "the refund returns the excess; what was applied stays applied");
+  equal(over.data.refundedKobo, 500_000, "only the excess is recorded as refunded");
   equal([due.status, allocationsFor(state, over).map((item) => item.status)], ["paid", ["confirmed"]], "the instalment stays paid by the money that stayed");
   equal(positionFor(state, due.customerId).unallocatedKobo, 0, "the refunded excess is no longer credit");
-  refused(() => executeAction(state, finance(wat("2027-07-03T12:00:00")), { action: "manual_allocate", recordId: over.id, reason: "Apply the rest", data: { dueItemId: recordsOf(state, "due-items").find((item) => item.reference === "DEMO-LOAN-2006")!.id, amountKobo: 500_000 } }), /refunded to the payer\. Its money went back/, 409, "the refunded excess cannot be allocated");
+  refused(() => executeAction(state, finance(wat("2027-07-03T12:00:00")), { action: "manual_allocate", recordId: over.id, reason: "Apply the rest", data: { dueItemId: recordsOf(state, "due-items").find((item) => item.reference === "DEMO-LOAN-2006")!.id, amountKobo: 500_000 } }), /Payment TRF-OVER was refunded to the payer in part: NGN 5,000\.00 went back, so nothing is left to allocate/, 409, "the refunded excess cannot be allocated");
+  // The match is then found wrong. The ₦25,000 that stayed never went back: it is the customer's credit again, and Finance may allocate it.
+  const [overMatch] = allocationsFor(state, over);
+  executeAction(state, finance(wat("2027-07-04T09:00:00")), { action: "review_allocation", recordId: overMatch!.id, reason: "Wrong loan", data: { correct: false } });
+  equal([over.status, over.data.allocatedKobo, over.data.refundedKobo, over.data.refundStatus], ["unallocated", 0, 500_000, "refunded"], "only the excess went back, so the payment waits for Finance with the rest");
+  equal([paymentMoneyReturned(over), paymentUnappliedKobo(over), positionFor(state, due.customerId).unallocatedKobo], [false, GROSS, GROSS], "what the refund did not return is credit and can be allocated");
+  // An instalment for the gross ₦30,000, due the next day, is what R5 would propose if it read the payment as whole.
+  const third = makeRecord(state, "due-items", { name: "Ngozi Eze · instalment 7", status: "scheduled", customerId: due.customerId, amountKobo: 3_000_000, reference: "DEMO-LOAN-2007", data: { dueDate: "2027-07-04", mandateId: due.data.mandateId, owner: "lms", outstandingKobo: 3_000_000 } });
+  const closed = executeAction(state, finance(wat("2027-07-05T07:00:00")), { action: "daily_close" }).record!;
+  equal([over.status, allocationsFor(state, over).filter((item) => item.status === "proposed").length, closed.data.report.reconciliation.paymentsSkipped], ["unallocated", 0, 0], "automatic matching, which reads the gross amount, leaves it for Finance without failing");
+  equal(over.data.explanation, "A refund returned NGN 5,000.00 of this payment. Automatic matching leaves the NGN 25,000.00 it still holds for Finance to allocate.", "and says why");
+  const waiting = recordsOf(state, "payments").filter((item) => item.status === "unallocated" && item.id !== over.id).reduce((sum, item) => sum + item.amountKobo, 0);
+  equal([closed.data.report.unallocated.kobo, exceptionsFor(state, "unallocated_payment", over.id).map((item) => item.amountKobo)], [waiting + GROSS, [GROSS]], "the close and its exception count the NGN 25,000 it holds, not the NGN 30,000 received");
+  refused(() => executeAction(state, finance(wat("2027-07-05T09:30:00")), { action: "record_refund", recordId: over.id, reason: "Again", data: { reference: "RF-OVER-2" } }), /already recorded/, 409, "one refund per payment, even when the payment holds money again");
+  refused(() => executeAction(state, finance(wat("2027-07-05T10:00:00")), { action: "manual_allocate", recordId: over.id, reason: "Whole receipt", data: { dueItemId: third.id, amountKobo: 3_000_000 } }), /in part: NGN 5,000\.00 went back, so only NGN 25,000\.00 is left to allocate/, 409, "the refunded part still cannot be allocated");
+  // Finance applies what stayed: it settles instalment 6 and the rest is an overpayment of what the payment still holds.
+  executeAction(state, finance(wat("2027-07-05T10:02:00")), { action: "resolve_exception", recordId: exceptionsFor(state, "overpayment", over.id)[0]!.id, reason: "The excess was refunded to the payer.", data: { resolutionCode: "refund_requested" } });
+  const sixth = recordsOf(state, "due-items").find((item) => item.reference === "DEMO-LOAN-2006")!;
+  executeAction(state, finance(wat("2027-07-05T10:05:00")), { action: "manual_allocate", recordId: over.id, reason: "Right loan", data: { dueItemId: sixth.id, amountKobo: 1_234_500 } });
+  const overpayment = exceptionsFor(state, "overpayment", over.id).at(-1)!;
+  equal([over.status, sixth.status, overpayment.amountKobo, positionFor(state, due.customerId).unallocatedKobo], ["overpaid", "paid", 1_265_500, 1_265_500], "the overpayment is the NGN 12,655 left, not the refunded NGN 5,000 as well");
+  executeAction(state, finance(wat("2027-07-05T10:10:00")), { action: "manual_allocate", recordId: over.id, reason: "Rest to the next loan", data: { dueItemId: third.id, amountKobo: 1_265_500 } });
+  equal([over.status, over.data.allocatedKobo, outstandingOf(third), third.status, positionFor(state, due.customerId).unallocatedKobo], ["allocated", GROSS, 1_734_500, "partially_paid", 0], "what stayed is all applied again, and the payment has nothing left");
+  invariant(state);
+}
+{
+  // A refund recorded before its amount was kept is read as the whole payment: after its match is found wrong, nothing is left.
+  const { state, due } = liveFixture({ withFailure: false, merchantId: "legacy-refund" });
+  const legacy = makeRecord(state, "payments", { name: "legacy", status: "allocated", reference: "LEG-REFUND", customerId: due.customerId, amountKobo: 3_000_000, data: { allocatedKobo: GROSS, observedAt: wat("2027-07-01T09:00:00"), channel: "transfer", refundStatus: "refunded" } });
+  const match = makeRecord(state, "allocations", { name: "Allocation R7", status: "confirmed", customerId: due.customerId, amountKobo: GROSS, data: { paymentId: legacy.id, dueItemId: due.id, rule: "R7", confidence: "manual", automatic: false, reviewed: null } });
+  due.data.outstandingKobo = 0; due.status = "paid";
+  equal([paymentMoneyReturned(legacy), paymentUnappliedKobo(legacy)], [true, 0], "a refund with no recorded amount returned the whole payment");
+  executeAction(state, finance(wat("2027-07-02T09:00:00")), { action: "review_allocation", recordId: match.id, reason: "Wrong loan", data: { correct: false } });
+  equal([legacy.status, paymentUnappliedKobo(legacy), positionFor(state, due.customerId).unallocatedKobo], ["returned", 0, 0], "so its money is not credit once the match is superseded");
+  refused(() => executeAction(state, finance(wat("2027-07-02T10:00:00")), { action: "manual_allocate", recordId: legacy.id, reason: "By hand", data: { dueItemId: due.id, amountKobo: GROSS } }), /refunded to the payer\. Its money went back/, 409, "and it cannot be allocated");
+  // A refund whose recorded amount covers the whole payment reads the same.
+  const whole = makeRecord(state, "payments", { name: "whole", status: "returned", reference: "WHOLE-REFUND", customerId: due.customerId, amountKobo: 700_000, data: { allocatedKobo: 0, observedAt: wat("2027-07-01T09:00:00"), channel: "transfer", refundStatus: "refunded", refundedKobo: 700_000 } });
+  equal([paymentMoneyReturned(whole), paymentUnappliedKobo(whole)], [true, 0], "a refund of the whole amount returned the payment");
   invariant(state);
 }
 
@@ -109,6 +151,8 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   executeAction(state, finance(wat("2027-07-01T11:00:00")), { action: "manual_allocate", recordId: payment.id, reason: "Customer asked for instalment 6", data: { dueItemId: second.id, amountKobo: GROSS } });
   equal([payment.status, payment.data.allocatedKobo], ["allocated", GROSS], "the payment is fully applied to the instalment Finance chose");
   equal([proposal.status, payment.data.proposedDueItemId], ["superseded", undefined], "the proposal that no longer fits is withdrawn");
+  refused(() => executeAction(state, finance(wat("2027-07-01T11:02:00")), { action: "record_refund", recordId: payment.id, reason: "Returned", data: { reference: "RF-STALE" } }), /nothing unapplied to refund/, 409, "a payment whose money is all applied has nothing a refund recorded here can return");
+  equal([payment.status, payment.data.refundStatus, payment.data.refundedKobo], ["allocated", "none", undefined], "and the refused refund records nothing");
   assert.throws(() => executeAction(state, finance(wat("2027-07-01T11:05:00")), { action: "reject_allocation", recordId: payment.id, reason: "Old screen" }), /no proposed allocation/); checks += 1;
   for (const day of ["2027-07-02", "2027-07-03"]) reconcile(state, finance(wat(`${day}T07:00:00`)));
   equal([payment.status, allocationsFor(state, payment).filter((item) => item.status === "confirmed").length], ["allocated", 1], "later closes leave the applied payment alone");
@@ -143,9 +187,11 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   Object.assign(refundedExcess.data, { refundStatus: "recorded_externally" });
   makeRecord(state, "allocations", { name: "Allocation R7", status: "confirmed", customerId: due.customerId, amountKobo: GROSS, data: { paymentId: refundedExcess.id, dueItemId: second.id, rule: "R7", confidence: "manual", automatic: false, reviewed: null } });
   second.data.outstandingKobo = 0; second.status = "paid";
+  // Its excess was refunded and its match then superseded, when an earlier build read any refund as returning the whole payment.
+  const heldBack = makeRecord(state, "payments", { name: "legacy", status: "returned", reference: "LEG-PART-REFUND", customerId: due.customerId, amountKobo: 3_000_000, data: { allocatedKobo: 0, observedAt: wat("2027-07-01T09:00:00"), channel: "transfer", refundStatus: "refunded", refundedKobo: 500_000 } });
   const run = reconcile(state, finance(wat("2027-07-02T07:00:00")));
-  equal([applied.status, stuck.status, reversed.status, refundedExcess.status], ["allocated", "unallocated", "returned", "allocated"], "each status now matches its records");
-  equal(run.data.paymentStatusesRepaired, 4, "the close reports the repairs");
+  equal([applied.status, stuck.status, reversed.status, refundedExcess.status, heldBack.status], ["allocated", "unallocated", "returned", "allocated", "unallocated"], "each status now matches its records");
+  equal(run.data.paymentStatusesRepaired, 5, "the close reports the repairs");
   equal(stuck.data.proposedDueItemId, undefined, "the dead proposal pointer is cleared");
   invariant(state);
 }
@@ -257,6 +303,43 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   equal([variances.length, variances.at(-1)!.status], [2, "open"], "a changed fee variance raises a new exception");
 }
 {
+  // A fee variance accepted once holds whether it was raised before or after the statement credit matched the batch net.
+  for (const statementFirst of [true, false]) {
+    const { state, due } = liveFixture({ withFailure: false, merchantId: `durable-variance-statement-${statementFirst}` });
+    const statement = () => addObservation(state, { reference: "STMT-FEE", amountKobo: GROSS - 30_000, batchReference: "B-FEE-STMT", source: "statement", eventId: "st", occurredAt: wat("2027-07-01T08:00:00") });
+    addObservation(state, { reference: "L1", amountKobo: GROSS - 30_000, grossAmountKobo: GROSS, feeKobo: 30_000, batchReference: "B-FEE-STMT", source: "settlement", customerId: due.customerId, dueItemId: due.id, eventId: "l1", occurredAt: wat("2027-07-01T07:00:00") });
+    if (statementFirst) statement();
+    reconcile(state, finance(wat("2027-07-01T09:00:00")));
+    const batch = recordsOf(state, "settlement-batches").find((item) => item.reference === "B-FEE-STMT")!;
+    const [variance] = exceptionsFor(state, "settlement_variance", batch.id);
+    resolve(state, variance!, wat("2027-07-01T10:00:00"), "accepted_variance");
+    if (!statementFirst) statement();
+    reconcile(state, finance(wat("2027-07-02T07:05:00")));
+    reconcile(state, finance(wat("2027-07-05T07:05:00")));
+    equal([batch.status, batch.data.statementNetKobo], ["variance", GROSS - 30_000], `the statement matched the net but the fees still differ (${statementFirst ? "statement first" : "fees first"})`);
+    equal(exceptionsFor(state, "settlement_variance", batch.id).length, 1, `the accepted fee variance is not raised again (${statementFirst ? "statement first" : "fees first"})`);
+  }
+}
+{
+  // Resolutions stored before the batch evaluator: an earlier build keyed a variance found when the statement credit was linked on
+  // the statement (settlement_variance:<batch>:statement:<credit>:<net>:<fees>), and one found by the fee check on the fees
+  // (settlement_variance:<batch>:fees:<fees>:<expected fees>). Accepted under either spelling, the variance is not raised again.
+  for (const spelling of ["statement", "fees"] as const) {
+    const { state, due } = liveFixture({ withFailure: false, merchantId: `stored-variance-${spelling}` });
+    addObservation(state, { reference: "L1", amountKobo: GROSS - 30_000, grossAmountKobo: GROSS, feeKobo: 30_000, batchReference: "B-STORED", source: "settlement", customerId: due.customerId, dueItemId: due.id, eventId: "l1", occurredAt: wat("2027-07-01T07:00:00") });
+    addObservation(state, { reference: "STMT-STORED", amountKobo: GROSS - 30_000, batchReference: "B-STORED", source: "statement", eventId: "st", occurredAt: wat("2027-07-01T08:00:00") });
+    reconcile(state, finance(wat("2027-07-01T09:00:00")));
+    const batch = recordsOf(state, "settlement-batches").find((item) => item.reference === "B-STORED")!;
+    const [stored] = exceptionsFor(state, "settlement_variance", batch.id);
+    stored!.data.condition = spelling === "statement" ? `settlement_variance:${batch.id}:statement:2470000:2470000:30000` : `settlement_variance:${batch.id}:fees:30000:12500`;
+    resolve(state, stored!, wat("2027-07-01T10:00:00"), "accepted_variance");
+    reconcile(state, finance(wat("2027-07-02T07:05:00")));
+    reconcile(state, finance(wat("2027-07-05T07:05:00")));
+    equal([batch.status, batch.data.statementNetKobo, batch.data.netKobo, batch.data.feeVarianceKobo], ["variance", 2_470_000, 2_470_000, 17_500], `the credit matches the net and only the fees differ (${spelling} spelling)`);
+    equal(exceptionsFor(state, "settlement_variance", batch.id).length, 1, `a variance accepted under the ${spelling} spelling is not raised again`);
+  }
+}
+{
   const { state, due } = liveFixture({ withFailure: false, merchantId: "durable-mapping" });
   const attempt = addAttempt(state, due, { status: "failed", failureCode: "R42", occurredAt: wat("2027-06-28T06:16:00") });
   attempt.data.rawFailureCode = "R42";
@@ -333,4 +416,96 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   invariant(state);
 }
 
-console.log(`Payment lifecycle golden tests passed (${checks} checks): returned money, stale and rejected proposals, repaired statuses, isolated matching, precision reviews that stick and apply again, durable exception resolutions and confirmed unknown outcomes.`);
+// ---------- Item 13: an instalment's status follows its balance after an amount edit ----------
+/** The store's check on a save, against the state as it was loaded. */
+const saved = (loaded: DomainState, state: DomainState) => { assert.doesNotThrow(() => assertFinalState(loaded, state, state.merchant.id)); checks += 1; };
+const dueByReference = (state: DomainState, reference: string) => recordsOf(state, "due-items").find((item) => item.reference === reference)!;
+/** Finance applies a transfer of this amount to the instalment. */
+function manualTransfer(state: DomainState, due: TypedRecord<"due-items">, reference: string, amountKobo: number, at: string) {
+  const payment = makeRecord(state, "payments", { name: "Canonical payment", status: "unallocated", reference, customerId: due.customerId, amountKobo, data: { allocatedKobo: 0, observedAt: at, channel: "transfer" } });
+  executeAction(state, finance(at), { action: "manual_allocate", recordId: payment.id, reason: "Customer confirmed the instalment", data: { dueItemId: due.id, amountKobo } });
+}
+{
+  const state = seedMerchant("due-edits");
+  const at = wat("2027-07-01T09:00:00");
+  /** The record API's edit: the stored record with the changed fields, as PATCH /v1/records/due-items/:id builds it. */
+  const edit = (due: TypedRecord<"due-items">, changes: { amountKobo?: number; name?: string }) =>
+    amendDueItem(state, ctxAt(at, "Admin"), due, { ...due, ...changes, data: { ...due.data }, updatedAt: at });
+  const paid = dueByReference(state, "DEMO-LOAN-1001"); // ₦25,000, paid in full by a confirmed allocation
+  const partPaid = dueByReference(state, "DEMO-LOAN-1005"); // ₦25,000
+  manualTransfer(state, partPaid, "TRF-PART", 1_000_000, at);
+  const planned = addAttempt(state, partPaid, { status: "scheduled", occurredAt: wat("2027-07-03T07:00:00") });
+  const collecting = dueByReference(state, "DEMO-LOAN-1004"); // ₦35,000, in collection after a failed attempt
+  const untouched = dueByReference(state, "DEMO-LOAN-1006");
+  const disputed = dueByReference(state, "DEMO-LOAN-1007");
+  disputed.status = "in_dispute";
+  const tunde = dueByReference(state, "DEMO-LOAN-1002");
+  const final = makeRecord(state, "due-items", { name: "Túndé Bakare · instalment 9", status: "scheduled", customerId: tunde.customerId, amountKobo: 4_200_000, reference: "DEMO-LOAN-2009", data: { dueDate: "2027-06-01", mandateId: tunde.data.mandateId, owner: "lms", outstandingKobo: 4_200_000 } });
+  manualTransfer(state, final, "TRF-FINAL", 1_500_000, at);
+  final.status = "unpaid_final"; // the engine gave up after part of it was paid
+  equal([paid.status, partPaid.status, partPaid.data.outstandingKobo], ["paid", "partially_paid", 1_500_000], "one instalment is paid and another part-paid by a ₦10,000 transfer");
+  const loaded = structuredClone(state);
+
+  edit(paid, { amountKobo: 3_000_000 });
+  equal([paid.status, paid.data.outstandingKobo], ["partially_paid", 500_000], "a paid instalment raised to ₦30,000 owes ₦5,000 again and is part-paid");
+  edit(paid, { amountKobo: GROSS });
+  equal([paid.status, paid.data.outstandingKobo], ["paid", 0], "reduced back to what was paid, it is paid");
+  refused(() => edit(paid, { amountKobo: 1_000_000 }), /below confirmed allocations/, undefined, "an amount below the confirmed allocations is still refused");
+  edit(partPaid, { amountKobo: 1_000_000 });
+  equal([partPaid.status, partPaid.data.outstandingKobo], ["paid", 0], "a part-paid instalment reduced to the amount paid is paid with nothing outstanding");
+  equal(planned.status, "cancelled", "and its unsent attempt is cancelled, as when a payment settles it");
+  edit(untouched, { name: "Dami Adéyẹmí · instalment 6 (renamed)" });
+  equal([untouched.status, untouched.data.outstandingKobo], ["scheduled", 6_000_000], "an edit that leaves the balance whole keeps a scheduled instalment scheduled");
+  edit(collecting, { amountKobo: 3_600_000 });
+  equal([collecting.status, collecting.data.outstandingKobo], ["in_collection", 3_600_000], "an instalment in collection with nothing paid stays in collection when its amount changes");
+  edit(disputed, { amountKobo: 3_000_000 });
+  equal([disputed.status, disputed.data.outstandingKobo], ["in_dispute", 3_000_000], "a dispute is kept whatever the amount");
+  edit(final, { amountKobo: 4_500_000 });
+  equal([final.status, final.data.outstandingKobo], ["unpaid_final", 3_000_000], "a final failure is kept while money is still owed");
+  edit(final, { amountKobo: 1_500_000 });
+  equal([final.status, final.data.outstandingKobo], ["paid", 0], "and is paid once the edit leaves nothing outstanding");
+  saved(loaded, state);
+}
+{
+  // REC-09: marking a match wrong on an instalment the engine gave up on reopens it, since the money taken off it is owed again and the engine may collect it; an amount edit keeps the final failure, a review does not.
+  const state = seedMerchant("final-reopened");
+  const at = wat("2027-07-01T09:00:00");
+  const tunde = dueByReference(state, "DEMO-LOAN-1002");
+  const finalFailure = (reference: string, transfers: number[]) => {
+    const due = makeRecord(state, "due-items", { name: `Túndé Bakare · ${reference}`, status: "scheduled", customerId: tunde.customerId, amountKobo: 4_200_000, reference, data: { dueDate: "2027-06-01", mandateId: tunde.data.mandateId, owner: "lms", outstandingKobo: 4_200_000 } });
+    transfers.forEach((amountKobo, index) => manualTransfer(state, due, `TRF-${reference}-${index}`, amountKobo, at));
+    due.status = "unpaid_final"; // the engine gave up after part of it was paid
+    return { due, allocations: recordsOf(state, "allocations").filter((item) => item.status === "confirmed" && item.data.dueItemId === due.id) };
+  };
+  const once = finalFailure("DEMO-LOAN-2010", [1_500_000]);
+  const twice = finalFailure("DEMO-LOAN-2011", [1_500_000, 1_000_000]);
+  const loaded = structuredClone(state);
+  const markWrong = (allocation: TypedRecord<"allocations">) => executeAction(state, finance(wat("2027-07-02T09:00:00")), { action: "review_allocation", recordId: allocation.id, reason: "Wrong loan", data: { correct: false } });
+  markWrong(once.allocations[0]!);
+  equal([once.due.status, once.due.data.outstandingKobo], ["scheduled", 4_200_000], "with its only payment taken back it owes the whole amount and is scheduled again");
+  markWrong(twice.allocations[0]!);
+  equal([twice.due.status, twice.due.data.outstandingKobo], ["partially_paid", 3_200_000], "with one of two payments taken back it is part-paid, not a final failure");
+  saved(loaded, state);
+}
+{
+  // Statuses an amount edit left behind before this rule are repaired by the next close, before the engine evaluates them.
+  const state = seedMerchant("due-repair");
+  const raised = dueByReference(state, "DEMO-LOAN-1002"); // paid ₦42,000, raised to ₦47,000 by an earlier build's edit
+  raised.amountKobo = 4_700_000; raised.data.outstandingKobo = 500_000;
+  const reduced = dueByReference(state, "DEMO-LOAN-1005"); // part-paid, then reduced to what was paid
+  manualTransfer(state, reduced, "TRF-LEGACY", 1_000_000, wat("2027-07-01T09:00:00"));
+  const planned = addAttempt(state, reduced, { status: "scheduled", occurredAt: wat("2027-07-03T07:00:00") });
+  reduced.amountKobo = 1_000_000; reduced.data.outstandingKobo = 0;
+  const unknown = dueByReference(state, "DEMO-LOAN-1006"); // no stored balance: the repair does not guess one
+  delete unknown.data.outstandingKobo; unknown.status = "partially_paid";
+  equal([raised.status, reduced.status], ["paid", "partially_paid"], "the stored statuses contradict the balances");
+  const loaded = structuredClone(state);
+  const run = reconcile(state, finance(wat("2027-07-02T07:00:00")));
+  equal([raised.status, reduced.status, unknown.status], ["partially_paid", "paid", "partially_paid"], "each stored balance now decides its status");
+  equal(planned.status, "cancelled", "the settled instalment's unsent attempt is cancelled");
+  equal(run.data.dueStatusesRepaired, 2, "the close reports the repairs");
+  saved(loaded, state);
+  equal(reconcile(state, finance(wat("2027-07-03T07:00:00"))).data.dueStatusesRepaired, 0, "the next close has nothing left to repair");
+}
+
+console.log(`Payment lifecycle golden tests passed (${checks} checks): returned money, stale and rejected proposals, repaired statuses, isolated matching, precision reviews that stick and apply again, durable exception resolutions, confirmed unknown outcomes, and instalment statuses that follow their balance.`);

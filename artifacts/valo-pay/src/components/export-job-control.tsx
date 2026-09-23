@@ -5,6 +5,7 @@ import { Download, RefreshCw } from 'lucide-react';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useSafeCreateExport, useSafeRetryExportJob } from '@/lib/safe-mutations';
 import { Button } from './ui/button';
+import { DiscardOriginalRequest } from './discard-original-request';
 import { formatDate } from '@/lib/formatters';
 import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
 import { GetExportJobResponse } from '@workspace/api-zod';
@@ -86,7 +87,7 @@ export function ExportJobControl({ kind, customerId, closeReviewId, savedJobId, 
     </div>
     {!canCreate && <p className="text-xs text-muted-foreground">Read-only access lets you download existing files. Ask a teammate with a working role to generate or retry an export.</p>}
     {problem?.scope === scope && <div role="alert" className="rounded-lg border border-destructive/30 p-3 text-sm"><p className="font-medium">{title === 'Billing CSV' ? 'Billing export' : title} request could not be confirmed</p><p>{problem.message}</p><p className="mt-2">The request may have been saved. Check saved exports before starting another request.</p><Button className="mt-2" variant="outline" size="sm" onClick={refreshStatus}>Check saved exports</Button></div>}
-    {(create.hasUnconfirmedOutcome || retry.hasUnconfirmedOutcome) && <div className="rounded-lg border bg-secondary/20 p-3 text-sm"><p>Other export requests are paused until this result is confirmed. Retrying checks the original request without creating a duplicate.</p><Button variant="outline" size="sm" className="mt-2" disabled={!canCreate} busy={create.isPending || retry.isPending} busyLabel="Checking original request…" onClick={() => { if (create.hasUnconfirmedOutcome) void start(create.variables!.data.format as Format, true); else void retrySaved(); }}>Retry original request</Button></div>}
+    {(create.hasUnconfirmedOutcome || retry.hasUnconfirmedOutcome) && <div className="rounded-lg border bg-secondary/20 p-3 text-sm"><p>Other export requests are paused until this result is confirmed. Retrying checks the original request without creating a duplicate.</p><Button variant="outline" size="sm" className="mt-2" disabled={!canCreate} busy={create.isPending || retry.isPending} busyLabel="Checking original request…" onClick={() => { if (create.hasUnconfirmedOutcome) void start(create.variables!.data.format as Format, true); else void retrySaved(); }}>Retry original request</Button><DiscardOriginalRequest disabled={create.isPending || retry.isPending} onDiscard={() => { create.abandonUnconfirmed(); retry.abandonUnconfirmed(); setProblem(null); }} /></div>}
     {(recent.error || status.error) && <div role="alert" className="text-sm"><p>Saved export status could not be loaded. A job may still be running.</p><Button variant="outline" size="sm" onClick={refreshStatus}>Refresh export status</Button></div>}
     {job && <div role={state === 'failed' ? 'alert' : 'status'} className="rounded-lg border bg-card p-3 text-sm space-y-2">
       <p className="font-medium">{title} {state === 'expired' ? 'file has expired' : state === 'ready' ? 'is ready to download' : state === 'failed' ? 'could not be completed' : state === 'running' ? 'is being prepared' : 'is queued'}</p>

@@ -43,22 +43,29 @@ const server = app.listen(port, (err) => {
 
 /**
  * A stop signal drains rather than drops: no new connections, the requests in
- * flight finish, a close pass in progress completes, then the pool ends. A
- * pass that will not finish in time is abandoned by the deadline; its
- * transaction rolls back with the connection and the close runs again as a
- * catch-up after restart (NFR-AVA-02).
+ * flight finish, a scheduled close pass ends after the lender close in
+ * progress, then the pool ends. The lenders the pass had not reached are
+ * still due and close as a catch-up after restart (NFR-AVA-02). A close that
+ * will not finish in time is abandoned by the deadline; its transaction rolls
+ * back with the connection and it runs again after restart the same way. An
+ * export attempt in progress is cancelled and its job handed back to the
+ * queue for the next worker, never failed; if that write cannot be made
+ * before the deadline, the job keeps its lease and a later poll recovers it
+ * when the lease expires.
  */
 let stopping = false;
 async function shutdown(signal: string): Promise<void> {
   if (stopping) return;
   stopping = true;
-  logger.info({ event: "server.stopping", signal }, "Shutting down: finishing requests and any close in progress");
+  logger.info({ event: "server.stopping", signal }, "Shutting down: finishing requests and any close in progress; unfinished exports return to the queue");
   const deadline = setTimeout(() => { logger.error({ event: "server.stop_timeout" }, "Shutdown deadline passed; exiting"); process.exit(1); }, 10_000);
   deadline.unref();
   scheduler?.stop();
   exportWorker?.stop();
   await new Promise<void>((resolve) => { server.close(() => resolve()); server.closeIdleConnections(); });
   await scheduler?.settle();
+  // settle() waits for the hand-back writes of the cancelled exports, which need the pool: ending the
+  // pool first would leave every stopped export 'interrupted', waiting up to five minutes for its lease.
   await exportWorker?.settle();
   await closeDatabase();
   logger.info({ event: "server.stopped" }, "Shutdown complete");

@@ -2,6 +2,8 @@ import { z } from "zod";
 import { importKinds } from "./kinds";
 import { businessDateSchema } from "./source-quality";
 
+/** HTTP statuses the service treats as a definitive refusal: the same request would be refused again, so its operations-journal entry is cancelled and its key cannot run again. */
+export const definitiveRefusalStatuses = [400, 403, 404, 409, 410, 413, 415, 422] as const;
 /** Roles granted by a provisioned pilot administrator, never a browser persona. */
 export const pilotRoleSchema = z.enum([
   "Admin",

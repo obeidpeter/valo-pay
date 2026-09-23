@@ -20,6 +20,15 @@ function preview(state: DomainState, external: LifecycleExternalCandidate[] = []
 function approve(state: DomainState, run: ReturnType<typeof preview>, external: LifecycleExternalCandidate[] = []) { return approveLifecycleRun(state, ctx, run.id, { expectedUpdatedAt: run.updatedAt, previewDigest: run.previewDigest, reason: 'Reviewed the exact eligible sample source artifacts.' }, external); }
 function hold(state: DomainState, sourceId: string, held: boolean) { return setLifecycleHold(state, ctx, { kind: 'raw_csv', sourceId, held, expectedHoldRevision: lifecycleHolds(state).revision, reason: held ? 'Keep this source for an unresolved sample case.' : 'The sample review is complete; release the source hold.' }); }
 {
+  // Retention screens need the committed CSV itself: a batch the route did not open is refused, not left out of the inventory.
+  for (const field of ['csv', 'check']) {
+    const { state, batch } = fixture(`sealed-${field}`); enable(state);
+    batch.data[field] = { protectedPayload: 1 };
+    refuses(() => lifecycleView(state, ctx), 500);
+    refuses(() => preview(state), 500);
+  }
+}
+{
   const { state } = fixture();
   const view = lifecycleView(state, ctx);
   check(view.eligibleCount === 0 && view.policy.rawCsvDays === null && view.policy.journalPayloadDays === null && view.policy.exportFileDays === null, 'all deletion policies start disabled');

@@ -1,12 +1,13 @@
 // Golden tests for the scheduled daily close: the configurable WAT time
 // (REC-01, default 07:00), the cursor every close moves, a manual close before
-// or after the time, a close that runs late after an outage (NFR-AVA-02) and
-// the missed-close alert (NFR-OBS-02).
+// or after the time, a close that runs late after an outage (NFR-AVA-02), the
+// missed-close alert (NFR-OBS-02), the backoff after a failed scheduled attempt
+// and the pause of an idle sandbox's automatic close.
 import assert from "node:assert/strict";
 import { closeRules, closeTimeOf, isCloseTime, nextCloseInstant } from "@workspace/valopay-schema";
 import { ctxAt, liveFixture, wat } from "./helpers.js";
 import { executeAction, runDailyClose } from "../src/domain/actions.js";
-import { closeSchedule, rescheduleAfterSettings, scheduledCloseDue, storedCloseCursor } from "../src/domain/close.js";
+import { closeRetryOf, closeSchedule, nextCloseRetry, pauseIdleSandboxClose, rescheduleAfterSettings, scheduledCloseDue, storedCloseCursor } from "../src/domain/close.js";
 import { buildAlerts } from "../src/domain/alerts.js";
 import { buildOverview, buildReports } from "../src/domain/reports.js";
 import { recordsOf } from "../src/domain/records.js";
@@ -162,7 +163,7 @@ const quietDeadlines = (state: ReturnType<typeof seedMerchant>) => { for (const 
   assert.equal(scheduledCloseDue(state, wat("2027-06-28T09:00:00")), false, "and nothing is due");
   assert.equal(buildOverview(state, wat("2027-06-28T09:00:00")).nextClose, "", "the overview shows no next close when the automatic close is off");
   state.settings.scheduledCloseEnabled = true;
-  assert.deepEqual(closeSchedule(state, wat("2027-06-28T09:00:00")), { time: "07:00", enabled: true, nextAt: wat("2027-06-28T07:00:00"), missed: true, overdueMinutes: 120, lateAfterMinutes: 30, lastAt: null, lastTrigger: null });
+  assert.deepEqual(closeSchedule(state, wat("2027-06-28T09:00:00")), { time: "07:00", enabled: true, nextAt: wat("2027-06-28T07:00:00"), missed: true, overdueMinutes: 120, lateAfterMinutes: 30, lastAt: null, lastTrigger: null, failedAttempts: 0, retryAt: null, pausedForInactivityAt: null });
   checks += 4;
   // A configured time other than the default: the route recomputes the cursor from the new time.
   state.settings.closeTime = "09:30";
@@ -203,4 +204,104 @@ const quietDeadlines = (state: ReturnType<typeof seedMerchant>) => { for (const 
   checks += 9;
 }
 
-console.log(`Close schedule golden tests passed (${checks} checks): WAT arithmetic, seed, manual and scheduled closes, catch-up, lateness, missed-close alert, overview and report views, settings changes.`);
+// ---------- A failed scheduled attempt backs off; any close or a rescheduling save clears it; an idle sandbox is paused ----------
+{
+  const { state } = liveFixture({ merchantId: "schedule-retry", withFailure: false });
+  quietDeadlines(state);
+  const at = wat("2027-06-28T07:00:00");
+  state.settings.nextCloseAt = at;
+  const first = nextCloseRetry(state.settings, wat("2027-06-28T07:05:00"));
+  assert.deepEqual(first, { cursor: at, failures: 1, retryAt: wat("2027-06-28T07:07:00"), lastFailedAt: wat("2027-06-28T07:05:00") }, "the first failure waits two minutes");
+  state.settings.closeRetry = first;
+  assert.equal(scheduledCloseDue(state, wat("2027-06-28T07:06:00")), false, "not due again before its retry time, whichever instance looks");
+  assert.equal(scheduledCloseDue(state, wat("2027-06-28T07:07:00")), true, "due again at its retry time");
+  const retrying = closeSchedule(state, wat("2027-06-28T07:06:00"));
+  assert.equal(retrying.failedAttempts, 1); assert.equal(retrying.retryAt, wat("2027-06-28T07:07:00")); assert.equal(retrying.pausedForInactivityAt, null);
+  assert.equal(retrying.nextAt, at, "the close stays pending at its own time");
+  assert.equal(closeSchedule(state, wat("2027-06-28T07:40:00")).missed, true, "a close still failing past 30 minutes is missed");
+  checks += 8;
+
+  // The delay doubles from two minutes and stops at an hour; it never gives up.
+  let settings: Record<string, unknown> = { nextCloseAt: at }, now = wat("2027-06-28T07:05:00");
+  const delays: number[] = [];
+  for (let attempt = 1; attempt <= 7; attempt += 1) {
+    const retry = nextCloseRetry(settings, now)!;
+    assert.equal(retry.failures, attempt); assert.equal(retry.cursor, at);
+    delays.push((Date.parse(retry.retryAt) - Date.parse(now)) / 60_000);
+    settings = { ...settings, closeRetry: retry };
+    now = retry.retryAt;
+  }
+  assert.deepEqual(delays, [2, 4, 8, 16, 32, 60, 60]);
+  checks += 15;
+
+  // A retry belongs to one close time: once the cursor moves, it is inert and the count restarts.
+  assert.equal(closeRetryOf({ nextCloseAt: wat("2027-06-29T07:00:00"), closeRetry: first }), null, "a retry left from an earlier time is ignored");
+  assert.equal(nextCloseRetry({ nextCloseAt: wat("2027-06-29T07:00:00"), closeRetry: first }, wat("2027-06-29T07:03:00"))!.failures, 1, "and the count restarts");
+  assert.equal(nextCloseRetry({ nextCloseAt: wat("2027-06-29T07:00:00") }, wat("2027-06-28T09:00:00")), null, "a close not yet due has nothing to retry");
+  assert.equal(nextCloseRetry({}, wat("2027-06-28T09:00:00")), null, "nor has a lender without a cursor");
+  assert.equal(closeRetryOf({ nextCloseAt: at, closeRetry: { ...first!, failures: 0 } }), null, "a malformed count is ignored");
+  assert.equal(closeRetryOf({ nextCloseAt: at, closeRetry: { ...first!, retryAt: "soon" } }), null, "and so is a malformed time");
+  checks += 6;
+
+  // Any close ends the retry, scheduled or manual.
+  runDailyClose(state, ctxAt(wat("2027-06-28T07:07:00"), "Operations"), "scheduled");
+  assert.equal(state.settings.closeRetry, undefined, "a scheduled close clears the retry");
+  const closed = closeSchedule(state, wat("2027-06-28T07:08:00"));
+  assert.equal(closed.failedAttempts, 0); assert.equal(closed.retryAt, null);
+  state.settings.nextCloseAt = wat("2027-06-29T07:00:00");
+  state.settings.closeRetry = nextCloseRetry(state.settings, wat("2027-06-29T07:02:00"));
+  executeAction(state, ctxAt(wat("2027-06-29T07:03:00"), "Finance"), { action: "daily_close" });
+  assert.equal(state.settings.closeRetry, undefined, "a manual close clears it too");
+  checks += 4;
+
+  // An unchanged save keeps a pending retry; a new close time starts afresh without it.
+  state.settings.nextCloseAt = wat("2027-06-30T07:00:00");
+  state.settings.closeRetry = nextCloseRetry(state.settings, wat("2027-06-30T07:02:00"));
+  const previous = () => ({ time: closeTimeOf(state.settings), enabled: state.settings.scheduledCloseEnabled !== false });
+  let before = previous();
+  assert.equal(rescheduleAfterSettings(state, before, wat("2027-06-30T07:03:00")), false);
+  assert.equal(closeRetryOf(state.settings)?.failures, 1, "an unchanged save keeps the retry");
+  before = previous(); state.settings.closeTime = "08:00";
+  assert.equal(rescheduleAfterSettings(state, before, wat("2027-06-30T07:03:00")), true);
+  assert.equal(state.settings.closeRetry, undefined, "a new time drops the retry");
+  assert.equal(state.settings.nextCloseAt, wat("2027-06-30T08:00:00"));
+  checks += 5;
+
+  // An idle sandbox: the automatic close is switched off, recorded and explained; switching it on resumes from the next time.
+  state.settings.nextCloseAt = wat("2027-07-01T08:00:00");
+  state.settings.closeRetry = nextCloseRetry(state.settings, wat("2027-07-01T08:01:00"));
+  pauseIdleSandboxClose(state, wat("2027-07-01T08:02:00"));
+  assert.equal(state.settings.scheduledCloseEnabled, false); assert.equal(state.settings.closePausedForInactivityAt, wat("2027-07-01T08:02:00"));
+  assert.equal(state.settings.closeRetry, undefined, "a paused close has nothing to retry");
+  const paused = closeSchedule(state, wat("2027-07-01T10:00:00"));
+  assert.equal(paused.enabled, false); assert.equal(paused.missed, false, "a paused close is not missed");
+  assert.equal(paused.pausedForInactivityAt, wat("2027-07-01T08:02:00")); assert.equal(paused.failedAttempts, 0); assert.equal(paused.retryAt, null);
+  assert.equal(scheduledCloseDue(state, wat("2027-07-01T10:00:00")), false);
+  before = previous(); state.settings.scheduledCloseEnabled = true;
+  assert.equal(rescheduleAfterSettings(state, before, wat("2027-07-03T09:00:00")), true, "switching on again reschedules");
+  assert.equal(state.settings.closePausedForInactivityAt, undefined, "and ends the pause");
+  assert.equal(state.settings.nextCloseAt, wat("2027-07-04T08:00:00"), "from the next configured time, not the stale one");
+  assert.equal(closeSchedule(state, wat("2027-07-03T09:00:00")).pausedForInactivityAt, null);
+  checks += 13;
+
+  // The effective view shows the retry time only while the automatic close is available.
+  state.settings.nextCloseAt = wat("2027-07-04T08:00:00");
+  state.settings.closeRetry = nextCloseRetry(state.settings, wat("2027-07-04T08:01:00"));
+  const nowRetrying = wat("2027-07-04T08:02:00");
+  const runtime: CloseRuntime = { state: "running", intervalMs: 60_000, lastTickAt: nowRetrying, lastSuccessAt: nowRetrying, lastErrorAt: null, observedAt: nowRetrying };
+  const effective = effectiveCloseSchedule(state, nowRetrying, runtime);
+  assert.equal(effective.automatic, true); assert.equal(effective.failedAttempts, 1); assert.equal(effective.retryAt, wat("2027-07-04T08:03:00"));
+  assert.equal(effectiveCloseSchedule(state, nowRetrying, { ...runtime, state: "off" }).retryAt, null, "no retry is promised while the service is off");
+  checks += 4;
+
+  // The public schemas carry the new fields, and a settings answer saved by an earlier build (without them) still replays.
+  const answer = buildConsoleSettings(state, "Admin", nowRetrying, runtime);
+  const parsed = S.GetSettingsResponse.parse(answer).closeSchedule!;
+  assert.equal(parsed.failedAttempts, 1); assert.equal(parsed.retryAt, wat("2027-07-04T08:03:00")); assert.equal(parsed.pausedForInactivityAt, null);
+  const stored = structuredClone(answer) as { closeSchedule: Record<string, unknown> };
+  for (const field of ["failedAttempts", "retryAt", "pausedForInactivityAt"]) delete stored.closeSchedule[field];
+  assert.doesNotThrow(() => S.UpdateSettingsResponse.parse(stored), "an earlier build's stored receipt still parses");
+  checks += 4;
+}
+
+console.log(`Close schedule golden tests passed (${checks} checks): WAT arithmetic, seed, manual and scheduled closes, catch-up, lateness, missed-close alert, overview and report views, settings changes, retry backoff and the idle pause.`);

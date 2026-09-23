@@ -81,7 +81,36 @@ try {
       assert.ok(elapsed < 2000, `A pilot-scale collections page (${view}) returns in ${Math.round(elapsed)} ms.`);
     }, 'read');
   }
-  console.log('Priority queue integration passed: 6,000 rows, all filters, complete counts, bounded pages, deep links, related-record scoping, malformed legacy dates and a 14,000-row collections queue in linear time.');
+  // A lender loaded since the last ANALYZE, which the statistics describe as
+  // empty. Each attempt still reads its instalment by primary key; as a plain
+  // join PostgreSQL scanned all of the lender's instalments for every row
+  // (22 s for a 25,000-record lender, past the request statement limit).
+  await pool.query('ALTER TABLE valopay_records SET (autovacuum_enabled = false)');
+  try {
+    tokens.push(randomBytes(32).toString('hex'));
+    const unanalysedId = (await inWorkspace(request(tokens[2]), response(), listMerchants))[0]!.id;
+    const seeded = await inWorkspace(request(tokens[2]), response(), ctx => loadState(ctx, unanalysedId, 'share'), 'read');
+    const payer = seeded.records.find(row => row.kind === 'customers')!, payerMandate = seeded.records.find(row => row.kind === 'mandates')!;
+    await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data,amount_kobo)
+      SELECT $1 || '-fresh-due-' || lpad(i::text,5,'0'),$1,'due-items','Fresh instalment ' || i,'scheduled','FDUE-' || i,$2,
+        jsonb_build_object('synthetic',true,'mandateId',$3::text,'owner','valopay','dueDate','2026-09-18'),1000000
+      FROM generate_series(1,6000) i`, [unanalysedId, payer.id, payerMandate.id]);
+    await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data,amount_kobo)
+      SELECT $1 || '-fresh-attempt-' || lpad(i::text,5,'0'),$1,'attempts','Fresh attempt ' || i,'failed','FATT-' || i,$2,
+        jsonb_build_object('synthetic',true,'dueItemId',$1 || '-fresh-due-' || lpad(i::text,5,'0'),'occurredAt','2026-09-18T12:00:00Z'),1000000
+      FROM generate_series(1,6000) i`, [unanalysedId, payer.id]);
+    const loaded = await inWorkspace(request(tokens[2]), response(), ctx => loadState(ctx, unanalysedId, 'share'), 'read');
+    for (const view of ['failed', 'all']) {
+      await inWorkspace(request(tokens[2]), response(), async ctx => {
+        const start = performance.now();
+        const actual = await listQueue(ctx, unanalysedId, 'collections', { view, limit: 25 });
+        const elapsed = performance.now() - start;
+        assert.deepEqual(normalise(actual), normalise(pageQueue(loaded.records, 'collections', { view, limit: 25 }, ctx.now)), `collections before ANALYZE: ${view}`);
+        assert.ok(elapsed < 2000, `A collections page (${view}) for a lender loaded since the last ANALYZE returns in ${Math.round(elapsed)} ms.`);
+      }, 'read');
+    }
+  } finally { await pool.query('ALTER TABLE valopay_records RESET (autovacuum_enabled)'); }
+  console.log('Priority queue integration passed: 6,000 rows, all filters, complete counts, bounded pages, deep links, related-record scoping, malformed legacy dates, a 14,000-row collections queue in linear time, and the same for a lender loaded since the last ANALYZE.');
 } finally {
   const principals = tokens.map(token => createHash('sha256').update(`demo:${token}`).digest('hex'));
   const scope = 'SELECT id FROM valopay_merchants WHERE workspace_id IN (SELECT id FROM valopay_workspaces WHERE principal_hash=ANY($1::text[]))';

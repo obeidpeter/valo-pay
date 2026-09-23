@@ -24,6 +24,27 @@ describe('saved background exports',()=>{
   expect(attempts.map(call=>(call.body as any).format)).toEqual(['csv','csv']);
   expect(api.state().records.filter(record=>record.kind==='exports')).toHaveLength(1);
  });
+ it('discards a lost export request deliberately, and the next request is new',async()=>{
+  const user=userEvent.setup();
+  const customer=api.state().records.find(record=>record.kind==='customers')!;
+  const send=globalThis.fetch, keys:string[]=[];
+  globalThis.fetch=async(input,options)=>{if(options?.method==='POST'&&/\/api\/v1\/exports(\?|$)/.test(String(input)))keys.push(new Headers(options.headers).get('Idempotency-Key')!);return send(input,options);};
+  api.failNext(/^\/v1\/exports$/, 'offline', 'POST');
+  renderApp(`/customers/${customer.id}`);
+  await user.click(await screen.findByRole('button',{name:'CSV'}));
+  await screen.findByRole('button',{name:'Retry original request'});
+  expect(screen.getByRole('button',{name:'Check saved exports'})).toBeTruthy();
+  vi.spyOn(window,'confirm').mockReturnValue(true);
+  await user.click(screen.getByRole('button',{name:'Discard original request'}));
+  await waitFor(()=>expect(screen.queryByRole('button',{name:'Retry original request'})).toBeNull());
+  expect(screen.queryByRole('button',{name:'Check saved exports'})).toBeNull();
+  expect(screen.getByRole('button',{name:'JSON'}).hasAttribute('disabled')).toBe(false);
+  await user.click(screen.getByRole('button',{name:'JSON'}));
+  expect(await screen.findByText('Dispute pack is queued')).toBeTruthy();
+  expect(keys).toHaveLength(2);
+  expect(keys[1]).not.toBe(keys[0]);
+  expect(api.calls.filter(call=>call.path==='/v1/exports'&&call.method==='POST').map(call=>(call.body as any).format)).toEqual(['csv','json']);
+ });
  it('recovers an unconfirmed request by checking saved jobs without submitting another export',async()=>{
   const user=userEvent.setup();
   api.failNext(/^\/v1\/exports$/, 'offline', 'POST');

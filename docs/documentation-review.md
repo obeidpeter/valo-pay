@@ -38,6 +38,7 @@ The README, `docs/BUILD_STATUS.md`, `docs/DATABASE_SECURITY.md`, `docs/frontend-
 - an export of `lib/valopay-schema` has no doc comment;
 - a document under `docs/` is not on the snapshot tool's list;
 - a console route or a domain action is missing from `docs/frontend-contract.md`, or the contract describes an action the code does not have;
+- a route served by a router `app.ts` mounts under `/api`, whatever its variable is called and including the Paystack test ingress mounted outside `routes/index.ts`, is missing from the contract, `app.ts` mounts something under `/api` the check cannot follow to a file under `routes/`, `app.ts` imports a router from `routes/` without mounting it at a literal `/api` path (a path held in a constant, say), or the check no longer reaches `routes/index.ts`;
 - the prose of a document uses an American spelling from its list.
 
 ## Where to document what

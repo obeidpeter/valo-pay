@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Link } from "wouter";
 import { Button } from "./ui/button";
 import { saidBy } from "@/lib/notify";
+import { DiscardOriginalRequest } from "./discard-original-request";
 
 export const pilotField =
   "w-full min-h-11 rounded-lg border bg-background px-3 py-2 text-sm";
@@ -72,6 +73,7 @@ export function RecoveryNotice({
     isPending: boolean;
     error: unknown;
     retryUnconfirmed(): Promise<unknown>;
+    abandonUnconfirmed(): void;
   };
 }) {
   return mutation.hasUnconfirmedOutcome ? (
@@ -82,8 +84,8 @@ export function RecoveryNotice({
       <p className="font-semibold">Outcome not confirmed</p>
       <p>
         {persistent
-          ? "Check the original request before making a different change. Requests received by the server remain in Operations after you leave or reload."
-          : "Check the original request, or refresh this page to inspect the saved result before making another change."}
+          ? "Check the original request before making a different change. Requests received by the server remain in Operations after you leave or reload. If it cannot be recovered, check Operations, then discard it to start again."
+          : "Check the original request, or refresh this page to inspect the saved result before making another change. If it cannot be recovered, check the saved result, then discard it to start again."}
       </p>
       <PilotError error={mutation.error} />
       <div className="flex flex-wrap gap-3">
@@ -104,6 +106,10 @@ export function RecoveryNotice({
             Open Operations
           </Link>
         )}
+        <DiscardOriginalRequest
+          disabled={mutation.isPending}
+          onDiscard={mutation.abandonUnconfirmed}
+        />
       </div>
     </div>
   ) : (

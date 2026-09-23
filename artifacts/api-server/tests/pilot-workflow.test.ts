@@ -10,6 +10,7 @@ import { advanceRecordVersions } from "../src/lib/edit-versions";
 import { validateRecord } from "../src/domain/validation";
 import { executeAction } from "../src/domain/actions";
 import type { BatchInput } from "@workspace/valopay-schema";
+import { ZodError } from "zod";
 process.env.DATABASE_URL ||= "postgres://unused:unused@127.0.0.1:1/unused";
 const { assertFinalState } = await import("../src/lib/valopay-store");
 const { recoverableRequest } = await import("../src/lib/operation-recovery");
@@ -66,6 +67,30 @@ assert.equal(
 );
 assert.equal(new Set(batch.data.recordIds).size, 2);
 assertFinalState(before, state, state.merchant.id, ctx.now);
+// The batch list reads a plaintext summary of the check, so it never needs the
+// protected source rows; a view that needs them refuses sealed ones loudly.
+const summaryOf = (check: any) => ({ valid: check.valid, invalid: check.invalid, imported: check.imported, skipped: check.skipped });
+assert.deepEqual(batch.data.checkSummary, summaryOf(batch.data.check), "A commit stores the new check's summary.");
+{
+  const sealed = { protectedPayload: 1 };
+  const listed = structuredClone(batch);
+  listed.data.check = sealed;
+  assert.deepEqual(batchView(listed).data.check, summaryOf(batch.data.check), "The list uses the summary, not the sealed check.");
+  delete listed.data.checkSummary;
+  assert.throws(() => batchView(listed), (e: any) => e.status === 500, "A sealed check without a summary is refused, not listed as empty counts.");
+  assert.equal(batchView(listed, false, "omit").data.check, undefined, "When the key service could not open it, the batch is listed without counts.");
+  assert.deepEqual(batchView({ ...listed, data: { ...listed.data, check: batch.data.check } }, false, "omit").data.check, summaryOf(batch.data.check), "An open check still gives its counts.");
+  const draft = saveImportBatch(structuredClone(state), ctx, { ...input, sourceBatchId: "sealed-draft" });
+  assert.deepEqual(draft.data.checkSummary, summaryOf(draft.data.check), "A save stores its check's summary.");
+  const sealedState = structuredClone(state);
+  const unopened = saveImportBatch(sealedState, ctx, { ...input, sourceBatchId: "sealed-commit" });
+  unopened.data.csv = sealed;
+  assert.throws(
+    () => commitImportBatch(sealedState, ctx, unopened.id, unopened.updatedAt),
+    (e: any) => e.status === 500 && !(e instanceof ZodError),
+    "Committing a batch whose rows were not opened is a server fault, not a validation failure or a source check.",
+  );
+}
 const replay = saveImportBatch(state, ctx, {
   ...input,
   sourceBatchId: "feed-002",

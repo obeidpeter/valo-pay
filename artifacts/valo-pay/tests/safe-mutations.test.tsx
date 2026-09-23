@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { render, cleanup, renderHook, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { useSafePerformAction, useSafeImportRecords, useSafeCreateRecord, useSafeUpdateRecord, useSafeUpdateSettings, useSafeCreateExport, useSafeRetryExportJob, outcomeIsUnconfirmed } from '@/lib/safe-mutations';
+import { useSafePerformAction, useSafeImportRecords, useSafeCreateRecord, useSafeUpdateRecord, useSafeUpdateSettings, useSafeCreateExport, useSafeRetryExportJob, outcomeIsUnconfirmed, requestClosed } from '@/lib/safe-mutations';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { screen, userEvent, waitFor } from './harness';
 
@@ -182,6 +182,75 @@ describe('safe mutation intentions', () => {
     await screen.findByRole('status');
     expect(keys).toHaveLength(2);
     expect(keys[1]).not.toBe(keys[0]);
+  });
+
+  const jsonAnswer=(status:number,body:unknown)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json'}});
+  const hookFor=()=>{const client=new QueryClient();const wrapper=({children}:{children:React.ReactNode})=><QueryClientProvider client={client}>{children}</QueryClientProvider>;return renderHook(()=>useSafePerformAction(),{wrapper});};
+  const actionVariables=(reason='Sample review')=>({params:{merchantId:api.merchantIds[0]!},data:{action:'new_policy_version',recordId:'sample-policy',reason}});
+
+  it('releases an unconfirmed request when the service says its journal entry is cancelled',async()=>{
+    const keys:string[]=[];
+    globalThis.fetch=async(_input,options)=>{
+      keys.push(new Headers(options?.headers).get('Idempotency-Key')!);
+      if(keys.length===1) throw new TypeError('Failed to fetch');
+      if(keys.length===2) return jsonAnswer(409,{error:'The workspace changed. Refresh and review before trying again.',operation:'cancelled',requestId:'r2'});
+      return jsonAnswer(200,{message:'Saved',data:{}});
+    };
+    const {result}=hookFor();
+    await act(async()=>{await result.current.mutateAsync(actionVariables()).catch(()=>{});});
+    await waitFor(()=>expect(result.current.hasUnconfirmedOutcome).toBe(true));
+    await act(async()=>{await result.current.retryUnconfirmed().catch(()=>{});});
+    await waitFor(()=>expect(result.current.isError).toBe(true));
+    expect(result.current.hasUnconfirmedOutcome).toBe(false);
+    expect(keys[1]).toBe(keys[0]);
+    await act(async()=>{await result.current.mutateAsync(actionVariables('Changed after review'));});
+    expect(keys).toHaveLength(3);
+    expect(keys[2]).not.toBe(keys[0]);
+  });
+
+  it.each([403,409,422])('gives an identical resubmission a new key after a definitive %s refusal',async status=>{
+    const keys:string[]=[];
+    globalThis.fetch=async(_input,options)=>{keys.push(new Headers(options?.headers).get('Idempotency-Key')!);return jsonAnswer(status,{error:'Refused',requestId:'r'});};
+    const {result}=hookFor();
+    for(let attempt=0;attempt<2;attempt+=1) await act(async()=>{await result.current.mutateAsync(actionVariables()).catch(()=>{});});
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).not.toBe(keys[0]);
+    expect(result.current.hasUnconfirmedOutcome).toBe(false);
+  });
+
+  it.each([401,429])('keeps the key after a %s, which the service does not treat as final',async status=>{
+    const keys:string[]=[];
+    globalThis.fetch=async(_input,options)=>{keys.push(new Headers(options?.headers).get('Idempotency-Key')!);return jsonAnswer(status,{error:'Wait',requestId:'r'});};
+    const {result}=hookFor();
+    for(let attempt=0;attempt<2;attempt+=1) await act(async()=>{await result.current.mutateAsync(actionVariables()).catch(()=>{});});
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it('discards an unconfirmed request on request',async()=>{
+    const keys:string[]=[];
+    globalThis.fetch=async(_input,options)=>{
+      keys.push(new Headers(options?.headers).get('Idempotency-Key')!);
+      if(keys.length===1) throw new TypeError('Failed to fetch');
+      return jsonAnswer(200,{message:'Saved',data:{}});
+    };
+    const {result}=hookFor();
+    await act(async()=>{await result.current.mutateAsync(actionVariables()).catch(()=>{});});
+    await waitFor(()=>expect(result.current.hasUnconfirmedOutcome).toBe(true));
+    act(()=>{result.current.abandonUnconfirmed();});
+    await waitFor(()=>expect(result.current.hasUnconfirmedOutcome).toBe(false));
+    expect(result.current.isError).toBe(false);
+    await act(async()=>{await result.current.mutateAsync(actionVariables('A new request after discarding'));});
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).not.toBe(keys[0]);
+  });
+
+  it('marks only a structured refusal carrying the cancelled marker as closed',()=>{
+    expect(requestClosed({status:409,data:{error:'Changed',operation:'cancelled'}})).toBe(true);
+    expect(requestClosed({status:503,data:{error:'Busy',committed:false,operation:'cancelled'}})).toBe(true);
+    expect(requestClosed({status:409,data:{error:'Changed'}})).toBe(false);
+    expect(requestClosed({status:200,data:{error:'x',operation:'cancelled'}})).toBe(false);
+    expect(requestClosed({status:409,data:{operation:'cancelled'}})).toBe(false);
+    expect(outcomeIsUnconfirmed({status:503,data:{error:'Busy',operation:'cancelled'}})).toBe(false);
   });
 
   it.each(['null','empty','invalid JSON'])('does not treat a %s successful body as a confirmed action',async body=>{

@@ -14,7 +14,7 @@ Observation-first collections operations for Nigerian lenders. The current appli
 - `node scripts/check-db-boundary.mjs` — disallow raw database access outside the scoped repository.
 - `VALOPAY_RUN_INTEGRATION=1 pnpm run test:integration` — the repository and scheduled-close suites against `DATABASE_URL`, which must be a disposable development database with the schema pushed; the pull-request workflow runs them against its own PostgreSQL service container.
 - `node scripts/security-valopay.mjs` — negative and concurrent API checks using fresh synthetic development workspaces.
-- The API process runs the scheduled daily close (REC-01, default 07:00 WAT per lender) from `artifacts/api-server/src/lib/close-scheduler.ts`; set `VALOPAY_CLOSE_SCHEDULER=off` to run a process without it.
+- The API process runs the scheduled daily close (REC-01, default 07:00 WAT per lender) from `artifacts/api-server/src/lib/close-scheduler.ts`; set `VALOPAY_CLOSE_SCHEDULER=off` to run a process without it. The close scheduler and the export worker both run inside the API process, so they need an always-on host: an Autoscale deployment scaled to zero runs no close or export until a request starts it (README, Scheduled daily close). A stopped worker returns its unfinished exports to the queue.
 - Required integrations: PostgreSQL, managed Clerk and private App Storage. Never display their environment secret values.
 
 ## Stack
@@ -54,7 +54,9 @@ Two synthetic lenders; customer positions and timelines; mandate tracking; sched
 ## Gotchas
 
 - Amounts are safe integer kobo. Refuse due items below 500,000; 500,000–999,999 requires a recorded merchant Admin override. This floor does not reject inbound partial payments.
-- All workspace/merchant operations, imports, exports and idempotency use the scoped repository. Only that runtime module may access the database connection; routes and domain modules must never receive raw clients or unrestricted query functions. Keep principal and merchant locking across validation, mutation and audit append.
+- All workspace/merchant operations, imports, exports and idempotency use the scoped repository. Only that runtime module may access the database connection; routes and domain modules must never receive raw clients or unrestricted query functions. Keep workspace, principal and merchant locking across validation, mutation and audit append.
+- Every transaction checks out through `checkOut` and begins with `beginStatement` (`artifacts/api-server/src/lib/database-limits.ts`), so it carries statement, lock and idle limits. Never use a bare BEGIN or an unlistened pool client: an unheard client error ends the process.
+- `loadState` leaves an import batch's protected `csv` and `check` sealed. A route that shows or uses raw source rows calls `revealImportPayloads` first (in a write, before the domain changes the batch); the domain refuses sealed rows with a 500 (`assertSourceOpened`).
 - Use one audit-hash canonicalisation implementation. Independent hash formats cannot share a chain.
 - Orval's post-generation barrel normalisation is intentional; generated request parameter types and validators otherwise collide.
 - App Storage provides private persistence, but retention lock, six-year policy and crypto-shredding are not certified.

@@ -1,7 +1,8 @@
-import { DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_TOLERANCE_KOBO, exceptionCatalogue, isKobo, isOpenException, normaliseFailureCode, normaliseRefundStatus, normaliseReversalStatus, paymentMoneyReturned, providerFeeKobo, resolveExceptionType, type ExceptionType, type ProviderFeeSchedule, type PaymentChannel } from "@workspace/valopay-schema";
+import { DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_TOLERANCE_KOBO, exceptionCatalogue, isKobo, isOpenException, nairaText, normaliseFailureCode, normaliseRefundStatus, normaliseReversalStatus, paymentMoneyReturned, paymentRefundedKobo, paymentUnappliedKobo, providerFeeKobo, resolveExceptionType, type ExceptionType, type ProviderFeeSchedule, type PaymentChannel } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
-import { addBusinessDays } from "./calendar";
+import { addBusinessDays, watDate } from "./calendar";
+import { validateRecord } from "./validation";
 import { approvedPolicyFor, attemptTime, attemptsFor, enrolEligibleFailures, evaluateRetry, recordRetryDecision } from "./policy-engine";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -12,9 +13,11 @@ export const UNALLOCATED_AGE_MS = DAY_MS;
 
 export const paymentReversed = (payment: TypedRecord<"payments">): boolean => normaliseReversalStatus(payment.data.reversalStatus) === "reversed";
 export const paymentRefunded = (payment: TypedRecord<"payments">): boolean => normaliseRefundStatus(payment.data.refundStatus) === "refunded";
-/** Reversed or refunded: the money went back to the payer, so nothing it has not already applied can be allocated or held as credit. */
-export const paymentReturned = (payment: TypedRecord<"payments">): boolean => paymentMoneyReturned(payment.data);
+/** Reversed, or refunded in full: the money went back to the payer, so nothing it has not already applied can be allocated or held as credit. */
+export const paymentReturned = (payment: TypedRecord<"payments">): boolean => paymentMoneyReturned(payment);
 export const paymentObservedAt = (payment: TypedRecord<"payments">): number => Date.parse(String(payment.data.observedAt || payment.createdAt));
+/** When an allocation was applied (REC-07, REC-09): confirmedAt, or its creation for records written before confirmedAt was kept. A review or a reinstatement never moves it. */
+export const allocationConfirmedAt = (allocation: TypedRecord<"allocations">): string => String(allocation.data.confirmedAt || allocation.createdAt);
 
 /** The four independent status dimensions of a Payment (TRD 4.2), written in one vocabulary; legacy spellings are normalised. */
 export function paymentDimensions(payment: TypedRecord<"payments">): void {
@@ -50,9 +53,11 @@ const identityCondition = (type: ExceptionType, linkedRecordId: string): string 
  * record, it is not raised again, so a resolved exception does not come back
  * at every close. A changed condition, such as a different fee variance, is
  * new work and raises a new exception. Event-driven raises pass no condition
- * and keep the one-open-exception rule only.
+ * and keep the one-open-exception rule only. `settledBy` names other
+ * conditions that describe the same state, such as the spelling an earlier
+ * check recorded, so their resolution also holds.
  */
-export function raiseException(state: DomainState, ctx: Context, type: ExceptionType, options: { linkedRecordId?: string; customerId?: string; amountKobo?: number; notes: string; condition?: string }): TypedRecord<"exceptions"> {
+export function raiseException(state: DomainState, ctx: Context, type: ExceptionType, options: { linkedRecordId?: string; customerId?: string; amountKobo?: number; notes: string; condition?: string; settledBy?: readonly string[] }): TypedRecord<"exceptions"> {
   const definition = exceptionCatalogue[type];
   const linkedRecordId = options.linkedRecordId || "";
   const sameRecord = (item: TypedRecord<"exceptions">) => item.data.linkedRecordId === linkedRecordId && resolveExceptionType(item.data.type) === type;
@@ -60,7 +65,8 @@ export function raiseException(state: DomainState, ctx: Context, type: Exception
   if (existing) return existing;
   if (options.condition !== undefined) {
     // A resolution with no stored condition (an event-driven raise, or one recorded before conditions were stored) settles the record.
-    const settled = recordsOf(state, "exceptions").find((item) => sameRecord(item) && (item.data.condition === undefined || item.data.condition === options.condition));
+    const settles = (condition: unknown) => condition === undefined || condition === options.condition || (options.settledBy ?? []).includes(String(condition));
+    const settled = recordsOf(state, "exceptions").find((item) => sameRecord(item) && settles(item.data.condition));
     if (settled) return settled;
   }
   return makeRecord(state, "exceptions", {
@@ -138,6 +144,11 @@ function settlementBatch(state: DomainState, ctx: Context, observation: TypedRec
       data: { provider, batchReference, providerConnection: payment.data.providerConnection, lineObservationIds: [], linePaymentIds: [], grossKobo: 0, feeKobo: 0, netKobo: 0, expectedFeeKobo: 0, feeSchedule: schedule },
     });
   }
+  if (!Array.isArray(batch.data.lineObservationIds)) {
+    // A batch Finance entered by hand: the provider's lines now build its totals, and the typed totals are kept beside them.
+    batch.data.enteredTotals = { grossKobo: Number(batch.data.grossKobo || 0), feeKobo: Number(batch.data.feeKobo || 0), netKobo: Number(batch.data.netKobo || 0) };
+    Object.assign(batch.data, { lineObservationIds: [], linePaymentIds: [], grossKobo: 0, feeKobo: 0, netKobo: 0, expectedFeeKobo: 0, feeSchedule: batch.data.feeSchedule ?? schedule });
+  }
   const lineIds = batch.data.lineObservationIds as string[];
   const linePaymentIds = (batch.data.linePaymentIds ||= []) as string[];
   if (lineIds.includes(observation.id)) return;
@@ -160,46 +171,89 @@ function settlementBatch(state: DomainState, ctx: Context, observation: TypedRec
   touch(batch, ctx.now);
 }
 
-/** ING-07: a batch whose fees do not reconcile to the schedule is a variance exception, never forced. */
-function checkBatchFees(state: DomainState, ctx: Context): number {
+const STATEMENT_DIFFERS = "Statement credit differs from gross settlement lines less recorded fees.";
+const STATEMENT_MATCHED = "Statement credit matched the settlement batch net total; it was not allocated to a customer.";
+
+/**
+ * ING-03 and ING-07: what a settlement batch's current lines and linked
+ * statement credit show. It waits for its statement credit unless the fees
+ * already differ from the schedule; it is reconciled when the credit equals the
+ * net total and the fees are within tolerance, and a variance otherwise. The
+ * condition names the state a settlement_variance exception is raised for;
+ * `settledBy` is the other spelling earlier builds recorded for the same state.
+ */
+export function settlementBatchState(batch: TypedRecord<"settlement-batches">): { status: "pending" | "reconciled" | "variance"; explanation?: string; condition?: string; settledBy?: string[] } {
+  const net = Number(batch.data.netKobo || 0), variance = Number(batch.data.feeVarianceKobo || 0);
+  const feesDiffer = Math.abs(variance) > SETTLEMENT_BATCH_TOLERANCE_KOBO;
+  const feeText = `Provider fees of ${batch.data.feeKobo} kobo differ from the schedule's ${batch.data.expectedFeeKobo} kobo by ${variance} kobo.`;
+  const feeCondition = `settlement_variance:${batch.id}:fees:${batch.data.feeKobo}:${batch.data.expectedFeeKobo}`;
+  const statement = typeof batch.data.statementObservationId === "string" && Number.isSafeInteger(batch.data.statementNetKobo) ? Number(batch.data.statementNetKobo) : null;
+  if (statement === null) return feesDiffer ? { status: "variance", explanation: feeText, condition: feeCondition } : { status: "pending" };
+  const statementCondition = `settlement_variance:${batch.id}:statement:${statement}:${batch.data.netKobo}:${batch.data.feeKobo}`;
+  if (statement !== net) return { status: "variance", explanation: feesDiffer ? `${STATEMENT_DIFFERS} ${feeText}` : STATEMENT_DIFFERS, condition: statementCondition };
+  if (feesDiffer) return { status: "variance", explanation: feeText, condition: feeCondition, settledBy: [statementCondition] };
+  return { status: "reconciled", explanation: STATEMENT_MATCHED };
+}
+
+/**
+ * Every batch is re-evaluated from its current totals at every reconciliation,
+ * so a line imported after its statement credit matched, or an edit, moves it.
+ * Only what changed is written. A variance is a settlement_variance exception,
+ * never forced; an exception raised for an earlier state stays for Finance,
+ * and its notes gain a dated line whenever the batch moves, so the text it was
+ * raised with is not read as the batch's current state.
+ * Returns the number of batches in variance.
+ */
+function evaluateSettlementBatches(state: DomainState, ctx: Context): number {
   let variances = 0;
   for (const batch of recordsOf(state, "settlement-batches")) {
-    const variance = Number(batch.data.feeVarianceKobo || 0);
-    if (Math.abs(variance) <= SETTLEMENT_BATCH_TOLERANCE_KOBO) continue;
-    if (batch.status !== "variance") { batch.status = "variance"; touch(batch, ctx.now); }
-    batch.data.explanation = `Provider fees of ${batch.data.feeKobo} kobo differ from the schedule's ${batch.data.expectedFeeKobo} kobo by ${variance} kobo.`;
-    raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, notes: batch.data.explanation, condition: `settlement_variance:${batch.id}:fees:${batch.data.feeKobo}:${batch.data.expectedFeeKobo}` });
+    let changed = false;
+    // A batch edited by hand keeps its fee variance in step with its stated and expected fees.
+    if (Number.isSafeInteger(batch.data.feeKobo) && Number.isSafeInteger(batch.data.expectedFeeKobo)) {
+      const variance = Number(batch.data.feeKobo) - Number(batch.data.expectedFeeKobo);
+      if (batch.data.feeVarianceKobo !== variance) { batch.data.feeVarianceKobo = variance; changed = true; }
+    }
+    const next = settlementBatchState(batch);
+    const previous = batch.status;
+    const moved = previous !== next.status || (next.explanation !== undefined && batch.data.explanation !== next.explanation);
+    if (previous !== next.status) { batch.status = next.status; changed = true; }
+    if (next.explanation !== undefined && batch.data.explanation !== next.explanation) { batch.data.explanation = next.explanation; changed = true; }
+    // Back to waiting for its statement credit: the variance explanation no longer applies.
+    if (next.explanation === undefined && previous !== next.status && batch.data.explanation !== undefined) { delete batch.data.explanation; changed = true; }
+    if (changed) touch(batch, ctx.now);
+    // The exception raised for an earlier state stays open for Finance; a dated line says where the batch now stands.
+    const open = moved ? recordsOf(state, "exceptions").find((item) => isOpenException(item.status) && item.data.linkedRecordId === batch.id && resolveExceptionType(item.data.type) === "settlement_variance") : undefined;
+    if (open) {
+      const current = `the batch is now ${next.status === "variance" ? "in variance" : next.status}. ${next.explanation ?? "Its fees are within the schedule and it waits for its statement credit."}`;
+      open.data.notes = `${open.data.notes ? `${open.data.notes}\n` : ""}Update on ${watDate(Date.parse(ctx.now))} (WAT): ${current}`;
+      touch(open, ctx.now);
+    }
+    if (next.status !== "variance") continue;
+    raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, notes: next.explanation!, condition: next.condition, settledBy: next.settledBy });
     variances += 1;
   }
   return variances;
 }
 
-/** ING-03 (3): a statement credit whose reference matches a settlement batch resolves to the batch, never to a customer. */
-function matchSettlementStatements(state: DomainState, ctx: Context): number {
-  let matched = 0;
-  recordsOf(state, "observations").filter((item) => item.status === "unresolved" && item.data.source === "statement" && item.data.batchReference).forEach((statement) => {
-    const batch = recordsOf(state, "settlement-batches").find((item) => item.reference === statement.data.batchReference);
-    if (!batch) return; // It may arrive before the settlement file; leave it for the next close.
+/** ING-03 (3): a statement credit whose reference matches a settlement batch resolves to the batch, never to a customer; the batch is evaluated afterwards. */
+function linkSettlementStatements(state: DomainState, ctx: Context): number {
+  const statements = recordsOf(state, "observations").filter((item) => item.status === "unresolved" && item.data.source === "statement" && item.data.batchReference);
+  if (!statements.length) return 0;
+  const batches = new Map<string, TypedRecord<"settlement-batches">>();
+  for (const batch of recordsOf(state, "settlement-batches")) if (!batches.has(batch.reference)) batches.set(batch.reference, batch);
+  let linked = 0;
+  for (const statement of statements) {
+    const batch = batches.get(String(statement.data.batchReference));
+    if (!batch) continue; // It may arrive before the settlement file; leave it for the next close.
     statement.status = "resolved";
     statement.data.resolvedTo = `batch:${batch.id}`;
     statement.data.resolutionKey = "settlement_batch_net_credit";
     batch.data.statementObservationId = statement.id;
     batch.data.statementNetKobo = statement.amountKobo;
-    const feeVariance = Math.abs(Number(batch.data.feeVarianceKobo || 0)) > SETTLEMENT_BATCH_TOLERANCE_KOBO;
-    if (statement.amountKobo === Number(batch.data.netKobo) && !feeVariance) {
-      batch.status = "reconciled";
-      batch.data.explanation = "Statement credit matched the settlement batch net total; it was not allocated to a customer.";
-    } else {
-      batch.status = "variance";
-      batch.data.explanation = statement.amountKobo === Number(batch.data.netKobo)
-        ? "Statement credit matched the batch net, but the provider fees differ from the fee schedule."
-        : "Statement credit differs from gross settlement lines less recorded fees.";
-      raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, notes: batch.data.explanation, condition: `settlement_variance:${batch.id}:statement:${statement.amountKobo}:${batch.data.netKobo}:${batch.data.feeKobo}` });
-    }
     touch(statement, ctx.now); touch(batch, ctx.now);
-    matched += 1;
-  });
-  return matched;
+    linked += 1;
+  }
+  return linked;
 }
 
 export function allocatePayment(
@@ -214,8 +268,8 @@ export function allocatePayment(
   explanation?: string,
 ): TypedRecord<"allocations"> {
   assertAllocationEligible(due);
-  assertPaymentAllocatable(payment);
-  if (!Number.isInteger(amount) || amount <= 0 || amount > payment.amountKobo - Number(payment.data.allocatedKobo || 0)) {
+  assertPaymentAllocatable(payment, amount);
+  if (!Number.isInteger(amount) || amount <= 0 || amount > paymentUnappliedKobo(payment)) {
     throw new Error("Enter a positive whole number in kobo, no more than the payment has left to allocate.");
   }
   const remaining = outstanding(due);
@@ -236,11 +290,20 @@ export function allocatePayment(
   return allocation;
 }
 
-/** Reversed or refunded money went back to the payer: no proposal, confirmation or manual allocation may apply it. */
-function assertPaymentAllocatable(payment: TypedRecord<"payments">): void {
-  if (!paymentReturned(payment)) return;
-  const how = paymentReversed(payment) ? "reversed by the provider" : "refunded to the payer";
-  throw Object.assign(new Error(`Payment ${payment.reference} was ${how}. Its money went back, so it cannot be allocated to an instalment.`), { status: 409 });
+/**
+ * Reversed or refunded money went back to the payer: no proposal, confirmation
+ * or manual allocation may apply it. After a refund of part of a payment, such
+ * as an overpayment's excess, only the money that stayed can be applied.
+ */
+function assertPaymentAllocatable(payment: TypedRecord<"payments">, amount: number): void {
+  if (paymentReturned(payment)) {
+    const how = paymentReversed(payment) ? "reversed by the provider" : "refunded to the payer";
+    throw Object.assign(new Error(`Payment ${payment.reference} was ${how}. Its money went back, so it cannot be allocated to an instalment.`), { status: 409 });
+  }
+  const refunded = paymentRefundedKobo(payment), left = paymentUnappliedKobo(payment);
+  if (refunded > 0 && amount > left) {
+    throw Object.assign(new Error(`Payment ${payment.reference} was refunded to the payer in part: ${nairaText(refunded)} went back, so ${left > 0 ? `only ${nairaText(left)} is` : "nothing is"} left to allocate to an instalment.`), { status: 409 });
+  }
 }
 
 function assertAllocationEligible(due: TypedRecord<'due-items'>): void {
@@ -251,11 +314,11 @@ export function applyConfirmedAllocation(state: DomainState, ctx: Context, alloc
   const payment = findRecord(state, String(allocation.data.paymentId), "payments");
   const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
   assertAllocationEligible(due);
-  assertPaymentAllocatable(payment);
+  assertPaymentAllocatable(payment, allocation.amountKobo);
   if (allocation.status === "superseded") throw new Error("This allocation is no longer applied and cannot be confirmed. Review the payment to create a new match.");
   if (allocation.status === "confirmed") throw Object.assign(new Error("This allocation is already applied. Refresh the payment to see its current position."), { status: 409 });
   const amount = allocation.amountKobo;
-  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > payment.amountKobo - Number(payment.data.allocatedKobo || 0)) {
+  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > paymentUnappliedKobo(payment)) {
     throw new Error("This allocation is more than the payment has left to allocate. Refresh the payment and review the proposed amount.");
   }
   if (amount > outstanding(due)) throw Object.assign(new Error("The proposed allocation exceeds the instalment balance now outstanding. Refresh the queue and review the changed balances."), { status: 409 });
@@ -266,7 +329,7 @@ export function applyConfirmedAllocation(state: DomainState, ctx: Context, alloc
   const remaining = Math.max(0, outstanding(due) - amount);
   due.data.outstandingKobo = remaining;
   due.status = remaining === 0 ? "paid" : "partially_paid";
-  const unapplied = payment.amountKobo - Number(payment.data.allocatedKobo);
+  const unapplied = paymentUnappliedKobo(payment);
   if (unapplied === 0) payment.status = "allocated";
   else if (remaining === 0) {
     // 7.3: the excess is unapplied credit on the customer position and an exception; never auto-applied elsewhere.
@@ -295,9 +358,60 @@ export function supersedeAllocation(state: DomainState, ctx: Context, allocation
   payment.data.allocatedKobo = Math.max(0, Number(payment.data.allocatedKobo || 0) - allocation.amountKobo);
   const restored = Math.min(due.amountKobo, outstanding(due) + allocation.amountKobo);
   due.data.outstandingKobo = restored;
-  if (!["in_dispute", "cancelled", "closed"].includes(due.status)) due.status = restored === due.amountKobo ? (attemptsFor(state, due.id).length ? "in_collection" : "scheduled") : "partially_paid";
+  settleDueStatus(state, ctx, due, true);
   touch(allocation, ctx.now); touch(due, ctx.now);
   settlePaymentStatus(state, ctx, payment);
+}
+
+/** Statuses a workflow sets rather than the balance: an edit, a repair or a returned allocation keeps them. */
+const heldDueStatuses: readonly string[] = ["in_dispute", "cancelled", "closed"];
+
+/**
+ * The status an instalment's balance implies: paid with nothing outstanding,
+ * part-paid while some but not all of it is paid, and otherwise scheduled or
+ * in collection, by its attempts. A dispute, cancellation or closure is kept,
+ * and so is a final failure while money is still owed, unless `reopenFinal`
+ * (a superseded allocation gives the engine money to collect again).
+ */
+export function derivedDueStatus(state: DomainState, due: TypedRecord<"due-items">, reopenFinal = false): TypedRecord<"due-items">["status"] {
+  if (heldDueStatuses.includes(due.status)) return due.status;
+  const left = outstanding(due);
+  if (left === 0) return "paid";
+  if (due.status === "unpaid_final" && !reopenFinal) return "unpaid_final";
+  if (left < due.amountKobo) return "partially_paid";
+  if (due.status === "scheduled" || due.status === "in_collection") return due.status;
+  return attemptsFor(state, due.id).length ? "in_collection" : "scheduled";
+}
+
+/** Moves an instalment to the status its balance implies; a settled one has its unsent attempts cancelled. True when the status changed. */
+export function settleDueStatus(state: DomainState, ctx: Context, due: TypedRecord<"due-items">, reopenFinal = false): boolean {
+  const status = derivedDueStatus(state, due, reopenFinal);
+  if (status === "paid") cancelUnsentAttempts(state, due.id, ctx.now);
+  if (status === due.status) return false;
+  due.status = status; touch(due, ctx.now);
+  return true;
+}
+
+/**
+ * An instalment edited through the record API. Its outstanding balance is
+ * rebuilt from the confirmed allocations and its status follows that balance,
+ * so a paid instalment whose amount rises is part-paid again and a part-paid
+ * one reduced to what was paid is paid. The status is derived after
+ * validation, which refuses a status set by the caller.
+ */
+export function amendDueItem(state: DomainState, ctx: Context, due: TypedRecord<"due-items">, input: TypedRecord<"due-items">): TypedRecord<"due-items"> {
+  const allocated = recordsOf(state, "allocations").filter((item) => item.status === "confirmed" && item.data.dueItemId === due.id).reduce((sum, item) => sum + item.amountKobo, 0);
+  if (input.amountKobo < allocated) throw new Error("Due amount cannot be reduced below confirmed allocations.");
+  for (const key of ["experimentId", "experimentArm", "firstFailureAt"] as const) {
+    if (JSON.stringify(input.data[key]) !== JSON.stringify(due.data[key])) throw new Error("Experiment assignment is immutable.");
+  }
+  input.data.outstandingKobo = input.amountKobo - allocated;
+  // RET-10: an obligation amended after its first failure leaves the experiment's eligible set.
+  if (input.amountKobo !== due.amountKobo || String(input.data.dueDate) !== String(due.data.dueDate)) input.data.amendedAt = ctx.now;
+  validateRecord(state, ctx, "due-items", input, true);
+  Object.assign(due, input);
+  settleDueStatus(state, ctx, due);
+  return due;
 }
 
 /** The reason a precision review records when it takes a match out of use; older records carry only this text. */
@@ -317,7 +431,7 @@ export function supersededByReview(allocation: TypedRecord<"allocations">): bool
 export function reinstateAllocation(state: DomainState, ctx: Context, allocation: TypedRecord<"allocations">): void {
   const payment = findRecord(state, String(allocation.data.paymentId), "payments");
   const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
-  const left = payment.amountKobo - Number(payment.data.allocatedKobo || 0);
+  const left = paymentUnappliedKobo(payment);
   const blocker = paymentReturned(payment) ? `payment ${payment.reference} was ${paymentReversed(payment) ? "reversed" : "refunded"}`
     : ["cancelled", "closed", "in_dispute"].includes(due.status) ? `instalment ${due.reference} is ${due.status.replace(/_/g, " ")}`
     : allocation.amountKobo > left ? `payment ${payment.reference} no longer has that much left to allocate`
@@ -341,7 +455,8 @@ export function reinstateAllocation(state: DomainState, ctx: Context, allocation
 export function settlePaymentStatus(state: DomainState, ctx: Context, payment: TypedRecord<"payments">, reason = "Superseded: the proposal no longer fits what the payment has left."): void {
   paymentDimensions(payment);
   const allocated = Number(payment.data.allocatedKobo || 0);
-  const left = payment.amountKobo - allocated;
+  // What it still holds: a refund of part of it, such as an overpayment's excess, is not left to allocate.
+  const left = paymentUnappliedKobo(payment);
   const returned = paymentReturned(payment);
   const proposals = recordsOf(state, "allocations").filter((item) => item.data.paymentId === payment.id && item.status === "proposed");
   for (const proposal of proposals) {
@@ -361,10 +476,27 @@ export function settlePaymentStatus(state: DomainState, ctx: Context, payment: T
     delete payment.data.proposedDueItemId; delete payment.data.proposedAmountKobo;
     if (allocated === 0) payment.status = returned ? "returned" : "unallocated";
     // Refunded after part of it was applied: the rest went back, so what stayed is all applied.
-    else if (left <= 0 || returned) payment.status = "allocated";
+    else if (left <= 0) payment.status = "allocated";
     else payment.status = previous === "overpaid" ? "overpaid" : "partial";
   }
   touch(payment, ctx.now);
+}
+
+/**
+ * Records a refund made outside Valo Pay: it returns what the payment has not
+ * applied, and data.refundedKobo keeps that amount for billing and reports. A
+ * caller that returns applied money, such as the pay-by-bank refund, takes the
+ * allocations off their instalments first, so the whole receipt is recorded.
+ */
+export function recordPaymentRefund(state: DomainState, ctx: Context, payment: TypedRecord<"payments">, reason: string): number {
+  paymentDimensions(payment);
+  const refundedKobo = Math.max(0, payment.amountKobo - Number(payment.data.allocatedKobo || 0));
+  payment.data.refundStatus = "refunded";
+  payment.data.refundedKobo = refundedKobo;
+  touch(payment, ctx.now);
+  // Its money went back: open proposals are withdrawn and the payment leaves the allocation queues.
+  settlePaymentStatus(state, ctx, payment, reason);
+  return refundedKobo;
 }
 
 /** Finance said this payment does not belong to the instalment: automatic matching never proposes the pair again. */
@@ -386,14 +518,16 @@ const rejectedMatches = (payment: TypedRecord<"payments">): Set<string> => new S
 
 /**
  * Payments whose status contradicts their records: "unallocated" with money
- * applied, "proposed" with no live proposal, or money returned while still
+ * applied, "proposed" with no live proposal, money returned while still
  * waiting in an allocation queue, carrying a proposal, or shown as holding
- * unapplied money ("partial" or "overpaid" after a refund).
+ * unapplied money ("partial" or "overpaid" after a refund), or "returned"
+ * while it holds money a refund of part of it did not return.
  */
 function paymentsToSettle(state: DomainState): TypedRecord<"payments">[] {
   const proposed = new Set(recordsOf(state, "allocations").filter((item) => item.status === "proposed").map((item) => String(item.data.paymentId)));
   return recordsOf(state, "payments").filter((payment) => {
     if (paymentReturned(payment)) return ["unallocated", "proposed", "possible_duplicate", "partial", "overpaid"].includes(payment.status) || proposed.has(payment.id);
+    if (payment.status === "returned") return true;
     if (payment.status === "unallocated") return Number(payment.data.allocatedKobo || 0) > 0 || proposed.has(payment.id);
     return payment.status === "proposed" && !proposed.has(payment.id);
   });
@@ -447,6 +581,8 @@ function canonicalPayment(state: DomainState, ctx: Context, observation: TypedRe
   if (source === "settlement") {
     payment.data.settlementStatus = "settled";
     payment.data.settledAt ||= observedAt;
+    // A settlement line pays out a debit that was collected, so it succeeded even when its webhook never arrived.
+    if (payment.data.channel === "direct_debit" && payment.data.collectionStatus !== "failed") payment.data.collectionStatus = "succeeded";
     settlementBatch(state, ctx, observation, payment);
   }
   if (observation.data.reversed === true || observation.data.reversalStatus === "reversed") reversePayment(state, ctx, payment);
@@ -526,6 +662,12 @@ function matchPayment(state: DomainState, ctx: Context, payment: TypedRecord<"pa
     payment.data.explanation = explanation;
     touch(payment, ctx.now);
   };
+  // The rules compare the gross amount, which a payment refunded in part no longer holds.
+  const refunded = paymentRefundedKobo(payment);
+  if (refunded > 0) {
+    leaveForFinance(`A refund returned ${nairaText(refunded)} of this payment. Automatic matching leaves the ${nairaText(paymentUnappliedKobo(payment))} it still holds for Finance to allocate.`);
+    return;
+  }
   // Finance's "this is the wrong instalment" stands: a strong reference to a
   // rejected instalment is not matched anywhere else automatically either.
   if (intended && rejected.has(intended.due.id)) {
@@ -628,14 +770,20 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
   const exceptionsBefore = recordsOf(state, "exceptions").length;
   const canonicalPayments = new CanonicalPaymentIndex(state);
   const resolved = observations.map((item) => canonicalPayment(state, ctx, item, canonicalPayments)).filter(Boolean) as TypedRecord<"payments">[];
-  const statementBatchesMatched = matchSettlementStatements(state, ctx);
-  const feeVariances = checkBatchFees(state, ctx);
+  const statementBatchesMatched = linkSettlementStatements(state, ctx);
+  const batchVariances = evaluateSettlementBatches(state, ctx);
   const allocationsBefore = new Set(recordsOf(state, "allocations").map((item) => item.id));
   // Statuses written before these rules, or by a path that did not settle the
   // payment, are re-derived first, so the rule ladder only sees whole,
   // unapplied payments that still hold their money.
   const repaired = paymentsToSettle(state);
   repaired.forEach((payment) => settlePaymentStatus(state, ctx, payment));
+  // Instalment statuses that contradict their stored balance, as an amount edit
+  // could leave them before this rule, are re-derived before matching and before
+  // the engine evaluates them. A record without a stored balance is left alone.
+  const duesRepaired = recordsOf(state, "due-items")
+    .filter((due) => Number.isInteger(due.data.outstandingKobo) && derivedDueStatus(state, due) !== due.status)
+    .filter((due) => settleDueStatus(state, ctx, due)).length;
   const matches = new MatchIndex(state);
   let paymentsSkipped = 0;
   for (const payment of recordsOf(state, "payments").filter((item) => item.status === "unallocated")) {
@@ -651,7 +799,7 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
   }
   const now = Date.parse(ctx.now);
   const aged = recordsOf(state, "payments").filter((item) => item.status === "unallocated" && !paymentReturned(item) && now - paymentObservedAt(item) >= UNALLOCATED_AGE_MS);
-  aged.forEach((payment) => raiseException(state, ctx, "unallocated_payment", { linkedRecordId: payment.id, customerId: payment.customerId, amountKobo: payment.amountKobo, notes: "No certain or confirmed allocation after 24 hours.", condition: identityCondition("unallocated_payment", payment.id) }));
+  aged.forEach((payment) => raiseException(state, ctx, "unallocated_payment", { linkedRecordId: payment.id, customerId: payment.customerId, amountKobo: paymentUnappliedKobo(payment), notes: "No certain or confirmed allocation after 24 hours.", condition: identityCondition("unallocated_payment", payment.id) }));
   // Outcomes resolved before resolutions updated the attempt are applied now, the latest resolution first,
   // so those instalments stop waiting as in flight.
   const unknownAttempts = new Set(recordsOf(state, "attempts").filter((attempt) => attempt.status === "unknown").map((attempt) => attempt.id));
@@ -674,7 +822,7 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
     message: "Reconciliation complete. Payment evidence has been checked for matches. No money was moved and no collection instruction was sent.",
     data: {
       observationsResolved: observations.filter((item) => item.status === "resolved").length, observationsBySource, canonicalPayments: resolved.length,
-      settlementStatementsMatched: statementBatchesMatched, settlementVariances: feeVariances, allocationsByRule, paymentStatusesRepaired: repaired.length, paymentsSkipped, attemptOutcomesConfirmed: outcomesConfirmed,
+      settlementStatementsMatched: statementBatchesMatched, settlementVariances: batchVariances, allocationsByRule, paymentStatusesRepaired: repaired.length, dueStatusesRepaired: duesRepaired, paymentsSkipped, attemptOutcomesConfirmed: outcomesConfirmed,
       proposed: recordsOf(state, "payments").filter((item) => item.status === "proposed").length,
       unallocated: recordsOf(state, "payments").filter((item) => item.status === "unallocated").length,
       possibleDuplicates: recordsOf(state, "payments").filter((item) => item.status === "possible_duplicate").length,

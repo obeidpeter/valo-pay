@@ -7,6 +7,7 @@ import {
   type ImportRecordsMutationVariables, type CreateExportMutationVariables, type RetryExportJobMutationVariables,
 } from '@workspace/api-client-react';
 import { CreateRecordResponse, UpdateRecordResponse, PerformActionResponse, ImportRecordsResponse, UpdateSettingsResponse, CreateExportResponse, RetryExportJobResponse } from '@workspace/api-zod';
+import { definitiveRefusalStatuses } from '@workspace/valopay-schema';
 
 /** Object key order must not turn an unchanged retry into another operation. */
 export function submissionFingerprint(value: unknown): string {
@@ -19,7 +20,7 @@ type Options<Result, Variables> = { mutation?: UseMutationOptions<Result, Error,
 
 /** A structured rejection confirms no write; transport/parse/5xx errors do not. */
 export function outcomeIsUnconfirmed(error: unknown): boolean {
-  if (nothingSaved(error)) return false;
+  if (nothingSaved(error) || requestClosed(error)) return false;
   const response = error as { status?: number; data?: { error?: unknown } } | null;
   return !(response?.status && response.status >= 400 && response.status < 500 && response.status !== 408 && typeof response.data?.error === 'string');
 }
@@ -28,6 +29,21 @@ export function outcomeIsUnconfirmed(error: unknown): boolean {
 export function nothingSaved(error: unknown): boolean {
   const response = error as { status?: number; data?: { error?: unknown; committed?: unknown } } | null;
   return Boolean(response?.status && response.status >= 500 && response.data?.committed === false && typeof response.data.error === 'string');
+}
+
+/** The service says the request's journal entry is cancelled (`operation: "cancelled"`): a cancelled entry never
+ * completes, so neither this request nor an earlier one with its key was or can be saved. Proof even for a request
+ * held as unconfirmed. */
+export function requestClosed(error: unknown): boolean {
+  const response = error as { status?: number; data?: { error?: unknown; operation?: unknown } } | null;
+  return Boolean(response?.status && response.status >= 400 && response.data?.operation === 'cancelled' && typeof response.data.error === 'string');
+}
+
+/** A structured refusal the service treats as final for its key (400, 403, 404, 409, 410, 413, 415, 422): the same
+ * request would be refused again, and its key cannot run again. A 401 or 429 keeps the key. */
+export function definitiveRefusal(error: unknown): boolean {
+  const response = error as { status?: number; data?: { error?: unknown } } | null;
+  return (definitiveRefusalStatuses as readonly number[]).includes(response?.status ?? 0) && typeof response?.data?.error === 'string';
 }
 
 function recoveryError(message: string) {
@@ -48,7 +64,12 @@ const exportReceipt = (value: Awaited<ReturnType<typeof createExport>>) => Boole
 /**
  * A key belongs to one form/action session and unchanged payload (including lender).
  * Keep it when a response is lost: the server can replay its already committed result.
- * A changed submission is allowed only after a confirmed outcome. Nothing is persisted locally.
+ * A changed submission is allowed only after a confirmed outcome: a receipt, a
+ * refusal of the first attempt, or a refusal the service marks as cancelled. A
+ * finished request cannot run again under its key, so an identical resubmission
+ * after it gets a new key. Discarding the original (abandonUnconfirmed) is a
+ * person's deliberate choice after a warning, never automatic. Nothing is
+ * persisted locally.
  */
 export function useSafeMutation<Result, Variables>(send: (variables: Variables, request: RequestOptions) => Promise<Result>, options: Options<Result, Variables> = {}, scope?: unknown, writes: (variables: Variables) => boolean = () => true) {
   const attempt = useRef<{ fingerprint: string; key: string; variables: Variables; pending: boolean; unconfirmed: boolean } | null>(null);
@@ -72,10 +93,12 @@ export function useSafeMutation<Result, Variables>(send: (variables: Variables, 
         return result;
       } catch (error) {
         // A later auth/policy rejection can occur before replay lookup. It does
-        // not establish whether the original request committed.
-        current.unconfirmed = current.unconfirmed || (writes(current.variables) && outcomeIsUnconfirmed(error));
-        // A request that saved nothing is finished: its journal entry is closed, so the next submission needs a new key.
-        if (nothingSaved(error) && !current.unconfirmed && attempt.current === current) attempt.current = null;
+        // not establish whether the original request committed, unless the
+        // service says the key's journal entry is cancelled: then nothing sent
+        // with it was saved or can be.
+        current.unconfirmed = requestClosed(error) ? false : current.unconfirmed || (writes(current.variables) && outcomeIsUnconfirmed(error));
+        // A finished request (refused for good, or saved nothing) cannot run again under its key: the next submission needs a new one.
+        if (!current.unconfirmed && attempt.current === current && (requestClosed(error) || nothingSaved(error) || definitiveRefusal(error))) attempt.current = null;
         throw error;
       } finally {
         current.pending = false;
@@ -88,6 +111,12 @@ export function useSafeMutation<Result, Variables>(send: (variables: Variables, 
     retryUnconfirmed: (): Promise<Result> => {
       if (!attempt.current?.unconfirmed) return Promise.reject(recoveryError('There is no unconfirmed request to retry.'));
       return mutation.mutateAsync(attempt.current.variables);
+    },
+    /** Forgets the original request and its key after the person chose to discard it: the next submission is new. */
+    abandonUnconfirmed: () => {
+      if (attempt.current?.pending) return;
+      attempt.current = null;
+      mutation.reset();
     },
   };
 }

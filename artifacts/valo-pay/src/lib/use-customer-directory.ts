@@ -28,6 +28,8 @@ export function useCustomerDirectory(merchantId: string | null) {
     pagination: {
       page, pageSize, offset: page * pageSize,
       setPage: (value: number) => update({ page: String(Math.max(0, Math.floor(value)) + 1) }),
+      /** Replaces a page past the end, so Back does not return to it. */
+      correctPage: (value: number) => update({ page: String(Math.max(0, Math.floor(value)) + 1) }, true),
       setPageSize: (value: number) => { if (RECORD_PAGE_SIZES.some(size => size === value)) update({ size: String(value), page: '' }); },
     },
   };

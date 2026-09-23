@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { retentionPolicySchema, retentionPolicyInputSchema, retentionHoldInputSchema, lifecycleCandidateSchema, lifecyclePreviewInputSchema, lifecycleApproveInputSchema, lifecycleRunViewSchema, lifecycleViewSchema, lifecycleReceiptStatusSchema, type LifecycleCandidate, type LifecycleExternalCandidate, type RetentionPolicy } from '@workspace/valopay-schema';
 import type { Context, DomainState, ValopayRecord } from './types';
-import { makeRecord, touch } from './records';
+import { makeRecord, touch, assertSourceOpened } from './records';
 
 const DAY = 86400000;
 const defaults: RetentionPolicy = { rawCsvDays: null, journalPayloadDays: null, exportFileDays: null, auditTrail: 'retain' };
@@ -39,6 +39,8 @@ function validateExternal(state: DomainState, candidates: LifecycleExternalCandi
   return result;
 }
 export function lifecycleCandidates(state: DomainState, external: LifecycleExternalCandidate[] = []) {
+  // A committed batch whose rows were not opened would silently drop out of the inventory.
+  for (const record of rows(state, 'import-batches')) if (record.status === 'committed' && record.data.csv !== undefined) assertSourceOpened(record, ['csv', 'check']);
   const raw: LifecycleCandidate[] = rows(state, 'import-batches').filter(record => record.status === 'committed' && typeof record.data.csv === 'string' && record.data.csv.length > 0 && typeof record.data.committedAt === 'string').map(record => lifecycleCandidateSchema.parse({ kind: 'raw_csv', merchantId: state.merchant.id, sourceId: record.id, version: record.updatedAt, createdAt: record.data.committedAt, label: 'Committed import source CSV', digest: hash({ id: record.id, version: record.updatedAt, csv: record.data.csv, preview: record.data.check?.preview || null }), status: 'committed' }));
   return [...raw, ...validateExternal(state, external)].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || candidateKey(a).localeCompare(candidateKey(b)));
 }

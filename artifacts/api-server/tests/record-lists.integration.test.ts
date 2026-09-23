@@ -17,6 +17,7 @@ const { customerTimeline } = await import("../src/domain/timeline.js");
 const { buildConsoleSettings } = await import("../src/lib/valopay-close-views.js");
 const { default: express } = await import("express");
 const { default: router } = await import("../src/routes/valopay.js");
+const { errorHandler } = await import("../src/lib/error-handler.js");
 const auth = () => Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true });
 const token = randomBytes(32).toString("hex"), otherToken = randomBytes(32).toString("hex"), editingToken = randomBytes(32).toString("hex");
 const request = (value = token) => ({ headers: { cookie: `valopay_sandbox=${value}` }, secure: false, auth: auth() }) as any;
@@ -105,9 +106,9 @@ try {
   const customer = editState.records.find(row => row.kind === "customers")!;
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { (req as any).auth = auth(); (req as any).log = { info() {} }; next(); });
+  app.use((req, _res, next) => { (req as any).auth = auth(); (req as any).log = { info() {}, warn() {}, error() {} }; next(); });
   app.use("/api", router);
-  app.use((error: any, _req: any, res: any, _next: any) => res.status(error.status || 500).json({ error: error.message }));
+  app.use(errorHandler);
   server = await new Promise<Server>(resolve => { const running = app.listen(0, "127.0.0.1", () => resolve(running)); });
   const address = server.address(); assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}/api/v1`;
@@ -138,6 +139,17 @@ try {
   assert.equal(suspended.status, 200, JSON.stringify(suspended.body));
   assert.equal((await api("/actions", "POST", { ...suspend, action: "mandate_cancel" }, "cancel-stale")).status, 409);
   assert.deepEqual(await api("/actions", "POST", suspend, "suspend-once"), suspended);
+  // Audit item 13: an instalment's status follows an amount edit, and the API alone numbers policy versions.
+  const paidDue = editState.records.find(row => row.kind === "due-items" && row.reference === "DEMO-LOAN-1001")!;
+  assert.equal(paidDue.status, "paid");
+  const raised = await api(`/records/due-items/${paidDue.id}`, "PATCH", { amountKobo: 3_000_000, expectedUpdatedAt: paidDue.updatedAt }, "raise-paid-due");
+  assert.equal(raised.status, 200, JSON.stringify(raised.body));
+  assert.deepEqual([raised.body.status, raised.body.data.outstandingKobo], ["partially_paid", 500_000], "a paid instalment raised above what was paid is part-paid again");
+  const reduced = await api(`/records/due-items/${paidDue.id}`, "PATCH", { amountKobo: 2_500_000, expectedUpdatedAt: raised.body.updatedAt }, "reduce-paid-due");
+  assert.deepEqual([reduced.status, reduced.body.status, reduced.body.data.outstandingKobo], [200, "paid", 0], "reduced to what was paid, it is paid");
+  const draftPolicy = editState.records.find(row => row.kind === "policies")!;
+  const renumbered = await api(`/records/policies/${draftPolicy.id}`, "PATCH", { data: { version: 2 }, expectedUpdatedAt: draftPolicy.updatedAt });
+  assert.equal(renumbered.status, 400, JSON.stringify(renumbered.body)); assert.match(renumbered.body.error, /version numbers are assigned/);
   const roleChange = { action: "set_role", data: { role: "Operations" } };
   const roleChanged = await api("/actions", "POST", roleChange, "role-switch-once");
   assert.equal(roleChanged.status, 200);
@@ -165,7 +177,7 @@ try {
       assert.ok(Date.parse(record.updatedAt) > Date.parse(job.updatedAt));
     }, "read");
   }
-  console.log("Record list integration passed: 10k rows, scoped paging/counts, exact search, history totals, tenant isolation, stale edits and successful replay.");
+  console.log("Record list integration passed: 10k rows, scoped paging/counts, exact search, history totals, tenant isolation, stale edits, successful replay, instalment statuses that follow an edit and API-assigned policy versions.");
 } finally {
   if (server) await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve()));
   // Leave other suites' fixtures untouched, and do not make scheduler tests

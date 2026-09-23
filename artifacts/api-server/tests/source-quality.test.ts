@@ -37,6 +37,11 @@ assert.equal(batchSourceQuality(state, batch).importedRows, 1);
 const repeated = saveImportBatch(state, ctx, { name: "Customers 002", source: "test-lms", sourceBatchId: "customers-002", kind: "customers", csv: batch.data.csv, mapping: {}, identityColumn: "source_row_id", amountUnit: "naira", syntheticOnly: true });
 assert.equal(batchSourceQuality(state, repeated).duplicateRows, 1);
 assert.equal(batchSourceQuality(state, repeated).importedRows, 0);
+// Source rows the route did not open are a server fault, never an "unavailable" quality a person would act on.
+for (const field of ["csv", "check"]) {
+  const unopened = structuredClone(repeated); unopened.data[field] = { protectedPayload: 1 };
+  assert.throws(() => batchSourceQuality(state, unopened), (e: any) => e.status === 500 && /not opened/.test(e.message), `a sealed ${field} is refused`);
+}
 
 // A later delivery does not erase a missed first day; each cadence window has its own receipt.
 makeRecord(state, "import-batches", { status: "committed", data: { source: "test-lms", kind: "customers", committedAt: "2026-09-23T09:15:00.000Z" } });

@@ -215,7 +215,6 @@ export default function PoliciesPage() {
           actionKind === 'create_policy' || actionKind === 'edit_policy' ? [
             { name: 'name', label: 'Policy name', type: 'text', required: true },
             { name: 'status', label: 'Status', type: 'select', options: [{label: 'Draft', value: 'draft'}], required: true },
-            { name: 'version', label: 'Version', type: 'number', isData: true, required: true },
             { name: 'maxAttempts', label: 'Maximum attempts', type: 'number', isData: true, required: true },
             { name: 'spacingHours', label: 'Time between attempts (hours)', type: 'number', isData: true, required: true },
             { name: 'firstNoticeHours', label: 'Notice before first attempt (hours)', type: 'number', isData: true, required: true },

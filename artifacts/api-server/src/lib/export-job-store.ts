@@ -2,35 +2,23 @@ import { pool, type PoolClient } from '@workspace/db';
 import { randomUUID } from 'node:crypto';
 import type { Context, DomainState, ValopayRecord } from '../domain/types';
 import { canonical, digest, SYSTEM_ACTOR_PREFIX } from './valopay-store';
-import { EXPORT_LEASE_MS, EXPORT_CONFIRM_LEASE_MS, exportIsClaimable, type ClaimedExport, type ExportArtifact, type ExportJobRepository, type ExportWriteResult } from './export-jobs';
+import { EXPORT_LEASE_MS, EXPORT_CONFIRM_LEASE_MS, exportIsClaimable, returnExportToQueue, type ClaimedExport, type ExportArtifact, type ExportJobRepository, type ExportWriteResult } from './export-jobs';
 import { bindRuntimeService, runtimeExportRequesterAllowed } from './runtime-isolation';
+import { beginStatement, checkOut, databaseLimits } from './database-limits';
 
 type Scope = { id: string; workspace_id: string; principal_hash: string; info: DomainState['merchant']; settings: DomainState['settings']; now: Date };
 type Row = { id: string; merchant_id: string; kind: string; name: string; status: string; reference: string; amount_kobo: number | string; customer_id: string; data: Record<string, any>; created_at: Date; updated_at: Date };
 const recordOf = (row: Row): ValopayRecord => ({ id: row.id, merchantId: row.merchant_id, kind: row.kind, name: row.name, status: row.status, reference: row.reference, amountKobo: Number(row.amount_kobo), customerId: row.customer_id, data: row.data, createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString() });
 const ownership = 'EXISTS (SELECT 1 FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id WHERE m.id=$1 AND m.workspace_id=$2 AND w.principal_hash=$3)';
 const actor = `${SYSTEM_ACTOR_PREFIX}export worker`;
-/** A late pool checkout is returned unused: a timeout never starts a background transaction. */
-function acquireClient(): Promise<PoolClient> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const timer = setTimeout(() => { settled = true; reject(new Error('Export database connection timed out.')); }, 5000);
-    pool.connect((error, client, release) => {
-      clearTimeout(timer);
-      if (settled) { release?.(); return; }
-      settled = true;
-      if (error || !client) reject(error || new Error('Export database connection unavailable.'));
-      else resolve(client);
-    });
-  });
-}
 
-/** This capability is system-only: every transaction derives the workspace and principal from its locked merchant. */
+/** This capability is system-only: every transaction derives the workspace and principal from its locked merchant.
+ * The pool's checkout wait bounds the checkout, so a late connection never starts a background transaction, and
+ * the worker limits bound what runs. */
 async function transaction<T>(merchantId: string, work: (client: PoolClient, scope: Scope) => Promise<T>): Promise<T | null> {
-  const client = await acquireClient();
+  const guard = await checkOut(() => pool.connect()), client = guard.client;
   try {
-    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
-    await client.query("SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='1s'; SET LOCAL idle_in_transaction_session_timeout='5s'");
+    await client.query(beginStatement(databaseLimits().worker, 'ISOLATION LEVEL REPEATABLE READ'));
     await bindRuntimeService(client);
     const scope = (await client.query<Scope>(`SELECT m.id,m.workspace_id,w.principal_hash,m.info,m.settings,now() AS now
       FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id WHERE m.id=$1 FOR UPDATE OF m SKIP LOCKED`, [merchantId])).rows[0];
@@ -40,7 +28,7 @@ async function transaction<T>(merchantId: string, work: (client: PoolClient, sco
     if (committed.command !== 'COMMIT') throw new Error('Export job transaction did not commit.');
     return result;
   } catch (error) { try { await client.query('ROLLBACK'); } catch { /* disconnected */ } throw error; }
-  finally { client.release(); }
+  finally { guard.release(); }
 }
 async function audit(client: PoolClient, scope: Scope, job: ValopayRecord, action: string, summary: string) {
   const tail = (await client.query<Row>(`SELECT r.* FROM valopay_records r WHERE r.merchant_id=$1 AND r.kind='audit' AND ${ownership}
@@ -88,10 +76,9 @@ export const exportJobRepository: ExportJobRepository = {
   async candidates(limit) {
     // Bound checkout and the read itself so a queue scan cannot occupy both
     // worker slots forever. Claims still recheck ownership under the lender lock.
-    const client = await acquireClient();
+    const guard = await checkOut(() => pool.connect()), client = guard.client;
     try {
-      await client.query('BEGIN READ ONLY');
-      await client.query("SET LOCAL statement_timeout='5s'; SET LOCAL lock_timeout='1s'; SET LOCAL idle_in_transaction_session_timeout='5s'");
+      await client.query(beginStatement(databaseLimits().worker, 'READ ONLY'));
       await bindRuntimeService(client);
       const targets = (await client.query<{ merchantId: string; id: string }>(`SELECT merchant_id AS "merchantId",id FROM valopay_records
       WHERE kind='exports' AND (status='queued' OR (status='running' AND COALESCE(data->>'leaseExpiresAt','') <= to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')))
@@ -99,7 +86,7 @@ export const exportJobRepository: ExportJobRepository = {
       await client.query('COMMIT');
       return targets;
     } catch (error) { try { await client.query('ROLLBACK'); } catch { /* disconnected */ } throw error; }
-    finally { client.release(); }
+    finally { guard.release(); }
   },
   async claim(merchantId, id) {
     return transaction(merchantId, async (client, scope) => {
@@ -138,6 +125,18 @@ export const exportJobRepository: ExportJobRepository = {
       // be adopted shortly, with the same object/key, without waiting five minutes.
       if (stage === 'confirming') job.data.leaseExpiresAt = new Date(scope.now.getTime() + EXPORT_CONFIRM_LEASE_MS).toISOString();
       await writeJob(client, scope, job);
+      return 'saved';
+    }) ?? 'busy';
+  },
+  async release(claim) {
+    return await transaction(claim.merchantId, async (client, scope) => {
+      const row = (await client.query<Row>(`SELECT r.* FROM valopay_records r WHERE r.id=$4 AND r.merchant_id=$1 AND r.kind='exports' AND ${ownership}`, [scope.id, scope.workspace_id, scope.principal_hash, claim.id])).rows[0];
+      if (!row || row.status !== 'running' || row.data.leaseToken !== claim.token) return 'lost';
+      // Attempts keep counting claims, and the private object key stays, so a file the stopped upload committed is adopted.
+      const job = recordOf(row);
+      returnExportToQueue(job, scope.now.toISOString());
+      await writeJob(client, scope, job);
+      await audit(client, scope, job, 'export.released', 'The export worker stopped before finishing; the saved job returns to the queue for the next worker.');
       return 'saved';
     }) ?? 'busy';
   },

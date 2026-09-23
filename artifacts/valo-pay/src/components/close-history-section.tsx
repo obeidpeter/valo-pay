@@ -149,7 +149,7 @@ export function CloseHistorySection({ active }: { active: boolean }) {
   });
   useEffect(() => {
     if (query.data && query.data.offset !== pagination.offset)
-      pagination.setPage(Math.floor(query.data.offset / pagination.pageSize));
+      pagination.correctPage(Math.floor(query.data.offset / pagination.pageSize));
   }, [query.data, pagination.offset, pagination.pageSize]);
   const history = closeHistory(
     query.data?.first && query.data.latest

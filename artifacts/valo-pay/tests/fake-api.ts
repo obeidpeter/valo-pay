@@ -26,9 +26,9 @@ import {
   ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, isCloseTime,
   nextCloseInstant, recordKinds, roles,
 } from "@workspace/valopay-schema";
-import { customerTimeline, executeAction, makeRecord, rescheduleAfterSettings, validateRecord } from "../../api-server/src/domain";
+import { amendDueItem, customerTimeline, executeAction, makeRecord, rescheduleAfterSettings, validateRecord } from "../../api-server/src/domain";
 import { enrolEligibleFailures } from "../../api-server/src/domain/policy-engine";
-import type { Context, DomainState, ValopayRecord } from "../../api-server/src/domain/types";
+import type { Context, DomainState, TypedRecord, ValopayRecord } from "../../api-server/src/domain/types";
 import { seedMerchant } from "../../api-server/src/lib/valopay-seed";
 import { getGates } from "../../api-server/src/lib/valopay-readiness";
 import { pageRecords } from "../../api-server/src/lib/valopay-list";
@@ -238,13 +238,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
         const {expectedUpdatedAt:_expected,...changes}=body;
         const input = { ...old, ...changes, data: { ...old.data, ...body.data, synthetic: true } as Record<string, any>, updatedAt: ctx.now };
         assertNoDirectImportedCorrection(old,input);
-        if (kind === "due-items") {
-          const allocated = state.records.filter((record) => record.kind === "allocations" && record.status === "confirmed" && record.data.dueItemId === old.id).reduce((sum, record) => sum + record.amountKobo, 0);
-          if (input.amountKobo < allocated) fail("Due amount cannot be reduced below confirmed allocations.");
-          for (const key of ["experimentId", "experimentArm", "firstFailureAt"]) if (JSON.stringify(input.data[key]) !== JSON.stringify(old.data[key])) fail("Experiment assignment is immutable.");
-          input.data.outstandingKobo = input.amountKobo - allocated;
-          if (input.amountKobo !== old.amountKobo || String(input.data.dueDate) !== String(old.data.dueDate)) input.data.amendedAt = ctx.now;
-        }
+        if (kind === "due-items") return amendDueItem(state, ctx, old as TypedRecord<"due-items">, input as TypedRecord<"due-items">);
         validateRecord(state, ctx, kind, input, true);
         Object.assign(old, input);
         return old;

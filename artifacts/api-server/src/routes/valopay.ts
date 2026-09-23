@@ -4,7 +4,7 @@ import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
 import { z } from "zod";
 import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, roles, fail, appendAudit, verifyAudit, digest, canonical, listMerchants, findIdempotency, saveIdempotency, changeRole, type StoreContext } from "../lib/valopay-store";
-import { customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction } from "../domain";
+import { amendDueItem, customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction, type TypedRecord } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
 import { bindCloseReviewBasis } from '../domain/close-review';
 import { assertNoDirectImportedCorrection } from '../domain/import-corrections';
@@ -100,14 +100,8 @@ router.patch("/v1/records/:kind/:id",async(req,res)=>{
   const {expectedUpdatedAt: _version,...changes}=body;
   const input={...old,...changes,data:{...old.data,...body.data,synthetic:true} as Record<string,any>,updatedAt:ctx.now};
   assertNoDirectImportedCorrection(old,input);
-  if(kind==="due-items"){
-   const allocated=state.records.filter(r=>r.kind==="allocations"&&r.status==="confirmed"&&r.data.dueItemId===old.id).reduce((s,r)=>s+r.amountKobo,0);
-   if(input.amountKobo<allocated)fail("Due amount cannot be reduced below confirmed allocations.");
-   for(const key of ["experimentId","experimentArm","firstFailureAt"])if(JSON.stringify(input.data[key])!==JSON.stringify(old.data[key]))fail("Experiment assignment is immutable.");
-   input.data.outstandingKobo=input.amountKobo-allocated;
-   // RET-10: an obligation amended after its first failure leaves the experiment's eligible set.
-   if(input.amountKobo!==old.amountKobo||String(input.data.dueDate)!==String(old.data.dueDate))input.data.amendedAt=ctx.now;
-  }
+  // An instalment's balance is rebuilt from its allocations and its status follows it.
+  if(kind==="due-items")return amendDueItem(state,ctx,old as TypedRecord<"due-items">,input as TypedRecord<"due-items">);
   validateRecord(state,ctx,kind,input,true);Object.assign(old,input);return old;
   },true,S.UpdateRecordResponse);
  res.json(S.UpdateRecordResponse.parse(result));

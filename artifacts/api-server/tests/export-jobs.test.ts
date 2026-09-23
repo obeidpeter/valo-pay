@@ -46,6 +46,12 @@ const repository: ExportJobRepository = {
     if (record.data.leaseToken !== claim.token) return 'lost';
     record.status = 'failed'; record.data.lastError = message; delete record.data.leaseToken; return 'saved';
   },
+  async release(claim) {
+    const record = state.records.find(record => record.id === claim.id)!;
+    if (record.status !== 'running' || record.data.leaseToken !== claim.token) return 'lost';
+    record.status = 'queued'; record.data.stage = 'queued'; record.data.lastProgressAt = new Date(clock).toISOString();
+    delete record.data.leaseToken; delete record.data.leaseExpiresAt; delete record.data.lastError; return 'saved';
+  },
   async progress(claim,stage) {
     const record=state.records.find(record=>record.id===claim.id)!;
     if(record.data.leaseToken!==claim.token)return 'lost';
@@ -198,6 +204,58 @@ const stopping=startExportWorker({intervalMs:60_000,repository:{...repository,ca
 }),put:async()=>{throw new Error('Stopped reads must never upload.');}},generate});
 await twoReading;stopping.stop();await stopping.settle();
 assert.equal(activeReads,0);assert.equal(stopClaims,2);await stopping.tick();assert.equal(stopClaims,2);checks+=3;
+// The stop says nothing about the exports: both return to the queue, unfailed.
+for(const stopped of stopTargets.slice(0,2)){const row=state.records.find(record=>record.id===stopped.id)!;assert.equal(row.status,'queued');assert.equal(row.data.lastError,undefined);checks+=2;}
+
+// A stop mid-upload hands the claim back instead of failing the job, so the
+// next worker resumes it at once without a Retry or a five-minute lease wait.
+const stopReason=()=>new Error('Export worker is stopping.');
+const blockedUpload=(onUpload:()=>void):ExportJobStorage=>({existing:async()=>null,put:async(_claim,_bytes,_artifact,signal)=>new Promise((_resolve,reject)=>{
+ signal!.addEventListener('abort',()=>reject(signal!.reason),{once:true});onUpload();
+})});
+const releasedJob=queueExport(state,ctx,{kind:'customers',format:'json'},'/private/test');
+const stopRelease=new AbortController();
+assert.equal(await processExportJob(repository,blockedUpload(()=>stopRelease.abort(stopReason())),generate,{...target,id:releasedJob.id},{signal:stopRelease.signal,backoffMs:0}),'released');
+const releasedRow=state.records.find(record=>record.id===releasedJob.id)!,releasedView=exportJobView(releasedRow,new Date(clock).toISOString());
+assert.equal(releasedRow.status,'queued');assert.equal(releasedView.stage,'queued');assert.equal(releasedView.error,undefined);
+assert.equal(releasedView.stalled,false);assert.equal(releasedView.retryAllowed,false);assert.equal(releasedRow.data.leaseToken,undefined);
+assert.equal(exportIsClaimable(releasedRow,new Date(clock).toISOString()),true);checks+=7;
+assert.equal(await processExportJob(repository,storage,generate,{...target,id:releasedJob.id}),'ready');assert.equal(releasedRow.data.attempts,2);checks+=2;
+// The per-attempt timeout is not a stop: it still records a failure.
+const timedOut=queueExport(state,ctx,{kind:'customers',format:'json'},'/private/test');
+assert.equal(await processExportJob(repository,blockedUpload(()=>{}),generate,{...target,id:timedOut.id},{signal:new AbortController().signal,timeoutMs:10,backoffMs:0}),'failed');
+assert.equal(state.records.find(record=>record.id===timedOut.id)!.status,'failed');checks+=2;
+
+// The worker's stop() hands both active claims back and says so in its log.
+const workerIds=[0,1].map(()=>queueExport(state,ctx,{kind:'customers',format:'json'},'/private/test').id);
+let uploading=0,bothUploading!:()=>void;const bothBlocked=new Promise<void>(resolve=>{bothUploading=resolve;});
+const lines:Array<{event:string;status?:string}>=[];
+const releasing=startExportWorker({intervalMs:60_000,log:{info:(line:any)=>lines.push(line),error:(line:any)=>lines.push(line)} as any,
+ repository:{...repository,candidates:async()=>workerIds.map(id=>({...target,id}))},storage:blockedUpload(()=>{if(++uploading===2)bothUploading();}),generate});
+await bothBlocked;releasing.stop();await releasing.settle();
+for(const id of workerIds){const row=state.records.find(record=>record.id===id)!;assert.equal(row.status,'queued');assert.equal(row.data.lastError,undefined);checks+=2;}
+assert.deepEqual(lines.map(line=>[line.event,line.status]),[['export.job','released'],['export.job','released']]);checks++;
+
+// When the hand-back cannot be written, the job keeps its lease and is never
+// failed; a later poll recovers it once the lease expires.
+for(const release of [async()=>{throw new Error('Database unavailable');},async()=>'busy' as const]){
+ const unreleased=queueExport(state,ctx,{kind:'customers',format:'json'},'/private/test'),stop=new AbortController();
+ assert.equal(await processExportJob({...repository,release},blockedUpload(()=>stop.abort(stopReason())),generate,{...target,id:unreleased.id},{signal:stop.signal,backoffMs:0}),'interrupted');
+ const row=state.records.find(record=>record.id===unreleased.id)!;
+ assert.equal(row.status,'running');assert.equal(row.data.lastError,undefined);assert.equal(exportIsClaimable(row,new Date(clock).toISOString()),false);
+ clock+=EXPORT_LEASE_MS+1;
+ assert.equal(await processExportJob(repository,storage,generate,{...target,id:unreleased.id}),'ready');checks+=5;
+}
+// A worker whose lease was superseded cannot hand back its successor's job.
+const handedOver=queueExport(state,ctx,{kind:'customers',format:'json'},'/private/test');
+const staleClaim=(await repository.claim(target.merchantId,handedOver.id))!;
+clock+=EXPORT_LEASE_MS+1;
+const currentClaim=(await repository.claim(target.merchantId,handedOver.id))!;
+const staleStop=new AbortController();
+assert.equal(await processExportJob({...repository,claim:async()=>staleClaim,progress:async()=>'saved'},blockedUpload(()=>staleStop.abort(stopReason())),generate,{...target,id:handedOver.id},{signal:staleStop.signal,backoffMs:0}),'skipped');
+const handedOverRow=state.records.find(record=>record.id===handedOver.id)!;
+assert.equal(handedOverRow.status,'running');assert.equal(handedOverRow.data.leaseToken,currentClaim.token);
+assert.equal(await repository.release(currentClaim),'saved');assert.equal(handedOverRow.status,'queued');checks+=5;
 const {renderDisputePackPdf,buildDisputePack}=await import('../src/lib/valopay-packs');
 const renderState=seedMerchant('bounded-pack');
 const renderCustomer=renderState.records.find(record=>record.kind==='customers')!;
@@ -205,4 +263,4 @@ await assert.rejects(renderDisputePackPdf(buildDisputePack(renderState,ctx,rende
 const oversizedField=buildDisputePack(renderState,ctx,renderCustomer.id);oversizedField.note='x'.repeat(50_001);
 await assert.rejects(renderDisputePackPdf(oversizedField),(error:any)=>error.exportPdfFieldTooLarge===true);checks++;
 console.log(JSON.stringify({benchmark:'synthetic-export-volume',rows:10000,bytes:volume.bytes.length,generationMs:volume.artifact.generationMs,limitBytes:MAX_EXPORT_BYTES}));
-console.log(`Export job tests passed (${checks} checks): durable queue, no I/O in a transaction, upload acknowledgement recovery, commit failure, expired leases, fencing, safe failures, tenant denial and two-worker bound.`);
+console.log(`Export job tests passed (${checks} checks): durable queue, no I/O in a transaction, upload acknowledgement recovery, commit failure, expired leases, fencing, safe failures, tenant denial, two-worker bound and hand-back on stop.`);

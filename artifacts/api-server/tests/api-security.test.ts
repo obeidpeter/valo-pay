@@ -1,21 +1,24 @@
 // Offline security regression checks for the API shell (see docs/security-review.md):
 // how a thrown error is answered, and the headers and origin rule on every /api/v1 answer.
-// No database: the webhook ingress route answers without one, and the error handler is
+// No database: the webhook ingress routes answer without one, and the error handler is
 // exercised with a fake request and response.
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { ZodError } from "zod";
 import { errorHandler } from "../src/lib/error-handler.js";
 import { validateRecord } from "../src/domain/validation.js";
 import { markRolledBack } from "../src/lib/transaction-outcome.js";
 import { storageFailure } from "../src/lib/export-download.js";
+import { DatabaseLimitError } from "../src/lib/database-limits.js";
+import { markOperationClosed, operationClosed, registerRefusalCloser } from "../src/lib/refused-operations.js";
 
 let checks = 0;
-type Answer = { status?: number; body?: unknown };
+type Answer = { status?: number; body?: unknown; headers?: Record<string, string> };
 function answer(error: unknown): Answer {
   const out: Answer = {};
   const logged: unknown[] = [];
   const req = { id: "test-request", log: { error: (...args: unknown[]) => logged.push(args), warn: (...args: unknown[]) => logged.push(args), info: (...args: unknown[]) => logged.push(args) } };
-  const res = { headersSent: false, status(code: number) { out.status = code; return this; }, json(body: unknown) { out.body = body; return this; } };
+  const res = { headersSent: false, setHeader(name: string, value: string) { out.headers = { ...out.headers, [name]: value }; return this; }, status(code: number) { out.status = code; return this; }, json(body: unknown) { out.body = body; return this; } };
   errorHandler(error, req as never, res as never, () => undefined);
   return out;
 }
@@ -58,7 +61,35 @@ function answer(error: unknown): Answer {
   const zod = answer(new ZodError([{ code: "custom", path: ["data", "amountKobo"], message: "Expected number" }]));
   assert.equal(zod.status, 400);
   assert.deepEqual((zod.body as { details: unknown[] }).details, [{ field: "data.amountKobo", message: "Expected number" }], "validation failures name their fields");
-  checks += 29;
+  // A database limit (a busy lender, a lock or statement past its limit, a lost connection) is a 503 that says when to retry.
+  assert.deepEqual(answer(markRolledBack(new DatabaseLimitError("lock_timeout", { write: true }))), { status: 503, headers: { "Retry-After": "2" }, body: { error: "This lender is busy with another change. Nothing was saved. Try again in a moment.", committed: false, requestId: "test-request" } }, "a lock wait past its limit is a 503 with Retry-After, and nothing was saved");
+  assert.equal(answer(markRolledBack(new DatabaseLimitError("statement_timeout"))).headers?.["Retry-After"], "5", "a stopped statement waits longer before a retry");
+  assert.deepEqual(answer(new DatabaseLimitError("pool_timeout", { write: false })), { status: 503, headers: { "Retry-After": "2" }, body: { error: "The service is busy. Try again in a moment.", requestId: "test-request" } }, "committed: false only when the store says nothing was saved");
+  assert.equal(answer(Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" })).status, 500, "a raw PostgreSQL code is translated by the store, never guessed here");
+  assert.equal((unconfigured as Answer).headers, undefined, "an application 503 sets no Retry-After");
+  checks += 34;
+}
+
+{
+  // A refusal whose request's journal entry is cancelled says so: neither this request nor an earlier one with its key was or can be saved.
+  const answered = (error: unknown, closer?: () => Promise<boolean>) => new Promise<Answer>((resolve) => {
+    const out: Answer = {};
+    const quiet = () => undefined;
+    const req = { id: "test-request", log: { error: quiet, warn: quiet, info: quiet } };
+    if (closer) registerRefusalCloser(req as never, closer);
+    const res = { headersSent: false, setHeader(name: string, value: string) { out.headers = { ...out.headers, [name]: value }; return this; }, status(code: number) { out.status = code; return this; }, json(body: unknown) { out.body = body; resolve(out); return this; } };
+    errorHandler(error, req as never, res as never, () => undefined);
+  });
+  const stale = () => Object.assign(new Error("The workspace changed. Refresh and review before trying again."), { status: 409 });
+  assert.deepEqual(await answered(stale(), async () => true), { status: 409, body: { error: "The workspace changed. Refresh and review before trying again.", requestId: "test-request", operation: "cancelled" } }, "a refusal that leaves its journal entry cancelled says so");
+  assert.deepEqual(await answered(stale(), async () => false), { status: 409, body: { error: "The workspace changed. Refresh and review before trying again.", requestId: "test-request" } }, "a refusal whose entry was already completed, or could not be closed, carries no marker");
+  assert.deepEqual(await answered(stale(), () => Promise.reject(new Error("pool closed"))), { status: 409, body: { error: "The workspace changed. Refresh and review before trying again.", requestId: "test-request" } }, "a closer that fails never marks the refusal");
+  assert.deepEqual(await answered(markOperationClosed(Object.assign(new Error("This request was cancelled before it completed and saved nothing."), { status: 409 }))), { status: 409, body: { error: "This request was cancelled before it completed and saved nothing.", requestId: "test-request", operation: "cancelled" } }, "a refusal of a key whose entry was already cancelled says so without a closer");
+  assert.equal(operationClosed(new Error("unmarked")), false);
+  // A write the store rolled back at a database limit: the not-saved 503 closes the entry and says both.
+  assert.deepEqual(await answered(markRolledBack(new DatabaseLimitError("lock_timeout", { write: true })), async () => true), { status: 503, headers: { "Retry-After": "2" }, body: { error: "This lender is busy with another change. Nothing was saved. Try again in a moment.", committed: false, requestId: "test-request", operation: "cancelled" } }, "a not-saved 503 whose entry closed carries both committed:false and the marker");
+  assert.equal(((await answered(Object.assign(new Error("The gateway timed out."), { status: 504 }))).body as { operation?: string }).operation, undefined, "a failure with no closed entry is never marked");
+  checks += 7;
 }
 
 {
@@ -111,8 +142,31 @@ try {
   assert.equal(nul.status, 400, "a NUL character is refused at the edge");
   assert.equal(await errorOf(nul), "Text cannot contain the NUL character (\\u0000). Remove it from data.name and try again.");
   checks += 21;
+
+  // The Paystack test ingress checks a delivery's signature on its raw bytes before it touches a lender:
+  // with the database unreachable, a forged delivery to a mapped connection is still a 401, not a 500.
+  const paystackNames = ["VALOPAY_PAYSTACK_INGRESS", "PAYSTACK_TEST_SECRET_KEY", "VALOPAY_PAYSTACK_CONNECTIONS"] as const;
+  const paystackSaved = Object.fromEntries(paystackNames.map((name) => [name, process.env[name]]));
+  try {
+    const key = ["sk", "test", "OFFLINE", "0".repeat(20)].join("_"), connection = "c".repeat(64);
+    process.env["VALOPAY_PAYSTACK_INGRESS"] = "test";
+    process.env["PAYSTACK_TEST_SECRET_KEY"] = key;
+    process.env["VALOPAY_PAYSTACK_CONNECTIONS"] = JSON.stringify({ [connection]: { workspaceId: "unreachable-workspace", merchantId: "unreachable-lender" } });
+    const event = JSON.stringify({ event: "charge.success", data: { domain: "test", id: "800001", status: "success", amount: 10000, currency: "NGN", reference: "OFFLINE-INGRESS-001", channel: "direct_debit" } });
+    const deliver = (bytes: string, signature: string) => fetch(`${base}/api/v1/providers/paystack/${connection}/events`, { method: "POST", headers: { "Content-Type": "application/json", "X-Paystack-Signature": signature }, body: bytes });
+    const forged = await deliver(event, "f".repeat(128));
+    assert.equal(forged.status, 401, "a forged delivery is refused before the lender is locked or read");
+    assert.equal(await errorOf(forged), "The Paystack webhook signature is invalid.");
+    assert.equal(forged.headers.get("cache-control"), "no-store");
+    assert.equal(forged.headers.get("x-content-type-options"), "nosniff");
+    const live = event.replace('"domain":"test"', '"domain":"live"');
+    assert.equal((await deliver(live, createHmac("sha512", key).update(live).digest("hex"))).status, 400, "a signed live-mode event is refused before the lender is opened");
+    checks += 5;
+  } finally {
+    for (const name of paystackNames) { const value = paystackSaved[name]; if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+  }
 } finally {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-console.log(`API security tests passed (${checks} checks): error answers and statuses, body-parser and NUL refusals, unavailable services and storage failures, prototype keys, response headers, origin rule before the body, body limit, webhook ingress.`);
+console.log(`API security tests passed (${checks} checks): error answers and statuses, body-parser and NUL refusals, unavailable services and storage failures, prototype keys, response headers, origin rule before the body, body limit, webhook ingress, Paystack signature before any lender work.`);

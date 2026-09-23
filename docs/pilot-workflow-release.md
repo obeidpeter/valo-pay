@@ -41,7 +41,7 @@ All paths below are beneath `/api/v1`. Lender paths require `merchantId`; paged 
 | Endpoint | Contract and permissions |
 | --- | --- |
 | `GET /pilot/journey` | Saved lender counts, synthetic-only marker and access mode |
-| `POST /pilot/lenders` | Admin; name and segment; required idempotency key; creates an empty synthetic lender with automatic close disabled |
+| `POST /pilot/lenders` | Admin (a staff host also requires recent MFA); name and segment; required idempotency key; creates an empty synthetic lender with automatic close disabled; a sandbox workspace holds at most five lenders (409 beyond) |
 | `GET /operations` | This caller's request summaries and receipts, without stored bodies |
 | `POST /operations/:id/retry` | Uses the exact saved request and key; requires the original actor and role plus current permission |
 | `POST /operations/:id/cancel` | Serialises with the lender transaction; refuses completed work and blocks future execution |
@@ -59,7 +59,7 @@ All paths below are beneath `/api/v1`. Lender paths require `merchantId`; paged 
 | `POST /team/accept` | Verified matching email and organisation, fresh MFA and an unused invitation token |
 | `POST /team/verify` | Clerk reverification challenge; does not grant membership or execute a financial request |
 
-Journal entries survive reload and restart once received by the server. Anonymous history still depends on its sandbox cookie and existing workspace expiry; signed-in history follows the account. Requests that never reached the service cannot be recovered. Pending entries can be retried or cancelled; validation failures do not prove a financial transaction occurred. At most 100 unfinished requests per caller/lender may be retained. Completed journal payloads currently follow workspace retention; review a separate retention policy before any real-data pilot.
+Journal entries survive reload and restart once received by the server. Anonymous history still depends on its sandbox cookie and existing workspace expiry; signed-in history follows the account. Requests that never reached the service cannot be recovered. Pending entries can be retried or cancelled; a cancelled entry never completes afterwards, even if an attempt with its key was already running. Validation failures do not prove a financial transaction occurred. At most 100 unfinished requests per caller/lender may be retained. Completed journal payloads currently follow workspace retention; review a separate retention policy before any real-data pilot.
 
 Staff membership changes take the organisation lock before the member lock. Financial writes retain a shared organisation lock through commit, so revocation waits for already-authorised work and blocks later work. This does not claim to cancel a transaction that had already started.
 

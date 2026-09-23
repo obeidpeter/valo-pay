@@ -210,3 +210,14 @@ for (const theme of ["light", "dark"] as const) {
     }
   });
 }
+
+test("a page past the end is corrected in place, so browser Back leaves the list", async ({ page }) => {
+  await page.goto("/overview");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  await page.goto("/collections?page=99&size=25");
+  // The queue moves to its last page and says so in the address.
+  await expect(page).toHaveURL(/[?&]lender=/);
+  expect(new URL(page.url()).searchParams.get("page")).not.toBe("99");
+  await page.goBack();
+  await expect(page).toHaveURL(/\/overview$/);
+});

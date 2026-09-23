@@ -10,7 +10,7 @@ import { errorHandler } from "./lib/error-handler";
 import { staffMode, staffPolicy } from './lib/staff-access';
 import { CLERK_PROXY_PATH,clerkProxyMiddleware,getClerkProxyHost } from "./middlewares/clerkProxyMiddleware";
 import { createPaystackIngress } from './routes/sources';
-import { paystackConnectionTransaction } from './lib/paystack-connection';
+import { paystackIngress } from './lib/paystack-connection';
 
 /** The path of the first key or string in a parsed body that carries a NUL character, "" for the body itself. */
 export function nulField(value: unknown, path = "", depth = 0): string | undefined {
@@ -46,8 +46,9 @@ app.use(
   pinoHttp({
     logger,
     genReqId: requestIdFor,
-    // A failed answer is an error line; every other request is one info line with its status and time.
-    customLogLevel: (_req, res, error) => (error || res.statusCode >= 500 ? "error" : "info"),
+    // A failed answer is an error line; a 503 that says when to retry (a busy lender, a database limit) is a
+    // warning, so a busy moment does not page anyone; every other request is one info line with its status and time.
+    customLogLevel: (_req, res, error) => (error ? "error" : res.statusCode === 503 && res.getHeader("Retry-After") ? "warn" : res.statusCode >= 500 ? "error" : "info"),
     serializers: {
       req(req) {
         return {
@@ -75,7 +76,8 @@ app.use('/api/v1/providers/paystack',(req,res,next)=>{
   else if(++old.count>120){res.setHeader('Retry-After','60');res.status(429).json({error:'Test event delivery limit reached.',requestId:req.id});return;}
   next();
 });
-app.use('/api',createPaystackIngress(paystackConnectionTransaction));
+// The Paystack test ingress reads its own raw body and checks its signature before it touches a lender.
+app.use('/api',createPaystackIngress(paystackIngress));
 // The response headers, the origin rule and the request limit come before the
 // body is read, so a malformed or oversized body is answered with the same
 // headers as any other request, and a refused client never has its body parsed.

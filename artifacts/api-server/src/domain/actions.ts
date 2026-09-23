@@ -1,20 +1,20 @@
 import {
   counted, businessDateSchema,
   DEFAULT_ACTIVATION_WINDOW_DAYS, PLATFORM_OWNER, activationReminderCaps, closeRules, failureCodeList, isHandBackOwner, isKnownFailureCode,
-  nextCloseInstant, normaliseFailureCode, normaliseOwner, passRuleText, resolutionCodesFor, resolveExceptionType, withinQuietHours, templateTextProblems,
+  nairaText, nextCloseInstant, normaliseFailureCode, normaliseOwner, passRuleText, paymentUnappliedKobo, resolutionCodesFor, resolveExceptionType, withinQuietHours, templateTextProblems,
   type CloseTrigger,
 } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import {
-  REVIEW_SUPERSESSION, allocatePayment, applyConfirmedAllocation, confirmAttemptOutcome, forgetRejectedMatch, paymentReturned, paymentReversed, reconcile,
-  reinstateAllocation, rememberRejectedMatch, settlePaymentStatus, supersedeAllocation, supersededByReview,
+  REVIEW_SUPERSESSION, allocatePayment, applyConfirmedAllocation, confirmAttemptOutcome, forgetRejectedMatch, paymentRefunded, paymentReversed, reconcile,
+  recordPaymentRefund, reinstateAllocation, rememberRejectedMatch, settlePaymentStatus, supersedeAllocation, supersededByReview,
 } from "./reconciliation";
 import { buildReports } from "./reports";
 import { buildCloseReport, closeSchedule, openingSnapshot, storedCloseCursor } from "./close";
 import { issueInvoice } from "./billing";
 import type { ActionInput, ActionResult, Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { assertActionRole } from "./validation";
-import { countedAttempts, evaluateRetry, policyIdFor, policySummary, preregisterSample, samePolicyLineage } from "./policy-engine";
+import { countedAttempts, evaluateRetry, policyIdFor, policyLineage, policySummary, policyVersionOf, preregisterSample, samePolicyLineage } from "./policy-engine";
 import { buildAlerts } from "./alerts";
 
 const requiresReason = new Set([
@@ -53,7 +53,8 @@ function dueItemsUnderMandate(state: DomainState, mandateId: string): Set<string
  * 7.5: remember the opening position, run the close, then write the REC-07
  * report as immutable evidence.  Every close, scheduled or manual, covers the
  * pending scheduled instant if one has passed and moves the schedule cursor to
- * the next configured time (REC-01); a close that starts more than
+ * the next configured time (REC-01), ending any retry the scheduler recorded
+ * for failed attempts; a close that starts more than
  * closeRules.lateAfterMinutes after that instant is recorded as late.
  */
 export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTrigger): ActionResult {
@@ -69,6 +70,7 @@ export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTr
   report.alerts = buildAlerts(state, now);
   const reports = buildReports(state, now);
   state.settings.nextCloseAt = nextCloseInstant(now, schedule.time);
+  delete state.settings.closeRetry;
   const summary = `${counted(report.observations.received, "observation")} received, ${counted(report.allocated.count, "allocation")} confirmed, ${report.unallocated.count} unallocated (${report.unallocated.olderThan24Hours} older than 24h), ${counted(report.exceptions.opened.count, "exception")} opened and ${report.exceptions.closed.count} closed, ${counted(report.customerPositionsChanged.length, "customer position")} changed.`;
   const close = makeRecord(state, "closes", {
     name: `Daily close ${now.slice(0, 10)}${trigger === "scheduled" ? " · scheduled" : ""}`, status: "completed", createdAt: now,
@@ -175,6 +177,11 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     if (input.action === "approve_policy") {
       assertActionRole(ctx, ["Compliance reviewer"]);
       if (policy.status !== "submitted" || !policy.data.author || policy.data.author === ctx.actor) throw new Error("Submit the policy for review, then ask a Compliance reviewer other than its author to approve it.");
+      // One approved number names one set of rules: consent records, notices and decisions quote it.
+      const version = policyVersionOf(policy);
+      if (policyLineage(state, policy).some((item) => item.id !== policy.id && item.status === "approved" && policyVersionOf(item) === version)) {
+        throw Object.assign(new Error(`Version ${version} of this policy is already approved with its own rules. Reject this submission, then draft the next version from the approved one so it gets a new number.`), { status: 409 });
+      }
       policy.status = "approved"; policy.data.reviewer = ctx.actor; policy.data.approvedAt = now;
     }
     if (input.action === "reject_policy") {
@@ -185,7 +192,12 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     if (input.action === "new_policy_version") {
       assertActionRole(ctx, ["Admin"]);
       const { reviewer: _reviewer, approvedAt: _approvedAt, submittedAt: _submittedAt, rejectedAt: _rejectedAt, ...carried } = policy.data;
-      const copy = makeRecord(state, "policies", { name: policy.name, status: "draft", amountKobo: 0, createdAt: now, data: { ...carried, version: Number(policy.data.version || 0) + 1, author: ctx.actor, previousVersionId: policy.id } });
+      // Numbered after every version of the policy, drafts and rejected ones included, so two drafts from one version never share a number.
+      const versions = policyLineage(state, policy).map(policyVersionOf);
+      if (versions.some((version) => !Number.isSafeInteger(version) || version < 1)) throw new Error("Policy history has an invalid version number.");
+      const latest = Math.max(...versions);
+      if (latest >= Number.MAX_SAFE_INTEGER) throw new Error("This policy has reached the supported version limit.");
+      const copy = makeRecord(state, "policies", { name: policy.name, status: "draft", amountKobo: 0, createdAt: now, data: { ...carried, version: latest + 1, author: ctx.actor, previousVersionId: policy.id } });
       return result("Draft policy version created.", copy);
     }
     policy.data.lastActionReason = reason(input); touch(policy, now);
@@ -352,12 +364,12 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     const payment = findRecord(state, String(input.recordId), "payments");
     // Reversed money already went back. A refund returns what the payment has not applied, such as an overpayment's
     // excess: money applied to an instalment stays applied, and nothing is left to allocate or hold as credit.
-    if (paymentReturned(payment)) throw Object.assign(new Error(paymentReversed(payment) ? `Payment ${payment.reference} was reversed by the provider, so its money already went back. There is nothing to refund.` : `A refund is already recorded for payment ${payment.reference}.`), { status: 409 });
-    payment.data.refundStatus = "refunded"; payment.data.refundReference = String(data.reference); payment.data.refundRecordedAt = now; payment.data.refundRecordedExternally = true;
-    touch(payment, now);
-    // Its money went back: open proposals are withdrawn and the payment leaves the allocation queues.
-    settlePaymentStatus(state, ctx, payment, "Superseded: the payment was refunded outside Valo Pay.");
-    return result("External refund reference recorded; Valo Pay did not move funds.", payment);
+    // One refund is recorded per payment, including one that returned only part of it.
+    if (paymentReversed(payment) || paymentRefunded(payment)) throw Object.assign(new Error(paymentReversed(payment) ? `Payment ${payment.reference} was reversed by the provider, so its money already went back. There is nothing to refund.` : `A refund is already recorded for payment ${payment.reference}.`), { status: 409 });
+    if (paymentUnappliedKobo(payment) <= 0) throw Object.assign(new Error(`Payment ${payment.reference} has all of its money applied to instalments, so there is nothing unapplied to refund. A refund recorded here returns only money the payment has not applied.`), { status: 409 });
+    payment.data.refundReference = String(data.reference); payment.data.refundRecordedAt = now; payment.data.refundRecordedExternally = true;
+    const refundedKobo = recordPaymentRefund(state, ctx, payment, "Superseded: the payment was refunded outside Valo Pay.");
+    return result(`External refund of ${nairaText(refundedKobo)} recorded: the money this payment had not applied. Valo Pay did not move funds.`, payment, { refundedKobo });
   }
   if (input.action === "simulate_failure") {
     assertActionRole(ctx, ["Admin", "Operations"]);

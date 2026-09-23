@@ -78,10 +78,14 @@ export function retryExport(state: DomainState, ctx: Context, id: string): Expor
   if(record.data.fileDeletedAt)fail('This export file expired under the retention policy. Start a new export if current evidence is needed.',410);
   if (record.status === 'ready' || record.status === 'queued') return exportJobView(record, ctx.now);
   if (record.status === 'running' && !exportIsClaimable(record, ctx.now)) return exportJobView(record, ctx.now);
-  record.status = 'queued'; record.updatedAt = ctx.now;
-  record.data.stage = 'queued'; record.data.lastProgressAt = ctx.now;
-  delete record.data.leaseToken; delete record.data.leaseExpiresAt; delete record.data.lastError;
+  returnExportToQueue(record, ctx.now);
   return exportJobView(record, ctx.now);
+}
+/** Back to the queue with the same request, attempts and private object identity; only the lease and last error are cleared. */
+export function returnExportToQueue(record: ValopayRecord, now: string): void {
+  record.status = 'queued'; record.updatedAt = now;
+  record.data.stage = 'queued'; record.data.lastProgressAt = now;
+  delete record.data.leaseToken; delete record.data.leaseExpiresAt; delete record.data.lastError;
 }
 
 export interface ClaimedExport {
@@ -93,7 +97,12 @@ export interface ExportJobRepository {
   progress?(claim: ClaimedExport, stage: ExportStage): Promise<ExportWriteResult>;
   finish(claim: ClaimedExport, artifact: ExportArtifact): Promise<ExportWriteResult>;
   fail(claim: ClaimedExport, message: string): Promise<ExportWriteResult>;
+  /** A stopping worker hands its claim back: queued again, fenced by the lease token, never marked failed. */
+  release(claim: ClaimedExport): Promise<ExportWriteResult>;
 }
+/** 'released': a stopping worker returned the job to the queue. 'interrupted': it stopped and could not, so the job
+ * keeps its lease and a later poll recovers it once the lease expires. */
+export type ExportAttemptResult = 'ready' | 'failed' | 'skipped' | 'released' | 'interrupted';
 export interface ExportJobStorage {
   existing(claim: ClaimedExport, signal?: AbortSignal): Promise<ExportArtifact | null>;
   put(claim: ClaimedExport, bytes: Buffer, artifact: ExportArtifact, signal?: AbortSignal): Promise<void>;
@@ -109,7 +118,7 @@ export async function retryExportWrite(write: () => Promise<ExportWriteResult>, 
   return 'busy';
 }
 /** The durable claim commits before rendering/upload; all outcomes are fenced by the claim's lease token. */
-export async function processExportJob(repository: ExportJobRepository, storage: ExportJobStorage, generate: (claim: ClaimedExport, signal?: AbortSignal) => Promise<{ bytes: Buffer; artifact: ExportArtifact }>, target: { merchantId: string; id: string }, options: { signal?: AbortSignal; timeoutMs?: number; backoffMs?: number } = {}): Promise<'ready' | 'failed' | 'skipped'> {
+export async function processExportJob(repository: ExportJobRepository, storage: ExportJobStorage, generate: (claim: ClaimedExport, signal?: AbortSignal) => Promise<{ bytes: Buffer; artifact: ExportArtifact }>, target: { merchantId: string; id: string }, options: { signal?: AbortSignal; timeoutMs?: number; backoffMs?: number } = {}): Promise<ExportAttemptResult> {
   options.signal?.throwIfAborted();
   const claim = await repository.claim(target.merchantId, target.id);
   if (!claim) return 'skipped';
@@ -138,12 +147,20 @@ export async function processExportJob(repository: ExportJobRepository, storage:
     if (!await progress('confirming')) return 'skipped';
     return await write(() => repository.finish(claim, artifact!)) === 'saved' ? 'ready' : 'skipped';
   } catch (error) {
+    // The worker is stopping (options.signal, not the attempt's own timeout), which says nothing about the export:
+    // hand the claim back for the next worker. If that write cannot be made, the lease expires and a later poll recovers it.
+    if (options.signal?.aborted) {
+      try {
+        const released = await retryExportWrite(() => repository.release(claim), undefined, options.backoffMs);
+        return released === 'saved' ? 'released' : released === 'lost' ? 'skipped' : 'interrupted';
+      } catch { return 'interrupted'; }
+    }
     const message = (error as { exportPdfFieldTooLarge?: boolean })?.exportPdfFieldTooLarge
       ? 'A field is too long to lay out safely in PDF. Choose JSON or CSV to preserve the complete record.'
       : (error as { exportTooLarge?: boolean })?.exportTooLarge
       ? 'Export exceeds the 32 MB file limit. Export a customer pack or a smaller record category.'
       : 'Export generation could not finish. Retry this export. If it fails again, contact the workspace administrator.';
-    // If the database is unavailable, leave the durable running lease to expire and recover on a later poll.
+    // A stop is handled above. If the database is unavailable, leave the durable running lease to expire and recover on a later poll.
     try { await retryExportWrite(() => repository.fail(claim, message), undefined, options.backoffMs); } catch { /* durable lease recovery */ }
     return 'failed';
   } finally { clearTimeout(timer); }

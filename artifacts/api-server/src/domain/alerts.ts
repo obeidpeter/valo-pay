@@ -10,7 +10,7 @@ import type { DomainState } from "./types";
 import { paymentObservedAt } from "./reconciliation";
 import { closeSchedule, positionMismatches } from "./close";
 import { attemptTime } from "./policy-engine";
-import { monthOf } from "./billing";
+import { collectionSucceeded, monthOf } from "./billing";
 import { exportHealth } from '../lib/export-jobs';
 
 const DAY_MS = 24 * 60 * 60 * 1000, HOUR_MS = 60 * 60 * 1000;
@@ -55,9 +55,10 @@ export function buildAlerts(state: DomainState, now: string, audit?: AuditVerifi
   if (overdue.length) alerts.push({ key: "exceptions_overdue", severity: "medium", title: "Exceptions past their deadline", detail: `${counted(overdue.length, "open exception is", "open exceptions are")} overdue. Review each item with its assigned owner. Deadlines are calculated in business days.`, count: overdue.length, linkedRecordId: overdue[0]!.id });
   const deferred = recordsOf(state, "exceptions").filter((item) => isOpenException(item.status) && item.data.type === "notice_not_evidenced");
   if (deferred.length) alerts.push({ key: "attempts_deferred", severity: "medium", title: "Collection attempts delayed: notice evidence missing", detail: `${counted(deferred.length, "planned attempt passed its", "planned attempts passed their")} notice deadline without a record that the provider accepted the customer notice. Review the missing evidence before a retry.`, count: deferred.length, linkedRecordId: deferred[0]!.id });
+  // This WAT month's message cost per collection: a direct debit collected by webhook or settlement line counts.
   const month = monthOf(now);
   const cost = recordsOf(state, "notifications").filter((item) => monthOf(String(item.data.submittedAt || item.createdAt)) === month).reduce((sum, item) => sum + Number(item.data.costKobo || 0), 0);
-  const collections = recordsOf(state, "payments").filter((item) => monthOf(String(item.data.observedAt || item.createdAt)) === month && isBillableChannel(item.data.channel) && item.data.collectionStatus === "succeeded").length;
+  const collections = recordsOf(state, "payments").filter((item) => monthOf(String(item.data.observedAt || item.createdAt)) === month && isBillableChannel(item.data.channel) && collectionSucceeded(item)).length;
   const costCeiling = setting(state, "notificationCostAlertKobo", alertRules.notificationCostPerCollectionKobo);
   if (collections > 0 && cost / collections > costCeiling) alerts.push({ key: "notification_cost", severity: "medium", title: "Message cost exceeds the alert limit", detail: `Message costs average NGN ${(cost / collections / 100).toFixed(2)} per successful collection this month. The alert limit is NGN ${(costCeiling / 100).toFixed(2)}. Review message costs and settings.`, count: collections });
   const lastClose = recordsOf(state, "closes").map((item) => String(item.data.closedAt || item.createdAt)).sort().at(-1);

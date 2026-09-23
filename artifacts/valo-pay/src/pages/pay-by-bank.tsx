@@ -154,6 +154,7 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
         setReview(null);
         setReason("");
       }}
+      onReleased={() => setError("")}
     >
       <div className="connected-metrics">
         <div className="connected-metric">
@@ -582,6 +583,7 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
             </DialogHeader>
             <ConnectedRecovery
               recovery={api}
+              onReleased={() => setError("")}
               onRecovered={() => {
                 setError("");
                 setReview(null);

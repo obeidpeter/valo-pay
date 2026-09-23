@@ -26,7 +26,7 @@ export function usePagedQueue(queue: 'exceptions' | 'mandates' | 'collections', 
       setLocated(scope);
     }
     const actualPage = Math.floor(query.data.offset / pagination.pageSize);
-    if (actualPage !== pagination.page) pagination.setPage(actualPage);
+    if (actualPage !== pagination.page) pagination.correctPage(actualPage);
   }, [query.data, scope, target, pagination.pageSize, pagination.page]);
   return { ...query, pagination: { ...pagination, ...(query.data ? { offset: query.data.offset, page: Math.floor(query.data.offset / pagination.pageSize) } : {}) } };
 }

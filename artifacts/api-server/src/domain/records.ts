@@ -75,3 +75,15 @@ export function makeRecord<K extends string>(state: DomainState, kind: K, input:
 export function masked(value: unknown): boolean {
   return typeof value === "string" && (/[*xX•]/.test(value) || value.length <= 4);
 }
+
+/** A payload still sealed as stored (the store's envelope); the domain never opens one itself. */
+export const isSealedPayload = (value: unknown): boolean => !!value && typeof value === "object" && "protectedPayload" in value;
+/**
+ * The store opens an import batch's protected source rows only for the views
+ * that show or use them. A view that needs them and finds them sealed is a
+ * route that forgot to open them: a server fault, never an empty or
+ * "unavailable" answer a person might act on.
+ */
+export function assertSourceOpened(batch: ValopayRecord, fields: readonly string[]): void {
+  if (fields.some((field) => isSealedPayload(batch.data[field]))) throw Object.assign(new Error("Protected source rows were not opened for this request."), { status: 500 });
+}
