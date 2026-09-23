@@ -1,7 +1,7 @@
 import { Link, useLocation } from "wouter";
 import {
-  ArrowUpRight,
   Building2,
+  KeyRound,
   Landmark,
   ShieldCheck,
   Sparkles,
@@ -61,7 +61,7 @@ export function ConnectedFrame({
           {
             href: "/connections",
             label: "Permissions & readiness",
-            icon: ArrowUpRight,
+            icon: KeyRound,
           },
         ].map((i) => (
           <Link
