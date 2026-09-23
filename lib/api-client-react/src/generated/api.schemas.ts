@@ -75,11 +75,15 @@ export interface DatabaseCheck {
   latencyMs: number;
 }
 
+/**
+ * ok: every table, column and index this build needs is present. indexes_missing: ready, but an index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table or column is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and the migration that adds it.
+ */
 export type SchemaCheckStatus = typeof SchemaCheckStatus[keyof typeof SchemaCheckStatus];
 
 
 export const SchemaCheckStatus = {
   ok: 'ok',
+  indexes_missing: 'indexes_missing',
   incomplete: 'incomplete',
   unchecked: 'unchecked',
 } as const;
@@ -88,8 +92,8 @@ export const SchemaCheckStatus = {
  * Whether the database holds every table, column and index this build needs: missing names each one that is not there and the migration that adds it; unchecked while the database does not answer.
  */
 export interface SchemaCheck {
+  /** ok: every table, column and index this build needs is present. indexes_missing: ready, but an index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table or column is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and the migration that adds it. */
   status: SchemaCheckStatus;
-  missing: string[];
 }
 
 export type ReadinessStatusStatus = typeof ReadinessStatusStatus[keyof typeof ReadinessStatusStatus];

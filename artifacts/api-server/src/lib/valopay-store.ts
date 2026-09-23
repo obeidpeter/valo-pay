@@ -1665,36 +1665,48 @@ const schemaCatalogue = `SELECT
   (SELECT coalesce(json_agg(json_build_object('table',t.relname,'definition',regexp_replace(pg_get_indexdef(i.indexrelid),'^CREATE (UNIQUE )?INDEX \\S+ ON (ONLY )?\\S+ ',''))),'[]')
     FROM pg_index i JOIN pg_class t ON t.oid=i.indrelid JOIN pg_namespace n ON n.oid=t.relnamespace
     WHERE n.nspname=coalesce($1::text,current_schema()) AND t.relname=ANY($2::text[]) AND i.indisvalid AND i.indisready) AS indexes`;
-/** What the catalogue lacks of what this build needs, each with where it comes from; at most 20, then a count. */
-function schemaGaps(catalogue: { columns: Array<{ table: string; column: string }>; indexes: Array<{ table: string; definition: string }> }): string[] {
-  const present = new Map<string, Set<string>>(), missing: string[] = [];
+/**
+ * What the catalogue lacks of what this build needs, each with where it comes
+ * from: the tables and columns the queries use, then the indexes; at most 20
+ * of each, then a count.
+ */
+function schemaGaps(catalogue: { columns: Array<{ table: string; column: string }>; indexes: Array<{ table: string; definition: string }> }): { required: string[]; indexes: string[] } {
+  const present = new Map<string, Set<string>>(), required: string[] = [], indexes: string[] = [];
   for (const { table, column } of catalogue.columns) present.set(table, (present.get(table) ?? new Set<string>()).add(column));
   for (const table of requiredTables) {
     const columns = present.get(table.name);
-    if (!columns) { missing.push(`table ${table.name}: ${schemaSource(table.name)}`); continue; }
-    for (const column of table.columns) if (!columns.has(column)) missing.push(`column ${table.name}.${column}: ${schemaSource(table.name)}`);
+    if (!columns) { required.push(`table ${table.name}: ${schemaSource(table.name)}`); continue; }
+    for (const column of table.columns) if (!columns.has(column)) required.push(`column ${table.name}.${column}: ${schemaSource(table.name)}`);
   }
-  const indexes = new Set(catalogue.indexes.map((index) => `${index.table} ${index.definition}`));
+  const defined = new Set(catalogue.indexes.map((index) => `${index.table} ${index.definition}`));
   // A missing table is named above; its indexes are not listed again.
-  for (const index of requiredIndexes) if (present.has(index.table) && !indexes.has(`${index.table} ${index.definition}`)) missing.push(`index ${index.name}: apply lib/db/migrations/${index.migration}`);
-  return missing.length > 20 ? [...missing.slice(0, 20), `and ${missing.length - 20} more`] : missing;
+  for (const index of requiredIndexes) if (present.has(index.table) && !defined.has(`${index.table} ${index.definition}`)) indexes.push(`index ${index.name}: apply lib/db/migrations/${index.migration}`);
+  const capped = (list: string[]) => list.length > 20 ? [...list.slice(0, 20), `and ${list.length - 20} more`] : list;
+  return { required: capped(required), indexes: capped(indexes) };
 }
-/** The readiness check's findings: whether the database answered, and whether it holds everything this build needs. */
+/**
+ * The readiness check's findings: whether the database answered, and whether
+ * it holds everything this build needs. `incomplete` means a table or column
+ * the queries use is missing, so requests would fail; `indexes_missing` means
+ * only an index a migration adds is missing, so some reads are slower but
+ * every request still works. `missing` names each, for the log.
+ */
 export interface DatabaseReadiness {
   status: "ok" | "failed"; latencyMs: number; error?: string;
-  schema: { status: "ok" | "incomplete" | "unchecked"; missing: string[] };
+  schema: { status: "ok" | "indexes_missing" | "incomplete" | "unchecked"; missing: string[] };
 }
 let readiness: InstanceType<typeof Pool> | undefined;
 /**
  * Readiness: one bounded round trip to the database, on its own connection,
  * so a request pool that is busy does not read as a database that cannot be
  * reached. The round trip reads the catalogue, so a database that answers but
- * lacks a table, a column or an index this build needs (a migration not yet
- * applied) is not ready either, and says what is missing; a SELECT 1 could not
- * tell. It checks the application's schema: the isolated runtime schema when
- * runtime isolation is on, otherwise the connection's own (`schema` names
- * another, for tests). Never throws; a connection error stays in the caller's
- * log, not in an answer.
+ * lacks a table or a column this build needs (a migration not yet applied) is
+ * not ready either; a missing index is reported without failing, since every
+ * request still works, only slower. A SELECT 1 could not tell. It checks the
+ * application's schema: the isolated runtime schema when runtime isolation is
+ * on, otherwise the connection's own (`schema` names another, for tests).
+ * Never throws; a connection error stays in the caller's log, not in an
+ * answer.
  */
 export async function pingDatabase(options: { timeoutMs?: number; schema?: string } = {}): Promise<DatabaseReadiness> {
   const timeoutMs = options.timeoutMs ?? 2000, started = performance.now();
@@ -1710,8 +1722,9 @@ export async function pingDatabase(options: { timeoutMs?: number; schema?: strin
       readiness.query<{ columns: Array<{ table: string; column: string }>; indexes: Array<{ table: string; definition: string }> }>(schemaCatalogue, [schema, requiredTables.map((table) => table.name)]),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${timeoutMs} ms`)), timeoutMs); }),
     ])).rows[0]!;
-    const missing = schemaGaps(catalogue);
-    return { status: "ok", latencyMs: Math.round(performance.now() - started), schema: { status: missing.length ? "incomplete" : "ok", missing } };
+    const gaps = schemaGaps(catalogue);
+    const status = gaps.required.length ? "incomplete" : gaps.indexes.length ? "indexes_missing" : "ok";
+    return { status: "ok", latencyMs: Math.round(performance.now() - started), schema: { status, missing: [...gaps.required, ...gaps.indexes] } };
   } catch (error) {
     return { status: "failed", latencyMs: Math.round(performance.now() - started), error: error instanceof Error ? error.message : String(error), schema: { status: "unchecked", missing: [] } };
   } finally {

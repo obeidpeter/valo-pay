@@ -8,7 +8,7 @@ const schemas = {
   SchedulerRun: obj({ runId: str, at: str, durationMs: num, initialised: num, examined: num, closed: num, skipped: num, failed: num }),
   SchedulerStatus: obj({ state: { type: "string", enum: ["not_started", "running", "off", "stopped"] }, intervalMs: { type: ["integer", "null"] }, ticks: num, lastTickAt: { type: ["string", "null"] }, lastRun: { oneOf: [ref("SchedulerRun"), { type: "null" }] } }),
   DatabaseCheck: obj({ status: { type: "string", enum: ["ok", "failed"] }, latencyMs: num }),
-  SchemaCheck: obj({ status: { type: "string", enum: ["ok", "incomplete", "unchecked"] }, missing: { type: "array", items: str } }),
+  SchemaCheck: obj({ status: { type: "string", enum: ["ok", "indexes_missing", "incomplete", "unchecked"], description: "ok: every table, column and index this build needs is present. indexes_missing: ready, but an index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table or column is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and the migration that adds it." } }),
   ReadinessStatus: obj({ status: { type: "string", enum: ["ok", "degraded"] }, build: str, checks: obj({ database: ref("DatabaseCheck"), schema: ref("SchemaCheck") }) }),
   RecordData: { type: "object", additionalProperties: {} },
   ValopayRecord: obj({ id: str, merchantId: str, kind: str, name: str, status: str, reference: str, amountKobo: num, customerId: str, createdAt: str, updatedAt: str, data: ref("RecordData") }),
@@ -74,7 +74,7 @@ const recordId = {name:"id",in:"query",schema:str,description:"Only this exact r
 add("/healthz","get","healthCheck","HealthStatus");
 add("/readyz","get","readinessCheck","ReadinessStatus");
 const describe = (path, method, summary, description) => Object.assign(paths[path][method], { summary, description });
-paths["/readyz"].get.responses["503"]={description:"Not ready: the database cannot be reached within the check's time limit, or lacks a table, column or index this build needs",content:{"application/json":{schema:ref("ReadinessStatus")}}};
+paths["/readyz"].get.responses["503"]={description:"Not ready: the database cannot be reached within the check's time limit, or lacks a table or column this build needs",content:{"application/json":{schema:ref("ReadinessStatus")}}};
 add("/v1/workspace","get","getWorkspace","Workspace");
 add("/v1/overview","get","getOverview","Overview",null,[merchant]);
 add("/v1/records/{kind}","get","listRecords","RecordList",null,[pathParam("kind"),merchant,search,status,limit,offset,updatedSince,customerId,recordId]);

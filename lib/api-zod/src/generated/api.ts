@@ -53,8 +53,7 @@ export const ReadinessCheckResponse = zod.object({
   "latencyMs": zod.number().int()
 }).describe('One round trip to the database and how long it took.'),
   "schema": zod.object({
-  "status": zod.enum(['ok', 'incomplete', 'unchecked']),
-  "missing": zod.array(zod.string())
+  "status": zod.enum(['ok', 'indexes_missing', 'incomplete', 'unchecked']).describe('ok: every table, column and index this build needs is present. indexes_missing: ready, but an index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table or column is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and the migration that adds it.')
 }).describe('Whether the database holds every table, column and index this build needs: missing names each one that is not there and the migration that adds it; unchecked while the database does not answer.')
 })
 }).describe('The readiness answer: ok, or degraded while the database does not answer or lacks a table, column or index this build needs.')

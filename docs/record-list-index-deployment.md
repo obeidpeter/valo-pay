@@ -45,7 +45,7 @@ PostgreSQL documents the concurrent-build locking, transaction and failure behav
 
 `lib/db/migrations/007_journal_and_lender_indexes.sql` adds two more read indexes, also declared in `lib/db/src/schema/valopay.ts`: `valopay_operations_pending` on `valopay_operations(merchant_id, owner)` for pending entries only, which the limit of 100 pending requests per person and lender counts (without it the count read every entry the person had ever made), and `valopay_merchants_workspace` on `valopay_merchants(workspace_id, id)`, which listing and counting a workspace's lenders, the expiry sweep, the staff directory and row-security scope read. They change no rows, permissions or constraints.
 
-Apply it after `003_pilot_workflow.sql`, with the database owner's private deployment connection in `DATABASE_URL`, and before deploying the build whose schema declares the indexes: `/api/readyz` answers 503 and names both until they exist.
+Apply it after `003_pilot_workflow.sql`, with the database owner's private deployment connection in `DATABASE_URL`, and before deploying the build whose schema declares the indexes. Until they exist `/api/readyz` stays ready but reports `checks.schema.status` `indexes_missing`, and a `readiness.indexes_missing` log line names both.
 
 ```sh
 psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f lib/db/migrations/007_journal_and_lender_indexes.sql

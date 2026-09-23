@@ -301,7 +301,7 @@ try {
   // Readiness asks the database for what this build needs, not only for an answer: every table the Drizzle schema
   // declares with every column it declares, and the indexes later migrations add, compared by definition (the copied
   // tables of an isolated schema carry generated index names). A database missing a migration used to answer SELECT 1
-  // and read as ready.
+  // and read as ready. A missing table or column fails the check; a missing index is only reported.
   {
     const ready = await pingDatabase();
     assert.deepEqual([ready.status, ready.schema], ["ok", { status: "ok", missing: [] }], "the pushed schema is complete");
@@ -312,11 +312,13 @@ try {
       for (const table of tables) await pool.query(`CREATE TABLE "${scratch}".${table} (LIKE public.${table} INCLUDING ALL)`);
       assert.deepEqual((await pingDatabase({ schema: scratch })).schema, { status: "ok", missing: [] }, "copied tables whose indexes carry generated names are complete");
       const copiedPending = (await pool.query<{ indexname: string }>("SELECT indexname FROM pg_indexes WHERE schemaname=$1 AND tablename='valopay_operations' AND indexdef LIKE '%WHERE (status%'", [scratch])).rows[0]!.indexname;
+      await pool.query(`DROP INDEX "${scratch}"."${copiedPending}"`);
+      // Without an index every request still works, only slower: reported, not a reason to leave rotation.
+      assert.deepEqual((await pingDatabase({ schema: scratch })).schema, { status: "indexes_missing", missing: ["index valopay_operations_pending: apply lib/db/migrations/007_journal_and_lender_indexes.sql"] }, "a missing index alone is named, with its migration, without failing");
       await pool.query(`DROP TABLE "${scratch}".valopay_staff_events`);
       await pool.query(`ALTER TABLE "${scratch}".valopay_operations DROP COLUMN receipt`);
-      await pool.query(`DROP INDEX "${scratch}"."${copiedPending}"`);
       const incomplete = await pingDatabase({ schema: scratch });
-      assert.deepEqual([incomplete.status, incomplete.schema.status], ["ok", "incomplete"], "a database that answers but lacks a migration is not ready");
+      assert.deepEqual([incomplete.status, incomplete.schema.status], ["ok", "incomplete"], "a database that answers but lacks a table or column the build uses is not ready");
       assert.deepEqual(incomplete.schema.missing, [
         "column valopay_operations.receipt: apply lib/db/migrations/003_pilot_workflow.sql",
         "table valopay_staff_events: apply lib/db/migrations/003_pilot_workflow.sql",
