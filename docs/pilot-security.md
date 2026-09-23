@@ -54,6 +54,28 @@ Managed envelope encryption ([pilot operations controls](pilot-operations-contro
 
 `artifacts/api-server/tests/payload-rewrap.integration.test.ts` rehearses this on PostgreSQL with a local key-service fixture: bounded runs until none remain, a payload rewritten during a run, the retired key no view needs afterwards, and a run stopped by a key the service cannot open.
 
+## Rehearsing independent approval with staging identities
+
+The anonymous sandbox cannot rehearse independent approval: one browser plays every role under one principal, so close approval, correction approval, team approvals, retention approval and lifting the emergency stop all need a second person it does not have. Rehearse them on a staging host instead:
+
+1. Create a separate Clerk application for staging, with organisations and multi-factor authentication on, and one staging organisation. Add at least five test identities to it: two administrators (A and B), a Finance reviewer, a Compliance reviewer and an Operations user; a Read-only user helps with the refusals. Use [Clerk's test email addresses and phone numbers](https://clerk.com/docs/testing/test-emails-and-phones) so no real inbox or phone is involved, enrol a second factor for each, and record which identity plays which role.
+2. Configure a staging host with `VALOPAY_STAFF_ACCESS=staging`, `VALOPAY_STAFF_ISSUER`, `VALOPAY_STAFF_ORIGINS` and the staging Clerk keys ([setup](pilot-workflow-release.md#setup-and-rollback)), on a disposable database with synthetic records only.
+3. Provision administrator A with `scripts/provision-pilot.ts`, then administrator B with its `--add-administrator` mode ([pilot administrators](pilot-workflow-release.md#pilot-administrators)).
+4. Rehearse each flow, signed in as the identity named at each step, and note every refusal:
+   - Invitations: A invites the Operations, Finance and Compliance reviewer identities. The Operations invitation can be accepted at once. The other two wait: accepting is refused, A cannot approve them, and once B approves them they can be accepted. A assigns lenders to the non-administrators.
+   - Role changes: A asks to change the Operations member to Finance. The membership is unchanged until B approves; A cannot approve it; B can decline it instead. Suspend a member and ask to reactivate them: that waits for B too.
+   - Close review: Operations or A runs a daily close and prepares its review naming the Finance identity; Finance approves or returns it, and nobody else can.
+   - Import corrections: Operations proposes a correction to a committed synthetic batch naming the Finance reviewer, who decides it.
+   - Policies and templates: A submits a draft; the Compliance reviewer approves it; A cannot.
+   - Retention: A saves a policy at the staff minimums and prepares a preview; A's approval is refused and B approves; either executes. Nothing in a new pilot is six years old, so age one synthetic source first by setting its commit time back in the staging database, as `artifacts/api-server/tests/staff-governance.integration.test.ts` does.
+   - Emergency stop: A turns it on, then asks to turn it off; the stop stays on until B approves, and B could keep it on instead.
+   - Exports: the Operations identity cannot queue or open a dispute pack, the customer register or the audit trail; Finance can.
+   - Directory: the Operations identity sees only the colleagues on its lenders and no one's expiry but its own; A sees everyone.
+   - Fortnightly review: each reviewer records their own review, and it carries their name and the time it was saved.
+5. Check that the access history (Team & access) and each lender's audit trail name both people of every approval. Keep these identities for synthetic staging only; never reuse them on a host with real data.
+
+`artifacts/api-server/tests/staff-governance.integration.test.ts` runs the team, emergency stop, retention, export, directory, review and calendar rules through the real routes on PostgreSQL with verified-session fixtures; the staging rehearsal is what checks them against real Clerk sessions, organisations and second factors.
+
 ## Staging rehearsal
 
 1. Use a disposable staging environment, synthetic records, a separate Clerk application and generated test keys. Set up two organisations and provision explicit, expiring memberships for each lender. Verify issuer and authorised-party configuration; no wildcard requesting origin is permitted by this helper.
