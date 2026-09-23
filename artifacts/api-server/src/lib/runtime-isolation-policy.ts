@@ -11,9 +11,10 @@
  * login in the workspace guard, and white space is collapsed. {role} is spelt
  * out in this text before a comparison, never put into the live text.
  *
- * A migration that changes a policy, a helper or the workspace guard changes
- * this file in the same reviewed commit; runtime-isolation.integration.test.ts
- * fails otherwise, and so does every isolated staff request.
+ * A migration that changes a policy, a helper, the workspace guard or a grant
+ * to the runtime login changes this file in the same reviewed commit;
+ * runtime-isolation.integration.test.ts fails otherwise, and so does every
+ * isolated staff request.
  */
 export type ReviewedPolicy = { readonly using: string | null; readonly check: string | null };
 export type ReviewedHelper = { readonly args: string; readonly result: string; readonly volatility: "s" | "v"; readonly language: "sql" | "plpgsql"; readonly source: string };
@@ -57,6 +58,25 @@ export const reviewedRuntimeHelpers: Readonly<Record<string, ReviewedHelper>> = 
   valopay_runtime_workspace: { args: "", result: "text", volatility: "s", language: "sql", source: "SELECT team.workspace_id FROM valopay_teams team WHERE team.organization_id=NULLIF(current_setting('valopay.runtime_org',true),'') AND (EXISTS(SELECT 1 FROM valopay_staff_memberships member WHERE member.workspace_id=team.workspace_id AND member.user_id=NULLIF(current_setting('valopay.runtime_user',true),'') AND member.status='active' AND member.expires_at>statement_timestamp()) OR EXISTS(SELECT 1 FROM valopay_staff_invitations invitation WHERE invitation.workspace_id=team.workspace_id AND invitation.token_hash=NULLIF(current_setting('valopay.runtime_invite',true),'') AND invitation.status='pending' AND invitation.expires_at>statement_timestamp() AND invitation.email IN(SELECT jsonb_array_elements_text(COALESCE(NULLIF(current_setting('valopay.runtime_emails',true),''),'[]')::jsonb))))" },
   valopay_runtime_writer: { args: "", result: "boolean", volatility: "s", language: "sql", source: "SELECT EXISTS(SELECT 1 FROM valopay_staff_memberships member WHERE member.workspace_id=valopay_runtime_workspace() AND member.user_id=NULLIF(current_setting('valopay.runtime_user',true),'') AND member.role IN('Admin','Operations','Finance','Compliance reviewer') AND member.status='active' AND member.expires_at>statement_timestamp())" },
 };
+/**
+ * Every privilege 005 grants the runtime login on a relation, and no others:
+ * `table:PRIVILEGE` on a whole table, `table.column:PRIVILEGE` on one column.
+ * The login holds nothing else on any relation in any schema, directly or
+ * through PUBLIC, and is a member of no role, so these are all it can do with
+ * data; a view, a sequence or another table beside the ten is refused too.
+ */
+export const reviewedRuntimeGrants: readonly string[] = [
+  "valopay_idempotency.response:UPDATE", "valopay_idempotency:INSERT", "valopay_idempotency:SELECT",
+  "valopay_merchants.info:UPDATE", "valopay_merchants.settings:UPDATE", "valopay_merchants:INSERT", "valopay_merchants:SELECT",
+  "valopay_operations.receipt:UPDATE", "valopay_operations.request:UPDATE", "valopay_operations.status:UPDATE", "valopay_operations.updated_at:UPDATE", "valopay_operations:INSERT", "valopay_operations:SELECT",
+  "valopay_records.amount_kobo:UPDATE", "valopay_records.customer_id:UPDATE", "valopay_records.data:UPDATE", "valopay_records.name:UPDATE", "valopay_records.reference:UPDATE", "valopay_records.status:UPDATE", "valopay_records.updated_at:UPDATE", "valopay_records:INSERT", "valopay_records:SELECT",
+  "valopay_staff_events:INSERT", "valopay_staff_events:SELECT",
+  "valopay_staff_invitations.status:UPDATE", "valopay_staff_invitations:INSERT", "valopay_staff_invitations:SELECT",
+  "valopay_staff_lender_access:DELETE", "valopay_staff_lender_access:INSERT", "valopay_staff_lender_access:SELECT",
+  "valopay_staff_memberships.display_name:UPDATE", "valopay_staff_memberships.expires_at:UPDATE", "valopay_staff_memberships.role:UPDATE", "valopay_staff_memberships.status:UPDATE", "valopay_staff_memberships.updated_at:UPDATE", "valopay_staff_memberships:INSERT", "valopay_staff_memberships:SELECT",
+  "valopay_teams:SELECT",
+  "valopay_workspaces.role:UPDATE", "valopay_workspaces:SELECT",
+];
 /** The one non-internal trigger on the ten tables, as pg_get_triggerdef writes it. It must also be enabled. */
 export const reviewedRuntimeTrigger = { name: "valopay_runtime_workspace_guard", table: "valopay_workspaces", definition: "CREATE TRIGGER valopay_runtime_workspace_guard BEFORE UPDATE ON valopay_workspaces FOR EACH ROW EXECUTE FUNCTION valopay_runtime_guard_workspace()" } as const;
 /** The PostgreSQL major version whose rendering of the expressions is recorded above. */
@@ -65,7 +85,47 @@ export const reviewedRuntimeServerMajor = 16;
 export type RuntimePolicyRow = { tablename: string; policyname: string; cmd: string; permissive: string; roles: string[]; qual: string | null; with_check: string | null };
 export type RuntimeHelperRow = { proname: string; args: string; result: string; volatility: string; language: string; source: string; safe: boolean };
 export type RuntimeTriggerRow = { tgname: string; relname: string; definition: string; tgenabled: string };
+/** The connection as it reads itself: its roles, the attributes either holds that bypass or administer security, the roles it is a member of, and whether it can create objects in the runtime schema. */
+export type RuntimeRoleRow = { current_name: string; session_name: string; attributes: string[]; memberships: string[]; creates: boolean };
+/** One privilege the runtime login holds on a relation, directly or through PUBLIC, as the relation's or the column's access list records it. */
+export type RuntimeGrantRow = { schema: string; relation: string; column: string | null; privilege: string; grantable: boolean };
+/** An object in the runtime schema beyond the reviewed set: a relation that is neither one of the ten tables nor one of their indexes (kind as pg_class writes it), or a function that is not a reviewed helper (kind "function"). */
+export type RuntimeObjectRow = { name: string; kind: string };
 type Scope = { schema: string; role: string };
+
+/**
+ * Each way the connection differs from the runtime login 005 creates: another
+ * role; an attribute that bypasses or administers row security or streams
+ * every change (SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB, REPLICATION); a
+ * membership of any role, such as pg_execute_server_program or
+ * pg_read_all_data, whose privileges it could take up; or CREATE on the
+ * runtime schema.
+ */
+export function runtimeRoleDifferences(row: RuntimeRoleRow, scope: Scope): string[] {
+  const out: string[] = [];
+  if (row.current_name !== scope.role || row.session_name !== scope.role) out.push(`connected as ${row.session_name} (current role ${row.current_name}) instead of the runtime login`);
+  for (const attribute of row.attributes) out.push(`the login holds ${attribute}`);
+  for (const role of row.memberships) out.push(`the login is a member of ${role}`);
+  if (row.creates) out.push("the login can create objects in the runtime schema");
+  return out.sort();
+}
+
+const objectKinds: Readonly<Record<string, string>> = { r: "table", p: "partitioned table", v: "view", m: "materialized view", f: "foreign table", S: "sequence", c: "composite type", i: "index", I: "partitioned index", function: "function" };
+/**
+ * Each way the runtime login's privileges, and the objects in the runtime
+ * schema, differ from the reviewed set. A privilege on a relation in the
+ * runtime schema is named without the qualifier, one anywhere else with its
+ * schema, so a grant on another schema's copy of a table never passes for the
+ * reviewed one.
+ */
+export function runtimeGrantDifferences(grants: RuntimeGrantRow[], extras: RuntimeObjectRow[], scope: Scope): string[] {
+  const out: string[] = [], reviewed = new Set(reviewedRuntimeGrants);
+  const held = new Set(grants.map(row => `${row.schema === scope.schema ? "" : `${row.schema}.`}${row.relation}${row.column === null ? "" : `.${row.column}`}:${row.privilege}${row.grantable ? " with grant option" : ""}`));
+  for (const key of held) if (!reviewed.has(key)) out.push(`${key}: not in the reviewed set`);
+  for (const key of reviewed) if (!held.has(key)) out.push(`${key}: missing`);
+  for (const row of extras) out.push(`${row.name}: a ${objectKinds[row.kind] ?? "relation"} the reviewed set does not have`);
+  return out.sort();
+}
 
 /** Puts a live definition in the reviewed form. The runtime schema's qualifier is removed
  * only in front of a valopay_ name: such a name resolves to the same table or helper

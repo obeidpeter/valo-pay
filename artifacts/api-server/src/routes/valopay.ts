@@ -3,7 +3,7 @@ import { listReconciliation, listCloseHistory, getCloseDetail, loadReportsView }
 import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
 import { z } from "zod";
-import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, roles, fail, appendAudit, verifyAudit, listMerchants, findIdempotency, saveIdempotency, receiptOf, changeRole, type StoreContext } from "../lib/valopay-store";
+import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, auditObject, roles, fail, appendAudit, verifyAudit, listMerchants, findIdempotency, saveIdempotency, receiptOf, changeRole, type StoreContext } from "../lib/valopay-store";
 import { requestFingerprint } from "../lib/digests";
 import { amendDueItem, customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction, type TypedRecord } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
@@ -27,6 +27,12 @@ const router:IRouter=Router(routerOptions);
 const kinds=new Set<string>(recordKinds);
 function safeKind(value:unknown):string { const kind=z.string().parse(value);if(!kinds.has(kind))fail("Unknown resource.",404);return kind; }
 /**
+ * What a write's audit entry takes from its request, as the route's schema
+ * parsed it: the action a route runs by name, the record its body names and
+ * the reason. A route passes only fields its schema has.
+ */
+export type AuditInput = { action?: string; recordId?: string; reason?: string };
+/**
  * One lender's state for a route: read under a share lock, or written under the
  * exclusive lock with an audit entry and, when the request carries an
  * Idempotency-Key, a receipt its repeat is answered from. A fresh answer is
@@ -36,8 +42,13 @@ function safeKind(value:unknown):string { const kind=z.string().parse(value);if(
  * given without fields the contract no longer lists, or as a 500 that says the
  * request was saved (replayedAnswer, lib/contract.ts). A receipt is kept where
  * receiptOf says, and a read is never fingerprinted.
+ *
+ * A write's audit entry takes nothing from the raw body: its action is the
+ * route's (or the action the route parsed), its object comes from the route or
+ * the record the write changed (auditObject), and its summary is the reason
+ * the route's own schema carries, passed in `audit`, or the default.
  */
-export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>unknown,mutating:boolean,responseSchema:S):Promise<z.output<S>>{
+export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>unknown,mutating:boolean,responseSchema:S,audit:AuditInput={}):Promise<z.output<S>>{
  const {merchantId}=lenderQuery(req);
  // A write's key is checked by name before anything runs; a read ignores one, and nothing of a read is fingerprinted.
  const key=mutating?optionalKey(req):undefined;
@@ -61,9 +72,9 @@ export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response
    // Validate before committing: an invalid response must not leave durable writes.
    const result=contractAnswer(responseSchema,rawResult);
   if(mutating){
-   // An action may add what it established to the reason, such as the payer Finance identified.
-   const reason=req.body.reason||"Synthetic workspace operation",auditNote=(rawResult as {data?:{auditNote?:unknown}}|undefined)?.data?.auditNote;
-   appendAudit(state,ctx,req.path.includes("/actions")?String(req.body.action):`${req.method.toLowerCase()}.${req.path.split("/").slice(2).join(".")}`,req.body.recordId||String(req.params.id||"workspace"),typeof auditNote==="string"&&auditNote?`${reason}${/[.!?]$/.test(reason)?"":"."} ${auditNote}`:reason,changes);
+   // A domain action may add what it established to the reason, such as the payer Finance identified: server-built text in its answer.
+   const reason=audit.reason?.trim()||"Synthetic workspace operation",auditNote=audit.action===undefined?undefined:(rawResult as {data?:{auditNote?:unknown}}|undefined)?.data?.auditNote;
+   appendAudit(state,ctx,audit.action??`${req.method.toLowerCase()}.${req.path.split("/").slice(2).join(".")}`,auditObject(ctx,state,{path:req.params.id,body:audit.recordId,answer:rawResult},"workspace"),typeof auditNote==="string"&&auditNote?`${reason}${/[.!?]$/.test(reason)?"":"."} ${auditNote}`:reason,changes);
     await saveState(ctx,state);
     if(receipt)await saveIdempotency(ctx,receipt.id,fingerprint,result);
   }
@@ -139,7 +150,7 @@ router.post("/v1/actions",async(req,res)=>{
   if(body.action==="verify_audit")return {message:"Audit log check complete.",data:verifyAudit(state)};
   if(body.action==="mark_pack_used")fail("Synthetic packs cannot be recorded as evidence used in a real case.",403);
   return executeAction(state,ctx,body);
-  },true,S.PerformActionResponse);
+  },true,S.PerformActionResponse,{action:body.action,recordId:body.recordId,reason:body.reason});
  res.json(result);
 });
 router.post("/v1/imports",async(req,res)=>{

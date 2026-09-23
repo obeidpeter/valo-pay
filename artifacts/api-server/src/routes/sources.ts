@@ -31,7 +31,7 @@ router.post("/v1/sources/profiles", async (req, res) => {
 router.post("/v1/sources/manifests", async (req, res) => {
   requiredKey(req);
   const input = sourceManifestInputSchema.parse(req.body);
-  res.json(await withState(req, res, (state, ctx) => saveSourceManifest(state, ctx, input), true, valopayRecordSchema));
+  res.json(await withState(req, res, (state, ctx) => saveSourceManifest(state, ctx, input), true, valopayRecordSchema, { reason: input.reason }));
 });
 router.post("/v1/sources/profiles/:id/save", async (req, res) => {
   const input = sourceProfileInputSchema.parse(req.body), id = z.string().min(1).max(100).parse(req.params.id);
@@ -43,7 +43,7 @@ router.post("/v1/sources/paystack/fixtures", async (req, res) => {
 });
 router.post("/v1/sources/events/:id/replay", async (req, res) => {
   const input = providerReplayInputSchema.parse(req.body), id = z.string().min(1).max(100).parse(req.params.id);
-  res.json(await withState(req, res, (state, ctx) => providerEventView(replayProviderEvent(state, ctx, id, input.expectedUpdatedAt, input.reason)), true, providerEventViewSchema));
+  res.json(await withState(req, res, (state, ctx) => providerEventView(replayProviderEvent(state, ctx, id, input.expectedUpdatedAt, input.reason)), true, providerEventViewSchema, { reason: input.reason }));
 });
 export default router;
 

@@ -61,6 +61,7 @@ router.post("/v1/pilot/import-corrections", async (req, res) => {
         proposeImportCorrection(state, ctx, input, await caseAssignees(ctx)),
       true,
       importCorrectionViewSchema,
+      { reason: input.reason },
     ),
   );
 });
@@ -76,6 +77,7 @@ router.post("/v1/pilot/import-corrections/:id/decision", async (req, res) => {
         decideImportCorrection(state, ctx, id, input, await caseAssignees(ctx)),
       true,
       importCorrectionViewSchema,
+      { reason: input.reason },
     ),
   );
 });

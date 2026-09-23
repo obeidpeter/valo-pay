@@ -982,6 +982,27 @@ export function addedRecords(context: StoreContext, state: DomainState): Valopay
   return state.records.filter((record) => !session.snapshot!.records.has(record.id));
 }
 
+/**
+ * The record a write's audit entry is about, of those its route can vouch for:
+ * the one its path names; else the one its parsed body names, when the write
+ * added or changed it or answers with it; else the one its answer names
+ * (`record.id`, or `id`), when the lender has it; else `fallback`. An id a
+ * client wrote that the write did not act on is never the object.
+ */
+export function auditObject(context: StoreContext, state: DomainState, names: { path?: unknown; body?: string; answer?: unknown }, fallback: string): string {
+  const session = sessionFor(context);
+  lockedMerchant(session);
+  if (typeof names.path === "string" && names.path) return names.path;
+  const shown = names.answer as { id?: unknown; record?: { id?: unknown } } | null | undefined;
+  const answered = typeof shown?.record?.id === "string" ? shown.record.id : typeof shown?.id === "string" ? shown.id : undefined;
+  const byId = (id: string) => state.records.find((record) => record.id === id);
+  if (names.body) {
+    const named = byId(names.body), loaded = session.snapshot!.records.get(names.body);
+    if (named && (names.body === answered || loaded === undefined || recordChanged(loaded, named))) return names.body;
+  }
+  return answered && byId(answered) ? answered : fallback;
+}
+
 const recordColumns = "r.id,r.merchant_id,r.kind,r.name,r.status,r.reference,r.amount_kobo,r.customer_id,r.data,r.created_at,r.updated_at";
 const scopedRecordsFrom = `FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id
   JOIN valopay_workspaces w ON w.id=m.workspace_id`;

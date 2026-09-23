@@ -30,7 +30,7 @@ The test copies the ten table definitions into a uniquely named `valopay_runtime
 
 Staff access and the restricted runtime carry the transaction, access and scope integration this rehearsal was for: in staff mode verified memberships replace the sandbox personas, each staff transaction sets its scope with transaction-local `set_config(..., true)` after checking its connection, the background worker runs as a provisioned service member, and a transaction whose COMMIT PostgreSQL answers with ROLLBACK is reported as not saved. Before a pilot uses them:
 
-1. Provision the restricted login, schema, service member, identity application and key access on the host. Never give that login table ownership, schema creation, migration-role membership, superuser or `BYPASSRLS`.
+1. Provision the restricted login, schema, service member, identity application and key access on the host. Never give that login table ownership, schema creation, membership of any role, superuser, `BYPASSRLS`, `REPLICATION` or a privilege migration 005 does not grant; the application refuses every one of these (`docs/pilot-operations-controls.md`).
 2. Keep workspace provisioning and expiry as narrow administrative operations. Do not make the web process an administrator to get around a policy denial.
 3. Retest the complete runtime under the restricted login: bootstrap, sign-in, invitations, permission changes, reconciliation, exports, idempotency, daily closes, recovery and connection-pool reuse. Record migration, rollback and recovery evidence before applying anything to a pilot database.
 

@@ -22,11 +22,11 @@ router.get('/v1/lifecycle/runs/:id', async (req, res) => {
 });
 router.post('/v1/lifecycle/policy', async (req, res) => {
   requiredKey(req); const input = retentionPolicyInputSchema.parse(req.body);
-  res.json(await withState(req, res, async (state, ctx) => { await openRawSources(ctx, state); saveLifecyclePolicy(state, ctx, input); return lifecycleView(state, ctx, await lifecycleInventory(ctx, state)); }, true, lifecycleViewSchema));
+  res.json(await withState(req, res, async (state, ctx) => { await openRawSources(ctx, state); saveLifecyclePolicy(state, ctx, input); return lifecycleView(state, ctx, await lifecycleInventory(ctx, state)); }, true, lifecycleViewSchema, { reason: input.reason }));
 });
 router.post('/v1/lifecycle/holds', async (req, res) => {
   requiredKey(req); const input = retentionHoldInputSchema.parse(req.body);
-  res.json(await withState(req, res, async (state, ctx) => { await openRawSources(ctx, state); const inventory = await lifecycleInventory(ctx, state); setLifecycleHold(state, ctx, input, inventory); return lifecycleView(state, ctx, inventory); }, true, lifecycleViewSchema));
+  res.json(await withState(req, res, async (state, ctx) => { await openRawSources(ctx, state); const inventory = await lifecycleInventory(ctx, state); setLifecycleHold(state, ctx, input, inventory); return lifecycleView(state, ctx, inventory); }, true, lifecycleViewSchema, { reason: input.reason }));
 });
 router.post('/v1/lifecycle/runs', async (req, res) => {
   requiredKey(req); const input = lifecyclePreviewInputSchema.parse(req.body);
@@ -34,7 +34,7 @@ router.post('/v1/lifecycle/runs', async (req, res) => {
 });
 router.post('/v1/lifecycle/runs/:id/approve', async (req, res) => {
   requiredKey(req); const input = lifecycleApproveInputSchema.parse(req.body), id = idOf(req.params.id);
-  res.json(await withState(req, res, async (state, ctx) => { await openRawSources(ctx, state); return approveLifecycleRun(state, ctx, id, input, await lifecycleInventory(ctx, state)); }, true, lifecycleRunViewSchema));
+  res.json(await withState(req, res, async (state, ctx) => { await openRawSources(ctx, state); return approveLifecycleRun(state, ctx, id, input, await lifecycleInventory(ctx, state)); }, true, lifecycleRunViewSchema, { reason: input.reason }));
 });
 router.post('/v1/lifecycle/runs/:id/execute', async (req, res) => {
   requiredKey(req); const input = lifecycleExecuteInputSchema.parse(req.body), id = idOf(req.params.id);
