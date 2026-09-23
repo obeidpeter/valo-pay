@@ -109,11 +109,11 @@ interface CreditDeskView {
   canAssess: boolean;
   canReview: boolean;
   actor: string;
-  customers: {
-    id: string;
-    name: string;
-    reference: string;
-    permissions: { accountRead: boolean; creditAssessment: boolean };
+  /** Applicants holding a permission; one not listed holds neither. */
+  permissions: {
+    customerId: string;
+    accountRead: boolean;
+    creditAssessment: boolean;
   }[];
   assessments: Assessment[];
   model: {
@@ -197,8 +197,13 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
       </>
     );
   const data = api.data.credit as CreditDeskView;
+  // The applicants are the workspace's customers, listed once for every connected page.
+  const applicants = api.data.customers;
   const customer =
-    data.customers.find((item) => item.id === customerId) ?? data.customers[0];
+    applicants.find((item) => item.id === customerId) ?? applicants[0];
+  const permissions = data.permissions.find(
+    (item) => item.customerId === customer?.id,
+  ) ?? { accountRead: false, creditAssessment: false };
   const selected =
     data.assessments.find((item) => item.id === selectedId) ??
     data.assessments[0];
@@ -321,7 +326,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
                 onChange={(event) => setCustomerId(event.target.value)}
                 required
               >
-                {data.customers.map((item) => (
+                {applicants.map((item) => (
                   <option value={item.id} key={item.id}>
                     {item.name} · {item.reference}
                   </option>
@@ -333,16 +338,14 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
                 <p className="font-medium">Separate permissions</p>
                 <p>
                   Account reading:{" "}
-                  {customer.permissions.accountRead ? "Active" : "Required"}
+                  {permissions.accountRead ? "Active" : "Required"}
                 </p>
                 <p>
                   Credit assessment:{" "}
-                  {customer.permissions.creditAssessment
-                    ? "Active"
-                    : "Required"}
+                  {permissions.creditAssessment ? "Active" : "Required"}
                 </p>
-                {(!customer.permissions.accountRead ||
-                  !customer.permissions.creditAssessment) && (
+                {(!permissions.accountRead ||
+                  !permissions.creditAssessment) && (
                   <Link
                     href="/connections"
                     className="font-medium underline underline-offset-4"

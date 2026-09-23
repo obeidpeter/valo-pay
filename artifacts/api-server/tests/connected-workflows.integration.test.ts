@@ -468,8 +468,33 @@ try {
     assert.ok(state.records.find((r) => r.id === reviewId));
     assert.equal(verifyAudit(state).valid, true);
   });
+  // A write loads the closes more than a week older than the latest as
+  // summaries while a read loads them whole: the revision a view gave is still
+  // the one its action computes (the 23 September audit).
+  await inWorkspace(request(a), response(), (ctx) => changeRole(ctx, "Admin"), "persona");
+  await inWorkspace(request(a), response(), async (ctx) => {
+    const state = await loadState(ctx, second);
+    for (const days of [9, 0])
+      makeRecord(state, "closes" as string, {
+        name: `Connected revision close ${days}`,
+        status: "completed",
+        createdAt: new Date(Date.parse(ctx.now) - days * 86_400_000).toISOString(),
+        data: {
+          summary: "Synthetic close a week apart",
+          report: { unallocated: { count: 0 }, exceptions: { opened: { count: 0 } } },
+          operational: { note: "Left out of a write's summary" },
+          metrics: [],
+        },
+      });
+    appendAudit(state, ctx, "test.connected.closes", second, "Added closes a week apart.");
+    await saveState(ctx, state);
+  });
+  assert.ok(
+    (await fresh(a, second, "consent.grant", { subjectId: "sme", purpose: "merchant_account_read" })).recordId,
+    "an action sent with its view's revision is applied although older closes load as summaries",
+  );
   console.log(
-    "Connected PostgreSQL workflows passed: persistence, 20-way replay, checkout/collection and due-edit races, principal/lender isolation, immutable credit evidence and audit.",
+    "Connected PostgreSQL workflows passed: persistence, 20-way replay, checkout/collection and due-edit races, principal/lender isolation, immutable credit evidence, audit and the revision across summarised closes.",
   );
 } finally {
   // A failed replay assertion must not race fixture cleanup against another still-running command.
