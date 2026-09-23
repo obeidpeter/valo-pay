@@ -8,6 +8,17 @@ const preferenceKeys = ["executionStart", "executionEnd", "authorisationMode", "
 export function settingsRevision(settings: Record<string, any>): string {
   return createHash("sha256").update(JSON.stringify(preferenceKeys.map(key => [key, settings[key] ?? null]))).digest("hex");
 }
+/**
+ * A record's data after an edit: the stored fields with the edit's merged over
+ * them, as a merge patch reads it, so a field the edit sends as null is removed.
+ * That is how an edit clears an optional field; a field it leaves out keeps
+ * its value.
+ */
+export function mergeData(stored: Record<string, unknown>, edit: Record<string, unknown> | undefined): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...stored, ...edit };
+  for (const [key, value] of Object.entries(edit ?? {})) if (value === null) delete merged[key];
+  return merged;
+}
 function stale(message: string): never { throw Object.assign(new Error(message), { status: 409 }); }
 export function assertRecordVersion(record: ValopayRecord, expectedUpdatedAt: string | undefined): void {
   if (expectedUpdatedAt === undefined) return;

@@ -199,7 +199,14 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
       let val = formData[f.name];
       // A checkbox always submits a boolean: an untouched box is false, never a missing field.
       if (f.type === 'checkbox') val = Boolean(val);
-      else if(val===undefined || (val===''&&!f.required&&f.type!=='textarea'))return;
+      else if (val === undefined) return;
+      else if (val === '' && !f.required && f.type !== 'textarea') {
+        // An optional field left empty is left out, except on an edit that emptied a stored value: the edit
+        // starts from the record's data, so that value is sent as null, which removes it (a merge patch).
+        if (!(record && !actionMutation && f.isData && originalRecord.current?.data?.[f.name] !== undefined)) return;
+        payload.data[f.name] = null;
+        return;
+      }
       if (isMoney(f)) val = nairaToKobo(String(val));
       else if (f.type === 'number') val = Number(val);
       if(['consentGaps','linePaymentIds','confirmedJobs'].includes(f.name)&&typeof val==='string')val=val.split(/[|,]/).map(s=>s.trim()).filter(Boolean);

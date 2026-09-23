@@ -154,7 +154,7 @@ export interface RecordInput {
 }
 
 /**
- * The fields to change on a record; omitted fields keep their values.
+ * The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed.
  */
 export interface RecordUpdate {
   name?: string;

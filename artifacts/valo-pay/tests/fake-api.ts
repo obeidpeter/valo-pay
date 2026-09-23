@@ -8,7 +8,7 @@ import { pilotProgress, closeReviewList, prepareCloseReview, decideCloseReview, 
 import { derivePersonalWork, recordWorkReceipt } from '../../api-server/src/domain/personal-work';
 import { lifecycleView, lifecycleRunView, saveLifecyclePolicy, setLifecycleHold, lifecyclePreview, approveLifecycleRun, assertLifecycleCandidate, eraseLifecycleRawCsv, recordLifecycleReceipt } from '../../api-server/src/domain/lifecycle';
 import { sourceProfileInputSchema, paystackFixtureInputSchema, providerReplayInputSchema, prepareCloseReviewSchema, decideCloseReviewSchema, personalWorkQuerySchema, personalWorkViewSchema, workReceiptInputSchema, workReceiptSchema } from '@workspace/valopay-schema';
-import { advanceRecordVersions } from '../../api-server/src/lib/edit-versions';
+import { advanceRecordVersions, mergeData } from '../../api-server/src/lib/edit-versions';
 import { pageCustomerHistory } from '../../api-server/src/lib/customer-history';
 import { connectedView, connectedActionSchema, runConnectedAction } from '../../api-server/src/domain/connected';
 import { pageReconciliation, pageCloseHistory } from '../../api-server/src/lib/console-read-models';
@@ -236,7 +236,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
         const old = state.records.find((record) => record.kind === kind && record.id === params.id);
         if (!old) fail("Record not found.", 404);
         const {expectedUpdatedAt:_expected,...changes}=body;
-        const input = { ...old, ...changes, data: { ...old.data, ...body.data, synthetic: true } as Record<string, any>, updatedAt: ctx.now };
+        const input = { ...old, ...changes, data: { ...mergeData(old.data, body.data), synthetic: true } as Record<string, any>, updatedAt: ctx.now };
         assertNoDirectImportedCorrection(old,input);
         if (kind === "due-items") return amendDueItem(state, ctx, old as TypedRecord<"due-items">, input as TypedRecord<"due-items">);
         validateRecord(state, ctx, kind, input, true);

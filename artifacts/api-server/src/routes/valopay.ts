@@ -15,7 +15,7 @@ import { getGates } from "../lib/valopay-readiness";
 import { importCsv } from "../lib/valopay-import";
 import { exportDescriptorForRecord, exportKinds, readExport } from "../lib/valopay-exports";
 import { exportJobView, publicExportRecord, queueExport, retryExport } from '../lib/export-jobs';
-import { assertRecordVersion, assertSettingsVersion } from "../lib/edit-versions";
+import { assertRecordVersion, assertSettingsVersion, mergeData } from "../lib/edit-versions";
 import { schedulerStatus } from "../lib/close-scheduler";
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../lib/valopay-close-views";
 import { listQueue } from '../lib/valopay-store';
@@ -109,7 +109,7 @@ router.patch("/v1/records/:kind/:id",async(req,res)=>{
   if (kind === 'exceptions' && old.data.case?.assignee && old.data.case.assignee !== ctx.actor && ctx.role !== 'Admin') fail('Ask the case assignee or an administrator to make this change.',403);
   assertRecordVersion(old,body.expectedUpdatedAt);
   const {expectedUpdatedAt: _version,...changes}=body;
-  const input={...old,...changes,data:{...old.data,...body.data,synthetic:true} as Record<string,any>,updatedAt:ctx.now};
+  const input={...old,...changes,data:{...mergeData(old.data,body.data),synthetic:true} as Record<string,any>,updatedAt:ctx.now};
   assertNoDirectImportedCorrection(old,input);
   // An instalment's balance is rebuilt from its allocations and its status follows it.
   if(kind==="due-items")return amendDueItem(state,ctx,old as TypedRecord<"due-items">,input as TypedRecord<"due-items">);
