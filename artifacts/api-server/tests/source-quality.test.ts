@@ -58,6 +58,11 @@ assert.equal(batchSourceQuality(state, amountBatch).sourceAmountKobo, null);
 assert.throws(() => assertSourceBatchReady(state, amountBatch), /exceeds/);
 amountBatch.data.csv = "row,amount\n1,not-money";
 assert.equal(batchSourceQuality(state, amountBatch).status, "unavailable");
+// As in the import, a blank amount counts for nothing on a customer row, and stays an error where the kind needs an amount.
+const customerAmounts = makeRecord(state, "import-batches", { data: { kind: "customers", source: "amounts", csv: "row,amount\n1,\n2,0.20", amountUnit: "naira", mapping: {}, check: {} } });
+assert.equal(batchSourceQuality(state, customerAmounts).sourceAmountKobo, 20);
+amountBatch.data.csv = "row,amount\n1,";
+assert.equal(batchSourceQuality(state, amountBatch).status, "unavailable");
 
 const inbox = fresh("inbox-test");
 const first = runPaystackFixture(inbox, ctx, "payment");

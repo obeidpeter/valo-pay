@@ -41,11 +41,17 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
   let valid=0,invalid=0,imported=0;
   for(const [index,raw] of parsed.entries()){
     try{
-      const record:Record<string,any>={data:{synthetic:true}};
+      const record:Record<string,any>={data:{synthetic:true}}, blankAsZero:Record<string,number>={};
       for(const [key,value] of Object.entries(raw)){
         const target=destination(key);
         if (!target) continue;
         if (unsafeKey(target)) throw new Error('Reserved object names are not allowed as import fields.');
+        // A blank number is absent. Only the amount, which every kind but customers needs, is still refused when blank.
+        if (numeric.has(target) && !value && !(target === 'amountKobo' && input.kind !== 'customers')) {
+          // Earlier builds read a blank number other than an amount as 0, and the fingerprints of the rows they imported include it.
+          if (!target.endsWith('Kobo')) blankAsZero[target] = 0;
+          continue;
+        }
         let decoded:unknown=value;
         if (numeric.has(target) && target.endsWith('Kobo')) {
           decoded = csvAmountToKobo(value, amountUnit);
@@ -57,7 +63,7 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
       }
       const identity = input.identities && { source: input.identities.source, rowId: input.identities.ids[index], batchId: input.identities.batchId };
       // Stored in the row's import identity and compared when the row is imported again: its first form.
-      const identityFingerprint = canonicalDigest(record, 'legacy-en-us-replacer');
+      const identityFingerprint = canonicalDigest({ ...record, data: { ...record.data, ...blankAsZero } }, 'legacy-en-us-replacer');
       if (identity) {
         const prior = working.records.find(r => r.kind === input.kind && r.data.importIdentity?.source === identity.source && r.data.importIdentity?.rowId === identity.rowId);
         if (prior) {
