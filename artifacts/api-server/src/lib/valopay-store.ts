@@ -34,7 +34,8 @@ import { beginStatement, checkOut, databaseLimits, failedTransaction, DatabaseLi
 import { createLenderGate } from './lender-gate';
 import { assertImportedCorrectionChange } from '../domain/import-corrections';
 import type { LifecycleExternalCandidate, LifecycleCandidate } from '@workspace/valopay-schema';
-import { lifecycleCandidateCheck, eraseLifecycleRawCsv, recordLifecycleReceipt, lifecycleRunView } from '../domain/lifecycle';
+import { lifecycleRunView } from '../domain/lifecycle';
+import { executeApprovedRun } from '../domain/lifecycle-run';
 import { deleteRetainedExport } from './export-download';
 import { objectStorageClient } from './objectStorage';
 import { assertProviderEventChange } from '../providers/paystack-inbox';
@@ -1560,45 +1561,35 @@ export async function lifecycleInventory(context:StoreContext,state:DomainState)
   ...state.records.filter(r=>r.kind==='exports'&&['ready','failed'].includes(r.status)&&!r.data.fileDeletedAt&&r.data.bucket&&r.data.objectName).map(r=>({kind:'export_file' as const,merchantId,sourceId:r.id,version:r.updatedAt,createdAt:String(r.data.generatedAt||r.updatedAt),label:'Private export file',digest:canonicalDigest({id:r.id,status:r.status,data:r.data},"legacy-en-us-null"),status:r.status as 'ready'|'failed'})),
  ];
 }
-/** One candidate per request bounds external work and makes progress resumable.
- * The lender lock prevents a hold or retry being introduced during deletion. */
+/**
+ * Executes an approved retention run under the lender lock: as many of its
+ * sources as fit in the step budget, each checked again and given a receipt,
+ * stopping at a blocked source or a deletion that cannot be confirmed
+ * (executeApprovedRun). The console repeats the request until the run is done.
+ */
 export async function executeLifecycleRun(context:StoreContext,state:DomainState,id:string) {
  const session=sessionFor(context),merchantId=lockedMerchant(session);
  if(context.role!=='Admin'||session.access!=='write'||state.merchant.id!==merchantId)fail('An administrator in this lender is required.',403);
  const run=state.records.find(r=>r.id===id&&r.kind==='retention-runs');if(!run)fail('Retention run not found.',404);
  if(run.status==='completed')return lifecycleRunView(state,run);
  const external=await lifecycleInventory(context,state);
- const attempted=new Set(state.records.filter(r=>r.kind==='retention-receipts'&&r.data.runId===id).map(r=>`${r.data.kind}:${r.data.sourceId}`));
- const candidates=[...run.data.candidates as LifecycleCandidate[]].sort((a,b)=>Number(attempted.has(`${a.kind}:${a.sourceId}`))-Number(attempted.has(`${b.kind}:${b.sourceId}`)));
- // Prepared once: nothing changes the state until the one candidate this request handles, so skipping the run's
- // finished sources costs a lookup each rather than another pass over the lender.
- const check=lifecycleCandidateCheck(state,context,id,external);
- for(const candidate of candidates){
-  try{
-   if(!check(candidate))continue;
-  }catch{return recordLifecycleReceipt(state,context,id,candidate,'blocked','This source changed, is held or no longer meets the approved policy. Review the source and prepare a fresh preview.');}
-  try{
-   let result:'deleted'|'already_absent'='deleted';
-   if(candidate.kind==='raw_csv')eraseLifecycleRawCsv(state,context,id,candidate);
-   else if(candidate.kind==='journal_payload'){
-    const row=(await session.client.query<OperationRow>('SELECT * FROM valopay_operations WHERE merchant_id=$1 AND id=$2 FOR UPDATE',[merchantId,candidate.sourceId])).rows[0];
-    if(!row||!['completed','cancelled'].includes(row.status))fail('The terminal request is no longer eligible.',409);
-    const tombstone={purged:true,at:context.now,retentionRunId:id};
-    await session.client.query("UPDATE valopay_operations SET request=$3,receipt=$3 WHERE merchant_id=$1 AND id=$2 AND status IN ('completed','cancelled')",[merchantId,row.id,tombstone]);
-    await session.client.query('UPDATE valopay_idempotency SET response=$3 WHERE merchant_id=$1 AND id=ANY($2::text[])',[merchantId,receiptIds(merchantId,row.request_key,row.id),tombstone]);
-   }else{
-    const record=state.records.find(r=>r.id===candidate.sourceId&&r.kind==='exports')!;
-    result=await deleteRetainedExport(objectStorageClient.bucket(record.data.bucket).file(record.data.objectName),{id:record.id,merchantId,checksum:record.data.checksum});
-    record.data.fileDeletedAt=context.now;record.data.fileRetentionRunId=id;
-   }
-   return recordLifecycleReceipt(state,context,id,candidate,result,'Retention action completed. Financial records, provenance, request identities and audit history were retained.');
-  }catch(error){
-   // A SQL error aborts the whole transaction; never mask it as a receipt.
-   if(typeof (error as any)?.code==='string'&&/^[A-Z0-9]{5}$/.test((error as any).code))throw error;
-   return recordLifecycleReceipt(state,context,id,candidate,'failed','Deletion could not be confirmed. Resume this saved run to check the same source; do not create a replacement export.');
+ // A completed request's payload is purged in this transaction; an export file is deleted from private storage.
+ const remove=async(candidate:LifecycleCandidate):Promise<'deleted'|'already_absent'>=>{
+  if(candidate.kind==='journal_payload'){
+   const row=(await session.client.query<OperationRow>('SELECT * FROM valopay_operations WHERE merchant_id=$1 AND id=$2 FOR UPDATE',[merchantId,candidate.sourceId])).rows[0];
+   if(!row||!['completed','cancelled'].includes(row.status))fail('The terminal request is no longer eligible.',409);
+   const tombstone={purged:true,at:context.now,retentionRunId:id};
+   await session.client.query("UPDATE valopay_operations SET request=$3,receipt=$3 WHERE merchant_id=$1 AND id=$2 AND status IN ('completed','cancelled')",[merchantId,row.id,tombstone]);
+   await session.client.query('UPDATE valopay_idempotency SET response=$3 WHERE merchant_id=$1 AND id=ANY($2::text[])',[merchantId,receiptIds(merchantId,row.request_key,row.id),tombstone]);
+   return 'deleted';
   }
- }
- return lifecycleRunView(state,run);
+  const record=state.records.find(r=>r.id===candidate.sourceId&&r.kind==='exports')!;
+  const result=await deleteRetainedExport(objectStorageClient.bucket(record.data.bucket).file(record.data.objectName),{id:record.id,merchantId,checksum:record.data.checksum});
+  record.data.fileDeletedAt=context.now;record.data.fileRetentionRunId=id;
+  return result;
+ };
+ // A SQL error aborts the whole transaction; never mask it as a receipt.
+ return executeApprovedRun(state,context,id,external,remove,{fatal:error=>typeof (error as any)?.code==='string'&&/^[A-Z0-9]{5}$/.test((error as any).code)});
 }
 
 /**

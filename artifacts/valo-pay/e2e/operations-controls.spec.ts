@@ -35,6 +35,27 @@ test('the current assignee can review and acknowledge a handover without resolvi
   await page.screenshot({ path: info.outputPath('personal-work-receipts.png'), fullPage: true });
 });
 
+test('an approved retention run keeps going until every source is removed', async ({ page, request }) => {
+  expect((await request.post('/__test/aged-batches?count=3')).ok()).toBeTruthy();
+  await page.goto('/lifecycle');
+  await page.getByRole('checkbox', { name: 'Raw CSV after import' }).check();
+  await page.getByLabel('Reason for the policy change').fill('Pilot agreement: raw files are kept for 30 days only.');
+  await page.getByRole('button', { name: 'Save retention policy' }).click();
+  await expect(page.getByText('Retention policy saved. Saving a policy does not delete data.')).toBeVisible();
+  await page.getByRole('button', { name: 'Prepare deletion preview' }).click();
+  await page.getByRole('checkbox', { name: /I reviewed every source identity/ }).check();
+  await page.getByLabel('Reason for approving this deletion').fill('Approved under the pilot retention agreement.');
+  await page.getByRole('button', { name: 'Approve exact deletion run' }).click();
+  // The sample service removes one source a request: one click carries the run through all three.
+  await page.getByRole('button', { name: 'Execute approved run' }).click();
+  const outcome = page.getByText('This run is complete. Inspect its saved deletion receipts below.');
+  await expect(outcome).toBeVisible();
+  await expect(outcome).toBeFocused();
+  await expect(page.getByText('3 source artifacts · 3 confirmed complete · 0 remaining.', { exact: false })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Execute approved run|Resume approved run|Stop/ })).toHaveCount(0);
+  await audit(page);
+});
+
 for (const theme of ['light', 'dark'] as const) test(`new operations pages expose bounded state and clear setup controls in ${theme}`, async ({ page }, info) => {
   await page.emulateMedia({ colorScheme: theme });
   await page.addInitScript(value => localStorage.setItem('valopay-theme', value), theme);

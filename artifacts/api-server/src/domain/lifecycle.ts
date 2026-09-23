@@ -158,7 +158,9 @@ export function approveLifecycleRun(state: DomainState, ctx: Context, id: string
  * evidence) is read from the lender once, when first needed, so checking every
  * source of a run costs a lookup each. The check answers false for a source
  * the run already removed, true for one that may be removed now, and refuses
- * anything else. Prepare it again after the state changes.
+ * anything else. Removing the run's own sources changes nothing it compares
+ * for the others, so an executor keeps one for a request (lifecycle-run.ts);
+ * prepare it again after any other change to the state.
  */
 export function lifecycleCandidateCheck(state: DomainState, ctx: Context, runId: string, external: LifecycleExternalCandidate[] = []) {
   admin(ctx); const run = runOf(state, runId), latest = latestReceipts(state, runId), manifest = new Set((run.data.candidates as LifecycleCandidate[]).map(saved => canonicalJson(saved)));
@@ -176,14 +178,18 @@ export function lifecycleCandidateCheck(state: DomainState, ctx: Context, runId:
     return true;
   };
 }
-/** Store worker calls this immediately before each irreversible operation while holding the lender lock. */
+/** One source's check on its own, prepared for it alone. */
 export function assertLifecycleCandidate(state: DomainState, ctx: Context, runId: string, candidate: LifecycleCandidate, external: LifecycleExternalCandidate[] = []) {
   return lifecycleCandidateCheck(state, ctx, runId, external)(candidate);
 }
-/** Raw CSV is the only artifact erased in this pure domain service. Imported records, identity provenance and audit are retained. */
-export function eraseLifecycleRawCsv(state: DomainState, ctx: Context, runId: string, candidate: LifecycleCandidate) {
+/**
+ * Raw CSV is the only artifact erased in this pure domain service. Imported records, identity provenance and audit are
+ * retained. A run's executor passes the check it prepared for the request, so each source is not checked against the
+ * whole lender again.
+ */
+export function eraseLifecycleRawCsv(state: DomainState, ctx: Context, runId: string, candidate: LifecycleCandidate, check?: (candidate: LifecycleCandidate) => boolean) {
   if (candidate.kind !== 'raw_csv') refuse('External artifacts must be deleted by the storage service.', 400);
-  if (!assertLifecycleCandidate(state, ctx, runId, candidate)) return;
+  if (!(check ?? lifecycleCandidateCheck(state, ctx, runId))(candidate)) return;
   const batch = rows(state, 'import-batches').find(record => record.id === candidate.sourceId)!;
   delete batch.data.csv;
   if (batch.data.check) delete batch.data.check.preview;
