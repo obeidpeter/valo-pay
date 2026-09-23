@@ -18,6 +18,7 @@ import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { RecordDialog } from '@/components/record-dialog';
 import { LoadProblem } from '@/components/load-problem';
+import { DiscardOriginalRequest, DISCARD_ORIGINAL_WARNING } from '@/components/discard-original-request';
 
 export default function SettingsPage() {
   const { merchantId, workspace } = useWorkspace();
@@ -131,7 +132,12 @@ export default function SettingsPage() {
   };
   const cancelExec = () => { if (updateExecSettings.isPending || updateExecSettings.hasUnconfirmedOutcome) return; if (confirmExecDiscard()) { execSession.current += 1; setIsEditingExec(false); setExecErrors({}); setExecAlert(''); setExecConflict(false); } };
   const refreshLatest = async () => {
-    if (updateExecSettings.isPending || updateExecSettings.hasUnconfirmedOutcome || !confirmExecDiscard() || refreshingLatest) return;
+    if (updateExecSettings.isPending || refreshingLatest) return;
+    // Refreshing discards the draft; while the original save is unconfirmed it also discards that request, after its own warning.
+    if (updateExecSettings.hasUnconfirmedOutcome) {
+      if (!window.confirm(DISCARD_ORIGINAL_WARNING)) return;
+      updateExecSettings.abandonUnconfirmed();
+    } else if (!confirmExecDiscard()) return;
     const isCurrentVisit = captureVisit();
     const submittedSession = execSession.current;
     setRefreshingLatest(true);
@@ -212,8 +218,8 @@ export default function SettingsPage() {
             {requestInstruction.hasUnconfirmedOutcome ? 'Retry original block test' : 'Test live-instruction block'}
           </Button>
         </div>
-        {updateRole.hasUnconfirmedOutcome && <p role="alert" className="text-sm mt-3">The role-change response is unconfirmed. Retry the original request before selecting another role.</p>}
-        {requestInstruction.hasUnconfirmedOutcome && <p role="alert" className="text-sm mt-3">The block-test response is unconfirmed. Retry the original test to recover its result. This does not enable live instructions.</p>}
+        {updateRole.hasUnconfirmedOutcome && <div role="alert" className="text-sm mt-3"><p>The role-change response is unconfirmed. Retry the original request before selecting another role.</p><DiscardOriginalRequest disabled={updateRole.isPending} onDiscard={updateRole.abandonUnconfirmed} /></div>}
+        {requestInstruction.hasUnconfirmedOutcome && <div role="alert" className="text-sm mt-3"><p>The block-test response is unconfirmed. Retry the original test to recover its result. This does not enable live instructions.</p><DiscardOriginalRequest disabled={requestInstruction.isPending} onDiscard={requestInstruction.abandonUnconfirmed} /></div>}
         {otherOutcomeUnconfirmed && <p className="text-sm text-muted-foreground mt-3">Resolve the unconfirmed settings or control request before changing roles.</p>}
       </section>}
 
@@ -238,7 +244,7 @@ export default function SettingsPage() {
               </div>
             )}
           </div>
-          {execAlert && <div className="px-6 pt-6"><FormAlert title={updateExecSettings.hasUnconfirmedOutcome ? 'Settings outcome unconfirmed' : 'Settings not saved'}>{execAlert}{execConflict && <><p className="mt-2">Your draft is still here. Refresh to review the latest settings before editing again.</p><Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => { void refreshLatest(); }} busy={refreshingLatest} busyLabel="Refreshing…">Discard draft and refresh</Button></>}</FormAlert></div>}
+          {execAlert && <div className="px-6 pt-6"><FormAlert title={updateExecSettings.hasUnconfirmedOutcome ? 'Settings outcome unconfirmed' : 'Settings not saved'}>{execAlert}{updateExecSettings.hasUnconfirmedOutcome && <div className="mt-2"><DiscardOriginalRequest disabled={updateExecSettings.isPending || refreshingLatest} onDiscard={() => { updateExecSettings.abandonUnconfirmed(); setExecAlert(''); setExecConflict(false); }} /></div>}{execConflict && <><p className="mt-2">Your draft is still here. Refresh to review the latest settings before editing again.</p><Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => { void refreshLatest(); }} busy={refreshingLatest} busyLabel="Refreshing…">Discard draft and refresh</Button></>}</FormAlert></div>}
           <div className="p-6 space-y-6">
             <fieldset disabled={updateExecSettings.isPending || updateExecSettings.hasUnconfirmedOutcome || refreshingLatest} className="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 gap-6">
               <div>
@@ -397,7 +403,7 @@ export default function SettingsPage() {
                 </Button>
                 </div>
               </div>
-              {killSwitch.hasUnconfirmedOutcome && <p role="alert" className="text-sm mt-3">The emergency-stop response is unconfirmed. The stop may already have changed. Retry the original request to recover its result; do not submit the opposite action.</p>}
+              {killSwitch.hasUnconfirmedOutcome && <div role="alert" className="text-sm mt-3"><p>The emergency-stop response is unconfirmed. The stop may already have changed. Retry the original request to recover its result; do not submit the opposite action.</p><DiscardOriginalRequest disabled={killSwitch.isPending} onDiscard={killSwitch.abandonUnconfirmed} /></div>}
               {settings.merchant.killSwitch && (
                 <p className="text-xs text-destructive mt-2 flex items-center gap-1 font-bold">
                   <AlertTriangle className="h-3 w-3" /> Emergency stop active. No instructions can be sent to a provider or bank.

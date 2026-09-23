@@ -38,7 +38,7 @@ export default function CustomersPage() {
   const rowTargets = useMemo(() => data?.items.map(customer => `record-${customer.id}`) || [], [data]);
   useHashTarget(rowTargets, !!data && !searchPending && sameLender);
   useEffect(() => {
-    if (data && !isFetching && pagination.page > 0 && pagination.offset >= data.total) pagination.setPage(Math.max(0, Math.ceil(data.total / pagination.pageSize) - 1));
+    if (data && !isFetching && pagination.page > 0 && pagination.offset >= data.total) pagination.correctPage(Math.max(0, Math.ceil(data.total / pagination.pageSize) - 1));
   }, [data, isFetching, pagination.page, pagination.pageSize]);
 
   if (!merchantId) return null;

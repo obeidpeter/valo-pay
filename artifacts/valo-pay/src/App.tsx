@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 
 import { Loading } from '@/components/loading';
 import { focusMain } from '@/lib/focus';
 import { installUnsavedNavigationGuard } from '@/lib/unsaved-changes';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, type DefaultOptions } from '@tanstack/react-query';
+import { retryQuery } from '@/lib/query-retry';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import NotFoundPage from '@/pages/not-found';
@@ -111,9 +112,12 @@ function Prefetch({ pages }: { pages: PageLoader[] }) {
  * thirty seconds is shown at once when a page is returned to, instead of a
  * loading line and a repeated request; an action's invalidation still refetches
  * what it changed, and a tab that comes back after longer refetches on focus.
+ * A failed read is repeated, at most twice, only when no answer arrived or the
+ * service failed (retryQuery): a refusal such as a 403 or 404 shows at once.
  */
 export const QUERY_STALE_MS = 30_000;
-export const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: QUERY_STALE_MS } } });
+export const queryDefaults = { queries: { staleTime: QUERY_STALE_MS, retry: retryQuery } } satisfies DefaultOptions;
+export const queryClient = new QueryClient({ defaultOptions: queryDefaults });
 
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");

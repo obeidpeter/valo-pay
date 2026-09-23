@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { useWorkspace } from "@/lib/workspace-context";
 import { usePilotMutation, usePilotQuery } from "@/lib/pilot";
@@ -13,12 +13,36 @@ import {
 import { Button } from "@/components/ui/button";
 import { formatDate, formatKobo } from "@/lib/formatters";
 import { readableLabel } from "@/components/record-label";
+import { LookedFor } from "@/components/notice";
+import { NotFoundNotice } from "@/pages/not-found";
 
 const watInput = (iso: string) =>
   new Date(Date.parse(iso) + 3600000).toISOString().slice(0, 16);
+/** The address is a case page, but the current lender has no exception with that ID. */
+function MissingCase({ id }: { id: string }) {
+  useEffect(() => {
+    document.title = "Case not found · Valo Pay";
+  }, []);
+  return (
+    <NotFoundNotice
+      title="Case not found"
+      primary={{ href: "/exceptions", label: "Back to exceptions" }}
+      secondary={{ href: "/overview", label: "Go to overview" }}
+    >
+      <p>
+        No case was found with ID <LookedFor>{id}</LookedFor> for the selected
+        lender. Check the address or choose another lender.
+      </p>
+      <p>No records have changed.</p>
+    </NotFoundNotice>
+  );
+}
 export default function CasePage({ params }: { params: { id: string } }) {
   const { merchantId } = useWorkspace(),
     query = usePilotQuery(`/pilot/cases/${params.id}`);
+  // A confirmed 404 is its own page; any other failure keeps the retry below.
+  if ((query.error as { status?: number } | null)?.status === 404)
+    return <MissingCase id={params.id} />;
   return (
     <div className="space-y-6">
       <Link href="/exceptions" className="text-sm text-primary underline">

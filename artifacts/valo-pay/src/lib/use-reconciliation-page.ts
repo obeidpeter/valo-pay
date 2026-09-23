@@ -29,7 +29,7 @@ export function useReconciliationPage(
   });
   useEffect(() => {
     if (query.data && query.data.offset !== pagination.offset)
-      pagination.setPage(Math.floor(query.data.offset / pagination.pageSize));
+      pagination.correctPage(Math.floor(query.data.offset / pagination.pageSize));
   }, [query.data, pagination.offset, pagination.pageSize]);
   return { ...query, pagination };
 }

@@ -1,7 +1,7 @@
 import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
 import { PilotAccessError } from './pilot-access';
-import { closeRefusedOperation } from './refused-operations';
+import { closeRefusedOperation, operationClosed } from './refused-operations';
 import { wasRolledBack } from './transaction-outcome';
 import { DatabaseLimitError } from './database-limits';
 
@@ -34,6 +34,13 @@ import { DatabaseLimitError } from './database-limits';
  * middleware bound one) is closed, so it never lingers as pending. The
  * middleware registers how; this module never imports the store or the
  * database, so the offline suites can load it.
+ *
+ * When the request's journal entry is cancelled after the refusal, or the
+ * refusal is of a key whose entry was already cancelled, the answer says
+ * `operation: "cancelled"`. A cancelled entry never completes, so neither this
+ * request nor any earlier one with its key was saved or can be: the console
+ * may release a request it holds as unconfirmed. An entry that could not be
+ * closed, or that an earlier attempt completed, is never marked.
  */
 const programmingErrors = [TypeError, RangeError, ReferenceError, SyntaxError, URIError, EvalError];
 const databaseCodes = ["23503", "23505", "23514", "P0001"];
@@ -127,7 +134,10 @@ export const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {
     for (const [name, value] of Object.entries(answer.headers ?? {})) res.setHeader(name, value);
     res.status(answer.status).json(answer.body);
   };
+  const flagged = operationClosed(error);
+  const mark = (closed?: boolean) => { if (closed === true || flagged) answer.body.operation = "cancelled"; };
   // A refusal with a journal entry waits for the entry to close; every other refusal is answered at once.
   const closing = closeRefusedOperation(req, answer.status, answer.body.error, answer.body.committed === false);
-  if (closing) void closing.then(send, send); else send();
+  if (closing) void closing.then((closed) => { mark(closed); send(); }, () => { mark(); send(); });
+  else { mark(); send(); }
 };

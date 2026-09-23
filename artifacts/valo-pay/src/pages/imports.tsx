@@ -338,6 +338,35 @@ function BatchEditor({
   const busy = mutation.isPending || reading,
     locked =
       busy || mutation.hasUnconfirmedOutcome || batch?.status === "committed";
+  // A save or commit refused because the batch changed, or a refresh that shows a newer saved version, offers that
+  // version. The draft stays editable until the person chooses to replace it.
+  const [latestProblem, setLatestProblem] = useState(""),
+    [loadingLatest, setLoadingLatest] = useState(false);
+  const stale =
+    !!id &&
+    !mutation.hasUnconfirmedOutcome &&
+    (mutation.error as { status?: number } | null)?.status === 409;
+  const newer =
+    !!batch &&
+    detail.data?.batch?.id === batch.id &&
+    Date.parse(detail.data.batch.updatedAt) > Date.parse(batch.updatedAt);
+  const loadLatest = async () => {
+    if (busy || loadingLatest || !confirmDiscard()) return;
+    setLoadingLatest(true);
+    setLatestProblem("");
+    try {
+      const result = await detail.refetch();
+      if (result.data?.batch) {
+        hydrate(result.data.batch);
+        mutation.reset();
+      } else
+        setLatestProblem(
+          "The latest version could not be loaded. Your draft is still here. Try again.",
+        );
+    } finally {
+      setLoadingLatest(false);
+    }
+  };
   const denied = !["Admin", "Operations", "Finance"].includes(
     workspace?.role || "",
   );
@@ -697,6 +726,33 @@ function BatchEditor({
               ))}
             </div>
           </fieldset>
+        )}
+        {(stale || newer) && (
+          <div
+            role="status"
+            className="space-y-3 rounded-lg border border-warning-border bg-warning/20 p-4 text-sm"
+          >
+            <p>
+              {newer
+                ? "A newer version of this batch was saved."
+                : "This batch changed after you opened it."}{" "}
+              Your draft is still here. Load the latest version to continue; it
+              replaces your unsaved changes.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              busy={loadingLatest}
+              busyLabel="Loading…"
+              disabled={busy}
+              onClick={() => {
+                void loadLatest();
+              }}
+            >
+              Load latest version
+            </Button>
+            {latestProblem && <p role="alert">{latestProblem}</p>}
+          </div>
         )}
         <RecoveryNotice mutation={mutation} />
         <div className="flex flex-wrap gap-3">

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, waitFor } from "./harness";
+import { queryClient, queryDefaults } from "@/App";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -38,5 +39,32 @@ describe("customer timeline", () => {
     expect(screen.getByRole("link", { name: "Back to customers" }).getAttribute("href")).toBe("/customers");
     expect(screen.getByRole("link", { name: "Go to overview" }).getAttribute("href")).toBe("/overview");
     await waitFor(() => expect(document.title).toBe("Customer not found · Valo Pay"));
+  });
+
+  it("says when the lender has no case with the ID, at once and after one request", async () => {
+    // The app's own retry rule, without its delay: a 404 is shown at once, never repeated.
+    const testDefaults = queryClient.getDefaultOptions();
+    queryClient.setDefaultOptions({ queries: { ...queryDefaults.queries, retryDelay: 0 } });
+    try {
+      renderApp("/cases/no-such-case");
+      expect(await screen.findByRole("heading", { level: 1, name: "Case not found" })).toBeTruthy();
+      expect(screen.queryByRole("heading", { name: "Coordinate a case" })).toBeNull();
+      expect(screen.getByText("no-such-case")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+      expect(screen.getByRole("link", { name: "Back to exceptions" }).getAttribute("href")).toBe("/exceptions");
+      expect(screen.getByRole("link", { name: "Go to overview" }).getAttribute("href")).toBe("/overview");
+      await waitFor(() => expect(document.title).toBe("Case not found · Valo Pay"));
+      expect(api.calls.filter((call) => call.path === "/v1/pilot/cases/no-such-case").map((call) => call.status)).toEqual([404]);
+    } finally {
+      queryClient.setDefaultOptions(testDefaults);
+    }
+  });
+
+  it("keeps a temporary case loading failure retryable", async () => {
+    api.failNext(/^\/v1\/pilot\/cases\/no-such-case$/, { status: 503, error: "The service is busy. Try again in a moment." });
+    renderApp("/cases/no-such-case");
+    expect(await screen.findByText(/^The service is busy\. Try again in a moment\./)).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "Coordinate a case" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 });

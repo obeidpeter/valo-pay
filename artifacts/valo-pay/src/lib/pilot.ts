@@ -17,11 +17,12 @@ export async function pilotRequest<T = any>(
       ...Object.fromEntries(new Headers(options.headers)),
     }),
   });
-  const data = await response.json();
+  // A proxy's HTML error page is not JSON: the status still says what happened (a 5xx is worth repeating).
+  const data = await response.json().catch(() => undefined);
   if (!response.ok)
     throw Object.assign(
-      new Error(data.error || "The request could not be completed."),
-      { status: response.status, data },
+      new Error(data?.error || "The request could not be completed."),
+      { status: response.status, data: data ?? {} },
     );
   if (!data || typeof data !== "object")
     throw new Error(

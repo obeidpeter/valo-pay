@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, waitFor, within } from "./harness";
 import { queryClient } from "@/App";
@@ -163,4 +163,155 @@ it("locks a mandate draft after a lost create response, then recovers one mandat
   expect(
     api.state().records.filter((r) => r.reference === "SYN-RECOVER-MANDATE"),
   ).toHaveLength(1);
+});
+
+/** Loses the first settings save before it reaches the API; the retry is refused as stale, with or without the cancelled marker. */
+function staleSettingsRetry(marked: boolean) {
+  const send = globalThis.fetch;
+  const patches: string[] = [];
+  let reads = 0;
+  globalThis.fetch = async (input, options) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof Request
+          ? input.url
+          : input.toString();
+    if (url.includes("/v1/settings") && (!options?.method || options.method === "GET"))
+      reads += 1;
+    if (options?.method === "PATCH" && url.includes("/v1/settings")) {
+      patches.push(new Headers(options.headers).get("Idempotency-Key")!);
+      if (patches.length === 1) throw new TypeError("Failed to fetch");
+      return new Response(
+        JSON.stringify({
+          error:
+            "These settings changed after you opened them. Your changes have not been saved. Refresh the settings, review the latest version, and try again.",
+          requestId: "r",
+          ...(marked ? { operation: "cancelled" } : {}),
+        }),
+        { status: 409, headers: { "content-type": "application/json" } },
+      );
+    }
+    return send(input, options);
+  };
+  return { patches, reads: () => reads };
+}
+
+async function loseSettingsSave(user: ReturnType<typeof userEvent.setup>) {
+  renderApp("/settings");
+  await screen.findByText("07:00 WAT");
+  await user.click(screen.getByRole("button", { name: "Edit" }));
+  const amount = screen.getByLabelText(
+    "Notification cost alert (₦ per collection)",
+  );
+  await user.clear(amount);
+  await user.type(amount, "10.29");
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  await screen.findByText("Settings outcome unconfirmed");
+}
+
+it("a settings retry refused as cancelled is a known failure, and Discard draft and refresh works", async () => {
+  const user = userEvent.setup();
+  const traffic = staleSettingsRetry(true);
+  await loseSettingsSave(user);
+  await user.click(
+    screen.getByRole("button", { name: "Retry original settings request" }),
+  );
+  await screen.findByText("Settings not saved");
+  expect(screen.queryByText("Settings outcome unconfirmed")).toBeNull();
+  expect(traffic.patches[1]).toBe(traffic.patches[0]);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  const reads = traffic.reads();
+  await user.click(
+    screen.getByRole("button", { name: "Discard draft and refresh" }),
+  );
+  await screen.findByRole("button", { name: "Edit" });
+  expect(traffic.reads()).toBeGreaterThan(reads);
+  expect(confirm).toHaveBeenCalled();
+});
+
+it("Discard draft and refresh also discards an original settings request that stays unconfirmed", async () => {
+  const user = userEvent.setup();
+  const traffic = staleSettingsRetry(false);
+  await loseSettingsSave(user);
+  await user.click(
+    screen.getByRole("button", { name: "Retry original settings request" }),
+  );
+  const refresh = await screen.findByRole("button", {
+    name: "Discard draft and refresh",
+  });
+  expect(screen.getByText("Settings outcome unconfirmed")).toBeTruthy();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const reads = traffic.reads();
+  await user.click(refresh);
+  expect(confirm).toHaveBeenCalledWith(expect.stringContaining("may already have been saved"));
+  expect(traffic.reads()).toBe(reads);
+  expect(screen.getByText("Settings outcome unconfirmed")).toBeTruthy();
+  confirm.mockReturnValue(true);
+  await user.click(refresh);
+  await screen.findByRole("button", { name: "Edit" });
+  expect(traffic.reads()).toBeGreaterThan(reads);
+  // Editing again starts a new request under a new key.
+  await user.click(screen.getByRole("button", { name: "Edit" }));
+  const amount = screen.getByLabelText(
+    "Notification cost alert (₦ per collection)",
+  );
+  await user.clear(amount);
+  await user.type(amount, "10.31");
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(traffic.patches).toHaveLength(3));
+  expect(traffic.patches[2]).not.toBe(traffic.patches[0]);
+});
+
+it("a lost mandate create can be discarded deliberately, which unlocks the dialog", async () => {
+  const user = userEvent.setup();
+  renderApp("/mandates");
+  await user.click(
+    await screen.findByRole("button", { name: "Create synthetic mandate" }),
+  );
+  const dialog = await screen.findByRole("dialog", {
+    name: "Create synthetic mandate",
+  });
+  await user.type(
+    within(dialog).getByLabelText(/Mandate name/),
+    "Discarded sample mandate",
+  );
+  await user.selectOptions(
+    within(dialog).getByLabelText(/Customer/),
+    api.state().records.find((r) => r.kind === "customers")!.id,
+  );
+  await user.type(within(dialog).getByLabelText(/Debit limit/), "2000.29");
+  await user.type(
+    within(dialog).getByLabelText(/Provider reference/),
+    "SYN-DISCARD-MANDATE",
+  );
+  await user.type(
+    within(dialog).getByLabelText(/Consent evidence reference/),
+    "SYN-CONSENT-DISCARD",
+  );
+  await user.selectOptions(
+    within(dialog).getByLabelText(/^Policy/),
+    api.state().records.find((r) => r.kind === "policies")!.id,
+  );
+  api.failNext(/^\/v1\/records\/mandates$/, "offline", "POST");
+  await user.click(
+    within(dialog).getByRole("button", { name: "Create mandate" }),
+  );
+  await screen.findByText("Mandate creation outcome unconfirmed");
+  const cancel = within(dialog).getByRole("button", {
+    name: "Cancel",
+  }) as HTMLButtonElement;
+  expect(cancel.disabled).toBe(true);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  await user.click(
+    within(dialog).getByRole("button", { name: "Discard original request" }),
+  );
+  expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Check Operations"));
+  await waitFor(() => expect(cancel.disabled).toBe(false));
+  expect(screen.queryByText("Mandate creation outcome unconfirmed")).toBeNull();
+  expect(
+    within(dialog).getByLabelText(/Mandate name/).closest("fieldset")?.disabled,
+  ).toBe(false);
+  await user.click(cancel);
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });

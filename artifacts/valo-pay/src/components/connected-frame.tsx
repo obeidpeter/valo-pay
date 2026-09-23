@@ -8,12 +8,15 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { DiscardOriginalRequest } from "@/components/discard-original-request";
+import { requestClosed } from "@/lib/safe-mutations";
 import "@/connected.css";
 type Recovery = {
   scope: string;
   pending: boolean;
   hasUnconfirmedOutcome: boolean;
   retryUnconfirmed: () => Promise<void>;
+  abandonUnconfirmed: () => void;
 };
 export function ConnectedFrame({
   title,
@@ -21,12 +24,15 @@ export function ConnectedFrame({
   children,
   recovery,
   onRecovered,
+  onReleased,
 }: {
   title: string;
   description: string;
   children: ReactNode;
   recovery?: Recovery;
   onRecovered?: () => void;
+  /** The held request was let go without a result: discarded, or refused as cancelled. */
+  onReleased?: () => void;
 }) {
   const [location] = useLocation();
   return (
@@ -66,7 +72,11 @@ export function ConnectedFrame({
           </Link>
         ))}
       </nav>
-      <ConnectedRecovery recovery={recovery} onRecovered={onRecovered} />
+      <ConnectedRecovery
+        recovery={recovery}
+        onRecovered={onRecovered}
+        onReleased={onReleased}
+      />
       <fieldset
         disabled={recovery?.pending || recovery?.hasUnconfirmedOutcome}
         className="space-y-6 min-w-0"
@@ -80,9 +90,11 @@ export function ConnectedFrame({
 export function ConnectedRecovery({
   recovery,
   onRecovered,
+  onReleased,
 }: {
   recovery?: Recovery;
   onRecovered?: () => void;
+  onReleased?: () => void;
 }) {
   const [recoveryError, setRecoveryError] = useState("");
   const [recovered, setRecovered] = useState(false);
@@ -107,30 +119,51 @@ export function ConnectedRecovery({
           </h2>
           <p className="mt-2">
             The response was lost or unavailable. Your action may already have
-            been saved. Keep this workspace open and retry the original request
-            to recover its result. Do not start a replacement action.
+            been saved. Retry the original request to recover its result. If it
+            cannot be recovered, check Operations before you start a new action.
           </p>
-          <Button
-            className="mt-3"
-            busy={recovery.pending}
-            busyLabel="Recovering result…"
-            onClick={async () => {
-              const submittedScope = recovery.scope;
-              setRecoveryError("");
-              try {
-                await recovery.retryUnconfirmed();
-                if (scope.current === submittedScope) {
-                  onRecovered?.();
-                  setRecovered(true);
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <Button
+              busy={recovery.pending}
+              busyLabel="Recovering result…"
+              onClick={async () => {
+                const submittedScope = recovery.scope;
+                setRecoveryError("");
+                try {
+                  await recovery.retryUnconfirmed();
+                  if (scope.current === submittedScope) {
+                    onRecovered?.();
+                    setRecovered(true);
+                  }
+                } catch (error) {
+                  if (scope.current !== submittedScope) return;
+                  // The service cancelled the request's key: nothing sent with it was saved, and the page is free again.
+                  if (requestClosed(error)) {
+                    onReleased?.();
+                    setRecoveryError(
+                      `The original request was not saved. ${(error as Error).message}`,
+                    );
+                  } else setRecoveryError((error as Error).message);
                 }
-              } catch (error) {
-                if (scope.current === submittedScope)
-                  setRecoveryError((error as Error).message);
-              }
-            }}
-          >
-            Retry original sample request
-          </Button>
+              }}
+            >
+              Retry original sample request
+            </Button>
+            <Link
+              href="/operations"
+              className="inline-flex min-h-10 items-center text-primary underline"
+            >
+              Open Operations
+            </Link>
+            <DiscardOriginalRequest
+              disabled={recovery.pending}
+              onDiscard={() => {
+                recovery.abandonUnconfirmed();
+                setRecoveryError("");
+                onReleased?.();
+              }}
+            />
+          </div>
           {recoveryError && <p className="mt-2">{recoveryError}</p>}
         </div>
       )}

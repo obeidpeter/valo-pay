@@ -8,7 +8,7 @@ import type { StaffLenderAccessInput } from '@workspace/valopay-schema';
 import type { VerifiedClerkSession } from './pilot-access';
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
-import { closeTimeOf, nextCloseInstant } from "@workspace/valopay-schema";
+import { closeTimeOf, definitiveRefusalStatuses, nextCloseInstant } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { recordsOf } from "../domain/records";
 import { nextCloseRetry, type CloseRetry } from "../domain/close";
@@ -22,6 +22,7 @@ import { periodBounds, previousMonth } from '../domain/billing';
 import { measurementRules } from '@workspace/valopay-schema';
 import { protectStored, revealStored, protectRecordData, revealRecordsData, payloadEncryptionKey, isProtectedPayload, PROTECTED_IMPORT_FIELDS, type ProtectedImportField } from './protected-payloads';
 import { markRolledBack } from './transaction-outcome';
+import { markOperationClosed } from './refused-operations';
 import { beginStatement, checkOut, databaseLimits, failedTransaction, DatabaseLimitError, type Checkout } from './database-limits';
 import { createLenderGate } from './lender-gate';
 import { assertImportedCorrectionChange } from '../domain/import-corrections';
@@ -151,8 +152,10 @@ export async function prepareOperation(ctx: StoreContext, merchantId: string, ke
   const prior = (await session.client.query<OperationRow>('SELECT * FROM valopay_operations WHERE id=$1 AND merchant_id=$2 AND owner=$3', [id, merchantId, owner])).rows[0];
   if (prior) {
     if (prior.request_hash !== hash) fail('This request key belongs to a different request. Recover the original request first.', 409);
+    // A cancelled entry is final (completeOperation refuses it), whatever the role now: the answer says so, and the
+    // person who sent it hears the original reason.
+    if (prior.status === 'cancelled') throw markOperationClosed(Object.assign(new Error(await cancelledRefusal(ctx, merchantId, prior)), { status: 409 }));
     if (prior.actor !== ctx.actor || prior.role !== ctx.role) fail('Return to the original role before checking this request.', 403);
-    if (prior.status === 'cancelled') fail('This request was cancelled and cannot run again.', 409);
     return prior.id;
   }
   if (ctx.role === 'Read-only') fail('Your read-only role cannot submit operations.', 403);
@@ -164,6 +167,21 @@ export async function prepareOperation(ctx: StoreContext, merchantId: string, ke
   await session.client.query(`INSERT INTO valopay_operations(id,merchant_id,owner,actor,role,request_key,request_hash,request,label,created_at,updated_at)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`, [id, merchantId, owner, ctx.actor, ctx.role, key, hash, await protectStored(request,{lender:merchantId,record:id,field:'request'}), label, ctx.now]);
   return id;
+}
+/** Why a cancelled request cannot run again, in the words of its original refusal when the same person and role
+ * ask and it was refused outright. The receipt may be absent (cancelled from Operations), expired under retention,
+ * unreadable or a failure that saved nothing ("try again" would mislead here), so a general sentence stands in. */
+async function cancelledRefusal(ctx: StoreContext, merchantId: string, prior: OperationRow): Promise<string> {
+  let reason: unknown;
+  if (prior.actor === ctx.actor && prior.role === ctx.role) {
+    try {
+      const rejected = (await revealStored(prior.receipt, { lender: merchantId, record: prior.id, field: 'receipt' }))?.rejected;
+      if ((definitiveRefusalStatuses as readonly unknown[]).includes(rejected?.status)) reason = rejected.message;
+    } catch { reason = undefined; }
+  }
+  return typeof reason === 'string' && reason.trim()
+    ? `The service refused this request and saved nothing: ${reason.trim()} It cannot run again; review the latest records and submit a new request.`
+    : 'This request was cancelled before it completed and saved nothing. It cannot run again; review the latest records and submit a new request.';
 }
 export async function listOperations(ctx: StoreContext, merchantId: string, offset = 0) {
   const session = sessionFor(ctx); await readMerchant(ctx, merchantId);
@@ -189,11 +207,13 @@ export async function cancelOperation(ctx: StoreContext, merchantId: string, id:
   await session.client.query("UPDATE valopay_operations SET status='cancelled',updated_at=$4 WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND status='pending'", [id, merchantId, session.owner || session.principal, ctx.now]);
   return { message: 'The server confirmed this request has not completed and cancelled it. It cannot run again.' };
 }
-/** A definitive refusal (a 4xx the same request would receive again) closes
- * the journal entry: it neither waits for confirmation nor counts towards the
- * pending limit, and its key cannot run again. Runs in its own transaction
- * after the refused request's transaction rolled back. */
-export async function rejectOperation(req: Request, bound: { id: string; merchantId: string }, rejection: { status: number; message: string }) {
+/** A definitive refusal (a 4xx the same request would receive again), or a
+ * failure that saved nothing, closes the journal entry: it neither waits for
+ * confirmation nor counts towards the pending limit, and its key cannot run
+ * again. Runs in its own transaction after the refused request's transaction
+ * rolled back, and resolves to whether the entry is cancelled afterwards: an
+ * entry an earlier attempt already completed stays completed, and is not. */
+export async function rejectOperation(req: Request, bound: { id: string; merchantId: string }, rejection: { status: number; message: string }): Promise<boolean> {
   const guard = await checkOut(() => pool.connect()), client = guard.client;
   try {
     await client.query(beginStatement(databaseLimits().request));
@@ -202,22 +222,34 @@ export async function rejectOperation(req: Request, bound: { id: string; merchan
       await bindRuntimeIdentity(client, { organizationId: verified.orgId || '', userId: verified.userId || '' });
     }
     const receipt = await protectStored({ rejected: rejection }, { lender: bound.merchantId, record: bound.id, field: 'receipt' });
-    await client.query("UPDATE valopay_operations SET status='cancelled',receipt=$3,updated_at=now() WHERE id=$1 AND merchant_id=$2 AND status='pending'", [bound.id, bound.merchantId, receipt]);
-    await client.query('COMMIT');
+    const closed = await client.query<{ status: string }>("UPDATE valopay_operations SET status='cancelled',receipt=$3,updated_at=now() WHERE id=$1 AND merchant_id=$2 AND status='pending' RETURNING status", [bound.id, bound.merchantId, receipt]);
+    const status = closed.rows[0]?.status ?? (await client.query<{ status: string }>('SELECT status FROM valopay_operations WHERE id=$1 AND merchant_id=$2', [bound.id, bound.merchantId])).rows[0]?.status;
+    const committed = await client.query('COMMIT');
+    return committed.command === 'COMMIT' && status === 'cancelled';
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch { /* the transaction is already closed */ }
     throw error;
   } finally { guard.release(); }
 }
 /** Receipt and domain writes commit together. A process crash cannot leave a
- * completed journal entry without the corresponding business write. */
+ * completed journal entry without the corresponding business write.
+ *
+ * A cancelled entry never completes. This guard is what makes cancellation
+ * final: an attempt already past its checks when a retry's refusal (or
+ * Cancel if unfinished) cancelled its entry is refused here and rolls back,
+ * so an answer that says `operation: "cancelled"` proves that nothing sent
+ * with the key was saved. Every journaled write must commit through this
+ * function for that to hold. */
 export async function completeOperation(ctx: StoreContext, receipt: unknown) {
   const session = sessionFor(ctx);
   if (!session.operationId) return;
-  const merchantId = lockedMerchant(session);
+  const merchantId = lockedMerchant(session), owner = session.owner || session.principal;
   const result = await session.client.query(`UPDATE valopay_operations SET status='completed',receipt=$5,updated_at=$6
-    WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND actor=$4`, [session.operationId, merchantId, session.owner || session.principal, ctx.actor, await protectStored(receipt,{lender:merchantId,record:session.operationId,field:'receipt'}), ctx.now]);
-  if (!rowsAffected(result)) fail('The recovery request no longer belongs to this session.', 409);
+    WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND actor=$4 AND status<>'cancelled'`, [session.operationId, merchantId, owner, ctx.actor, await protectStored(receipt,{lender:merchantId,record:session.operationId,field:'receipt'}), ctx.now]);
+  if (rowsAffected(result)) return;
+  const current = (await session.client.query<{ status: string }>('SELECT status FROM valopay_operations WHERE id=$1 AND merchant_id=$2 AND owner=$3', [session.operationId, merchantId, owner])).rows[0];
+  if (current?.status === 'cancelled') fail('This request was cancelled before it completed. Nothing was saved, and it cannot run again.', 409);
+  fail('The recovery request no longer belongs to this session.', 409);
 }
 
 type StaffRow = { id: string; workspace_id: string; user_id: string; display_name: string; role: string; status: 'active' | 'suspended' | 'revoked'; expires_at: Date; created_at: Date; updated_at: Date };

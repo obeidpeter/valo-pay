@@ -1,7 +1,11 @@
 import { useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "./workspace-context";
-import { outcomeIsUnconfirmed, submissionFingerprint } from "./safe-mutations";
+import {
+  outcomeIsUnconfirmed,
+  requestClosed,
+  submissionFingerprint,
+} from "./safe-mutations";
 import { useUnsavedChanges } from "./unsaved-changes";
 
 export interface ConnectedRecord {
@@ -54,11 +58,17 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
     signal: options.signal ?? AbortSignal.timeout(25000),
     headers: { "Content-Type": "application/json", ...options.headers },
   });
-  const body = await response.json();
+  // A proxy's HTML error page is not JSON: the status still says what happened (a 5xx is worth repeating).
+  const body = await response.json().catch(() => undefined);
   if (!response.ok)
     throw Object.assign(
-      new Error(body.error || "The request could not be completed."),
-      { status: response.status, data: body },
+      new Error(body?.error || "The request could not be completed."),
+      { status: response.status, data: body ?? {} },
+    );
+  // An unreadable success is no confirmation: without a status, a write stays unconfirmed.
+  if (body === undefined)
+    throw new Error(
+      "The service returned an unreadable answer. Retry the original request to recover its outcome.",
     );
   return body;
 }
@@ -160,9 +170,12 @@ export function useConnected() {
         // A definite request rejection did not commit; a reviewed retry may
         // use the newly fetched revision. Network/timeout/5xx stays ambiguous.
         // A later authentication/revision rejection can happen before replay
-        // lookup. It does not prove that an earlier unknown write failed.
-        current.unconfirmed =
-          current.unconfirmed || outcomeIsUnconfirmed(error);
+        // lookup. It does not prove that an earlier unknown write failed,
+        // unless the service says the key's journal entry is cancelled: then
+        // nothing sent with the key was saved or can be.
+        current.unconfirmed = requestClosed(error)
+          ? false
+          : current.unconfirmed || outcomeIsUnconfirmed(error);
         if (!current.unconfirmed && attempt.current === current)
           attempt.current = null;
         throw error;
@@ -192,6 +205,12 @@ export function useConnected() {
       if (!attempt.current?.unconfirmed)
         throw new Error("There is no unconfirmed request to retry.");
       await mutation.mutateAsync(attempt.current.input);
+    },
+    /** Forgets the original request and its key after the person chose to discard it: the next action is new. */
+    abandonUnconfirmed: () => {
+      if (attempt.current?.pending) return;
+      attempt.current = null;
+      mutation.reset();
     },
     canWrite: !!workspace && workspace.role !== "Read-only",
   };

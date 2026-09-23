@@ -10,6 +10,7 @@ import { validateRecord } from "../src/domain/validation.js";
 import { markRolledBack } from "../src/lib/transaction-outcome.js";
 import { storageFailure } from "../src/lib/export-download.js";
 import { DatabaseLimitError } from "../src/lib/database-limits.js";
+import { markOperationClosed, operationClosed, registerRefusalCloser } from "../src/lib/refused-operations.js";
 
 let checks = 0;
 type Answer = { status?: number; body?: unknown; headers?: Record<string, string> };
@@ -67,6 +68,28 @@ function answer(error: unknown): Answer {
   assert.equal(answer(Object.assign(new Error("canceling statement due to lock timeout"), { code: "55P03" })).status, 500, "a raw PostgreSQL code is translated by the store, never guessed here");
   assert.equal((unconfigured as Answer).headers, undefined, "an application 503 sets no Retry-After");
   checks += 34;
+}
+
+{
+  // A refusal whose request's journal entry is cancelled says so: neither this request nor an earlier one with its key was or can be saved.
+  const answered = (error: unknown, closer?: () => Promise<boolean>) => new Promise<Answer>((resolve) => {
+    const out: Answer = {};
+    const quiet = () => undefined;
+    const req = { id: "test-request", log: { error: quiet, warn: quiet, info: quiet } };
+    if (closer) registerRefusalCloser(req as never, closer);
+    const res = { headersSent: false, setHeader(name: string, value: string) { out.headers = { ...out.headers, [name]: value }; return this; }, status(code: number) { out.status = code; return this; }, json(body: unknown) { out.body = body; resolve(out); return this; } };
+    errorHandler(error, req as never, res as never, () => undefined);
+  });
+  const stale = () => Object.assign(new Error("The workspace changed. Refresh and review before trying again."), { status: 409 });
+  assert.deepEqual(await answered(stale(), async () => true), { status: 409, body: { error: "The workspace changed. Refresh and review before trying again.", requestId: "test-request", operation: "cancelled" } }, "a refusal that leaves its journal entry cancelled says so");
+  assert.deepEqual(await answered(stale(), async () => false), { status: 409, body: { error: "The workspace changed. Refresh and review before trying again.", requestId: "test-request" } }, "a refusal whose entry was already completed, or could not be closed, carries no marker");
+  assert.deepEqual(await answered(stale(), () => Promise.reject(new Error("pool closed"))), { status: 409, body: { error: "The workspace changed. Refresh and review before trying again.", requestId: "test-request" } }, "a closer that fails never marks the refusal");
+  assert.deepEqual(await answered(markOperationClosed(Object.assign(new Error("This request was cancelled before it completed and saved nothing."), { status: 409 }))), { status: 409, body: { error: "This request was cancelled before it completed and saved nothing.", requestId: "test-request", operation: "cancelled" } }, "a refusal of a key whose entry was already cancelled says so without a closer");
+  assert.equal(operationClosed(new Error("unmarked")), false);
+  // A write the store rolled back at a database limit: the not-saved 503 closes the entry and says both.
+  assert.deepEqual(await answered(markRolledBack(new DatabaseLimitError("lock_timeout", { write: true })), async () => true), { status: 503, headers: { "Retry-After": "2" }, body: { error: "This lender is busy with another change. Nothing was saved. Try again in a moment.", committed: false, requestId: "test-request", operation: "cancelled" } }, "a not-saved 503 whose entry closed carries both committed:false and the marker");
+  assert.equal(((await answered(Object.assign(new Error("The gateway timed out."), { status: 504 }))).body as { operation?: string }).operation, undefined, "a failure with no closed entry is never marked");
+  checks += 7;
 }
 
 {

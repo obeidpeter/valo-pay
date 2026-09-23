@@ -172,3 +172,90 @@ it("identifies demo access honestly and does not offer working staff invitation 
   ).toBeNull();
   expect(screen.getByText(/requires a configured organisation/)).toBeTruthy();
 });
+
+it("offers the latest saved version after a colleague saves the batch", async () => {
+  const user = userEvent.setup();
+  renderApp("/imports");
+  await user.click(await screen.findByRole("button", { name: "Use sample" }));
+  await user.click(
+    screen.getByRole("button", { name: "Save and check batch" }),
+  );
+  await screen.findByRole("heading", { name: "Saved check results" });
+  await waitFor(() =>
+    expect(
+      (screen.getByLabelText("CSV content") as HTMLTextAreaElement).value,
+    ).toContain("PILOT-C001"),
+  );
+  // A colleague saves a newer version of the same batch.
+  const colleagueCsv = api.mutate((state) => {
+    const batch = state.records.find((r) => r.kind === "import-batches")!;
+    batch.data.csv = `${String(batch.data.csv)}\n`;
+    batch.name = "Colleague version";
+    batch.updatedAt = new Date(Date.parse(batch.updatedAt) + 60_000).toISOString();
+    return String(batch.data.csv);
+  });
+  await user.type(screen.getByLabelText("CSV content"), " ");
+  await user.click(
+    screen.getByRole("button", { name: "Save and check batch" }),
+  );
+  await screen.findByText(/Load the latest version to continue/);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  await user.click(screen.getByRole("button", { name: "Load latest version" }));
+  expect(confirm).toHaveBeenCalled();
+  await screen.findByRole("heading", { name: "Colleague version" });
+  expect(
+    (screen.getByLabelText("CSV content") as HTMLTextAreaElement).value,
+  ).toBe(colleagueCsv);
+  expect(screen.queryByText(/Load the latest version to continue/)).toBeNull();
+  await user.click(
+    screen.getByRole("button", { name: "Save and check batch" }),
+  );
+  await waitFor(() =>
+    expect(
+      api.calls
+        .filter((c) => /\/v1\/pilot\/batches\/[^/]+\/save$/.test(c.path))
+        .map((c) => c.status),
+    ).toEqual([409, 200]),
+  );
+});
+
+it("lets a case claim whose response was lost be discarded deliberately", async () => {
+  const item = api.state().records.find((r) => r.kind === "exceptions")!;
+  const user = userEvent.setup();
+  renderApp(`/cases/${item.id}`);
+  await user.type(
+    await screen.findByLabelText("Next action"),
+    "Review the payment evidence",
+  );
+  await user.type(
+    screen.getByLabelText("Handover or progress note"),
+    "Checked the source reference.",
+  );
+  api.failNext(new RegExp(`^/v1/pilot/cases/${item.id}$`), "offline", "POST");
+  await user.click(
+    screen.getByRole("button", { name: "Claim and save next step" }),
+  );
+  await screen.findByText("Outcome not confirmed");
+  expect(
+    (screen.getByLabelText("Next action") as HTMLInputElement).closest("fieldset")
+      ?.disabled,
+  ).toBe(true);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  await user.click(
+    screen.getByRole("button", { name: "Discard original request" }),
+  );
+  await waitFor(() =>
+    expect(screen.queryByText("Outcome not confirmed")).toBeNull(),
+  );
+  expect(
+    (screen.getByLabelText("Next action") as HTMLInputElement).closest("fieldset")
+      ?.disabled,
+  ).toBe(false);
+  expect(
+    (
+      screen.getByRole("button", {
+        name: "Claim and save next step",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(false);
+});

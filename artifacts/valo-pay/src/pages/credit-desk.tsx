@@ -257,6 +257,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
       title="Credit Desk"
       description="Turn authorised evidence into a clear assessment. Keep the lender’s decision separate."
       recovery={api}
+      onReleased={() => setError("")}
       onRecovered={() => {
         setError("");
         setReason("");

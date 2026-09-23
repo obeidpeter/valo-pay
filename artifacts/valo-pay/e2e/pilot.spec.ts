@@ -97,3 +97,23 @@ test("saved import and case handover work across reload with accessible responsi
     fullPage: true,
   });
 });
+test("an unknown case says so at once, after a single request", async ({
+  page,
+}) => {
+  const asked: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/v1/pilot/cases/no-such-case")
+      asked.push(request.method());
+  });
+  await page.goto("/cases/no-such-case");
+  await expect(
+    page.getByRole("heading", { name: "Case not found", level: 1 }),
+  ).toBeVisible();
+  await expect(page.getByText("no-such-case", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Back to exceptions" }),
+  ).toHaveAttribute("href", "/exceptions");
+  // A refusal is never repeated: past the first retry's one-second delay, still one request.
+  await page.waitForTimeout(1500);
+  expect(asked).toEqual(["GET"]);
+});
