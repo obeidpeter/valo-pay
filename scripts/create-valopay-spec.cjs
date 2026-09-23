@@ -558,11 +558,11 @@ operation("/v1/providers/paystack/{connectionId}/events", "post", "receivePaysta
 Object.assign(paths["/v1/providers/paystack/{connectionId}/events"].post.responses, {
   "400": { description: "The body is not JSON bytes, the connection ID is malformed, or the signed event is inconsistent or from live mode" },
   "401": { description: "The signature does not match the exact bytes under the configured test key; nothing was locked, read or saved" },
-  "403": { description: "The mapped lender is not a synthetic lender in sandbox or observation mode with its kill switch on, or the mapping names another workspace" },
-  "404": { description: "No lender is mapped to this connection ID" },
+  "403": { description: "With the lender locked, the mapping names another workspace, or the lender is not a synthetic lender in sandbox or observation mode with its kill switch on" },
+  "404": { description: "No lender is mapped to this connection ID, or, when the lender cannot be locked, it is not in the mapped workspace (removed, or the mapping names the wrong lender or workspace); correct the connection mapping, since delivering again will not help" },
   "413": { description: "The body is larger than 256 KiB" },
   "429": { description: "More than 120 deliveries a minute from this client address; retry after the Retry-After seconds" },
-  "503": { description: "The ingress is off or misconfigured, or the lender is busy; Paystack delivers again" },
+  "503": { description: "The ingress is off or misconfigured, or the mapped lender is in its workspace but busy; Paystack delivers again" },
 });
 
 // Personal work.

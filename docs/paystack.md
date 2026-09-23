@@ -68,8 +68,9 @@ The answers, in the order they are checked:
 | 400 | The signed event is not JSON, is inconsistent, or comes from live mode. |
 | 503 | The connection map is not valid. |
 | 404 | No lender is mapped to the connection ID. |
-| 503 | The lender is busy with another change. Paystack delivers the event again. A mapping whose lender no longer exists gets this answer too, on every delivery, so correct or remove such a mapping. |
-| 403 | The mapping names another workspace, or the lender is not in sandbox or observation mode with its kill switch on. |
+| 404 | The mapped lender could not be locked, and a read without the lock does not find it in the mapped workspace: it was removed, or the mapping names the wrong lender or workspace. The answer says the mapped lender was not found; correct or remove the mapping, because delivering again will not help. |
+| 503 | The mapped lender is in the mapped workspace but busy with another change. Paystack delivers the event again. |
+| 403 | The lender was locked, and the mapping names another workspace or the lender is not in sandbox or observation mode with its kill switch on. |
 | 200 | `{"accepted":true,"duplicate":false}` when the event is saved, and `duplicate: true` for a repeat delivery of an event already saved. |
 
 A verified event is saved in the mapped lender's inbox as a receipt, with the audit entry `paystack.test_event`, and appears in the Paystack test connection panel on the Sources page. `charge.success` waits for independent verification, and evidence that conflicts with an earlier receipt or the lender's saved expectation is quarantined. The two `direct_debit.authorization.*` events record mandate evidence only, and any other signed event is recorded as ignored. None of them creates a payment, allocation, debit or mandate authority.

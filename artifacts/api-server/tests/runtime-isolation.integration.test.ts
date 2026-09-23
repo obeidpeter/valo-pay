@@ -200,6 +200,9 @@ try {
   assert.equal(process.env.VALOPAY_RUNTIME_ISOLATION, "staging");
   const unrecorded = await store.inMerchantAsSystem("lender-a", `${store.SYSTEM_ACTOR_PREFIX}readiness probe`, readinessChecks);
   assert.equal(unrecorded?.checks.find(check => check.id === "database")?.state, "not_configured", "Readiness follows the transaction's own check, not the environment.");
+  // The Paystack ingress's read without the lock runs as the service member too, so it finds only what the lock could take.
+  assert.deepEqual(await Promise.all([["lender-a", "workspace-a"], ["lender-a", "workspace-b"], ["lender-b", "workspace-b"], ["lender-gone", "workspace-a"]].map(([merchant, workspace]) => store.merchantInWorkspace(merchant!, workspace!))), [true, false, false, false], "A lender is found only in its own workspace, and never outside the service member's organisation.");
+  assert.equal(await store.inMerchantAsSystem("lender-b", `${store.SYSTEM_ACTOR_PREFIX}isolation probe`, async () => true), undefined, "The lock cannot take another organisation's lender either.");
   // Actual acceptance and ON CONFLICT renewal under the restricted LOGIN.
   // Only Clerk's verified-email lookup is replaced; no external call is made.
   const { clerkClient } = await import("@clerk/express"), previousGetUser = clerkClient.users.getUser;

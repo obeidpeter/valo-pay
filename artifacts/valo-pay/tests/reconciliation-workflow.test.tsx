@@ -131,6 +131,39 @@ describe('reconciliation result visibility', () => {
   });
 });
 
+describe('external refunds', () => {
+  it('explains, instead of offering, a refund the service would refuse', async () => {
+    const user = userEvent.setup();
+    api.mutate(state => {
+      const open = state.records.find(record => record.kind === 'payments' && record.status === 'unallocated')!;
+      // An overpayment whose ₦5,000 excess was refunded, then whose allocation was superseded: it holds money again.
+      state.records.push({ ...open, id: randomUUID(), reference: 'SBX-REFUNDED-EXCESS', amountKobo: 3_000_000, data: { ...open.data, allocatedKobo: 0, refundStatus: 'refunded', refundedKobo: 500_000, refundReference: 'RF-EXCESS' } });
+      state.records.push({ ...open, id: randomUUID(), reference: 'SBX-REVERSED', data: { ...open.data, reversalStatus: 'reversed' } });
+    });
+    renderApp('/reconciliation');
+    const payments = (await screen.findByRole('heading', { name: 'Unallocated payments' })).parentElement!.parentElement!;
+    await within(payments).findByText('SBX-REFUNDED-EXCESS');
+    const refundFor = (reference: string) => within(payments).getByRole('button', { name: `Record external refund for ${reference}` });
+    const reasonFor = (button: HTMLElement) => document.getElementById(button.getAttribute('aria-describedby') || '')?.textContent;
+    const refunded = refundFor('SBX-REFUNDED-EXCESS'), reversed = refundFor('SBX-REVERSED');
+    expect(refunded.getAttribute('aria-disabled')).toBe('true');
+    expect(reasonFor(refunded)).toBe('A refund is already recorded for this payment.');
+    expect(reversed.getAttribute('aria-disabled')).toBe('true');
+    expect(reasonFor(reversed)).toBe('The provider reversed this payment, so its money already went back.');
+    await user.click(refunded);
+    await user.click(reversed);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.calls.some(call => call.method === 'POST')).toBe(false);
+    // What stayed with the lender can still be allocated, and a payment with no refund recorded can still record one.
+    const refundedRow = within(payments).getByText('SBX-REFUNDED-EXCESS').closest('tr')!;
+    expect(within(refundedRow).getByRole('button', { name: 'Allocate' }).getAttribute('aria-disabled')).toBeNull();
+    const open = refundFor('SBX-UNIDENTIFIED-001');
+    expect(open.getAttribute('aria-disabled')).toBeNull();
+    await user.click(open);
+    expect(await screen.findByRole('dialog', { name: 'Record external refund' })).toBeTruthy();
+  });
+});
+
 describe('allocation amounts', () => {
   it('shows naira balances, blocks excess precision and over-allocation, and submits exact kobo', async () => {
     const user = userEvent.setup();

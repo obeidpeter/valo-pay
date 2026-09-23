@@ -1,3 +1,5 @@
+import { normaliseRefundStatus, normaliseReversalStatus } from '@workspace/valopay-schema';
+
 type ActingWorkspace = { role: string; actor: string } | undefined;
 type PermissionRecord = { status?: string; data?: Record<string, unknown> } | null;
 export type PermissionRequest = { action?: string; kind?: string; record?: PermissionRecord };
@@ -40,6 +42,9 @@ export function permissionReason(workspace: ActingWorkspace, { action, kind, rec
   }
   if (action === 'submit_template' && record?.data?.author !== workspace.actor) return 'Only this template’s author can submit it for review.';
   if ((['edit_template', 'edit_policy'].includes(action || '') || (!action && ['templates', 'policies'].includes(kind || ''))) && record?.data?.author && record.data.author !== workspace.actor) return 'Only this draft’s author can edit it.';
+  // One refund is recorded per payment, even one that returned only part of it, and reversed money already went back.
+  if (action === 'record_refund' && normaliseReversalStatus(record?.data?.reversalStatus) === 'reversed') return 'The provider reversed this payment, so its money already went back.';
+  if (action === 'record_refund' && normaliseRefundStatus(record?.data?.refundStatus) === 'refunded') return 'A refund is already recorded for this payment.';
   if (!action && ['templates', 'policies'].includes(kind || '') && record && !['draft', 'rejected'].includes(record.status || '')) {
     return 'This submitted or approved version cannot be edited. Create a draft version to make changes.';
   }

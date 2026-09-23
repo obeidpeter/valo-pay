@@ -85,4 +85,36 @@ try {
 } finally {
   for (const name of names) { const value = saved[name]; if (value === undefined) delete process.env[name]; else process.env[name] = value; }
 }
-console.log("Raw Paystack ingress checks passed: signature verified on the exact bytes before any lender is opened, mapped-lender isolation, duplicate acknowledgement, test-only boundary and ingress settings.");
+
+// The real connection lookup, with the lender lock and the read without it standing in for the database: a lock
+// that is not taken is either a busy lender (503, retry) or a mapping to a lender that is not there (404, correct it).
+const { createPaystackConnectionTransaction } = await import("../src/lib/paystack-connection");
+const goneConnection = "c".repeat(64), missingLender = "The lender mapped to this Paystack test connection was not found. Correct the connection mapping.";
+let locks = 0, lenderInWorkspace = false;
+const lookups: string[][] = [];
+const lookup = express();
+lookup.use(createPaystackIngress({ secretKey: paystackTestSecretKey, transact: createPaystackConnectionTransaction({
+  inMerchantAsSystem: async () => { locks++; return undefined; },
+  merchantInWorkspace: async (merchantId, workspaceId) => { lookups.push([merchantId, workspaceId]); return lenderInWorkspace; },
+}) }));
+lookup.use((error: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => { res.status(error.status || 400).json({ error: error.message }); });
+const lookupServer = lookup.listen(0, "127.0.0.1");
+await new Promise<void>(resolve => lookupServer.once("listening", resolve));
+const lookupAddress = lookupServer.address(); assert.ok(lookupAddress && typeof lookupAddress !== "string");
+const deliver = async (sig: string, id = goneConnection) => { const response = await fetch(`http://127.0.0.1:${lookupAddress.port}/v1/providers/paystack/${id}/events`, { method: "POST", headers: { "content-type": "application/json", "x-paystack-signature": sig }, body }); return { status: response.status, error: ((await response.json()) as { error: string }).error }; };
+try {
+  process.env.VALOPAY_PAYSTACK_INGRESS = "test"; process.env.PAYSTACK_TEST_SECRET_KEY = key;
+  process.env.VALOPAY_PAYSTACK_CONNECTIONS = JSON.stringify({ [goneConnection]: { workspaceId: "mapped-workspace", merchantId: "removed-lender" } });
+  assert.equal((await deliver(forged)).status, 401);
+  assert.deepEqual([locks, lookups], [0, []], "a forged delivery never tries the lock or looks for the lender");
+  assert.deepEqual(await deliver(signature), { status: 404, error: missingLender }, "a verified delivery to a lender that is not there names the mapping, not a busy lender");
+  assert.deepEqual([locks, lookups], [1, [["removed-lender", "mapped-workspace"]]], "the lender is looked for in the mapped workspace only after the lock was not taken");
+  lenderInWorkspace = true;
+  assert.deepEqual(await deliver(signature), { status: 503, error: "The test lender is busy. Retry this delivery." }, "a lender that is there but locked stays busy");
+  assert.deepEqual(await deliver(signature, connectionId), { status: 404, error: "Paystack test connection not found." });
+  assert.deepEqual([locks, lookups.length], [2, 2], "an unmapped connection never tries a lock");
+} finally {
+  for (const name of names) { const value = saved[name]; if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+  await new Promise<void>((resolve, reject) => lookupServer.close(error => error ? reject(error) : resolve()));
+}
+console.log("Raw Paystack ingress checks passed: signature verified on the exact bytes before any lender is opened, mapped-lender isolation, duplicate acknowledgement, test-only boundary, ingress settings, and a busy lender told from a mapping to a missing one.");

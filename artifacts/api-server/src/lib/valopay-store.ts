@@ -1485,6 +1485,16 @@ export async function inMerchantAsSystem<T>(merchantId: string, actor: string, f
 }
 
 /**
+ * Whether a lender exists in a workspace, read without its lock: when
+ * inMerchantAsSystem finds no row to lock, this tells a lender busy elsewhere
+ * from one that is not there.  A plain read with the system limits; under
+ * runtime isolation it runs as the service member, as the lock does.
+ */
+export async function merchantInWorkspace(merchantId: string, workspaceId: string): Promise<boolean> {
+  return runtimeServiceRead(async client => Boolean((await client.query("SELECT 1 FROM valopay_merchants WHERE id=$1 AND workspace_id=$2", [merchantId, workspaceId])).rows[0]));
+}
+
+/**
  * The next lenders whose scheduled close is due, in a fair order: staff and
  * signed-in lenders before anonymous sandboxes; lenders waiting to retry a
  * failed attempt after the rest; one lender per workspace per turn, so one

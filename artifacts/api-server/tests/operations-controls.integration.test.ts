@@ -223,6 +223,7 @@ try{
   assert.equal(checkouts,0,"a forged delivery takes no database connection");
   assert.equal(unwraps,0,"a forged delivery opens no protected payload");
   const answer=async(response:Response)=>({status:response.status,error:((await response.json()) as {error:string}).error});
+  const missingLender="The lender mapped to this Paystack test connection was not found. Correct the connection mapping.";
   const holder=await pool.connect();
   try{
     await holder.query("BEGIN");await holder.query("SELECT 1 FROM valopay_merchants WHERE id=$1 FOR UPDATE",[lender]);
@@ -231,15 +232,17 @@ try{
     assert.equal(checkouts,0,"a forged delivery to a locked lender takes no database connection");
     const busy=await answer(await deliver(signed));
     assert.equal(busy.status,503);assert.match(busy.error,/The test lender is busy/);
-    // The lock is taken before the workspace and mode checks, so a busy lender answers 503 even to a mapping it would refuse (docs/paystack.md).
+    // A lender that cannot be locked is looked for without the lock, in the mapped workspace only (docs/paystack.md).
     process.env.VALOPAY_PAYSTACK_CONNECTIONS=JSON.stringify({[connectionId]:{workspaceId:"wrong-workspace",merchantId:lender}});
-    assert.deepEqual(await answer(await deliver(signed)),busy,"a busy lender answers 503 before the 403 checks");
+    assert.deepEqual(await answer(await deliver(signed)),{status:404,error:missingLender},"a busy lender is not found in another workspace, so the mapping is named for correction");
   }finally{await holder.query("ROLLBACK");holder.release();process.env.VALOPAY_PAYSTACK_CONNECTIONS=JSON.stringify({[connectionId]:{workspaceId,merchantId:lender}});}
-  pool.off("acquire",countCheckout);
-  // A mapping whose lender no longer exists matches no row to lock either, so it answers busy too, not 404 (docs/paystack.md).
+  // A mapping whose lender no longer exists matches no row to lock either: after the signature, and only then, it answers 404, not busy.
   process.env.VALOPAY_PAYSTACK_CONNECTIONS=JSON.stringify({[connectionId]:{workspaceId,merchantId:`gone-${randomUUID()}`}});
-  const gone=await answer(await deliver(signed));
-  assert.equal(gone.status,503);assert.match(gone.error,/The test lender is busy/);
+  checkouts=0;
+  assert.equal((await deliver(forged)).status,401);
+  assert.equal(checkouts,0,"a forged delivery to a missing lender takes no database connection");
+  assert.deepEqual(await answer(await deliver(signed)),{status:404,error:missingLender},"a signed delivery to a missing lender is told to correct the mapping, not to retry");
+  pool.off("acquire",countCheckout);
   process.env.VALOPAY_PAYSTACK_CONNECTIONS=JSON.stringify({[connectionId]:{workspaceId,merchantId:lender}});
   assert.equal(unwraps,0);assert.equal(await providerEvents(),1,"refused deliveries save nothing");
   const accepted=await deliver(signed);
