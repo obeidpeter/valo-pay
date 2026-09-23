@@ -15,6 +15,7 @@ import {
 } from "../src/domain/import-corrections";
 import type { DomainState } from "../src/domain/types";
 import { ResponseContractError } from "../src/lib/contract";
+import { canonicalDigest } from "../src/lib/digests";
 
 const ctx = {
   actor: "Clerk:operator",
@@ -354,6 +355,103 @@ assert.equal(
   ).status,
   "withdrawn",
 );
+{
+  // MAN-07 (audit item 20): the amended instalment is checked as the person who
+  // proposed the correction, as a direct edit would be, never as an Admin.
+  const low = fresh();
+  imported(
+    low,
+    "customers",
+    "source_row_id,name,reference,consentProvenance\nc-1,Synthetic payer,COR-C-3,Synthetic consent",
+  );
+  const instalment = imported(
+    low,
+    "due-items",
+    "source_row_id,name,reference,customerId,amount,dueDate,owner,overrideReason\nd-1,Synthetic instalment,COR-D-3,COR-C-3,25000,2028-12-01,lms,An Admin accepted a low ticket for this loan",
+  );
+  const lowInput = {
+    batchId: instalment.batch.id,
+    targetId: instalment.target.id,
+    expectedUpdatedAt: instalment.target.updatedAt,
+    changes: { amountKobo: 600000 },
+    syntheticOnly: true as const,
+  };
+  assert.ok(
+    previewImportCorrection(low, ctx, lowInput).blockers.some((blocker) =>
+      /need an Admin/.test(blocker),
+    ),
+    "Operations cannot correct an instalment below the lender minimum, as they cannot edit one there directly",
+  );
+  const admin = {
+    actor: "Clerk:admin",
+    principalId: "person-admin",
+    role: "Admin",
+    now: ctx.now,
+  };
+  const byAdmin = previewImportCorrection(low, admin, lowInput);
+  assert.deepEqual(byAdmin.blockers, [], "an Admin may");
+  const proposalInput = {
+    ...lowInput,
+    previewDigest: byAdmin.previewDigest,
+    reviewer: finance.actor,
+    reason: "The lender agreed a lower instalment",
+    evidence: "SOURCE-AMOUNT-003",
+  };
+  const legacy = structuredClone(low);
+  const proposal = proposeImportCorrection(low, admin, proposalInput, reviewers);
+  assert.equal(
+    listImportCorrections(low, finance, instalment.batch.id).proposals[0]
+      ?.current,
+    true,
+    "the Finance reviewer sees the Admin's proposal as current",
+  );
+  const before = structuredClone(low);
+  decideImportCorrection(
+    low,
+    finance,
+    proposal.id,
+    {
+      proposalDigest: proposal.proposalDigest,
+      action: "approve",
+      reason: "Independently checked the lower instalment",
+    },
+    reviewers,
+  );
+  assert.equal(instalment.target.amountKobo, 600000);
+  assert.doesNotThrow(() =>
+    assertImportedCorrectionChange(
+      before.records.find((r) => r.id === instalment.target.id)!,
+      instalment.target,
+      before,
+      low,
+    ),
+  );
+  // A proposal recorded before the proposer's role was kept is checked as a
+  // non-Admin: such a change below the minimum needs a fresh proposal.
+  const old = proposeImportCorrection(legacy, admin, proposalInput, reviewers);
+  const stored = legacy.records.find((r) => r.id === old.id)!;
+  const { proposedRole: _role, proposalDigest: _digest, ...evidence } =
+    stored.data;
+  stored.data = {
+    ...evidence,
+    proposalDigest: canonicalDigest(evidence, "legacy-en-us-replacer"),
+  };
+  assert.throws(
+    () =>
+      decideImportCorrection(
+        legacy,
+        finance,
+        old.id,
+        {
+          proposalDigest: stored.data.proposalDigest,
+          action: "approve",
+          reason: "Independently checked the lower instalment",
+        },
+        reviewers,
+      ),
+    /prepare a fresh comparison/,
+  );
+}
 console.log(
-  "Import correction checks passed: immutable provenance, exact comparison, independent approval, stale dependencies, controlled financial changes, withdrawal and isolation.",
+  "Import correction checks passed: immutable provenance, exact comparison, independent approval, stale dependencies, controlled financial changes, the proposer's own authority, withdrawal and isolation.",
 );

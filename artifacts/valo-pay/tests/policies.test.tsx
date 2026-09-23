@@ -23,6 +23,25 @@ describe('policy and template review', () => {
     await screen.findByText(/Example Lender: Your payment of ₦25,000.00/);
   });
 
+  it('tests a submitted version on the instalments its policy governs before anyone approves it', async () => {
+    api.mutate(state => {
+      const previous = state.records.find(record => record.kind === 'policies')!;
+      previous.status = 'approved';
+      state.records.push({ ...structuredClone(previous), id: 'policy-next', status: 'submitted', data: { ...previous.data, version: 2, previousVersionId: previous.id, spacingHours: 72 } });
+    });
+    const user = userEvent.setup();
+    renderApp('/policies');
+    const row = (await screen.findByText('Version 2')).closest('.p-6') as HTMLElement;
+    await user.click(within(row).getByRole('button', { name: 'Test this version' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Test this policy version' });
+    await user.type(within(dialog).getByLabelText('Reason *'), 'What would version 2 do?');
+    await user.click(within(dialog).getByRole('button', { name: 'Run policy simulation' }));
+    expect(await within(dialog).findByText(/^Version 2 is not approved: this shows what it would do if it were approved and applied\./)).toBeTruthy();
+    expect(within(dialog).queryByText('No instalments use this policy yet.')).toBeNull();
+    expect(api.calls.find(call => (call.body as { action?: string })?.action === 'backtest_policy')?.body).toMatchObject({ recordId: 'policy-next' });
+    expect(api.state().records.find(record => record.id === 'policy-next')?.status).toBe('submitted');
+  });
+
   it('shows changed limits, spacing and both notice periods before a policy is approved', async () => {
     api.mutate(state => {
       const previous = state.records.find(record => record.kind === 'policies')!;

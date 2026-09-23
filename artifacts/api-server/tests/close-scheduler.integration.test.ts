@@ -4,7 +4,8 @@
 // lender's failure from the others and backs off before retrying it, never
 // waiting for a lender held elsewhere to record the failure; drains batches
 // until nothing is due, sharing each batch across workspaces and putting
-// lenders being retried after the rest; pauses an idle anonymous sandbox
+// lenders being retried after the rest; catches up a lender's missed business
+// dates one close per pass, oldest first; pauses an idle anonymous sandbox
 // instead of closing it; stops between lenders when told to; gives legacy
 // lenders a cursor without a close; runs once, as the one-shot close pass,
 // with an exit status; and its audit entries never keep an abandoned sandbox
@@ -22,6 +23,7 @@ const { pool } = await import("@workspace/db");
 const { nextCloseInstant } = await import("@workspace/valopay-schema");
 const { SYSTEM_ACTOR_PREFIX, appendAudit, dueScheduledCloses, inWorkspace, listMerchants, loadState, recordScheduledCloseFailure, saveState } = await import("../src/lib/valopay-store.js");
 const { SCHEDULED_CLOSE_ACTOR, runClosePassOnce, runDueCloses, startCloseScheduler, schedulerStatus } = await import("../src/lib/close-scheduler.js");
+const { followingCloseInstant, scheduledCloseBusinessDate } = await import("../src/domain/close.js");
 
 const requestFor = (token: string) => ({ headers: { cookie: `valopay_sandbox=${token}` }, secure: false, auth: Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true }) }) as any;
 const response = () => ({ cookie() { /* a valid test cookie is already supplied */ } }) as any;
@@ -117,7 +119,7 @@ try {
     assert.equal(audit.data.actor, SCHEDULED_CLOSE_ACTOR);
     assert.equal(audit.name, "daily_close");
     assert.equal(audit.data.objectId, closedA.closeId);
-    assert.equal(state.settings.nextCloseAt, nextCloseInstant(String(closes[0]!.data.closedAt), "07:00"), "the cursor moved to the next 07:00 WAT after the close");
+    assert.equal(state.settings.nextCloseAt, followingCloseInstant(dueAt, "07:00"), "the cursor moved one business date on, to 07:00 WAT the day after the time it covered");
     assert.ok(String(state.settings.nextCloseAt) > dbNow);
   });
   const again = await runDueCloses({ batchSize: 100, onlyMerchantIds: only });
@@ -280,6 +282,18 @@ try {
   const fair = await runDueCloses({ batchSize: 1, onlyMerchantIds: [x1, x2, y1, s1] });
   assert.deepEqual(closedIds(fair).sort(), [x1, x2, y1, s1].sort(), "a pass drains every due lender");
   assert.equal(closedIds(fair)[0], s1); assert.equal(fair.batches, 5, "four full batches of one and a last empty one");
+
+  // A lender owed several missed business dates gets one catch-up close per pass, the oldest date first, even when
+  // full batches would read it again: the others due are not held back behind its backlog.
+  const [k1, k2] = await sandboxLenders();
+  clock = await databaseNow();
+  const owedFrom = nextCloseInstant(clock - 96 * 60 * 60 * 1000, "07:00"); // four scheduled times have passed since
+  await setCursor(k1, owedFrom); await setCursor(k2, hoursAgo(clock, 1));
+  assert.deepEqual(closedIds(await runDueCloses({ batchSize: 1, onlyMerchantIds: [k1, k2] })), [k1, k2], "each due lender is closed once in the pass");
+  assert.equal(await cursorOf(k1), followingCloseInstant(owedFrom, "07:00"), "one business date on");
+  for (let pass = 2; pass <= 4; pass += 1) assert.deepEqual(closedIds(await runDueCloses({ batchSize: 1, onlyMerchantIds: [k1, k2] })), [k1], `pass ${pass} closes the next owed date`);
+  assert.equal((await runDueCloses({ batchSize: 1, onlyMerchantIds: [k1, k2] })).examined, 0, "caught up");
+  assert.deepEqual((await closesOf(k1)).map((close) => close.data.sourceBusinessDate), [0, 1, 2, 3].map((day) => scheduledCloseBusinessDate(new Date(Date.parse(owedFrom) + day * 24 * 60 * 60 * 1000).toISOString())), "one close per missed business date, oldest first");
 
   // Within staff and signed-in lenders, and within anonymous sandboxes, lenders being retried come after the rest,
   // and a workspace's lender being retried takes its last turn, not its first.

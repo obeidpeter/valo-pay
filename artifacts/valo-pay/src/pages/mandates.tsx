@@ -269,7 +269,10 @@ export default function MandatesPage() {
           action={actionKind}
           policyName={approvedVersionOptions.find(policy => policy.value === values.policyId)?.label}
         />}
-        fields={actionKind === 'mandate_reissue' ? [{ name: 'consentEvidence', label: 'New consent evidence reference (reissuing creates a new mandate)', type: 'text', isData: true, required: true }]
+        fields={actionKind === 'mandate_reissue' ? [
+            { name: 'consentEvidence', label: 'New consent evidence reference (reissuing creates a new mandate)', type: 'text', isData: true, required: true },
+            { name: 'amountKobo', label: 'Debit limit the new consent covers', type: 'number', isData: true, required: true },
+          ]
           : actionKind === 'notify_policy_change' ? [{ name: 'policyId', label: 'Approved policy version (the notice is simulated and is not proof of delivery)', type: 'select', isData: true, required: true, options: approvedVersionOptions }]
           : actionKind === 'apply_policy_version' ? [
             { name: 'policyId', label: 'Approved policy version to apply', type: 'select', isData: true, required: true, options: approvedVersionOptions },

@@ -6,7 +6,7 @@ import {
 import { isDeepStrictEqual } from "node:util";
 import { assertNoRealBankDetails, findRecord, masked, recordsOf } from "./records";
 import type { Context, DomainState, RecordOf, TypedRecord, ValopayRecord } from "./types";
-import { addBusinessDays } from "./calendar";
+import { addBusinessDays, watDate } from "./calendar";
 import { countedAttempts, minimumTicketKobo, policySummary } from "./policy-engine";
 
 const roleSet = new Set<string>(roles);
@@ -59,6 +59,22 @@ function parseData(kind: string, data: Record<string, any>): void {
 export function cutoverComplete(cutover: TypedRecord<"cutovers">): boolean {
   const data = cutover.data;
   return cutover.status === "ready" && data.incumbentDisabled === true && data.externalAttemptsImported === true && data.dualRunComplete === true && Boolean(data.accountableUser) && Boolean(data.confirmation);
+}
+
+/** When collection ownership was last handed back (DEB-12), or null if it never was. */
+export function lastHandBackAt(state: DomainState): string | null {
+  return recordsOf(state, "cutovers").filter((item) => item.status === "handed_back").map((item) => String(item.data.handedBackAt || item.createdAt)).sort().at(-1) ?? null;
+}
+
+/**
+ * DEB-11 and DEB-12: Valo Pay may hold collection ownership only under a
+ * complete contract.  A hand-back ends every contract recorded before it,
+ * because the incumbent schedules were re-enabled, so only one recorded
+ * after the last hand-back counts.
+ */
+export function cutoverInForce(state: DomainState): boolean {
+  const handedBack = lastHandBackAt(state);
+  return recordsOf(state, "cutovers").some((item) => cutoverComplete(item) && (handedBack === null || item.createdAt > handedBack));
 }
 
 function assertTransition(kind: string, from: string, to: string): void {
@@ -165,6 +181,10 @@ export function validateRecord(
     if (existing && ["consentEvidence", "workflow", "origin"].some((key) => JSON.stringify(data[key]) !== JSON.stringify(existing.data[key]))) {
       throw new Error("Existing consent evidence cannot be changed. Reissue the mandate with a new consent record.");
     }
+    // MAN-02: the customer consented to this limit; a different limit needs a new consent record.
+    if (existing && input.amountKobo !== existing.amountKobo) {
+      throw new Error("The debit limit is part of the customer's consent and cannot be changed here. Reissue the mandate with new consent evidence for the new limit.");
+    }
     if (existing?.data.policyId && data.policyId !== existing.data.policyId) throw new Error("Use Apply policy version to change the version for this mandate and record the required notice and consent.");
     if (existing && consentKeys.some((key) => existing.data[key] !== undefined && JSON.stringify(data[key]) !== JSON.stringify(existing.data[key]))) {
       throw new Error("Use Apply policy version to update the version covered by consent.");
@@ -188,8 +208,11 @@ export function validateRecord(
       const mandate = parent(state, data.mandateId, "mandates", "dueItem mandateId");
       if (mandate.customerId !== input.customerId) throw new Error("Choose a mandate that belongs to the customer on this instalment.");
     }
-    if (data.owner === PLATFORM_OWNER && !recordsOf(state, "cutovers").some(cutoverComplete)) {
-      throw new Error("Valo Pay cannot take collection ownership until the handover agreement and parallel-run day are complete, with a named responsible user and written confirmation.");
+    if (data.owner === PLATFORM_OWNER && !cutoverInForce(state)) {
+      const handedBack = lastHandBackAt(state);
+      throw new Error(handedBack
+        ? `Valo Pay cannot take collection ownership again until a new handover agreement, recorded after the hand-back on ${watDate(Date.parse(handedBack))}, and its parallel-run day are complete, with a named responsible user and written confirmation.`
+        : "Valo Pay cannot take collection ownership until the handover agreement and parallel-run day are complete, with a named responsible user and written confirmation.");
     }
     if (data.outstandingKobo !== undefined && (!Number.isInteger(data.outstandingKobo) || data.outstandingKobo < 0 || data.outstandingKobo > input.amountKobo!)) {
       throw new Error("Outstanding balance cannot exceed the due amount.");
@@ -228,6 +251,8 @@ export function validateRecord(
   if (kind === "policies") {
     requireRole(ctx, ["Admin"]);
     if (!isUpdate && input.status && input.status !== "draft") throw new Error("Policies are created as drafts only.");
+    // RET-01: the reviewer approves the rules that were submitted, so they are frozen until a reviewer rejects them.
+    if (existing?.status === "submitted") throw new Error("A submitted policy cannot be edited. A reviewer must reject it before its author can make changes.");
     if (data.reviewer !== undefined && data.reviewer !== existing?.data.reviewer) throw new Error("The policy reviewer is recorded during approval and cannot be changed here.");
     for (const key of ["previousVersionId", "approvedAt", "submittedAt", "rejectedAt"]) {
       if (JSON.stringify(data[key]) !== JSON.stringify(existing?.data[key])) throw new Error(`Policy ${key} is recorded by its review or version action and cannot be changed here.`);
@@ -278,6 +303,10 @@ export function validateRecord(
   }
   if (kind === "cutovers") {
     requireRole(ctx, ["Admin"]);
+    const handedBack = lastHandBackAt(state);
+    if (input.status === "ready" && existing && existing.status !== "ready" && handedBack !== null && existing.createdAt <= handedBack) {
+      throw new Error(`This cutover contract ended with the hand-back on ${watDate(Date.parse(handedBack))}. Record a new cutover contract to take collection ownership again.`);
+    }
     if (input.status === "ready" && existing?.status !== "ready") {
       const candidate = { ...(existing ?? { id: "", merchantId: "", kind, name: "", reference: "", amountKobo: 0, customerId: "", createdAt: "", updatedAt: "" }), status: "ready", data } as TypedRecord<"cutovers">;
       if (!cutoverComplete(candidate)) throw new Error("The handover is ready only after the previous collection system is disabled in writing, external attempts are imported, the parallel-run day is complete, and a named responsible user has confirmed.");

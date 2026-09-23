@@ -10,7 +10,8 @@ import {
   recordPaymentRefund, reinstateAllocation, rememberRejectedMatch, settlePaymentStatus, supersedeAllocation, supersededByReview,
 } from "./reconciliation";
 import { buildReports } from "./reports";
-import { buildCloseReport, closeSchedule, openingSnapshot, storedCloseCursor } from "./close";
+import { buildCloseReport, closeSchedule, followingCloseInstant, openingSnapshot, owedCloseDates, scheduledCloseBusinessDate, storedCloseCursor } from "./close";
+import { watDate } from "./calendar";
 import { issueInvoice } from "./billing";
 import type { ActionInput, ActionResult, Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { assertActionRole } from "./validation";
@@ -51,17 +52,26 @@ function dueItemsUnderMandate(state: DomainState, mandateId: string): Set<string
 
 /**
  * 7.5: remember the opening position, run the close, then write the REC-07
- * report as immutable evidence.  Every close, scheduled or manual, covers the
- * pending scheduled instant if one has passed and moves the schedule cursor to
- * the next configured time (REC-01), ending any retry the scheduler recorded
- * for failed attempts; a close that starts more than
- * closeRules.lateAfterMinutes after that instant is recorded as late.
+ * report as immutable evidence.  Each scheduled time closes one business
+ * date, the WAT day before it, and checks that date's source files.  A close
+ * that starts at or after the oldest scheduled time still owed covers that
+ * time alone (REC-01): a scheduled close always, a person's close unless it
+ * names another business date.  The cursor then moves one day on, so after
+ * an outage every missed business date gets its own catch-up close, oldest
+ * first, and the lender stays due until none is owed.  Any close ends a retry
+ * the scheduler recorded for failed attempts; a close that starts more than
+ * closeRules.lateAfterMinutes after the time it covers is recorded as late.
  */
-export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTrigger): ActionResult {
+export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTrigger, sourceBusinessDate?: string): ActionResult {
   const now = ctx.now;
   const schedule = closeSchedule(state, now);
   const cursor = storedCloseCursor(state);
-  const scheduledFor = cursor && Date.parse(cursor) <= Date.parse(now) ? cursor : null;
+  // Nothing is owed while the automatic close is off: switching it on again restarts from the next configured time.
+  const pending = schedule.enabled && cursor && Date.parse(cursor) <= Date.parse(now) ? cursor : null;
+  const pendingDate = pending ? scheduledCloseBusinessDate(pending) : null;
+  const scheduledFor = pending && (trigger === "scheduled" || !sourceBusinessDate || sourceBusinessDate === pendingDate) ? pending : null;
+  const runDate = watDate(Date.parse(now));
+  const businessDate = scheduledFor ? pendingDate! : sourceBusinessDate ?? (trigger === "scheduled" ? scheduledCloseBusinessDate(now) : runDate);
   const delayMinutes = scheduledFor ? Math.floor((Date.parse(now) - Date.parse(scheduledFor)) / MINUTE_MS) : null;
   const late = delayMinutes !== null && delayMinutes > closeRules.lateAfterMinutes;
   const opening = openingSnapshot(state);
@@ -69,19 +79,25 @@ export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTr
   const report = buildCloseReport(state, ctx, opening, reconciled.data);
   report.alerts = buildAlerts(state, now);
   const reports = buildReports(state, now);
-  state.settings.nextCloseAt = nextCloseInstant(now, schedule.time);
+  if (scheduledFor) state.settings.nextCloseAt = followingCloseInstant(scheduledFor, schedule.time);
+  else if (!cursor) state.settings.nextCloseAt = nextCloseInstant(now, schedule.time);
   delete state.settings.closeRetry;
+  const owed = owedCloseDates(state, now).total;
   const summary = `${counted(report.observations.received, "observation")} received, ${counted(report.allocated.count, "allocation")} confirmed, ${report.unallocated.count} unallocated (${report.unallocated.olderThan24Hours} older than 24h), ${counted(report.exceptions.opened.count, "exception")} opened and ${report.exceptions.closed.count} closed, ${counted(report.customerPositionsChanged.length, "customer position")} changed.`;
   const close = makeRecord(state, "closes", {
-    name: `Daily close ${now.slice(0, 10)}${trigger === "scheduled" ? " · scheduled" : ""}`, status: "completed", createdAt: now,
+    name: `Daily close ${runDate}${trigger === "scheduled" ? " · scheduled" : ""}${businessDate === runDate ? "" : ` · business date ${businessDate}`}`, status: "completed", createdAt: now,
     data: {
       summary, metrics: reports.metrics, closedAt: now, period: report.period, report, operational: reports.operational, positionAlert: report.positionRebuild.alert,
-      schedule: { trigger, scheduledFor, delayMinutes, late, nextAt: state.settings.nextCloseAt }, synthetic: true,
+      sourceBusinessDate: businessDate, schedule: { trigger, scheduledFor, delayMinutes, late, nextAt: state.settings.nextCloseAt }, synthetic: true,
     },
   });
+  const lateness = late ? ` ${delayMinutes} minutes after its ${schedule.time} WAT time` : "";
+  const stillOwed = owed ? ` ${counted(owed, "missed business date is", "missed business dates are")} still to close.` : "";
   const message = trigger === "scheduled"
-    ? `Scheduled daily close completed${late ? ` ${delayMinutes} minutes after its ${schedule.time} WAT time` : ""}. No data was fetched from the provider or sent to the loan management system.`
-    : "Daily close completed. No data was fetched from the provider or sent to the loan management system.";
+    ? `Scheduled daily close of ${businessDate} completed${lateness}.${stillOwed} No data was fetched from the provider or sent to the loan management system.`
+    : scheduledFor
+      ? `Daily close of ${businessDate} completed in place of its scheduled close${lateness ? `,${lateness}` : ""}.${stillOwed} No data was fetched from the provider or sent to the loan management system.`
+      : `Daily close completed.${stillOwed} No data was fetched from the provider or sent to the loan management system.`;
   return result(message, close, { ...reconciled.data, closeId: close.id, positionAlert: report.positionRebuild.alert, schedule: close.data.schedule });
 }
 
@@ -134,12 +150,15 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     const old = findRecord(state, String(input.recordId), "mandates");
     if (!["pending_activation", "expired", "cancelled", "failed"].includes(old.status)) throw new Error("You can reissue a mandate only if it expired, was cancelled, failed or is still awaiting activation.");
     if (!data.consentEvidence || typeof data.consentEvidence !== "string") throw new Error("Enter a new consent evidence reference to reissue this mandate.");
+    // MAN-02: the new consent may cover a new limit; the limit of an existing mandate never changes.
+    const limitKobo = data.amountKobo === undefined || data.amountKobo === null || data.amountKobo === "" ? old.amountKobo : data.amountKobo;
+    if (!Number.isSafeInteger(limitKobo) || Number(limitKobo) < 1) throw new Error("Enter the debit limit the new consent covers, a whole number of kobo greater than 0.");
     // RET-07: fresh consent covers the current approved version of the same policy, or the version named in data.policyId.
     const target = data.policyId ? findRecord(state, String(data.policyId), "policies") : recordsOf(state, "policies").find((item) => item.id === old.data.policyId);
     if (data.policyId && (target!.status !== "approved" || (old.data.policyId && !samePolicyLineage(state, String(old.data.policyId), target!.id)))) throw new Error("Choose an approved version of this mandate's existing policy.");
     // MAN-06: a new mandate and a new consent record; the old records are never edited.
     const fresh = makeRecord(state, "mandates", {
-      name: `${old.name} · reissued`, status: "pending_activation", customerId: old.customerId, amountKobo: old.amountKobo, createdAt: now,
+      name: `${old.name} · reissued`, status: "pending_activation", customerId: old.customerId, amountKobo: Number(limitKobo), createdAt: now,
       data: {
         workflow: old.data.workflow, frequency: old.data.frequency, policyId: target?.id ?? old.data.policyId, origin: "reissued", reissuedFrom: old.id,
         consentPolicyId: target?.id, consentPolicyVersion: target ? Number(target.data.version || 1) : undefined, consentPolicySummary: target ? policySummary(target) : undefined,
@@ -268,10 +287,8 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
   if (input.action === "daily_close") {
     assertActionRole(ctx, ["Admin", "Operations", "Finance"]);
     const sourceDate = data.sourceBusinessDate === undefined ? undefined : businessDateSchema.parse(data.sourceBusinessDate);
-    if (sourceDate && sourceDate > new Date(Date.parse(ctx.now) + 3600000).toISOString().slice(0, 10)) throw new Error('Choose today or an earlier source business date. Future source coverage cannot be closed.');
-    const closed = runDailyClose(state, ctx, "manual");
-    if (sourceDate && closed.record) closed.record.data.sourceBusinessDate = sourceDate;
-    return closed;
+    if (sourceDate && sourceDate > watDate(Date.parse(ctx.now))) throw new Error('Choose today or an earlier source business date. Future source coverage cannot be closed.');
+    return runDailyClose(state, ctx, "manual", sourceDate);
   }
   if (["confirm_allocation", "reject_allocation", "manual_allocate"].includes(input.action)) {
     assertActionRole(ctx, ["Admin", "Finance"]);
@@ -391,8 +408,11 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
   if (input.action === "backtest_policy") {
     assertActionRole(ctx, ["Admin", "Operations", "Finance", "Compliance reviewer"]);
     const policy = findRecord(state, String(input.recordId), "policies");
-    const decisions = recordsOf(state, "due-items").filter((due) => policyIdFor(state, due) === policy.id).map((due) => evaluateRetry(state, ctx, due, policy));
-    return result("This simulation shows whether the policy would allow a retry and when. It does not predict how much money would be recovered.", policy, { decisions, recoveryEstimate: null, notARecoveryClaim: true });
+    // Any version, a draft under review included, is tried on the instalments its policy governs, as if it applied.
+    const lineage = new Set(policyLineage(state, policy).map((item) => item.id));
+    const decisions = recordsOf(state, "due-items").filter((due) => lineage.has(String(policyIdFor(state, due)))).map((due) => evaluateRetry(state, ctx, due, policy, { simulation: true }));
+    const unapproved = policy.status === "approved" ? "" : `Version ${policyVersionOf(policy)} is not approved: this shows what it would do if it were approved and applied. `;
+    return result(`${unapproved}This simulation shows whether the policy would allow a retry and when. It does not predict how much money would be recovered.`, policy, { decisions, recoveryEstimate: null, notARecoveryClaim: true });
   }
   if (input.action === "preregister_experiment") {
     assertActionRole(ctx, ["Admin"]);

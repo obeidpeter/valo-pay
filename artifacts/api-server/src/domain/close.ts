@@ -1,7 +1,8 @@
-import { closeRules, closeTimeOf, isOpenException, nextCloseInstant, paymentUnappliedKobo, type CloseReport } from "@workspace/valopay-schema";
+import { WAT_OFFSET_MS, closeRules, closeTimeOf, isOpenException, nextCloseInstant, paymentUnappliedKobo, type CloseReport } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { allocationConfirmedAt, paymentObservedAt } from "./reconciliation";
+import { watDate } from "./calendar";
 
 const DAY_MS = 24 * 60 * 60 * 1000, MINUTE_MS = 60 * 1000;
 
@@ -41,6 +42,43 @@ const validInstant = (value: unknown): value is string => typeof value === "stri
 export function storedCloseCursor(state: DomainState): string | null {
   const value = state.settings.nextCloseAt;
   return validInstant(value) ? value : null;
+}
+
+/**
+ * The WAT business date a scheduled close closes, whose source files it
+ * checks: the day before the WAT date of its scheduled time, the last whole
+ * day (the 07:00 close of 29 June closes 28 June), whatever the time of day.
+ */
+export function scheduledCloseBusinessDate(scheduledFor: string): string {
+  return watDate(Date.parse(scheduledFor) - DAY_MS);
+}
+
+/**
+ * The scheduled time after the one a close covered: the configured time on
+ * the next WAT day.  A missed time is never skipped: when this one has passed
+ * too, the lender is still due and the next close catches it up, so every
+ * business date gets its own close.
+ */
+export function followingCloseInstant(covered: string, closeTime: string): string {
+  const nextDay = Date.parse(`${watDate(Date.parse(covered))}T00:00:00.000Z`) - WAT_OFFSET_MS + DAY_MS;
+  return nextCloseInstant(nextDay - 1, closeTime);
+}
+
+/**
+ * The business dates whose scheduled close is still owed at `now`, oldest
+ * first: the pending time's, and one for each configured time since.  Nothing
+ * is owed while the automatic close is off.  At most `limit` dates are
+ * listed; `total` counts them all.
+ */
+export function owedCloseDates(state: DomainState, now: string, limit = 31): { dates: string[]; total: number } {
+  const cursor = storedCloseCursor(state), nowMs = Date.parse(now);
+  if (state.settings.scheduledCloseEnabled === false || cursor === null || Date.parse(cursor) > nowMs) return { dates: [], total: 0 };
+  const next = Date.parse(followingCloseInstant(cursor, closeTimeOf(state.settings)));
+  // After the first, the configured times are a whole day apart: WAT keeps no daylight saving.
+  const total = 1 + (next <= nowMs ? Math.floor((nowMs - next) / DAY_MS) + 1 : 0);
+  const dates = [scheduledCloseBusinessDate(cursor)];
+  for (let at = next; dates.length < Math.min(total, limit); at += DAY_MS) dates.push(scheduledCloseBusinessDate(new Date(at).toISOString()));
+  return { dates, total };
 }
 
 /** The recorded retry, only while it belongs to the pending close time: one left from an earlier time is inert. */

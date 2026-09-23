@@ -128,6 +128,8 @@ export default function PoliciesPage() {
                     <Button variant="outline" size="sm" action="new_policy_version" record={policy} onClick={() => handleAction(policy, 'new_policy_version')}>Draft next version</Button>
                     </>
                   )}
+                  {/* A simulation: a draft or submitted version is tried on the instalments its policy governs, as if approved. */}
+                  <Button variant="ghost" size="sm" action="backtest_policy" record={policy} onClick={() => handleAction(policy, 'backtest_policy')}>Test this version</Button>
                 </div>
               </div>
             ))
@@ -195,6 +197,7 @@ export default function PoliciesPage() {
           actionKind === 'approve_policy' ? 'Approve policy' :
           actionKind === 'reject_policy' ? 'Reject policy' :
           actionKind === 'new_policy_version' ? 'Draft next policy version' :
+          actionKind === 'backtest_policy' ? 'Test this policy version' :
           actionKind === 'create_template' ? 'Draft new template' :
           actionKind === 'edit_template' ? 'Edit template' :
           actionKind === 'submit_template' ? 'Submit template for review' :

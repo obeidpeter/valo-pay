@@ -79,6 +79,65 @@ const check = (condition: unknown, message: string) => { assert.ok(condition, me
   checks += 7;
 }
 
+// ---------- The retry notice follows the failure (audit item 9): a notice accepted before it announced an earlier debit ----------
+{
+  const { state, policy, due } = liveFixture({ withFailure: false, merchantId: "notice-order" });
+  const preDebit = addNotice(state, due, wat("2027-06-25T09:00:00"), "pre_debit");
+  const failed = addAttempt(state, due, { status: "failed", failureCode: "INSUFFICIENT_FUNDS", occurredAt: wat("2027-06-28T06:16:00"), noticeId: preDebit.id });
+  due.status = "in_collection";
+  const linkedEarly = evaluateRetry(state, ctxAt(wat("2027-06-29T08:00:00")), due, policy);
+  assert.deepEqual([linkedEarly.decision, linkedEarly.rule, linkedEarly.noticeRequired?.evidenced, linkedEarly.noticeRequired?.noticeId], ["defer", "notice_not_evidenced", false, null], "the pre-debit notice of 25 June is not the notice for the failure of 28 June");
+  assert.equal(linkedEarly.inputs.noticeEvidence, null);
+  failed.data.noticeId = addNotice(state, due, wat("2027-06-28T06:15:00")).id;
+  assert.equal(evaluateRetry(state, ctxAt(wat("2027-06-29T08:00:00")), due, policy).noticeRequired?.evidenced, false, "nor is a failed-debit notice accepted a minute before the failure");
+  const after = addNotice(state, due, wat("2027-06-29T09:00:00"));
+  failed.data.noticeId = after.id;
+  const evidenced = evaluateRetry(state, ctxAt(wat("2027-06-29T09:30:00")), due, policy);
+  assert.deepEqual([evidenced.decision, evidenced.noticeRequired?.evidenced, evidenced.noticeRequired?.noticeId], ["would_schedule", true, after.id], "a notice accepted after the failure is evidence");
+  assert.equal(toWat(evidenced.nextAt), "2027-06-30T09:00:00", "and the retry waits the full 24 hours after its acceptance");
+  checks += 5;
+}
+
+// ---------- RET-10 enrolment window (audit item 16): it closes at the end of the WAT day, not at midnight UTC ----------
+{
+  const enrolled = (failureAt: string) => {
+    const { state, policy, due } = liveFixture({ withFailure: false, merchantId: `enrolment-${failureAt}` });
+    const experiment = recordsOf(state, "experiments")[0]!;
+    Object.assign(experiment.data, { policyId: policy.id, preregisteredAt: "2027-01-01T00:00:00.000Z", enrolmentClose: "2027-06-30", analysisDate: "2027-08-15" });
+    experiment.status = "preregistered";
+    addAttempt(state, due, { status: "failed", failureCode: "INSUFFICIENT_FUNDS", occurredAt: failureAt });
+    due.status = "in_collection";
+    enrolEligibleFailures(state, ctxAt(wat("2027-07-01T07:00:00")));
+    return due.data.experimentId === experiment.id;
+  };
+  assert.equal(enrolled(wat("2027-06-30T23:59:00")), true, "a first failure in the last minute of 30 June WAT is inside the window");
+  assert.equal(enrolled(wat("2027-07-01T00:30:00")), false, "one at 00:30 WAT on 1 July (23:30 UTC on 30 June) is after it closed");
+  checks += 2;
+}
+
+// ---------- Backtest of a new version (audit item 15): a draft is simulated on the instalments its policy governs ----------
+{
+  const { state, policy, due, mandate } = liveFixture({ merchantId: "backtest-draft" });
+  mandate.data.consentPolicyId = policy.id; mandate.data.consentPolicyVersion = 1;
+  const failed = recordsOf(state, "attempts").find((item) => item.data.dueItemId === due.id)!;
+  failed.data.noticeId = addNotice(state, due, wat("2027-06-28T09:00:08")).id;
+  const ctx = ctxAt(wat("2027-06-28T09:01:00"));
+  const approved = executeAction(state, ctx, { action: "backtest_policy", recordId: policy.id, reason: "Baseline" });
+  const draftId = executeAction(state, ctx, { action: "new_policy_version", recordId: policy.id, reason: "Longer spacing" }).record!.id;
+  const draft = recordsOf(state, "policies").find((item) => item.id === draftId)!;
+  draft.data.spacingHours = 72;
+  const run = executeAction(state, ctx, { action: "backtest_policy", recordId: draft.id, reason: "What would version 2 do?" });
+  assert.equal(run.data.decisions.length, approved.data.decisions.length, "the draft is tried on every instalment its policy governs");
+  const decision = run.data.decisions.find((item: { dueItemId: string }) => item.dueItemId === due.id)!;
+  assert.deepEqual([decision.decision, decision.rule, decision.policyVersion], ["would_schedule", "plan", 2], decision.reason);
+  assert.equal(toWat(decision.nextAt), "2027-07-01T06:16:00", "72-hour spacing from a Monday 06:16 failure lands on Thursday");
+  assert.match(run.message, /not approved/);
+  assert.equal(toWat(approved.data.decisions.find((item: { dueItemId: string }) => item.dueItemId === due.id)!.nextAt), "2027-06-30T06:16:00", "the approved version's own result is unchanged");
+  assert.equal(evaluateRetry(state, ctx, due, draft).rule, "unapproved_policy", "outside a backtest the engine never plans with an unapproved version");
+  assert.equal(recordsOf(state, "retry-decisions").length, 0, "a backtest records nothing");
+  checks += 7;
+}
+
 // ---------- Quiet hours (10.4): the adapter refuses a message at 21:00:01 and accepts one at 08:00:00 WAT ----------
 {
   const { state, mandate } = liveFixture();
@@ -255,4 +314,4 @@ const check = (condition: unknown, message: string) => { assert.ok(condition, me
   checks += 3;
 }
 
-console.log(`Retry engine golden tests passed (${checks} checks): worked timeline, window bounds, calendar, notice clock, quiet hours, ceilings, failure codes, kill switches, minimum ticket, stable assignment, sample sizes.`);
+console.log(`Retry engine golden tests passed (${checks} checks): worked timeline, window bounds, calendar, notice clock, notice after the failure, WAT enrolment window, backtests of new versions, quiet hours, ceilings, failure codes, kill switches, minimum ticket, stable assignment, sample sizes.`);

@@ -340,6 +340,30 @@ function settle(state: DomainState, due: ValopayRecord, amountKobo: number, sett
   assert.equal(reports.experiment.result, "proven");
   assert.equal(reports.experiment.results[0].experimentId, experiment2.id);
   checks += 8;
+  // The analysis date is a WAT date (audit item 16): it is reached at midnight WAT, 23:00 UTC the evening before.
+  assert.equal(upliftReport(proven, experiment2, wat("2028-01-30T23:59:00")).checks.analysisDateReached, false, "the last minute of 30 January WAT");
+  assert.equal(upliftReport(proven, experiment2, wat("2028-01-31T00:30:00")).checks.analysisDateReached, true, "00:30 WAT on 31 January, still 30 January in UTC");
+  checks += 2;
+}
+
+// ---------- RET-11 (audit item 17): each arm is held to its own pre-computed minimum sample ----------
+{
+  const { state, policy } = liveFixture({ withFailure: false, merchantId: "uplift-arms" });
+  const registered = recordsOf(state, "experiments")[0]!;
+  Object.assign(registered.data, { policyId: policy.id, holdoutShare: 0.2, minPerArm: 0, baselineRate: 0.4, enrolmentClose: "2027-08-01", analysisDate: "2027-10-01" });
+  executeAction(state, ctxAt(wat("2027-06-01T09:00:00"), "Admin"), { action: "preregister_experiment", recordId: registered.id, reason: "Register the plan" });
+  assert.deepEqual(upliftReport(state, registered, wat("2027-10-02T09:00:00")).minimumByArm, { engine: 1172, holdout: 293 }, "a 20% comparison group needs 293; the retry group four times as many");
+  // A plan whose computed minimums are small enough to fill here: two in the comparison group, eight in the retry group.
+  const experiment = makeRecord(state, "experiments", { name: "Test 2", status: "preregistered", data: { policyId: policy.id, holdoutShare: 0.2, minPerArm: 2, seed: "seed", baselineRate: 0.4, analysisDate: "2028-01-31", enrolmentClose: "2027-12-31", preregisteredAt: "2027-02-01T00:00:00.000Z", sampleCalculation: { holdoutMinimum: 2, engineMinimum: 8, confidence: 0.9, power: 0.8, effect: 0.08 } } });
+  const failedAt = wat("2027-09-01T06:16:00");
+  for (let index = 0; index < 2; index++) enrolledDue(state, experiment, "holdout", 2_500_000, failedAt, index);
+  for (let index = 0; index < 7; index++) settle(state, enrolledDue(state, experiment, "engine", 2_500_000, failedAt, index + 2), 2_500_000, wat("2027-09-05T10:00:00"));
+  const short = upliftReport(state, experiment, "2028-02-01T09:00:00.000Z");
+  assert.deepEqual([short.engine.mature, short.holdout.mature, short.minimumByArm], [7, 2, { engine: 8, holdout: 2 }]);
+  assert.equal(short.checks.sampleMet, false, "seven in the retry group is below its own minimum of eight, though above the comparison group's two");
+  settle(state, enrolledDue(state, experiment, "engine", 2_500_000, failedAt, 9), 2_500_000, wat("2027-09-05T10:00:00"));
+  assert.equal(upliftReport(state, experiment, "2028-02-01T09:00:00.000Z").checks.sampleMet, true, "eight meets it");
+  checks += 4;
 }
 
 {
@@ -399,4 +423,4 @@ function settle(state: DomainState, due: ValopayRecord, amountKobo: number, sett
 }
 
 void HOUR; void addAttempt;
-console.log(`Measurement golden tests passed (${checks} checks): decision records and what makes a new one, deferral deadline, arm on decision, close report and the matches it counts, position rebuild, uplift interval and rule, billable channels, pack counts.`);
+console.log(`Measurement golden tests passed (${checks} checks): decision records and what makes a new one, deferral deadline, arm on decision, close report and the matches it counts, position rebuild, uplift interval and rule, each arm's own minimum, the WAT analysis date, billable channels, pack counts.`);
