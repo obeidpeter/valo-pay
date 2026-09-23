@@ -425,8 +425,9 @@ export const ImportRecordsResponse = zod.object({
   "values": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
   "amountKobo": zod.number().int().optional()
 })).optional(),
-  "skipped": zod.number().int().optional()
-}).describe('How many rows were valid, invalid and imported, and each row\'s outcome.')
+  "skipped": zod.number().int().optional(),
+  "warnings": zod.array(zod.string()).optional()
+}).describe('How many rows were valid, invalid and imported, and each row\'s outcome. warnings, when present, says which name or reference came from a fallback (the reference, a row number or a generated reference) while a column was left unused, and the check and the commit are not refused for it.')
 
 
 /**

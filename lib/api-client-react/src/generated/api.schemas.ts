@@ -375,7 +375,7 @@ export type ImportResultPreviewItem = {
 };
 
 /**
- * How many rows were valid, invalid and imported, and each row's outcome.
+ * How many rows were valid, invalid and imported, and each row's outcome. warnings, when present, says which name or reference came from a fallback (the reference, a row number or a generated reference) while a column was left unused, and the check and the commit are not refused for it.
  */
 export interface ImportResult {
   valid: number;
@@ -385,6 +385,7 @@ export interface ImportResult {
   columns?: string[];
   preview?: ImportResultPreviewItem[];
   skipped?: number;
+  warnings?: string[];
 }
 
 /**

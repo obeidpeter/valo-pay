@@ -37,6 +37,7 @@ const steps = [
   [tsx, ["artifacts/api-server/tests/answer-schemas.test.ts"]],
   [tsx, ["artifacts/api-server/tests/i18n.test.ts"]],
   [tsx, ["artifacts/api-server/tests/counted-text.test.ts"]],
+  [tsx, ["artifacts/api-server/tests/import-mapping.test.ts"]],
   [tsx, ["artifacts/api-server/tests/observability.test.ts"]],
   [tsx, ["artifacts/api-server/tests/database-limits.test.ts"]],
   [tsx, ["artifacts/api-server/tests/pilot-security.test.ts"]],

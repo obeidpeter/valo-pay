@@ -20,12 +20,14 @@ export const actionResultSchema = z.object({
 /** The outcome of one imported row (ImportRow). */
 export const importRowSchema = z.object({ row: count, status: z.string(), message: z.string() }).strict();
 
-/** How many rows were valid, invalid and imported, each row's outcome, and a check's columns and preview (ImportResult). */
+/** How many rows were valid, invalid and imported, each row's outcome, a check's columns and preview, and its warnings (ImportResult). */
 export const importResultSchema = z.object({
   valid: count, invalid: count, imported: count, rows: z.array(importRowSchema),
   columns: z.array(z.string()).optional(),
   preview: z.array(z.object({ row: count, values: recordDataSchema, amountKobo: count.optional() }).strict()).optional(),
   skipped: count.optional(),
+  /** A name or reference that came from a fallback while a column went unused, one sentence each; commit is not refused. */
+  warnings: z.array(z.string()).optional(),
 }).strict();
 
 /** The lender's close schedule as it runs: when, whether automatic, and what the close service is doing (EffectiveCloseSchedule). */

@@ -56,6 +56,7 @@ schemas.SettingsInput.properties.expectedRevision = str;
 schemas.ImportResult.properties.columns = { type: "array", items: str };
 schemas.ImportResult.properties.preview = { type: "array", items: obj({ row: num, values: ref("RecordData"), amountKobo: num }, ["row", "values"]) };
 schemas.ImportResult.properties.skipped = num;
+schemas.ImportResult.properties.warnings = { type: "array", items: str };
 // An operation and its success answer. The refusals and failures it can answer are listed by
 // listErrorAnswers at the end, from what its route does, with the error body they carry.
 function add(path, method, id, response, body, params = []) {
@@ -146,7 +147,7 @@ const schemaDescriptions = {
   ActionResult: "What an action did, in words, with the record it produced or changed and any data it returns.",
   ImportInput: "A synthetic CSV to preview or commit for one kind, with an optional column mapping.",
   ImportRow: "The outcome of one imported row.",
-  ImportResult: "How many rows were valid, invalid and imported, and each row's outcome.",
+  ImportResult: "How many rows were valid, invalid and imported, and each row's outcome. warnings, when present, says which name or reference came from a fallback (the reference, a row number or a generated reference) while a column was left unused, and the check and the commit are not refused for it.",
   Report: "The reports: metrics, billing, the experiment, operational measurement and the daily closes.",
   Gate: "One readiness gate: what it needs, its status and the evidence recorded.",
   Gates: "The prerequisites and decisions, the sandbox's limitations, and the cash and burn figures used for the funding decision.",
