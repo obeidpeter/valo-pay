@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
 import { LazyPage, QUERY_STALE_MS, loadPage, queryClient, queryDefaults } from "@/App";
 import { QUERY_RETRIES, retryQuery } from "@/lib/query-retry";
+import { pilotRequest } from "@/lib/pilot";
 import { installFakeApi } from "./fake-api";
 import { renderApp, screen } from "./harness";
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -40,6 +41,37 @@ describe("performance", () => {
       renderApp(`/customers/${ada.id}`);
       expect(await screen.findByRole("heading", { name: "Ada Okonkwo" })).toBeTruthy();
       expect(api.calls.filter((call) => call.path.endsWith("/history")).map((call) => call.status)).toEqual([503, 200]);
+    } finally {
+      queryClient.setDefaultOptions(testDefaults);
+      api.uninstall();
+    }
+  });
+
+  const gatewayPage = () => new Response("<html><body>502 Bad Gateway</body></html>", { status: 502, headers: { "Content-Type": "text/html" } });
+
+  it("keeps the status of a pilot answer that is not JSON, so a proxy's 502 is repeated", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(gatewayPage());
+    const failure = await pilotRequest("/pilot/journey").catch((error: unknown) => error);
+    expect(failure).toMatchObject({ status: 502, data: {}, message: "The request could not be completed." });
+    expect(retryQuery(0, failure)).toBe(true);
+  });
+
+  it("repeats a connected read that met a proxy's HTML error page", async () => {
+    const api = installFakeApi();
+    const testDefaults = queryClient.getDefaultOptions();
+    queryClient.setDefaultOptions({ queries: { ...queryDefaults.queries, retryDelay: 0 } });
+    const send = globalThis.fetch, reads: number[] = [];
+    globalThis.fetch = async (input, options) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+      if (!url.startsWith("/api/v1/connected?")) return send(input, options);
+      const answer = reads.length ? await send(input, options) : gatewayPage();
+      reads.push(answer.status);
+      return answer;
+    };
+    try {
+      renderApp("/credit-desk");
+      expect(await screen.findByLabelText("Reason for this assessment")).toBeTruthy();
+      expect(reads).toEqual([502, 200]);
     } finally {
       queryClient.setDefaultOptions(testDefaults);
       api.uninstall();

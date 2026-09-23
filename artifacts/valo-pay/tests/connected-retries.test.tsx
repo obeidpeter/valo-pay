@@ -325,6 +325,9 @@ it("a refusal the service marks as cancelled releases the held action", async ()
     /^The original request was not saved\. The workspace changed/,
   );
   expect(screen.queryByText("Previous action outcome unconfirmed")).toBeNull();
+  // The page's own error from the lost attempt does not come back once the request is released.
+  expect(screen.queryByText("Failed to fetch")).toBeNull();
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
   const reason = screen.getByLabelText("Reason for this assessment");
   expect(reason.closest("fieldset")?.disabled).toBe(false);
   expect(submissions.map((s) => s.status)).toEqual(["lost", 409]);
@@ -376,3 +379,55 @@ it("offers a deliberate discard of the original request", async () => {
   expect(submissions).toHaveLength(2);
   expect(submissions[1]!.key).not.toBe(submissions[0]!.key);
 });
+
+it.each([
+  [401, "Sign in again to continue."],
+  [429, "Too many requests. Wait a minute, then try again."],
+])(
+  "a %i keeps the action's key, so the identical next attempt is the same request",
+  async (status, error) => {
+    // A 401 or 429 is not final: any journal entry it left stays pending until the same key settles it.
+    const send = globalThis.fetch;
+    const submissions: Array<{ key: string; body: string }> = [];
+    globalThis.fetch = async (input, options) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof Request
+            ? input.url
+            : input.toString();
+      if (options?.method !== "POST" || !url.includes("/connected/actions"))
+        return send(input, options);
+      submissions.push({
+        key: new Headers(options.headers).get("Idempotency-Key")!,
+        body: String(options.body),
+      });
+      if (submissions.length === 1)
+        return new Response(JSON.stringify({ error }), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        });
+      return send(input, options);
+    };
+    const user = userEvent.setup();
+    renderApp("/credit-desk");
+    await screen.findByRole("heading", { name: "Credit Desk", level: 1 });
+    await user.type(
+      screen.getByLabelText("Reason for this assessment"),
+      "Check the synthetic evidence after a refusal to wait",
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Run sample assessment/ }),
+    );
+    await screen.findByText(error);
+    expect(screen.queryByText("Previous action outcome unconfirmed")).toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: /Run sample assessment/ }),
+    );
+    await screen.findByText(
+      /A new immutable sample assessment has been recorded/,
+    );
+    expect(submissions).toHaveLength(2);
+    expect(submissions[1]).toEqual(submissions[0]);
+  },
+);

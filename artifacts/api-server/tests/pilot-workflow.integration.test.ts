@@ -368,6 +368,105 @@ try {
     409,
   );
 
+  // An entry cancelled while its own request is past its checks (a concurrent
+  // retry's refusal, or Cancel if unfinished) is refused at completion; that
+  // refusal finds the entry already cancelled and still says so.
+  const midwayBody = {
+    name: "Cancelled midway",
+    reference: `MIDWAY-${randomUUID()}`,
+    data: { consentProvenance: "Synthetic fixture" },
+  };
+  const midwayKey = randomUUID();
+  const midwayId = await store.inWorkspace(sandboxRequest(), response, (ctx) =>
+    store.prepareOperation(ctx, lender, midwayKey, {
+      method: "POST",
+      path: "/v1/records/customers",
+      body: midwayBody,
+    }),
+  );
+  const canceller = await pool.connect();
+  let midway: { status: number; data: any };
+  try {
+    await canceller.query("BEGIN");
+    const cancellerPid = (await canceller.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+    await canceller.query(
+      "UPDATE valopay_operations SET status='cancelled',updated_at=now() WHERE id=$1 AND status='pending'",
+      [midwayId],
+    );
+    const answer = call(path, "POST", midwayBody, midwayKey);
+    // The request reaches completeOperation and waits for the cancellation to commit.
+    for (let waited = 0; ; waited += 20) {
+      const blocked = await pool.query(
+        "SELECT count(*)::int AS n FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))",
+        [cancellerPid],
+      );
+      if (blocked.rows[0].n > 0) break;
+      assert.ok(waited < 4000, "The request should wait for the cancellation.");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await canceller.query("COMMIT");
+    midway = await answer;
+  } finally {
+    canceller.release();
+  }
+  assert.equal(midway.status, 409, JSON.stringify(midway.data));
+  assert.match(midway.data.error, /cancelled before it completed/);
+  assert.equal(
+    midway.data.operation,
+    "cancelled",
+    "A refusal of an entry already cancelled says so: nothing sent with the key was saved.",
+  );
+  assert.equal(
+    (
+      await pool.query("SELECT 1 FROM valopay_records WHERE reference=$1", [
+        midwayBody.reference,
+      ])
+    ).rows.length,
+    0,
+  );
+
+  // A write that committed before the journal existed has a receipt and no
+  // entry; its retry creates a pending entry. A refusal before the receipt is
+  // read must not cancel that entry or say the request was not saved.
+  for (const prefix of ["", "connected:"]) {
+    const legacyKey = randomUUID();
+    await store.inWorkspace(sandboxRequest(), response, async (ctx) => {
+      await store.loadState(ctx, lender, "update");
+      await store.saveIdempotency(
+        ctx,
+        store.digest(`${prefix}${lender}:${legacyKey}`),
+        "legacy fingerprint",
+        { id: "legacy receipt" },
+      );
+    });
+    const legacyId = await store.inWorkspace(sandboxRequest(), response, (ctx) =>
+      store.prepareOperation(ctx, lender, legacyKey, {
+        method: "POST",
+        path: prefix ? "/v1/connected/actions" : "/v1/records/customers",
+        body: { name: "Saved before the journal" },
+      }),
+    );
+    assert.equal(
+      await store.rejectOperation(
+        sandboxRequest(),
+        { id: legacyId, merchantId: lender },
+        { status: 404, message: "Lender not found in your permitted workspace access." },
+      ),
+      false,
+      `A refused retry of a ${prefix || "record "}key with an earlier receipt is not marked.`,
+    );
+    assert.equal(
+      (
+        await pool.query("SELECT status FROM valopay_operations WHERE id=$1", [
+          legacyId,
+        ])
+      ).rows[0].status,
+      "pending",
+      "Its entry is not cancelled: the original request was saved.",
+    );
+    await pool.query("DELETE FROM valopay_operations WHERE id=$1", [legacyId]);
+  }
+
   const setupKey = randomUUID();
   const empty = ok(
     await call(

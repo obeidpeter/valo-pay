@@ -315,3 +315,82 @@ it("a lost mandate create can be discarded deliberately, which unlocks the dialo
   await user.click(cancel);
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
+
+/** Records the idempotency key of every matching request and passes it on. */
+function recordKeys(path: string, method: string) {
+  const send = globalThis.fetch;
+  const keys: string[] = [];
+  globalThis.fetch = async (input, options) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof Request
+          ? input.url
+          : input.toString();
+    if (url.includes(path) && options?.method === method)
+      keys.push(new Headers(options.headers).get("Idempotency-Key")!);
+    return send(input, options);
+  };
+  return keys;
+}
+
+it("the unconfirmed settings notice discards its original request, and the next save is new", async () => {
+  const user = userEvent.setup();
+  const keys = recordKeys("/v1/settings", "PATCH");
+  api.failNext(/^\/v1\/settings$/, "offline", "PATCH");
+  await loseSettingsSave(user);
+  const alert = screen.getByText("Settings outcome unconfirmed").closest("[role=alert]") as HTMLElement;
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  await user.click(
+    within(alert).getByRole("button", { name: "Discard original request" }),
+  );
+  await waitFor(() =>
+    expect(screen.queryByText("Settings outcome unconfirmed")).toBeNull(),
+  );
+  const amount = screen.getByLabelText(
+    "Notification cost alert (₦ per collection)",
+  );
+  expect(amount.closest("fieldset")?.disabled).toBe(false);
+  await user.click(screen.getByRole("button", { name: "Save" }));
+  await screen.findByText("Settings saved");
+  expect(api.state().settings.notificationCostAlertKobo).toBe(1029);
+  expect(keys).toHaveLength(2);
+  expect(keys[1]).not.toBe(keys[0]);
+});
+
+it("the unconfirmed emergency-stop notice discards its original request, and the next request is new", async () => {
+  const user = userEvent.setup();
+  renderApp("/settings");
+  await screen.findByText("07:00 WAT");
+  const reason = screen.getByLabelText(
+    "Reason for changing the emergency stop",
+  ) as HTMLInputElement;
+  await user.type(reason, "Stop sample operations for a review");
+  const keys = recordKeys("/v1/actions", "POST");
+  api.failNext(/^\/v1\/actions$/, "offline", "POST");
+  await user.click(
+    screen.getByRole("button", { name: "Activate emergency stop" }),
+  );
+  const notice = (
+    await screen.findByText(/The emergency-stop response is unconfirmed/)
+  ).closest("[role=alert]") as HTMLElement;
+  expect(reason.disabled).toBe(true);
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  await user.click(
+    within(notice).getByRole("button", { name: "Discard original request" }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.queryByText(/The emergency-stop response is unconfirmed/),
+    ).toBeNull(),
+  );
+  expect(reason.disabled).toBe(false);
+  expect(api.state().merchant.killSwitch).toBe(false);
+  await user.click(
+    screen.getByRole("button", { name: "Activate emergency stop" }),
+  );
+  await screen.findByText("Emergency stop updated");
+  expect(api.state().merchant.killSwitch).toBe(true);
+  expect(keys).toHaveLength(2);
+  expect(keys[1]).not.toBe(keys[0]);
+});

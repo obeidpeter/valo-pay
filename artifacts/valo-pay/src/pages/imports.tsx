@@ -25,6 +25,7 @@ import { formatDate, formatKobo } from "@/lib/formatters";
 import { ScrollFrame } from "@/components/scroll-frame";
 import { readableLabel } from "@/components/record-label";
 import { ImportCorrections } from "@/components/import-corrections";
+import { isStaleRecordError } from "@/components/form-field";
 
 const types = {
   customers: "Customers",
@@ -338,16 +339,17 @@ function BatchEditor({
   const busy = mutation.isPending || reading,
     locked =
       busy || mutation.hasUnconfirmedOutcome || batch?.status === "committed";
-  // A save or commit refused because the batch changed, or a refresh that shows a newer saved version, offers that
-  // version. The draft stays editable until the person chooses to replace it.
+  // A save or commit refused because the batch changed (the service's "record changed after you opened it"), or a
+  // refresh that shows a newer saved version, offers that version. The draft stays editable until the person chooses
+  // to replace it. While a save's outcome is unconfirmed, the newer version may be that save: the recovery notice
+  // handles it instead.
   const [latestProblem, setLatestProblem] = useState(""),
     [loadingLatest, setLoadingLatest] = useState(false);
   const stale =
-    !!id &&
-    !mutation.hasUnconfirmedOutcome &&
-    (mutation.error as { status?: number } | null)?.status === 409;
+    !!id && !mutation.hasUnconfirmedOutcome && isStaleRecordError(mutation.error);
   const newer =
     !!batch &&
+    !mutation.hasUnconfirmedOutcome &&
     detail.data?.batch?.id === batch.id &&
     Date.parse(detail.data.batch.updatedAt) > Date.parse(batch.updatedAt);
   const loadLatest = async () => {
@@ -355,14 +357,15 @@ function BatchEditor({
     setLoadingLatest(true);
     setLatestProblem("");
     try {
-      const result = await detail.refetch();
-      if (result.data?.batch) {
-        hydrate(result.data.batch);
-        mutation.reset();
-      } else
-        setLatestProblem(
-          "The latest version could not be loaded. Your draft is still here. Try again.",
-        );
+      // A failed refetch would otherwise resolve with the cached, older batch.
+      const result = await detail.refetch({ throwOnError: true });
+      if (!result.data?.batch) throw new Error("The batch was not returned.");
+      hydrate(result.data.batch);
+      mutation.reset();
+    } catch {
+      setLatestProblem(
+        "The latest version could not be loaded. Your draft is still here. Try again.",
+      );
     } finally {
       setLoadingLatest(false);
     }

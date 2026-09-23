@@ -163,6 +163,7 @@ export default function TeamPage() {
                     {item.status === "pending" && (
                       <Button
                         variant="outline"
+                        disabled={revoke.hasUnconfirmedOutcome}
                         busy={revoke.isPending}
                         onClick={() =>
                           revoke.mutate({
@@ -177,7 +178,7 @@ export default function TeamPage() {
                   </div>
                 ))}
               </div>
-              <PilotError error={revoke.error} />
+              <RecoveryNotice mutation={revoke} persistent={false} />
             </PilotPanel>
           )}
           {admin && (

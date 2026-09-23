@@ -2,6 +2,8 @@ import { useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "./workspace-context";
 import {
+  definitiveRefusal,
+  nothingSaved,
   outcomeIsUnconfirmed,
   requestClosed,
   submissionFingerprint,
@@ -176,7 +178,17 @@ export function useConnected() {
         current.unconfirmed = requestClosed(error)
           ? false
           : current.unconfirmed || outcomeIsUnconfirmed(error);
-        if (!current.unconfirmed && attempt.current === current)
+        // A finished request (refused for good, or saved nothing) cannot run
+        // again under its key: the next action needs a new one. A 401 or 429
+        // is not final (any journal entry it left stays pending), so the same
+        // action keeps its key, as in useSafeMutation.
+        if (
+          !current.unconfirmed &&
+          attempt.current === current &&
+          (requestClosed(error) ||
+            nothingSaved(error) ||
+            definitiveRefusal(error))
+        )
           attempt.current = null;
         throw error;
       } finally {

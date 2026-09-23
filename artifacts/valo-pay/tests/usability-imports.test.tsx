@@ -74,6 +74,28 @@ describe('UX-I01 import outcome and correction guidance', () => {
     expect(api.state().records.filter(record => record.name === 'Reference-free sample')).toHaveLength(1);
     expect(screen.queryByText('Import outcome not confirmed')).toBeNull();
   });
+
+  it('discards a lost import deliberately, which frees the wizard for a new import under a new key', async () => {
+    const user = await customerImport('name,consentProvenance\nDiscarded import sample,Synthetic');
+    const send = globalThis.fetch;
+    const keys: string[] = [];
+    globalThis.fetch = async (input, options) => {
+      if (options?.method === 'POST' && String(input).includes('/imports') && JSON.parse(String(options.body)).commit) keys.push(new Headers(options.headers).get('Idempotency-Key')!);
+      return send(input, options);
+    };
+    api.failNext(/^\/v1\/imports$/, 'offline', 'POST');
+    await user.click(screen.getByRole('button', { name: 'Import data' }));
+    const notice = (await screen.findByText('Import outcome not confirmed')).closest('[role=alert]') as HTMLElement;
+    expect(screen.getByLabelText('CSV content')).toHaveProperty('disabled', true);
+    await user.click(within(notice).getByRole('button', { name: 'Discard original request' }));
+    await waitFor(() => expect(screen.queryByText('Import outcome not confirmed')).toBeNull());
+    expect(screen.getByLabelText('CSV content')).toHaveProperty('disabled', false);
+    await user.click(screen.getByRole('button', { name: 'Import data' }));
+    await screen.findByRole('heading', { name: 'Import results' });
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).not.toBe(keys[0]);
+    expect(api.state().records.filter(record => record.name === 'Discarded import sample')).toHaveLength(1);
+  });
 });
 
 describe('UX-I02 shared form recovery and UX-I03 review correction', () => {

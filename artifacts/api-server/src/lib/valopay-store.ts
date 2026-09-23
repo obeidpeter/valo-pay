@@ -206,12 +206,16 @@ export async function readOperation(ctx: StoreContext, merchantId: string, id: s
   if((row.request as any)?.purged)fail('This terminal request payload expired under the lender retention policy. Its identity and completion history are retained; it cannot run again.',410);
   return {...row, request:await revealStored(row.request,{lender:merchantId,record:id,field:'request'}), receipt:await revealStored(row.receipt,{lender:merchantId,record:id,field:'receipt'})};
 }
+/** Whether a receipt is stored under this request key. An entry that is not completed but has one belongs to a
+ * write saved outside the journal, before it existed: that request was saved, so its entry is never cancelled. */
+async function receiptStored(client: PoolClient, merchantId: string, key: string): Promise<boolean> {
+  return (await client.query('SELECT 1 FROM valopay_idempotency WHERE merchant_id=$1 AND id=ANY($2::text[])', [merchantId, [digest(`${merchantId}:${key}`), digest(`connected:${merchantId}:${key}`)]])).rows.length > 0;
+}
 export async function cancelOperation(ctx: StoreContext, merchantId: string, id: string) {
   const session = sessionFor(ctx); await readMerchant(ctx, merchantId, 'update');
   const row = await readOperation(ctx, merchantId, id);
   if (row.status === 'completed') fail('This request already completed. Refresh Operations to see its saved result.', 409);
-  const legacy = await session.client.query('SELECT 1 FROM valopay_idempotency WHERE merchant_id=$1 AND id=ANY($2::text[])', [merchantId, [digest(`${merchantId}:${row.request_key}`), digest(`connected:${merchantId}:${row.request_key}`)]]);
-  if (legacy.rows.length) fail('A receipt already exists for this request. Check the original request to recover it.', 409);
+  if (await receiptStored(session.client, merchantId, row.request_key)) fail('A receipt already exists for this request. Check the original request to recover it.', 409);
   await session.client.query("UPDATE valopay_operations SET status='cancelled',updated_at=$4 WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND status='pending'", [id, merchantId, session.owner || session.principal, ctx.now]);
   return { message: 'The server confirmed this request has not completed and cancelled it. It cannot run again.' };
 }
@@ -220,7 +224,10 @@ export async function cancelOperation(ctx: StoreContext, merchantId: string, id:
  * confirmation nor counts towards the pending limit, and its key cannot run
  * again. Runs in its own transaction after the refused request's transaction
  * rolled back, and resolves to whether the entry is cancelled afterwards: an
- * entry an earlier attempt already completed stays completed, and is not. */
+ * entry an earlier attempt already completed stays completed, and is not; one
+ * cancelled meanwhile (by another attempt's refusal, or from Operations) is.
+ * As in cancelOperation, an entry whose key already has a stored receipt (a
+ * write saved before the journal existed) stays pending, and is not. */
 export async function rejectOperation(req: Request, bound: { id: string; merchantId: string }, rejection: { status: number; message: string }): Promise<boolean> {
   const guard = await checkOut(() => pool.connect()), client = guard.client;
   try {
@@ -230,8 +237,13 @@ export async function rejectOperation(req: Request, bound: { id: string; merchan
       await bindRuntimeIdentity(client, { organizationId: verified.orgId || '', userId: verified.userId || '' });
     }
     const receipt = await protectStored({ rejected: rejection }, { lender: bound.merchantId, record: bound.id, field: 'receipt' });
-    const closed = await client.query<{ status: string }>("UPDATE valopay_operations SET status='cancelled',receipt=$3,updated_at=now() WHERE id=$1 AND merchant_id=$2 AND status='pending' RETURNING status", [bound.id, bound.merchantId, receipt]);
-    const status = closed.rows[0]?.status ?? (await client.query<{ status: string }>('SELECT status FROM valopay_operations WHERE id=$1 AND merchant_id=$2', [bound.id, bound.merchantId])).rows[0]?.status;
+    // The row lock orders this against an attempt completing the entry: whichever commits first decides.
+    const entry = (await client.query<{ status: string; request_key: string }>('SELECT status,request_key FROM valopay_operations WHERE id=$1 AND merchant_id=$2 FOR UPDATE', [bound.id, bound.merchantId])).rows[0];
+    let status = entry?.status;
+    if (entry?.status === 'pending' && !(await receiptStored(client, bound.merchantId, entry.request_key))) {
+      await client.query("UPDATE valopay_operations SET status='cancelled',receipt=$3,updated_at=now() WHERE id=$1 AND merchant_id=$2 AND status='pending'", [bound.id, bound.merchantId, receipt]);
+      status = 'cancelled';
+    }
     const committed = await client.query('COMMIT');
     return committed.command === 'COMMIT' && status === 'cancelled';
   } catch (error) {
