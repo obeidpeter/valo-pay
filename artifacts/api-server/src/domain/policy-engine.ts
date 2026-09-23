@@ -6,6 +6,7 @@ import {
 } from "@workspace/valopay-schema";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { makeRecord, recordsOf } from "./records";
+import { indexedPass, recordsWhere } from "./record-index";
 import { holidaySet, isBusinessDay, nonBusinessDaysBetween, watDate } from "./calendar";
 import { canonicalDigest } from "../lib/digests";
 
@@ -77,18 +78,18 @@ export function policyLineage(state: DomainState, policy: TypedRecord<"policies"
 export const policyVersionOf = (policy: TypedRecord<"policies">): number => Number(policy.data.version || 1);
 
 export function policyIdFor(state: DomainState, due: TypedRecord<"due-items">): string | undefined {
-  return due.data.policyId || recordsOf(state, "mandates").find((r) => r.id === due.data.mandateId)?.data.policyId;
+  return due.data.policyId || recordsWhere(state, "mandates", "id", due.data.mandateId)[0]?.data.policyId;
 }
 
 export function approvedPolicyFor(state: DomainState, due: TypedRecord<"due-items">): TypedRecord<"policies"> | undefined {
   const id = policyIdFor(state, due);
-  return id ? recordsOf(state, "policies").find((policy) => policy.id === id && policy.status === "approved") : undefined;
+  return id ? recordsWhere(state, "policies", "id", id).find((policy) => policy.status === "approved") : undefined;
 }
 
 export const attemptTime = (attempt: TypedRecord<"attempts">): string => String(attempt.data.occurredAt || attempt.createdAt);
 
 export function attemptsFor(state: DomainState, dueItemId: string): TypedRecord<"attempts">[] {
-  return recordsOf(state, "attempts").filter((attempt) => attempt.data.dueItemId === dueItemId).sort((a, b) => attemptTime(a).localeCompare(attemptTime(b)));
+  return recordsWhere(state, "attempts", "data.dueItemId", dueItemId).sort((a, b) => attemptTime(a).localeCompare(attemptTime(b)));
 }
 
 /** Attempts the customer experienced.  Cancelled and not-yet-sent attempts never count toward the ceiling (DEB-05). */
@@ -174,7 +175,7 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
     ...(noticeRequired ? { noticeRequired } : {}),
   });
   const finalNotice: NoticeRequirement = { purpose: "final_attempt", leadHours: 0, requiredBy: null, noticeId: null, acceptedAt: null, evidenced: false };
-  if(state.records.some(r=>r.kind==='connected-intents' && r.data.dueItemId===due.id && ['authorised','pending','unknown'].includes(r.status))) return explain('blocked','in_flight','A pay-by-bank payment is pending or has an unknown outcome. Reconcile it before scheduling another collection.');
+  if(recordsWhere(state,'connected-intents','data.dueItemId',due.id).some(r=>['authorised','pending','unknown'].includes(r.status))) return explain('blocked','in_flight','A pay-by-bank payment is pending or has an unknown outcome. Reconcile it before scheduling another collection.');
 
   // Row 1: settled by any channel, or the obligation is frozen or closed.
   const outstanding = Number.isInteger(due.data.outstandingKobo) ? Number(due.data.outstandingKobo) : due.amountKobo;
@@ -204,7 +205,7 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
   }
   // RET-01: only an approved version by a reviewer who is not its author may plan a retry.
   if (!options.simulation && (policy.status !== "approved" || !policy.data.reviewer || policy.data.reviewer === policy.data.author)) return explain("blocked", "unapproved_policy", "Independent compliance approval is required before a retry can be planned.");
-  const mandate = recordsOf(state, "mandates").find((record) => record.id === due.data.mandateId);
+  const mandate = recordsWhere(state, "mandates", "id", due.data.mandateId)[0];
   // RET-07: the engine applies the version the consent covers until a notice, and fresh consent where required, moves the mandate to a newer one.
   if (!options.simulation && mandate?.data.consentPolicyId && mandate.data.consentPolicyId !== policy.id) {
     inputs.consentPolicyVersion = mandate.data.consentPolicyVersion;
@@ -234,7 +235,7 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
   // NOT-10: the notice clock runs from provider acceptance, never from submission or simulation.  The notice for a
   // retry follows the failure it reports: one accepted before the failure announced an earlier debit.
   const failedAt = Date.parse(attemptTime(last));
-  const notice = recordsOf(state, "notifications").find((record) => record.id === last.data.noticeId && ["pre_debit", "failed_debit"].includes(String(record.data.purpose)) && record.data.acceptedAt && record.data.synthetic !== true && Date.parse(String(record.data.acceptedAt)) > failedAt);
+  const notice = recordsWhere(state, "notifications", "id", last.data.noticeId).find((record) => ["pre_debit", "failed_debit"].includes(String(record.data.purpose)) && record.data.acceptedAt && record.data.synthetic !== true && Date.parse(String(record.data.acceptedAt)) > failedAt);
   if (notice) {
     const acceptedAt = Date.parse(String(notice.data.acceptedAt));
     const earliest = Math.max(earliestBySpacing, acceptedAt + leadHours * HOUR);
@@ -286,7 +287,7 @@ export function decisionFingerprint(decision: DecisionIdentity): string {
 }
 
 export function latestDecisionFor(state: DomainState, dueItemId: string): TypedRecord<"retry-decisions"> | undefined {
-  return recordsOf(state, "retry-decisions").filter((record) => record.data.dueItemId === dueItemId).sort((a, b) => String(a.data.evaluatedAt).localeCompare(String(b.data.evaluatedAt)) || a.createdAt.localeCompare(b.createdAt)).at(-1);
+  return recordsWhere(state, "retry-decisions", "data.dueItemId", dueItemId).sort((a, b) => String(a.data.evaluatedAt).localeCompare(String(b.data.evaluatedAt)) || a.createdAt.localeCompare(b.createdAt)).at(-1);
 }
 
 /**
@@ -332,6 +333,9 @@ export function assignArm(seed: string, merchantId: string, dueItemId: string, h
  * dispute, not amended after the failure, inside the enrolment window.
  */
 export function enrolEligibleFailures(state: DomainState, ctx: Context): void {
+  indexedPass(state, () => enrolFailures(state, ctx));
+}
+function enrolFailures(state: DomainState, ctx: Context): void {
   for (const due of recordsOf(state, "due-items")) {
     if (due.data.experimentId || due.data.owner !== PLATFORM_OWNER) continue;
     if (["cancelled", "closed", "in_dispute", "paid", "unpaid_final"].includes(due.status) || due.amountKobo < ABSOLUTE_TICKET_FLOOR_KOBO) continue;
@@ -341,13 +345,13 @@ export function enrolEligibleFailures(state: DomainState, ctx: Context): void {
     const retry = retryRuleFor(first.data.failureCode);
     if (retry !== "yes" && retry !== "once") continue;
     if (counted.some((attempt) => normaliseFailureCode(attempt.data.failureCode) === "CUSTOMER_DISPUTED")) continue;
-    const mandate = recordsOf(state, "mandates").find((record) => record.id === due.data.mandateId);
+    const mandate = recordsWhere(state, "mandates", "id", due.data.mandateId)[0];
     if (!mandate || mandate.status !== "active") continue;
     const failureAt = attemptTime(first);
     if (due.data.amendedAt && String(due.data.amendedAt) > failureAt) continue;
     // Enrolment closes at the end of its WAT day: a failure counts by its West Africa Time date.
-    const experiment = recordsOf(state, "experiments").find((item) =>
-      item.status === "preregistered" && item.data.policyId === policyIdFor(state, due) && failureAt >= String(item.data.preregisteredAt) && watDate(Date.parse(failureAt)) <= String(item.data.enrolmentClose).slice(0, 10),
+    const experiment = recordsWhere(state, "experiments", "data.policyId", policyIdFor(state, due)).find((item) =>
+      item.status === "preregistered" && failureAt >= String(item.data.preregisteredAt) && watDate(Date.parse(failureAt)) <= String(item.data.enrolmentClose).slice(0, 10),
     );
     if (!experiment) continue;
     due.data.experimentId = experiment.id;

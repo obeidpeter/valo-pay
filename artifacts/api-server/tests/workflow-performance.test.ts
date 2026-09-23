@@ -22,8 +22,10 @@ let fullArrayFilterVisits = 0;
 Object.defineProperty(state.records, "filter", { configurable: true, value: function (...args: Parameters<Array<any>["filter"]>) { fullArrayFilterVisits += this.length; return Array.prototype.filter.apply(this, args); } });
 const close = timed("dailyCloseMs", () => runDailyClose(state, context, "manual"));
 // A deterministic work budget, not a machine-speed assertion: the prior
-// per-customer/per-instalment rebuild exceeded 180 million visits here.
-assert.ok(fullArrayFilterVisits < fixture.records.length * (Math.ceil(count / 5) * 4 + 100), `close full-array filter visits ${fullArrayFilterVisits} exceeded budget`);
+// per-customer/per-instalment rebuild exceeded 180 million visits here, and
+// scanning every record for each match confirmed (the 23 September audit)
+// about 12 million; the close now scans the list a bounded number of times.
+assert.ok(fullArrayFilterVisits < fixture.records.length * 100, `close full-array filter visits ${fullArrayFilterVisits} exceeded budget`);
 delete (state.records as any).filter;
 assert.equal(close.record!.data.report.positionRebuild.customersChecked, count);
 assert.equal(close.record!.data.report.positionRebuild.mismatches.length, 0);
