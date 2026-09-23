@@ -33,11 +33,12 @@ async function inTurn<T>(merchantId: string, work: () => Promise<T>): Promise<T>
  * the worker limits bound what runs.
  *
  * A claim that finds the lender busy skips it, since the job stays queued for a later look, and reads the lender at
- * one snapshot (REPEATABLE READ). A write to a claimed job (progress, completion, hand-back) waits for the lender up
- * to the worker's lock limit instead, since giving up would leave the job running under its lease; it reads at READ
- * COMMITTED, so after the wait it sees what the holder committed (a snapshot taken before the wait would miss the
- * holder's audit entries and fork the chain). A wait that reaches the limit is 'busy', and retryExportWrite tries
- * the write again. */
+ * one snapshot (REPEATABLE READ). A write to a claimed job (progress, completion, the hand-back of a job whose lender
+ * stayed busy) waits for the lender up to the worker's lock limit instead, since giving up would leave the job
+ * running under its lease; it reads at READ COMMITTED, so after the wait it sees what the holder committed (a
+ * snapshot taken before the wait would miss the holder's audit entries and fork the chain). A wait that reaches the
+ * limit is 'busy', and retryExportWrite tries the write again. A stopping worker's hand-back skips a busy lender as a
+ * claim does: the process's shutdown deadline cannot wait for it, and the lease recovers the job. */
 async function transaction<T>(merchantId: string, lock: 'skip' | 'wait', work: (client: PoolClient, scope: Scope) => Promise<T>): Promise<T | null> {
   return inTurn(merchantId, async () => {
     const guard = await checkOut(() => pool.connect()), client = guard.client;
@@ -191,7 +192,7 @@ export const exportJobRepository: ExportJobRepository = {
     }) ?? 'busy';
   },
   async release(claim, reason = 'stopping') {
-    return await transaction(claim.merchantId, 'wait', async (client, scope) => {
+    return await transaction(claim.merchantId, reason === 'stopping' ? 'skip' : 'wait', async (client, scope) => {
       const row = (await client.query<Row>(`SELECT r.* FROM valopay_records r WHERE r.id=$4 AND r.merchant_id=$1 AND r.kind='exports' AND ${ownership}`, [scope.id, scope.workspace_id, scope.principal_hash, claim.id])).rows[0];
       if (!row || row.status !== 'running' || row.data.leaseToken !== claim.token) return 'lost';
       // Attempts keep counting claims, and the private object key stays, so a file the stopped upload committed is adopted.
