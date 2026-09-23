@@ -16,6 +16,10 @@ export const lifecycleCandidateSchema = z.object({ kind: lifecycleKindSchema, me
 export type LifecycleCandidate = z.infer<typeof lifecycleCandidateSchema>;
 /** Terminal request payload or export artifact supplied by the scoped storage service. */
 export type LifecycleExternalCandidate = LifecycleCandidate & { kind: 'journal_payload' | 'export_file' };
+/** Why an export file is kept whatever the policy says: it is linked as evidence to a case that is still open, or it is the reviewed-close export of an approved Finance close review. `recordId` names the case or the review. */
+export const lifecycleEvidenceSchema = z.object({ reason: z.enum(['open_case', 'approved_close_review']), recordId: id }).strict();
+/** One reason an export file is kept as evidence. */
+export type LifecycleEvidence = z.infer<typeof lifecycleEvidenceSchema>;
 /** Policy revision to use when saving a bounded deletion preview. */
 export const lifecyclePreviewInputSchema = z.object({ expectedPolicyRevision: hash }).strict();
 /** Fresh approval of one exact unexpired deletion preview. */
@@ -30,7 +34,7 @@ export const lifecycleReceiptViewSchema = z.object({ id, kind: lifecycleKindSche
 export const lifecycleRunViewSchema = z.object({ id, merchantId: id, status: z.enum(['preview', 'approved', 'running', 'completed', 'attention']), updatedAt: at, createdAt: at, expiresAt: at, previewDigest: hash, policyRevision: hash, candidates: z.array(lifecycleCandidateSchema).max(100), candidateCount: z.number().int().nonnegative(), moreEligible: z.number().int().nonnegative(), approvedBy: z.string().nullable(), approvedAt: at.nullable(), receipts: z.array(lifecycleReceiptViewSchema).max(100), successful: z.number().int().nonnegative(), remaining: z.number().int().nonnegative(), auditRetained: z.literal(true), financialRecordsRetained: z.literal(true), syntheticOnly: z.literal(true) }).strict();
 /** Validated retention preview, approval and receipt read model. */
 export type LifecycleRunView = z.infer<typeof lifecycleRunViewSchema>;
-/** Administrator-only policy, holds, bounded inventory and saved retention runs. */
-export const lifecycleViewSchema = z.object({ merchantId: id, lenderName: z.string(), actor: id, asOf: at, policy: retentionPolicySchema, policyRevision: hash, holdRevision: hash, eligibleCount: z.number().int().nonnegative(), targets: z.array(lifecycleCandidateSchema.extend({ held: z.boolean() }).strict()).max(100), targetTotal: z.number().int().nonnegative(), targetOffset: z.number().int().nonnegative(), holds: z.array(z.object({ kind: lifecycleKindSchema, sourceId: id, reason: z.string(), actor: id, at }).strict()).max(100), holdTotal: z.number().int().nonnegative(), runs: z.array(lifecycleRunViewSchema).max(10), auditRetained: z.literal(true), financialRecordsRetained: z.literal(true), syntheticOnly: z.literal(true) }).strict();
+/** Administrator-only policy, holds, bounded inventory and saved retention runs. A source kept as evidence carries the reasons, is never eligible and is counted in `evidenceTotal`. */
+export const lifecycleViewSchema = z.object({ merchantId: id, lenderName: z.string(), actor: id, asOf: at, policy: retentionPolicySchema, policyRevision: hash, holdRevision: hash, eligibleCount: z.number().int().nonnegative(), evidenceTotal: z.number().int().nonnegative(), targets: z.array(lifecycleCandidateSchema.extend({ held: z.boolean(), evidence: z.array(lifecycleEvidenceSchema).max(10) }).strict()).max(100), targetTotal: z.number().int().nonnegative(), targetOffset: z.number().int().nonnegative(), holds: z.array(z.object({ kind: lifecycleKindSchema, sourceId: id, reason: z.string(), actor: id, at }).strict()).max(100), holdTotal: z.number().int().nonnegative(), runs: z.array(lifecycleRunViewSchema).max(10), auditRetained: z.literal(true), financialRecordsRetained: z.literal(true), syntheticOnly: z.literal(true) }).strict();
 /** Validated retention control response for one lender. */
 export type LifecycleView = z.infer<typeof lifecycleViewSchema>;

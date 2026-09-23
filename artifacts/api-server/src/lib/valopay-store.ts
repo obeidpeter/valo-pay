@@ -1,9 +1,11 @@
 import { historySections, historyKind, positionNote, type CustomerHistoryQuery, type HistorySection } from './customer-history';
 import { pool, Pool, poolSize, type PoolClient } from "@workspace/db";
+import * as tables from "@workspace/db/schema";
+import { getTableConfig } from "drizzle-orm/pg-core";
 import { getAuth, clerkClient } from "@clerk/express";
 import { staffMode, verifyStaff } from './staff-access';
 import { validateLenderAccessChange } from './staff-lender-access';
-import { bindRuntimeIdentity, bindRuntimeService, clearRuntimeInviteeGrants, runtimeIsolationEnabled, runtimeServiceRead } from './runtime-isolation';
+import { bindRuntimeIdentity, bindRuntimeService, clearRuntimeInviteeGrants, runtimeIsolationConfiguration, runtimeIsolationEnabled, runtimeServiceRead } from './runtime-isolation';
 import type { StaffLenderAccessInput } from '@workspace/valopay-schema';
 import type { VerifiedClerkSession } from './pilot-access';
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -27,7 +29,7 @@ import { beginStatement, checkOut, databaseLimits, failedTransaction, DatabaseLi
 import { createLenderGate } from './lender-gate';
 import { assertImportedCorrectionChange } from '../domain/import-corrections';
 import type { LifecycleExternalCandidate, LifecycleCandidate } from '@workspace/valopay-schema';
-import { assertLifecycleCandidate, eraseLifecycleRawCsv, recordLifecycleReceipt, lifecycleRunView } from '../domain/lifecycle';
+import { lifecycleCandidateCheck, eraseLifecycleRawCsv, recordLifecycleReceipt, lifecycleRunView } from '../domain/lifecycle';
 import { deleteRetainedExport } from './export-download';
 import { objectStorageClient } from './objectStorage';
 import { assertProviderEventChange } from '../providers/paystack-inbox';
@@ -204,7 +206,9 @@ export async function readOperation(ctx: StoreContext, merchantId: string, id: s
   if (!row) fail('Request not found in your lender history.', 404);
   if (row.actor !== ctx.actor || row.role !== ctx.role) fail('This request was submitted under a different role. Your current role cannot repeat it.', 403);
   if((row.request as any)?.purged)fail('This terminal request payload expired under the lender retention policy. Its identity and completion history are retained; it cannot run again.',410);
-  return {...row, request:await revealStored(row.request,{lender:merchantId,record:id,field:'request'}), receipt:await revealStored(row.receipt,{lender:merchantId,record:id,field:'receipt'})};
+  // The receipt is not opened: a retry replays the answer saved under the request's key, and cancelling reads only the status and key.
+  const { receipt: _receipt, ...entry } = row;
+  return {...entry, request:await revealStored(row.request,{lender:merchantId,record:id,field:'request'})};
 }
 /** Whether a receipt is stored under this request key. An entry that is not completed but has one belongs to a
  * write saved outside the journal, before it existed: that request was saved, so its entry is never cancelled. */
@@ -251,6 +255,24 @@ export async function rejectOperation(req: Request, bound: { id: string; merchan
     throw error;
   } finally { guard.release(); }
 }
+/**
+ * What the journal keeps of a completed request's answer: a reference to the
+ * record it saved, the only part Operations reads (its "Open saved result"
+ * link). The whole answer is stored once, under the request's key in
+ * valopay_idempotency, and that copy is what a retried key or a retry from
+ * Operations replays. A daily close answers with its whole record, about
+ * 100 KB for a pilot-scale lender, and used to be stored in both tables.
+ * Entries completed earlier keep their whole answer until retention removes it.
+ */
+export function journalReceipt(response: unknown): { id?: string; kind?: string; record?: { id: string; kind?: string } } {
+  const reference = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const { id, kind } = value as { id?: unknown; kind?: unknown };
+    return typeof id === "string" ? { id, ...(typeof kind === "string" ? { kind } : {}) } : undefined;
+  };
+  const record = reference((response as { record?: unknown } | null | undefined)?.record);
+  return { ...(record ? { record } : {}), ...reference(response) };
+}
 /** Receipt and domain writes commit together. A process crash cannot leave a
  * completed journal entry without the corresponding business write.
  *
@@ -265,7 +287,7 @@ export async function completeOperation(ctx: StoreContext, receipt: unknown) {
   if (!session.operationId) return;
   const merchantId = lockedMerchant(session), owner = session.owner || session.principal;
   const result = await session.client.query(`UPDATE valopay_operations SET status='completed',receipt=$5,updated_at=$6
-    WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND actor=$4 AND status<>'cancelled'`, [session.operationId, merchantId, owner, ctx.actor, await protectStored(receipt,{lender:merchantId,record:session.operationId,field:'receipt'}), ctx.now]);
+    WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND actor=$4 AND status<>'cancelled'`, [session.operationId, merchantId, owner, ctx.actor, await protectStored(journalReceipt(receipt),{lender:merchantId,record:session.operationId,field:'receipt'}), ctx.now]);
   if (rowsAffected(result)) return;
   const current = (await session.client.query<{ status: string }>('SELECT status FROM valopay_operations WHERE id=$1 AND merchant_id=$2 AND owner=$3', [session.operationId, merchantId, owner])).rows[0];
   if (current?.status === 'cancelled') fail('This request was cancelled before it completed. Nothing was saved, and it cannot run again.', 409);
@@ -1359,9 +1381,12 @@ export async function executeLifecycleRun(context:StoreContext,state:DomainState
  const external=await lifecycleInventory(context,state);
  const attempted=new Set(state.records.filter(r=>r.kind==='retention-receipts'&&r.data.runId===id).map(r=>`${r.data.kind}:${r.data.sourceId}`));
  const candidates=[...run.data.candidates as LifecycleCandidate[]].sort((a,b)=>Number(attempted.has(`${a.kind}:${a.sourceId}`))-Number(attempted.has(`${b.kind}:${b.sourceId}`)));
+ // Prepared once: nothing changes the state until the one candidate this request handles, so skipping the run's
+ // finished sources costs a lookup each rather than another pass over the lender.
+ const check=lifecycleCandidateCheck(state,context,id,external);
  for(const candidate of candidates){
   try{
-   if(!assertLifecycleCandidate(state,context,id,candidate,external))continue;
+   if(!check(candidate))continue;
   }catch{return recordLifecycleReceipt(state,context,id,candidate,'blocked','This source changed, is held or no longer meets the approved policy. Review the source and prepare a fresh preview.');}
   try{
    let result:'deleted'|'already_absent'='deleted';
@@ -1394,6 +1419,15 @@ export async function executeLifecycleRun(context:StoreContext,state:DomainState
  * which every request mutation appends to, so the scheduled close (a system
  * actor) never keeps an abandoned sandbox alive.  Ordinary DML inside the
  * caller's transaction.
+ *
+ * Nothing is deleted until every lender of the workspace is locked, in lender
+ * order and without waiting (SKIP LOCKED), like the workspace rows before
+ * them. The scheduled close, the export worker, Paystack test deliveries and
+ * requests all hold a lender's row while they write its records, so a
+ * workspace with a lender held elsewhere is left whole for a later sweep.
+ * Deleting the records first and then waiting for such a lender deadlocked
+ * with a close that saved it. The skipped workspace's other lenders stay
+ * locked until the caller's transaction ends; a scheduled close skips them.
  */
 export async function sweepExpiredWorkspaces(client: PoolClient, limit: number): Promise<number> {
   const stale = (await client.query<{ id: string }>(
@@ -1407,11 +1441,17 @@ export async function sweepExpiredWorkspaces(client: PoolClient, limit: number):
     [ANONYMOUS_WORKSPACE_DAYS, limit, `${SYSTEM_ACTOR_PREFIX}%`],
   )).rows.map((row) => row.id);
   if (!stale.length) return 0;
-  await client.query("DELETE FROM valopay_idempotency WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id = ANY($1::text[]))", [stale]);
-  await client.query("DELETE FROM valopay_records WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id = ANY($1::text[]))", [stale]);
-  await client.query("DELETE FROM valopay_merchants WHERE workspace_id = ANY($1::text[])", [stale]);
-  await client.query("DELETE FROM valopay_workspaces WHERE id = ANY($1::text[])", [stale]);
-  return stale.length;
+  // The workspace rows locked above keep each lender list fixed: adding a lender needs its workspace.
+  const lenders = (await client.query<{ id: string; workspace_id: string }>("SELECT id,workspace_id FROM valopay_merchants WHERE workspace_id = ANY($1::text[])", [stale])).rows;
+  const locked = new Set((await client.query<{ id: string }>("SELECT id FROM valopay_merchants WHERE workspace_id = ANY($1::text[]) ORDER BY id FOR UPDATE SKIP LOCKED", [stale])).rows.map((row) => row.id));
+  const busy = new Set(lenders.filter((lender) => !locked.has(lender.id)).map((lender) => lender.workspace_id));
+  const expired = stale.filter((id) => !busy.has(id));
+  if (!expired.length) return 0;
+  await client.query("DELETE FROM valopay_idempotency WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id = ANY($1::text[]))", [expired]);
+  await client.query("DELETE FROM valopay_records WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id = ANY($1::text[]))", [expired]);
+  await client.query("DELETE FROM valopay_merchants WHERE workspace_id = ANY($1::text[])", [expired]);
+  await client.query("DELETE FROM valopay_workspaces WHERE id = ANY($1::text[])", [expired]);
+  return expired.length;
 }
 
 async function seedWorkspace(client: PoolClient, workspace: WorkspaceRow, principal: string, anonymous: boolean, now: string) {
@@ -1593,14 +1633,71 @@ export async function initialiseCloseCursors(): Promise<number> {
   });
 }
 
+/** Where a table comes from: the base schema, or the migration in lib/db/migrations that adds it. */
+const tableMigrations: Record<string, string> = {
+  valopay_operations: "003_pilot_workflow.sql", valopay_teams: "003_pilot_workflow.sql", valopay_staff_memberships: "003_pilot_workflow.sql",
+  valopay_staff_invitations: "003_pilot_workflow.sql", valopay_staff_events: "003_pilot_workflow.sql", valopay_staff_lender_access: "004_staff_lender_access.sql",
+};
+const schemaSource = (table: string) => tableMigrations[table] ? `apply lib/db/migrations/${tableMigrations[table]}` : "create it from the Drizzle schema in lib/db";
+/** Every table this build uses, with every column the Drizzle schema in lib/db gives it. */
+const requiredTables = [tables.workspaces, tables.merchants, tables.records, tables.idempotency, tables.operations, tables.teams, tables.staffMemberships, tables.staffInvitations, tables.staffEvents, tables.staffLenderAccess]
+  .map((table) => { const config = getTableConfig(table); return { name: config.name, columns: config.columns.map((column) => column.name) }; });
+/**
+ * The indexes later migrations add, as PostgreSQL 16 writes their definitions
+ * after the name and table. They are compared by definition, not by name: an
+ * isolated runtime schema holds copies of the tables whose indexes carry
+ * generated names.
+ */
+const requiredIndexes = [
+  { name: "valopay_records_lender_kind_page", table: "valopay_records", definition: "USING btree (merchant_id, kind, created_at, id)", migration: "002_record_list_indexes.sql" },
+  { name: "valopay_records_lender_kind_status_page", table: "valopay_records", definition: "USING btree (merchant_id, kind, status, created_at, id)", migration: "002_record_list_indexes.sql" },
+  { name: "valopay_records_lender_customer", table: "valopay_records", definition: "USING btree (merchant_id, customer_id, created_at, id)", migration: "002_record_list_indexes.sql" },
+  { name: "valopay_records_lender_kind_updated", table: "valopay_records", definition: "USING btree (merchant_id, kind, updated_at)", migration: "002_record_list_indexes.sql" },
+  { name: "valopay_staff_lender_access_lender", table: "valopay_staff_lender_access", definition: "USING btree (merchant_id, membership_id)", migration: "004_staff_lender_access.sql" },
+  { name: "valopay_operations_pending", table: "valopay_operations", definition: "USING btree (merchant_id, owner) WHERE (status = 'pending'::text)", migration: "007_journal_and_lender_indexes.sql" },
+  { name: "valopay_merchants_workspace", table: "valopay_merchants", definition: "USING btree (workspace_id, id)", migration: "007_journal_and_lender_indexes.sql" },
+] as const;
+/** The columns and valid indexes of the application's tables in one schema (by default the connection's own), in one catalogue read. */
+const schemaCatalogue = `SELECT
+  (SELECT coalesce(json_agg(json_build_object('table',c.relname,'column',a.attname)),'[]') FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
+    WHERE n.nspname=coalesce($1::text,current_schema()) AND c.relname=ANY($2::text[]) AND c.relkind IN ('r','p')) AS columns,
+  (SELECT coalesce(json_agg(json_build_object('table',t.relname,'definition',regexp_replace(pg_get_indexdef(i.indexrelid),'^CREATE (UNIQUE )?INDEX \\S+ ON (ONLY )?\\S+ ',''))),'[]')
+    FROM pg_index i JOIN pg_class t ON t.oid=i.indrelid JOIN pg_namespace n ON n.oid=t.relnamespace
+    WHERE n.nspname=coalesce($1::text,current_schema()) AND t.relname=ANY($2::text[]) AND i.indisvalid AND i.indisready) AS indexes`;
+/** What the catalogue lacks of what this build needs, each with where it comes from; at most 20, then a count. */
+function schemaGaps(catalogue: { columns: Array<{ table: string; column: string }>; indexes: Array<{ table: string; definition: string }> }): string[] {
+  const present = new Map<string, Set<string>>(), missing: string[] = [];
+  for (const { table, column } of catalogue.columns) present.set(table, (present.get(table) ?? new Set<string>()).add(column));
+  for (const table of requiredTables) {
+    const columns = present.get(table.name);
+    if (!columns) { missing.push(`table ${table.name}: ${schemaSource(table.name)}`); continue; }
+    for (const column of table.columns) if (!columns.has(column)) missing.push(`column ${table.name}.${column}: ${schemaSource(table.name)}`);
+  }
+  const indexes = new Set(catalogue.indexes.map((index) => `${index.table} ${index.definition}`));
+  // A missing table is named above; its indexes are not listed again.
+  for (const index of requiredIndexes) if (present.has(index.table) && !indexes.has(`${index.table} ${index.definition}`)) missing.push(`index ${index.name}: apply lib/db/migrations/${index.migration}`);
+  return missing.length > 20 ? [...missing.slice(0, 20), `and ${missing.length - 20} more`] : missing;
+}
+/** The readiness check's findings: whether the database answered, and whether it holds everything this build needs. */
+export interface DatabaseReadiness {
+  status: "ok" | "failed"; latencyMs: number; error?: string;
+  schema: { status: "ok" | "incomplete" | "unchecked"; missing: string[] };
+}
 let readiness: InstanceType<typeof Pool> | undefined;
 /**
  * Readiness: one bounded round trip to the database, on its own connection,
  * so a request pool that is busy does not read as a database that cannot be
- * reached. Never throws; the reason stays in the caller's log, not in an answer.
+ * reached. The round trip reads the catalogue, so a database that answers but
+ * lacks a table, a column or an index this build needs (a migration not yet
+ * applied) is not ready either, and says what is missing; a SELECT 1 could not
+ * tell. It checks the application's schema: the isolated runtime schema when
+ * runtime isolation is on, otherwise the connection's own (`schema` names
+ * another, for tests). Never throws; a connection error stays in the caller's
+ * log, not in an answer.
  */
-export async function pingDatabase(timeoutMs = 2000): Promise<{ status: "ok" | "failed"; latencyMs: number; error?: string }> {
-  const started = performance.now();
+export async function pingDatabase(options: { timeoutMs?: number; schema?: string } = {}): Promise<DatabaseReadiness> {
+  const timeoutMs = options.timeoutMs ?? 2000, started = performance.now();
   let timer: NodeJS.Timeout | undefined;
   try {
     if (!readiness) {
@@ -1608,13 +1705,15 @@ export async function pingDatabase(timeoutMs = 2000): Promise<{ status: "ok" | "
       // An idle connection that fails is replaced; the next ping reports whether the database answers.
       readiness.on("error", () => {});
     }
-    await Promise.race([
-      readiness.query("SELECT 1"),
+    const schema = options.schema ?? runtimeIsolationConfiguration()?.schema ?? null;
+    const catalogue = (await Promise.race([
+      readiness.query<{ columns: Array<{ table: string; column: string }>; indexes: Array<{ table: string; definition: string }> }>(schemaCatalogue, [schema, requiredTables.map((table) => table.name)]),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${timeoutMs} ms`)), timeoutMs); }),
-    ]);
-    return { status: "ok", latencyMs: Math.round(performance.now() - started) };
+    ])).rows[0]!;
+    const missing = schemaGaps(catalogue);
+    return { status: "ok", latencyMs: Math.round(performance.now() - started), schema: { status: missing.length ? "incomplete" : "ok", missing } };
   } catch (error) {
-    return { status: "failed", latencyMs: Math.round(performance.now() - started), error: error instanceof Error ? error.message : String(error) };
+    return { status: "failed", latencyMs: Math.round(performance.now() - started), error: error instanceof Error ? error.message : String(error), schema: { status: "unchecked", missing: [] } };
   } finally {
     if (timer) clearTimeout(timer);
   }

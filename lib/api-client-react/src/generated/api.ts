@@ -273,8 +273,8 @@ export const getReadinessCheckUrl = () => {
 }
 
 /**
- * Answers 503 with status degraded while the database does not answer within the check's time limit; the reason is in the log, not the answer. Needs no sandbox or sign-in.
- * @summary Readiness: one bounded round trip to the database
+ * Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table, column or index this build needs: checks.schema names each one with the migration that adds it. A connection error is in the log, not the answer. Needs no sandbox or sign-in.
+ * @summary Readiness: one bounded round trip to the database, which also checks its schema
  */
 export const readinessCheck = async ( options?: Parameters<typeof customFetch>[1]): Promise<ReadinessStatus> => {
 
@@ -321,7 +321,7 @@ export type ReadinessCheckQueryError = ErrorType<void | ReadinessStatus>
 
 
 /**
- * @summary Readiness: one bounded round trip to the database
+ * @summary Readiness: one bounded round trip to the database, which also checks its schema
  */
 
 export function useReadinessCheck<TData = Awaited<ReturnType<typeof readinessCheck>>, TError = ErrorType<void | ReadinessStatus>>(

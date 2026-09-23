@@ -5,10 +5,12 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
-import type { DatabaseCheck } from './databaseCheck';
-import type { SchemaCheck } from './schemaCheck';
 
-export type ReadinessStatusChecks = {
-  database: DatabaseCheck;
-  schema: SchemaCheck;
-};
+export type SchemaCheckStatus = typeof SchemaCheckStatus[keyof typeof SchemaCheckStatus];
+
+
+export const SchemaCheckStatus = {
+  ok: 'ok',
+  incomplete: 'incomplete',
+  unchecked: 'unchecked',
+} as const;

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { retentionPolicySchema, lifecycleRunViewSchema, type LifecycleExternalCandidate } from '@workspace/valopay-schema';
 import { seedMerchant } from '../src/lib/valopay-seed';
 import { makeRecord } from '../src/domain/records';
-import { lifecycleView, lifecyclePolicy, lifecycleHolds, lifecyclePreview, approveLifecycleRun, saveLifecyclePolicy, setLifecycleHold, assertLifecycleCandidate, eraseLifecycleRawCsv, recordLifecycleReceipt } from '../src/domain/lifecycle';
+import { lifecycleView, lifecyclePolicy, lifecycleHolds, lifecyclePreview, approveLifecycleRun, saveLifecyclePolicy, setLifecycleHold, assertLifecycleCandidate, lifecycleCandidateCheck, eraseLifecycleRawCsv, recordLifecycleReceipt } from '../src/domain/lifecycle';
 import type { DomainState } from '../src/domain/types';
 
 const ctx = { actor: 'Clerk:admin', role: 'Admin', now: '2026-09-25T10:00:00.000Z' };
@@ -19,6 +19,12 @@ function enable(state: DomainState) { return saveLifecyclePolicy(state, ctx, { p
 function preview(state: DomainState, external: LifecycleExternalCandidate[] = []) { return lifecyclePreview(state, ctx, { expectedPolicyRevision: lifecyclePolicy(state).revision }, external); }
 function approve(state: DomainState, run: ReturnType<typeof preview>, external: LifecycleExternalCandidate[] = []) { return approveLifecycleRun(state, ctx, run.id, { expectedUpdatedAt: run.updatedAt, previewDigest: run.previewDigest, reason: 'Reviewed the exact eligible sample source artifacts.' }, external); }
 function hold(state: DomainState, sourceId: string, held: boolean) { return setLifecycleHold(state, ctx, { kind: 'raw_csv', sourceId, held, expectedHoldRevision: lifecycleHolds(state).revision, reason: held ? 'Keep this source for an unresolved sample case.' : 'The sample review is complete; release the source hold.' }); }
+/** The same lender, counting every record read, so a test can see how many passes over the lender a call makes. */
+function counted(state: DomainState) {
+  let reads = 0;
+  const records = new Proxy(state.records, { get(target, key, receiver) { if (typeof key === 'string' && /^[0-9]+$/.test(key)) reads += 1; return Reflect.get(target, key, receiver); } });
+  return { state: { ...state, records }, reads: () => reads, reset() { reads = 0; } };
+}
 {
   // Retention screens need the committed CSV itself: a batch the route did not open is refused, not left out of the inventory.
   for (const field of ['csv', 'check']) {
@@ -130,5 +136,55 @@ function hold(state: DomainState, sourceId: string, held: boolean) { return setL
   check(run.candidateCount === 100 && run.moreEligible === 5, 'each approved deletion manifest is bounded to100 exact artifacts');
   check(lifecycleView(state, ctx).targets.length === 100 && lifecycleView(state, ctx, [], 100).targets.length === 5, 'inventory has bounded pages');
   refuses(() => approveLifecycleRun(state, ctx, 'different-run', { expectedUpdatedAt: run.updatedAt, previewDigest: run.previewDigest, reason: 'Not a run in this lender.' }), 404);
+}
+{
+  // Checking sources against the policy, the holds and the evidence reads the lender a fixed number of times, however
+  // many sources there are. The view, a preview, an approval and the executor's check each used to read every record
+  // again for every source: 5,010 journal entries on a 25,000-record lender took about 4 s a request.
+  const { state, batch } = fixture('scale'); enable(state);
+  for (let i = 0; i < 1500; i++) state.records.push({ id: `scale-customer-${i}`, merchantId: state.merchant.id, kind: 'customers', name: `Synthetic customer ${i}`, status: 'active', reference: `SCALE-${i}`, amountKobo: 0, customerId: '', createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z', data: { synthetic: true } });
+  const external: LifecycleExternalCandidate[] = Array.from({ length: 1500 }, (_, i) => ({ kind: 'journal_payload', merchantId: state.merchant.id, sourceId: `operation-${String(i).padStart(4, '0')}`, version: 'v1', createdAt: '2026-08-01T12:00:00.000Z', label: 'Completed sample request', digest: 'a'.repeat(64), status: 'completed' }));
+  setLifecycleHold(state, ctx, { kind: 'journal_payload', sourceId: 'operation-0000', held: true, expectedHoldRevision: lifecycleHolds(state).revision, reason: 'Keep one request for a sample dispute.' }, external);
+  const size = state.records.length + external.length, bound = 25 * size, probe = counted(state);
+  const view = lifecycleView(probe.state, ctx, external);
+  check(view.targetTotal === 1501 && view.eligibleCount === 1500 && view.targets[0]!.sourceId === batch.id, 'every source is listed, and the held one is not eligible');
+  check(probe.reads() <= bound, `the view reads the lender a fixed number of times (${probe.reads()} reads for ${size} records and sources)`);
+  probe.reset(); const run = lifecyclePreview(probe.state, ctx, { expectedPolicyRevision: lifecyclePolicy(state).revision }, external);
+  check(run.candidateCount === 100 && run.moreEligible === 1400 && probe.reads() <= bound, `a preview reads the lender a fixed number of times (${probe.reads()} reads)`);
+  probe.reset(); const approved = approveLifecycleRun(probe.state, ctx, run.id, { expectedUpdatedAt: run.updatedAt, previewDigest: run.previewDigest, reason: 'Reviewed the exact eligible sample source artifacts.' }, external);
+  check(approved.status === 'approved' && probe.reads() <= bound, `an approval reads the lender a fixed number of times (${probe.reads()} reads)`);
+  probe.reset(); const executorCheck = lifecycleCandidateCheck(probe.state, ctx, approved.id, external);
+  check(approved.candidates.every(candidate => executorCheck(candidate)) && probe.reads() <= bound, `the executor's check of a whole run reads the lender a fixed number of times (${probe.reads()} reads)`);
+}
+{
+  // Export files the lender relies on as evidence are never offered for deletion, and the view says why: one linked to
+  // a case that is still open, and the reviewed-close export of an approved Finance review. They used to be listed as
+  // eligible with nothing to prompt a hold.
+  const { state, batch } = fixture('evidence'); enable(state);
+  const exportFile = (name: string, data: Record<string, unknown> = {}) => makeRecord(state, 'exports', { name, status: 'ready', createdAt: '2026-08-02T00:00:00.000Z', data: { kind: 'customer-pack', format: 'json', bucket: 'synthetic-private', objectName: `exports/${name}.json`, checksum: 'c'.repeat(64), generatedAt: '2026-08-02T00:00:00.000Z', ...data } });
+  const review = makeRecord(state, 'close-reviews', { name: 'Approved sample close review', status: 'approved', createdAt: '2026-08-02T00:00:00.000Z', data: { closeId: 'sample-close', snapshotDigest: 'e'.repeat(64) } });
+  const caseFile = exportFile('case-evidence'), reviewFile = exportFile('reviewed-close', { kind: 'reviewed-close', closeReviewId: review.id, closeSnapshotDigest: 'e'.repeat(64) }), plainFile = exportFile('unlinked');
+  const caseData = { assignee: ctx.actor, assigneeName: 'Sample administrator', nextAction: 'Review the linked export', nextActionAt: '2026-10-01T10:00:00.000Z', evidenceIds: [caseFile.id] };
+  const openCase = makeRecord(state, 'exceptions', { name: 'Open sample case', status: 'in_progress', createdAt: '2026-08-02T00:00:00.000Z', data: { type: 'unmatched_payment', case: caseData } });
+  const external = (): LifecycleExternalCandidate[] => [caseFile, reviewFile, plainFile].map(file => ({ kind: 'export_file', merchantId: state.merchant.id, sourceId: file.id, version: file.updatedAt, createdAt: '2026-08-02T00:00:00.000Z', label: 'Private export file', digest: 'd'.repeat(64), status: 'ready' }));
+  const view = lifecycleView(state, ctx, external()), target = (id: string) => view.targets.find(item => item.sourceId === id)!;
+  assert.deepEqual(target(caseFile.id).evidence, [{ reason: 'open_case', recordId: openCase.id }], 'an export linked to an open case says so'); checks += 1;
+  assert.deepEqual(target(reviewFile.id).evidence, [{ reason: 'approved_close_review', recordId: review.id }], 'the reviewed-close export of an approved review says so'); checks += 1;
+  check(target(plainFile.id).evidence.length === 0 && target(batch.id).evidence.length === 0, 'other sources carry no evidence reason');
+  check(view.eligibleCount === 2 && view.evidenceTotal === 2, 'evidence files are not eligible; the raw CSV and the unlinked export are');
+  const run = preview(state, external());
+  assert.deepEqual(run.candidates.map(candidate => candidate.sourceId).sort(), [batch.id, plainFile.id].sort(), 'a preview leaves evidence out'); checks += 1;
+  // Linked as evidence after the preview, approval is refused; after the approval, the executor's check blocks deletion.
+  caseData.evidenceIds = [caseFile.id, plainFile.id];
+  refuses(() => approve(state, run, external()), 409);
+  caseData.evidenceIds = [caseFile.id];
+  const approved = approve(state, preview(state, external()), external()), file = approved.candidates.find(candidate => candidate.sourceId === plainFile.id)!;
+  caseData.evidenceIds = [caseFile.id, plainFile.id];
+  refuses(() => assertLifecycleCandidate(state, ctx, approved.id, file, external()), 409);
+  // A resolved case no longer keeps its evidence; an approved review's export stays evidence.
+  openCase.status = 'resolved';
+  const after = lifecycleView(state, ctx, external());
+  check(after.targets.every(item => item.sourceId === reviewFile.id || item.evidence.length === 0) && after.evidenceTotal === 1, 'resolving the case releases its evidence');
+  check(assertLifecycleCandidate(state, ctx, approved.id, file, external()), 'and the approved file may then be deleted');
 }
 console.log(`Lifecycle retention: ${checks} checks passed.`);

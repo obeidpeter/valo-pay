@@ -20,6 +20,7 @@ const { DatabaseLimitError } = await import("../src/lib/database-limits.js");
 const { markRolledBack } = await import("../src/lib/transaction-outcome.js");
 const { schedulerStatus, markSchedulerOff } = await import("../src/lib/close-scheduler.js");
 const { BUILD } = await import("../src/lib/build-info.js");
+const { readinessAnswer } = await import("../src/routes/health.js");
 
 let checks = 0;
 const lines = (): Array<Record<string, any>> => readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
@@ -68,6 +69,18 @@ const waitedChange = handled(markRolledBack(new DatabaseLimitError("workspace_bu
 assert.deepEqual([waitedChange.status, waitedChange.headers["Retry-After"], waitedChange.body.committed, waitedChange.logged[0]!.level, waitedChange.logged[0]!.fields["limit"]], [503, "2", false, "warn", "workspace_busy"], "a team or persona change that could not start is a warning, retried, with nothing saved");
 checks += 18;
 
+// ---- Readiness: a database that answers but lacks a table, column or index this build needs is not ready, and the answer names what is missing ----
+const complete = readinessAnswer({ status: "ok", latencyMs: 3, schema: { status: "ok", missing: [] } });
+assert.deepEqual([complete.httpStatus, complete.body.status, complete.body.checks.schema.status], [200, "ok", "ok"]);
+const missingIndex = "index valopay_operations_pending: apply lib/db/migrations/007_journal_and_lender_indexes.sql";
+const incomplete = readinessAnswer({ status: "ok", latencyMs: 3, schema: { status: "incomplete", missing: [missingIndex] } });
+assert.deepEqual([incomplete.httpStatus, incomplete.body.status, incomplete.body.checks.database.status], [503, "degraded", "ok"], "an answering database without what the build needs is not ready");
+assert.deepEqual(incomplete.body.checks.schema, { status: "incomplete", missing: [missingIndex] }, "and the answer says what is missing and how to add it");
+const unreachable = readinessAnswer({ status: "failed", latencyMs: 2000, error: "connect ECONNREFUSED 127.0.0.1:5432", schema: { status: "unchecked", missing: [] } });
+assert.deepEqual([unreachable.httpStatus, unreachable.body.status, unreachable.body.checks.database.status, unreachable.body.checks.schema.status], [503, "degraded", "failed", "unchecked"]);
+assert.ok(!JSON.stringify(unreachable.body).includes("ECONNREFUSED"), "the connection error stays in the log");
+checks += 6;
+
 // ---- Over HTTP: liveness, readiness, ids on answers, refusals in the log, nothing secret written ----
 const server = app.listen(0);
 try {
@@ -93,14 +106,15 @@ try {
 
   const started = Date.now();
   const ready = await fetch(`${base}/api/readyz`);
-  const readyBody = await ready.json() as { status: string; build: string; checks: { database: { status: string; latencyMs: number } } };
+  const readyBody = await ready.json() as { status: string; build: string; checks: { database: { status: string; latencyMs: number }; schema: { status: string; missing: string[] } } };
   assert.equal(ready.status, 503, "no database behind the placeholder address: not ready");
   assert.equal(readyBody.status, "degraded");
   assert.equal(readyBody.checks.database.status, "failed");
   assert.ok(typeof readyBody.checks.database.latencyMs === "number");
+  assert.deepEqual(readyBody.checks.schema, { status: "unchecked", missing: [] }, "a database that does not answer has its schema unchecked");
   assert.ok(Date.now() - started < 5_000, "the readiness check is bounded");
   assert.ok(!JSON.stringify(readyBody).includes("127.0.0.1"), "the answer does not describe the database");
-  checks += 6;
+  checks += 7;
 
   // A request that needs the database while it cannot be reached is turned away with a 503 that says when to retry.
   const unreachable = await fetch(`${base}/api/v1/workspace`);

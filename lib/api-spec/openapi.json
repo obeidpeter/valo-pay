@@ -77,7 +77,7 @@
             "description": "Conflict"
           },
           "503": {
-            "description": "Not ready: the database cannot be reached within the check's time limit",
+            "description": "Not ready: the database cannot be reached within the check's time limit, or lacks a table, column or index this build needs",
             "content": {
               "application/json": {
                 "schema": {
@@ -87,8 +87,8 @@
             }
           }
         },
-        "summary": "Readiness: one bounded round trip to the database",
-        "description": "Answers 503 with status degraded while the database does not answer within the check's time limit; the reason is in the log, not the answer. Needs no sandbox or sign-in."
+        "summary": "Readiness: one bounded round trip to the database, which also checks its schema",
+        "description": "Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table, column or index this build needs: checks.schema names each one with the migration that adds it. A connection error is in the log, not the answer. Needs no sandbox or sign-in."
       }
     },
     "/v1/workspace": {
@@ -4595,6 +4595,30 @@
         ],
         "description": "One round trip to the database and how long it took."
       },
+      "SchemaCheck": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "incomplete",
+              "unchecked"
+            ]
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "status",
+          "missing"
+        ],
+        "description": "Whether the database holds every table, column and index this build needs: missing names each one that is not there and the migration that adds it; unchecked while the database does not answer."
+      },
       "ReadinessStatus": {
         "type": "object",
         "properties": {
@@ -4613,10 +4637,14 @@
             "properties": {
               "database": {
                 "$ref": "#/components/schemas/DatabaseCheck"
+              },
+              "schema": {
+                "$ref": "#/components/schemas/SchemaCheck"
               }
             },
             "required": [
-              "database"
+              "database",
+              "schema"
             ]
           }
         },
@@ -4625,7 +4653,7 @@
           "build",
           "checks"
         ],
-        "description": "The readiness answer: ok, or degraded while the database does not answer."
+        "description": "The readiness answer: ok, or degraded while the database does not answer or lacks a table, column or index this build needs."
       },
       "RecordData": {
         "type": "object",
@@ -9471,6 +9499,10 @@
             "type": "integer",
             "minimum": 0
           },
+          "evidenceTotal": {
+            "type": "integer",
+            "minimum": 0
+          },
           "targets": {
             "type": "array",
             "items": {
@@ -9524,6 +9556,32 @@
                 },
                 "held": {
                   "type": "boolean"
+                },
+                "evidence": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "open_case",
+                          "approved_close_review"
+                        ]
+                      },
+                      "recordId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      }
+                    },
+                    "required": [
+                      "reason",
+                      "recordId"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "maxItems": 10
                 }
               },
               "required": [
@@ -9535,7 +9593,8 @@
                 "label",
                 "digest",
                 "status",
-                "held"
+                "held",
+                "evidence"
               ],
               "additionalProperties": false
             },
@@ -9853,6 +9912,7 @@
           "policyRevision",
           "holdRevision",
           "eligibleCount",
+          "evidenceTotal",
           "targets",
           "targetTotal",
           "targetOffset",

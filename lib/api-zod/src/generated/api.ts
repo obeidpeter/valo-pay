@@ -41,8 +41,8 @@ export const HealthCheckResponse = zod.object({
 
 
 /**
- * Answers 503 with status degraded while the database does not answer within the check's time limit; the reason is in the log, not the answer. Needs no sandbox or sign-in.
- * @summary Readiness: one bounded round trip to the database
+ * Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table, column or index this build needs: checks.schema names each one with the migration that adds it. A connection error is in the log, not the answer. Needs no sandbox or sign-in.
+ * @summary Readiness: one bounded round trip to the database, which also checks its schema
  */
 export const ReadinessCheckResponse = zod.object({
   "status": zod.enum(['ok', 'degraded']),
@@ -51,9 +51,13 @@ export const ReadinessCheckResponse = zod.object({
   "database": zod.object({
   "status": zod.enum(['ok', 'failed']),
   "latencyMs": zod.number().int()
-}).describe('One round trip to the database and how long it took.')
+}).describe('One round trip to the database and how long it took.'),
+  "schema": zod.object({
+  "status": zod.enum(['ok', 'incomplete', 'unchecked']),
+  "missing": zod.array(zod.string())
+}).describe('Whether the database holds every table, column and index this build needs: missing names each one that is not there and the migration that adds it; unchecked while the database does not answer.')
 })
-}).describe('The readiness answer: ok, or degraded while the database does not answer.')
+}).describe('The readiness answer: ok, or degraded while the database does not answer or lacks a table, column or index this build needs.')
 
 
 /**
@@ -3383,6 +3387,8 @@ export const getLifecycleResponsePolicyRevisionRegExp = new RegExp('^[a-f0-9]{64
 export const getLifecycleResponseHoldRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
 export const getLifecycleResponseEligibleCountMin = 0;
 
+export const getLifecycleResponseEvidenceTotalMin = 0;
+
 export const getLifecycleResponseTargetsItemMerchantIdMax = 200;
 
 export const getLifecycleResponseTargetsItemSourceIdMax = 200;
@@ -3392,6 +3398,10 @@ export const getLifecycleResponseTargetsItemVersionMax = 200;
 export const getLifecycleResponseTargetsItemLabelMax = 200;
 
 export const getLifecycleResponseTargetsItemDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const getLifecycleResponseTargetsItemEvidenceItemRecordIdMax = 200;
+
+export const getLifecycleResponseTargetsItemEvidenceMax = 10;
+
 export const getLifecycleResponseTargetsMax = 100;
 
 export const getLifecycleResponseTargetTotalMin = 0;
@@ -3457,6 +3467,7 @@ export const GetLifecycleResponse = zod.object({
   "policyRevision": zod.string().regex(getLifecycleResponsePolicyRevisionRegExp),
   "holdRevision": zod.string().regex(getLifecycleResponseHoldRevisionRegExp),
   "eligibleCount": zod.number().int().min(getLifecycleResponseEligibleCountMin),
+  "evidenceTotal": zod.number().int().min(getLifecycleResponseEvidenceTotalMin),
   "targets": zod.array(zod.object({
   "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
   "merchantId": zod.string().min(1).max(getLifecycleResponseTargetsItemMerchantIdMax),
@@ -3466,7 +3477,11 @@ export const GetLifecycleResponse = zod.object({
   "label": zod.string().min(1).max(getLifecycleResponseTargetsItemLabelMax),
   "digest": zod.string().regex(getLifecycleResponseTargetsItemDigestRegExp),
   "status": zod.enum(['committed', 'completed', 'cancelled', 'ready', 'failed']),
-  "held": zod.boolean()
+  "held": zod.boolean(),
+  "evidence": zod.array(zod.object({
+  "reason": zod.enum(['open_case', 'approved_close_review']),
+  "recordId": zod.string().min(1).max(getLifecycleResponseTargetsItemEvidenceItemRecordIdMax)
+})).max(getLifecycleResponseTargetsItemEvidenceMax)
 })).max(getLifecycleResponseTargetsMax),
   "targetTotal": zod.number().int().min(getLifecycleResponseTargetTotalMin),
   "targetOffset": zod.number().int().min(getLifecycleResponseTargetOffsetMin),
@@ -3663,6 +3678,8 @@ export const saveRetentionPolicyResponsePolicyRevisionRegExp = new RegExp('^[a-f
 export const saveRetentionPolicyResponseHoldRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
 export const saveRetentionPolicyResponseEligibleCountMin = 0;
 
+export const saveRetentionPolicyResponseEvidenceTotalMin = 0;
+
 export const saveRetentionPolicyResponseTargetsItemMerchantIdMax = 200;
 
 export const saveRetentionPolicyResponseTargetsItemSourceIdMax = 200;
@@ -3672,6 +3689,10 @@ export const saveRetentionPolicyResponseTargetsItemVersionMax = 200;
 export const saveRetentionPolicyResponseTargetsItemLabelMax = 200;
 
 export const saveRetentionPolicyResponseTargetsItemDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const saveRetentionPolicyResponseTargetsItemEvidenceItemRecordIdMax = 200;
+
+export const saveRetentionPolicyResponseTargetsItemEvidenceMax = 10;
+
 export const saveRetentionPolicyResponseTargetsMax = 100;
 
 export const saveRetentionPolicyResponseTargetTotalMin = 0;
@@ -3737,6 +3758,7 @@ export const SaveRetentionPolicyResponse = zod.object({
   "policyRevision": zod.string().regex(saveRetentionPolicyResponsePolicyRevisionRegExp),
   "holdRevision": zod.string().regex(saveRetentionPolicyResponseHoldRevisionRegExp),
   "eligibleCount": zod.number().int().min(saveRetentionPolicyResponseEligibleCountMin),
+  "evidenceTotal": zod.number().int().min(saveRetentionPolicyResponseEvidenceTotalMin),
   "targets": zod.array(zod.object({
   "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
   "merchantId": zod.string().min(1).max(saveRetentionPolicyResponseTargetsItemMerchantIdMax),
@@ -3746,7 +3768,11 @@ export const SaveRetentionPolicyResponse = zod.object({
   "label": zod.string().min(1).max(saveRetentionPolicyResponseTargetsItemLabelMax),
   "digest": zod.string().regex(saveRetentionPolicyResponseTargetsItemDigestRegExp),
   "status": zod.enum(['committed', 'completed', 'cancelled', 'ready', 'failed']),
-  "held": zod.boolean()
+  "held": zod.boolean(),
+  "evidence": zod.array(zod.object({
+  "reason": zod.enum(['open_case', 'approved_close_review']),
+  "recordId": zod.string().min(1).max(saveRetentionPolicyResponseTargetsItemEvidenceItemRecordIdMax)
+})).max(saveRetentionPolicyResponseTargetsItemEvidenceMax)
 })).max(saveRetentionPolicyResponseTargetsMax),
   "targetTotal": zod.number().int().min(saveRetentionPolicyResponseTargetTotalMin),
   "targetOffset": zod.number().int().min(saveRetentionPolicyResponseTargetOffsetMin),
@@ -3849,6 +3875,8 @@ export const setRetentionHoldResponsePolicyRevisionRegExp = new RegExp('^[a-f0-9
 export const setRetentionHoldResponseHoldRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
 export const setRetentionHoldResponseEligibleCountMin = 0;
 
+export const setRetentionHoldResponseEvidenceTotalMin = 0;
+
 export const setRetentionHoldResponseTargetsItemMerchantIdMax = 200;
 
 export const setRetentionHoldResponseTargetsItemSourceIdMax = 200;
@@ -3858,6 +3886,10 @@ export const setRetentionHoldResponseTargetsItemVersionMax = 200;
 export const setRetentionHoldResponseTargetsItemLabelMax = 200;
 
 export const setRetentionHoldResponseTargetsItemDigestRegExp = new RegExp('^[a-f0-9]{64}$');
+export const setRetentionHoldResponseTargetsItemEvidenceItemRecordIdMax = 200;
+
+export const setRetentionHoldResponseTargetsItemEvidenceMax = 10;
+
 export const setRetentionHoldResponseTargetsMax = 100;
 
 export const setRetentionHoldResponseTargetTotalMin = 0;
@@ -3923,6 +3955,7 @@ export const SetRetentionHoldResponse = zod.object({
   "policyRevision": zod.string().regex(setRetentionHoldResponsePolicyRevisionRegExp),
   "holdRevision": zod.string().regex(setRetentionHoldResponseHoldRevisionRegExp),
   "eligibleCount": zod.number().int().min(setRetentionHoldResponseEligibleCountMin),
+  "evidenceTotal": zod.number().int().min(setRetentionHoldResponseEvidenceTotalMin),
   "targets": zod.array(zod.object({
   "kind": zod.enum(['raw_csv', 'journal_payload', 'export_file']),
   "merchantId": zod.string().min(1).max(setRetentionHoldResponseTargetsItemMerchantIdMax),
@@ -3932,7 +3965,11 @@ export const SetRetentionHoldResponse = zod.object({
   "label": zod.string().min(1).max(setRetentionHoldResponseTargetsItemLabelMax),
   "digest": zod.string().regex(setRetentionHoldResponseTargetsItemDigestRegExp),
   "status": zod.enum(['committed', 'completed', 'cancelled', 'ready', 'failed']),
-  "held": zod.boolean()
+  "held": zod.boolean(),
+  "evidence": zod.array(zod.object({
+  "reason": zod.enum(['open_case', 'approved_close_review']),
+  "recordId": zod.string().min(1).max(setRetentionHoldResponseTargetsItemEvidenceItemRecordIdMax)
+})).max(setRetentionHoldResponseTargetsItemEvidenceMax)
 })).max(setRetentionHoldResponseTargetsMax),
   "targetTotal": zod.number().int().min(setRetentionHoldResponseTargetTotalMin),
   "targetOffset": zod.number().int().min(setRetentionHoldResponseTargetOffsetMin),

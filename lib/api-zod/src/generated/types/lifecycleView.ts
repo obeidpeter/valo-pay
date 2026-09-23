@@ -33,6 +33,8 @@ export interface LifecycleView {
   holdRevision: string;
   /** @minimum 0 */
   eligibleCount: number;
+  /** @minimum 0 */
+  evidenceTotal: number;
   /** @maxItems 100 */
   targets: LifecycleViewTargetsItem[];
   /** @minimum 0 */

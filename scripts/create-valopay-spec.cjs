@@ -8,7 +8,8 @@ const schemas = {
   SchedulerRun: obj({ runId: str, at: str, durationMs: num, initialised: num, examined: num, closed: num, skipped: num, failed: num }),
   SchedulerStatus: obj({ state: { type: "string", enum: ["not_started", "running", "off", "stopped"] }, intervalMs: { type: ["integer", "null"] }, ticks: num, lastTickAt: { type: ["string", "null"] }, lastRun: { oneOf: [ref("SchedulerRun"), { type: "null" }] } }),
   DatabaseCheck: obj({ status: { type: "string", enum: ["ok", "failed"] }, latencyMs: num }),
-  ReadinessStatus: obj({ status: { type: "string", enum: ["ok", "degraded"] }, build: str, checks: obj({ database: ref("DatabaseCheck") }) }),
+  SchemaCheck: obj({ status: { type: "string", enum: ["ok", "incomplete", "unchecked"] }, missing: { type: "array", items: str } }),
+  ReadinessStatus: obj({ status: { type: "string", enum: ["ok", "degraded"] }, build: str, checks: obj({ database: ref("DatabaseCheck"), schema: ref("SchemaCheck") }) }),
   RecordData: { type: "object", additionalProperties: {} },
   ValopayRecord: obj({ id: str, merchantId: str, kind: str, name: str, status: str, reference: str, amountKobo: num, customerId: str, createdAt: str, updatedAt: str, data: ref("RecordData") }),
   RecordInput: obj({ name: str, status: str, reference: str, amountKobo: {type:"integer", minimum:0}, customerId: str, data: ref("RecordData") }, ["name"]),
@@ -73,7 +74,7 @@ const recordId = {name:"id",in:"query",schema:str,description:"Only this exact r
 add("/healthz","get","healthCheck","HealthStatus");
 add("/readyz","get","readinessCheck","ReadinessStatus");
 const describe = (path, method, summary, description) => Object.assign(paths[path][method], { summary, description });
-paths["/readyz"].get.responses["503"]={description:"Not ready: the database cannot be reached within the check's time limit",content:{"application/json":{schema:ref("ReadinessStatus")}}};
+paths["/readyz"].get.responses["503"]={description:"Not ready: the database cannot be reached within the check's time limit, or lacks a table, column or index this build needs",content:{"application/json":{schema:ref("ReadinessStatus")}}};
 add("/v1/workspace","get","getWorkspace","Workspace");
 add("/v1/overview","get","getOverview","Overview",null,[merchant]);
 add("/v1/records/{kind}","get","listRecords","RecordList",null,[pathParam("kind"),merchant,search,status,limit,offset,updatedSince,customerId,recordId]);
@@ -93,7 +94,7 @@ paths["/v1/exports/{id}/download"]={get:{operationId:"downloadExport",tags:["val
 paths["/v1/openapi.json"]={get:{operationId:"getOpenApiDocument",tags:["valopay"],responses:{"200":{description:"Versioned public API specification",content:{"application/json":{schema:{type:"object",additionalProperties:true}}}}}}};
 paths["/v1/webhooks/{provider}"]={post:{operationId:"disabledProviderWebhook",tags:["valopay"],parameters:[pathParam("provider")],responses:{"403":{description:"Disabled until a provider-specific signed adapter is configured. No events are processed."}}}};
 describe("/healthz","get","Liveness: the process answers, with its build, uptime and scheduler state","Never touches the database, so a database outage does not read as a dead process. Needs no sandbox or sign-in.");
-describe("/readyz","get","Readiness: one bounded round trip to the database","Answers 503 with status degraded while the database does not answer within the check's time limit; the reason is in the log, not the answer. Needs no sandbox or sign-in.");
+describe("/readyz","get","Readiness: one bounded round trip to the database, which also checks its schema","Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table, column or index this build needs: checks.schema names each one with the migration that adds it. A connection error is in the log, not the answer. Needs no sandbox or sign-in.");
 describe("/v1/workspace","get","The caller's workspace: its lenders, roles and actor","On a first visit an anonymous caller gets a new synthetic sandbox with two lenders; a signed-in person gets their own workspace. New sandboxes are limited per client address.");
 describe("/v1/overview","get","The operations overview for one lender","Metrics, queues, recent activity, upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02).");
 describe("/v1/records/{kind}","get","Records of one kind for one lender, newest first","Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync.");
@@ -117,7 +118,8 @@ const schemaDescriptions = {
   SchedulerRun: "The last scheduler pass that found work: its id, when it ran, how long it took, how many batches it read and what it did, including idle sandboxes whose automatic close it paused.",
   SchedulerStatus: "Whether closes are scheduled in this process, how often it looks, when it last looked and its last pass with work.",
   DatabaseCheck: "One round trip to the database and how long it took.",
-  ReadinessStatus: "The readiness answer: ok, or degraded while the database does not answer.",
+  SchemaCheck: "Whether the database holds every table, column and index this build needs: missing names each one that is not there and the migration that adds it; unchecked while the database does not answer.",
+  ReadinessStatus: "The readiness answer: ok, or degraded while the database does not answer or lacks a table, column or index this build needs.",
   RecordData: "A record's data: the fields the kind's schema declares, and anything else a caller stored.",
   ValopayRecord: "A stored record of any kind, with its lender, status, reference, amount in kobo and data.",
   RecordInput: "A new record: only the name is required; the kind's default status applies when none is given.",

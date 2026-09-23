@@ -40,3 +40,15 @@ Already completed indexes stay in place. A failed or timed-out concurrent build 
 If inspection establishes that the failed index belongs to this migration and is not supporting a constraint, the operator can review a single `DROP INDEX CONCURRENTLY public.EXACT_FAILED_INDEX_NAME` command, then rerun the inspection and application steps. Do not drop an unfamiliar or pre-existing differently defined index to make the script pass. No index rollback is required merely to roll back application code; these indexes do not alter the data contract.
 
 PostgreSQL documents the concurrent-build locking, transaction and failure behaviour, and why `IF NOT EXISTS` alone does not validate an existing index, in [CREATE INDEX](https://www.postgresql.org/docs/16/sql-createindex.html). The repository's `record-index-migration.integration.test.ts` rehearses inspection, creation, exact reapplication, conflicting names, equivalent indexes under another name, and unchanged rows in a dedicated throwaway database. Running the test does not apply anything to the live database.
+
+## Journal and lender indexes (migration 007)
+
+`lib/db/migrations/007_journal_and_lender_indexes.sql` adds two more read indexes, also declared in `lib/db/src/schema/valopay.ts`: `valopay_operations_pending` on `valopay_operations(merchant_id, owner)` for pending entries only, which the limit of 100 pending requests per person and lender counts (without it the count read every entry the person had ever made), and `valopay_merchants_workspace` on `valopay_merchants(workspace_id, id)`, which listing and counting a workspace's lenders, the expiry sweep, the staff directory and row-security scope read. They change no rows, permissions or constraints.
+
+Apply it after `003_pilot_workflow.sql`, with the database owner's private deployment connection in `DATABASE_URL`, and before deploying the build whose schema declares the indexes: `/api/readyz` answers 503 and names both until they exist.
+
+```sh
+psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f lib/db/migrations/007_journal_and_lender_indexes.sql
+```
+
+Unlike 002, it is one transaction and repeatable: each index is created only if its name is missing, and before committing the file checks that both names hold the reviewed, valid definitions, so a different index under either name stops it with nothing changed. A plain build takes a SHARE lock, so writes to that table wait while it runs; both tables hold one row per lender or per keyed request, so at pilot scale that is well under a second. The file waits at most 5 s for its locks and 60 s per statement, and changes nothing if either limit is reached. For a journal too large to build within that, run the same two definitions one at a time with `CREATE INDEX CONCURRENTLY` outside a transaction, then run the file to verify them; the cautions above about invalid concurrent builds apply.

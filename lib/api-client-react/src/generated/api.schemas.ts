@@ -75,6 +75,23 @@ export interface DatabaseCheck {
   latencyMs: number;
 }
 
+export type SchemaCheckStatus = typeof SchemaCheckStatus[keyof typeof SchemaCheckStatus];
+
+
+export const SchemaCheckStatus = {
+  ok: 'ok',
+  incomplete: 'incomplete',
+  unchecked: 'unchecked',
+} as const;
+
+/**
+ * Whether the database holds every table, column and index this build needs: missing names each one that is not there and the migration that adds it; unchecked while the database does not answer.
+ */
+export interface SchemaCheck {
+  status: SchemaCheckStatus;
+  missing: string[];
+}
+
 export type ReadinessStatusStatus = typeof ReadinessStatusStatus[keyof typeof ReadinessStatusStatus];
 
 
@@ -85,10 +102,11 @@ export const ReadinessStatusStatus = {
 
 export type ReadinessStatusChecks = {
   database: DatabaseCheck;
+  schema: SchemaCheck;
 };
 
 /**
- * The readiness answer: ok, or degraded while the database does not answer.
+ * The readiness answer: ok, or degraded while the database does not answer or lacks a table, column or index this build needs.
  */
 export interface ReadinessStatus {
   status: ReadinessStatusStatus;
@@ -2407,6 +2425,23 @@ export const LifecycleViewTargetsItemStatus = {
   failed: 'failed',
 } as const;
 
+export type LifecycleViewTargetsItemEvidenceItemReason = typeof LifecycleViewTargetsItemEvidenceItemReason[keyof typeof LifecycleViewTargetsItemEvidenceItemReason];
+
+
+export const LifecycleViewTargetsItemEvidenceItemReason = {
+  open_case: 'open_case',
+  approved_close_review: 'approved_close_review',
+} as const;
+
+export type LifecycleViewTargetsItemEvidenceItem = {
+  reason: LifecycleViewTargetsItemEvidenceItemReason;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  recordId: string;
+};
+
 export type LifecycleViewTargetsItem = {
   kind: LifecycleViewTargetsItemKind;
   /**
@@ -2434,6 +2469,8 @@ export type LifecycleViewTargetsItem = {
   digest: string;
   status: LifecycleViewTargetsItemStatus;
   held: boolean;
+  /** @maxItems 10 */
+  evidence: LifecycleViewTargetsItemEvidenceItem[];
 };
 
 export type LifecycleViewHoldsItemKind = typeof LifecycleViewHoldsItemKind[keyof typeof LifecycleViewHoldsItemKind];
@@ -2624,6 +2661,8 @@ export interface LifecycleView {
   holdRevision: string;
   /** @minimum 0 */
   eligibleCount: number;
+  /** @minimum 0 */
+  evidenceTotal: number;
   /** @maxItems 100 */
   targets: LifecycleViewTargetsItem[];
   /** @minimum 0 */

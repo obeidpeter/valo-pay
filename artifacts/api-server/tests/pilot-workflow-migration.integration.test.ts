@@ -1,6 +1,6 @@
-// Rehearses lib/db/migrations/003_pilot_workflow.sql and 004_staff_lender_access.sql on
-// a throwaway database, the way a host applies them: on a schema that does not carry
-// the tables yet. The other database-backed suites run them after drizzle-kit push, where
+// Rehearses lib/db/migrations/003_pilot_workflow.sql, 004_staff_lender_access.sql and
+// 007_journal_and_lender_indexes.sql on a throwaway database, the way a host applies
+// them: on a schema that does not carry the tables yet. The other database-backed suites run them after drizzle-kit push, where
 // CREATE TABLE IF NOT EXISTS finds every table and the SQL is never exercised. The
 // result must match the pushed schema exactly (columns, constraints, indexes), so a
 // database built by either route behaves the same; the files must be repeatable; and
@@ -19,7 +19,7 @@ const { pool, Pool } = await import('@workspace/db');
 const database = `valopay_pilot_rehearsal_${randomUUID().replaceAll('-', '')}`;
 assert.match(database, /^valopay_pilot_rehearsal_[a-f0-9]{32}$/);
 const targetUrl = new URL(connection); targetUrl.pathname = `/${database}`;
-const migrations = await Promise.all(['003_pilot_workflow.sql', '004_staff_lender_access.sql'].map((name) => readFile(new URL(`../../../lib/db/migrations/${name}`, import.meta.url), 'utf8')));
+const migrations = await Promise.all(['003_pilot_workflow.sql', '004_staff_lender_access.sql', '007_journal_and_lender_indexes.sql'].map((name) => readFile(new URL(`../../../lib/db/migrations/${name}`, import.meta.url), 'utf8')));
 const tables = ['valopay_operations', 'valopay_teams', 'valopay_staff_memberships', 'valopay_staff_invitations', 'valopay_staff_events', 'valopay_staff_lender_access'];
 type Client = Pick<InstanceType<typeof Pool>, 'query'>;
 /** Everything that decides how a table behaves: its columns, constraints and indexes, named. */
@@ -29,9 +29,11 @@ async function shape(client: Client, table: string) {
   const indexes = (await client.query('SELECT indexname,indexdef FROM pg_indexes WHERE schemaname=$1 AND tablename=$2 ORDER BY indexname', ['public', table])).rows;
   return { columns, constraints, indexes };
 }
+/** The lender table is created below as the earlier schema left it, so only its indexes are compared: 007 adds one. */
+const lenderIndexes = async (client: Client) => (await client.query("SELECT indexname,indexdef FROM pg_indexes WHERE schemaname='public' AND tablename='valopay_merchants' AND indexname<>'valopay_merchants_pkey' ORDER BY indexname")).rows;
 let target: InstanceType<typeof Pool> | undefined, created = false, checks = 0;
 try {
-  const pushed = Object.fromEntries(await Promise.all(tables.map(async (table) => [table, await shape(pool, table)])));
+  const pushed = Object.fromEntries(await Promise.all(tables.map(async (table) => [table, await shape(pool, table)]))), pushedLenderIndexes = await lenderIndexes(pool);
   for (const table of tables) assert.ok(pushed[table].columns.length, `${table} is missing from the pushed schema; run drizzle-kit push before this rehearsal`);
   await pool.query(`CREATE DATABASE "${database}"`); created = true;
   target = new Pool({ connectionString: targetUrl.toString() });
@@ -40,6 +42,7 @@ try {
   await target.query('CREATE TABLE public.valopay_merchants (id text PRIMARY KEY, workspace_id text NOT NULL REFERENCES public.valopay_workspaces(id), info jsonb NOT NULL, settings jsonb NOT NULL)');
   for (const migration of migrations) await target.query(migration);
   for (const table of tables) { assert.deepEqual(await shape(target, table), pushed[table], `${table} built by the migration differs from the pushed schema`); checks++; }
+  assert.deepEqual(await lenderIndexes(target), pushedLenderIndexes, 'the lender indexes built by the migration differ from the pushed schema'); checks++;
   // Rows survive a repeat application, and the schema does not change.
   await target.query("INSERT INTO public.valopay_workspaces VALUES('workspace-a','hash-a','Admin')");
   await target.query(`INSERT INTO public.valopay_merchants VALUES('lender-a','workspace-a','{}','{}')`);
@@ -50,6 +53,7 @@ try {
   const before = (await target.query('SELECT status,receipt FROM public.valopay_operations WHERE id=$1', ['operation-a'])).rows;
   for (const migration of migrations) await target.query(migration);
   for (const table of tables) { assert.deepEqual(await shape(target, table), pushed[table], `${table} changed on a repeat application`); checks++; }
+  assert.deepEqual(await lenderIndexes(target), pushedLenderIndexes, 'the lender indexes changed on a repeat application'); checks++;
   assert.deepEqual((await target.query('SELECT status,receipt FROM public.valopay_operations WHERE id=$1', ['operation-a'])).rows, before, 'a repeat application keeps existing rows'); checks++;
   assert.deepEqual(before, [{ status: 'pending', receipt: null }]); checks++;
   // The rules the tables declare hold, under the names the application's conflict handling and the Drizzle schema use.

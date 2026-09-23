@@ -107,3 +107,15 @@ it('lets an administrator place an exact artifact hold with an accountable reaso
   expect(api.state().records.filter(record => record.kind === 'retention-holds' && record.data.held)).toHaveLength(1);
   expect(api.state().records.find(record => record.id === batchId)!.data.csv).toContain('SAMPLE-ROW');
 });
+
+it('says why an export file kept as evidence is never offered for deletion', async () => {
+  api.mutate((state, ctx) => saveLifecyclePolicy(state, ctx, { policy: { rawCsvDays: 30, journalPayloadDays: null, exportFileDays: 30, auditTrail: 'retain' }, expectedRevision: lifecyclePolicy(state).revision, reason: 'Sample sources and files have passed their retention review.' }));
+  const exportId = api.mutate(state => makeRecord(state, 'exports', { name: 'Sample customer pack', status: 'ready', createdAt: '2026-08-02T10:00:00.000Z', data: { kind: 'customer-pack', format: 'json', bucket: 'synthetic-private', objectName: 'exports/sample.json', checksum: 'c'.repeat(64), generatedAt: '2026-08-02T10:00:00.000Z' } }).id);
+  const caseId = api.mutate(state => makeRecord(state, 'exceptions', { name: 'Open sample case', status: 'in_progress', createdAt: '2026-08-02T10:00:00.000Z', data: { type: 'unmatched_payment', case: { assignee: 'Sandbox Admin', assigneeName: 'Demo Admin', nextAction: 'Review the linked export', nextActionAt: '2026-10-01T10:00:00.000Z', evidenceIds: [exportId] } } }).id);
+  api.lifecycleExternal = [{ kind: 'export_file', merchantId: api.merchantIds[0]!, sourceId: exportId, version: 'generation-1', createdAt: '2026-08-02T10:00:00.000Z', label: 'Private export file', digest: 'd'.repeat(64), status: 'ready' }];
+  const user = userEvent.setup(); renderApp('/lifecycle');
+  await screen.findByText(/1 sources currently eligible · 1 kept as evidence/);
+  await user.selectOptions(await screen.findByRole('combobox', { name: 'Source to hold or release' }), `export_file:${exportId}`);
+  expect(screen.getByText(new RegExp(`Kept as evidence \\(linked to open case ${caseId}\\), so it is not eligible for deletion`))).toBeTruthy();
+  expect(screen.getByRole('option', { name: new RegExp(`${exportId} · Evidence`) })).toBeTruthy();
+});

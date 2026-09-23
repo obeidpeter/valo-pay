@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 // The pure guard does not connect, but the repository module verifies that a
 // database URL exists while it is loaded.
 process.env.DATABASE_URL ||= "postgres://unused:unused@127.0.0.1:1/unused";
-const { assertFinalState, canonical, appendAudit, expiredWorkspaceCleanupEnabled, verifyAudit } = await import("../src/lib/valopay-store.js");
+const { assertFinalState, canonical, appendAudit, expiredWorkspaceCleanupEnabled, verifyAudit, journalReceipt } = await import("../src/lib/valopay-store.js");
 const { seedMerchant } = await import("../src/lib/valopay-seed.js");
 
 const seed = () => seedMerchant("merchant-a");
@@ -14,6 +14,11 @@ assert.equal(canonical({ b: 2, a: 1 }), canonical({ a: 1, b: 2 }), "JSONB key re
 assert.equal(expiredWorkspaceCleanupEnabled(undefined), false, "Automatic workspace cleanup must default off.");
 assert.equal(expiredWorkspaceCleanupEnabled("off"), false, "Only the explicit opt-in may enable cleanup.");
 assert.equal(expiredWorkspaceCleanupEnabled("on"), true, "The documented opt-in must enable cleanup.");
+// The journal keeps a reference to what a completed request saved; the whole answer is kept once, as the replay copy.
+assert.deepEqual(journalReceipt({ id: "record-1", kind: "customers", name: "Synthetic", data: { note: "x".repeat(1000) } }), { id: "record-1", kind: "customers" }, "A saved record is kept as its reference.");
+assert.deepEqual(journalReceipt({ message: "Daily close complete.", record: { id: "close-1", kind: "closes", data: { report: { rows: Array.from({ length: 500 }, () => "x") } } }, data: { closeId: "close-1" } }), { record: { id: "close-1", kind: "closes" } }, "An action keeps a reference to the record it saved, not the record.");
+assert.deepEqual(journalReceipt({ id: "run-1", status: "approved", candidates: [] }), { id: "run-1" }, "A result without a record kind keeps its ID.");
+for (const answer of [{ message: "Audit log check complete.", data: { valid: true } }, null, undefined, "text", [{ id: "x" }], { id: 7 }]) assert.deepEqual(journalReceipt(answer), {}, "An answer that names no record keeps nothing.");
 {
   const state = seed();
   appendAudit(state, { actor: "System", role: "Admin", now: "2026-01-01T00:00:00.000Z" }, "test", "workspace", "Synthetic test");

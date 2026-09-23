@@ -111,6 +111,12 @@ try {
   const history = ok(await call(`/v1/operations?merchantId=${lender}`));
   assert.equal(history.total, 1);
   assert.equal(history.items[0].status, "completed");
+  // The entry keeps only a reference to the saved record, which Operations links to; the answer itself is kept once, under the key.
+  assert.deepEqual([history.items[0].recordId, history.items[0].recordKind], [first.id, "customers"]);
+  assert.deepEqual(
+    (await pool.query("SELECT receipt FROM valopay_operations WHERE id=$1", [history.items[0].id])).rows[0].receipt,
+    { id: first.id, kind: "customers" },
+  );
   assert.equal(
     "request" in history.items[0],
     false,

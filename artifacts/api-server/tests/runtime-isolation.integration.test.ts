@@ -291,7 +291,11 @@ try {
   await assert.rejects(() => store.inWorkspace(req, { cookie() {} } as any, ctx => store.loadState(ctx, "lender-a", "share"), "read"), /not found/);
   const elevated = await admin.connect(); try { await elevated.query("BEGIN"); await assert.rejects(() => isolation.bindRuntimeIdentity(elevated, { organizationId: "org_runtimeA", userId: "user_adminA" }), /elevated/); await elevated.query("ROLLBACK"); } finally { elevated.release(); }
   const configured = process.env.VALOPAY_RUNTIME_SCHEMA; process.env.VALOPAY_RUNTIME_SCHEMA = "public"; assert.throws(() => isolation.runtimeIsolationConfiguration(), /public/); process.env.VALOPAY_RUNTIME_SCHEMA = configured;
-  console.log("Runtime isolation passed: actual restricted login, ten forced-RLS tables, the reviewed policies, helpers and workspace guard compared by definition (nine weakenings refused), readiness from the transaction's own check, once-per-statement lender scope at pilot scale, pooled-scope reset, mixed-tenant denial, per-lender grants, concurrent invitation acceptance and renewal, a read queued behind a change to its own membership refused with a 409, service requester checks and real repository/MFA integration.");
+  // /api/readyz reads the isolated schema, as the restricted login: its copied tables carry every column and, under generated names, every index this build needs.
+  const ready = await store.pingDatabase();
+  assert.deepEqual([ready.status, ready.schema], ["ok", { status: "ok", missing: [] }], "readiness checks the isolated runtime schema");
+  await store.closeDatabase(); runtimePool = undefined;
+  console.log("Runtime isolation passed: actual restricted login, ten forced-RLS tables, the reviewed policies, helpers and workspace guard compared by definition (nine weakenings refused), readiness from the transaction's own check and of the isolated schema, once-per-statement lender scope at pilot scale, pooled-scope reset, mixed-tenant denial, per-lender grants, concurrent invitation acceptance and renewal, a read queued behind a change to its own membership refused with a 409, service requester checks and real repository/MFA integration.");
 } finally {
   if (runtimePool) await runtimePool.end();
   if (!/^valopay_runtime_test_[a-f0-9]+$/.test(schema) || !/^runtime_(app|helper)_[a-f0-9]+$/.test(appRole) || !/^runtime_(app|helper)_[a-f0-9]+$/.test(helperRole)) throw new Error("Unsafe generated test cleanup target.");

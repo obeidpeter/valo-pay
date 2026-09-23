@@ -13,7 +13,10 @@ export const merchants = pgTable("valopay_merchants", {
   workspaceId: text("workspace_id").notNull().references(()=>workspaces.id),
   info: jsonb("info").notNull(),
   settings: jsonb("settings").notNull(),
-});
+}, t => [
+  // A workspace's lenders: listing and counting them, the expiry sweep, the staff directory and row-security scope (migration 007).
+  index("valopay_merchants_workspace").on(t.workspaceId, t.id),
+]);
 export const records = pgTable("valopay_records", {
   id: text("id").primaryKey(),
   merchantId: text("merchant_id").notNull().references(()=>merchants.id),
@@ -62,6 +65,8 @@ export const operations = pgTable('valopay_operations', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, t => [index('valopay_operations_owner_page').on(t.merchantId, t.owner, t.createdAt, t.id),
+  // The pending-request limit counts only a person's pending entries (migration 007).
+  index('valopay_operations_pending').on(t.merchantId, t.owner).where(sql`${t.status} = 'pending'`),
   check('valopay_operation_status', sql`${t.status} IN ('pending','completed','cancelled')`)]);
 
 export const teams = pgTable('valopay_teams', {

@@ -1,6 +1,6 @@
 import { saveImportBatch, commitImportBatch, coordinateCase, batchView } from '../../api-server/src/domain/pilot-workflow';
 import { listImportCorrections, previewImportCorrection, proposeImportCorrection, decideImportCorrection, assertNoDirectImportedCorrection } from '../../api-server/src/domain/import-corrections';
-import { importCorrectionsResponseSchema, importCorrectionPreviewSchema, importCorrectionViewSchema } from '@workspace/valopay-schema';
+import { importCorrectionsResponseSchema, importCorrectionPreviewSchema, importCorrectionViewSchema, type LifecycleExternalCandidate } from '@workspace/valopay-schema';
 import { saveSourceProfile, sourceQuality } from '../../api-server/src/domain/source-quality';
 import { saveSourceManifest } from '../../api-server/src/domain/source-completeness';
 import { providerEventView, replayProviderEvent, runPaystackFixture } from '../../api-server/src/providers/paystack-inbox';
@@ -54,6 +54,8 @@ export interface FakeApi {
   state(merchantId?: string): DomainState;
   /** Applies a change as a committed mutation with an audit entry, the way a request would. */
   mutate<T>(fn: (state: DomainState, ctx: Context) => T, merchantId?: string): T;
+  /** The terminal request payloads and export files the server's storage inventory would list for retention (none by default). */
+  lifecycleExternal: LifecycleExternalCandidate[];
   setNow(iso: string): void;
   /** Makes the next request whose path (and method, when given) matches fail: with an API-style error body and status, or as a network failure ("offline"). */
   failNext(pattern: RegExp, failure: { status: number; error: string; details?: Array<{ field: string; message: string }> } | "offline", method?: string): void;
@@ -111,6 +113,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
     scheduler: { state: 'running', intervalMs: 60_000, lastTickAt: options.now ?? new Date().toISOString(), lastSuccessAt: options.now ?? new Date().toISOString(), lastErrorAt: null },
     state(merchantId) { const id = merchantId ?? api.merchantIds[0]!; return states.get(id) ?? fail("Lender not found in this workspace.", 404); },
     mutate(fn, merchantId) { return withState(merchantId ?? api.merchantIds[0]!, fn, { action: "test.mutation", objectId: "workspace", summary: "Arranged by a console test" }); },
+    lifecycleExternal: [],
     setNow(iso) { api.now = iso; if (api.scheduler.state === 'running') { api.scheduler.lastTickAt = iso; api.scheduler.lastSuccessAt = iso; } },
     failNext(pattern, failure, method) { failures.push({ pattern, failure, method: method?.toUpperCase() }); },
     hold(pattern) {
@@ -174,12 +177,12 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
     ['GET', /^\/v1\/work$/, (_p,q) => personalWorkViewSchema.parse(derivePersonalWork(api.state(merchantOf(q)),context(),roster(),personalWorkQuerySchema.parse(q)))],
     ['POST', /^\/v1\/work\/notifications\/read$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>workReceiptSchema.parse(recordWorkReceipt(s,c,roster(),'read',workReceiptInputSchema.parse(b))),{action:'work.read',objectId:'work',summary:'Read in-app notification'})],
     ['POST', /^\/v1\/work\/handovers\/acknowledge$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>workReceiptSchema.parse(recordWorkReceipt(s,c,roster(),'acknowledge',workReceiptInputSchema.parse(b))),{action:'work.acknowledge',objectId:'work',summary:'Acknowledge case handover'})],
-    ['GET', /^\/v1\/lifecycle$/, (_p,q) => lifecycleView(api.state(merchantOf(q)),context(),[],Number(q.offset||0))],
+    ['GET', /^\/v1\/lifecycle$/, (_p,q) => lifecycleView(api.state(merchantOf(q)),context(),api.lifecycleExternal,Number(q.offset||0))],
     ['GET', /^\/v1\/lifecycle\/runs\/(?<id>[^/]+)$/, (p,q) => {if(api.role!=='Admin')fail('An administrator is required.',403);const s=api.state(merchantOf(q)),r=s.records.find(r=>r.kind==='retention-runs'&&r.id===p.id);if(!r)fail('Retention run not found.',404);return lifecycleRunView(s,r);}],
-    ['POST', /^\/v1\/lifecycle\/policy$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>{saveLifecyclePolicy(s,c,b);return lifecycleView(s,c);},{action:'retention.policy',objectId:'retention',summary:'Save synthetic retention policy'})],
-    ['POST', /^\/v1\/lifecycle\/holds$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>{setLifecycleHold(s,c,b);return lifecycleView(s,c);},{action:'retention.hold',objectId:'retention',summary:'Change preservation hold'})],
-    ['POST', /^\/v1\/lifecycle\/runs$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>lifecyclePreview(s,c,b),{action:'retention.preview',objectId:'retention',summary:'Save bounded deletion preview'})],
-    ['POST', /^\/v1\/lifecycle\/runs\/(?<id>[^/]+)\/approve$/, (p,q,b) => withState(merchantOf(q),(s,c)=>approveLifecycleRun(s,c,p.id!,b),{action:'retention.approve',objectId:p.id!,summary:'Approve exact retention preview'})],
+    ['POST', /^\/v1\/lifecycle\/policy$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>{saveLifecyclePolicy(s,c,b);return lifecycleView(s,c,api.lifecycleExternal);},{action:'retention.policy',objectId:'retention',summary:'Save synthetic retention policy'})],
+    ['POST', /^\/v1\/lifecycle\/holds$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>{setLifecycleHold(s,c,b,api.lifecycleExternal);return lifecycleView(s,c,api.lifecycleExternal);},{action:'retention.hold',objectId:'retention',summary:'Change preservation hold'})],
+    ['POST', /^\/v1\/lifecycle\/runs$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>lifecyclePreview(s,c,b,api.lifecycleExternal),{action:'retention.preview',objectId:'retention',summary:'Save bounded deletion preview'})],
+    ['POST', /^\/v1\/lifecycle\/runs\/(?<id>[^/]+)\/approve$/, (p,q,b) => withState(merchantOf(q),(s,c)=>approveLifecycleRun(s,c,p.id!,b,api.lifecycleExternal),{action:'retention.approve',objectId:p.id!,summary:'Approve exact retention preview'})],
     ['POST', /^\/v1\/lifecycle\/runs\/(?<id>[^/]+)\/execute$/, (p,q,b) => withState(merchantOf(q),(s,c)=>{if(c.role!=='Admin')fail('An administrator is required.',403);const run=s.records.find(r=>r.kind==='retention-runs'&&r.id===p.id);if(!run||run.data.previewDigest!==b.previewDigest)fail('The approved preview does not match.',409);for(const candidate of run.data.candidates){try{if(!assertLifecycleCandidate(s,c,run.id,candidate))continue;if(candidate.kind==='raw_csv'){eraseLifecycleRawCsv(s,c,run.id,candidate);recordLifecycleReceipt(s,c,run.id,candidate,'deleted','Raw synthetic CSV removed; imported records and audit retained.');}else recordLifecycleReceipt(s,c,run.id,candidate,'blocked','External storage deletion is not simulated.');}catch(error){recordLifecycleReceipt(s,c,run.id,candidate,'blocked',error instanceof Error?error.message:'Source check failed.');}}return lifecycleRunView(s,run);},{action:'retention.execute',objectId:p.id!,summary:'Execute approved synthetic raw CSV cleanup'})],
     ['GET', /^\/v1\/pilot\/batches$/, (_p,q)=>{const all=api.state(merchantOf(q)).records.filter(r=>r.kind==='import-batches');return {items:all.slice(Number(q.offset||0),Number(q.offset||0)+25).map(r=>batchView(r)),total:all.length,offset:Number(q.offset||0)};}],
     ['GET', /^\/v1\/pilot\/batches\/(?<id>[^/]+)$/, (p,q)=>{const s=api.state(merchantOf(q)), batch=s.records.find(r=>r.kind==='import-batches'&&r.id===p.id);if(!batch)fail('Batch not found.',404);if(!['Admin','Operations','Finance'].includes(api.role))fail('An import operator role is required.',403);return {batch,revisions:s.records.filter(r=>r.kind==='import-revisions'&&r.data.batchId===p.id)};}],
