@@ -40,7 +40,7 @@ function Sources() {
   const canWrite = ["Admin", "Operations", "Finance"].includes(workspace?.role || "");
   const canReplay = ["Admin", "Finance"].includes(workspace?.role || "");
   return <div className="space-y-6">
-    <PilotHeading title="Sources & connections">Check what arrived, what is missing and whether every source row is accounted for. All records in this pilot remain synthetic.</PilotHeading>
+    <PilotHeading title="Data sources">Check what arrived, what is missing and whether every source row is accounted for. All records in this pilot remain synthetic.</PilotHeading>
     <PilotError error={query.error} retry={() => { void query.refetch(); }} />
     {query.isLoading && <p role="status">Loading source controls…</p>}
     <label className="block max-w-xs text-sm font-medium">Business date (WAT)<input type="date" required className={pilotField} value={businessDate} onChange={event=>{if(event.target.value&&confirmUnsavedChanges())setBusinessDate(event.target.value);}}/></label>

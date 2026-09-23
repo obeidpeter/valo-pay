@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -34,6 +34,7 @@ import {
 } from "@/components/connected-frame";
 import { useConnected } from "@/lib/connected";
 import { useWorkspace } from "@/lib/workspace-context";
+import { useDialogFocusReturn } from "@/lib/focus";
 import { formatCompactDate, formatDate, formatKobo } from "@/lib/formatters";
 import { nairaToKobo } from "@/lib/money-input";
 
@@ -363,6 +364,9 @@ export default function CashDeskPage() {
   const [downside, setDownside] = useState("70");
   const [delay, setDelay] = useState("7");
   const [buffer, setBuffer] = useState("1500000");
+  // A confirmed step can remove or disable the button that opened its review, so focus then goes to the result.
+  const result = useRef<HTMLParagraphElement>(null);
+  const restoreFocus = useDialogFocusReturn(!!action, () => result.current);
   useEffect(() => {
     setAction(null);
     setReason("");
@@ -495,7 +499,7 @@ export default function CashDeskPage() {
       onReleased={() => setProblem("")}
     >
       {success && (
-        <p className="connected-note" role="status">
+        <p className="connected-note" role="status" ref={result}>
           {success}
         </p>
       )}
@@ -1571,7 +1575,7 @@ export default function CashDeskPage() {
           if (!open && !pending && !api.hasUnconfirmedOutcome) setAction(null);
         }}
       >
-        <DialogContent>
+        <DialogContent onCloseAutoFocus={restoreFocus}>
           <DialogHeader>
             <DialogTitle>{action?.title}</DialogTitle>
             <DialogDescription>{action?.detail}</DialogDescription>

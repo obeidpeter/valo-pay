@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "wouter";
 import { ArrowRight, CheckCircle2, Landmark, ShieldCheck } from "lucide-react";
 import {
@@ -22,6 +22,7 @@ import { useConnected, type ConnectedRecord } from "@/lib/connected";
 import { formatKobo, formatDate } from "@/lib/formatters";
 import { nairaToKobo, koboToNaira } from "@/lib/money-input";
 import { useWorkspace } from "@/lib/workspace-context";
+import { useDialogFocusReturn } from "@/lib/focus";
 export default function PayByBank() {
   const api = useConnected(),
     { merchantId } = useWorkspace();
@@ -41,6 +42,9 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
       data?: Record<string, unknown>;
     } | null>(null),
     [reason, setReason] = useState("");
+  // A confirmed step usually removes the button that opened its review, so focus then goes to the result.
+  const result = useRef<HTMLParagraphElement>(null);
+  const restoreFocus = useDialogFocusReturn(!!review, () => result.current);
   const act = async (
     action: string,
     data: Record<string, unknown> = {},
@@ -190,7 +194,7 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
         </p>
       )}
       {success && (
-        <p role="status" className="connected-note">
+        <p role="status" className="connected-note" ref={result}>
           {success}
         </p>
       )}
@@ -573,7 +577,7 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
               setReview(null);
           }}
         >
-          <DialogContent>
+          <DialogContent onCloseAutoFocus={restoreFocus}>
             <DialogHeader>
               <DialogTitle>{review.title}</DialogTitle>
               <DialogDescription>

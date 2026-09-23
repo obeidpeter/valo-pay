@@ -40,8 +40,14 @@ export function useDialogActivationTracking(): void {
   }, []);
 }
 
-/** Snapshot at opening, before the dialog's autofocus effect moves focus. */
-export function useDialogFocusReturn(isOpen: boolean): (event?: { preventDefault(): void }) => void {
+/**
+ * Snapshot at opening, before the dialog's autofocus effect moves focus. On
+ * closing, focus returns to the control that opened the dialog. A confirmed
+ * step often removes or disables its own button; then focus goes to the
+ * `result` the page names, such as the message that says what happened, and
+ * only without one to the page's main region, never to the page body.
+ */
+export function useDialogFocusReturn(isOpen: boolean, result?: () => HTMLElement | null | undefined): (event?: { preventDefault(): void }) => void {
   const opener = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     if (!isOpen) return;
@@ -55,6 +61,13 @@ export function useDialogFocusReturn(isOpen: boolean): (event?: { preventDefault
     if (target?.isConnected) {
       target.focus({ preventScroll: true });
       if (document.activeElement === target) return;
+    }
+    const outcome = result?.();
+    if (outcome?.isConnected) {
+      // A message is not a keyboard stop, but it can hold focus so reading continues from it.
+      if (!outcome.hasAttribute('tabindex')) outcome.tabIndex = -1;
+      outcome.focus();
+      if (document.activeElement === outcome) return;
     }
     focusMain();
   };

@@ -258,7 +258,7 @@ export default function ReconciliationPage() {
 
         {view !== 'review' && <section aria-label="Possible duplicate payments" className="bg-card border rounded-xl shadow-sm overflow-hidden xl:col-span-2">
           <div className="border-b p-4"><h2 className="font-semibold">Possible duplicate payments</h2><p className="mt-1 text-xs text-muted-foreground">These payments are held for Finance review and are never allocated automatically.</p></div>
-          <ScrollFrame label="Possible duplicate payments" className="overflow-x-auto">
+          <ScrollFrame label="Possible duplicate payments table" className="overflow-x-auto">
             <table className="min-w-[650px] w-full text-left text-sm"><thead className="border-b bg-secondary/30 text-muted-foreground"><tr><th className="p-4 font-medium">Payment</th><th className="p-4 font-medium">Customer</th><th className="p-4 font-medium">Reason for review</th><th className="p-4 text-right font-medium">Amount</th><th className="p-4 text-right font-medium">Next step</th></tr></thead>
               <tbody className="divide-y">{isLoadingAllPayments ? <LoadingRow colSpan={5} what="possible duplicate payments" /> : allPaymentsError && !allPayments ? <tr><td colSpan={5} className="p-4"><p role="alert" className="text-destructive">Possible duplicate payments could not be loaded. Use Refresh queue above to try again.</p></td></tr> : duplicates.length === 0 ? <EmptyRow colSpan={5} title={q ? 'No results match your search' : "No possible duplicates"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Payments needing a duplicate check will appear here.</>}</EmptyRow> : duplicates.map(payment => <tr key={payment.id}>
                 <td className="p-4"><RecordLabel record={payment} id={payment.id} /></td><td className="p-4"><RecordLabel record={customerById.get(String(payment.customerId))} id={payment.customerId} customer /></td>
@@ -371,7 +371,7 @@ export default function ReconciliationPage() {
             <p className="w-full text-xs leading-relaxed text-muted-foreground">Finance checks a sample of automatic matches from the last completed month. Marking a match incorrect stops counting that allocation and reopens the payment and instalment.</p>
             <p className="text-xs font-medium">{precision?.reviewed || 0} of {precision?.sampleSize || 0} sampled matches reviewed{precision?.falseMatchRate !== null && precision?.falseMatchRate !== undefined ? ` · incorrect match rate ${(Number(precision.falseMatchRate) * 100).toFixed(1)}% (95% confidence interval: ${(Number(precision.interval?.low) * 100).toFixed(1)}% to ${(Number(precision.interval?.high) * 100).toFixed(1)}%)` : ''}.</p>
           </div>
-          <ScrollFrame label="Match accuracy review" className="p-0 overflow-x-auto max-h-[400px]">
+          <ScrollFrame label="Match accuracy review table" className="p-0 overflow-x-auto max-h-[400px]">
             <table className="min-w-[780px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
