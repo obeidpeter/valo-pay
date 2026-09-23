@@ -23,6 +23,7 @@ const steps = [
   [tsx, ["artifacts/api-server/tests/edit-versions.test.ts"]],
   [tsx, ["artifacts/api-server/tests/canonical-json.test.ts"]],
   [tsx, ["artifacts/api-server/tests/canonical-json-golden.test.ts"]],
+  [tsx, ["artifacts/api-server/tests/record-kinds.test.ts"]],
   [tsx, ["artifacts/api-server/tests/valopay-store-guards.test.ts"]],
   [tsx, ["artifacts/api-server/tests/export-download.test.ts"]],
   [tsx, ["artifacts/api-server/tests/export-jobs.test.ts"]],

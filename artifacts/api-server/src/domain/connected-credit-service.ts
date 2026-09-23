@@ -217,7 +217,7 @@ export function runCreditAction(
     reason: string;
     data: Record<string, unknown>;
   },
-) {
+): ValopayRecord {
   if (
     state.settings.environment !== "sandbox" ||
     !ctx.actor.startsWith("Sandbox ")

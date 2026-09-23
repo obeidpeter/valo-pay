@@ -191,7 +191,7 @@ it("uses the declared WAT business date and exact expected file when opening Imp
       evidence: "DAILY-SOURCE-001",
       syntheticOnly: true,
     }),
-  ).data.files[0];
+  ).data.files![0]!;
   const user = userEvent.setup();
   renderApp(`/imports?businessDate=${date}&expectation=${file.id}`);
   await waitFor(() =>

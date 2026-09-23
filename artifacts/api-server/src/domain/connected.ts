@@ -262,14 +262,14 @@ function paymentAction(
   const due = owned(state, String(intent.data.dueItemId), "due-items");
   const event = (status: string, detail: string) => {
     intent.status = status;
-    intent.data.events.push({ at: ctx.now, status, detail });
+    intent.data.events!.push({ at: ctx.now, status, detail });
     touch(intent, ctx.now);
     return intent;
   };
   if (input.action === "payment.authorise") {
     if (intent.status !== "created")
       reject("Only a new checkout can be authorised.", 409);
-    if (Date.parse(intent.data.expiresAt) <= Date.parse(ctx.now))
+    if (Date.parse(String(intent.data.expiresAt)) <= Date.parse(ctx.now))
       reject("This checkout expired. Cancel it and create a new one.", 409);
     if (state.merchant.killSwitch)
       reject("The workspace emergency stop is on.", 403);

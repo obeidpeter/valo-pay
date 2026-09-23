@@ -99,8 +99,8 @@ function counted(state: DomainState) {
   check(assertLifecycleCandidate(state, ctx, approved.id, candidate), 'approved unchanged unheld source passes the executor check');
   eraseLifecycleRawCsv(state, ctx, approved.id, candidate);
   const completed = recordLifecycleReceipt(state, ctx, approved.id, candidate, 'deleted', 'Committed source CSV and preview removed; imported records retained.');
-  check(!('csv' in batch.data) && !('preview' in batch.data.check), 'only raw CSV and its raw preview were erased');
-  check(batch.data.rowIds[0] === 'ROW-1' && batch.data.recordIds[0] === 'financial-1' && batch.status === 'committed', 'source-row provenance, financial links and batch commitment remain');
+  check(!('csv' in batch.data) && !('preview' in batch.data.check!), 'only raw CSV and its raw preview were erased');
+  check(batch.data.rowIds![0] === 'ROW-1' && batch.data.recordIds![0] === 'financial-1' && batch.status === 'committed', 'source-row provenance, financial links and batch commitment remain');
   check(JSON.stringify(state.records.filter(record => !record.kind.startsWith('retention-') && record.id !== batch.id)) === protectedRecords, 'underlying financial, case and audit records are unchanged');
   check(completed.status === 'completed' && completed.successful === 1 && completed.remaining === 0 && completed.receipts[0]!.status === 'deleted', 'verified deletion receipt completes exact run');
   check(assertLifecycleCandidate(state, ctx, approved.id, candidate) === false, 'successful receipts prevent repeated physical deletion');

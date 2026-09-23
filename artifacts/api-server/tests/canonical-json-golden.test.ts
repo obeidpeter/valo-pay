@@ -52,7 +52,7 @@ values.importRowFingerprints = state.records.filter((record) => record.data.impo
 
 // Source completeness: a declaration, its file ID and the basis a close stores.
 const manifest = saveSourceManifest(state, ops, { businessDate: date, files: [{ source: "golden-lms", sourceBatchId: "golden-2026-09-22", kind: "customers", expectedRows: 2, expectedAmountKobo: 0 }], noFilesExpected: false, reason: "The source owner confirms the complete daily file set.", evidence: "Source control report GOLDEN-22.", syntheticOnly: true });
-values.sourceFileIds = manifest.data.files.map((file: { id: string }) => file.id);
+values.sourceFileIds = manifest.data.files!.map((file) => file.id);
 values.sourceBasis = sourceCompleteness(state, date).basisDigest;
 
 // A case being worked, with a handover, whose assignment carries extra fields.

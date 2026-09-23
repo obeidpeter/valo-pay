@@ -1,6 +1,6 @@
 import { sourceManifestInputSchema, businessDateSchema, sourceBatchQualitySchema, sameJson, legacyCollatedCompare, type SourceManifestInput } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "./types";
-import { makeRecord } from "./records";
+import { makeRecord, recordsOf } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
 import { canonicalDigest } from "../lib/digests";
 
@@ -12,7 +12,7 @@ const refuse = (message: string, status = 400): never => { throw Object.assign(n
 export const watBusinessDate = (iso: string) => new Date(Date.parse(iso) + 3600000).toISOString().slice(0, 10);
 const identity = (file: {source: string; kind: string; sourceBatchId: string}) => [file.source, file.kind, file.sourceBatchId];
 export const sourceFileId = (businessDate: string, file: {source: string; kind: string; sourceBatchId: string}) => hash([businessDate, ...identity(file)]);
-export function latestSourceManifest(state: DomainState, businessDate: string) { return state.records.filter(r => r.kind === "source-manifests" && r.data.businessDate === businessDate).sort((a,b) => Number(b.data.revision)-Number(a.data.revision))[0]; }
+export function latestSourceManifest(state: DomainState, businessDate: string) { return recordsOf(state, "source-manifests").filter(r => r.data.businessDate === businessDate).sort((a,b) => Number(b.data.revision)-Number(a.data.revision))[0]; }
 export function saveSourceManifest(state: DomainState, ctx: Context, raw: SourceManifestInput) {
   if (!["Admin", "Operations", "Finance"].includes(ctx.role)) refuse("Your role cannot declare source expectations.", 403);
   const input = sourceManifestInputSchema.parse(raw), previous = latestSourceManifest(state, input.businessDate);
