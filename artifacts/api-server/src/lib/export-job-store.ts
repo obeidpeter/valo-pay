@@ -13,51 +13,103 @@ const recordOf = (row: Row): ValopayRecord => ({ id: row.id, merchantId: row.mer
 const ownership = 'EXISTS (SELECT 1 FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id WHERE m.id=$1 AND m.workspace_id=$2 AND w.principal_hash=$3)';
 const actor = `${SYSTEM_ACTOR_PREFIX}export worker`;
 
+/**
+ * This process's worker transactions on one lender take turns: the worker's
+ * two slots never meet at the lender's lock, so one slot's claim no longer
+ * skips the other's job, and neither holds a connection waiting for the other.
+ * Requests and other processes still meet the lock.
+ */
+const turns = new Map<string, Promise<void>>();
+async function inTurn<T>(merchantId: string, work: () => Promise<T>): Promise<T> {
+  const current = (turns.get(merchantId) ?? Promise.resolve()).then(work);
+  const done = current.then(() => undefined, () => undefined);
+  turns.set(merchantId, done);
+  try { return await current; }
+  finally { if (turns.get(merchantId) === done) turns.delete(merchantId); }
+}
+
 /** This capability is system-only: every transaction derives the workspace and principal from its locked merchant.
  * The pool's checkout wait bounds the checkout, so a late connection never starts a background transaction, and
- * the worker limits bound what runs. */
-async function transaction<T>(merchantId: string, work: (client: PoolClient, scope: Scope) => Promise<T>): Promise<T | null> {
-  const guard = await checkOut(() => pool.connect()), client = guard.client;
-  try {
-    await client.query(beginStatement(databaseLimits().worker, 'ISOLATION LEVEL REPEATABLE READ'));
-    await bindRuntimeService(client);
-    const scope = (await client.query<Scope>(`SELECT m.id,m.workspace_id,w.principal_hash,m.info,m.settings,now() AS now
-      FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id WHERE m.id=$1 FOR UPDATE OF m SKIP LOCKED`, [merchantId])).rows[0];
-    if (!scope) { await client.query('ROLLBACK'); return null; }
-    const result = await work(client, scope);
-    const committed = await client.query('COMMIT');
-    if (committed.command !== 'COMMIT') throw new Error('Export job transaction did not commit.');
-    return result;
-  } catch (error) { try { await client.query('ROLLBACK'); } catch { /* disconnected */ } throw error; }
-  finally { guard.release(); }
+ * the worker limits bound what runs.
+ *
+ * A claim that finds the lender busy skips it, since the job stays queued for a later look, and reads the lender at
+ * one snapshot (REPEATABLE READ). A write to a claimed job (progress, completion, hand-back) waits for the lender up
+ * to the worker's lock limit instead, since giving up would leave the job running under its lease; it reads at READ
+ * COMMITTED, so after the wait it sees what the holder committed (a snapshot taken before the wait would miss the
+ * holder's audit entries and fork the chain). A wait that reaches the limit is 'busy', and retryExportWrite tries
+ * the write again. */
+async function transaction<T>(merchantId: string, lock: 'skip' | 'wait', work: (client: PoolClient, scope: Scope) => Promise<T>): Promise<T | null> {
+  return inTurn(merchantId, async () => {
+    const guard = await checkOut(() => pool.connect()), client = guard.client;
+    try {
+      await client.query(beginStatement(databaseLimits().worker, lock === 'skip' ? 'ISOLATION LEVEL REPEATABLE READ' : undefined));
+      await bindRuntimeService(client);
+      let scope: Scope | undefined;
+      try {
+        scope = (await client.query<Scope>(`SELECT m.id,m.workspace_id,w.principal_hash,m.info,m.settings,now() AS now
+          FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id WHERE m.id=$1 FOR UPDATE OF m${lock === 'skip' ? ' SKIP LOCKED' : ''}`, [merchantId])).rows[0];
+      } catch (error) { if ((error as { code?: unknown }).code !== '55P03') throw error; }
+      if (!scope) { await client.query('ROLLBACK'); return null; }
+      const result = await work(client, scope);
+      const committed = await client.query('COMMIT');
+      if (committed.command !== 'COMMIT') throw new Error('Export job transaction did not commit.');
+      return result;
+    } catch (error) { try { await client.query('ROLLBACK'); } catch { /* disconnected */ } throw error; }
+    finally { guard.release(); }
+  });
 }
-async function audit(client: PoolClient, scope: Scope, job: ValopayRecord, action: string, summary: string) {
-  const tail = (await client.query<Row>(`SELECT r.* FROM valopay_records r WHERE r.merchant_id=$1 AND r.kind='audit' AND ${ownership}
-    ORDER BY (r.data->>'sequence')::bigint DESC LIMIT 1`, [scope.id, scope.workspace_id, scope.principal_hash])).rows.map(recordOf);
-  const previous=tail[0];
+
+const headRead = (since: boolean) => `SELECT r.* FROM valopay_records r WHERE r.merchant_id=$1 AND r.kind='audit'${since ? " AND r.created_at >= $4::timestamptz - interval '1 hour'" : ''} AND ${ownership}
+  ORDER BY (r.data->>'sequence')::bigint DESC LIMIT 1`;
+/**
+ * The head of the lender's audit chain, which the next entry follows: the
+ * entry with the highest sequence. A claim finds it among the records it loads
+ * for the export anyway. A later write to the claimed job reads it from the
+ * entries since an hour before the claim (`since`, the job's startedAt), a
+ * range the lender-kind index serves: the claim wrote an entry then, and every
+ * entry after it comes from a transaction that took the lender after the
+ * claim, stamped with its own start, at most a few lock waits earlier. So the
+ * read follows the lender's recent work, not its whole history. Without a
+ * start to go by, or with no entry in that hour, it reads the whole chain.
+ */
+async function auditHead(client: PoolClient, scope: Scope, from: { records: ValopayRecord[] } | { since: unknown }): Promise<ValopayRecord | undefined> {
+  if ('records' in from) {
+    let head: ValopayRecord | undefined;
+    for (const record of from.records) if (record.kind === 'audit' && (!head || Number(record.data.sequence) > Number(head.data.sequence))) head = record;
+    return head;
+  }
+  const scoped = [scope.id, scope.workspace_id, scope.principal_hash];
+  const since = typeof from.since === 'string' && Number.isFinite(Date.parse(from.since)) ? from.since : undefined;
+  const row = (since ? (await client.query<Row>(headRead(true), [...scoped, since])).rows[0] : undefined) ?? (await client.query<Row>(headRead(false), scoped)).rows[0];
+  return row && recordOf(row);
+}
+/** Appends the job's entry after `previous`, the chain's head; returns it as stored. */
+async function audit(client: PoolClient, scope: Scope, job: ValopayRecord, action: string, summary: string, previous: ValopayRecord | undefined): Promise<ValopayRecord | undefined> {
   const sequence=previous?Number(previous.data.sequence)+1:1;
   if(!Number.isSafeInteger(sequence)||sequence<1)throw new Error('Invalid audit sequence.');
   const now=scope.now.toISOString();
   const data=auditEntryData({sequence,actor,action,objectId:job.id,summary,changes:{status:job.status,attempt:job.data.attempts,checksum:job.data.checksum},previousHash:previous?.data.hash,timestamp:now});
   const entry:ValopayRecord={id:randomUUID(),merchantId:scope.id,kind:'audit',name:action,status:'recorded',reference:'',amountKobo:0,customerId:job.customerId,createdAt:now,updatedAt:now,data};
-  await client.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at)
-    SELECT $4,$1,'audit',$5,$6,$7,$8,$9,$10,$11,$12 WHERE ${ownership}`,
-  [scope.id, scope.workspace_id, scope.principal_hash, entry.id, entry.name, entry.status, entry.reference, entry.amountKobo, entry.customerId, entry.data, entry.createdAt, entry.updatedAt]);
-  return entry;
+  const inserted=(await client.query<Row>(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at)
+    SELECT $4,$1,'audit',$5,$6,$7,$8,$9,$10,$11,$12 WHERE ${ownership} RETURNING *`,
+  [scope.id, scope.workspace_id, scope.principal_hash, entry.id, entry.name, entry.status, entry.reference, entry.amountKobo, entry.customerId, entry.data, entry.createdAt, entry.updatedAt])).rows[0];
+  return inserted && recordOf(inserted);
 }
-async function writeJob(client: PoolClient, scope: Scope, job: ValopayRecord) {
-  const result = await client.query(`UPDATE valopay_records r SET status=$5,data=$6,updated_at=GREATEST($7::timestamptz,r.updated_at+interval '1 millisecond')
-    WHERE r.id=$4 AND r.merchant_id=$1 AND r.kind='exports' AND ${ownership}`,
+/** Saves the job; returns it as stored. */
+async function writeJob(client: PoolClient, scope: Scope, job: ValopayRecord): Promise<ValopayRecord> {
+  const result = await client.query<Row>(`UPDATE valopay_records r SET status=$5,data=$6,updated_at=GREATEST($7::timestamptz,r.updated_at+interval '1 millisecond')
+    WHERE r.id=$4 AND r.merchant_id=$1 AND r.kind='exports' AND ${ownership} RETURNING r.*`,
   [scope.id, scope.workspace_id, scope.principal_hash, job.id, job.status, job.data, scope.now.toISOString()]);
   if (result.rowCount !== 1) throw new Error('Export job no longer belongs to this lender.');
+  return recordOf(result.rows[0]!);
 }
 async function complete(claim: ClaimedExport, artifact?: ExportArtifact, message?: string): Promise<ExportWriteResult> {
   const intendedReady = !!artifact;
-  return await transaction(claim.merchantId, async (client, scope) => {
+  return await transaction(claim.merchantId, 'wait', async (client, scope) => {
     const row = (await client.query<Row>(`SELECT r.* FROM valopay_records r WHERE r.id=$4 AND r.merchant_id=$1 AND r.kind='exports' AND ${ownership}`,
       [scope.id, scope.workspace_id, scope.principal_hash, claim.id])).rows[0];
     if (!row || row.status !== 'running' || row.data.leaseToken !== claim.token) return 'lost';
-    const job = recordOf(row);
+    const job = recordOf(row), head = await auditHead(client, scope, { since: row.data.startedAt });
     if (artifact && !await runtimeExportRequesterAllowed(client, scope.workspace_id, scope.id, job.data.requestedBy, job.data.requestedRole)) {
       artifact = undefined; message = 'The original requester authority changed during export generation. Request new evidence after access is reviewed.';
     }
@@ -68,7 +120,7 @@ async function complete(claim: ClaimedExport, artifact?: ExportArtifact, message
     delete job.data.leaseToken; delete job.data.leaseExpiresAt;
     if (artifact) delete job.data.lastError;
     await writeJob(client, scope, job);
-    await audit(client, scope, job, artifact ? 'export.ready' : 'export.failed', artifact ? 'Private synthetic export is ready; its checksum is recorded.' : 'Export generation failed; the saved job can be retried.');
+    await audit(client, scope, job, artifact ? 'export.ready' : 'export.failed', artifact ? 'Private synthetic export is ready; its checksum is recorded.' : 'Export generation failed; the saved job can be retried.', head);
     return intendedReady && !artifact ? 'lost' : 'saved';
   }) ?? 'busy';
 }
@@ -77,12 +129,16 @@ export const exportJobRepository: ExportJobRepository = {
   async candidates(limit) {
     // Bound checkout and the read itself so a queue scan cannot occupy both
     // worker slots forever. Claims still recheck ownership under the lender lock.
+    // The kind and status conditions are the predicate of migration 008's partial
+    // index of unfinished exports, kept in created_at and id order, so the look
+    // reads only queued and running jobs, in order, and stops at the limit.
     const guard = await checkOut(() => pool.connect()), client = guard.client;
     try {
       await client.query(beginStatement(databaseLimits().worker, 'READ ONLY'));
       await bindRuntimeService(client);
       const targets = (await client.query<{ merchantId: string; id: string }>(`SELECT merchant_id AS "merchantId",id FROM valopay_records
-      WHERE kind='exports' AND (status='queued' OR (status='running' AND COALESCE(data->>'leaseExpiresAt','') <= to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')))
+      WHERE kind='exports' AND status IN ('queued','running')
+        AND (status='queued' OR COALESCE(data->>'leaseExpiresAt','') <= to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
       ORDER BY created_at,id LIMIT $1`, [Math.max(1, Math.min(20, limit))])).rows;
       await client.query('COMMIT');
       return targets;
@@ -90,34 +146,39 @@ export const exportJobRepository: ExportJobRepository = {
     finally { guard.release(); }
   },
   async claim(merchantId, id) {
-    return transaction(merchantId, async (client, scope) => {
+    return transaction(merchantId, 'skip', async (client, scope) => {
       const row = (await client.query<Row>(`SELECT r.* FROM valopay_records r WHERE r.id=$4 AND r.merchant_id=$1 AND r.kind='exports' AND ${ownership}`,
         [scope.id, scope.workspace_id, scope.principal_hash, id])).rows[0];
       if (!row) return null;
       const job = recordOf(row), now = scope.now.toISOString();
       if (!exportIsClaimable(job, now)) return null;
+      // The export reads the lender's records, loaded once here; the audit chain's head is found among them.
+      const records = (await client.query<Row>(`SELECT r.* FROM valopay_records r WHERE r.merchant_id=$1 AND ${ownership}`, [scope.id, scope.workspace_id, scope.principal_hash])).rows.map(recordOf);
+      const head = await auditHead(client, scope, { records });
       if (!await runtimeExportRequesterAllowed(client, scope.workspace_id, scope.id, job.data.requestedBy, job.data.requestedRole)) {
         job.status = 'failed'; job.data.lastError = 'The original requester no longer has the required lender access or role. Request new evidence after access is reviewed.';
         job.data.stage = 'failed'; job.data.lastProgressAt = now;
         delete job.data.leaseToken; delete job.data.leaseExpiresAt;
-        await writeJob(client, scope, job); await audit(client, scope, job, 'export.access_changed', 'Export refused because its original requester authority changed.');
+        await writeJob(client, scope, job); await audit(client, scope, job, 'export.access_changed', 'Export refused because its original requester authority changed.', head);
         return null;
       }
       const token = randomUUID();
       job.status = 'running'; Object.assign(job.data, { leaseToken: token, leaseExpiresAt: new Date(scope.now.getTime() + EXPORT_LEASE_MS).toISOString(), startedAt: now, stage: 'checking', lastProgressAt: now, attempts: Number(job.data.attempts || 0) + 1 });
       delete job.data.lastError;
-      await writeJob(client, scope, job);
-      await audit(client, scope, job, 'export.started', 'Claimed a saved export job; generation runs outside this transaction.');
-      const records = (await client.query<Row>(`SELECT r.* FROM valopay_records r WHERE r.merchant_id=$1 AND ${ownership}`, [scope.id, scope.workspace_id, scope.principal_hash])).rows.map(recordOf);
+      const claimed = await writeJob(client, scope, job);
+      const started = await audit(client, scope, job, 'export.started', 'Claimed a saved export job; generation runs outside this transaction.', head);
+      // The export sees the lender as this transaction leaves it: the job running, its entry appended.
+      const state = records.map(record => record.id === claimed.id ? claimed : record);
+      if (started) state.push(started);
       const context: Context = { actor: String(job.data.requestedBy || actor), role: String(job.data.requestedRole || 'Read-only'), now };
-      return { merchantId, id, token, state: { merchant: scope.info, settings: scope.settings, records }, context,
+      return { merchantId, id, token, state: { merchant: scope.info, settings: scope.settings, records: state }, context,
         input: { kind: String(job.data.kind), customerId: job.customerId || undefined, closeReviewId:job.data.closeReviewId, format: String(job.data.format) as 'pdf' | 'json' | 'csv' },
         location: { bucket: String(job.data.bucket), objectName: String(job.data.objectName) } };
     });
   },
   async progress(claim, stage) {
     if (!['rendering','uploading','confirming'].includes(stage)) throw new Error('Invalid worker progress stage.');
-    return await transaction(claim.merchantId, async (client, scope) => {
+    return await transaction(claim.merchantId, 'wait', async (client, scope) => {
       const row = (await client.query<Row>(`SELECT r.* FROM valopay_records r WHERE r.id=$4 AND r.merchant_id=$1 AND r.kind='exports' AND ${ownership}`, [scope.id, scope.workspace_id, scope.principal_hash, claim.id])).rows[0];
       if (!row || row.status !== 'running' || row.data.leaseToken !== claim.token) return 'lost';
       const job = recordOf(row);
@@ -129,15 +190,17 @@ export const exportJobRepository: ExportJobRepository = {
       return 'saved';
     }) ?? 'busy';
   },
-  async release(claim) {
-    return await transaction(claim.merchantId, async (client, scope) => {
+  async release(claim, reason = 'stopping') {
+    return await transaction(claim.merchantId, 'wait', async (client, scope) => {
       const row = (await client.query<Row>(`SELECT r.* FROM valopay_records r WHERE r.id=$4 AND r.merchant_id=$1 AND r.kind='exports' AND ${ownership}`, [scope.id, scope.workspace_id, scope.principal_hash, claim.id])).rows[0];
       if (!row || row.status !== 'running' || row.data.leaseToken !== claim.token) return 'lost';
       // Attempts keep counting claims, and the private object key stays, so a file the stopped upload committed is adopted.
-      const job = recordOf(row);
+      const job = recordOf(row), head = await auditHead(client, scope, { since: row.data.startedAt });
       returnExportToQueue(job, scope.now.toISOString());
       await writeJob(client, scope, job);
-      await audit(client, scope, job, 'export.released', 'The export worker stopped before finishing; the saved job returns to the queue for the next worker.');
+      await audit(client, scope, job, 'export.released', reason === 'busy'
+        ? 'The lender stayed busy for longer than the export worker waits to record its progress; the saved job returns to the queue and resumes when the lender is free.'
+        : 'The export worker stopped before finishing; the saved job returns to the queue for the next worker.', head);
       return 'saved';
     }) ?? 'busy';
   },
