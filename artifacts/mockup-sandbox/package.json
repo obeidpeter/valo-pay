@@ -10,7 +10,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
-    "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "^1.2.20",
     "@radix-ui/react-alert-dialog": "^1.1.23",
     "@radix-ui/react-aspect-ratio": "^1.1.15",
@@ -49,10 +48,8 @@
     "class-variance-authority": "catalog:",
     "clsx": "catalog:",
     "cmdk": "^1.1.1",
-    "date-fns": "^3.6.0",
     "embla-carousel-react": "^8.6.0",
     "fast-glob": "^3.3.3",
-    "framer-motion": "catalog:",
     "input-otp": "^1.5.0",
     "lucide-react": "catalog:",
     "next-themes": "^0.4.6",
@@ -65,10 +62,8 @@
     "sonner": "^2.0.8",
     "tailwind-merge": "catalog:",
     "tailwindcss": "catalog:",
-    "tailwindcss-animate": "^1.0.7",
     "tw-animate-css": "^1.4.0",
     "vaul": "^1.1.2",
-    "vite": "catalog:",
-    "zod": "catalog:"
+    "vite": "catalog:"
   }
 }
