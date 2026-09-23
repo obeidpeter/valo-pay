@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { normaliseRuntimeDefinition, reviewedRuntimeHelpers, reviewedRuntimePolicies, reviewedRuntimeTrigger, runtimeHelperDifferences, runtimePolicyDifferences, type RuntimeHelperRow, type RuntimePolicyRow, type RuntimeTriggerRow } from "../src/lib/runtime-isolation-policy.js";
+import { expectedRuntimeDefinition, normaliseRuntimeDefinition, reviewedRuntimeHelpers, reviewedRuntimePolicies, reviewedRuntimeTrigger, runtimeHelperDifferences, runtimePolicyDifferences, type RuntimeHelperRow, type RuntimePolicyRow, type RuntimeTriggerRow } from "../src/lib/runtime-isolation-policy.js";
 
 // The comparison the isolation self-check runs in every staff transaction,
 // without a database: rows shaped as the restricted login reads the catalogue.
@@ -61,10 +61,18 @@ eq(runtimeHelperDifferences(helper("valopay_runtime_member", { args: "member_id 
 eq(runtimeHelperDifferences([...helpers(), { ...helpers()[0]!, args: "extra integer" }], scope), [`${helpers()[0]!.proname}(extra integer): an unreviewed overload`], "an overload is refused");
 eq(runtimeHelperDifferences(helpers().filter(row => row.proname !== "valopay_runtime_guard_workspace"), scope), ["valopay_runtime_guard_workspace: missing"], "a missing helper is refused");
 eq(runtimeHelperDifferences(helper("valopay_runtime_guard_workspace", { source: live(reviewedRuntimeHelpers.valopay_runtime_guard_workspace!.source)!.replace(`'${scope.role}'`, "'someone_else'") }), scope), ["valopay_runtime_guard_workspace: body differs"], "a guard that watches another login is refused");
+// The placeholder is spelt out in the reviewed text, never put into the live text: a guard that
+// compares session_user with the string '{role}' never fires, so it must not read as the reviewed guard.
+eq(runtimeHelperDifferences(helper("valopay_runtime_guard_workspace", { source: qualify(reviewedRuntimeHelpers.valopay_runtime_guard_workspace!.source) }), scope), ["valopay_runtime_guard_workspace: body differs"], "a guard that watches the placeholder instead of the login is refused");
+// Even a login named after the placeholder, which the configuration refuses, would not make such a guard pass.
+eq(runtimeHelperDifferences(helper("valopay_runtime_guard_workspace", { source: qualify(reviewedRuntimeHelpers.valopay_runtime_guard_workspace!.source) }), { ...scope, role: "{role}" }), ["valopay_runtime_guard_workspace: body differs"], "live text holding the placeholder is refused whatever the login is called");
 
-// Normalisation: only the runtime schema's qualifier, only the guard's role literal, only white space.
+// Normalisation: only the runtime schema's qualifier and white space; {role} is spelt out in the reviewed text alone.
 eq(normaliseRuntimeDefinition(null, scope), null, "an absent expression stays absent");
-eq(normaliseRuntimeDefinition(`BEGIN IF session_user='${scope.role}' THEN RAISE EXCEPTION 'x'; END IF; END;`, scope), "BEGIN IF session_user='{role}' THEN RAISE EXCEPTION 'x'; END IF; END;", "the guard's role literal becomes {role}");
+eq(normaliseRuntimeDefinition(`BEGIN IF session_user='${scope.role}' THEN RAISE EXCEPTION 'x'; END IF; END;`, scope), `BEGIN IF session_user='${scope.role}' THEN RAISE EXCEPTION 'x'; END IF; END;`, "the guard's role literal is kept as written");
+eq(normaliseRuntimeDefinition("BEGIN IF session_user='{role}' THEN RETURN NULL; END IF; END;", scope), "BEGIN IF session_user='{role}' THEN RETURN NULL; END IF; END;", "a live placeholder stays a placeholder");
+eq(expectedRuntimeDefinition(reviewedRuntimeHelpers.valopay_runtime_guard_workspace!.source, scope)!.startsWith(`BEGIN IF session_user='${scope.role}' THEN`), true, "the reviewed guard names the runtime login, as 005 writes it");
+eq(expectedRuntimeDefinition(null, scope), null, "an absent reviewed expression stays absent");
 eq(normaliseRuntimeDefinition(`SELECT ${scope.role}.id FROM ${scope.schema}.valopay_merchants ${scope.role}`, scope), `SELECT ${scope.role}.id FROM valopay_merchants ${scope.role}`, "an alias named like the role is kept");
 eq(normaliseRuntimeDefinition(`SELECT ${scope.schema}.now(), "${scope.schema}".valopay_runtime_admin()`, scope), `SELECT ${scope.schema}.now(), valopay_runtime_admin()`, "the qualifier is removed only in front of the reviewed objects' names");
 console.log(`Runtime isolation fingerprint checks passed (${checks}).`);

@@ -8,7 +8,8 @@
  * Pure: no database import, so the offline suites load it. Definitions are kept
  * as text a reviewer can read: the runtime schema's qualifier is removed from
  * the names of the reviewed tables and helpers, {role} stands for the runtime
- * login in the workspace guard, and white space is collapsed.
+ * login in the workspace guard, and white space is collapsed. {role} is spelt
+ * out in this text before a comparison, never put into the live text.
  *
  * A migration that changes a policy, a helper or the workspace guard changes
  * this file in the same reviewed commit; runtime-isolation.integration.test.ts
@@ -66,17 +67,29 @@ export type RuntimeHelperRow = { proname: string; args: string; result: string; 
 export type RuntimeTriggerRow = { tgname: string; relname: string; definition: string; tgenabled: string };
 type Scope = { schema: string; role: string };
 
-/** Puts a definition in the reviewed form. The runtime schema's qualifier is removed
+/** Puts a live definition in the reviewed form. The runtime schema's qualifier is removed
  * only in front of a valopay_ name: such a name resolves to the same table or helper
  * through the fixed search paths, while a qualified name that shadows a built-in, or
- * any other schema's qualifier, stays and differs. The guard's role literal becomes
- * {role}, and runs of white space become one space. */
+ * any other schema's qualifier, stays and differs. Runs of white space become one
+ * space; nothing else changes, so the guard keeps the role literal it tests. */
 export function normaliseRuntimeDefinition(text: string | null, scope: Scope): string | null {
   if (text === null) return null;
-  // The schema and role match strict patterns (runtimeIsolationConfiguration), so neither needs escaping.
+  // The schema matches a strict pattern (runtimeIsolationConfiguration), so it needs no escaping.
   return text.replace(new RegExp(`(?<![A-Za-z0-9_$".])(?:"${scope.schema}"|${scope.schema})\\.(?=valopay_)`, "g"), "")
-    .split(`session_user='${scope.role}'`).join("session_user='{role}'")
     .replace(/\s+/g, " ").trim();
+}
+
+const rolePlaceholder = "{role}";
+/** A reviewed definition as 005 writes it for this runtime login: {role} spelt out
+ * (the role matches a strict pattern, so %2$L quotes it as written). */
+export function expectedRuntimeDefinition(text: string | null, scope: Scope): string | null {
+  return text === null ? null : text.split(rolePlaceholder).join(scope.role);
+}
+
+/** Whether a live definition differs from the reviewed one. Live text that holds the
+ * placeholder always differs: a guard that compares session_user with '{role}' never fires. */
+function differs(live: string | null, reviewed: string | null, scope: Scope) {
+  return Boolean(live?.includes(rolePlaceholder)) || normaliseRuntimeDefinition(live, scope) !== expectedRuntimeDefinition(reviewed, scope);
 }
 
 /** Each way the helpers differ from the reviewed set, in words an operator can act on. */
@@ -89,7 +102,7 @@ export function runtimeHelperDifferences(rows: RuntimeHelperRow[], scope: Scope)
     seen.add(row.proname);
     if (!row.safe) out.push(`${row.proname}: owner, security or fixed search path differs`);
     if (row.args !== want.args || row.result !== want.result || row.volatility !== want.volatility || row.language !== want.language) out.push(`${row.proname}: signature differs`);
-    if (normaliseRuntimeDefinition(row.source, scope) !== want.source) out.push(`${row.proname}: body differs`);
+    if (differs(row.source, want.source, scope)) out.push(`${row.proname}: body differs`);
   }
   for (const name of Object.keys(reviewedRuntimeHelpers)) if (!seen.has(name)) out.push(`${name}: missing`);
   return out.sort();
@@ -105,8 +118,8 @@ export function runtimePolicyDifferences(policies: RuntimePolicyRow[], triggers:
     seen.add(key);
     if (row.permissive !== "PERMISSIVE") out.push(`${key}: ${String(row.permissive).toLowerCase()} instead of permissive`);
     if (row.roles.length !== 1 || row.roles[0] !== scope.role) out.push(`${key}: applies to ${row.roles.join(", ") || "no role"} instead of the runtime login`);
-    if (normaliseRuntimeDefinition(row.qual, scope) !== want.using) out.push(`${key}: USING expression differs`);
-    if (normaliseRuntimeDefinition(row.with_check, scope) !== want.check) out.push(`${key}: WITH CHECK expression differs`);
+    if (differs(row.qual, want.using, scope)) out.push(`${key}: USING expression differs`);
+    if (differs(row.with_check, want.check, scope)) out.push(`${key}: WITH CHECK expression differs`);
   }
   for (const key of Object.keys(reviewedRuntimePolicies)) if (!seen.has(key)) out.push(`${key}: missing`);
   // The definition covers timing, event, columns, WHEN condition, function and arguments.
@@ -116,7 +129,7 @@ export function runtimePolicyDifferences(policies: RuntimePolicyRow[], triggers:
     guarded = true;
     // O fires in ordinary sessions and A in every session; D never fires and R only on a replica.
     if (row.tgenabled !== "O" && row.tgenabled !== "A") out.push(`${guard.name}: disabled (state ${row.tgenabled})`);
-    if (normaliseRuntimeDefinition(row.definition, scope) !== guard.definition) out.push(`${guard.name}: definition differs`);
+    if (differs(row.definition, guard.definition, scope)) out.push(`${guard.name}: definition differs`);
   }
   if (!guarded) out.push(`${guard.name}: missing`);
   return out.sort();
