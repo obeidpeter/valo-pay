@@ -435,7 +435,7 @@ export default function ReportsPage() {
         title="Issue the monthly invoice"
         actionMutation="issue_invoice"
         fields={[
-          { name: 'period', label: 'Invoice month (YYYY-MM; leave blank for the previous month)', type: 'text', isData: true },
+          { name: 'period', label: 'Invoice month (YYYY-MM; leave blank for the previous month)', type: 'text', isData: true, help: `Months are invoiced in order, a month with nothing to bill for zero. The next invoice covers ${String(reports?.billing?.nextInvoicePeriod || 'the previous month')}.` },
         ]}
       />
       <RecordDialog

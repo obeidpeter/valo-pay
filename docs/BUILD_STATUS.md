@@ -1,4 +1,12 @@
 # Valo Pay — build status
+## Audit fixes, 23 September audit · September 2026
+
+The findings of the 23 September 2026 audit are fixed and covered by tests:
+
+- **Every invoice month, in order.** Invoices now cover every month in order: issuing a month after the next one due is refused, naming the month to issue first, so a month can no longer be passed over and its licence lost (issuing March after January used to leave February impossible to invoice). Before the first invoice, the month due is the one the earliest signed terms took effect. A month with nothing to bill gets an explicit zero invoice, and the statement's next invoice month and the Issue invoice dialog say which month comes next.
+- **Licence terms.** Any signed terms now bill the licence, not only a design partner's: the latest signed terms in effect by the end of a month bill that whole month, with no proration, so a renewal takes effect from its month instead of being ignored in favour of the first terms found. Terms belong to the lender by its id rather than by matching its name, so renaming the lender no longer stops its licence, and the Evidence page's terms dialog records the date terms take effect.
+- **Reversal window from settlement.** A collection becomes billable once the provider's reversal window has passed since it settled, as the money rules document, rather than since it was collected; a payment settled before its settlement time was kept counts from when it was observed.
+
 ## Audit fixes, items 21 to 31 · September 2026
 
 Items 21 to 31 of the 22 September 2026 audit are fixed and covered by tests:
