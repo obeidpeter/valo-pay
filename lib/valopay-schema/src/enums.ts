@@ -126,6 +126,18 @@ export function paymentUnappliedKobo(payment: { amountKobo?: unknown; data?: { a
   return Math.max(0, Number(payment.amountKobo || 0) - Number(payment.data?.allocatedKobo || 0) - paymentRefundedKobo(payment));
 }
 /**
+ * REC-04: a payment whose money waits for Finance to allocate it: an
+ * unallocated payment, or the unapplied rest of one that is partly applied
+ * (partial, or overpaid after its instalment was settled). A proposal, a
+ * duplicate hold and returned money wait for other work. Finance's payments
+ * queue, the unallocated ageing and the close totals read payments through this.
+ */
+export function paymentAwaitsAllocation(payment: { status?: unknown; amountKobo?: unknown; data?: { allocatedKobo?: unknown; reversalStatus?: unknown; refundStatus?: unknown; refundedKobo?: unknown } | null } | null | undefined): boolean {
+  if (!payment) return false;
+  if (payment.status === "unallocated") return true;
+  return (payment.status === "partial" || payment.status === "overpaid") && paymentUnappliedKobo(payment) > 0;
+}
+/**
  * What a refund returned to the payer: data.refundedKobo as recorded, or the
  * whole payment for a refund recorded before the amount was kept.
  */

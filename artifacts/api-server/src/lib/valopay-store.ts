@@ -1058,7 +1058,7 @@ export async function listReconciliation(context: StoreContext, merchantId: stri
     precision = { ...precisionAudit({merchant:merchant.info,settings:merchant.settings,records:sample},context.now), population, requiredSample:Math.min(measurementRules.precisionSampleSize,population) };
     sampledIds = precision.sampledAllocationIds;
   }
-  const conditions = { proposals:"r.kind='allocations' AND r.status='proposed'", duplicates:"r.kind='payments' AND r.status='possible_duplicate'", payments:"r.kind='payments' AND r.status='unallocated'", observations:"r.kind='observations' AND r.status='unresolved'", audit:"r.kind='allocations' AND r.id=ANY($5::text[])", batches:"r.kind='settlement-batches'" };
+  const conditions = { proposals:"r.kind='allocations' AND r.status='proposed'", duplicates:"r.kind='payments' AND r.status='possible_duplicate'", payments:`r.kind='payments' AND (r.status='unallocated' OR (r.status IN ('partial','overpaid') AND ${paymentUnappliedSql}>0))`, observations:"r.kind='observations' AND r.status='unresolved'", audit:"r.kind='allocations' AND r.id=ANY($5::text[])", batches:"r.kind='settlement-batches'" };
   const due = query.dueItem ? (await session.client.query<RecordRow>(select("r.kind='due-items' AND r.id=$4"),[...scope,query.dueItem])).rows[0] : undefined;
   const related = new Map<string,ValopayRecord>();
   if (due) related.set(due.id,rowToRecord(due));
@@ -1267,6 +1267,8 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
     if (present.id !== before.id || present.merchantId !== before.merchantId || present.kind !== before.kind || present.createdAt !== before.createdAt) {
       conflict("Record identity, lender, kind, and creation time are immutable.");
     }
+    // A payment's payer, once its evidence named one or Finance identified it, is never reassigned.
+    if (before.kind === "payments" && before.customerId && present.customerId !== before.customerId) conflict("A payment's payer cannot change once it is recorded.");
     const retentionChange=()=>{
       const kind=before.kind==='exports'?'export_file':'raw_csv';
       const receipt=[...final.values()].find(r=>r.kind==='retention-receipts'&&!original.has(r.id)&&r.data.sourceId===before.id&&r.data.kind===kind&&['deleted','already_absent'].includes(r.data.result));
@@ -1330,6 +1332,7 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
     optionalReference(record, "proposedDueItemId", "due-items", "Proposed due item");
     optionalReference(record, "virtualAccountCustomerId", "customers", "Virtual-account customer");
     optionalReference(record, "settlementBatchId", "settlement-batches", "Settlement batch");
+    optionalReference(record, "countedInBatchId", "settlement-batches", "Settlement batch counting the line");
     optionalReference(record, "statementObservationId", "observations", "Statement observation");
     anyReference(record, "linkedRecordId", "Exception link");
     if (record.data.lineObservationIds !== undefined && changed(record, "lineObservationIds")) {
@@ -1380,9 +1383,13 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
       // the final-state amount constraints below.
       const payment = reference(record, record.data.paymentId, "payments", "Allocation payment", final);
       const due = reference(record, record.data.dueItemId, "due-items", "Allocation due item", final);
-      if (payment.customerId && due.customerId && payment.customerId !== due.customerId) conflict("Allocation payment and due item must have the same customer.");
+      // A superseded allocation applies nothing, such as a proposal withdrawn when Finance identified another payer.
+      if (record.status !== "superseded" && payment.customerId && due.customerId && payment.customerId !== due.customerId) conflict("Allocation payment and due item must have the same customer.");
+      // A proposal for a payment whose evidence named no payer carries no customer until Finance identifies the payer.
       if (record.customerId && (record.customerId !== payment.customerId || record.customerId !== due.customerId)) conflict("Allocation customer must match its parents.");
       if (record.status === "confirmed") {
+        // Evidence that named no payer is applied only once Finance has identified the payer.
+        if (!payment.customerId || record.customerId !== payment.customerId) conflict("A payment is applied to an instalment only once its payer is identified.");
         allocatedPayments.set(payment.id, (allocatedPayments.get(payment.id) || 0) + record.amountKobo);
         allocatedDues.set(due.id, (allocatedDues.get(due.id) || 0) + record.amountKobo);
       }

@@ -153,6 +153,10 @@ try {
     ["READ-REFUND-LEGACY", "returned", 1_000_000, { allocatedKobo: 0, refundStatus: "recorded_externally" }],
     ["READ-REFUND-WHOLE", "returned", 700_000, { allocatedKobo: 0, refundStatus: "refunded", refundedKobo: 700_000 }],
     ["READ-REVERSED", "returned", 900_000, { allocatedKobo: 0, reversalStatus: "reversed" }],
+    // Finance's payments queue holds the unapplied rest of a partial or overpaid payment, and nothing once it is all applied or returned.
+    ["READ-PARTIAL-REST", "partial", 3_000_000, { allocatedKobo: 1_000_000 }],
+    ["READ-OVERPAID-REST", "overpaid", 3_000_000, { allocatedKobo: 2_500_000 }],
+    ["READ-PARTIAL-SPENT", "partial", 3_000_000, { allocatedKobo: 2_500_000, refundStatus: "refunded", refundedKobo: 500_000 }],
   ] as const) {
     const { proposedDueItemId: _due, proposedAmountKobo: _amount, ...kept } =
       paymentTemplate.data;
@@ -203,6 +207,9 @@ try {
           assert.ok(actual.items.length <= filters.limit);
           assert.ok(actual.related.every((r) => r.merchantId === merchantId));
         }
+      // The payments queue holds the money waiting for Finance, the unapplied rest of partial and overpaid payments included.
+      const queued = (await listReconciliation(ctx, merchantId, "payments", { limit: 100 })).items.map((item) => item.reference);
+      assert.ok(queued.includes("READ-PARTIAL-REST") && queued.includes("READ-OVERPAID-REST") && !queued.includes("READ-PARTIAL-SPENT"), `payments queue: ${queued.join(", ")}`);
       // The audit month is the same WAT month in SQL and in the domain.
       const watMonth = (at: string) =>
         new Date(Date.parse(at) + 3_600_000).toISOString().slice(0, 7);

@@ -1,6 +1,7 @@
 import { foldForSearch } from './valopay-list';
 import type { DomainState, ValopayRecord } from "../domain/types";
 import { precisionAudit } from "../domain/reports";
+import { paymentAwaitsAllocation } from "@workspace/valopay-schema";
 
 export const reconciliationQueues = [
   "proposals",
@@ -106,7 +107,7 @@ export function pageReconciliation(
           : queue === "duplicates"
             ? r.kind === "payments" && r.status === "possible_duplicate"
             : queue === "payments"
-              ? r.kind === "payments" && r.status === "unallocated"
+              ? r.kind === "payments" && paymentAwaitsAllocation(r)
               : queue === "observations"
                 ? r.kind === "observations" && r.status === "unresolved"
                 : queue === "audit"

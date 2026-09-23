@@ -201,6 +201,14 @@ try {
   ok(await call(q(`/v1/exports/${job.id}/retry`), "POST"));
   await act({ action: "run_reconciliation" });
 
+  // ---- Finance identifies the payer of a payment whose evidence named none, in one action, and the audit entry says so ----
+  const unidentified = ok(await call(q("/v1/records/payments?search=SBX-UNIDENTIFIED-001"))).items[0];
+  const instalment = ok(await call(q("/v1/records/due-items?status=scheduled"))).items.find((item: any) => Number(item.data.outstandingKobo) >= 1_000_000);
+  const identified = await act({ action: "manual_allocate", recordId: unidentified.id, reason: "Payer confirmed by phone", data: { dueItemId: instalment.id, amountKobo: 1_000_000 } });
+  assert.equal(identified.data.payerCustomerId, instalment.customerId);
+  const trail = (await pool.query("SELECT customer_id,data FROM valopay_records WHERE merchant_id=$1 AND kind='audit' ORDER BY (data->>'sequence')::int DESC LIMIT 1", [lender])).rows[0];
+  assert.deepEqual([trail.data.action, trail.data.summary, trail.customer_id], ["manual_allocate", `Payer confirmed by phone. ${identified.data.auditNote}`, instalment.customerId], "the audit entry names the payer Finance identified");
+
   // ---- Operations: the journal, a recovered request and a cancelled one ----
   const journal = ok(await call(q("/v1/operations")));
   const completed = journal.items.find((item: any) => item.status === "completed" && item.recordId === record.id);

@@ -7,7 +7,7 @@ import {
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import {
   REVIEW_SUPERSESSION, allocatePayment, applyConfirmedAllocation, confirmAttemptOutcome, forgetRejectedMatch, paymentRefunded, paymentReversed, reconcile,
-  recordPaymentRefund, reinstateAllocation, rememberRejectedMatch, settlePaymentStatus, supersedeAllocation, supersededByReview,
+  recordPaymentRefund, reinstateAllocation, releaseDuplicateHold, rememberRejectedMatch, settlePaymentStatus, supersedeAllocation, supersededByReview,
 } from "./reconciliation";
 import { buildReports } from "./reports";
 import { buildCloseReport, closeSchedule, followingCloseInstant, openingSnapshot, owedCloseDates, scheduledCloseBusinessDate, storedCloseCursor } from "./close";
@@ -34,6 +34,19 @@ function reason(input: ActionInput): string {
 function result(message: string, record?: ValopayRecord, data: Record<string, any> = {}): ActionResult {
   // The store appends the canonical transaction-sequenced audit entry and digest.
   return { message, record, data: { ...data, synthetic: true, externalInstructionPerformed: false } };
+}
+
+/**
+ * The answer to an allocation that identified a payment's payer: the message
+ * says so, and data.auditNote, which the audit entry adds to Finance's reason,
+ * names the payer by customer reference and the payment.
+ */
+function payerIdentified(state: DomainState, message: string, record: ValopayRecord, payment: TypedRecord<"payments">): ActionResult {
+  const customer = recordsOf(state, "customers").find((item) => item.id === payment.customerId);
+  const payer = customer?.reference || payment.customerId;
+  return result(`${message} The payer is now recorded as ${customer?.name ? `${customer.name} (${payer})` : payer}.`, record, {
+    payerCustomerId: payment.customerId, auditNote: `Payer identified as customer ${payer} for payment ${payment.reference}.`,
+  });
 }
 
 /** MAN-08 and DEB-06: scheduled attempts are cancelled and logged; in-flight ones complete and are recorded. */
@@ -293,12 +306,15 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
   if (["confirm_allocation", "reject_allocation", "manual_allocate"].includes(input.action)) {
     assertActionRole(ctx, ["Admin", "Finance"]);
     const payment = findRecord(state, String(input.recordId), "payments");
+    // Evidence that named no payer is applied only here, and applying it identifies the payer in the same action.
+    const identifying = !payment.customerId;
     if (input.action === "manual_allocate") {
       const due = findRecord(state, String(data.dueItemId), "due-items");
-      const allocation = allocatePayment(state, ctx, payment, due, Number(data.amountKobo), "R7", "manual", false, `Finance allocated manually: ${reason(input)}`);
+      const why = reason(input);
+      const allocation = allocatePayment(state, ctx, payment, due, Number(data.amountKobo), "R7", "manual", false, identifying ? `Finance identified the payer and allocated manually: ${why}` : `Finance allocated manually: ${why}`, why);
       // Finance's own allocation outranks an earlier "not this instalment".
       forgetRejectedMatch(payment, due.id);
-      return result("Manual allocation recorded by Finance.", allocation);
+      return identifying ? payerIdentified(state, "Manual allocation recorded by Finance.", allocation, payment) : result("Manual allocation recorded by Finance.", allocation);
     }
     const allocation = recordsOf(state, "allocations").find((item) => item.data.paymentId === payment.id && item.status === "proposed");
     if (!allocation) throw new Error("This payment has no proposed allocation to review. Refresh the page to see its current status.");
@@ -316,10 +332,11 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
       rememberRejectedMatch(payment, allocation.data.dueItemId);
       settlePaymentStatus(state, ctx, payment);
     } else {
-      applyConfirmedAllocation(state, ctx, allocation);
+      applyConfirmedAllocation(state, ctx, allocation, reason(input));
       allocation.data.confirmedBy = ctx.actor;
     }
     touch(allocation, now); touch(payment, now);
+    if (identifying && input.action === "confirm_allocation") return payerIdentified(state, "Allocation confirmed.", allocation, payment);
     return result(`Allocation ${input.action === "reject_allocation" ? "rejected" : "confirmed"}.`, allocation);
   }
   if (input.action === "review_allocation") {
@@ -373,7 +390,14 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     touch(item, now);
     // An unknown outcome's resolution is what the provider confirmed, so the attempt takes that outcome.
     const outcome = type === "unknown_outcome" ? confirmAttemptOutcome(state, ctx, item) : undefined;
-    return result(outcome ? `Exception resolution recorded. The attempt is now recorded as ${outcome}.` : "Exception resolution recorded.", item, outcome ? { attemptStatus: outcome } : {});
+    if (outcome) return result(`Exception resolution recorded. The attempt is now recorded as ${outcome}.`, item, { attemptStatus: outcome });
+    // A suspected duplicate resolved as a separate payment leaves its hold; held evidence becomes a payment of its own at the next reconciliation.
+    const released = type === "suspected_duplicate" ? releaseDuplicateHold(state, ctx, item) : undefined;
+    if (released) return result(`Exception resolution recorded. Payment ${released.reference} is released from the duplicate hold and is matched like any other payment.`, item, { paymentStatus: released.status });
+    if (type === "suspected_duplicate" && recordsOf(state, "observations").some((record) => record.id === item.data.linkedRecordId && record.status === "unresolved")) {
+      return result(`Exception resolution recorded. The next reconciliation records this payment evidence as a payment of its own${data.resolutionCode === "confirmed_duplicate_refund" ? ", held until its refund is recorded" : ""}.`, item);
+    }
+    return result("Exception resolution recorded.", item);
   }
   if (input.action === "record_refund") {
     assertActionRole(ctx, ["Admin", "Finance"]);

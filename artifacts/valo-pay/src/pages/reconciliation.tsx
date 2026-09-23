@@ -15,7 +15,7 @@ import { RecordLabel, StatusBadge, readableLabel } from '@/components/record-lab
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useSearch } from 'wouter';
 import { nairaToKobo } from '@/lib/money-input';
-import { saidBy } from '@/lib/notify';
+import { notifyDone, saidBy } from '@/lib/notify';
 import { useHashTarget } from '@/lib/use-hash-target';
 import { safeCollectionReturnTo } from '@/lib/record-navigation';
 import { RecordPagination } from '@/components/record-pagination';
@@ -30,9 +30,11 @@ const instalmentOutstanding = (record: any): number => Math.max(0, Number(record
 
 function MatchEvidence({ allocation, payment, instalment, customer, decision }: { allocation: any; payment: any; instalment: any; customer?: any; decision: string }) {
   const available = paymentAvailable(payment), outstanding = instalmentOutstanding(instalment);
+  const payerToConfirm = !!payment && !payment.customerId;
   return (
     <section aria-label="Match evidence" className="space-y-3 rounded-lg border bg-secondary/20 p-3 text-sm">
       <div><p className="font-semibold">{customer?.name || 'Customer details unavailable'}</p><p className="mt-1 font-mono text-xs">{customer?.reference || 'Check the linked records before recording a decision.'}</p></div>
+      {payerToConfirm && <p className="rounded-md border border-warning-border bg-warning p-2 text-warning-foreground">The payment evidence names no payer. {decision === 'confirm_allocation' ? `Confirming records ${customer?.name || `the customer of instalment ${instalment?.reference || ''}`.trim()} as the payer, with your reason, in the same action.` : 'Rejecting leaves the payment unallocated, with no payer, for Finance to allocate.'}</p>}
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="rounded-md border bg-card p-3">
           <h3 className="font-semibold">Recorded payment</h3>
@@ -93,7 +95,8 @@ export default function ReconciliationPage() {
   const [allocationSession,setAllocationSession]=useState(0);
   const {search:allocationTerm,searchPending:allocationSearchPending}=useDebouncedSearch(allocationSearch,`${merchantId}:${allocationSession}`);
   const choicePage=useUrlPagination(merchantId,'allocation-');
-  const choiceParams={merchantId:merchantId!,search:allocationTerm,limit:choicePage.pageSize,offset:choicePage.offset};
+  // A payment whose payer is known is allocated to that customer's instalments; one with no payer offers every instalment, and choosing one identifies the payer.
+  const choiceParams={merchantId:merchantId!,search:allocationTerm,limit:choicePage.pageSize,offset:choicePage.offset,...(actionKind==='manual_allocate'&&selectedRecord?.customerId?{customerId:String(selectedRecord.customerId)}:{})};
   const choicesQuery=useListRecords('due-items',choiceParams,{query:{enabled:!!merchantId && isDialogOpen && actionKind==='manual_allocate' && !allocationSearchPending,queryKey:getListRecordsQueryKey('due-items',choiceParams)}});
   const rows=[...(proposals?.related||[]),...(payments?.related||[]),...(allPayments?.related||[]),...(observations?.related||[]),...(confirmedAllocations?.related||[])];
   const customerById=new Map(rows.filter(r=>r.kind==='customers').map(r=>[r.id,r]));
@@ -230,7 +233,7 @@ export default function ReconciliationPage() {
                 ) : (
                   proposalRows.map(prop => (
                     <tr key={prop.id} className="hover:bg-secondary/10">
-                      <td className="px-4 py-4"><RecordLabel record={customerById.get(String(prop.customerId))} id={prop.customerId} customer /></td>
+                      <td className="px-4 py-4">{prop.customerId ? <RecordLabel record={customerById.get(String(prop.customerId))} id={prop.customerId} customer /> : <><RecordLabel record={customerById.get(String(dueItemById.get(String(prop.data?.dueItemId))?.customerId))} id={dueItemById.get(String(prop.data?.dueItemId))?.customerId} customer /><span className="mt-1 block text-xs text-muted-foreground">Payer to confirm</span></>}</td>
                       <td className="px-4 py-4 text-xs"><RecordLabel record={paymentById.get(String(prop.data?.paymentId))} id={prop.data?.paymentId} /></td>
                       <td className="px-4 py-4 text-xs"><RecordLabel record={dueItemById.get(String(prop.data?.dueItemId))} id={prop.data?.dueItemId} /></td>
                       <td className="px-4 py-3 text-right font-mono font-medium">{formatKobo(prop.amountKobo)}</td>
@@ -301,7 +304,7 @@ export default function ReconciliationPage() {
                 ) : paymentsError && !payments ? (
                   <tr><td colSpan={3} className="p-5"><p role="alert" className="text-sm text-destructive">Unallocated payments could not be loaded. Use Refresh queue above to try again.</p></td></tr>
                 ) : paymentRows.length === 0 ? (
-                  <EmptyRow colSpan={3} title={q ? 'No results match your search' : "No unallocated payments"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Unallocated payments have not yet been assigned to an instalment. There are none waiting in this list.</>}</EmptyRow>
+                  <EmptyRow colSpan={3} title={q ? 'No results match your search' : "No unallocated payments"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Payments appear here while they hold money no instalment has: unallocated payments, and the rest of a payment allocated in part. There are none waiting in this list.</>}</EmptyRow>
                 ) : (
                   paymentRows.map(pay => (
                     <tr key={pay.id} className="hover:bg-secondary/10">
@@ -309,7 +312,7 @@ export default function ReconciliationPage() {
                         {pay.reference}
                         <div className="text-muted-foreground">{formatDate(pay.createdAt)}</div>
                       </td>
-                      <td className="px-4 py-2 text-right font-mono font-medium">{formatKobo(pay.amountKobo)}</td>
+                      <td className="px-4 py-2 text-right font-mono font-medium">{formatKobo(pay.amountKobo)}{paymentAvailable(pay) !== pay.amountKobo && <div className="text-xs font-normal text-muted-foreground">{formatKobo(paymentAvailable(pay))} left to allocate</div>}</td>
                       <td className="px-4 py-2 text-right space-x-2 flex justify-end items-center">
                         <Button size="sm" variant="outline" className="h-7 text-xs" action="manual_allocate" record={pay} onClick={() => handleAction(pay, 'manual_allocate')}>Allocate</Button>
                         <Button size="sm" variant="outline" className="h-8 text-xs" action="record_refund" record={pay} onClick={() => handleAction(pay, 'record_refund')} title="Record external refund" aria-label={`Record external refund for ${pay.reference}`}>
@@ -487,8 +490,9 @@ export default function ReconciliationPage() {
         }
         actionMutation={actionKind === 'create_batch' || actionKind === 'edit_batch' ? undefined : actionKind}
         actionRecordId={isProposalDecision ? selectedRecord?.data?.paymentId : undefined}
+        onDone={response => { if (response?.data?.payerCustomerId) notifyDone('Payer recorded', String(response.message)); }}
         defaultValues={isProposalDecision ? { data: { proposalId: selectedRecord?.id, proposalUpdatedAt: selectedRecord?.updatedAt } } : actionKind === 'review_allocation' ? { correct: reviewCorrect } : actionKind === 'manual_allocate' ? { amountKobo: paymentAvailable(selectedRecord) } : {}}
-        context={isProposalDecision && selectedRecord ? <MatchEvidence allocation={selectedRecord} payment={selectedPayment} instalment={selectedInstalment} customer={customerById.get(String(selectedRecord.customerId))} decision={actionKind} /> : isAllocationReview && selectedRecord ? values => <MatchEvidence allocation={selectedRecord} payment={selectedPayment} instalment={selectedInstalment} customer={customerById.get(String(selectedRecord.customerId))} decision={values.correct ? 'review_correct' : 'review_incorrect'} /> : actionKind === 'manual_allocate' ? values => {
+        context={isProposalDecision && selectedRecord ? <MatchEvidence allocation={selectedRecord} payment={selectedPayment} instalment={selectedInstalment} customer={customerById.get(String(selectedRecord.customerId || selectedInstalment?.customerId))} decision={actionKind} /> : isAllocationReview && selectedRecord ? values => <MatchEvidence allocation={selectedRecord} payment={selectedPayment} instalment={selectedInstalment} customer={customerById.get(String(selectedRecord.customerId))} decision={values.correct ? 'review_correct' : 'review_incorrect'} /> : actionKind === 'manual_allocate' ? values => {
           const due = dueItemById.get(String(values.dueItemId));
           const available = paymentAvailable(selectedRecord), outstanding = instalmentOutstanding(due);
           let amount: number | null = null;
@@ -498,7 +502,10 @@ export default function ReconciliationPage() {
             {choicesQuery.error ? <LoadProblem what="instalment choices" error={choicesQuery.error} retry={()=>{void choicesQuery.refetch();}} /> : choicesQuery.isFetching || allocationSearchPending ? <p role="status">Loading instalment choices…</p> : <RecordPagination pagination={choicePage} total={choicesQuery.data?.total || 0} label="instalment choices" />}
             <p className="font-semibold">Payment {selectedRecord?.reference}</p>
             <p>Recorded payer: <strong>{customerById.get(String(selectedRecord?.customerId))?.name || (selectedRecord?.customerId ? 'Customer name unavailable' : 'Not identified')}</strong></p>
-            {!selectedRecord?.customerId && <p className="text-xs text-muted-foreground">Confirm the payer from the payment evidence before choosing their instalment.</p>}
+            {!selectedRecord?.customerId ? <>
+              <p className="text-xs text-muted-foreground">Confirm the payer from the payment evidence, then choose one of their instalments. Allocating records that customer as the payer, with your reason, in the same action.</p>
+              {due && <p>Payer to be recorded: <strong>{customerById.get(String(due.customerId))?.name || `the customer of instalment ${due.reference}`}</strong></p>}
+            </> : <p className="text-xs text-muted-foreground">Only this payer's instalments are offered.</p>}
             <p>Available to allocate: <strong>{formatKobo(available)}</strong></p>
             <p>Selected instalment outstanding: <strong>{due ? formatKobo(outstanding) : 'Choose an instalment'}</strong></p>
             {due && amount !== null && amount > 0 && amount <= available && amount <= outstanding && <p className="text-xs text-muted-foreground">After allocation: {formatKobo(available - amount)} unapplied payment; {formatKobo(outstanding - amount)} still due.</p>}
