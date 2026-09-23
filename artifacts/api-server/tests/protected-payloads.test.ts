@@ -18,6 +18,31 @@ assert.equal(await openPayload(rotated,scope,provider),value);
 keys.delete(key);
 await assert.rejects(()=>openPayload(first,scope,provider),/Protected data/);
 assert.equal(await openPayload(rotated,scope,provider),value,'new wrapping key survives withdrawal of old key');
+// Framing: the IV must be the canonical base64 of 12 bytes and the tag of 16. Each envelope below keeps the
+// stored text lengths and used to open: Node's decoder stops at padding and ignores unused bits, and GCM
+// takes any IV length and checks only as many tag bytes as it is given, down to 4.
+{
+  const aad=Buffer.from(JSON.stringify(['valopay',1,scope.lender,scope.record,scope.field]));
+  const sealed=await sealPayload('SYNTHETIC framing',scope,key2,provider),tag=Buffer.from(sealed.tag,'base64');
+  assert.deepEqual([Buffer.from(sealed.iv,'base64').length,tag.length],[12,16]);
+  assert.equal(await openPayload(sealed,scope,provider),'SYNTHETIC framing','a canonical envelope opens');
+  const digits='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  // Sealed again with the envelope's own data key and an 11-byte IV: authentic, and its canonical base64 is 16 characters.
+  const dataKey=await provider.unwrap(key2,Buffer.from(sealed.wrappedKey,'base64'),aad),shortIv=randomBytes(11),cipher=createCipheriv('aes-256-gcm',dataKey,shortIv);cipher.setAAD(aad);
+  const shortIvCiphertext=Buffer.concat([cipher.update(JSON.stringify('SYNTHETIC framing')),cipher.final()]).toString('base64');
+  const malformed=[
+    ['a tag cut to 12 bytes',{...sealed,tag:tag.subarray(0,12).toString('base64').padEnd(24,'=')}],
+    ['a tag cut to 4 bytes',{...sealed,tag:tag.subarray(0,4).toString('base64').padEnd(24,'=')}],
+    ['the tag in non-canonical base64',{...sealed,tag:sealed.tag.slice(0,21)+digits[digits.indexOf(sealed.tag[21]!)|0b1111]+'=='}],
+    ['an 11-byte IV',{...sealed,iv:shortIv.toString('base64'),tag:cipher.getAuthTag().toString('base64'),ciphertext:shortIvCiphertext}],
+  ] as const;
+  let unwraps=0;const counting:WrappingKeyProvider={wrap:provider.wrap,async unwrap(id,data,aad){unwraps++;return provider.unwrap(id,data,aad);}};
+  for(const [name,envelope] of malformed){
+    assert.deepEqual([envelope.iv.length,envelope.tag.length],[16,24],name);
+    await assert.rejects(()=>openPayload(envelope,scope,counting),/Protected data cannot be opened/,`refused: ${name}`);
+  }
+  assert.equal(unwraps,0,'a malformed envelope is refused before any key-service call');
+}
 const mode=process.env.VALOPAY_PAYLOAD_ENCRYPTION,configured=process.env.VALOPAY_KMS_KEY;
 try {process.env.VALOPAY_PAYLOAD_ENCRYPTION='kms';delete process.env.VALOPAY_KMS_KEY;assert.throws(payloadEncryptionKey,/Protected data/);process.env.VALOPAY_KMS_KEY='https://attacker.invalid/key';assert.throws(payloadEncryptionKey,/Protected data/);process.env.VALOPAY_PAYLOAD_ENCRYPTION='off';assert.equal(payloadEncryptionKey(),undefined);}finally{if(mode===undefined)delete process.env.VALOPAY_PAYLOAD_ENCRYPTION;else process.env.VALOPAY_PAYLOAD_ENCRYPTION=mode;if(configured===undefined)delete process.env.VALOPAY_KMS_KEY;else process.env.VALOPAY_KMS_KEY=configured;}
 // Stored batches: a field already sealed is kept as stored, and many batches are
@@ -57,4 +82,4 @@ try {process.env.VALOPAY_PAYLOAD_ENCRYPTION='kms';delete process.env.VALOPAY_KMS
     if(savedKey===undefined)delete process.env.VALOPAY_KMS_KEY;else process.env.VALOPAY_KMS_KEY=savedKey;
   }
 }
-console.log('Protected payload tests passed: large imports, scoped authenticated encryption, corruption, key loss and rotation, sealed fields kept, bounded and selective opening.');
+console.log('Protected payload tests passed: large imports, scoped authenticated encryption, corruption, exact IV and tag framing, key loss and rotation, sealed fields kept, bounded and selective opening.');
