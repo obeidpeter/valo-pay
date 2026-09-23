@@ -3,7 +3,15 @@
 -- Every constraint carries the name the Drizzle schema in lib/db gives it, so a
 -- database built by this file and one built by drizzle-kit push are identical;
 -- the pilot workflow migration rehearsal checks that on a throwaway database.
+-- It is repeatable. Creating a table locks the tables its foreign keys name,
+-- and creating an index locks its table even when the index exists, so an
+-- open write on one of those tables holds it back, and writes that come after
+-- it wait behind it. The lock wait is limited to 5 s and each statement to
+-- 60 s: if either limit is reached nothing changes, and it can be run again
+-- at a quieter moment.
 BEGIN;
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '60s';
 CREATE TABLE IF NOT EXISTS valopay_operations (
  id text PRIMARY KEY, merchant_id text NOT NULL CONSTRAINT valopay_operations_merchant_id_valopay_merchants_id_fk REFERENCES valopay_merchants(id) ON DELETE CASCADE,
  owner text NOT NULL, actor text NOT NULL, role text NOT NULL, request_key text NOT NULL,
