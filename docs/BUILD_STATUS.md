@@ -8,6 +8,7 @@ The findings of the 23 September 2026 audit are fixed and covered by tests:
 - **Reversal window from settlement.** A collection becomes billable once the provider's reversal window has passed since it settled, as the money rules document, rather than since it was collected; a payment settled before its settlement time was kept counts from when it was observed.
 - **Credit Desk repayment schedule.** Explicit terms and the sample schedule fall due once a calendar month, on the assessment's day in West Africa Time or the month's last day when it is shorter, instead of every 30 days, which put two repayments in some months and doubled that month's peak. A 24-month schedule that spans 29 February still fits the two-year horizon.
 - **Cash Desk tax period and overdue outflows.** The sample VAT period is the West Africa Time month, so a sample set up at 00:30 WAT on the 1st no longer lands in the month before. A forecast keeps an approved outflow past its due date as due now, with a warning, instead of dropping it; a receipt past its due date is still left out.
+- **Exact money in messages.** `nairaText`, which writes money in the API's messages and invoice explanations, now splits kobo into naira and kobo with integer arithmetic, so an amount above about NGN 10 trillion no longer loses a kobo.
 
 ## Audit fixes, items 21 to 31 · September 2026
 
