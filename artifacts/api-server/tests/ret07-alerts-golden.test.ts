@@ -121,6 +121,18 @@ const reviewer = (now: string) => ctxAt(now, "Compliance reviewer");
     /Policy previousVersionId is recorded/, "a new policy cannot claim to follow another");
   checks += 5;
 }
+{
+  // Two drafts from version 1 that an earlier build both numbered 2: only an approved version holds a number, so a stored draft, rejected or submitted duplicate does not stop the first approval, and the second is then refused.
+  const { state, policy } = liveFixture({ merchantId: "policy-stored-duplicates" });
+  const stored = (status: "draft" | "submitted" | "rejected") => makeRecord(state, "policies", { name: policy.name, status, amountKobo: 0, data: { ...policy.data, version: 2, author: "Sandbox Admin", reviewer: "", previousVersionId: policy.id, approvedAt: undefined } });
+  const draft = stored("draft"), rejected = stored("rejected"), first = stored("submitted"), second = stored("submitted");
+  const approve = (record: { id: string }) => executeAction(state, reviewer(wat("2027-06-06T09:00:00")), { action: "approve_policy", recordId: record.id, reason: "Stored duplicates test" });
+  approve(first);
+  assert.equal(first.status, "approved", "a version 2 that is only drafted, rejected or submitted does not hold the number");
+  assert.throws(() => approve(second), (error: any) => error.status === 409 && /^Version 2 of this policy is already approved/.test(error.message), "once one version 2 is approved, the other is refused");
+  assert.deepEqual([draft.status, rejected.status, second.status], ["draft", "rejected", "submitted"], "and nothing else changed");
+  checks += 3;
+}
 
 // ---------- NFR-OBS-02: alerts derived from state ----------
 {

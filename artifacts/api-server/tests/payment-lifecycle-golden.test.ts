@@ -407,6 +407,27 @@ function manualTransfer(state: DomainState, due: TypedRecord<"due-items">, refer
   saved(loaded, state);
 }
 {
+  // REC-09: marking a match wrong on an instalment the engine gave up on reopens it, since the money taken off it is owed again and the engine may collect it; an amount edit keeps the final failure, a review does not.
+  const state = seedMerchant("final-reopened");
+  const at = wat("2027-07-01T09:00:00");
+  const tunde = dueByReference(state, "DEMO-LOAN-1002");
+  const finalFailure = (reference: string, transfers: number[]) => {
+    const due = makeRecord(state, "due-items", { name: `Túndé Bakare · ${reference}`, status: "scheduled", customerId: tunde.customerId, amountKobo: 4_200_000, reference, data: { dueDate: "2027-06-01", mandateId: tunde.data.mandateId, owner: "lms", outstandingKobo: 4_200_000 } });
+    transfers.forEach((amountKobo, index) => manualTransfer(state, due, `TRF-${reference}-${index}`, amountKobo, at));
+    due.status = "unpaid_final"; // the engine gave up after part of it was paid
+    return { due, allocations: recordsOf(state, "allocations").filter((item) => item.status === "confirmed" && item.data.dueItemId === due.id) };
+  };
+  const once = finalFailure("DEMO-LOAN-2010", [1_500_000]);
+  const twice = finalFailure("DEMO-LOAN-2011", [1_500_000, 1_000_000]);
+  const loaded = structuredClone(state);
+  const markWrong = (allocation: TypedRecord<"allocations">) => executeAction(state, finance(wat("2027-07-02T09:00:00")), { action: "review_allocation", recordId: allocation.id, reason: "Wrong loan", data: { correct: false } });
+  markWrong(once.allocations[0]!);
+  equal([once.due.status, once.due.data.outstandingKobo], ["scheduled", 4_200_000], "with its only payment taken back it owes the whole amount and is scheduled again");
+  markWrong(twice.allocations[0]!);
+  equal([twice.due.status, twice.due.data.outstandingKobo], ["partially_paid", 3_200_000], "with one of two payments taken back it is part-paid, not a final failure");
+  saved(loaded, state);
+}
+{
   // Statuses an amount edit left behind before this rule are repaired by the next close, before the engine evaluates them.
   const state = seedMerchant("due-repair");
   const raised = dueByReference(state, "DEMO-LOAN-1002"); // paid ₦42,000, raised to ₦47,000 by an earlier build's edit

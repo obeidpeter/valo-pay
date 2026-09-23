@@ -19,6 +19,16 @@ const { assertFinalState } = await import("../src/lib/valopay-store.js");
 let checks = 0;
 const check = (condition: unknown, message: string) => { assert.ok(condition, message); checks += 1; };
 const decisionsFor = (state: DomainState, due: ValopayRecord) => recordsOf(state, "retry-decisions").filter((item) => item.data.dueItemId === due.id);
+/**
+ * Every record read back as the store reads it: the data is jsonb, which
+ * leaves out undefined values and gives every object's keys back shorter
+ * first, then by their bytes, not in the order they were written.
+ */
+const throughDatabase = (state: DomainState) => {
+  const jsonbOrder = ([a]: [string, unknown], [b]: [string, unknown]) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
+  state.records = state.records.map((record) => ({ ...record, data: JSON.parse(JSON.stringify(record.data), (_key, value: unknown) => (
+    value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort(jsonbOrder)) : value)) }));
+};
 
 // ---------- RET-03: every close records the decision with its version, row, inputs, time and notice; unchanged decisions are not repeated ----------
 {
@@ -106,13 +116,14 @@ const decisionsFor = (state: DomainState, due: ValopayRecord) => recordsOf(state
   checks += 1;
 }
 {
-  // A decision recorded by an earlier build carries the fingerprint that left out nested inputs; after the database round trip it is still recognised.
+  // A decision recorded by an earlier build carries the fingerprint that left out nested inputs; after the database round trip, which reorders its keys, it is still recognised.
   const { state, due } = liveFixture({ merchantId: "decision-legacy" });
   reconcile(state, ctxAt(wat("2027-06-28T09:01:00"), "Finance"));
   const stored = decisionsFor(state, due)[0]!;
   const { evaluatedAt: _evaluatedAt, reason: _reason, fingerprint: _fingerprint, previousDecisionId: _previous, synthetic: _synthetic, ...rest } = stored.data;
   stored.data.fingerprint = createHash("sha256").update(JSON.stringify(rest, Object.keys(rest).sort())).digest("hex");
-  state.records = JSON.parse(JSON.stringify(state.records));
+  throughDatabase(state);
+  assert.notDeepEqual(Object.keys(decisionsFor(state, due)[0]!.data.inputs), Object.keys(rest.inputs), "the round trip gives the inputs back in another key order");
   reconcile(state, ctxAt(wat("2027-06-28T12:00:00"), "Finance"));
   assert.equal(decisionsFor(state, due).length, 1, "the stored decision is not written again");
   // An input left undefined (the code of an attempt still in flight) is absent after the round trip, and is the same decision.
@@ -120,10 +131,10 @@ const decisionsFor = (state: DomainState, due: ValopayRecord) => recordsOf(state
   reconcile(state, ctxAt(wat("2027-06-30T09:00:00"), "Finance"));
   const inFlight = decisionsFor(state, due);
   assert.equal(inFlight.at(-1)!.data.rule, "in_flight", "an attempt in flight blocks the plan");
-  state.records = JSON.parse(JSON.stringify(state.records));
+  throughDatabase(state);
   reconcile(state, ctxAt(wat("2027-06-30T09:30:00"), "Finance"));
   assert.equal(decisionsFor(state, due).length, inFlight.length, "and is not written again after the round trip");
-  checks += 3;
+  checks += 4;
 }
 
 // ---------- RET-03 and 6.3 row 8: a notice deadline that passes unevidenced defers the attempt and raises the exception ----------
