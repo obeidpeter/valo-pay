@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeRecord } from '../../api-server/src/domain';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { renderApp, screen, userEvent, waitFor, within } from './harness';
+import { fireEvent } from '@testing-library/react';
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -32,6 +33,19 @@ describe('evidence register and operational reviews', () => {
     expect(await within(register).findByText('Updated recovery evidence')).toBeTruthy();
     expect(api.state().records.find(record => record.name === 'Updated recovery evidence')?.data.gateId).toBe('T2');
     expect(screen.getByText('Requirements missing')).toBeTruthy();
+  });
+
+  it('records when signed terms take effect, the month from which they bill', async () => {
+    const user = userEvent.setup();
+    renderApp('/evidence');
+    const section = (await screen.findByRole('heading', { name: 'Commercial commitments' })).closest('section')!;
+    await user.click(await within(section).findByRole('button', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit commercial terms' });
+    expect(within(dialog).getByText(/^Each invoice month is billed from the latest signed terms in effect by its end, for the whole month\./)).toBeTruthy();
+    await user.click(within(dialog).getByRole('checkbox', { name: /^Signed/ }));
+    fireEvent.change(within(dialog).getByLabelText(/^Takes effect on/), { target: { value: '2027-07-15' } });
+    await user.click(within(dialog).getByRole('button', { name: /Save/ }));
+    await waitFor(() => expect(api.state().records.find(record => record.kind === 'commercial')?.data).toMatchObject({ signed: true, effectiveDate: '2027-07-15' }));
   });
 
   it('shows load failures instead of saying commercial commitments and reviews are empty', async () => {

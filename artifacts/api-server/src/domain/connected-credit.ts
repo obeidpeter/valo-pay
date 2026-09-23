@@ -1,4 +1,8 @@
-import { legacyCollatedCompare, sameJson } from "@workspace/valopay-schema";
+import {
+  legacyCollatedCompare,
+  sameJson,
+  WAT_OFFSET_MS,
+} from "@workspace/valopay-schema";
 import { canonicalDigest } from "../lib/digests";
 
 /**
@@ -306,6 +310,30 @@ function stamp(value: string): number {
       "The timestamp contains an invalid calendar date.",
     );
   return Date.parse(value);
+}
+/**
+ * The same West Africa Time day and time `months` calendar months after an
+ * instant, or the month's last day when it is shorter: a monthly repayment
+ * date, so each month carries one repayment.
+ */
+export function monthsAfter(value: string, months: number): string {
+  const wat = new Date(stamp(value) + WAT_OFFSET_MS);
+  const target = new Date(
+    Date.UTC(
+      wat.getUTCFullYear(),
+      wat.getUTCMonth() + months,
+      1,
+      wat.getUTCHours(),
+      wat.getUTCMinutes(),
+      wat.getUTCSeconds(),
+      wat.getUTCMilliseconds(),
+    ),
+  );
+  const lastDay = new Date(
+    Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  target.setUTCDate(Math.min(wat.getUTCDate(), lastDay));
+  return new Date(target.getTime() - WAT_OFFSET_MS).toISOString();
 }
 function integer(value: number, label: string, minimum = 0): number {
   if (!Number.isSafeInteger(value) || value < minimum)
@@ -711,10 +739,12 @@ export function assessCredit(
       "Supply the lender's proposed repayment schedule including all charges.",
     );
   const scheduleByMonth = new Map<string, number>();
+  // Two calendar years, so a 24-month schedule fits even when it spans 29 February.
+  const horizon = stamp(monthsAfter(input.asOf, 24));
   for (const payment of input.repaymentSchedule) {
     const due = stamp(payment.dueAt);
     integer(payment.amountKobo, "Scheduled repayment", 1);
-    if (due <= asOf || due > asOf + 730 * DAY)
+    if (due <= asOf || due > horizon)
       fail(
         "INVALID_REPAYMENT_DATE",
         "Repayments must follow the assessment and fit within the two-year synthetic horizon.",
@@ -1498,11 +1528,10 @@ export function createSyntheticCreditInput(options: {
       sourceAsOf: options.now,
     },
     requestedPrincipalKobo: 24_000_000,
-    repaymentSchedule: [
-      { dueAt: at(30), amountKobo: 9_000_000 },
-      { dueAt: at(60), amountKobo: 9_000_000 },
-      { dueAt: at(90), amountKobo: 9_000_000 },
-    ],
+    repaymentSchedule: [1, 2, 3].map((month) => ({
+      dueAt: monthsAfter(options.now, month),
+      amountKobo: 9_000_000,
+    })),
   };
   if (options.scenario === "thin_file") {
     input.sources[0]!.coverageStart = at(-30);

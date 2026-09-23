@@ -102,7 +102,10 @@ values.retryDecision = decisionFingerprint({ dueItemId: "due-golden", attemptId:
 // Connected banking evidence.
 values.cashEvidence = [cashEvidenceHash(tricky), cashEvidenceHash([tricky, null, { skipped: undefined, kept: true }])];
 const creditContext = { tenantId: state.merchant.id, actorId: ops.actor, permissions: ["credit:assess"] as const, now: ops.now };
-values.creditAssessment = assessCredit(createSyntheticCreditInput({ tenantId: state.merchant.id, applicantId: "golden-applicant", applicationRef: "golden-application", now: ops.now }), { ...creditContext, permissions: [...creditContext.permissions] }).id;
+const creditInput = createSyntheticCreditInput({ tenantId: state.merchant.id, applicantId: "golden-applicant", applicationRef: "golden-application", now: ops.now });
+// The sample schedule as the earlier builds wrote it, every 30 days (it now falls due monthly), so the digest covers the same input.
+creditInput.repaymentSchedule = [30, 60, 90].map((days) => ({ dueAt: new Date(Date.parse(ops.now) + days * 86_400_000).toISOString(), amountKobo: 9_000_000 }));
+values.creditAssessment = assessCredit(creditInput, { ...creditContext, permissions: [...creditContext.permissions] }).id;
 values.connectedRevision = connectedRevision(state);
 
 // Request fingerprints stored with idempotency receipts and journal entries.

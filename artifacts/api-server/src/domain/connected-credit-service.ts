@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   assessCredit,
   createSyntheticCreditInput,
+  monthsAfter,
   reviewCreditAssessment,
   syntheticCreditAccountId,
   type CreditAssessmentResult,
@@ -295,12 +296,11 @@ export function runCreditAction(
       )
         reject("Provide the principal, repayment amount and term together.");
       assessment.requestedPrincipalKobo = data.principalKobo!;
+      // One repayment a calendar month, not every 30 days, which would put two in some months.
       assessment.repaymentSchedule = Array.from(
         { length: data.termMonths! },
         (_, index) => ({
-          dueAt: new Date(
-            Date.parse(ctx.now) + (index + 1) * 30 * 86_400_000,
-          ).toISOString(),
+          dueAt: monthsAfter(ctx.now, index + 1),
           amountKobo: data.repaymentKobo!,
         }),
       );

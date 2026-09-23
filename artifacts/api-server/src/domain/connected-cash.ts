@@ -319,7 +319,8 @@ export interface ForecastOptions {
   downsideDelayDays?: number;
   bufferMinor?: number;
 }
-/** CASH-06: historical evaluation excludes future knowledge; reserves are planning values only. */
+/** CASH-06: historical evaluation excludes future knowledge; reserves are planning values only.
+ * An approved outflow past its due date is still owed and counts as due now; an overdue receipt is left out. */
 export function forecastCash(
   scope: CurrencyScope,
   openingMinor: number,
@@ -356,12 +357,19 @@ export function forecastCash(
     instant(c.dueAt, "Due time");
     required(c.version, "Commitment version");
   });
+  // An approved outflow past its due date is still owed, so it counts as due
+  // now; a receipt past its due date is not counted on until it arrives.
   const eligible = commitments.filter(
     (c) =>
       c.approved &&
       instant(c.knownAt, "Known time") <= at &&
-      instant(c.dueAt, "Due time") >= at,
+      (c.direction === "outflow" || instant(c.dueAt, "Due time") >= at),
   );
+  const dueTime = (c: CashCommitment) =>
+    Math.max(instant(c.dueAt, "Due time"), at);
+  const overdueOutflows = eligible.filter(
+    (c) => instant(c.dueAt, "Due time") < at,
+  ).length;
   const points = Array.from({ length: Math.ceil(days / 7) }, (_, i) =>
     Math.min((i + 1) * 7, days),
   );
@@ -371,7 +379,7 @@ export function forecastCash(
       const until = at + day * DAY;
       const included = eligible.filter(
         (c) =>
-          instant(c.dueAt, "Due time") +
+          dueTime(c) +
             (name === "downside" && c.direction === "inflow"
               ? delay * DAY
               : 0) <=
@@ -425,7 +433,7 @@ export function forecastCash(
     planningBufferMinor: buffer,
     scenarios,
     includedCommitmentIds: eligible
-      .filter((c) => instant(c.dueAt, "Due time") <= at + days * DAY)
+      .filter((c) => dueTime(c) <= at + days * DAY)
       .map((c) => c.id),
     excludedCommitmentIds: commitments
       .filter((c) => !eligible.includes(c))
@@ -437,6 +445,13 @@ export function forecastCash(
         : [
             "Refresh or reconcile the opening balance before using funding readiness.",
           ]),
+      ...(overdueOutflows === 1
+        ? ["An approved outflow past its due date is included as due now."]
+        : overdueOutflows
+          ? [
+              `${overdueOutflows} approved outflows past their due dates are included as due now.`,
+            ]
+          : []),
     ],
   };
 }

@@ -324,7 +324,8 @@ export default function EvidencePage() {
             { name: 'licenceKobo', label: 'Monthly licence fee (kobo)', type: 'number', isData: true, required: true },
             { name: 'usageBps', label: 'Usage rate (basis points; 100 = 1%)', type: 'number', isData: true, required: true },
             { name: 'usageCapKobo', label: 'Usage fee cap per collection (kobo)', type: 'number', isData: true, required: true },
-            { name: 'signed', label: 'Signed', type: 'checkbox', isData: true }
+            { name: 'signed', label: 'Signed', type: 'checkbox', isData: true },
+            { name: 'effectiveDate', label: 'Takes effect on', type: 'date', isData: true, help: 'Each invoice month is billed from the latest signed terms in effect by its end, for the whole month. Leave blank for terms that apply from the start.' }
           ] : []
         }
       />

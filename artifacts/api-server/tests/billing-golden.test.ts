@@ -1,14 +1,15 @@
 // Golden tests for invoicing (BIL-04) and post-invoice adjustments (BIL-07)
-// against TRD v1.1 section 5.15, with the recovery fee gate (BIL-03).
+// against TRD v1.1 section 5.15, with the terms that bill a licence (BIL-02),
+// the reversal window (BIL-01) and the recovery fee gate (BIL-03).
 import assert from "node:assert/strict";
 import { ctxAt, wat } from "./helpers.js";
 import { executeAction } from "../src/domain/actions.js";
 import { buildOverview, buildReports } from "../src/domain/reports.js";
-import { issueInvoice, monthOf, pendingAdjustments, previousMonth, periodEnd } from "../src/domain/billing.js";
+import { billableCollection, issueInvoice, monthOf, pendingAdjustments, previousMonth, periodEnd } from "../src/domain/billing.js";
 import { supersedeAllocation } from "../src/domain/reconciliation.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
-import type { DomainState, ValopayRecord } from "../src/domain/types.js";
+import type { DomainState, TypedRecord, ValopayRecord } from "../src/domain/types.js";
 
 const { assertFinalState } = await import("../src/lib/valopay-store.js");
 let checks = 0;
@@ -16,10 +17,11 @@ const finance = (now: string) => ctxAt(now, "Finance");
 const LICENCE = 60_000_000; // contracted Scale licence in the seed
 const invoiceFor = (state: DomainState, period: string, now: string) => executeAction(state, finance(now), { action: "issue_invoice", reason: "month end", data: { period } }).record!;
 
-function fixture(id: string): { state: DomainState; collection: (reference: string, observedAt: string, amountKobo?: number) => ValopayRecord } {
+/** A seeded lender whose design-partner terms are signed from `effectiveDate`, so its first invoice is for that month or an earlier one. */
+function fixture(id: string, effectiveDate = "2027-06-01"): { state: DomainState; collection: (reference: string, observedAt: string, amountKobo?: number) => TypedRecord<"payments"> } {
   const state = seedMerchant(id);
   const terms = recordsOf(state, "commercial")[0]!;
-  terms.data.signed = true; terms.data.effectiveDate = "2027-01-01";
+  terms.data.signed = true; terms.data.effectiveDate = effectiveDate;
   // The seeded receipts become transfers so only the collections each case creates are billable (BIL-01 is covered in measurement-golden).
   for (const payment of recordsOf(state, "payments")) payment.data.channel = "transfer";
   const customer = recordsOf(state, "customers")[0]!;
@@ -150,7 +152,7 @@ checks += 5;
 
 // ---------- BIL-04: months are West Africa Time: a collection at 00:30 WAT on 1 January is January's, and so is the default period at 00:30 WAT on 1 February ----------
 {
-  const { state, collection } = fixture("wat-months");
+  const { state, collection } = fixture("wat-months", "2027-12-01");
   collection("PSK-NYE", wat("2027-12-31T23:30:00"));
   collection("PSK-NY", wat("2028-01-01T00:30:00"));
   const december = invoiceFor(state, "2027-12", wat("2028-01-09T09:00:00"));
@@ -164,8 +166,7 @@ checks += 5;
 
 // ---------- BIL-07: a correction is priced at the rate of the invoice that first billed the collection ----------
 {
-  const { state, collection } = fixture("adjustment-rates");
-  recordsOf(state, "commercial")[0]!.data.effectiveDate = "2026-01-01";
+  const { state, collection } = fixture("adjustment-rates", "2026-12-01");
   // Billed at the public price in 2026 and reversed in 2027: the whole fee is credited, not half of it.
   const fullPrice = collection("PSK-2026", wat("2026-12-10T06:20:00"), 10_000_000);
   const december2026 = invoiceFor(state, "2026-12", wat("2027-01-09T09:00:00"));
@@ -174,6 +175,8 @@ checks += 5;
   assert.deepEqual(january2027.data.adjustments.map((line: any) => [line.paymentReference, line.reason, line.kobo]), [["PSK-2026", "reversal", -15_000]], "the capped NGN 150 fee billed in full is credited in full");
   assert.equal(january2027.data.totals.netKobo, LICENCE / 2 - 15_000, "the 2027 discount halves the licence, not the credit for a fee billed at the public price");
   assert.equal(january2027.data.designPartnerDiscount.kobo, -LICENCE / 2);
+  // February to November are quiet months, invoiced in order all the same.
+  for (let month = 2; month <= 11; month++) invoiceFor(state, `2027-${String(month).padStart(2, "0")}`, wat(`2027-${String(month + 1).padStart(2, "0")}-01T09:00:00`));
   // Billed at half price in 2027 and corrected in 2028: the credit is what was charged, and a debit is charged at the same rate.
   const reversed = collection("PSK-2027", wat("2027-12-10T06:20:00"), 10_000_000);
   const raised = collection("PSK-UP", wat("2027-12-11T06:20:00"));
@@ -188,7 +191,7 @@ checks += 5;
   assert.deepEqual([december2026.data.usageLines[0].feeKobo, december2026.data.usageLines[0].discountRate, december2026.data.usageLines[0].chargedKobo], [15_000, 0, 15_000]);
   assert.deepEqual(december2027.data.usageLines.map((line: any) => [line.paymentReference, line.feeKobo, line.discountRate, line.chargedKobo]), [["PSK-2027", 15_000, 0.5, 7_500], ["PSK-UP", 7_500, 0.5, 3_750]]);
   assert.deepEqual(january2028.data.adjustments.map((line: any) => [line.feeDeltaKobo, line.discountRate, line.billedChargedKobo]), [[-15_000, 0.5, 7_500], [4_500, 0.5, 3_750]]);
-  assert.match(january2028.data.adjustments[0].explanation, /billed NGN 75\.00 on INV-2027-12-003 at the 50% design-partner discount\) was reversed by the provider after it was billed; credit of NGN 75\.00\./);
+  assert.match(january2028.data.adjustments[0].explanation, /billed NGN 75\.00 on INV-2027-12-013 at the 50% design-partner discount\) was reversed by the provider after it was billed; credit of NGN 75\.00\./);
   assert.match(january2028.data.designPartnerDiscount.note, /Adjustment lines carry the rate of the invoice that first billed each collection/);
   assert.deepEqual(pendingAdjustments(state), [], "each correction is billed once");
   checks += 12;
@@ -240,7 +243,7 @@ checks += 5;
 
 // ---------- BIL-01: a direct debit whose settlement line arrived without its webhook succeeded, so it is withheld inside its window and then billed ----------
 {
-  const { state, collection } = fixture("settled-only");
+  const { state, collection } = fixture("settled-only", "2027-07-01");
   const settled = collection("PSK-SETTLED", wat("2027-06-28T06:20:00"));
   settled.data.collectionStatus = "received"; // stored before a settlement line set it to succeeded
   state.settings.billingPeriod = "2027-06";
@@ -274,4 +277,67 @@ checks += 5;
   checks += 8;
 }
 
-console.log(`Billing golden tests passed (${checks} checks): invoice lines, VAT, WAT months and period rules, withheld collections, adjustment credits and debits with references at the rate first billed, refunds of unapplied money, debits settled without a webhook, credit note, recovery fee gate and window.`);
+// ---------- BIL-04: every month is invoiced, in order: a skipped month is refused, naming the month to issue first, and a quiet month gets a zero invoice ----------
+{
+  const { state, collection } = fixture("sequence", "2027-01-01");
+  const statement = (now: string) => buildReports(state, now).billing;
+  assert.throws(() => invoiceFor(state, "2027-03", wat("2027-04-03T10:00:00")), /issue the invoice for 2027-01 first/, "the first invoice is for the month the signed terms took effect, so no licensed month is passed over");
+  assert.equal(statement(wat("2027-04-03T10:00:00")).nextInvoicePeriod, "2027-01", "the statement names the month the first invoice covers");
+  collection("PSK-JAN", wat("2027-01-10T06:20:00"));
+  const january = invoiceFor(state, "2027-01", wat("2027-02-03T10:00:00"));
+  assert.throws(() => invoiceFor(state, "2027-03", wat("2027-04-03T10:00:00")), /issue the invoice for 2027-02 first/, "March after January is refused, so February is never left behind");
+  assert.equal(statement(wat("2027-04-03T10:00:00")).nextInvoicePeriod, "2027-02");
+  const february = invoiceFor(state, "2027-02", wat("2027-04-03T10:00:00"));
+  assert.deepEqual([february.data.collectionsCounted, february.data.licence.kobo, february.data.totals.netKobo], [0, LICENCE, LICENCE / 2], "a month with no collections still bills its licence");
+  const march = invoiceFor(state, "2027-03", wat("2027-04-03T11:00:00"));
+  assert.deepEqual([january, february, march].map((invoice) => invoice.reference), ["INV-2027-01-001", "INV-2027-02-002", "INV-2027-03-003"]);
+  assert.throws(() => invoiceFor(state, "2027-02", wat("2027-04-03T12:00:00")), /already been issued/);
+  assert.equal(statement(wat("2027-04-03T12:00:00")).nextInvoicePeriod, "2027-04");
+  checks += 8;
+
+  // With no signed terms and nothing to bill, the month still gets its invoice, for zero.
+  const quiet = fixture("quiet-month").state;
+  recordsOf(quiet, "commercial")[0]!.data.signed = false;
+  const zero = invoiceFor(quiet, "2027-06", wat("2027-07-01T09:00:00"));
+  assert.deepEqual([zero.data.collectionsCounted, zero.data.licence.kobo, zero.data.totals.netKobo, zero.data.totals.vatKobo, zero.data.totals.totalKobo, zero.amountKobo], [0, 0, 0, 0, 0, 0], "a quiet month gets an explicit zero invoice");
+  assert.throws(() => invoiceFor(quiet, "2027-08", wat("2027-09-01T09:00:00")), /issue the invoice for 2027-07 first/);
+  checks += 2;
+}
+
+// ---------- BIL-02: the licence comes from the lender's latest signed terms in effect in the month, found by the lender's id, for the whole month ----------
+{
+  const { state } = fixture("terms", "2027-05-01");
+  const original = recordsOf(state, "commercial")[0]!;
+  state.merchant.name = "Renamed Lender Ltd"; // the terms keep the name they were signed under: the lender's id links them
+  // Another lender's signed terms never bill this one, nor move where its invoices start.
+  state.records.push({ ...structuredClone(original), id: "other-lender-terms", merchantId: "other-lender", data: { ...structuredClone(original.data), licenceKobo: 1_000, effectiveDate: "2027-01-01" } });
+  // A renewal at the Standard price from 15 July, at the full price (not a design partner), and an unsigned proposal from August.
+  const renewal = makeRecord(state, "commercial", { name: "Licence renewal", status: "signed", createdAt: wat("2027-06-20T09:00:00"), data: { ...structuredClone(original.data), licenceKobo: 35_000_000, effectiveDate: "2027-07-15", signed: true, designPartner: false } });
+  makeRecord(state, "commercial", { name: "Proposal", status: "discovery", createdAt: wat("2027-07-20T09:00:00"), data: { ...structuredClone(original.data), licenceKobo: 15_000_000, effectiveDate: "2027-08-01", signed: false } });
+  const [may, june, july, august] = [["2027-05", "2027-06-01"], ["2027-06", "2027-07-01"], ["2027-07", "2027-08-01"], ["2027-08", "2027-09-01"]].map(([period, day]) => invoiceFor(state, period!, wat(`${day}T09:00:00`)));
+  const billedBy = (invoice: ValopayRecord) => [invoice.data.terms?.commercialId, invoice.data.licence.kobo, invoice.data.designPartnerDiscount.rate, invoice.data.totals.netKobo];
+  assert.deepEqual([may!, june!].map(billedBy), [[original.id, LICENCE, 0.5, LICENCE / 2], [original.id, LICENCE, 0.5, LICENCE / 2]], "the signed design-partner terms bill May and June at half price, though the lender was renamed");
+  assert.deepEqual([july!, august!].map(billedBy), [[renewal.id, 35_000_000, 0, 35_000_000], [renewal.id, 35_000_000, 0, 35_000_000]], "the renewal, not a design partner's, bills all of July from its effective month with no proration, and the unsigned proposal bills nothing");
+  state.settings.billingPeriod = "2027-09";
+  assert.deepEqual(buildReports(state, wat("2027-09-15T09:00:00")).billing.lines.map((line: any) => [line.commercialId, line.contractedLicenceKobo, line.designPartnerDiscount]), [[renewal.id, 35_000_000, false]], "the statement shows the terms that bill the month");
+  checks += 3;
+}
+
+// ---------- BIL-01: the reversal window runs from settlement ----------
+{
+  const { state, collection } = fixture("window-from-settlement", "2027-03-01");
+  const late = collection("PSK-SETTLED-LATE", wat("2027-03-01T07:00:00"));
+  late.data.settledAt = wat("2027-03-07T07:00:00"); // collected on 1 March, paid out on 7 March
+  assert.equal(billableCollection(state, late, wat("2027-03-08T08:00:00")), false, "a day after settlement it is inside the seven-day window, though it was collected a week before");
+  assert.equal(billableCollection(state, late, wat("2027-03-14T07:00:00")), true, "seven days after settlement it can be billed");
+  const unrecorded = collection("PSK-NO-SETTLED-AT", wat("2027-03-02T07:00:00"));
+  delete unrecorded.data.settledAt; // settled before its settlement time was kept: the window runs from when it was observed
+  assert.equal(billableCollection(state, unrecorded, wat("2027-03-09T07:00:00")), true);
+  state.settings.billingPeriod = "2027-03";
+  assert.equal(buildReports(state, wat("2027-03-10T09:00:00")).billing.withheldInsideReversalWindow, 1, "withheld while inside its window from settlement");
+  const march = invoiceFor(state, "2027-03", wat("2027-04-01T09:00:00"));
+  assert.deepEqual(march.data.usageLines.map((line: any) => [line.paymentReference, line.settledAt]), [["PSK-SETTLED-LATE", wat("2027-03-07T07:00:00")], ["PSK-NO-SETTLED-AT", null]]);
+  checks += 5;
+}
+
+console.log(`Billing golden tests passed (${checks} checks): invoice lines, VAT, WAT months and period rules, every month invoiced in order with a zero invoice for a quiet one, the latest signed terms in effect found by the lender's id, withheld collections and the reversal window from settlement, adjustment credits and debits with references at the rate first billed, refunds of unapplied money, debits settled without a webhook, credit note, recovery fee gate and window.`);
