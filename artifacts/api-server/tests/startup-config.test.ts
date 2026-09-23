@@ -46,6 +46,7 @@ const rules: Array<[Record<string, string>, string]> = [
   [{ NODE_ENV: "staging" }, "NODE_ENV must be development, production or test."],
   [{ VALOPAY_EXPIRED_WORKSPACE_CLEANUP: "ON" }, "VALOPAY_EXPIRED_WORKSPACE_CLEANUP must be on or off."],
   [{ VALOPAY_STAFF_ACCESS: "on" }, "VALOPAY_STAFF_ACCESS must be off or staging."],
+  [{ VALOPAY_APP_ORIGINS: "https://valopay.example.test, valopay.example.test" }, "VALOPAY_APP_ORIGINS must list HTTPS origins, separated by commas, such as https://valopay.example."],
   [{ VALOPAY_PAYLOAD_ENCRYPTION: "yes" }, "VALOPAY_PAYLOAD_ENCRYPTION must be off or kms."],
   [{ VALOPAY_PAYLOAD_ENCRYPTION: "kms", VALOPAY_KMS_KEY: "synthetic-secret" }, "VALOPAY_KMS_KEY must be a Cloud KMS CryptoKey name (projects/…/locations/…/keyRings/…/cryptoKeys/…) when VALOPAY_PAYLOAD_ENCRYPTION is kms."],
   [{ VALOPAY_KMS_PREVIOUS_KEYS: "projects/p/locations/l/keyRings/r/cryptoKeys/k, synthetic-secret" }, "VALOPAY_KMS_PREVIOUS_KEYS must list Cloud KMS CryptoKey names, separated by commas."],
@@ -66,9 +67,14 @@ checks += 2;
 assert.deepEqual(problems({ ...base, VALOPAY_STAFF_ACCESS: "staging" }), [
   "VALOPAY_STAFF_ISSUER must be the Clerk issuer's HTTPS origin when VALOPAY_STAFF_ACCESS is staging.",
   "VALOPAY_STAFF_ORIGINS must list one or more HTTPS origins, separated by commas, when VALOPAY_STAFF_ACCESS is staging.",
+  "CLERK_SECRET_KEY is required when VALOPAY_STAFF_ACCESS is staging: without it no one can sign in.",
 ]);
-const staff = { ...base, VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://clerk.example.test", VALOPAY_STAFF_ORIGINS: "https://valopay.example.test, https://staff.example.test" };
+const staff = { ...base, VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://clerk.example.test", VALOPAY_STAFF_ORIGINS: "https://valopay.example.test, https://staff.example.test", CLERK_SECRET_KEY: "sk_test_synthetic" };
 assert.equal(readStartupConfig(staff, "server").staffAccess, "staging");
+// The close pass signs no one in, so a staff host's close pass needs no Clerk key.
+const { CLERK_SECRET_KEY: _clerk, ...staffWithoutClerk } = staff;
+assert.deepEqual(problems(staffWithoutClerk, "close-pass"), []);
+checks += 1;
 assert.deepEqual(problems({ ...staff, VALOPAY_STAFF_ORIGINS: "http://valopay.example.test" }), ["VALOPAY_STAFF_ORIGINS must list one or more HTTPS origins, separated by commas, when VALOPAY_STAFF_ACCESS is staging."]);
 assert.deepEqual(problems({ ...base, VALOPAY_RUNTIME_ISOLATION: "staging" }).length, 6, "every missing companion of the restricted runtime is named at once");
 const isolated = { ...staff, VALOPAY_RUNTIME_ISOLATION: "staging", VALOPAY_RUNTIME_SCHEMA: "valopay_runtime_staging_pilot", VALOPAY_RUNTIME_ROLE: "valopay_runtime_login", VALOPAY_PAYLOAD_ENCRYPTION: "kms", VALOPAY_KMS_KEY: "projects/p/locations/l/keyRings/r/cryptoKeys/k", VALOPAY_RUNTIME_SERVICE_ORG: "org_Synthetic", VALOPAY_RUNTIME_SERVICE_USER: "user_Synthetic" };

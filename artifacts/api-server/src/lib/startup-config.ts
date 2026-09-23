@@ -98,6 +98,12 @@ export function readStartupConfig(env: Record<string, string | undefined>, purpo
     if (!httpsOrigin(given("VALOPAY_STAFF_ISSUER") ?? "")) problems.push("VALOPAY_STAFF_ISSUER must be the Clerk issuer's HTTPS origin when VALOPAY_STAFF_ACCESS is staging.");
     const origins = (given("VALOPAY_STAFF_ORIGINS") ?? "").split(",").map((value) => value.trim()).filter(Boolean);
     if (!origins.length || !origins.every(httpsOrigin)) problems.push("VALOPAY_STAFF_ORIGINS must list one or more HTTPS origins, separated by commas, when VALOPAY_STAFF_ACCESS is staging.");
+    // Staff sign in through Clerk: without its secret key no one could, so the server does not start (the close pass signs no one in).
+    if (purpose === "server" && given("CLERK_SECRET_KEY") === undefined) problems.push("CLERK_SECRET_KEY is required when VALOPAY_STAFF_ACCESS is staging: without it no one can sign in.");
+  }
+  // The origins the console is served at outside staff mode (staff-access.ts appOrigins), when they are given.
+  if (!(given("VALOPAY_APP_ORIGINS") ?? "").split(",").map((value) => value.trim()).filter(Boolean).every(httpsOrigin)) {
+    problems.push("VALOPAY_APP_ORIGINS must list HTTPS origins, separated by commas, such as https://valopay.example.");
   }
   const payloadEncryption = oneOf("VALOPAY_PAYLOAD_ENCRYPTION", ["off", "kms"] as const, "off");
   if (payloadEncryption === "kms" && !KMS_KEY.test(given("VALOPAY_KMS_KEY") ?? "")) problems.push("VALOPAY_KMS_KEY must be a Cloud KMS CryptoKey name (projects/…/locations/…/keyRings/…/cryptoKeys/…) when VALOPAY_PAYLOAD_ENCRYPTION is kms.");

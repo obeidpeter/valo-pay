@@ -80,7 +80,7 @@ export function signInOrigins(): string[] {
  * Whether this host checks Clerk sessions: Clerk is configured and, outside
  * staff mode, so is an origin to accept them from. Otherwise every request is
  * anonymous; a staff host, which refuses anonymous requests, does not start
- * without Clerk (signInConfiguration).
+ * without Clerk (startup-config.ts).
  */
 export function signInEnabled(): boolean {
   return clerkConfigured() && (staffMode() || appOrigins().length > 0);
@@ -111,18 +111,16 @@ export function clerkOptions(req: { headers: IncomingHttpHeaders }): { publishab
   return { publishableKey: origin ? publishableKeyFromHost(origin.host, configured) : configured ?? "", authorizedParties: origins };
 }
 /**
- * What the process says about sign-in before it listens: `fatal` when it must
- * not start (staff mode without Clerk, where no one could sign in, or an
- * invalid staff or origin setting), `warning` when it runs with sign-in off
- * (Clerk is configured, but no origin to accept sessions from).
+ * What the process says about sign-in before it listens: `warning` when it
+ * runs with sign-in off (Clerk is configured, but no origin to accept sessions
+ * from). A host that must not start (staff mode without Clerk, where no one
+ * could sign in, or a malformed staff or origin setting) was already stopped by
+ * the start-up check (startup-config.ts).
  */
-export function signInConfiguration(): { fatal?: string; warning?: string } {
-  let staff: boolean;
-  try { staff = staffMode(); } catch { return { fatal: "VALOPAY_STAFF_ACCESS must be unset, off or staging, so the server did not start." }; }
-  if (staff && !clerkConfigured()) return { fatal: "Staff mode (VALOPAY_STAFF_ACCESS=staging) needs CLERK_SECRET_KEY: without it no one can sign in, so the server did not start." };
-  if (staff || !clerkConfigured()) return {};
+export function signInConfiguration(): { warning?: string } {
+  // A staff host without Clerk, and a malformed VALOPAY_APP_ORIGINS, never get here: the start-up check refused them (startup-config.ts).
   let origins: string[];
-  try { origins = appOrigins(); } catch { return { fatal: "VALOPAY_APP_ORIGINS must list HTTPS origins separated by commas, such as https://valopay.example, so the server did not start." }; }
+  try { if (staffMode() || !clerkConfigured()) return {}; origins = appOrigins(); } catch { return {}; }
   if (!origins.length) return { warning: "CLERK_SECRET_KEY is set but no application origin is (VALOPAY_APP_ORIGINS, or REPLIT_DOMAINS on Replit): sign-in is off and every request is an anonymous sandbox." };
   return {};
 }

@@ -11,12 +11,9 @@ import { signInConfiguration } from "./lib/staff-access";
 
 const port = serverSettings.port!;
 
-// Sign-in must work where it is required: a staff host without Clerk does not start (one fatal line).
+// A host with Clerk but no origin to accept sessions from runs with sign-in off, and says so. (A staff host
+// without Clerk never gets here: the start-up check refused it.)
 const signIn = signInConfiguration();
-if (signIn.fatal) {
-  logger.fatal({ event: "server.misconfigured" }, signIn.fatal);
-  process.exit(1);
-}
 if (signIn.warning) logger.warn({ event: "sign_in.off" }, signIn.warning);
 
 // A connection that fails while idle is a log line, not the end of the process.

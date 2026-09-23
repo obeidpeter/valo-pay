@@ -217,6 +217,12 @@ try {
 
   await section("Clerk options and the sign-in configuration", async () => {
     const { clerkOptions, signInConfiguration, signInEnabled, appOrigins } = await import("../src/lib/staff-access.js");
+    const { InvalidConfiguration, readStartupConfig } = await import("../src/lib/startup-config.js");
+    // What the start-up check refuses, for the settings given on top of a server's required ones.
+    const refused = (settings: Record<string, string>) => {
+      try { readStartupConfig({ PORT: "8080", DATABASE_URL: "postgres://user@127.0.0.1:1/unused", ...settings }, "server"); return []; }
+      catch (error) { if (error instanceof InvalidConfiguration) return error.problems; throw error; }
+    };
     const live = `pk_live_${Buffer.from("clerk.pilot.example$").toString("base64").replace(/=+$/, "")}`;
     Object.assign(process.env, { VALOPAY_APP_ORIGINS: "https://pilot.example,https://valopay.example", CLERK_PUBLISHABLE_KEY: live });
     const frontend = (key: string) => Buffer.from(key.split("_")[2]!, "base64").toString();
@@ -227,12 +233,13 @@ try {
     Object.assign(process.env, { VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ORIGINS: "https://staff.example" });
     assert.deepEqual(clerkOptions({ headers: {} }).authorizedParties, ["https://staff.example"], "in staff mode the staff policy's origins");
     delete process.env["CLERK_SECRET_KEY"];
-    assert.match(signInConfiguration().fatal ?? "", /needs CLERK_SECRET_KEY/, "a staff host without Clerk must not start");
+    assert.deepEqual(refused({ VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://clerk.pilot.example", VALOPAY_STAFF_ORIGINS: "https://staff.example" }), ["CLERK_SECRET_KEY is required when VALOPAY_STAFF_ACCESS is staging: without it no one can sign in."], "a staff host without Clerk must not start");
+    assert.deepEqual(refused({ VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://clerk.pilot.example", VALOPAY_STAFF_ORIGINS: "https://staff.example", CLERK_SECRET_KEY: "sk_test_placeholder" }), [], "and with Clerk it starts");
     delete process.env["VALOPAY_STAFF_ACCESS"]; delete process.env["VALOPAY_STAFF_ORIGINS"];
     assert.deepEqual([signInConfiguration(), signInEnabled()], [{}, false], "without Clerk the sandbox runs anonymously, which is fine");
     process.env["CLERK_SECRET_KEY"] = "sk_test_placeholder";
     process.env["VALOPAY_APP_ORIGINS"] = "pilot.example";
-    assert.match(signInConfiguration().fatal ?? "", /VALOPAY_APP_ORIGINS must list HTTPS origins/);
+    assert.deepEqual(refused({ CLERK_SECRET_KEY: "sk_test_placeholder", VALOPAY_APP_ORIGINS: "pilot.example" }), ["VALOPAY_APP_ORIGINS must list HTTPS origins, separated by commas, such as https://valopay.example."], "a malformed origin list stops start-up");
     assert.throws(appOrigins, (error: { status?: number }) => error.status === 503, "and a request is refused, not served without the check");
     delete process.env["VALOPAY_APP_ORIGINS"];
     assert.match(signInConfiguration().warning ?? "", /sign-in is off/, "Clerk with no origin to accept sessions from runs with sign-in off");
@@ -240,19 +247,19 @@ try {
     process.env["REPLIT_DOMAINS"] = "valopay.replit.app,Valopay.example";
     assert.deepEqual([appOrigins(), signInEnabled(), signInConfiguration()], [["https://valopay.replit.app", "https://valopay.example"], true, {}], "on Replit the deployment's domains serve when nothing else is configured");
     delete process.env["REPLIT_DOMAINS"];
-    checks += 12;
+    checks += 13;
   });
 
   // ---- Operations item 4: in staff mode a missing CLERK_SECRET_KEY stops startup with one fatal line ----
   await section("a staff host without Clerk does not start", () => {
-    const env: Record<string, string | undefined> = { ...process.env, NODE_ENV: "test", LOG_LEVEL: "info", PORT: "39217", VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ORIGINS: "https://pilot.example", VALOPAY_CLOSE_SCHEDULER: "off", LOG_FILE: undefined, LOG_FORMAT: undefined };
+    const env: Record<string, string | undefined> = { ...process.env, NODE_ENV: "test", LOG_LEVEL: "info", PORT: "39217", VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://clerk.pilot.example", VALOPAY_STAFF_ORIGINS: "https://pilot.example", VALOPAY_CLOSE_SCHEDULER: "off", LOG_FILE: undefined, LOG_FORMAT: undefined };
     delete env["CLERK_SECRET_KEY"];
     const tsx = join(import.meta.dirname, "..", "..", "..", "scripts", "node_modules", "tsx", "dist", "cli.mjs");
     const run = spawnSync(process.execPath, [tsx, join(import.meta.dirname, "..", "src", "index.ts")], { env, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL" });
     assert.equal(run.status, 1, `the process exits (status ${run.status}, signal ${run.signal})`);
     const lines = run.stdout.split("\n").filter((line) => line.startsWith("{")).map((line) => JSON.parse(line) as Record<string, unknown>);
-    assert.deepEqual(lines.map((line) => [line["level"], line["event"]]), [[60, "server.misconfigured"]], "with one fatal line and nothing else logged");
-    assert.match(String(lines[0]!["msg"]), /needs CLERK_SECRET_KEY/);
+    assert.deepEqual(lines.map((line) => [line["level"], line["event"]]), [[60, "config.invalid"]], "with one fatal line and nothing else logged");
+    assert.deepEqual(lines[0]!["problems"], ["CLERK_SECRET_KEY is required when VALOPAY_STAFF_ACCESS is staging: without it no one can sign in."]);
     checks += 3;
   });
 } finally {
