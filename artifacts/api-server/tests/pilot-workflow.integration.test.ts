@@ -685,6 +685,22 @@ try {
       "admin",
     ),
   );
+  // The five-lender limit is the sandbox's: a staff workspace takes a sixth.
+  for (const n of [2, 3, 4, 5, 6])
+    ok(
+      await call(
+        "/v1/pilot/lenders",
+        "POST",
+        { name: `Staff pilot ${n}`, segment: "Consumer lending" },
+        randomUUID(),
+        "admin",
+      ),
+    );
+  assert.equal(
+    ok(await call("/v1/workspace", "GET", undefined, undefined, "admin"))
+      .merchants.length,
+    6,
+  );
   assert.equal(
     (
       await call(

@@ -1424,7 +1424,7 @@ export const createPilotLenderBodyNameMax = 100;
 export const CreatePilotLenderBody = zod.object({
   "name": zod.string().min(createPilotLenderBodyNameMin).max(createPilotLenderBodyNameMax),
   "segment": zod.enum(['Consumer lending', 'Cooperative', 'Asset finance', 'Business finance'])
-}).describe('A new synthetic lender for a staff workspace: name and segment.')
+}).describe('A new synthetic lender: name and segment. A sandbox workspace holds at most five lenders, the two samples included.')
 
 export const CreatePilotLenderResponse = zod.object({
   "id": zod.string(),

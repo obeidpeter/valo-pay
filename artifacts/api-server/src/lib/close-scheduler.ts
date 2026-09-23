@@ -9,7 +9,8 @@
  *
  * A pass reads due lenders in batches until none is left or its time budget
  * is spent, in a fair order (dueScheduledCloses): staff and signed-in lenders
- * first, one lender per workspace per turn, lenders being retried last.  A
+ * before anonymous sandboxes and, within each, lenders being retried after
+ * the rest, then one lender per workspace per turn.  A
  * failed close is recorded on the lender and retried after 2, 4, 8 … minutes,
  * at most hourly, so a lender that keeps failing never holds the others back;
  * the close stays pending until an attempt succeeds.  An anonymous sandbox

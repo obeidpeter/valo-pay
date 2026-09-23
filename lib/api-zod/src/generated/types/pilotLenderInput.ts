@@ -8,7 +8,7 @@
 import type { PilotLenderInputSegment } from './pilotLenderInputSegment';
 
 /**
- * A new synthetic lender for a staff workspace: name and segment.
+ * A new synthetic lender: name and segment. A sandbox workspace holds at most five lenders, the two samples included.
  */
 export interface PilotLenderInput {
   /**

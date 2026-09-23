@@ -1,13 +1,14 @@
 // Database-backed test for the scheduled daily close runner (REC-01): it closes
 // only due lenders, each in its own system transaction through the scoped
 // repository; skips a lender locked by a request in flight; isolates one
-// lender's failure from the others and backs off before retrying it; drains
-// batches until nothing is due, sharing each batch across workspaces; pauses
-// an idle anonymous sandbox instead of closing it; stops between lenders when
-// told to; gives legacy lenders a cursor without a close; and its audit
-// entries never keep an abandoned sandbox alive. Every pass is scoped to this
-// test's own lenders, so other due lenders in a reused database never crowd
-// them out.
+// lender's failure from the others and backs off before retrying it, never
+// waiting for a lender held elsewhere to record the failure; drains batches
+// until nothing is due, sharing each batch across workspaces and putting
+// lenders being retried after the rest; pauses an idle anonymous sandbox
+// instead of closing it; stops between lenders when told to; gives legacy
+// lenders a cursor without a close; and its audit entries never keep an
+// abandoned sandbox alive. Every pass is scoped to this test's own lenders, so
+// other due lenders in a reused database never crowd them out.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 
@@ -18,7 +19,7 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
 
 const { pool } = await import("@workspace/db");
 const { nextCloseInstant } = await import("@workspace/valopay-schema");
-const { SYSTEM_ACTOR_PREFIX, appendAudit, dueScheduledCloses, inWorkspace, listMerchants, loadState, saveState } = await import("../src/lib/valopay-store.js");
+const { SYSTEM_ACTOR_PREFIX, appendAudit, dueScheduledCloses, inWorkspace, listMerchants, loadState, recordScheduledCloseFailure, saveState } = await import("../src/lib/valopay-store.js");
 const { SCHEDULED_CLOSE_ACTOR, runDueCloses, startCloseScheduler, schedulerStatus } = await import("../src/lib/close-scheduler.js");
 
 const requestFor = (token: string) => ({ headers: { cookie: `valopay_sandbox=${token}` }, secure: false, auth: Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true }) }) as any;
@@ -46,6 +47,35 @@ const breakLender = async (merchantId: string) => {
 };
 /** Moves a recorded retry's next attempt into the past, as if its wait had passed. */
 const retryNow = async (merchantId: string) => pool.query("UPDATE valopay_merchants SET settings = jsonb_set(settings, '{closeRetry,retryAt}', to_jsonb($2::text)) WHERE id=$1", [merchantId, new Date((await databaseNow()) - 1000).toISOString()]);
+/**
+ * Runs `pass` while another connection, as a request would, takes the lender's
+ * row at the moment the failure recorder is about to read it, after the failed
+ * close rolled back.  The recorder's read is recognised by its text; the row
+ * is released when the pass ends.
+ */
+const takenBeforeRecording = async <T>(merchantId: string, pass: () => Promise<T>): Promise<T> => {
+  const holder = await pool.connect();
+  const clients = Object.getPrototypeOf(holder) as { query: (this: unknown, ...args: unknown[]) => Promise<unknown> };
+  const query = clients.query;
+  let taken = false;
+  clients.query = async function (this: unknown, ...args: unknown[]) {
+    if (!taken && typeof args[0] === "string" && args[0].startsWith("SELECT settings, now() AS now FROM valopay_merchants")) {
+      taken = true;
+      await query.call(holder, "BEGIN");
+      await query.call(holder, "SELECT 1 FROM valopay_merchants WHERE id=$1 FOR UPDATE", [merchantId]);
+    }
+    return query.apply(this, args);
+  };
+  try {
+    const result = await pass();
+    assert.ok(taken, "the failure recorder read the lender");
+    return result;
+  } finally {
+    clients.query = query;
+    if (taken) await holder.query("ROLLBACK");
+    holder.release();
+  }
+};
 
 try {
   const sandbox = token();
@@ -133,6 +163,28 @@ try {
   assert.equal(await cursorOf(b), dueAt, "the close stays pending at its time");
   const waiting = await runDueCloses({ batchSize: 100, onlyMerchantIds: only });
   assert.equal([...closedIds(waiting), ...waiting.failed.map((item) => item.merchantId), ...waiting.skipped].includes(b), false, "a pass inside the wait does not try the lender again");
+  // The failure recorder never waits for a request or another instance holding the lender: it records nothing and
+  // answers at once, well inside the five-second lock limit it would otherwise wait out.
+  const recorderHolder = await pool.connect();
+  try {
+    await recorderHolder.query("BEGIN");
+    await recorderHolder.query("SELECT 1 FROM valopay_merchants WHERE id=$1 FOR UPDATE", [b]);
+    const asked = Date.now();
+    assert.equal(await recordScheduledCloseFailure(b), undefined, "nothing is recorded for a locked lender");
+    assert.ok(Date.now() - asked < 2500, "the recorder does not wait for the lock");
+    await recorderHolder.query("ROLLBACK");
+  } finally {
+    recorderHolder.release();
+  }
+  assert.deepEqual((await settingsOf(b)).closeRetry, recorded, "the retry is unchanged");
+  // Taken by a request just after its close failed, the lender gets no backoff and is left out of the rest of the pass.
+  await retryNow(b);
+  const beforeLocked = (await settingsOf(b)).closeRetry;
+  const locked = await takenBeforeRecording(b, () => runDueCloses({ batchSize: 1, onlyMerchantIds: [b] }));
+  assert.deepEqual(locked.failed.map((item) => [item.merchantId, item.failures, item.retryAt]), [[b, undefined, undefined]], "the failure is reported but not recorded");
+  assert.deepEqual(locked.skipped, [], "the pass does not try the lender again");
+  assert.equal(locked.batches, 2, "a full batch of one, then nothing left");
+  assert.deepEqual((await settingsOf(b)).closeRetry, beforeLocked, "no backoff was recorded");
   await pool.query("UPDATE valopay_records SET data = $2 WHERE id=$1", [brokenDue.id, brokenDue.data]);
   await retryNow(b);
   const repaired = await runDueCloses({ batchSize: 100, onlyMerchantIds: only });
@@ -227,6 +279,27 @@ try {
   const fair = await runDueCloses({ batchSize: 1, onlyMerchantIds: [x1, x2, y1, s1] });
   assert.deepEqual(closedIds(fair).sort(), [x1, x2, y1, s1].sort(), "a pass drains every due lender");
   assert.equal(closedIds(fair)[0], s1); assert.equal(fair.batches, 5, "four full batches of one and a last empty one");
+
+  // Within staff and signed-in lenders, and within anonymous sandboxes, lenders being retried come after the rest,
+  // and a workspace's lender being retried takes its last turn, not its first.
+  const [r1, r2] = await sandboxLenders(), [h1] = await sandboxLenders(), [g1] = await sandboxLenders();
+  clock = await databaseNow();
+  /** A retry for the lender's pending time whose wait is over: it is due again, but still being retried. */
+  const retrying = async (merchantId: string, at: string) => {
+    await setCursor(merchantId, at);
+    await pool.query(
+      "UPDATE valopay_merchants SET settings = settings || jsonb_build_object('closeRetry', jsonb_build_object('cursor', $2::text, 'failures', 1, 'retryAt', $3::text, 'lastFailedAt', $4::text)) WHERE id=$1",
+      [merchantId, at, new Date(clock - 60 * 1000).toISOString(), new Date(clock - 3 * 60 * 1000).toISOString()],
+    );
+  };
+  await retrying(r1, hoursAgo(clock, 5)); await setCursor(r2, hoursAgo(clock, 4)); await setCursor(h1, hoursAgo(clock, 1));
+  assert.deepEqual(await dueScheduledCloses(1, { only: [r1, h1] }), [h1], "a healthy lender comes before an earlier one being retried");
+  assert.deepEqual(await dueScheduledCloses(3, { only: [r1, r2, h1] }), [r2, h1, r1], "the lender being retried does not take its workspace's first turn");
+  await pool.query(`UPDATE valopay_merchants SET settings = settings || '{"anonymousWorkspace": false}' WHERE id=$1`, [g1]);
+  await retrying(g1, hoursAgo(clock, 1));
+  assert.deepEqual(await dueScheduledCloses(1, { only: [g1, r2, h1] }), [g1], "a signed-in lender being retried still comes before a healthy anonymous sandbox");
+  const retriedLast = await runDueCloses({ batchSize: 1, onlyMerchantIds: [r1, r2, h1, g1] });
+  assert.deepEqual(closedIds(retriedLast), [g1, r2, h1, r1], "a pass closes them in that order");
 
   // An anonymous sandbox nobody has changed for a week is paused, not closed; one a person changed is closed.
   const [z1, z2] = await sandboxLenders(), wToken = token(), [w1, w2] = await sandboxLenders(wToken);

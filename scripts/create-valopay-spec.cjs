@@ -462,7 +462,7 @@ described("Assignee", obj({ actor: str, name: str, role: str }), "A person who c
 described("EvidenceLink", obj({ id: str, name: str, reference: str, kind: str }), "A record the case can cite as evidence.");
 described("CaseDetail", obj({ record: ref("ValopayRecord"), assignees: arr("Assignee"), events: arr("ValopayRecord"), evidence: arr("EvidenceLink") }), "One exception with the people it can be handed to, its handover events and the records it can cite.");
 derived("CaseInput", shared.caseInputSchema, "A case handover or update: assignee, next action and its time, note and evidence, with the version being changed.");
-derived("PilotLenderInput", shared.lenderInputSchema, "A new synthetic lender for a staff workspace: name and segment.");
+derived("PilotLenderInput", shared.lenderInputSchema, "A new synthetic lender: name and segment. A sandbox workspace holds at most five lenders, the two samples included.");
 operation("/v1/pilot/journey", "get", "getPilotJourney", "PilotJourney", null, [merchant], "Read the pilot journey counts", "Counts of the records each pilot step needs, for the journey page. No record is created by reading.");
 operation("/v1/pilot/lenders", "post", "createPilotLender", "Merchant", "PilotLenderInput", [keyHeader], "Create a synthetic lender", "An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused.");
 operation("/v1/pilot/batches", "get", "listImportBatches", "ImportBatchList", null, [merchant, journalOffset], "List import batches", "Newest first, 25 a page, without source rows.");

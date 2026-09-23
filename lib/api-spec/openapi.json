@@ -6403,7 +6403,7 @@
           "segment"
         ],
         "additionalProperties": false,
-        "description": "A new synthetic lender for a staff workspace: name and segment."
+        "description": "A new synthetic lender: name and segment. A sandbox workspace holds at most five lenders, the two samples included."
       },
       "StaffMember": {
         "type": "object",
