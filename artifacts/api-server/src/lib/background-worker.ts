@@ -1,6 +1,7 @@
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import { pathToFileURL } from "node:url";
 import type { Logger } from "pino";
+import { closeRules } from "@workspace/valopay-schema";
 import { applySchedulerEvent, type SchedulerEvent } from "./close-scheduler";
 import { EXPORT_CONCURRENCY } from "./export-jobs";
 import { writeLogLine, type LogLineMessage } from "./logger";
@@ -84,10 +85,26 @@ export function startBackgroundWorker(options: BackgroundOptions & { log: Logger
   let ended!: () => void;
   const settled = new Promise<void>((resolve) => { ended = resolve; });
 
-  const spawn = () => {
+  /** Logs a thread that ended unasked, or could not start, and starts another after the wait. */
+  const crashed = (err: unknown, exitCode: number | undefined, startedAt: number) => {
+    if (Date.now() - startedAt >= (options.steadyMs ?? BACKGROUND_STEADY_MS)) crashes = 0;
+    crashes += 1;
+    const retryInMs = backgroundRestartDelay(crashes, options.restartMs, options.maxRestartMs);
+    log.error({ event: "background.crashed", err, exitCode, durationMs: Date.now() - startedAt, crashes, retryInMs }, "The background worker thread crashed; starting it again after a wait");
+    if (options.closes) applySchedulerEvent({ type: "failed", at: new Date().toISOString() });
+    restart = setTimeout(spawn, retryInMs);
+    restart.unref();
+  };
+  // The scheduler counts as started with its thread, as it did in the process, rather than as not started while the
+  // thread loads; the thread reports the same when its scheduler starts.
+  if (options.closes) applySchedulerEvent({ type: "started", intervalMs: options.closes.intervalMs ?? closeRules.tickSeconds * 1000 });
+  function spawn(): void {
     restart = undefined;
-    const worker = sourceWorker(entry, settings) ?? new Worker(entry, settings), startedAt = Date.now();
-    let failure: unknown;
+    const startedAt = Date.now();
+    let worker: Worker, failure: unknown;
+    // A thread Node refuses to start (an execArgv flag threads do not take, say) is a crash like any other.
+    try { worker = sourceWorker(entry, settings) ?? new Worker(entry, settings); }
+    catch (error) { crashed(error, undefined, startedAt); return; }
     current = worker;
     worker.on("message", (message: BackgroundMessage) => {
       if (message?.type === "log") writeLogLine(message.line);
@@ -98,22 +115,13 @@ export function startBackgroundWorker(options: BackgroundOptions & { log: Logger
     worker.on("exit", (exitCode) => {
       current = undefined;
       const err = failure ?? (exitCode ? new Error(`The background worker thread exited with status ${exitCode}.`) : new Error("The background worker thread ended without being asked to stop."));
-      if (stopping) {
-        if (failure || exitCode) log.error({ event: "background.crashed", err, exitCode, durationMs: Date.now() - startedAt }, "The background worker thread failed while it stopped");
-        else log.info({ event: "background.stopped", durationMs: Date.now() - startedAt }, "Background worker thread stopped");
-        ended();
-        return;
-      }
-      if (Date.now() - startedAt >= (options.steadyMs ?? BACKGROUND_STEADY_MS)) crashes = 0;
-      crashes += 1;
-      const retryInMs = backgroundRestartDelay(crashes, options.restartMs, options.maxRestartMs);
-      log.error({ event: "background.crashed", err, exitCode, durationMs: Date.now() - startedAt, crashes, retryInMs }, "The background worker thread crashed; starting it again after a wait");
-      if (options.closes) applySchedulerEvent({ type: "failed", at: new Date().toISOString() });
-      restart = setTimeout(spawn, retryInMs);
-      restart.unref();
+      if (!stopping) return crashed(err, exitCode, startedAt);
+      if (failure || exitCode) log.error({ event: "background.crashed", err, exitCode, durationMs: Date.now() - startedAt }, "The background worker thread failed while it stopped");
+      else log.info({ event: "background.stopped", durationMs: Date.now() - startedAt }, "Background worker thread stopped");
+      ended();
     });
     log.info({ event: "background.started", threadId: worker.threadId, closes: options.closes !== null, exports: options.exports !== null, poolSize: BACKGROUND_POOL_SIZE, crashes }, "Background worker thread started");
-  };
+  }
   spawn();
 
   return {

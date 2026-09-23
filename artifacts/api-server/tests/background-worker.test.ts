@@ -1,12 +1,13 @@
-// The background worker thread's supervision, offline: a thread that crashes
-// is logged and started again after a wait that doubles to its maximum, and a
-// thread that stayed up long enough starts the waits again; its crash marks
-// the scheduler failed without touching the process; its log lines and
-// scheduler changes reach the main thread; a stop ends the thread, or cancels
-// a start still waiting; and the real thread (background.ts) runs the close
-// scheduler and the export worker against an unreachable database, reports
-// both through the main thread and stops cleanly. The fixture threads are
-// data: modules; nothing connects to a database.
+// The background worker thread's supervision, offline: a thread that crashes,
+// ends unasked or cannot start is logged and started again after a wait that
+// doubles to its maximum, and a thread that stayed up long enough starts the
+// waits again; its crash marks the scheduler failed without touching the
+// process; its log lines and scheduler changes reach the main thread; a stop
+// ends the thread, or cancels a start still waiting; and the real thread
+// (background.ts) runs the close scheduler and the export worker against an
+// unreachable database, reports both through the main thread and stops
+// cleanly. The fixture threads are data: modules; nothing connects to a
+// database.
 import assert from "node:assert/strict";
 import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -85,6 +86,16 @@ try {
   assert.deepEqual(events("background.crashed").slice(0, 3).map((line) => [line.exitCode, line.crashes, line.retryInMs, line.err.message]), Array.from({ length: 3 }, () => [0, 1, 20, "The background worker thread ended without being asked to stop."]));
   checks += 1;
 
+  // ---- A thread Node refuses to start is a crash too: logged and tried again, never thrown into the process ----
+  mark();
+  const refused = startBackgroundWorker({ log: logger, closes: null, exports: {}, restartMs: 20, maxRestartMs: 20, entry: new URL("https://example.test/background.mjs") });
+  await waitFor(() => events("background.crashed").length >= 3, "three refused starts");
+  refused.stop();
+  await refused.settle();
+  assert.ok(events("background.crashed").every((line) => line.exitCode === undefined && line.err.code === "ERR_INVALID_URL_SCHEME"));
+  assert.equal(events("background.started").length, 0, "a thread that never started is not logged as started");
+  checks += 2;
+
   // ---- The real thread: the scheduler and the export worker against an unreachable database, reported here, stopped cleanly ----
   mark();
   const before = schedulerStatus();
@@ -101,7 +112,7 @@ try {
   assert.deepEqual(lines().filter((line) => line.event?.startsWith("background.")).map((line) => line.event), ["background.started", "background.stopped"], "it stopped when asked, without a crash");
   checks += 5;
 
-  console.log(`Background worker tests passed (${checks} checks): crashes logged and the thread started again after doubling waits, reset after a steady run; the scheduler marked failed meanwhile; log lines and scheduler changes relayed to the main thread; a stop that ends the thread or cancels a waiting start; and the real thread running both jobs and stopping cleanly.`);
+  console.log(`Background worker tests passed (${checks} checks): crashes, unasked ends and refused starts logged and the thread started again after doubling waits, reset after a steady run; the scheduler marked failed meanwhile; log lines and scheduler changes relayed to the main thread; a stop that ends the thread or cancels a waiting start; and the real thread running both jobs and stopping cleanly.`);
 } finally {
   rmSync(logFile, { force: true });
 }
