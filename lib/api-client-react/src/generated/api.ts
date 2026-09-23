@@ -5801,7 +5801,7 @@ export const getReceivePaystackTestEventUrl = (connectionId: string,) => {
 }
 
 /**
- * The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key, and at most 120 deliveries a minute per client network.
+ * The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key. At most 120 deliveries a minute per client network and, once signed, 60 a minute per connection. A repeat of a saved event is acknowledged without an audit entry, and its delivery count is written at most once a minute.
  * @summary Receive a signed Paystack test event
  */
 export const receivePaystackTestEvent = async (connectionId: string,

@@ -73,7 +73,7 @@ app.use((req,res,next)=>{res.setHeader("X-Request-Id",String(req.id));next();});
 app.use(CLERK_PROXY_PATH,clerkProxyMiddleware());
 // Liveness and readiness answer before anything else reads the request: no sign-in, no body, their own per-network limit.
 app.use("/api", healthRouter);
-// Paystack test deliveries: 120 a minute per client network.
+// Paystack test deliveries: 120 a minute per client network here, and 60 per connection once signed (paystack-connection.ts).
 const deliveries=createWindowCounter({limit:120,windowMs:60_000});
 app.use('/api/v1/providers/paystack',(req,res,next)=>{
   res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');
