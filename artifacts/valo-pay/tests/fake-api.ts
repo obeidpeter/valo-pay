@@ -32,7 +32,7 @@ import { enrolEligibleFailures } from "../../api-server/src/domain/policy-engine
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "../../api-server/src/domain/types";
 import { seedMerchant } from "../../api-server/src/lib/valopay-seed";
 import { getGates } from "../../api-server/src/lib/valopay-readiness";
-import { pageRecords } from "../../api-server/src/lib/valopay-list";
+import { allocatableOnly, pageRecords } from "../../api-server/src/lib/valopay-list";
 import { pageQueue } from '../../api-server/src/lib/valopay-queues';
 import { importCsv } from "../../api-server/src/lib/valopay-import";
 import { exportJobView, publicExportRecord, queueExport, retryExport } from '../../api-server/src/lib/export-jobs';
@@ -209,6 +209,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
     ["GET", /^\/v1\/records\/(?<kind>[^/]+)$/, (params, query) => {
       if (!kinds.has(params.kind!)) fail("Unknown resource.", 404);
       const parsed = S.ListRecordsQueryParams.parse(query);
+      allocatableOnly(params.kind!, parsed);
       return S.ListRecordsResponse.parse(withState(parsed.merchantId, (state) => {
         const page = pageRecords(state.records.filter((record) => record.kind === params.kind), parsed);
         return { ...page, items: page.items.map((record) => record.kind === "exports" ? publicExportRecord(record) : record) };

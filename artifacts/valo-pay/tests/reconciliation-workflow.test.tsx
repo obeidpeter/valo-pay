@@ -230,6 +230,33 @@ describe('allocation picker search', () => {
   });
 });
 
+describe('allocation picker counts', () => {
+  it('counts only the instalments it offers, and says so plainly when none can take the payment', async () => {
+    const user = userEvent.setup();
+    const open = api.state().records.filter(record => record.kind === 'due-items' && Number(record.data.outstandingKobo) > 0 && !['cancelled', 'closed', 'in_dispute'].includes(record.status));
+    const paid = api.state().records.find(record => record.kind === 'due-items' && record.status === 'paid')!;
+    expect(open.length).toBeLessThan(api.state().records.filter(record => record.kind === 'due-items').length);
+    renderApp('/reconciliation');
+    const payments = (await screen.findByRole('heading', { name: 'Unallocated payments' })).parentElement!.parentElement!;
+    const row = (await within(payments).findByText('SBX-UNIDENTIFIED-001')).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: 'Allocate' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Allocate payment' });
+    await waitFor(() => expect(within(dialog).queryByText('Loading instalment choices…')).toBeNull());
+    const offered = () => within(within(dialog).getByLabelText(/^Instalment/)).getAllByRole('option').filter(option => (option as HTMLOptionElement).value);
+    expect(offered().map(option => (option as HTMLOptionElement).value).sort()).toEqual(open.map(record => record.id).sort());
+    expect(within(dialog).getByText(`1–${open.length} of ${open.length} instalment choices`)).toBeTruthy();
+    // The server filters the page, so the count it gives is the count of choices.
+    expect(api.calls.filter(call => call.path === '/v1/records/due-items').every(call => call.query.allocatable === 'true')).toBe(true);
+    await user.type(within(dialog).getByLabelText('Find an instalment'), paid.reference);
+    await waitFor(() => expect(api.calls.some(call => call.path === '/v1/records/due-items' && call.query.search === paid.reference)).toBe(true));
+    await waitFor(() => expect(within(dialog).queryByText('Loading instalment choices…')).toBeNull());
+    expect(offered()).toHaveLength(0);
+    expect(within(dialog).getByText('No instalment that can take a payment matches this search.')).toBeTruthy();
+    expect(within(dialog).getByText('Instalments that are paid, cancelled, closed or in dispute cannot take a payment and are not listed.')).toBeTruthy();
+    expect(within(dialog).queryByRole('navigation', { name: 'instalment choices pagination' })).toBeNull();
+  });
+});
+
 describe('payer confirmation', () => {
   const finance = () => ({ actor: 'Sandbox Finance', role: 'Finance', now: api.now });
 

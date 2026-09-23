@@ -4100,7 +4100,19 @@ customerId?: string;
  * Only this exact record ID, in the selected kind and lender.
  */
 id?: string;
+/**
+ * Instalments (due-items) only. true lists just the instalments that can take an allocation now: those that still owe an amount and are not cancelled, closed or in dispute, the ones a manual allocation accepts, so total counts the choices. Omitted or false lists every instalment. Refused (400) for any other kind.
+ */
+allocatable?: ListRecordsAllocatable;
 };
+
+export type ListRecordsAllocatable = typeof ListRecordsAllocatable[keyof typeof ListRecordsAllocatable];
+
+
+export const ListRecordsAllocatable = {
+  true: 'true',
+  false: 'false',
+} as const;
 
 export type CreateRecordParams = {
 /**

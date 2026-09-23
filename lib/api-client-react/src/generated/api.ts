@@ -524,7 +524,7 @@ export const getListRecordsUrl = (kind: string,
 }
 
 /**
- * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync.
+ * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync; allocatable for the instalments a manual allocation accepts.
  * @summary Records of one kind for one lender, newest first
  */
 export const listRecords = async (kind: string,

@@ -96,7 +96,8 @@ export default function ReconciliationPage() {
   const {search:allocationTerm,searchPending:allocationSearchPending}=useDebouncedSearch(allocationSearch,`${merchantId}:${allocationSession}`);
   const choicePage=useUrlPagination(merchantId,'allocation-');
   // A payment whose payer is known is allocated to that customer's instalments; one with no payer offers every instalment, and choosing one identifies the payer.
-  const choiceParams={merchantId:merchantId!,search:allocationTerm,limit:choicePage.pageSize,offset:choicePage.offset,...(actionKind==='manual_allocate'&&selectedRecord?.customerId?{customerId:String(selectedRecord.customerId)}:{})};
+  // Only instalments that can take an allocation are asked for, so the pager counts exactly the choices it offers.
+  const choiceParams={merchantId:merchantId!,search:allocationTerm,limit:choicePage.pageSize,offset:choicePage.offset,allocatable:'true' as const,...(actionKind==='manual_allocate'&&selectedRecord?.customerId?{customerId:String(selectedRecord.customerId)}:{})};
   const choicesQuery=useListRecords('due-items',choiceParams,{query:{enabled:!!merchantId && isDialogOpen && actionKind==='manual_allocate' && !allocationSearchPending,queryKey:getListRecordsQueryKey('due-items',choiceParams)}});
   const rows=[...(proposals?.related||[]),...(payments?.related||[]),...(allPayments?.related||[]),...(observations?.related||[]),...(confirmedAllocations?.related||[])];
   const customerById=new Map(rows.filter(r=>r.kind==='customers').map(r=>[r.id,r]));
@@ -499,7 +500,8 @@ export default function ReconciliationPage() {
           try { amount = nairaToKobo(String(values.amountKobo ?? '')); } catch { /* The field reports incomplete or invalid input on submit. */ }
           return <section aria-label="Allocation preview" className="space-y-2 rounded-lg border bg-secondary/20 p-3 text-sm">
             <label className="grid gap-1 text-xs">Find an instalment<input type="search" value={allocationSearch} onChange={event=>{setAllocationSearch(event.target.value);choicePage.resetPage();}} placeholder="Name or reference" className="min-h-10 rounded-md border bg-background px-3" /></label>
-            {choicesQuery.error ? <LoadProblem what="instalment choices" error={choicesQuery.error} retry={()=>{void choicesQuery.refetch();}} /> : choicesQuery.isFetching || allocationSearchPending ? <p role="status">Loading instalment choices…</p> : <RecordPagination pagination={choicePage} total={choicesQuery.data?.total || 0} label="instalment choices" />}
+            <p className="text-xs text-muted-foreground">Instalments that are paid, cancelled, closed or in dispute cannot take a payment and are not listed.</p>
+            {choicesQuery.error ? <LoadProblem what="instalment choices" error={choicesQuery.error} retry={()=>{void choicesQuery.refetch();}} /> : choicesQuery.isFetching || allocationSearchPending ? <p role="status">Loading instalment choices…</p> : choicesQuery.data?.total === 0 ? <p role="status">{allocationTerm ? 'No instalment that can take a payment matches this search.' : selectedRecord?.customerId ? 'This payer has no instalment that can take a payment.' : 'No instalment can take a payment.'}</p> : <RecordPagination pagination={choicePage} total={choicesQuery.data?.total || 0} label="instalment choices" />}
             <p className="font-semibold">Payment {selectedRecord?.reference}</p>
             <p>Recorded payer: <strong>{customerById.get(String(selectedRecord?.customerId))?.name || (selectedRecord?.customerId ? 'Customer name unavailable' : 'Not identified')}</strong></p>
             {!selectedRecord?.customerId ? <>
@@ -525,7 +527,7 @@ export default function ReconciliationPage() {
         }}
         fields={
           actionKind === 'manual_allocate' ? [
-            { name: 'dueItemId', label: 'Instalment', type: 'select', isData: true, required: true, options: (choicesQuery.data?.items || []).filter(item => instalmentOutstanding(item) > 0 && !['paid', 'closed', 'cancelled'].includes(item.status)).map(item => ({ value: item.id, label: `${customerById.get(String(item.customerId))?.name || item.name} · ${item.reference} · ${formatKobo(instalmentOutstanding(item))} due` })) },
+            { name: 'dueItemId', label: 'Instalment', type: 'select', isData: true, required: true, options: (choicesQuery.data?.items || []).map(item => ({ value: item.id, label: `${customerById.get(String(item.customerId))?.name || item.name} · ${item.reference} · ${formatKobo(instalmentOutstanding(item))} due` })) },
             { name: 'amountKobo', label: 'Amount to allocate (₦)', type: 'number', isData: true, required: true }
           ] : 
           actionKind === 'record_refund' ? [

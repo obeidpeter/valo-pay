@@ -21,12 +21,12 @@ import { seedMerchant } from "./valopay-seed";
 import { createSandboxCreationLimits, creationRefusalMessage, WORKSPACE_CREATION_RETRY_AFTER_SECONDS } from "./creation-limit";
 import { readSandboxCookie, sandboxPrincipal, secureRequest, writeSandboxCookie } from "./sandbox-cookie";
 import { rememberSandbox } from "./request-limits";
-import { foldForSearch, LIST_PAGE_CEILING, type ListQuery } from "./valopay-list";
+import { allocatableOnly, foldForSearch, LIST_PAGE_CEILING, type ListQuery } from "./valopay-list";
 import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
 import { validateCloseRange, pageOffset, type ReadPageQuery, type ReconciliationQueue } from './console-read-models';
 import { precisionAudit } from '../domain/reports';
 import { periodBounds, previousMonth } from '../domain/billing';
-import { measurementRules } from '@workspace/valopay-schema';
+import { allocationClosedStatuses, measurementRules } from '@workspace/valopay-schema';
 import { protectStored, revealStored, protectRecordData, revealRecordsData, payloadEncryptionKey, isProtectedPayload, PROTECTED_IMPORT_FIELDS, type ProtectedImportField } from './protected-payloads';
 import { markRolledBack } from './transaction-outcome';
 import { markOperationClosed, markOperationState, type OperationState } from './refused-operations';
@@ -1003,6 +1003,12 @@ export async function listRecords(context: StoreContext, merchantId: string, kin
   if (query.status && query.status !== "all") filter("r.status", query.status);
   if (query.customerId) filter("r.customer_id", query.customerId);
   if (query.id) filter("r.id", query.id);
+  // canTakeAllocation in SQL: something still owed (the outstanding balance when it is a whole number, else the amount) and a status that takes one.
+  // CASE tries its conditions in order, so a balance is read as a number only once it is known to be one.
+  if (allocatableOnly(kind, query)) {
+    params.push([...allocationClosedStatuses]);
+    where += ` AND r.status <> ALL($${params.length}::text[]) AND (CASE WHEN jsonb_typeof(r.data->'outstandingKobo') IS DISTINCT FROM 'number' THEN r.amount_kobo WHEN (r.data->>'outstandingKobo')::numeric % 1 <> 0 THEN r.amount_kobo ELSE (r.data->>'outstandingKobo')::numeric END) > 0`;
+  }
   if (query.updatedSince) {
     const since = Date.parse(query.updatedSince);
     if (!Number.isFinite(since)) fail("updatedSince must be an ISO timestamp.");

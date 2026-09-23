@@ -178,7 +178,7 @@ export const GetOverviewResponse = zod.object({
 
 
 /**
- * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync.
+ * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync; allocatable for the instalments a manual allocation accepts.
  * @summary Records of one kind for one lender, newest first
  */
 export const ListRecordsParams = zod.object({
@@ -201,7 +201,8 @@ export const ListRecordsQueryParams = zod.object({
   "offset": zod.coerce.number().int().min(listRecordsQueryOffsetMin).optional().describe('Rows to skip in the newest-first order.'),
   "updatedSince": zod.string().optional().describe('ISO timestamp; only records updated at or after it (incremental sync).'),
   "customerId": zod.string().optional().describe('Only records directly linked to this customer, in the selected lender.'),
-  "id": zod.string().optional().describe('Only this exact record ID, in the selected kind and lender.')
+  "id": zod.string().optional().describe('Only this exact record ID, in the selected kind and lender.'),
+  "allocatable": zod.enum(['true', 'false']).optional().describe('Instalments (due-items) only. true lists just the instalments that can take an allocation now: those that still owe an amount and are not cancelled, closed or in dispute, the ones a manual allocation accepts, so total counts the choices. Omitted or false lists every instalment. Refused (400) for any other kind.')
 })
 
 export const ListRecordsResponse = zod.object({

@@ -5,6 +5,7 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
+import type { ListRecordsAllocatable } from './listRecordsAllocatable';
 
 export type ListRecordsParams = {
 /**
@@ -44,4 +45,8 @@ customerId?: string;
  * Only this exact record ID, in the selected kind and lender.
  */
 id?: string;
+/**
+ * Instalments (due-items) only. true lists just the instalments that can take an allocation now: those that still owe an amount and are not cancelled, closed or in dispute, the ones a manual allocation accepts, so total counts the choices. Omitted or false lists every instalment. Refused (400) for any other kind.
+ */
+allocatable?: ListRecordsAllocatable;
 };

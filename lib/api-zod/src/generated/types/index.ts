@@ -227,6 +227,7 @@ export * from './listImportCorrectionsParams';
 export * from './listOperationsParams';
 export * from './listQueueParams';
 export * from './listReconciliationParams';
+export * from './listRecordsAllocatable';
 export * from './listRecordsParams';
 export * from './membershipInput';
 export * from './membershipInputRole';
