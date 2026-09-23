@@ -32,7 +32,28 @@ Default development access remains unchanged. A separate synthetic staff staging
 VALOPAY_STAFF_ACCESS=staging pnpm --filter @workspace/scripts exec tsx ./provision-pilot.ts --synthetic-staging org_EXAMPLE user_EXAMPLE "Pilot workspace"
 ```
 
-The command (`scripts/provision-pilot.ts`) accepts existing Clerk organisation/user IDs and creates an empty application workspace. It checks its four arguments and `VALOPAY_STAFF_ACCESS=staging` before it loads the database pool, and prints the usage or the missing setting instead; with restricted runtime isolation on, it refuses, because isolated workspaces are provisioned through the migration owner's connection. `scripts/operator-commands.test.mjs` runs these refusals offline, and `pnpm run typecheck` covers the script. Confirm those identities with the operator before running it. It never grants live-data access. Add invitees to the same Clerk organisation, create their Valo Pay invitation, and share the link manually. Acceptance checks verified email, organisation, invitation expiry and both authentication factors. Memberships expire after 90 days; a new invitation is needed after revocation or expiry. Read access requires MFA within 12 hours; writes require it within 10 minutes. Team & access provides Account security and Verify identity controls. Never send identity-service secrets in invitations.
+The command (`scripts/provision-pilot.ts`) accepts existing Clerk organisation/user IDs and creates an empty application workspace with its first administrator. It checks its arguments and `VALOPAY_STAFF_ACCESS=staging` before it loads the database pool, and prints the usage or the missing setting instead; with restricted runtime isolation on, it refuses, because isolated workspaces are provisioned through the migration owner's connection. `scripts/operator-commands.test.mjs` runs these refusals offline, `artifacts/api-server/tests/pilot-administrators.integration.test.ts` runs every mode on PostgreSQL, and `pnpm run typecheck` covers the script. Confirm those identities with the operator before running it. It never grants live-data access. Add invitees to the same Clerk organisation, create their Valo Pay invitation, and share the link manually. Acceptance checks verified email, organisation, invitation expiry and both authentication factors. Memberships expire after 90 days; a person other than an administrator needs a new invitation after revocation or expiry, and an administrator is renewed by the operator (below). Read access requires MFA within 12 hours; writes require it within 10 minutes. Team & access provides Account security and Verify identity controls. Never send identity-service secrets in invitations.
+
+## Pilot administrators
+
+An administrator's membership lasts 90 days, like any other, and nobody can renew it from the console: an administrator whose access has ended cannot sign in to invite or renew anyone, so a pilot whose administrators all lapse is locked out of its own team. The operator command has two more modes for this, both with the staging host's `DATABASE_URL` and `VALOPAY_STAFF_ACCESS=staging`:
+
+```sh
+VALOPAY_STAFF_ACCESS=staging pnpm --filter @workspace/scripts exec tsx ./provision-pilot.ts --synthetic-staging --add-administrator org_EXAMPLE user_SECOND "Second administrator"
+VALOPAY_STAFF_ACCESS=staging pnpm --filter @workspace/scripts exec tsx ./provision-pilot.ts --synthetic-staging --renew org_EXAMPLE user_EXAMPLE
+```
+
+- `--add-administrator` gives another person of the same Clerk organisation an administrator membership for 90 days, with a `staff.administrator_added` event in the access history.
+- `--renew` extends an administrator's membership to 90 days from now, whether it is still active or has already ended, with a `staff.renewed` event recording the previous and the new expiry. It moves the membership's version, so an edit of it already open in Team & access is refused as stale.
+- Every mode can be run again: provisioning an organisation that already has this first administrator, or adding a person who is already an active administrator, changes nothing and says where things stand; two runs at once never fail on a duplicate row. Each prints its outcome as JSON and exits 0, or prints the refusal in plain words and exits 1.
+- They refuse a suspended or revoked membership (an administrator restores that with a new invitation), a membership of another role (an administrator changes roles in Team & access), a person with no membership (for `--renew`) and an organisation not yet provisioned.
+
+The routine that keeps a pilot's administration alive:
+
+1. Provision the first administrator, then add a second with `--add-administrator` a few weeks later, so the two expiries are staggered and one can always act.
+2. From 14 days before an administrator's access ends, the console shows that administrator a warning above every page; it also warns every administrator when the last administrator's access ends within 14 days, after which nobody could invite, change or renew staff.
+3. Before an expiry, run `--renew` for each administrator who should keep access. If every administrator has lapsed, `--renew` restores one; nothing else is needed.
+4. Check the access history in Team & access for the `staff.renewed` or `staff.administrator_added` entry.
 
 ## API supplement
 

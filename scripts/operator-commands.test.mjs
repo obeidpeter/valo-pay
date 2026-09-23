@@ -79,22 +79,32 @@ result = await run(paystack, ["--", "--help"]);
 assert.equal(result.status, 0);
 assert.match(result.stdout, /^Use: check-paystack /);
 
-// ---- provision-pilot.ts ----
+// ---- provision-pilot.ts: provision, --add-administrator and --renew ----
 const provision = "scripts/provision-pilot.ts";
-for (const args of [[], ["--synthetic-staging", "org_Synthetic", "user_Synthetic"], ["--", "--staging", "org_Synthetic", "user_Synthetic", "Synthetic workspace"], ["--synthetic-staging", "org_Synthetic", "user_Synthetic", "Synthetic", "workspace"]]) {
+for (const args of [[], ["--synthetic-staging", "org_Synthetic", "user_Synthetic"], ["--", "--staging", "org_Synthetic", "user_Synthetic", "Synthetic workspace"], ["--synthetic-staging", "org_Synthetic", "user_Synthetic", "Synthetic", "workspace"],
+  ["--synthetic-staging", "--renew", "org_Synthetic"], ["--synthetic-staging", "--renew", "org_Synthetic", "user_Synthetic", "Synthetic workspace"], ["--renew", "org_Synthetic", "user_Synthetic"],
+  ["--synthetic-staging", "--add-administrator", "org_Synthetic", "user_Synthetic"], ["--synthetic-staging", "--add-administrator", "--renew", "org_Synthetic", "user_Synthetic"], ["--synthetic-staging", "--rennew", "org_Synthetic", "user_Synthetic"]]) {
   result = await run(provision, args);
   assert.equal(result.status, 1, args.join(" "));
   assert.match(result.stderr, /^Usage: VALOPAY_STAFF_ACCESS=staging pnpm --filter @workspace\/scripts exec tsx \.\/provision-pilot\.ts --synthetic-staging/);
+  assert.match(result.stderr, /--add-administrator org_ID user_ID "Display name"\n.*--renew org_ID user_ID$/m, "the usage names all three modes");
 }
-// Right arguments without staff access stop before the store loads: there is no DATABASE_URL, which loading it would need.
-result = await run(provision, ["--", "--synthetic-staging", "org_Synthetic", "user_Synthetic", "Synthetic workspace"]);
-assert.equal(result.status, 1);
-assert.match(result.stderr, /^Set VALOPAY_STAFF_ACCESS=staging/);
-// With staff access, the store loads (the import that once failed to resolve) and refuses a malformed organisation before it opens a connection.
-result = await run(provision, ["--synthetic-staging", "organisation", "user_Synthetic", "Synthetic workspace"], { VALOPAY_STAFF_ACCESS: "staging", DATABASE_URL: unusableDatabase });
-assert.equal(result.status, 1);
-assert.match(result.stderr, /Provide a staging organisation, administrator user ID and workspace name\./);
-assert.doesNotMatch(result.output, /ERR_MODULE_NOT_FOUND|ECONNREFUSED/);
+// Right arguments without staff access stop before the store loads, in every mode: there is no DATABASE_URL, which loading it would need.
+for (const args of [["--", "--synthetic-staging", "org_Synthetic", "user_Synthetic", "Synthetic workspace"], ["--synthetic-staging", "--renew", "org_Synthetic", "user_Synthetic"], ["--synthetic-staging", "--add-administrator", "org_Synthetic", "user_Synthetic", "Second administrator"]]) {
+  result = await run(provision, args);
+  assert.equal(result.status, 1, args.join(" "));
+  assert.match(result.stderr, /^Set VALOPAY_STAFF_ACCESS=staging/);
+}
+// With staff access, the store loads (the import that once failed to resolve) and refuses a malformed organisation before it opens a connection,
+// in its own words: no stack, no connection error.
+for (const [args, refusal] of [[["--synthetic-staging", "organisation", "user_Synthetic", "Synthetic workspace"], "Provide a staging organisation, administrator user ID and workspace name."],
+  [["--synthetic-staging", "--renew", "org_Synthetic", "user"], "Provide a staging organisation and administrator user ID."],
+  [["--synthetic-staging", "--add-administrator", "org_Synthetic", "user_Synthetic", " "], "Provide a staging organisation, administrator user ID and display name."]]) {
+  result = await run(provision, args, { VALOPAY_STAFF_ACCESS: "staging", DATABASE_URL: unusableDatabase });
+  assert.equal(result.status, 1, args.join(" "));
+  assert.equal(result.stderr.split("\n").filter((line) => line && !/DEP0040|trace-deprecation/.test(line)).join("\n"), refusal);
+  assert.doesNotMatch(result.output, /ERR_MODULE_NOT_FOUND|ECONNREFUSED|\n\s+at /);
+}
 
 // ---- pnpm run test:smoke and test:security-api ----
 // Both refuse any host but a Replit development domain before they send anything: a loopback listener counts every connection.
@@ -114,4 +124,4 @@ try {
   assert.equal(connections, 0, "nothing was sent to a host that is not a Replit development domain");
 } finally { listener.close(); }
 
-console.log("Operator commands passed offline: options after pnpm's --, a named mistyped option, uncopied values, the monitor's dry run, its missing origin named and its careful failure, the Paystack check's refusals before any request, provision-pilot's usage, staff-access check and store refusal before any connection, and the smoke and security scripts' refusal of any host but a Replit development domain.");
+console.log("Operator commands passed offline: options after pnpm's --, a named mistyped option, uncopied values, the monitor's dry run, its missing origin named and its careful failure, the Paystack check's refusals before any request, provision-pilot's three modes with their usage, staff-access check and store refusal before any connection, and the smoke and security scripts' refusal of any host but a Replit development domain.");

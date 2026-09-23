@@ -440,24 +440,103 @@ async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: strin
   } finally { guard.release(); }
 }
 
-/** Operator-only bootstrap; never called by an HTTP route. */
-export async function provisionStaffWorkspace(organizationId: string, userId: string, name: string) {
+/**
+ * Operator-only (scripts/provision-pilot.ts); never called by an HTTP route.
+ * An organisation's staff workspace and its administrators: the first
+ * administrator with the workspace, another administrator, and renewal of an
+ * administrator's 90 days. Each change is one transaction with its staff
+ * event; running a command again never fails on a duplicate row, it says
+ * where things stand.
+ */
+const OPERATOR_ACTOR = 'System · operator provisioning';
+/** What an operator command did: its outcome, the workspace and administrator, and the expiry, in plain words too. */
+export type OperatorProvisioning = { outcome: 'provisioned' | 'added' | 'renewed' | 'unchanged'; workspaceId: string; userId: string; status: string; expiresAt: string; previousExpiresAt?: string; message: string };
+/** The checks every operator command makes before it opens a connection. */
+function operatorCheck(organizationId: string, userId: string, name?: { value: string; label: string }) {
   if (runtimeIsolationEnabled()) fail('Provision isolated staff workspaces through the separate migration-owner connection before starting the restricted runtime.', 503);
-  if (!staffMode() || !/^org_[A-Za-z0-9]+$/.test(organizationId) || !/^user_[A-Za-z0-9]+$/.test(userId) || !name.trim() || name.length > 100) fail('Provide a staging organisation, administrator user ID and workspace name.');
-  const guard = await checkOut(() => pool.connect()), client = guard.client, workspaceId = randomUUID();
+  if (!staffMode() || !/^org_[A-Za-z0-9]+$/.test(organizationId) || !/^user_[A-Za-z0-9]+$/.test(userId) || (name && (!name.value.trim() || name.value.length > 100))) fail(`Provide a staging organisation${name ? `, administrator user ID and ${name.label}` : ' and administrator user ID'}.`);
+}
+/** One operator change in its own bounded transaction: committed, or rolled back and thrown. */
+async function operatorTransaction<T>(change: (client: PoolClient) => Promise<T>): Promise<T> {
+  const guard = await checkOut(() => pool.connect()), client = guard.client;
   let committing = false;
   try {
     await client.query(beginStatement(databaseLimits().request));
-    await client.query("INSERT INTO valopay_workspaces(id,principal_hash,role) VALUES($1,$2,'Read-only')", [workspaceId, digest(`staff-org:${organizationId}`)]);
-    await client.query('INSERT INTO valopay_teams(workspace_id,organization_id,name) VALUES($1,$2,$3)', [workspaceId, organizationId, name]);
-    await client.query("INSERT INTO valopay_staff_memberships(id,workspace_id,user_id,display_name,role,expires_at) VALUES($1,$2,$3,$4,'Admin',now()+interval '90 days')", [randomUUID(), workspaceId, userId, 'Pilot administrator']);
-    await staffEvent(client, workspaceId, 'System · operator provisioning', 'staff.provisioned', userId, { organizationId });
+    const result = await change(client);
     committing = true;
-    await client.query('COMMIT'); return { workspaceId };
+    const committed = await client.query('COMMIT');
+    if (committed.command !== 'COMMIT') throw markRolledBack(new Error('The provisioning transaction was rolled back.'));
+    return result;
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch { /* the transaction is already closed */ }
+    // A row another run wrote at the same moment: named in plain words, never with the key the database quotes.
+    if ((error as { code?: unknown }).code === '23505') fail('Another provisioning run changed this organisation at the same moment, and nothing was saved. Run the command again to see where it stands.', 409);
     throw failedTransaction(error, { committing, lost: guard.lost(), write: true });
   } finally { guard.release(); }
+}
+type OperatorMember = StaffRow & { current: boolean };
+const memberFor = async (client: PoolClient, workspaceId: string, userId: string) => (await client.query<OperatorMember>('SELECT *, expires_at > clock_timestamp() AS current FROM valopay_staff_memberships WHERE workspace_id=$1 AND user_id=$2 FOR UPDATE', [workspaceId, userId])).rows[0];
+const operatorAnswer = (outcome: OperatorProvisioning['outcome'], workspaceId: string, member: StaffRow, message: string, previous?: StaffRow): OperatorProvisioning => ({ outcome, workspaceId, userId: member.user_id, status: member.status, expiresAt: member.expires_at.toISOString(), ...(previous ? { previousExpiresAt: previous.expires_at.toISOString() } : {}), message });
+/** The organisation's workspace, locked as a team change locks it (exclusively, waiting only for work already running), or a 404. */
+async function lockedTeam(client: PoolClient, organizationId: string): Promise<string> {
+  const missing = () => fail('This organisation has not been provisioned yet. Provision it with its first administrator.', 404);
+  const found = (await client.query<{ workspace_id: string }>('SELECT workspace_id FROM valopay_teams WHERE organization_id=$1', [organizationId])).rows[0] ?? missing();
+  await lockWorkspace(client, found.workspace_id, 'exclusive', true);
+  const team = (await client.query<{ workspace_id: string }>('SELECT t.workspace_id FROM valopay_teams t JOIN valopay_workspaces w ON w.id=t.workspace_id WHERE t.organization_id=$1 AND w.id=$2 FOR UPDATE OF w', [organizationId, found.workspace_id])).rows[0] ?? missing();
+  return team.workspace_id;
+}
+
+/** The organisation's workspace with its first administrator for 90 days; for an organisation already provisioned with this administrator, nothing changes and the answer says where it stands. */
+export async function provisionStaffWorkspace(organizationId: string, userId: string, name: string): Promise<OperatorProvisioning> {
+  operatorCheck(organizationId, userId, { value: name, label: 'workspace name' });
+  const principal = digest(`staff-org:${organizationId}`);
+  return operatorTransaction(async (client) => {
+    // The lock a first visit takes for its principal: two runs for one organisation run one after the other.
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [principal]);
+    const existing = (await client.query<{ workspace_id: string }>('SELECT workspace_id FROM valopay_teams WHERE organization_id=$1', [organizationId])).rows[0];
+    if (existing) {
+      const member = await memberFor(client, existing.workspace_id, userId);
+      if (member?.role !== 'Admin') fail('This organisation is already provisioned, with another first administrator. Add this person with --add-administrator, or renew an administrator with --renew.', 409);
+      const state = member.status !== 'active' ? `this administrator's membership is ${member.status}` : member.current ? `this person is an administrator until ${member.expires_at.toISOString()}` : `this administrator's access ended on ${member.expires_at.toISOString()}; renew it with --renew`;
+      return operatorAnswer('unchanged', existing.workspace_id, member, `Already provisioned, so nothing changed: ${state}.`);
+    }
+    const workspaceId = randomUUID();
+    await client.query("INSERT INTO valopay_workspaces(id,principal_hash,role) VALUES($1,$2,'Read-only')", [workspaceId, principal]);
+    await client.query('INSERT INTO valopay_teams(workspace_id,organization_id,name) VALUES($1,$2,$3)', [workspaceId, organizationId, name]);
+    const member = (await client.query<StaffRow>("INSERT INTO valopay_staff_memberships(id,workspace_id,user_id,display_name,role,expires_at) VALUES($1,$2,$3,$4,'Admin',now()+interval '90 days') RETURNING *", [randomUUID(), workspaceId, userId, 'Pilot administrator'])).rows[0]!;
+    await staffEvent(client, workspaceId, OPERATOR_ACTOR, 'staff.provisioned', userId, { organizationId });
+    return operatorAnswer('provisioned', workspaceId, member, `Provisioned: the first administrator's access lasts until ${member.expires_at.toISOString()}. Add a second administrator with --add-administrator, and renew with --renew before access ends.`);
+  });
+}
+
+/** Another administrator for a provisioned organisation, for 90 days; for a person who is already an active administrator, nothing changes. A suspended or revoked membership is never restored this way. */
+export async function addStaffAdministrator(organizationId: string, userId: string, displayName: string): Promise<OperatorProvisioning> {
+  operatorCheck(organizationId, userId, { value: displayName, label: 'display name' });
+  return operatorTransaction(async (client) => {
+    const workspaceId = await lockedTeam(client, organizationId);
+    const member = await memberFor(client, workspaceId, userId);
+    if (member?.role === 'Admin' && member.status === 'active' && member.current) return operatorAnswer('unchanged', workspaceId, member, `Already an administrator until ${member.expires_at.toISOString()}, so nothing changed. Renew with --renew before then.`);
+    if (member?.role === 'Admin' && member.status === 'active') fail(`This administrator's access ended on ${member.expires_at.toISOString()}. Renew it with --renew.`, 409);
+    if (member) fail(member.status === 'active' ? `This person is already a ${member.role} member. An administrator changes their role in Team & access.` : `This person's membership is ${member.status}, and adding an administrator never restores it: an administrator invites them again.`, 409);
+    const added = (await client.query<StaffRow>("INSERT INTO valopay_staff_memberships(id,workspace_id,user_id,display_name,role,expires_at) VALUES($1,$2,$3,$4,'Admin',now()+interval '90 days') RETURNING *", [randomUUID(), workspaceId, userId, displayName.trim()])).rows[0]!;
+    await staffEvent(client, workspaceId, OPERATOR_ACTOR, 'staff.administrator_added', added.id, { userId, organizationId });
+    return operatorAnswer('added', workspaceId, added, `Added: this administrator's access lasts until ${added.expires_at.toISOString()}.`);
+  });
+}
+
+/** An administrator's access, active or already ended, extended to 90 days from now, with a staff event; a suspended or revoked membership, or another role's, is refused. */
+export async function renewStaffAdministrator(organizationId: string, userId: string): Promise<OperatorProvisioning> {
+  operatorCheck(organizationId, userId);
+  return operatorTransaction(async (client) => {
+    const workspaceId = await lockedTeam(client, organizationId);
+    const member = await memberFor(client, workspaceId, userId);
+    if (!member) fail('This person has no membership in the organisation\'s workspace. Add them with --add-administrator.', 404);
+    if (member.role !== 'Admin') fail(`Renewal is for administrators, and this membership is ${member.role}. An administrator renews anyone else with a new invitation.`, 409);
+    if (member.status !== 'active') fail(`This administrator's membership is ${member.status}, and renewal never restores it: an administrator invites them again, or add another administrator with --add-administrator.`, 409);
+    const renewed = (await client.query<StaffRow>("UPDATE valopay_staff_memberships SET expires_at=greatest(expires_at,now()+interval '90 days'),updated_at=greatest(now(),updated_at+interval '1 millisecond') WHERE id=$1 AND workspace_id=$2 RETURNING *", [member.id, workspaceId])).rows[0]!;
+    await staffEvent(client, workspaceId, OPERATOR_ACTOR, 'staff.renewed', member.id, { userId, previousExpiresAt: member.expires_at.toISOString(), expiresAt: renewed.expires_at.toISOString(), ended: !member.current });
+    return operatorAnswer('renewed', workspaceId, renewed, `Renewed: this administrator's access ${member.current ? 'now lasts' : 'is restored and lasts'} until ${renewed.expires_at.toISOString()}.`, member);
+  });
 }
 
 /** A new synthetic lender, or, for a repeat of the same request (repeated), the lender its key created earlier. */
