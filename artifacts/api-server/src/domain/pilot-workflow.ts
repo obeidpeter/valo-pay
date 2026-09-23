@@ -6,7 +6,7 @@ import {
   type CaseInput,
 } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "./types";
-import { makeRecord, assertNoRealBankDetails, assertSourceOpened } from "./records";
+import { makeRecord, assertNoRealBankDetails, assertSourceOpened, isSealedPayload } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
 import { importCsv } from "../lib/valopay-import";
 import { batchSourceQuality, assertSourceBatchReady } from './source-quality';
@@ -26,7 +26,14 @@ const checkSummaryOf = (check: { valid: number; invalid: number; imported: numbe
   imported: check.imported,
   skipped: check.skipped,
 });
-export function batchView(batch: ValopayRecord, detail = false) {
+/**
+ * A batch as the list or its detail shows it. `sealedCheck` is what the list
+ * does with a check that is still sealed and has no summary (a batch saved
+ * before summaries were stored): "refuse" (500) when the route should have
+ * opened it, "omit" when the key service could not, so the batch is listed
+ * without counts instead of failing the whole list.
+ */
+export function batchView(batch: ValopayRecord, detail = false, sealedCheck: "refuse" | "omit" = "refuse") {
   return {
     ...batch,
     data: detail
@@ -45,12 +52,14 @@ export function batchView(batch: ValopayRecord, detail = false) {
           // Batches saved before the summary existed open their check for the list.
           check:
             batch.data.checkSummary ??
-            (assertSourceOpened(batch, ["check"]), {
-              valid: batch.data.check?.valid,
-              invalid: batch.data.check?.invalid,
-              imported: batch.data.check?.imported,
-              skipped: batch.data.check?.skipped,
-            }),
+            (sealedCheck === "omit" && isSealedPayload(batch.data.check)
+              ? undefined
+              : (assertSourceOpened(batch, ["check"]), {
+                  valid: batch.data.check?.valid,
+                  invalid: batch.data.check?.invalid,
+                  imported: batch.data.check?.imported,
+                  skipped: batch.data.check?.skipped,
+                })),
         },
   };
 }

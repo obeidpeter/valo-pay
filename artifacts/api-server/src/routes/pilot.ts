@@ -151,15 +151,29 @@ router.get("/v1/pilot/batches", async (req, res) => {
         const page = all.slice(q.offset, q.offset + 25),
           onPage = new Set(page.map((batch) => batch.id));
         // The list's counts come from each batch's stored check summary; only
-        // batches saved before the summary existed open their check.
-        await revealImportPayloads(
+        // batches saved before the summary existed open their check. When the
+        // key service cannot open them, they are listed without counts rather
+        // than failing the whole list.
+        const opened = await revealImportPayloads(
           ctx,
           state,
           (r) => onPage.has(r.id) && !r.data.checkSummary,
           ["check"],
+        ).then(
+          () => true,
+          (error: { status?: unknown }) => {
+            if (error?.status !== 503) throw error;
+            req.log.warn(
+              { event: "imports.check_unavailable", err: error },
+              "Batches saved before check summaries were listed without counts: the key service could not open their checks",
+            );
+            return false;
+          },
         );
         return {
-          items: page.map((batch) => batchView(batch)),
+          items: page.map((batch) =>
+            batchView(batch, false, opened ? "refuse" : "omit"),
+          ),
           total: all.length,
           offset: q.offset,
         };

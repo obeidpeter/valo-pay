@@ -24,6 +24,7 @@ const {createPaystackIngress}=await import("../src/routes/sources");
 const {paystackConnectionTransaction,paystackIngress}=await import("../src/lib/paystack-connection");
 const {receivePaystackEvent}=await import("../src/providers/paystack-inbox");
 const {runDueCloses}=await import("../src/lib/close-scheduler");
+const {inMerchantAsSystem,loadState,revealImportPayloads,SYSTEM_ACTOR_PREFIX}=await import("../src/lib/valopay-store");
 // The Paystack test ingress reads its own raw body, so it is mounted before JSON parsing, as in app.ts.
 const app=express();app.use((req,_res,next)=>{(req as any).log={info(){},warn(){},error(){}};next();});app.use("/api",createPaystackIngress(paystackIngress));
 app.use(express.json({limit:"2mb"}));app.use((req,_res,next)=>{(req as any).auth=Object.assign(()=>({userId:null}),{[Symbol.for("@clerk/express.auth")]:true});next();});app.use("/api",router);app.use(errorHandler);
@@ -58,21 +59,44 @@ try{
   assert.ok(unwraps>0,"the fixture counts every payload it opens");
   await assert.rejects(()=>openPayload(encryptedBatch.csv,{lender:other,record:batch.id,field:"csv"},managedWrappingKeys));
   // Only a view that shows or uses the raw source rows opens them. Overviews,
-  // lists, unrelated saves and the scheduled close make no key-service call, so
-  // they keep working while the key service is down.
+  // lists, unkeyed saves and the scheduled close make no key-service call, so
+  // they keep working while the key service is down; the batch list opens only
+  // the checks of batches saved before check summaries, and lists them without
+  // counts when it cannot. A keyed save seals its journal entry, so it fails closed.
   // The fixture's unwrap above already counts every payload opened.
-  const fixtureUnwrap=managedWrappingKeys.unwrap;
+  const fixtureUnwrap=managedWrappingKeys.unwrap,fixtureWrap=managedWrappingKeys.wrap,storedSummary=encryptedBatch.checkSummary;
+  assert.deepEqual(storedSummary,{valid:1,invalid:0,imported:1,skipped:0},"the check's counts are stored in plaintext beside it");
   try{
     for(const path of ["/v1/overview","/v1/work","/v1/pilot/journey","/v1/pilot/progress","/v1/pilot/batches"]){unwraps=0;ok(await call(`${path}?merchantId=${lender}`));assert.equal(unwraps,0,`${path} opens no protected payload`);}
     const listed=ok(await call(`/v1/pilot/batches?merchantId=${lender}`)).items.find((item:any)=>item.id===batch.id);
     assert.deepEqual(listed.data.check,{valid:1,invalid:0,imported:1,skipped:0},"the list's counts come from the stored check summary");
+    // A write that changed a batch before opening its rows is a programming fault, refused before any key-service call.
+    unwraps=0;
+    await assert.rejects(inMerchantAsSystem(lender,`${SYSTEM_ACTOR_PREFIX}source row check`,async ctx=>{const state=await loadState(ctx,lender,"update");state.records.find(record=>record.id===batch.id)!.name="Changed before its rows were opened";await revealImportPayloads(ctx,state,record=>record.id===batch.id);}),/must be opened before the batch changes/);
+    assert.equal(unwraps,0);
+    // A batch saved before check summaries were stored has none, and a committed batch never gains one: the list opens its check, and only that.
+    await pool.query("UPDATE valopay_records SET data=data-'checkSummary' WHERE id=$1 AND merchant_id=$2",[batch.id,lender]);
+    unwraps=0;const older=ok(await call(`/v1/pilot/batches?merchantId=${lender}`)).items.find((item:any)=>item.id===batch.id);
+    assert.deepEqual(older.data.check,{valid:1,invalid:0,imported:1,skipped:0},"a batch saved before check summaries lists the counts of its opened check");
+    assert.equal(unwraps,1,"the list opens that batch's check and nothing else");assert.equal("csv" in older.data,false);
     unwraps=0;const detail=ok(await call(`/v1/pilot/batches/${batch.id}?merchantId=${lender}`));
     assert.equal(unwraps,2,"a batch's detail opens its own rows and check");assert.equal(detail.batch.data.csv,batchInput.csv);assert.equal(detail.batch.data.check.imported,1);
     unwraps=0;ok(await post(`/v1/records/customers?merchantId=${lender}`,{name:"Unrelated keyed save",reference:`UNRELATED-${randomUUID()}`,data:{consentProvenance:"Synthetic consent"}}));
     assert.equal(unwraps,0,"an unrelated keyed save opens no source rows");
-    managedWrappingKeys.unwrap=async()=>{unwraps++;throw new Error("key service unavailable");};
+    // The key service can neither open nor seal, and answers as the real client does.
+    const outage=async():Promise<never>=>{throw Object.assign(new Error("Protected data cannot be opened. Ask the administrator to check the configured encryption key."),{status:503});};
+    managedWrappingKeys.unwrap=async()=>{unwraps++;return outage();};managedWrappingKeys.wrap=outage;
     unwraps=0;
-    ok(await call(`/v1/overview?merchantId=${lender}`));ok(await call(`/v1/pilot/batches?merchantId=${lender}`));
+    ok(await call(`/v1/overview?merchantId=${lender}`));
+    const uncounted=ok(await call(`/v1/pilot/batches?merchantId=${lender}`)).items.find((item:any)=>item.id===batch.id);
+    assert.equal(uncounted.status,"committed");assert.equal("check" in uncounted.data,false,"a batch whose check cannot be opened is listed without counts instead of failing the list");
+    assert.equal(uncounted.data.sourceBatchId,batchInput.sourceBatchId);
+    unwraps=0;
+    ok(await call(`/v1/records/customers?merchantId=${lender}`,"POST",{name:"Unkeyed save during the outage",reference:`UNKEYED-${randomUUID()}`,data:{consentProvenance:"Synthetic consent"}}));
+    // Console saves carry a key, and a keyed save seals its journal entry: it fails closed and saves nothing.
+    const keyedName=`Keyed save during the outage ${randomUUID()}`,keyed=await post(`/v1/records/customers?merchantId=${lender}`,{name:keyedName,reference:`KEYED-${randomUUID()}`,data:{consentProvenance:"Synthetic consent"}});
+    assert.equal(keyed.status,503);assert.equal((keyed.data as {committed?:unknown}).committed,false);
+    assert.equal((await pool.query("SELECT count(*)::int AS count FROM valopay_records WHERE merchant_id=$1 AND name=$2",[lender,keyedName])).rows[0].count,0);
     // Due long ago; the pass is scoped to this lender, so other due lenders in a reused database never crowd it out.
     await pool.query("UPDATE valopay_merchants SET settings=settings||'{\"nextCloseAt\":\"2000-01-01T00:00:00.000Z\"}'::jsonb WHERE id=$1",[lender]);
     const closes=await runDueCloses({batchSize:25,onlyMerchantIds:[lender]});
@@ -81,7 +105,7 @@ try{
     assert.equal(unwraps,0);
     const unavailable=await call(`/v1/pilot/batches/${batch.id}?merchantId=${lender}`);
     assert.equal(unavailable.status,503,"a view that needs the rows fails closed");assert.match(String((unavailable.data as {error?:string}).error),/Protected data cannot be opened/);
-  }finally{managedWrappingKeys.unwrap=fixtureUnwrap;}
+  }finally{managedWrappingKeys.unwrap=fixtureUnwrap;managedWrappingKeys.wrap=fixtureWrap;await pool.query("UPDATE valopay_records SET data=data||jsonb_build_object('checkSummary',$3::jsonb) WHERE id=$1 AND merchant_id=$2",[batch.id,lender,JSON.stringify(storedSummary)]);}
 
   const customerPath=`/v1/records/customers?merchantId=${lender}`,customerKey=randomUUID(),customerBody={name:"Retention request fixture",reference:`RETAIN-${randomUUID()}`,data:{consentProvenance:"Synthetic retention consent"}};
   const customer=ok(await post(customerPath,customerBody,customerKey));
@@ -179,8 +203,8 @@ try{
   const event={kind:"payment" as const,event:"charge.success" as const,dedupeKey:"paystack:test:charge.success:90210",payment:{provider:"paystack" as const,domain:"test" as const,transactionId:"90210",reference:"SYNTHETIC-MAPPED-001",amountKobo:2500,currency:"NGN" as const,state:"succeeded" as const,channel:"direct_debit"}};
   const ingest=()=>paystackConnectionTransaction(connectionId,({state,context})=>receivePaystackEvent(state,context,event,{connectionId,mode:"test"}));
   // A test delivery loads the lender without opening its protected source rows, so it is received while the key service is down.
-  const workingUnwrap=managedWrappingKeys.unwrap;managedWrappingKeys.unwrap=async()=>{throw new Error("key service unavailable");};
-  let receipt:Awaited<ReturnType<typeof ingest>>;try{receipt=await ingest();}finally{managedWrappingKeys.unwrap=workingUnwrap;}
+  const workingUnwrap=managedWrappingKeys.unwrap,workingIngressWrap=managedWrappingKeys.wrap;managedWrappingKeys.unwrap=managedWrappingKeys.wrap=async()=>{throw new Error("key service unavailable");};
+  let receipt:Awaited<ReturnType<typeof ingest>>;try{receipt=await ingest();}finally{managedWrappingKeys.unwrap=workingUnwrap;managedWrappingKeys.wrap=workingIngressWrap;}
   const duplicate=await ingest();assert.equal(receipt.event.id,duplicate.event.id);assert.equal(duplicate.duplicate,true);
   assert.equal(Number((await pool.query("SELECT count(*) AS n FROM valopay_records WHERE merchant_id=$1 AND kind='provider-events'",[lender])).rows[0].n),1);
   await assert.rejects(()=>paystackConnectionTransaction("f".repeat(64),()=>true),/not found/);
@@ -211,7 +235,7 @@ try{
   process.env.VALOPAY_PAYSTACK_CONNECTIONS=JSON.stringify({[connectionId]:{workspaceId:"wrong-workspace",merchantId:lender}});
   await assert.rejects(ingest,/unavailable/);
   assert.equal(Number((await pool.query("SELECT count(*) AS n FROM valopay_records WHERE merchant_id=$1 AND kind='provider-events'",[other])).rows[0].n),0);
-  console.log("Operations controls PostgreSQL integration passed: source checks, encrypted payloads opened only by the views that need them (overview, lists, saves, the scheduled close and test receipts work while the key service is down), holds/stale previews, verified retention receipts, preserved request tombstones, mapped Paystack test receipts and forged deliveries refused before the lender is locked or decrypted.");
+  console.log("Operations controls PostgreSQL integration passed: source checks, encrypted payloads opened only by the views that need them (overviews, lists, unkeyed saves, the scheduled close and test receipts work while the key service is down, older batches without their counts; keyed saves fail closed), holds/stale previews, verified retention receipts, preserved request tombstones, mapped Paystack test receipts and forged deliveries refused before the lender is locked or decrypted.");
 }finally{
   managedWrappingKeys.wrap=oldWrap;managedWrappingKeys.unwrap=oldUnwrap;master.fill(0);
   for(const name of environmentNames){const value=previousEnvironment[name];if(value===undefined)delete process.env[name];else process.env[name]=value;}

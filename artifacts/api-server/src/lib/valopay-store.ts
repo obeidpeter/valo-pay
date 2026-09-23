@@ -722,8 +722,9 @@ export async function loadState(context: StoreContext, merchantId: string, lock:
  * Opens the protected source rows (original CSV and validation check) of this
  * lender's import batches that `select` names, at most four key-service calls
  * at a time, and returns how many batches it opened. A full-state load keeps
- * them sealed, so overviews, lists, saves, the scheduled close and Paystack
- * test deliveries never depend on the key service. Only a view that shows or
+ * them sealed, so overviews, saves, the scheduled close and Paystack test
+ * deliveries never need the key service to open them (a keyed save still seals
+ * its journal entry, and a batch save its rows). Only a view that shows or
  * uses raw source rows calls this, and in a write it must call it before the
  * domain changes the batch: the opened form becomes the batch's loaded form,
  * so an opened but unchanged batch is not written back and the immutability

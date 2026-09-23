@@ -1471,7 +1471,7 @@ export const ListImportBatchesResponse = zod.object({
 }).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
   "total": zod.number().int(),
   "offset": zod.number().int()
-}).describe('Import batches newest first, 25 a page, with their source identity, quality totals and check counts but not their rows.')
+}).describe('Import batches newest first, 25 a page, with their source identity, quality totals and check counts but not their rows. A batch saved before check summaries were stored is listed without check counts while the key service cannot open its check.')
 
 
 /**

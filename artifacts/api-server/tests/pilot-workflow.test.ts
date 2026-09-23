@@ -78,6 +78,8 @@ assert.deepEqual(batch.data.checkSummary, summaryOf(batch.data.check), "A commit
   assert.deepEqual(batchView(listed).data.check, summaryOf(batch.data.check), "The list uses the summary, not the sealed check.");
   delete listed.data.checkSummary;
   assert.throws(() => batchView(listed), (e: any) => e.status === 500, "A sealed check without a summary is refused, not listed as empty counts.");
+  assert.equal(batchView(listed, false, "omit").data.check, undefined, "When the key service could not open it, the batch is listed without counts.");
+  assert.deepEqual(batchView({ ...listed, data: { ...listed.data, check: batch.data.check } }, false, "omit").data.check, summaryOf(batch.data.check), "An open check still gives its counts.");
   const draft = saveImportBatch(structuredClone(state), ctx, { ...input, sourceBatchId: "sealed-draft" });
   assert.deepEqual(draft.data.checkSummary, summaryOf(draft.data.check), "A save stores its check's summary.");
   const sealedState = structuredClone(state);

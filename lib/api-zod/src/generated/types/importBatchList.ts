@@ -8,7 +8,7 @@
 import type { ValopayRecord } from './valopayRecord';
 
 /**
- * Import batches newest first, 25 a page, with their source identity, quality totals and check counts but not their rows.
+ * Import batches newest first, 25 a page, with their source identity, quality totals and check counts but not their rows. A batch saved before check summaries were stored is listed without check counts while the key service cannot open its check.
  */
 export interface ImportBatchList {
   items: ValopayRecord[];
