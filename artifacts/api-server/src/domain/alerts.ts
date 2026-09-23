@@ -4,7 +4,7 @@
  * derived on every read and frozen into each daily close; they are never
  * stored on their own.
  */
-import { counted, alertRules, isBillableChannel, isOpenException, type AlertSeverity } from "@workspace/valopay-schema";
+import { counted, alertRules, deadlinePassed, isBillableChannel, isOpenException, type AlertSeverity } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { DomainState } from "./types";
 import { paymentObservedAt } from "./reconciliation";
@@ -51,7 +51,8 @@ export function buildAlerts(state: DomainState, now: string, audit?: AuditVerifi
   const threshold = setting(state, "unallocatedAlertThreshold", alertRules.unallocatedThreshold);
   const aged = recordsOf(state, "payments").filter((item) => item.status === "unallocated" && nowMs - paymentObservedAt(item) >= DAY_MS);
   if (aged.length > threshold) alerts.push({ key: "unallocated_over_threshold", severity: "high", title: "Too many payments are waiting for allocation", detail: `${counted(aged.length, "payment has", "payments have")} been waiting to be assigned to an instalment for at least 24 hours. The lender's alert limit is ${threshold}. Review the unallocated payments.`, count: aged.length });
-  const overdue = recordsOf(state, "exceptions").filter((item) => isOpenException(item.status) && Date.parse(String(item.data.dueBy)) < nowMs);
+  // A date-only deadline lasts its whole WAT day, as in the queues (deadlinePassed).
+  const overdue = recordsOf(state, "exceptions").filter((item) => isOpenException(item.status) && deadlinePassed(item.data.dueBy, nowMs));
   if (overdue.length) alerts.push({ key: "exceptions_overdue", severity: "medium", title: "Exceptions past their deadline", detail: `${counted(overdue.length, "open exception is", "open exceptions are")} overdue. Review each item with its assigned owner. Deadlines are calculated in business days.`, count: overdue.length, linkedRecordId: overdue[0]!.id });
   const deferred = recordsOf(state, "exceptions").filter((item) => isOpenException(item.status) && item.data.type === "notice_not_evidenced");
   if (deferred.length) alerts.push({ key: "attempts_deferred", severity: "medium", title: "Collection attempts delayed: notice evidence missing", detail: `${counted(deferred.length, "planned attempt passed its", "planned attempts passed their")} notice deadline without a record that the provider accepted the customer notice. Review the missing evidence before a retry.`, count: deferred.length, linkedRecordId: deferred[0]!.id });

@@ -20,8 +20,9 @@ export const instantInputSchema = z
   .transform((value, context) => {
     const instant = new Date(value);
     const utc = Number.isFinite(instant.getTime()) ? instant.toISOString() : "";
-    if (!/^\d{4}-/.test(utc)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "Use a date and time between the years 0000 and 9999." });
+    // PostgreSQL has no year 0, so the year 0000 is refused with the rest.
+    if (!/^\d{4}-/.test(utc) || utc.startsWith("0000")) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Use a date and time between the years 0001 and 9999." });
       return z.NEVER;
     }
     return utc;
@@ -48,6 +49,15 @@ export const merchantIdSchema = z
   .string({ required_error: "Choose a lender: merchantId is required.", invalid_type_error: "Send merchantId once, as text." })
   .min(1, "Choose a lender: merchantId is required.")
   .max(100, "A merchantId is at most 100 characters.");
+/** The id an address names (a record, run, batch, case, review, correction, export, member or invitation): 1 to 100 characters. */
+export const pathIdSchema = z
+  .string({ required_error: "Name a record in the address.", invalid_type_error: "Name one record in the address." })
+  .min(1, "Name a record in the address.")
+  .max(100, "An id in the address is at most 100 characters.");
+/** The id an address names, parsed so that a refusal names the parameter `id`: the same 400 on every route, before its body is read. */
+export function pathId(value: unknown): string {
+  return pathIdSchema.parse(value, { path: ["id"] });
+}
 /** The query of a lender-scoped request: every route reads it first, so a missing merchantId is the same 400 everywhere. */
 export const lenderQuerySchema = z.object({ merchantId: merchantIdSchema });
 /** A lender-scoped page of 25 rows: merchantId and the rows to skip. */

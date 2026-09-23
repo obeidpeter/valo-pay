@@ -7,6 +7,7 @@ import {
   importCorrectionPreviewSchema,
   importCorrectionViewSchema,
   importCorrectionsResponseSchema,
+  pathId,
 } from "@workspace/valopay-schema";
 import { withState } from "./valopay";
 import { lenderQuery, requiredKey } from "../lib/contract";
@@ -67,7 +68,7 @@ router.post("/v1/pilot/import-corrections", async (req, res) => {
 });
 router.post("/v1/pilot/import-corrections/:id/decision", async (req, res) => {
   requiredKey(req);
-  const id = z.string().min(1).max(100).parse(req.params.id),
+  const id = pathId(req.params.id),
     input = importCorrectionDecisionInputSchema.parse(req.body);
   res.json(
     await withState(

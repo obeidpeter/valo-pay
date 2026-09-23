@@ -7,11 +7,51 @@ import { importKinds, type RecordKind } from "./kinds";
 import { sourceBatchQualitySchema, expectedSourceFileSchema } from "./source-quality";
 import { importCorrectionPreviewSchema } from "./import-corrections";
 import { lifecycleCandidateSchema, lifecycleKindSchema, lifecycleReceiptStatusSchema, retentionPolicySchema } from "./lifecycle";
+import { WAT_OFFSET_MS } from "./policy";
 
-/** ISO date (YYYY-MM-DD) or a UTC ISO timestamp with millisecond precision or less. */
-export const isoDateOrTimestamp = z.string().regex(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/, "Use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z.").refine((value) => !Number.isNaN(Date.parse(value)), "Enter a valid date.");
-/** A day as YYYY-MM-DD. */
-export const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD, for example 2026-09-18.").refine((value) => !Number.isNaN(Date.parse(value)), "Enter a valid date.");
+const DAY_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+/**
+ * Whether a day (YYYY-MM-DD) or a UTC timestamp to the millisecond names a
+ * real date and time exactly as written, from the year 0001 (PostgreSQL has
+ * no year 0). Date.parse rolls 2026-02-30 over to 2 March and 24:00 over to
+ * the next day; this refuses both.
+ */
+export function isRealDate(value: string): boolean {
+  const day = DAY_ONLY.test(value);
+  if (!day && !UTC_TIMESTAMP.test(value)) return false;
+  const time = Date.parse(day ? `${value}T00:00:00.000Z` : value), written = day ? 10 : 19;
+  return Number.isFinite(time) && !value.startsWith("0000") && new Date(time).toISOString().slice(0, written) === value.slice(0, written);
+}
+/**
+ * When a deadline passes, in milliseconds: a timestamp at its instant, and a
+ * date-only deadline (YYYY-MM-DD) at the end of that day in West Africa Time
+ * (23:59:59.999 WAT), so it lasts the whole day. NaN for an impossible date,
+ * which is no deadline, as the SQL queues read it.
+ */
+export function deadlineEnds(value: unknown): number {
+  const text = typeof value === "string" ? value : "";
+  if (DAY_ONLY.test(text)) return isRealDate(text) ? Date.parse(`${text}T00:00:00.000Z`) + 24 * 60 * 60 * 1000 - WAT_OFFSET_MS - 1 : NaN;
+  return UTC_TIMESTAMP.test(text) && !isRealDate(text) ? NaN : Date.parse(text);
+}
+/** Whether a deadline has passed at `now` (an instant in milliseconds, or ISO text): after its instant, or once its WAT day is over. */
+export function deadlinePassed(value: unknown, now: number | string): boolean {
+  return deadlineEnds(value) < (typeof now === "number" ? now : Date.parse(now));
+}
+
+/**
+ * The longest a record's indexed text may be, in characters. Status, reference
+ * and customerId are columns of the record indexes, and a payment evidence
+ * record's eventId is in its unique index; PostgreSQL refuses an index entry
+ * over about 2,700 bytes. Longer text is refused as input, naming its field
+ * (400), before anything is saved.
+ */
+export const recordTextLimits = { status: 100, reference: 200, customerId: 100, eventId: 200 } as const;
+
+/** ISO date (YYYY-MM-DD) or a UTC ISO timestamp with millisecond precision or less, naming a real date. */
+export const isoDateOrTimestamp = z.string().regex(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/, "Use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z.").refine(isRealDate, "Enter a valid date.");
+/** A day as YYYY-MM-DD, naming a real date. */
+export const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD, for example 2026-09-18.").refine(isRealDate, "Enter a valid date.");
 /** An amount in kobo: a non-negative safe integer. */
 export const kobo = z.number({ invalid_type_error: 'Enter an amount as a number.' }).int('Enter a whole number in kobo (100 kobo = ₦1).').min(0, 'The amount cannot be negative.').max(Number.MAX_SAFE_INTEGER, 'The amount is too large.');
 const versionNumber = z.coerce.number().int().min(1);
@@ -187,7 +227,7 @@ export const recordDataSchemas = {
     source: z.enum(observationSources),
     dueItemId: z.string().optional(),
     provider: z.string().optional(),
-    eventId: z.string().optional(),
+    eventId: z.string().max(recordTextLimits.eventId, `An event ID is at most ${recordTextLimits.eventId} characters.`).optional(),
     narration: z.string().optional(),
     batchReference: z.string().optional(),
     feeKobo: kobo.optional(),

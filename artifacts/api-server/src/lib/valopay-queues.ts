@@ -1,3 +1,4 @@
+import { deadlineEnds, WAT_OFFSET_MS } from '@workspace/valopay-schema';
 import { foldForSearch } from './valopay-list';
 import type { ValopayRecord } from '../domain/types';
 
@@ -12,42 +13,42 @@ export function queueView(queue: QueueName, view?: string) {
   if (view && !(queueViews[queue] as readonly string[]).includes(view)) throw Object.assign(new Error('Unknown queue view.'), { status: 400 });
   return view || queueViews[queue][0];
 }
-const day = (value: unknown) => {
-  const text = String(value || '');
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
-  const time = Date.parse(text);
-  return Number.isFinite(time) ? new Date(time + 3_600_000).toISOString().slice(0, 10) : '';
-};
+/** The WAT day of an instant, or '' for none. */
+const watDay = (time: number) => Number.isFinite(time) ? new Date(time + WAT_OFFSET_MS).toISOString().slice(0, 10) : '';
 const instant = (value: unknown) => { const n = Date.parse(String(value || '')); return Number.isFinite(n) ? n : Infinity; };
+/** When a deadline passes (deadlineEnds): a date-only one lasts its whole WAT day; an impossible one never passes and sorts last. */
+const deadlineAt = (value: unknown) => { const n = deadlineEnds(value); return Number.isFinite(n) ? n : Infinity; };
 const unpaid = (row?: ValopayRecord) => !!row && !['paid', 'closed', 'cancelled'].includes(row.status);
 
 /** Reference implementation for the in-memory API; production filters and pages in PostgreSQL. */
 export function pageQueue(records: ValopayRecord[], queue: QueueName, query: QueueQuery, now: string) {
-  const view = queueView(queue, query.view), time = Date.parse(now), today = day(now);
+  const view = queueView(queue, query.view), time = Date.parse(now), today = watDay(time);
   const byId = new Map(records.map(row => [row.id, row]));
   const base = records.filter(row => queue === 'collections' ? row.kind === 'due-items' || row.kind === 'attempts' && row.status === 'failed' : row.kind === queue);
   const due = (row: ValopayRecord) => row.kind === 'attempts' ? byId.get(String(row.data.dueItemId)) : row;
   const deadline = (row: ValopayRecord) => queue === 'exceptions' ? row.data.dueBy : queue === 'mandates' ? row.data.activationDeadline : due(row)?.data.dueDate;
   const owner = (row: ValopayRecord) => String((queue === 'collections' ? due(row) : row)?.data.owner || (queue === 'collections' ? 'unassigned' : 'Unassigned'));
-  const overdue = (row: ValopayRecord) => queue === 'collections' && /^\d{4}-\d{2}-\d{2}$/.test(String(deadline(row))) ? String(deadline(row)) < today : instant(deadline(row)) < time;
+  // A date-only deadline is due all of its WAT day and overdue after it, in every queue (as the SQL reads it).
+  const overdue = (row: ValopayRecord) => deadlineAt(deadline(row)) < time;
+  const dueToday = (row: ValopayRecord) => watDay(deadlineAt(deadline(row))) === today;
   const matches = (row: ValopayRecord, key: string) => {
     if (queue === 'exceptions') {
       const open = !['closed', 'resolved'].includes(row.status);
-      return key === 'resolved' ? !open : open && (key === 'high' ? row.data.severity === 'high' : key === 'overdue' ? overdue(row) : key === 'due-today' ? day(deadline(row)) === today : true);
+      return key === 'resolved' ? !open : open && (key === 'high' ? row.data.severity === 'high' : key === 'overdue' ? overdue(row) : key === 'due-today' ? dueToday(row) : true);
     }
-    if (queue === 'mandates') return key === 'all' || row.status === 'pending_activation' && (key === 'overdue' ? overdue(row) : key === 'due-today' ? day(deadline(row)) === today : true);
-    return key === 'failed' ? row.kind === 'attempts' : row.kind === 'due-items' && (key === 'all' || unpaid(row) && (key === 'overdue' ? overdue(row) : day(deadline(row)) === today));
+    if (queue === 'mandates') return key === 'all' || row.status === 'pending_activation' && (key === 'overdue' ? overdue(row) : key === 'due-today' ? dueToday(row) : true);
+    return key === 'failed' ? row.kind === 'attempts' : row.kind === 'due-items' && (key === 'all' || unpaid(row) && (key === 'overdue' ? overdue(row) : dueToday(row)));
   };
   const search = foldForSearch(query.q || '');
   const owned = base.filter(row => (!search || foldForSearch([row.name,row.reference,byId.get(row.customerId)?.name,byId.get(row.customerId)?.reference].join(' ')).includes(search)) && (!query.owner || owner(row) === query.owner) && (!query.type || row.data.type === query.type));
   const counts = Object.fromEntries(queueViews[queue].map(key => [key, owned.filter(row => matches(row, key)).length]));
   const severity: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
-  const compareDate = (a: unknown, b: unknown) => instant(a) === instant(b) ? 0 : instant(a) < instant(b) ? -1 : 1;
+  const compare = (a: number, b: number) => a === b ? 0 : a < b ? -1 : 1;
   const items = owned.filter(row => query.record ? row.id === query.record : matches(row, view)).sort((a, b) => {
     const priority = queue === 'exceptions' ? Number(overdue(b)) - Number(overdue(a)) || (severity[String(a.data.severity)] ?? 4) - (severity[String(b.data.severity)] ?? 4)
       : queue === 'mandates' ? Number(b.status === 'pending_activation') - Number(a.status === 'pending_activation')
       : Number(unpaid(due(b)) && overdue(b)) - Number(unpaid(due(a)) && overdue(a)) || Number(unpaid(due(b))) - Number(unpaid(due(a)));
-    return priority || compareDate(deadline(a), deadline(b)) || (queue === 'collections' ? compareDate(a.data.occurredAt, b.data.occurredAt) : 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    return priority || compare(deadlineAt(deadline(a)), deadlineAt(deadline(b))) || (queue === 'collections' ? compare(instant(a.data.occurredAt), instant(b.data.occurredAt)) : 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   });
   const limit = query.limit || 25, index = query.target ? items.findIndex(row => row.id === query.target) : -1;
   const offset = index >= 0 ? Math.floor(index / limit) * limit : Math.min(query.offset || 0, Math.max(0, Math.ceil(items.length / limit) - 1) * limit);

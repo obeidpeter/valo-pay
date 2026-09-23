@@ -32,6 +32,27 @@ try {
     SELECT $1 || '-queue-attempt-' || lpad(i::text,5,'0'),$1,'attempts','Queue attempt ' || i,'failed','QATT-' || i,$2,
       jsonb_build_object('synthetic',true,'dueItemId',$1 || '-queue-due-' || lpad(i::text,5,'0'),'occurredAt','2026-09-18T12:00:00Z'),1000000
     FROM generate_series(1,2000) i`, [merchantId, customer.id]);
+  // Date-only deadlines on today's and yesterday's West Africa Time dates (23 September audit, API item 5): each is
+  // due all of its WAT day and overdue only after it, in every queue, as the reference queue and the alerts read it.
+  const watToday = new Date(Date.now() + 3_600_000).toISOString().slice(0, 10), watYesterday = new Date(Date.now() + 3_600_000 - 86_400_000).toISOString().slice(0, 10);
+  const dated: Record<string, string> = {};
+  for (const [label, date] of [['today', watToday], ['yesterday', watYesterday]] as const) {
+    dated[`exception-${label}`] = `${merchantId}-dated-exception-${label}`; dated[`mandate-${label}`] = `${merchantId}-dated-mandate-${label}`; dated[`due-${label}`] = `${merchantId}-dated-due-${label}`;
+    await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data,amount_kobo) VALUES
+      ($1,$4,'exceptions','Dated exception','open','DEX-' || $1,$5,jsonb_build_object('synthetic',true,'severity','low','owner','Finance','type','unallocated_payment','dueBy',$7::text),1000000),
+      ($2,$4,'mandates','Dated mandate','pending_activation','DMN-' || $2,$5,jsonb_build_object('synthetic',true,'workflow','hosted_consent','consentEvidence','Synthetic','activationDeadline',$7::text),5000000),
+      ($3,$4,'due-items','Dated instalment','scheduled','DDU-' || $3,$5,jsonb_build_object('synthetic',true,'mandateId',$6::text,'owner','lender','dueDate',$7::text),1000000)`,
+      [dated[`exception-${label}`], dated[`mandate-${label}`], dated[`due-${label}`], merchantId, customer.id, mandate.id, date]);
+  }
+  for (const [queue, kind] of [['exceptions', 'exception'], ['mandates', 'mandate'], ['collections', 'due']] as const) {
+    await inWorkspace(request(), response(), async ctx => {
+      // A target is located among the view's filtered rows: its page holds it only when the view does.
+      const inView = async (view: string, id: string) => (await listQueue(ctx, merchantId, queue, { view, target: id, limit: 100 })).items.some(row => row.id === id);
+      const today = dated[`${kind}-today`]!, yesterday = dated[`${kind}-yesterday`]!;
+      assert.deepEqual([await inView('overdue', today), await inView('due-today', today)], [false, true], `${queue}: a date-only deadline on today's WAT date is due today, not overdue`);
+      assert.deepEqual([await inView('overdue', yesterday), await inView('due-today', yesterday)], [true, false], `${queue}: yesterday's is overdue`);
+    }, 'read');
+  }
   const baseline = await inWorkspace(request(), response(), ctx => loadState(ctx, merchantId, 'share'), 'read');
   const normalise = (page: ReturnType<typeof pageQueue>) => ({ ...page, related: page.related.sort((a, b) => a.id.localeCompare(b.id)) });
   const timings: number[] = [];
@@ -110,7 +131,7 @@ try {
       }, 'read');
     }
   } finally { await pool.query('ALTER TABLE valopay_records RESET (autovacuum_enabled)'); }
-  console.log('Priority queue integration passed: 6,000 rows, all filters, complete counts, bounded pages, deep links, related-record scoping, malformed legacy dates, a 14,000-row collections queue in linear time, and the same for a lender loaded since the last ANALYZE.');
+  console.log('Priority queue integration passed: 6,000 rows, all filters, complete counts, bounded pages, deep links, related-record scoping, malformed legacy dates, date-only deadlines due all of their WAT day in every queue, a 14,000-row collections queue in linear time, and the same for a lender loaded since the last ANALYZE.');
 } finally {
   const principals = tokens.map(token => createHash('sha256').update(`demo:${token}`).digest('hex'));
   const scope = 'SELECT id FROM valopay_merchants WHERE workspace_id IN (SELECT id FROM valopay_workspaces WHERE principal_hash=ANY($1::text[]))';

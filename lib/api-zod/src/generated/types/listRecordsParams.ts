@@ -14,7 +14,7 @@ export type ListRecordsParams = {
  */
 merchantId: string;
 /**
- * Text matched, ignoring case and accents, against the name, reference, status and data.
+ * Text matched, ignoring case and accents, against the record's name, its reference and the text and number values in its data, nested ones included; never a field's name, true, false or null.
  */
 search?: string;
 /**
@@ -22,7 +22,7 @@ search?: string;
  */
 status?: string;
 /**
- * Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views.
+ * Page size, from 1 to 500; a value outside that range is refused (400). Omitted returns the complete filtered kind for existing relationship and balance views.
  * @minimum 1
  * @maximum 500
  */
@@ -33,7 +33,7 @@ limit?: number;
  */
 offset?: number;
 /**
- * ISO timestamp; only records updated at or after it (incremental sync).
+ * An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00; only records updated at or after that instant (incremental sync). A number, a date without a time, a time without Z or an offset, or a year outside 0001 to 9999 is refused (400, naming updatedSince).
  */
 updatedSince?: string;
 /**

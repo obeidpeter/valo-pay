@@ -9,7 +9,7 @@ import { amendDueItem, customerTimeline, makeRecord, rescheduleAfterSettings, va
 import { enrolEligibleFailures } from "../domain/policy-engine";
 import { bindCloseReviewBasis } from '../domain/close-review';
 import { assertNoDirectImportedCorrection } from '../domain/import-corrections';
-import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, isCloseTime, recordKinds } from "@workspace/valopay-schema";
+import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, instantInputSchema, isCloseTime, pathId, recordKinds } from "@workspace/valopay-schema";
 import type { DomainState, ValopayRecord } from "../domain/types";
 import { getGates } from "../lib/valopay-readiness";
 import { importCsv } from "../lib/valopay-import";
@@ -25,7 +25,9 @@ import { routerOptions } from './router-options';
 
 const router:IRouter=Router(routerOptions);
 const kinds=new Set<string>(recordKinds);
-function safeKind(value:unknown):string { const kind=z.string().parse(value);if(!kinds.has(kind))fail("Unknown resource.",404);return kind; }
+/** A list's query: an incremental sync's watermark is an RFC 3339 instant with Z or an offset, refused (400, naming updatedSince) otherwise. */
+const listRecordsQuery=S.ListRecordsQueryParams.extend({updatedSince:instantInputSchema.optional()});
+function safeKind(value:unknown):string { const kind=z.string().parse(value,{path:["kind"]});if(!kinds.has(kind))fail("Unknown resource.",404);return kind; }
 /**
  * What a write's audit entry takes from its request, as the route's schema
  * parsed it: the action a route runs by name, the record its body names and
@@ -92,7 +94,7 @@ router.get("/v1/overview",async(req,res)=>{
 });
 router.get("/v1/records/:kind",async(req,res)=>{
  lenderQuery(req);
- const kind=safeKind(req.params.kind),query=S.ListRecordsQueryParams.parse(req.query);
+ const kind=safeKind(req.params.kind),query=listRecordsQuery.parse(req.query);
  res.json(await inWorkspace(req,res,async ctx=>{
   const page=await listRecords(ctx,query.merchantId,kind,query);
   // Never leak internal storage location through collection APIs.
@@ -231,9 +233,9 @@ router.post("/v1/exports",async(req,res)=>{
 });
 /** An export of the request's lender, read in the tenant transaction and handed to `use` there, with the transaction clock. */
 async function authorisedExport<T>(req:Request,res:Response,use:(record:ValopayRecord,now:string)=>T){
- const {merchantId}=lenderQuery(req);
+ const {merchantId}=lenderQuery(req),id=pathId(req.params.id);
  return inWorkspace(req,res,async ctx=>{
-  const page=await listRecords(ctx,merchantId,'exports',{id:String(req.params.id),limit:1});
+  const page=await listRecords(ctx,merchantId,'exports',{id,limit:1});
   if(!page.items[0])fail('Export not found in this lender.',404);
   // The transaction clock decides whether the export is stalled or its lease expired.
   return use(page.items[0],ctx.now);
@@ -244,8 +246,9 @@ router.get('/v1/exports/:id',async(req,res)=>{
  res.json(await authorisedExport(req,res,(record,now)=>contractAnswer(S.GetExportJobResponse,exportJobView(record,now))));
 });
 router.post('/v1/exports/:id/retry',async(req,res)=>{
+ const id=pathId(req.params.id);
  req.body={};
- res.json(await withState(req,res,(state,ctx)=>retryExport(state,ctx,String(req.params.id)),true,S.RetryExportJobResponse));
+ res.json(await withState(req,res,(state,ctx)=>retryExport(state,ctx,id),true,S.RetryExportJobResponse));
 });
 router.get("/v1/exports/:id/download",async(req,res)=>{
  const cancellation=new AbortController();

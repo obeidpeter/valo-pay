@@ -1,5 +1,4 @@
 import { Router, type IRouter } from "express";
-import { z } from "zod";
 import { getAuth } from "@clerk/express";
 import { reverificationErrorResponse } from "@clerk/shared/authorization-errors";
 import { staffMode } from "../lib/staff-access";
@@ -18,6 +17,7 @@ import {
   merchantSchema,
   messageSchema,
   operationListSchema,
+  pathId,
   pilotJourneySchema,
   staffDirectorySchema,
   staffMemberSchema,
@@ -49,7 +49,7 @@ import {
 import { routerOptions } from "./router-options";
 
 const router: IRouter = Router(routerOptions);
-const idOf = (value: unknown) => z.string().min(1).max(100).parse(value);
+const idOf = pathId;
 router.post("/v1/team/verify", async (req, res) => {
   if (!staffMode()) fail("Staff access is not enabled on this host.", 403);
   const auth = getAuth(req, { acceptsToken: "session_token" });
@@ -239,8 +239,8 @@ router.post("/v1/pilot/batches", async (req, res) => {
   );
 });
 router.post("/v1/pilot/batches/:id/save", async (req, res) => {
-  const input = batchInputSchema.parse(req.body),
-    id = idOf(req.params.id);
+  const id = idOf(req.params.id),
+    input = batchInputSchema.parse(req.body);
   res.json(
     await withState(
       req,
@@ -252,8 +252,8 @@ router.post("/v1/pilot/batches/:id/save", async (req, res) => {
   );
 });
 router.post("/v1/pilot/batches/:id/commit", async (req, res) => {
-  const input = batchVersionInputSchema.parse(req.body),
-    id = idOf(req.params.id);
+  const id = idOf(req.params.id),
+    input = batchVersionInputSchema.parse(req.body);
   res.json(
     await withState(
       req,
@@ -323,8 +323,8 @@ router.get("/v1/pilot/cases/:id", async (req, res) => {
   );
 });
 router.post("/v1/pilot/cases/:id", async (req, res) => {
-  const input = caseInputSchema.parse(req.body),
-    id = idOf(req.params.id);
+  const id = idOf(req.params.id),
+    input = caseInputSchema.parse(req.body);
   res.json(
     await withState(
       req,
@@ -373,8 +373,8 @@ router.post("/v1/team/invitations/:id/revoke", async (req, res) => {
   );
 });
 router.patch("/v1/team/members/:id", async (req, res) => {
-  const input = membershipInputSchema.parse(req.body),
-    id = idOf(req.params.id);
+  const id = idOf(req.params.id),
+    input = membershipInputSchema.parse(req.body);
   res.json(
     await inWorkspace(
       req,

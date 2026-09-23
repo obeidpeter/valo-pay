@@ -17,7 +17,7 @@ import { RecordDialog } from '@/components/record-dialog';
 import { useQueryClient } from '@tanstack/react-query';
 import { activationWorkflows, mandateFrequencies } from '@workspace/valopay-schema';
 import { RecordLabel, StatusBadge, readableLabel } from '@/components/record-label';
-import { deadlineInstant, isDueToday, isDeadlineOverdue as isOverdue, useQueueFilters } from '@/lib/queue-filters';
+import { isDueToday, isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { nairaToKobo } from '@/lib/money-input';
 import { MandateActionContext } from '@/components/mandate-action-context';
 import { recordDestination, safeCollectionReturnTo } from '@/lib/record-navigation';
@@ -225,7 +225,7 @@ export default function MandatesPage() {
                     <td className="px-6 py-4"><StatusBadge status={mandate.status} /></td>
                     <td className="px-6 py-4 font-mono">{formatKobo(mandate.amountKobo)}</td>
                     <td className="px-6 py-4 text-xs text-muted-foreground" title={readableLabel(mandate.data?.workflow || 'standard')}>{readableLabel(mandate.data?.workflow || 'standard')}</td>
-                    <td className="px-6 py-4 text-xs"><p>{formatDate(deadlineInstant(mandate.data?.activationDeadline))}</p>{mandate.status === 'pending_activation' && isOverdue(mandate.data?.activationDeadline, now) && <p className="mt-1 font-semibold text-destructive">Overdue · follow up or reissue</p>}{mandate.status === 'pending_activation' && !isOverdue(mandate.data?.activationDeadline, now) && isDueToday(mandate.data?.activationDeadline, now) && <p className="mt-1 font-semibold text-warning-strong">Activation due today</p>}</td>
+                    <td className="px-6 py-4 text-xs"><p>{formatDate(String(mandate.data?.activationDeadline || ''))}</p>{mandate.status === 'pending_activation' && isOverdue(mandate.data?.activationDeadline, now) && <p className="mt-1 font-semibold text-destructive">Overdue · follow up or reissue</p>}{mandate.status === 'pending_activation' && !isOverdue(mandate.data?.activationDeadline, now) && isDueToday(mandate.data?.activationDeadline, now) && <p className="mt-1 font-semibold text-warning-strong">Activation due today</p>}</td>
                     <td className="px-6 py-4 text-right space-x-2">
                       {mandate.status === 'active' && <Button size="sm" variant="outline" className="h-7 text-xs" action="mandate_suspend" record={mandate} onClick={() => handleAction(mandate, 'mandate_suspend')}>Suspend</Button>}
                       {mandate.status === 'suspended' && <Button size="sm" variant="outline" className="h-7 text-xs" action="mandate_reinstate" record={mandate} onClick={() => handleAction(mandate, 'mandate_reinstate')}>Resume</Button>}

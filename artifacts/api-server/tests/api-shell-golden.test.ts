@@ -27,7 +27,7 @@ const records = Array.from({ length: 1200 }, (_, i) => record(i, i % 3 ? "open" 
   assert.equal(filtered.items.length, 10);
   const since = pageRecords(records, { updatedSince: new Date(Date.UTC(2027, 0, 2, 0, 1190)).toISOString() });
   assert.equal(since.total, 10, "updatedSince is inclusive of the watermark");
-  assert.throws(() => pageRecords(records, { updatedSince: "yesterday" }), /ISO timestamp/);
+  assert.throws(() => pageRecords(records, { updatedSince: "yesterday" }), /RFC 3339 date and time/);
   checks += 16;
 }
 

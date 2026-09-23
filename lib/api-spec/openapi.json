@@ -223,7 +223,7 @@
           }
         },
         "summary": "The caller's workspace: its lenders, roles and actor",
-        "description": "On a first visit an anonymous caller gets a new synthetic sandbox with two lenders; a signed-in person gets their own workspace. New sandboxes are limited per client network (20 an hour; an IPv6 client's network is its /64, and a /48 starts at most 60) and per server (300 an hour). A browser that sends two different sandbox cookies is refused (400) rather than guessed between."
+        "description": "On a first visit an anonymous caller gets a new synthetic sandbox with two lenders, and the sandbox cookie that names it on every later request (components.securitySchemes.sandboxCookie); a signed-in person gets their own workspace. New sandboxes are limited per client network (20 an hour; an IPv6 client's network is its /64, and a /48 starts at most 60) and per server (300 an hour). A browser that sends two different sandbox cookies is refused (400) rather than guessed between."
       }
     },
     "/v1/overview": {
@@ -287,7 +287,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -392,7 +392,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Text matched, ignoring case and accents, against the name, reference, status and data."
+            "description": "Text matched, ignoring case and accents, against the record's name, its reference and the text and number values in its data, nested ones included; never a field's name, true, false or null."
           },
           {
             "name": "status",
@@ -410,7 +410,7 @@
               "minimum": 1,
               "maximum": 500
             },
-            "description": "Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views."
+            "description": "Page size, from 1 to 500; a value outside that range is refused (400). Omitted returns the complete filtered kind for existing relationship and balance views."
           },
           {
             "name": "offset",
@@ -427,7 +427,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "ISO timestamp; only records updated at or after it (incremental sync)."
+            "description": "An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00; only records updated at or after that instant (incremental sync). A number, a date without a time, a time without Z or an offset, or a year outside 0001 to 9999 is refused (400, naming updatedSince)."
           },
           {
             "name": "customerId",
@@ -488,7 +488,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -606,6 +606,11 @@
                   "$ref": "#/components/schemas/ValopayRecord"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -615,6 +620,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -626,6 +636,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -636,15 +651,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -656,6 +681,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -665,6 +695,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -676,6 +711,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -685,6 +725,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -704,6 +749,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -714,6 +762,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -733,6 +786,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -772,7 +828,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -808,6 +866,11 @@
                   "$ref": "#/components/schemas/ValopayRecord"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -817,6 +880,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -828,6 +896,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -838,15 +911,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -858,6 +941,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -867,6 +955,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -878,6 +971,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -887,6 +985,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -906,6 +1009,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -916,6 +1022,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -935,6 +1046,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -992,6 +1106,11 @@
                   "$ref": "#/components/schemas/ActionResult"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -1001,6 +1120,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -1012,6 +1136,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -1022,15 +1151,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -1042,6 +1181,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -1051,6 +1195,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -1062,6 +1211,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -1071,6 +1225,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -1090,6 +1249,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -1100,6 +1262,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -1119,6 +1286,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -1176,6 +1346,11 @@
                   "$ref": "#/components/schemas/ImportResult"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -1185,6 +1360,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -1196,6 +1376,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -1206,15 +1391,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -1226,6 +1421,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -1235,6 +1435,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -1246,6 +1451,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -1255,6 +1465,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -1274,6 +1489,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -1284,6 +1502,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -1303,6 +1526,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -1333,7 +1559,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -1391,7 +1619,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1536,7 +1764,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1669,7 +1897,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1802,7 +2030,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1911,6 +2139,11 @@
                   "$ref": "#/components/schemas/Settings"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -1920,6 +2153,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -1931,6 +2169,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -1941,15 +2184,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -1961,6 +2214,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -1970,6 +2228,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -1981,6 +2244,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -1990,6 +2258,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -2009,6 +2282,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -2019,6 +2295,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -2038,6 +2319,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -2095,6 +2379,11 @@
                   "$ref": "#/components/schemas/ExportResult"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -2104,6 +2393,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -2115,6 +2409,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -2125,15 +2424,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -2145,6 +2454,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -2154,6 +2468,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -2165,6 +2484,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -2174,6 +2498,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -2193,6 +2522,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -2203,6 +2535,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -2222,6 +2559,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -2252,7 +2592,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -2310,7 +2652,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2394,7 +2736,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -2430,6 +2774,11 @@
                   "$ref": "#/components/schemas/ExportResult"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -2439,6 +2788,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -2450,6 +2804,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -2460,15 +2819,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -2480,6 +2849,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -2489,6 +2863,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -2500,6 +2879,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -2509,6 +2893,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -2528,6 +2917,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -2538,6 +2930,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -2557,6 +2954,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -2577,7 +2977,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -3049,7 +3451,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3236,7 +3638,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3407,7 +3809,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3502,7 +3904,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "Close record in the active lender."
           }
@@ -3549,7 +3953,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3644,7 +4048,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "Customer in the active lender."
           },
@@ -3780,7 +4186,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3913,7 +4319,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4024,6 +4430,11 @@
                   "$ref": "#/components/schemas/ConnectedActionResult"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -4033,6 +4444,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -4044,6 +4460,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -4054,15 +4475,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -4074,6 +4505,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -4083,6 +4519,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -4094,6 +4535,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -4103,6 +4549,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -4122,6 +4573,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -4132,6 +4586,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -4151,6 +4610,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -4240,7 +4702,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4324,7 +4786,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -4349,6 +4813,11 @@
                   "$ref": "#/components/schemas/OperationReplayResult"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -4358,6 +4827,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -4369,6 +4843,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -4379,15 +4858,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -4399,6 +4888,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -4408,6 +4902,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -4419,6 +4918,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -4428,6 +4932,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -4447,6 +4956,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -4457,6 +4969,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -4476,6 +4993,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -4496,7 +5016,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -4554,7 +5076,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4717,7 +5239,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5013,7 +5535,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5122,6 +5644,11 @@
                   "$ref": "#/components/schemas/ValopayRecord"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -5131,6 +5658,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5142,6 +5674,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -5152,15 +5689,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5172,6 +5719,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -5181,6 +5733,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5192,6 +5749,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -5201,6 +5763,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5220,6 +5787,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5230,6 +5800,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5249,6 +5824,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -5279,7 +5857,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -5337,7 +5917,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5421,7 +6001,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -5457,6 +6039,11 @@
                   "$ref": "#/components/schemas/ValopayRecord"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -5466,6 +6053,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5477,6 +6069,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -5487,15 +6084,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5507,6 +6114,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -5516,6 +6128,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5527,6 +6144,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -5536,6 +6158,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5555,6 +6182,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5565,6 +6195,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5584,6 +6219,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -5614,7 +6252,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -5650,6 +6290,11 @@
                   "$ref": "#/components/schemas/ValopayRecord"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -5659,6 +6304,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5670,6 +6320,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -5680,15 +6335,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5700,6 +6365,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -5709,6 +6379,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5720,6 +6395,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -5729,6 +6409,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5748,6 +6433,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5758,6 +6446,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -5777,6 +6470,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -5807,7 +6503,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -5865,7 +6563,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5947,7 +6645,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -5983,6 +6683,11 @@
                   "$ref": "#/components/schemas/ValopayRecord"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -5992,6 +6697,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -6003,6 +6713,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -6013,15 +6728,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -6033,6 +6758,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -6042,6 +6772,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -6053,6 +6788,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -6062,6 +6802,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -6081,6 +6826,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -6091,6 +6839,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -6110,6 +6863,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -6491,7 +7247,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           }
@@ -6538,7 +7296,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6642,7 +7400,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           }
@@ -6689,7 +7449,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -6803,7 +7563,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           }
@@ -6850,7 +7612,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7517,7 +8279,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7650,7 +8412,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7761,6 +8523,11 @@
                   "$ref": "#/components/schemas/ValopayRecord"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -7770,6 +8537,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -7781,6 +8553,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -7791,15 +8568,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -7811,6 +8598,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -7820,6 +8612,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -7831,6 +8628,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -7840,6 +8642,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -7859,6 +8666,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -7869,6 +8679,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -7888,6 +8703,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -7918,7 +8736,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -7954,6 +8774,11 @@
                   "$ref": "#/components/schemas/ValopayRecord"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -7963,6 +8788,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -7974,6 +8804,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -7984,15 +8819,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8004,6 +8849,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -8013,6 +8863,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8024,6 +8879,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -8033,6 +8893,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8052,6 +8917,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8062,6 +8930,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8081,6 +8954,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -8171,7 +9047,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8280,6 +9156,11 @@
                   "$ref": "#/components/schemas/ImportCorrectionView"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -8289,6 +9170,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8300,6 +9186,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -8310,15 +9201,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8330,6 +9231,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -8339,6 +9245,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8350,6 +9261,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -8359,6 +9275,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8378,6 +9299,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8388,6 +9312,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8407,6 +9336,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -8486,7 +9418,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8600,7 +9532,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -8636,6 +9570,11 @@
                   "$ref": "#/components/schemas/ImportCorrectionView"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -8645,6 +9584,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8656,6 +9600,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -8666,15 +9615,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8686,6 +9645,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -8695,6 +9659,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8706,6 +9675,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -8715,6 +9689,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8734,6 +9713,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8744,6 +9726,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8763,6 +9750,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -8851,7 +9841,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8962,6 +9952,11 @@
                   "$ref": "#/components/schemas/ValopayRecord"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -8971,6 +9966,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -8982,6 +9982,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -8992,15 +9997,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9012,6 +10027,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -9021,6 +10041,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9032,6 +10057,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -9041,6 +10071,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9060,6 +10095,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9070,6 +10108,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9089,6 +10132,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -9119,7 +10165,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -9155,6 +10203,11 @@
                   "$ref": "#/components/schemas/ValopayRecord"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -9164,6 +10217,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9175,6 +10233,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -9185,15 +10248,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9205,6 +10278,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -9214,6 +10292,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9225,6 +10308,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -9234,6 +10322,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9253,6 +10346,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9263,6 +10359,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9282,6 +10383,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -9339,6 +10443,11 @@
                   "$ref": "#/components/schemas/ValopayRecord"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -9348,6 +10457,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9359,6 +10473,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -9369,15 +10488,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9389,6 +10518,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -9398,6 +10532,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9409,6 +10548,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -9418,6 +10562,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9437,6 +10586,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9447,6 +10599,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9466,6 +10623,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -9523,6 +10683,11 @@
                   "$ref": "#/components/schemas/PaystackFixtureResult"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -9532,6 +10697,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9543,6 +10713,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -9553,15 +10728,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9573,6 +10758,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -9582,6 +10772,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9593,6 +10788,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -9602,6 +10802,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9621,6 +10826,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9631,6 +10839,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9650,6 +10863,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -9680,7 +10896,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -9716,6 +10934,11 @@
                   "$ref": "#/components/schemas/ProviderEvent"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -9725,6 +10948,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9736,6 +10964,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -9746,15 +10979,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9766,6 +11009,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -9775,6 +11023,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9786,6 +11039,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -9795,6 +11053,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9814,6 +11077,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9824,6 +11090,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -9843,6 +11114,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -9886,7 +11160,7 @@
               "type": "string",
               "pattern": "^[a-fA-F0-9]{128}$"
             },
-            "description": "HMAC-SHA512 of the exact request bytes under the configured test secret key, in hexadecimal."
+            "description": "HMAC-SHA512, under the configured test secret key and in hexadecimal, of the body's exact bytes: the JSON as sent, or, for a body sent with Content-Encoding gzip, deflate or br, the JSON bytes after decompression (not the compressed bytes); any other encoding is refused (415)."
           }
         ],
         "responses": {
@@ -9911,7 +11185,7 @@
             }
           },
           "401": {
-            "description": "The signature does not match the exact bytes under the configured test key; nothing was locked, read or saved",
+            "description": "The signature does not match the body's bytes (decompressed first, when the body is compressed) under the configured test key; nothing was locked, read or saved",
             "content": {
               "application/json": {
                 "schema": {
@@ -10020,7 +11294,7 @@
           }
         },
         "summary": "Receive a signed Paystack test event",
-        "description": "The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key. At most 120 deliveries a minute per client network and, once signed, 60 a minute per connection. A repeat of a saved event is acknowledged without an audit entry, and its delivery count is written at most once a minute."
+        "description": "The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the body's bytes, decompressed first when its Content-Encoding is gzip, deflate or br, before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key. At most 120 deliveries a minute per client network and, once signed, 60 a minute per connection. A repeat of a saved event is acknowledged without an audit entry, and its delivery count is written at most once a minute."
       }
     },
     "/v1/work": {
@@ -10133,7 +11407,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10244,6 +11518,11 @@
                   "$ref": "#/components/schemas/WorkReceipt"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -10253,6 +11532,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10264,6 +11548,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -10274,15 +11563,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10294,6 +11593,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -10303,6 +11607,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10314,6 +11623,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -10323,6 +11637,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10342,6 +11661,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10352,6 +11674,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10371,6 +11698,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -10428,6 +11758,11 @@
                   "$ref": "#/components/schemas/WorkReceipt"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -10437,6 +11772,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10448,6 +11788,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -10458,15 +11803,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10478,6 +11833,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -10487,6 +11847,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10498,6 +11863,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -10507,6 +11877,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10526,6 +11901,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10536,6 +11914,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10555,6 +11938,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -10644,7 +12030,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10728,7 +12114,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -10786,7 +12174,7 @@
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
@@ -10897,6 +12285,11 @@
                   "$ref": "#/components/schemas/LifecycleView"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -10906,6 +12299,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10917,6 +12315,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -10927,15 +12330,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10947,6 +12360,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -10956,6 +12374,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10967,6 +12390,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -10976,6 +12404,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -10995,6 +12428,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11005,6 +12441,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11024,6 +12465,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -11081,6 +12525,11 @@
                   "$ref": "#/components/schemas/LifecycleView"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -11090,6 +12539,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11101,6 +12555,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -11111,15 +12570,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11131,6 +12600,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -11140,6 +12614,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11151,6 +12630,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -11160,6 +12644,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11179,6 +12668,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11189,6 +12681,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11208,6 +12705,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -11265,6 +12765,11 @@
                   "$ref": "#/components/schemas/LifecycleRunView"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -11274,6 +12779,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11285,6 +12795,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -11295,15 +12810,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11315,6 +12840,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -11324,6 +12854,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11335,6 +12870,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -11344,6 +12884,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11363,6 +12908,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11373,6 +12921,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11392,6 +12945,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -11422,7 +12978,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -11458,6 +13016,11 @@
                   "$ref": "#/components/schemas/LifecycleRunView"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -11467,6 +13030,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11478,6 +13046,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -11488,15 +13061,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11508,6 +13091,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -11517,6 +13105,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11528,6 +13121,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -11537,6 +13135,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11556,6 +13159,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11566,6 +13172,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11585,6 +13196,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -11615,7 +13229,9 @@
             "in": "path",
             "required": true,
             "schema": {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
             },
             "description": "The record's id."
           },
@@ -11651,6 +13267,11 @@
                   "$ref": "#/components/schemas/LifecycleRunView"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "400": {
@@ -11660,6 +13281,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11671,6 +13297,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "403": {
@@ -11681,15 +13312,25 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "404": {
-            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "description": "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11701,6 +13342,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "410": {
@@ -11710,6 +13356,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11721,6 +13372,11 @@
                   "$ref": "#/components/schemas/ErrorBody"
                 }
               }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
+              }
             }
           },
           "415": {
@@ -11730,6 +13386,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11749,6 +13410,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11759,6 +13423,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
                 }
+              }
+            },
+            "headers": {
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           },
@@ -11778,6 +13447,9 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              },
+              "X-Valopay-Operation": {
+                "$ref": "#/components/headers/X-Valopay-Operation"
               }
             }
           }
@@ -12068,20 +13740,24 @@
         "type": "object",
         "properties": {
           "name": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 100
           },
           "reference": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 200
           },
           "amountKobo": {
             "type": "integer",
             "minimum": 0
           },
           "customerId": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 100
           },
           "data": {
             "$ref": "#/components/schemas/RecordData"
@@ -12090,26 +13766,30 @@
         "required": [
           "name"
         ],
-        "description": "A new record: only the name is required; the kind's default status applies when none is given."
+        "description": "A new record: only the name is required, and it cannot be empty; the kind's default status applies when none is given. A status is at most 100 characters, a reference 200 and a customerId 100."
       },
       "RecordUpdate": {
         "type": "object",
         "properties": {
           "name": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 100
           },
           "reference": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 200
           },
           "amountKobo": {
             "type": "integer",
             "minimum": 0
           },
           "customerId": {
-            "type": "string"
+            "type": "string",
+            "maxLength": 100
           },
           "data": {
             "$ref": "#/components/schemas/RecordData"
@@ -12119,7 +13799,7 @@
           }
         },
         "required": [],
-        "description": "The fields to change on a record; omitted fields keep their values."
+        "description": "The fields to change on a record; omitted fields keep their values. A name cannot be empty, and a status, reference or customerId is bounded as a new record's is."
       },
       "Merchant": {
         "type": "object",
@@ -13042,7 +14722,7 @@
             "type": "string"
           }
         },
-        "description": "A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states."
+        "description": "A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states: a deadline written as a day alone (YYYY-MM-DD) is due all that West Africa Time day and overdue once it ends, one with a time passes at that instant, and one that is not a real date is no deadline."
       },
       "ReconciliationPage": {
         "type": "object",
@@ -20245,6 +21925,22 @@
         ],
         "additionalProperties": false,
         "description": "Execution of an approved run, quoting its manifest digest, in bounded batches."
+      }
+    },
+    "headers": {
+      "X-Valopay-Operation": {
+        "description": "The id of this request's entry in the operations journal: GET /v1/operations lists it, and POST /v1/operations/{id}/retry and /cancel take it. Sent on every answer, success, refusal or failure, to a request whose Idempotency-Key the journal records, once the entry exists; absent without a key, when the key itself is refused, and for a demo role switch, which the journal does not record.",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "securitySchemes": {
+      "sandboxCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-valopay_sandbox",
+        "description": "The anonymous sandbox's cookie: a 32-byte random token in hexadecimal that the service sets on the first visit (GET /v1/workspace) and renews on every answer, HttpOnly, SameSite=Lax and lasting 30 days from the last visit. Behind TLS it is __Host-valopay_sandbox (Secure, Path=/, no Domain); on a plain-HTTP local run it is valopay_sandbox. A missing or malformed token starts a new sandbox; two different tokens are refused (400). The sandbox is found by the token's digest, never by the token, which is never stored or logged. A staff host identifies a signed-in session instead."
       }
     }
   }

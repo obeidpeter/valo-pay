@@ -60,7 +60,7 @@ export const ReadinessCheckResponse = zod.object({
 
 
 /**
- * On a first visit an anonymous caller gets a new synthetic sandbox with two lenders; a signed-in person gets their own workspace. New sandboxes are limited per client network (20 an hour; an IPv6 client's network is its /64, and a /48 starts at most 60) and per server (300 an hour). A browser that sends two different sandbox cookies is refused (400) rather than guessed between.
+ * On a first visit an anonymous caller gets a new synthetic sandbox with two lenders, and the sandbox cookie that names it on every later request (components.securitySchemes.sandboxCookie); a signed-in person gets their own workspace. New sandboxes are limited per client network (20 an hour; an IPv6 client's network is its /64, and a /48 starts at most 60) and per server (300 an hour). A browser that sends two different sandbox cookies is refused (400) rather than guessed between.
  * @summary The caller's workspace: its lenders, roles and actor
  */
 export const GetWorkspaceResponse = zod.object({
@@ -195,11 +195,11 @@ export const listRecordsQueryOffsetMin = 0;
 
 export const ListRecordsQueryParams = zod.object({
   "merchantId": zod.string().min(1).max(listRecordsQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.'),
-  "search": zod.string().optional().describe('Text matched, ignoring case and accents, against the name, reference, status and data.'),
+  "search": zod.string().optional().describe('Text matched, ignoring case and accents, against the record\'s name, its reference and the text and number values in its data, nested ones included; never a field\'s name, true, false or null.'),
   "status": zod.string().optional().describe('Only records in this status; omitted or "all" for every status.'),
-  "limit": zod.coerce.number().int().min(1).max(listRecordsQueryLimitMax).optional().describe('Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views.'),
+  "limit": zod.coerce.number().int().min(1).max(listRecordsQueryLimitMax).optional().describe('Page size, from 1 to 500; a value outside that range is refused (400). Omitted returns the complete filtered kind for existing relationship and balance views.'),
   "offset": zod.coerce.number().int().min(listRecordsQueryOffsetMin).optional().describe('Rows to skip in the newest-first order.'),
-  "updatedSince": zod.string().optional().describe('ISO timestamp; only records updated at or after it (incremental sync).'),
+  "updatedSince": zod.string().optional().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00; only records updated at or after that instant (incremental sync). A number, a date without a time, a time without Z or an offset, or a year outside 0001 to 9999 is refused (400, naming updatedSince).'),
   "customerId": zod.string().optional().describe('Only records directly linked to this customer, in the selected lender.'),
   "id": zod.string().optional().describe('Only this exact record ID, in the selected kind and lender.')
 })
@@ -248,18 +248,25 @@ export const CreateRecordHeader = zod.object({
   "Idempotency-Key": zod.string().min(createRecordHeaderIdempotencyKeyMin).max(createRecordHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
+
+export const createRecordBodyStatusMax = 100;
+
+export const createRecordBodyReferenceMax = 200;
+
 export const createRecordBodyAmountKoboMin = 0;
+
+export const createRecordBodyCustomerIdMax = 100;
 
 
 
 export const CreateRecordBody = zod.object({
-  "name": zod.string(),
-  "status": zod.string().optional(),
-  "reference": zod.string().optional(),
+  "name": zod.string().min(1),
+  "status": zod.string().max(createRecordBodyStatusMax).optional(),
+  "reference": zod.string().max(createRecordBodyReferenceMax).optional(),
   "amountKobo": zod.number().int().min(createRecordBodyAmountKoboMin).optional(),
-  "customerId": zod.string().optional(),
+  "customerId": zod.string().max(createRecordBodyCustomerIdMax).optional(),
   "data": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A new record: only the name is required; the kind\'s default status applies when none is given.')
+}).describe('A new record: only the name is required, and it cannot be empty; the kind\'s default status applies when none is given. A status is at most 100 characters, a reference 200 and a customerId 100.')
 
 export const CreateRecordResponse = zod.object({
   "id": zod.string(),
@@ -280,9 +287,13 @@ export const CreateRecordResponse = zod.object({
  * Editable kinds only; an approved, preregistered or closed version is immutable. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version.
  * @summary Update a record
  */
+export const updateRecordPathIdMax = 100;
+
+
+
 export const UpdateRecordParams = zod.object({
   "kind": zod.coerce.string().describe('Record kind: one of the shared schema\'s recordKinds (customers, mandates, due-items, attempts, observations, payments, ...).'),
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(updateRecordPathIdMax).describe('The record\'s id.')
 })
 
 export const updateRecordQueryMerchantIdMax = 100;
@@ -302,19 +313,26 @@ export const UpdateRecordHeader = zod.object({
   "Idempotency-Key": zod.string().min(updateRecordHeaderIdempotencyKeyMin).max(updateRecordHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
+
+export const updateRecordBodyStatusMax = 100;
+
+export const updateRecordBodyReferenceMax = 200;
+
 export const updateRecordBodyAmountKoboMin = 0;
+
+export const updateRecordBodyCustomerIdMax = 100;
 
 
 
 export const UpdateRecordBody = zod.object({
-  "name": zod.string().optional(),
-  "status": zod.string().optional(),
-  "reference": zod.string().optional(),
+  "name": zod.string().min(1).optional(),
+  "status": zod.string().max(updateRecordBodyStatusMax).optional(),
+  "reference": zod.string().max(updateRecordBodyReferenceMax).optional(),
   "amountKobo": zod.number().int().min(updateRecordBodyAmountKoboMin).optional(),
-  "customerId": zod.string().optional(),
+  "customerId": zod.string().max(updateRecordBodyCustomerIdMax).optional(),
   "data": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
   "expectedUpdatedAt": zod.string().optional()
-}).describe('The fields to change on a record; omitted fields keep their values.')
+}).describe('The fields to change on a record; omitted fields keep their values. A name cannot be empty, and a status, reference or customerId is bounded as a new record\'s is.')
 
 export const UpdateRecordResponse = zod.object({
   "id": zod.string(),
@@ -432,8 +450,12 @@ export const ImportRecordsResponse = zod.object({
  * Every event, mandate, due item and payment, with each retry decision as it was recorded.
  * @summary A customer's position and complete timeline
  */
+export const getCustomerTimelinePathIdMax = 100;
+
+
+
 export const GetCustomerTimelineParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(getCustomerTimelinePathIdMax).describe('The record\'s id.')
 })
 
 export const getCustomerTimelineQueryMerchantIdMax = 100;
@@ -846,8 +868,12 @@ export const CreateExportResponse = zod.object({
  * Tenant-authorised status, safe failure reason and checksum/download details once ready. Older immediate export records remain downloadable.
  * @summary Check a saved export
  */
+export const getExportJobPathIdMax = 100;
+
+
+
 export const GetExportJobParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(getExportJobPathIdMax).describe('The record\'s id.')
 })
 
 export const getExportJobQueryMerchantIdMax = 100;
@@ -885,8 +911,12 @@ export const GetExportJobResponse = zod.object({
  * Requeues a failed or expired job while preserving its identity and private object key. Running and ready jobs are returned unchanged; retries cannot overwrite a completed file.
  * @summary Retry a saved export
  */
+export const retryExportJobPathIdMax = 100;
+
+
+
 export const RetryExportJobParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(retryExportJobPathIdMax).describe('The record\'s id.')
 })
 
 export const retryExportJobQueryMerchantIdMax = 100;
@@ -933,8 +963,12 @@ export const RetryExportJobResponse = zod.object({
  * The bytes are read from private storage and checked against the recorded SHA-256 before any are sent.
  * @summary Download an export
  */
+export const downloadExportPathIdMax = 100;
+
+
+
 export const DownloadExportParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(downloadExportPathIdMax).describe('The record\'s id.')
 })
 
 export const downloadExportQueryMerchantIdMax = 100;
@@ -1048,7 +1082,7 @@ export const ListQueueResponse = zod.object({
   "owners": zod.array(zod.string()),
   "types": zod.array(zod.string()),
   "asOf": zod.string()
-}).describe('A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states.')
+}).describe('A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states: a deadline written as a day alone (YYYY-MM-DD) is due all that West Africa Time day and overdue once it ends, one with a time passes at that instant, and one that is not a real date is no deadline.')
 
 
 /**
@@ -1189,8 +1223,12 @@ export const ListCloseHistoryResponse = zod.object({
  * Returns the full immutable close report on demand within the current lender.
  * @summary Read the evidence for one recorded close
  */
+export const getCloseDetailPathIdMax = 100;
+
+
+
 export const GetCloseDetailParams = zod.object({
-  "id": zod.coerce.string().describe('Close record in the active lender.')
+  "id": zod.coerce.string().min(1).max(getCloseDetailPathIdMax).describe('Close record in the active lender.')
 })
 
 export const getCloseDetailQueryMerchantIdMax = 100;
@@ -1220,8 +1258,12 @@ export const GetCloseDetailResponse = zod.object({
  * Each section is independently paged in SQL, newest first with stable ID ordering. Counts and monetary aggregates are calculated before paging; no partial state may be written. Unknown customers return 404. The existing timeline endpoint retains its full-history contract.
  * @summary Page a customer history with complete balances
  */
+export const getCustomerHistoryPathIdMax = 100;
+
+
+
 export const GetCustomerHistoryParams = zod.object({
-  "id": zod.coerce.string().describe('Customer in the active lender.')
+  "id": zod.coerce.string().min(1).max(getCustomerHistoryPathIdMax).describe('Customer in the active lender.')
 })
 
 export const getCustomerHistoryQueryMerchantIdMax = 100;
@@ -2181,8 +2223,12 @@ export const ListOperationsResponse = zod.object({
  * Re-enters the original route with the stored request and key under the current rules, so it can answer anything that route answers. A completed entry returns its saved result; a cancelled or refused one is refused (409); a different role cannot repeat it (403); a request whose stored payload expired under retention is gone (410).
  * @summary Recover or repeat a journaled request
  */
+export const retryOperationPathIdMax = 100;
+
+
+
 export const RetryOperationParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(retryOperationPathIdMax).describe('The record\'s id.')
 })
 
 export const retryOperationQueryMerchantIdMax = 100;
@@ -2200,8 +2246,12 @@ export const RetryOperationResponse = zod.record(zod.string(), zod.unknown()).de
  * Confirms with the server that the request never completed and closes it, so its key cannot run again. A completed entry, or one whose receipt already exists, is refused (409); one whose stored payload expired under retention is gone (410).
  * @summary Cancel an unconfirmed request
  */
+export const cancelOperationPathIdMax = 100;
+
+
+
 export const CancelOperationParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(cancelOperationPathIdMax).describe('The record\'s id.')
 })
 
 export const cancelOperationQueryMerchantIdMax = 100;
@@ -2427,8 +2477,12 @@ export const SaveImportBatchResponse = zod.object({
  * The batch with its source rows and revisions. Import operator roles only (403); unknown batches are 404.
  * @summary Open an import batch
  */
+export const getImportBatchPathIdMax = 100;
+
+
+
 export const GetImportBatchParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(getImportBatchPathIdMax).describe('The record\'s id.')
 })
 
 export const getImportBatchQueryMerchantIdMax = 100;
@@ -2473,8 +2527,12 @@ export const GetImportBatchResponse = zod.object({
  * Saves a revision of the batch, keeping its source identity. A committed batch or a stale version is refused (409).
  * @summary Correct an uncommitted batch
  */
+export const saveImportBatchRevisionPathIdMax = 100;
+
+
+
 export const SaveImportBatchRevisionParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(saveImportBatchRevisionPathIdMax).describe('The record\'s id.')
 })
 
 export const saveImportBatchRevisionQueryMerchantIdMax = 100;
@@ -2545,8 +2603,12 @@ export const SaveImportBatchRevisionResponse = zod.object({
  * Imports the checked rows in one transaction and records the original source totals. A batch that is not ready, or a stale version, is refused (409).
  * @summary Commit a checked batch
  */
+export const commitImportBatchPathIdMax = 100;
+
+
+
 export const CommitImportBatchParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(commitImportBatchPathIdMax).describe('The record\'s id.')
 })
 
 export const commitImportBatchQueryMerchantIdMax = 100;
@@ -2589,8 +2651,12 @@ export const CommitImportBatchResponse = zod.object({
  * The exception with its possible assignees, handover history and citable evidence.
  * @summary Open a case
  */
+export const getCasePathIdMax = 100;
+
+
+
 export const GetCaseParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(getCasePathIdMax).describe('The record\'s id.')
 })
 
 export const getCaseQueryMerchantIdMax = 100;
@@ -2646,8 +2712,12 @@ export const GetCaseResponse = zod.object({
  * Records the assignee, next action and evidence, with the version being changed. The next action must be in the future.
  * @summary Hand over or update a case
  */
+export const coordinateCasePathIdMax = 100;
+
+
+
 export const CoordinateCaseParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(coordinateCasePathIdMax).describe('The record\'s id.')
 })
 
 export const coordinateCaseQueryMerchantIdMax = 100;
@@ -2799,8 +2869,12 @@ export const InviteStaffResponse = zod.object({
  * Administrator with recent MFA. A revoked token cannot be accepted; an invitation that is no longer pending is refused (409).
  * @summary Revoke an invitation
  */
+export const revokeInvitationPathIdMax = 100;
+
+
+
 export const RevokeInvitationParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(revokeInvitationPathIdMax).describe('The record\'s id.')
 })
 
 export const RevokeInvitationResponse = zod.object({
@@ -2812,8 +2886,12 @@ export const RevokeInvitationResponse = zod.object({
  * Administrator with recent MFA; nobody changes their own membership. Records the reason in the access history.
  * @summary Change a membership
  */
+export const updateStaffMemberPathIdMax = 100;
+
+
+
 export const UpdateStaffMemberParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(updateStaffMemberPathIdMax).describe('The record\'s id.')
 })
 
 export const updateStaffMemberBodyReasonMin = 3;
@@ -2843,8 +2921,12 @@ export const UpdateStaffMemberResponse = zod.object({
  * Administrator with recent MFA. Non-administrators open only the lenders named here; sessions pick the change up on their next request.
  * @summary Set a member's lender access
  */
+export const updateStaffLendersPathIdMax = 100;
+
+
+
 export const UpdateStaffLendersParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(updateStaffLendersPathIdMax).describe('The record\'s id.')
 })
 
 export const updateStaffLendersBodyLenderIdsItemMax = 100;
@@ -3124,8 +3206,12 @@ export const PrepareCloseReviewResponse = zod.object({
  * Only the named reviewer decides, and only while the snapshot is current; a changed close or source declaration must be prepared again. One browser switching demo roles is one person, so a sandbox cannot decide its own preparation (403).
  * @summary Approve or reject a close review
  */
+export const decideCloseReviewPathIdMax = 100;
+
+
+
 export const DecideCloseReviewParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(decideCloseReviewPathIdMax).describe('The record\'s id.')
 })
 
 export const decideCloseReviewQueryMerchantIdMax = 100;
@@ -3459,8 +3545,12 @@ export const PreviewImportCorrectionResponse = zod.object({
  * Only the named reviewer approves or rejects; the proposer may withdraw. Approval applies the change only while the comparison is current.
  * @summary Decide an import correction
  */
+export const decideImportCorrectionPathIdMax = 100;
+
+
+
 export const DecideImportCorrectionParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(decideImportCorrectionPathIdMax).describe('The record\'s id.')
 })
 
 export const decideImportCorrectionQueryMerchantIdMax = 100;
@@ -3842,8 +3932,12 @@ export const CreateSourceProfileResponse = zod.object({
  * Saves a new version of the profile; batches keep the version they were checked against.
  * @summary Change a source profile
  */
+export const saveSourceProfilePathIdMax = 100;
+
+
+
 export const SaveSourceProfileParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(saveSourceProfilePathIdMax).describe('The record\'s id.')
 })
 
 export const saveSourceProfileQueryMerchantIdMax = 100;
@@ -4057,8 +4151,12 @@ export const RunPaystackFixtureResponse = zod.object({
  * Re-processes the event with the reason recorded; duplicates are recognised and counted.
  * @summary Replay a stored provider event
  */
+export const replayProviderEventPathIdMax = 100;
+
+
+
 export const ReplayProviderEventParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(replayProviderEventPathIdMax).describe('The record\'s id.')
 })
 
 export const replayProviderEventQueryMerchantIdMax = 100;
@@ -4116,7 +4214,7 @@ export const ReplayProviderEventResponse = zod.object({
 
 
 /**
- * The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key. At most 120 deliveries a minute per client network and, once signed, 60 a minute per connection. A repeat of a saved event is acknowledged without an audit entry, and its delivery count is written at most once a minute.
+ * The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the body's bytes, decompressed first when its Content-Encoding is gzip, deflate or br, before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key. At most 120 deliveries a minute per client network and, once signed, 60 a minute per connection. A repeat of a saved event is acknowledged without an audit entry, and its delivery count is written at most once a minute.
  * @summary Receive a signed Paystack test event
  */
 export const receivePaystackTestEventPathConnectionIdRegExp = new RegExp('^[a-f0-9]{64}$');
@@ -4130,7 +4228,7 @@ export const receivePaystackTestEventHeaderXPaystackSignatureRegExp = new RegExp
 
 
 export const ReceivePaystackTestEventHeader = zod.object({
-  "x-paystack-signature": zod.string().regex(receivePaystackTestEventHeaderXPaystackSignatureRegExp).describe('HMAC-SHA512 of the exact request bytes under the configured test secret key, in hexadecimal.')
+  "x-paystack-signature": zod.string().regex(receivePaystackTestEventHeaderXPaystackSignatureRegExp).describe('HMAC-SHA512, under the configured test secret key and in hexadecimal, of the body\'s exact bytes: the JSON as sent, or, for a body sent with Content-Encoding gzip, deflate or br, the JSON bytes after decompression (not the compressed bytes); any other encoding is refused (415).')
 })
 
 export const ReceivePaystackTestEventBody = zod.object({
@@ -4601,8 +4699,12 @@ export const GetLifecycleResponse = zod.object({
  * Administrators only. The run's manifest and receipts.
  * @summary Read a retention run
  */
+export const getLifecycleRunPathIdMax = 100;
+
+
+
 export const GetLifecycleRunParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(getLifecycleRunPathIdMax).describe('The record\'s id.')
 })
 
 export const getLifecycleRunQueryMerchantIdMax = 100;
@@ -5204,8 +5306,12 @@ export const PreviewLifecycleRunResponse = zod.object({
  * Administrators only. The manifest digest must match the preview; a changed inventory must be previewed again.
  * @summary Approve a retention run
  */
+export const approveLifecycleRunPathIdMax = 100;
+
+
+
 export const ApproveLifecycleRunParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(approveLifecycleRunPathIdMax).describe('The record\'s id.')
 })
 
 export const approveLifecycleRunQueryMerchantIdMax = 100;
@@ -5316,8 +5422,12 @@ export const ApproveLifecycleRunResponse = zod.object({
  * Administrators only. Deletes in bounded batches with a receipt per item; blocked and failed items are reported, never skipped silently.
  * @summary Execute an approved run
  */
+export const executeLifecycleRunPathIdMax = 100;
+
+
+
 export const ExecuteLifecycleRunParams = zod.object({
-  "id": zod.coerce.string().describe('The record\'s id.')
+  "id": zod.coerce.string().min(1).max(executeLifecycleRunPathIdMax).describe('The record\'s id.')
 })
 
 export const executeLifecycleRunQueryMerchantIdMax = 100;

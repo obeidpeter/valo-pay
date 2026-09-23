@@ -21,7 +21,8 @@ import { seedMerchant } from "./valopay-seed";
 import { createSandboxCreationLimits, creationRefusalMessage, WORKSPACE_CREATION_RETRY_AFTER_SECONDS } from "./creation-limit";
 import { readSandboxCookie, sandboxPrincipal, secureRequest, writeSandboxCookie } from "./sandbox-cookie";
 import { rememberSandbox } from "./request-limits";
-import { foldForSearch, LIST_PAGE_CEILING, type ListQuery } from "./valopay-list";
+import { foldForSearch, LIST_PAGE_CEILING, matchesSearch, updatedSinceInstant, type ListQuery } from "./valopay-list";
+import { publicExportRecord } from "./export-jobs";
 import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
 import { validateCloseRange, pageOffset, type ReadPageQuery, type ReconciliationQueue } from './console-read-models';
 import { precisionAudit } from '../domain/reports';
@@ -1010,10 +1011,10 @@ const scopedRecordsWhere = "r.merchant_id=$1 AND m.workspace_id=$2 AND w.id=$2 A
 
 /** A list never loads unrelated kinds or constructs a writable DomainState.
  * No search: PostgreSQL calculates the count and returns only the page.
- * Search: preserve the exact JavaScript Unicode/JSON search contract by
- * scanning bounded batches of this kind; only the requested page is retained.
- * This path deliberately does not pretend jsonb::text is JSON.stringify: its
- * whitespace and number spelling differ. Search indexing is a separate change.
+ * Search: the JavaScript fold (matchesSearch) over each record's name,
+ * reference and data values as the list shows them (an export without its
+ * private storage fields), scanning bounded batches of this kind; only the
+ * requested page is retained. Search indexing is a separate change.
  */
 export async function listRecords(context: StoreContext, merchantId: string, kind: string, query: ListQuery) {
   const session = sessionFor(context);
@@ -1025,9 +1026,7 @@ export async function listRecords(context: StoreContext, merchantId: string, kin
   if (query.customerId) filter("r.customer_id", query.customerId);
   if (query.id) filter("r.id", query.id);
   if (query.updatedSince) {
-    const since = Date.parse(query.updatedSince);
-    if (!Number.isFinite(since)) fail("updatedSince must be an ISO timestamp.");
-    params.push(new Date(since).toISOString()); where += ` AND r.updated_at >= $${params.length}::timestamptz`;
+    params.push(new Date(updatedSinceInstant(query.updatedSince)).toISOString()); where += ` AND r.updated_at >= $${params.length}::timestamptz`;
   }
   const offset = Number.isInteger(query.offset) && Number(query.offset) > 0 ? Number(query.offset) : 0;
   const limit = Number.isInteger(query.limit) && Number(query.limit) > 0 ? Math.min(Number(query.limit), LIST_PAGE_CEILING) : undefined;
@@ -1049,8 +1048,9 @@ export async function listRecords(context: StoreContext, merchantId: string, kin
       if (cursor) { values.push(cursor.at, cursor.id); after = ` AND (r.created_at,r.id) < ($${values.length - 1}::timestamptz,$${values.length}::text)`; }
       const batch = (await session.client.query<RecordRow & { cursor_at: string }>(`SELECT ${recordColumns},r.created_at::text AS cursor_at ${scopedRecordsFrom} WHERE ${where}${after} ORDER BY r.created_at DESC,r.id DESC LIMIT ${LIST_PAGE_CEILING}`, values)).rows;
       for (const row of batch) {
-        if (!foldForSearch(`${row.name} ${row.reference} ${row.status} ${JSON.stringify(row.data)}`).includes(search)) continue;
-        if (total >= offset && (limit === undefined || items.length < limit)) items.push(rowToRecord(row));
+        const record = rowToRecord(row);
+        if (!matchesSearch(record.kind === "exports" ? publicExportRecord(record) : record, search)) continue;
+        if (total >= offset && (limit === undefined || items.length < limit)) items.push(record);
         total++;
       }
       if (batch.length < LIST_PAGE_CEILING) break;
@@ -1070,12 +1070,16 @@ export async function listQueue(context: StoreContext, merchantId: string, queue
   const values: unknown[] = [merchantId, session.workspace.id, session.principal, context.now, query.owner || '', query.type || '', query.record || '', foldForSearch(query.q || '')];
   // PostgreSQL 16's input check also handles malformed legacy dates without failing a queue.
   const timestamp = (text: string) => `CASE WHEN pg_input_is_valid(${text},'timestamp with time zone') THEN (CASE WHEN length(${text})=10 THEN ${text} || 'T00:00:00Z' ELSE ${text} END)::timestamptz END`;
+  // When a deadline passes (deadlineEnds in the shared schema): a date-only one at the end of its WAT day, so it is
+  // due all day and overdue after it; an impossible date (2026-02-30) is no deadline.
+  const deadlineAt = (text: string) => `CASE WHEN (${text}) ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (CASE WHEN pg_input_is_valid(${text},'date') THEN ((${text}) || 'T23:59:59.999+01:00')::timestamptz END)
+    WHEN pg_input_is_valid(${text},'timestamp with time zone') THEN (${text})::timestamptz END`;
   const dueData = `CASE WHEN r.kind='attempts' THEN d.data ELSE r.data END`;
   const deadline = queue === 'exceptions' ? "r.data->>'dueBy'" : queue === 'mandates' ? "r.data->>'activationDeadline'" : `(${dueData})->>'dueDate'`;
   const owner = queue === 'collections' ? `coalesce(nullif((${dueData})->>'owner',''),'unassigned')` : "coalesce(nullif(r.data->>'owner',''),'Unassigned')";
   const kind = queue === 'collections' ? "(r.kind='due-items' OR r.kind='attempts' AND r.status='failed')" : `r.kind='${queue}'`;
   const unpaid = `coalesce((CASE WHEN r.kind='attempts' THEN d.status ELSE r.status END) NOT IN ('paid','closed','cancelled'),false)`;
-  const overdue = queue === 'collections' ? `(CASE WHEN length(deadline)=10 THEN deadline < to_char($4::timestamptz AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD') ELSE deadline_at < $4::timestamptz END)` : 'deadline_at < $4::timestamptz';
+
   // Count/order only this queue's kinds. A failed attempt's instalment is read
   // by primary key from the same lender, one index probe per attempt: joining
   // the scoped set to itself made PostgreSQL compare every attempt with every
@@ -1085,21 +1089,31 @@ export async function listQueue(context: StoreContext, merchantId: string, queue
   // one row and each attempt scanned all its instalments (22 s for a
   // 25,000-record lender, past the statement limit). The lender and kind are
   // checked on the row the probe found.
+  // A search term is matched once per queue row, in a lateral column (OFFSET 0 keeps it from being written back into
+  // every filter) that the counts, the total, the page and its target all read, and against a customer only by a probe
+  // of the row's own customer (OFFSET 0 keeps it a probe, which PostgreSQL caches per customer), so a customer the
+  // queue holds many times is folded once and one it does not hold is never read. Written into each filter, the search
+  // was folded again for every count, with a customer lookup and fold per row each time: about 300 ms for a searched
+  // pilot-scale collections queue. Without a search term none of it is in the statement.
+  const searching = values[7] !== '';
+  const searchText = (expression: string) => `lower(regexp_replace(normalize(${expression},NFD), U&'[\\0300-\\036f]', '', 'g'))`;
+  const matched = searching ? `
+        LEFT JOIN LATERAL (SELECT true AS hit FROM valopay_records c WHERE c.id=r.customer_id AND c.merchant_id=$1 AND c.kind='customers' AND position($8 in ${searchText("concat_ws(' ',c.name,c.reference)")})>0 OFFSET 0) customer ON true
+        CROSS JOIN LATERAL (SELECT (customer.hit IS NOT NULL OR position($8 in ${searchText("concat_ws(' ',r.name,r.reference)")})>0) AS matched OFFSET 0) m` : '';
   const cte = `WITH scoped AS (SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND ${kind}),
-    b AS (SELECT r.*, ${deadline} AS deadline, ${timestamp(deadline)} AS deadline_at, ${owner} AS queue_owner,
+    b AS (SELECT r.*,${searching ? ' m.matched,' : ''} ${deadlineAt(deadline)} AS deadline_at, ${owner} AS queue_owner,
       ${unpaid} AS unpaid, ${timestamp("r.data->>'occurredAt'")} AS attempt_at
       FROM scoped r LEFT JOIN LATERAL (SELECT d.merchant_id,d.kind,d.status,d.data FROM valopay_records d WHERE r.kind='attempts' AND d.id=r.data->>'dueItemId' OFFSET 0) d
-        ON d.merchant_id=r.merchant_id AND d.kind='due-items' WHERE ${kind}),
-    q AS (SELECT b.*,coalesce(${overdue},false) AS overdue,
-      coalesce(CASE WHEN length(deadline)=10 THEN deadline ELSE to_char(deadline_at AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD') END = to_char($4::timestamptz AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD'),false) AS today FROM b)`;
+        ON d.merchant_id=r.merchant_id AND d.kind='due-items'${matched} WHERE ${kind}),
+    q AS (SELECT b.*,coalesce(deadline_at < $4::timestamptz,false) AS overdue,
+      coalesce(to_char(deadline_at AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD') = to_char($4::timestamptz AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD'),false) AS today FROM b)`;
   const conditions: Record<string, string> = queue === 'exceptions' ? {
     open: "status NOT IN ('closed','resolved')", high: "status NOT IN ('closed','resolved') AND data->>'severity'='high'",
     overdue: "status NOT IN ('closed','resolved') AND overdue", 'due-today': "status NOT IN ('closed','resolved') AND today", resolved: "status IN ('closed','resolved')",
   } : queue === 'mandates' ? { all: 'true', 'awaiting-activation': "status='pending_activation'", overdue: "status='pending_activation' AND overdue", 'due-today': "status='pending_activation' AND today" }
     : { all: "kind='due-items'", overdue: "kind='due-items' AND unpaid AND overdue", 'due-today': "kind='due-items' AND unpaid AND today", failed: "kind='attempts'" };
-  const searchText = (expression: string) => `lower(regexp_replace(normalize(${expression},NFD), U&'[\\0300-\\036f]', '', 'g'))`;
-  const searchFilter = `($8='' OR position($8 in ${searchText("concat_ws(' ',name,reference)")})>0 OR EXISTS(SELECT 1 FROM valopay_records c WHERE c.merchant_id=$1 AND c.kind='customers' AND c.id=q.customer_id AND position($8 in ${searchText("concat_ws(' ',c.name,c.reference)")})>0))`;
-  const ownerFilter = searchFilter + " AND ($5='' OR queue_owner=$5) AND ($6='' OR data->>'type'=$6)";
+  // Without a search term the statement still names $8, so PostgreSQL knows its type.
+  const ownerFilter = `${searching ? 'matched' : "$8=''"} AND ($5='' OR queue_owner=$5) AND ($6='' OR data->>'type'=$6)`;
   const selected = `${ownerFilter} AND (CASE WHEN $7<>'' THEN id=$7 ELSE (${conditions[view]}) END)`;
   const order = (queue === 'exceptions' ? "overdue DESC,CASE data->>'severity' WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,"
     : queue === 'mandates' ? "(status='pending_activation') DESC," : '(unpaid AND overdue) DESC,unpaid DESC,') + `deadline_at ASC NULLS LAST,${queue === 'collections' ? 'attempt_at ASC NULLS LAST,' : ''}id COLLATE "C"`;
