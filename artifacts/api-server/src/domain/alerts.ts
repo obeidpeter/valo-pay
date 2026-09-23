@@ -8,7 +8,7 @@ import { counted, alertRules, isBillableChannel, isOpenException, type AlertSeve
 import { recordsOf } from "./records";
 import type { DomainState } from "./types";
 import { paymentObservedAt } from "./reconciliation";
-import { closeSchedule, positionMismatches } from "./close";
+import { closeSchedule, owedCloseDates, positionMismatches } from "./close";
 import { attemptTime } from "./policy-engine";
 import { collectionSucceeded, monthOf } from "./billing";
 import { exportHealth } from '../lib/export-jobs';
@@ -66,7 +66,11 @@ export function buildAlerts(state: DomainState, now: string, audit?: AuditVerifi
   else if (nowMs - Date.parse(lastClose) > alertRules.closeOverdueHours * HOUR_MS) alerts.push({ key: "close_overdue", severity: "medium", title: "Daily close overdue", detail: `The last close was ${Math.floor((nowMs - Date.parse(lastClose)) / HOUR_MS)} hours ago. A close is due every day at the time set for this lender. Review the schedule or run a daily close.`, since: lastClose });
   // A scheduled close that has not run well past its time is the close analogue of a missed execution window (NFR-OBS-02).
   const schedule = closeSchedule(state, now);
-  if (schedule.missed) alerts.push({ key: "close_missed", severity: "high", title: "Scheduled daily close missed", detail: `The automatic close due at ${schedule.time} WAT is ${counted(schedule.overdueMinutes, "minute")} late. The scheduler may have stopped or the close may have failed. Check the schedule and run a daily close if needed.`, since: schedule.nextAt });
+  if (schedule.missed) {
+    // Each missed business date gets its own catch-up close, oldest first; the alert names the dates still owed.
+    const owed = owedCloseDates(state, now, 5), dates = new Intl.ListFormat("en-GB").format(owed.total > owed.dates.length ? [...owed.dates, `${owed.total - owed.dates.length} more`] : owed.dates);
+    alerts.push({ key: "close_missed", severity: "high", title: "Scheduled daily close missed", detail: `The automatic close due at ${schedule.time} WAT is ${counted(schedule.overdueMinutes, "minute")} late. ${owed.total === 1 ? "Business date" : "Business dates"} still to close: ${dates}. The scheduler may have stopped or the close may have failed. Check the schedule and run a daily close if needed.`, count: owed.total, since: schedule.nextAt });
+  }
   const switches = Object.entries((state.settings.policyKillSwitches || {}) as Record<string, unknown>).filter(([, on]) => on === true).map(([id]) => id);
   if (state.merchant.killSwitch || switches.length) alerts.push({ key: "kill_switch_active", severity: "info", title: state.merchant.killSwitch ? "Lender emergency stop is on" : "A policy emergency stop is on", detail: state.merchant.killSwitch ? "No collection instructions will be planned until an administrator turns off the emergency stop." : `The emergency stop is on for ${counted(switches.length, "policy version")}. No collection instructions will be planned under those versions until an administrator turns it off.`, count: switches.length || undefined });
   return alerts.sort((a, b) => order[a.severity] - order[b.severity] || a.key.localeCompare(b.key));

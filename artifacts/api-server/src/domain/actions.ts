@@ -10,7 +10,8 @@ import {
   recordPaymentRefund, reinstateAllocation, rememberRejectedMatch, settlePaymentStatus, supersedeAllocation, supersededByReview,
 } from "./reconciliation";
 import { buildReports } from "./reports";
-import { buildCloseReport, closeSchedule, openingSnapshot, storedCloseCursor } from "./close";
+import { buildCloseReport, closeSchedule, followingCloseInstant, openingSnapshot, owedCloseDates, scheduledCloseBusinessDate, storedCloseCursor } from "./close";
+import { watDate } from "./calendar";
 import { issueInvoice } from "./billing";
 import type { ActionInput, ActionResult, Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { assertActionRole } from "./validation";
@@ -51,17 +52,26 @@ function dueItemsUnderMandate(state: DomainState, mandateId: string): Set<string
 
 /**
  * 7.5: remember the opening position, run the close, then write the REC-07
- * report as immutable evidence.  Every close, scheduled or manual, covers the
- * pending scheduled instant if one has passed and moves the schedule cursor to
- * the next configured time (REC-01), ending any retry the scheduler recorded
- * for failed attempts; a close that starts more than
- * closeRules.lateAfterMinutes after that instant is recorded as late.
+ * report as immutable evidence.  Each scheduled time closes one business
+ * date, the WAT day before it, and checks that date's source files.  A close
+ * that starts at or after the oldest scheduled time still owed covers that
+ * time alone (REC-01): a scheduled close always, a person's close unless it
+ * names another business date.  The cursor then moves one day on, so after
+ * an outage every missed business date gets its own catch-up close, oldest
+ * first, and the lender stays due until none is owed.  Any close ends a retry
+ * the scheduler recorded for failed attempts; a close that starts more than
+ * closeRules.lateAfterMinutes after the time it covers is recorded as late.
  */
-export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTrigger): ActionResult {
+export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTrigger, sourceBusinessDate?: string): ActionResult {
   const now = ctx.now;
   const schedule = closeSchedule(state, now);
   const cursor = storedCloseCursor(state);
-  const scheduledFor = cursor && Date.parse(cursor) <= Date.parse(now) ? cursor : null;
+  // Nothing is owed while the automatic close is off: switching it on again restarts from the next configured time.
+  const pending = schedule.enabled && cursor && Date.parse(cursor) <= Date.parse(now) ? cursor : null;
+  const pendingDate = pending ? scheduledCloseBusinessDate(pending) : null;
+  const scheduledFor = pending && (trigger === "scheduled" || !sourceBusinessDate || sourceBusinessDate === pendingDate) ? pending : null;
+  const runDate = watDate(Date.parse(now));
+  const businessDate = scheduledFor ? pendingDate! : sourceBusinessDate ?? (trigger === "scheduled" ? scheduledCloseBusinessDate(now) : runDate);
   const delayMinutes = scheduledFor ? Math.floor((Date.parse(now) - Date.parse(scheduledFor)) / MINUTE_MS) : null;
   const late = delayMinutes !== null && delayMinutes > closeRules.lateAfterMinutes;
   const opening = openingSnapshot(state);
@@ -69,19 +79,25 @@ export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTr
   const report = buildCloseReport(state, ctx, opening, reconciled.data);
   report.alerts = buildAlerts(state, now);
   const reports = buildReports(state, now);
-  state.settings.nextCloseAt = nextCloseInstant(now, schedule.time);
+  if (scheduledFor) state.settings.nextCloseAt = followingCloseInstant(scheduledFor, schedule.time);
+  else if (!cursor) state.settings.nextCloseAt = nextCloseInstant(now, schedule.time);
   delete state.settings.closeRetry;
+  const owed = owedCloseDates(state, now).total;
   const summary = `${counted(report.observations.received, "observation")} received, ${counted(report.allocated.count, "allocation")} confirmed, ${report.unallocated.count} unallocated (${report.unallocated.olderThan24Hours} older than 24h), ${counted(report.exceptions.opened.count, "exception")} opened and ${report.exceptions.closed.count} closed, ${counted(report.customerPositionsChanged.length, "customer position")} changed.`;
   const close = makeRecord(state, "closes", {
-    name: `Daily close ${now.slice(0, 10)}${trigger === "scheduled" ? " · scheduled" : ""}`, status: "completed", createdAt: now,
+    name: `Daily close ${runDate}${trigger === "scheduled" ? " · scheduled" : ""}${businessDate === runDate ? "" : ` · business date ${businessDate}`}`, status: "completed", createdAt: now,
     data: {
       summary, metrics: reports.metrics, closedAt: now, period: report.period, report, operational: reports.operational, positionAlert: report.positionRebuild.alert,
-      schedule: { trigger, scheduledFor, delayMinutes, late, nextAt: state.settings.nextCloseAt }, synthetic: true,
+      sourceBusinessDate: businessDate, schedule: { trigger, scheduledFor, delayMinutes, late, nextAt: state.settings.nextCloseAt }, synthetic: true,
     },
   });
+  const lateness = late ? ` ${delayMinutes} minutes after its ${schedule.time} WAT time` : "";
+  const stillOwed = owed ? ` ${counted(owed, "missed business date is", "missed business dates are")} still to close.` : "";
   const message = trigger === "scheduled"
-    ? `Scheduled daily close completed${late ? ` ${delayMinutes} minutes after its ${schedule.time} WAT time` : ""}. No data was fetched from the provider or sent to the loan management system.`
-    : "Daily close completed. No data was fetched from the provider or sent to the loan management system.";
+    ? `Scheduled daily close of ${businessDate} completed${lateness}.${stillOwed} No data was fetched from the provider or sent to the loan management system.`
+    : scheduledFor
+      ? `Daily close of ${businessDate} completed in place of its scheduled close${lateness ? `,${lateness}` : ""}.${stillOwed} No data was fetched from the provider or sent to the loan management system.`
+      : `Daily close completed.${stillOwed} No data was fetched from the provider or sent to the loan management system.`;
   return result(message, close, { ...reconciled.data, closeId: close.id, positionAlert: report.positionRebuild.alert, schedule: close.data.schedule });
 }
 
@@ -271,10 +287,8 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
   if (input.action === "daily_close") {
     assertActionRole(ctx, ["Admin", "Operations", "Finance"]);
     const sourceDate = data.sourceBusinessDate === undefined ? undefined : businessDateSchema.parse(data.sourceBusinessDate);
-    if (sourceDate && sourceDate > new Date(Date.parse(ctx.now) + 3600000).toISOString().slice(0, 10)) throw new Error('Choose today or an earlier source business date. Future source coverage cannot be closed.');
-    const closed = runDailyClose(state, ctx, "manual");
-    if (sourceDate && closed.record) closed.record.data.sourceBusinessDate = sourceDate;
-    return closed;
+    if (sourceDate && sourceDate > watDate(Date.parse(ctx.now))) throw new Error('Choose today or an earlier source business date. Future source coverage cannot be closed.');
+    return runDailyClose(state, ctx, "manual", sourceDate);
   }
   if (["confirm_allocation", "reject_allocation", "manual_allocate"].includes(input.action)) {
     assertActionRole(ctx, ["Admin", "Finance"]);

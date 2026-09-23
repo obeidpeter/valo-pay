@@ -100,8 +100,9 @@ try{
     const keyedName=`Keyed save during the outage ${randomUUID()}`,keyed=await post(`/v1/records/customers?merchantId=${lender}`,{name:keyedName,reference:`KEYED-${randomUUID()}`,data:{consentProvenance:"Synthetic consent"}});
     assert.equal(keyed.status,503);assert.equal((keyed.data as {committed?:unknown}).committed,false);
     assert.equal((await pool.query("SELECT count(*)::int AS count FROM valopay_records WHERE merchant_id=$1 AND name=$2",[lender,keyedName])).rows[0].count,0);
-    // Due long ago; the pass is scoped to this lender, so other due lenders in a reused database never crowd it out.
-    await pool.query("UPDATE valopay_merchants SET settings=settings||'{\"nextCloseAt\":\"2000-01-01T00:00:00.000Z\"}'::jsonb WHERE id=$1",[lender]);
+    // Due an hour ago; the pass is scoped to this lender, so other due lenders in a reused database never crowd it out.
+    // (A cursor years old would leave the lender owing a catch-up close for every business date since.)
+    await pool.query("UPDATE valopay_merchants SET settings=settings||jsonb_build_object('nextCloseAt',$2::text) WHERE id=$1",[lender,new Date(Date.now()-60*60*1000).toISOString()]);
     const closes=await runDueCloses({batchSize:25,onlyMerchantIds:[lender]});
     assert.deepEqual(closes.failed.filter(failure=>failure.merchantId===lender),[],"the scheduled close does not need the key service");
     assert.ok(closes.closed.some(closed=>closed.merchantId===lender),"the scheduled close ran during the outage");

@@ -4,8 +4,10 @@
  * its own system transaction through the scoped repository, so a close never
  * bypasses the tenant predicate or the merchant lock, and one lender's failure
  * never touches another.  A close missed while the process was down runs at
- * the first tick after recovery and is recorded as late (NFR-AVA-02); every
- * run carries a correlation id in its log lines (NFR-OBS-01).
+ * the first tick after recovery and is recorded as late (NFR-AVA-02); when
+ * several business dates were missed, each gets its own catch-up close, one
+ * per pass, oldest first.  Every run carries a correlation id in its log
+ * lines (NFR-OBS-01).
  *
  * A pass reads due lenders in batches until none is left or its time budget
  * is spent, in a fair order (dueScheduledCloses): staff and signed-in lenders
@@ -82,10 +84,11 @@ type Outcome = Omit<ClosedMerchant, "merchantId"> | { paused: true };
 /**
  * One pass: give legacy merchants a cursor, then close due merchants batch
  * after batch, each in its own transaction, until none is due, the budget is
- * spent or the pass is told to stop.  Closed, paused and failed lenders leave
- * the due set by themselves (a failure is recorded with its retry time); a
- * skipped lender, or a failure that could not be recorded, is left out of the
- * pass's later batches.
+ * spent or the pass is told to stop.  Paused and failed lenders leave the due
+ * set by themselves (a failure is recorded with its retry time); a skipped
+ * lender, or a failure that could not be recorded, is left out of the pass's
+ * later batches.  So is a closed lender: one still owed missed business dates
+ * stays due, and gets one catch-up close per pass, the oldest date first.
  */
 export async function runDueCloses(options: CloseRunOptions = {}): Promise<CloseRun> {
   const run: CloseRun = { runId: randomUUID(), initialised: 0, batches: 0, examined: 0, closed: [], skipped: [], paused: [], failed: [] };
@@ -128,6 +131,7 @@ export async function runDueCloses(options: CloseRunOptions = {}): Promise<Close
           log?.info({ merchantId, idleDays: closeRules.idleSandboxDays }, "scheduled daily close paused for an idle sandbox");
         } else {
           run.closed.push({ merchantId, ...outcome });
+          exclude.add(merchantId);
           log?.info({ merchantId, ...outcome }, "scheduled daily close completed");
         }
       } catch (error) {

@@ -155,7 +155,7 @@ export default function ReportsPage() {
           {view === 'operations' && <><div className="max-w-64 space-y-1">
             <label htmlFor="close-source-date" className="text-xs font-medium">Source business date (optional)</label>
             <Input id="close-source-date" type="date" value={sourceBusinessDate} onChange={event => setSourceBusinessDate(event.target.value)} disabled={dailyClose.isPending} aria-describedby="close-source-date-help" />
-            <p id="close-source-date-help" className="text-xs text-muted-foreground">Defaults to today in WAT. Checks files for this date; financial totals reflect this run.</p>
+            <p id="close-source-date-help" className="text-xs text-muted-foreground">Defaults to today in WAT or, while scheduled closes are missed, to the oldest missed business date, which this close then covers. Checks files for that date; financial totals reflect this run.</p>
           </div><Button
             className="gap-2"
             action="daily_close" onClick={() => dailyClose.mutate({ data: { action: 'daily_close', ...(sourceBusinessDate ? { data: { sourceBusinessDate } } : {}) }, params: { merchantId } })}

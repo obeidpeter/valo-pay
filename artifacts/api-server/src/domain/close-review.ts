@@ -50,13 +50,16 @@ export function closeReviewIssues(close: ValopayRecord): CloseReviewIssue[] {
   return issues;
 }
 function latestClose(state: DomainState) { return newest(ofKind(state, "closes"))[0]; }
+const closeBusinessDate = (close: ValopayRecord): string | undefined => close.data.reviewBasis?.sourceCompleteness?.businessDate;
+/** The newest close of one business date: each missed date's catch-up close is reviewed on its own. */
+function latestCloseOf(state: DomainState, businessDate: string | undefined) { return newest(ofKind(state, "closes").filter(record => closeBusinessDate(record) === businessDate))[0]; }
 export function reviewIsCurrent(state: DomainState, review: ValopayRecord) {
   const close = ofKind(state, "closes").find(r => r.id === review.data.closeId);
   return Boolean(close && !closeReviewCurrentProblem(state, close) && review.data.inputDigest === close.data.reviewBasis.inputDigest && review.data.snapshotDigest === digest(close) && review.data.snapshotDigest === digest(review.data.snapshot));
 }
 export function closeReviewCurrentProblem(state: DomainState, close: ValopayRecord): string | null {
   if (!close.data.reviewBasis?.inputDigest) return "This older close has no recorded input fingerprint. Run a new daily close before preparing a review.";
-  if (latestClose(state)?.id !== close.id) return "A newer close exists. Review the latest close; this evidence remains available for the historical record.";
+  if (latestCloseOf(state, closeBusinessDate(close))?.id !== close.id) return "A newer close exists for this business date. Review the latest close; this evidence remains available for the historical record.";
   if (pendingFinancialCorrections(state).length) return "Financial import corrections await a decision. Resolve them before preparing, approving or exporting the current close.";
   if (close.data.reviewBasis.inputDigest !== closeReviewBasis(state)) return "Records changed after this close. Run a new daily close and prepare a new review; the earlier evidence stays unchanged.";
   const sources = close.data.reviewBasis.sourceCompleteness;
