@@ -490,3 +490,43 @@ it("says a failed read on a pilot page changed nothing, and sends a lost change 
   expect(lost.textContent).toContain("The request could not be completed. If it reached the service, Operations lists it with its outcome.");
 });
 
+
+it("asks for confirmation before revoking a staff member, and keeps their access when declined", async () => {
+  const send = globalThis.fetch;
+  const changes: Array<Record<string, unknown>> = [];
+  const member = { id: "member-1", actor: "user_sample_1", name: "Bola Sample", role: "Operations", status: "active", expiresAt: api.now, updatedAt: api.now, lenderIds: [], allLenders: false };
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  globalThis.fetch = async (input, options) => {
+    const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+    const path = new URL(url, "http://localhost").pathname;
+    if (path === "/api/v1/team" && (options?.method ?? "GET") === "GET")
+      return json({ mode: "staff", actor: "Pilot Admin", message: "Staff access is active.", members: [member], lenders: [], invitations: [], events: [] });
+    if (path === `/api/v1/team/members/${member.id}` && options?.method === "PATCH") {
+      const body = JSON.parse(String(options.body));
+      changes.push(body);
+      return json({ ...member, role: body.role, status: body.status, updatedAt: new Date(Date.parse(api.now) + 1000).toISOString() });
+    }
+    return send(input, options);
+  };
+  const user = userEvent.setup();
+  renderApp("/team");
+  await user.selectOptions(await screen.findByLabelText("Access for Bola Sample"), "revoked");
+  await user.type(screen.getByLabelText("Reason for changing Bola Sample"), "Left the collections team");
+  const save = screen.getByRole("button", { name: "Save access change" });
+  await user.click(save);
+  // One more step, which says what revoking does and cannot undo; nothing is sent yet.
+  const confirm = await screen.findByRole("dialog", { name: "Revoke Bola Sample’s access?" });
+  expect(confirm.textContent).toContain("A revoked person regains access only by accepting a new invitation.");
+  expect(confirm.textContent).toContain("Left the collections team");
+  expect(changes).toEqual([]);
+  await user.click(within(confirm).getByRole("button", { name: "Keep access" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(changes).toEqual([]);
+  await waitFor(() => expect(document.activeElement).toBe(save));
+  await user.click(save);
+  await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Revoke access" }));
+  await waitFor(() => expect(changes).toHaveLength(1));
+  expect(changes[0]).toMatchObject({ status: "revoked", reason: "Left the collections team" });
+  // Other access changes need no extra step.
+  expect(screen.queryByRole("dialog")).toBeNull();
+});

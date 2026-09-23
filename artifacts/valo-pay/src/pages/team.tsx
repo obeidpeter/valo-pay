@@ -12,6 +12,8 @@ import {
 } from "@/components/pilot-ui";
 import { StaffSession } from "@/components/staff-session";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useDialogFocusReturn } from "@/lib/focus";
 import { formatCount, formatDate } from "@/lib/formatters";
 import { AccessReadiness } from '@/components/access-readiness';
 
@@ -216,8 +218,23 @@ export default function TeamPage() {
 function Member({ member, editable, lenders }: { member: any; editable: boolean; lenders: any[] }) {
   const [role, setRole] = useState(member.role),
     [status, setStatus] = useState(member.status),
-    [reason, setReason] = useState("");
+    [reason, setReason] = useState(""),
+    // Revoking cannot be undone here, so it takes one more step after its reason; other changes save at once.
+    [confirming, setConfirming] = useState(false);
   const mutation = usePilotMutation();
+  const restoreFocus = useDialogFocusReturn(confirming);
+  const save = () =>
+    mutation.mutate({
+      path: `/team/members/${member.id}`,
+      method: "PATCH",
+      lender: false,
+      data: {
+        role,
+        status,
+        reason,
+        expectedUpdatedAt: member.updatedAt,
+      },
+    });
   return (
     <article className="space-y-3 rounded-lg border p-4">
       <div>
@@ -233,17 +250,8 @@ function Member({ member, editable, lenders }: { member: any; editable: boolean;
           className="space-y-3"
           onSubmit={(e) => {
             e.preventDefault();
-            mutation.mutate({
-              path: `/team/members/${member.id}`,
-              method: "PATCH",
-              lender: false,
-              data: {
-                role,
-                status,
-                reason,
-                expectedUpdatedAt: member.updatedAt,
-              },
-            });
+            if (status === "revoked" && member.status !== "revoked") setConfirming(true);
+            else save();
           }}
         >
           <div className="grid gap-3 sm:grid-cols-2">
@@ -297,6 +305,24 @@ function Member({ member, editable, lenders }: { member: any; editable: boolean;
           <RecoveryNotice mutation={mutation} persistent={false} />
         </form>
       )}
+      <Dialog open={confirming} onOpenChange={(open) => { if (!open) setConfirming(false); }}>
+        <DialogContent onCloseAutoFocus={restoreFocus}>
+          <DialogHeader>
+            <DialogTitle>Revoke {member.name}’s access?</DialogTitle>
+            <DialogDescription>
+              {member.name} loses access to this workspace and to every lender in it at their next request. Their lender access and any invitation still waiting for them are removed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 text-sm">
+            <p>A revoked person regains access only by accepting a new invitation.</p>
+            <p>Reason recorded in the access history: {reason}</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirming(false)}>Keep access</Button>
+            <Button variant="destructive" onClick={() => { setConfirming(false); save(); }}>Revoke access</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {editable && member.role !== "Admin" && member.status === "active" && <LenderGrants key={member.updatedAt} member={member} lenders={lenders} />}
     </article>
   );
