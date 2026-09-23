@@ -20,7 +20,7 @@ export interface ErrorBody {
   details?: ErrorDetail[];
   /** Present when staff access was refused: why. */
   code?: ErrorBodyCode;
-  /** Present on a failure that saved nothing: the transaction was rolled back, so the request may be sent again as new. */
+  /** Present on a failure that saved nothing: the transaction was rolled back, so the request may be sent again as new. A read's 500 never carries it, nor does the repeat of a request that was saved. */
   committed?: false;
   /** Present when the request's operations-journal entry is cancelled: nothing sent with its Idempotency-Key was or can be saved. */
   operation?: 'cancelled';

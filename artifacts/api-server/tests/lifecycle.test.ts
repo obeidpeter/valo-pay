@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
-import { retentionPolicySchema, lifecycleRunViewSchema, type LifecycleExternalCandidate } from '@workspace/valopay-schema';
+import { ZodError } from 'zod';
+import { retentionPolicySchema, lifecycleRunViewSchema, type LifecycleCandidate, type LifecycleExternalCandidate } from '@workspace/valopay-schema';
 import { seedMerchant } from '../src/lib/valopay-seed';
 import { makeRecord } from '../src/domain/records';
-import { lifecycleView, lifecyclePolicy, lifecycleHolds, lifecyclePreview, approveLifecycleRun, saveLifecyclePolicy, setLifecycleHold, assertLifecycleCandidate, lifecycleCandidateCheck, eraseLifecycleRawCsv, recordLifecycleReceipt } from '../src/domain/lifecycle';
+import { ResponseContractError } from '../src/lib/contract';
+import { lifecycleView, lifecycleRunView, lifecyclePolicy, lifecycleHolds, lifecyclePreview, approveLifecycleRun, saveLifecyclePolicy, setLifecycleHold, assertLifecycleCandidate, lifecycleCandidateCheck, eraseLifecycleRawCsv, recordLifecycleReceipt } from '../src/domain/lifecycle';
 import type { DomainState } from '../src/domain/types';
 
 const ctx = { actor: 'Clerk:admin', role: 'Admin', now: '2026-09-25T10:00:00.000Z' };
@@ -33,6 +35,27 @@ function counted(state: DomainState) {
     refuses(() => lifecycleView(state, ctx), 500);
     refuses(() => preview(state), 500);
   }
+}
+{
+  // What the views read back from storage (audit item 24, review). A timestamp an earlier build stored with an offset
+  // names the same instant, so the views answer it in UTC; a value that is no instant at all is the service's fault,
+  // a ResponseContractError (a 500 logged as response.invalid), never a ZodError the handler would answer as a 400.
+  const { state } = fixture('stored-offsets'); enable(state);
+  const run = preview(state), stored = state.records.find(record => record.id === run.id)!;
+  stored.data.expiresAt = '2026-09-25T11:15:00+01:00';
+  stored.data.candidates = stored.data.candidates.map((candidate: LifecycleCandidate) => ({ ...candidate, createdAt: candidate.createdAt.replace('Z', '+00:00') }));
+  const view = lifecycleView(state, ctx);
+  check(view.runs[0]!.expiresAt === '2026-09-25T10:15:00.000Z', 'an expiry stored with an offset is answered as its UTC instant');
+  check(view.runs[0]!.candidates.every(candidate => candidate.createdAt === '2026-08-01T10:00:00.000Z'), 'so is a stored source identity');
+  check(lifecycleRunView(state, stored).expiresAt === '2026-09-25T10:15:00.000Z', 'by the run view too');
+  // The stored manifest no longer matches the inventory word for word, so it is prepared again rather than approved.
+  refuses(() => approve(state, run), 409);
+  stored.data.expiresAt = 'next Tuesday';
+  const failure = (() => { try { lifecycleView(state, ctx); return undefined; } catch (error) { return error; } })();
+  check(failure instanceof ResponseContractError && !(failure instanceof ZodError) && failure.issues.some(issue => issue.path === 'expiresAt'), 'a stored expiry that is no instant is a fault in the run view, naming its path');
+  const policy = state.records.find(record => record.kind === 'retention-policies')!;
+  policy.data.policy = { ...policy.data.policy, rawCsvDays: 'thirty' };
+  check((() => { try { lifecyclePolicy(state); return false; } catch (error) { return error instanceof ResponseContractError; } })(), 'so is a stored policy the view cannot read');
 }
 {
   const { state } = fixture();

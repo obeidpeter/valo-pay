@@ -1,7 +1,13 @@
-import { retentionPolicySchema, retentionPolicyInputSchema, retentionHoldInputSchema, lifecycleCandidateSchema, lifecyclePreviewInputSchema, lifecycleApproveInputSchema, lifecycleRunViewSchema, lifecycleViewSchema, lifecycleReceiptStatusSchema, type LifecycleCandidate, type LifecycleEvidence, type LifecycleExternalCandidate, type RetentionPolicy, canonicalJson, sameJson, legacyCollatedCompare } from '@workspace/valopay-schema';
+import { retentionPolicySchema, retentionPolicyInputSchema, retentionHoldInputSchema, lifecycleCandidateSchema, lifecyclePreviewInputSchema, lifecycleApproveInputSchema, lifecycleRunViewSchema, lifecycleViewSchema, lifecycleReceiptStatusSchema, type LifecycleCandidate, type LifecycleEvidence, type LifecycleExternalCandidate, type RetentionPolicy, canonicalJson, sameJson, legacyCollatedCompare, storedInstant } from '@workspace/valopay-schema';
 import type { Context, DomainState, ValopayRecord } from './types';
 import { makeRecord, touch, assertSourceOpened } from './records';
 import { canonicalDigest } from '../lib/digests';
+import { contractAnswer } from '../lib/contract';
+
+// The request's input is parsed with its schema, so a mismatch is the request's 400. What these builders read
+// back from storage (the policy, the sources, the runs) and the answers they build are checked with
+// contractAnswer: a mismatch there is the service's fault, a 500 logged as response.invalid, never a 400.
+// A stored timestamp that is a valid instant in another form (an offset) is answered as its UTC instant.
 
 const DAY = 86400000;
 const defaults: RetentionPolicy = { rawCsvDays: null, journalPayloadDays: null, exportFileDays: null, auditTrail: 'retain' };
@@ -13,11 +19,13 @@ const rows = (state: DomainState, kind: string) => state.records.filter(record =
 const ordered = (records: ValopayRecord[]) => [...records].sort((a, b) => Number(b.data.sequence || 0) - Number(a.data.sequence || 0) || b.createdAt.localeCompare(a.createdAt));
 const nextSequence = (state: DomainState, kind: string) => Math.max(0, ...rows(state, kind).map(record => Number(record.data.sequence || 0))) + 1;
 const candidateKey = (candidate: Pick<LifecycleCandidate, 'kind' | 'sourceId'>) => `${candidate.kind}:${candidate.sourceId}`;
+/** A source identity read back from storage, its start as the UTC instant it names. */
+const storedCandidate = (candidate: unknown): unknown => candidate && typeof candidate === 'object' && !Array.isArray(candidate) ? { ...candidate, createdAt: storedInstant((candidate as { createdAt?: unknown }).createdAt) } : candidate;
 const settled = (receipt: ValopayRecord | undefined) => receipt?.data.result === 'deleted' || receipt?.data.result === 'already_absent';
 function advanceRun(run: ValopayRecord, now: string) { touch(run, new Date(Math.max(Date.parse(now), Date.parse(run.updatedAt) + 1)).toISOString()); }
 export function lifecyclePolicy(state: DomainState) {
   const latest = ordered(rows(state, 'retention-policies'))[0];
-  const policy = retentionPolicySchema.parse(latest?.data.policy || defaults);
+  const policy = contractAnswer(retentionPolicySchema, latest?.data.policy || defaults);
   return { policy, revision: hash({ merchantId: state.merchant.id, policy, recordId: latest?.id || null }) };
 }
 export function lifecycleHolds(state: DomainState) {
@@ -59,7 +67,7 @@ const evidenceFor = (rules: Rules, candidate: LifecycleCandidate): LifecycleEvid
 function validateExternal(state: DomainState, candidates: LifecycleExternalCandidate[]): LifecycleCandidate[] {
   const result: LifecycleCandidate[] = [];
   for (const raw of candidates) {
-    const candidate = lifecycleCandidateSchema.parse(raw);
+    const candidate = contractAnswer(lifecycleCandidateSchema, storedCandidate(raw));
     if (candidate.merchantId !== state.merchant.id) continue;
     if (candidate.kind === 'journal_payload' && !['completed', 'cancelled'].includes(candidate.status)) continue;
     if (candidate.kind === 'export_file' && !['ready', 'failed'].includes(candidate.status)) continue;
@@ -73,7 +81,7 @@ export function lifecycleCandidates(state: DomainState, external: LifecycleExter
   const batches = rows(state, 'import-batches');
   // A committed batch whose rows were not opened would silently drop out of the inventory.
   for (const record of batches) if (record.status === 'committed' && record.data.csv !== undefined) assertSourceOpened(record, ['csv', 'check']);
-  const raw: LifecycleCandidate[] = batches.filter(record => record.status === 'committed' && typeof record.data.csv === 'string' && record.data.csv.length > 0 && typeof record.data.committedAt === 'string').map(record => lifecycleCandidateSchema.parse({ kind: 'raw_csv', merchantId: state.merchant.id, sourceId: record.id, version: record.updatedAt, createdAt: record.data.committedAt, label: 'Committed import source CSV', digest: hash({ id: record.id, version: record.updatedAt, csv: record.data.csv, preview: record.data.check?.preview || null }), status: 'committed' }));
+  const raw: LifecycleCandidate[] = batches.filter(record => record.status === 'committed' && typeof record.data.csv === 'string' && record.data.csv.length > 0 && typeof record.data.committedAt === 'string').map(record => contractAnswer(lifecycleCandidateSchema, { kind: 'raw_csv', merchantId: state.merchant.id, sourceId: record.id, version: record.updatedAt, createdAt: storedInstant(record.data.committedAt), label: 'Committed import source CSV', digest: hash({ id: record.id, version: record.updatedAt, csv: record.data.csv, preview: record.data.check?.preview || null }), status: 'committed' }));
   return [...raw, ...validateExternal(state, external)].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || candidateKey(a).localeCompare(candidateKey(b)));
 }
 function eligible(rules: Rules, candidate: LifecycleCandidate) {
@@ -95,14 +103,15 @@ const latestReceipts = (state: DomainState, runId: string) => receiptsByRun(stat
 function runView(state: DomainState, run: ValopayRecord, latest: Map<string, ValopayRecord>) {
   const receipts = [...latest.values()];
   const successful = receipts.filter(receipt => ['deleted', 'already_absent'].includes(receipt.data.result)).length;
-  return lifecycleRunViewSchema.parse({ id: run.id, merchantId: state.merchant.id, status: run.status, updatedAt: run.updatedAt, createdAt: run.createdAt, expiresAt: run.data.expiresAt, previewDigest: run.data.previewDigest, policyRevision: run.data.policyRevision, candidates: run.data.candidates, candidateCount: run.data.candidates.length, moreEligible: run.data.moreEligible || 0, approvedBy: run.data.approvedBy || null, approvedAt: run.data.approvedAt || null, receipts: receipts.map(receipt => ({ id: receipt.id, kind: receipt.data.kind, sourceId: receipt.data.sourceId, status: receipt.data.result, at: receipt.createdAt, detail: receipt.data.detail, actor: receipt.data.actor })), successful, remaining: run.data.candidates.length - successful, auditRetained: true, financialRecordsRetained: true, syntheticOnly: true });
+  const candidates: unknown[] = Array.isArray(run.data.candidates) ? run.data.candidates : [];
+  return contractAnswer(lifecycleRunViewSchema, { id: run.id, merchantId: state.merchant.id, status: run.status, updatedAt: run.updatedAt, createdAt: run.createdAt, expiresAt: storedInstant(run.data.expiresAt), previewDigest: run.data.previewDigest, policyRevision: run.data.policyRevision, candidates: candidates.map(storedCandidate), candidateCount: candidates.length, moreEligible: run.data.moreEligible || 0, approvedBy: run.data.approvedBy || null, approvedAt: run.data.approvedAt ? storedInstant(run.data.approvedAt) : null, receipts: receipts.map(receipt => ({ id: receipt.id, kind: receipt.data.kind, sourceId: receipt.data.sourceId, status: receipt.data.result, at: receipt.createdAt, detail: receipt.data.detail, actor: receipt.data.actor })), successful, remaining: candidates.length - successful, auditRetained: true, financialRecordsRetained: true, syntheticOnly: true });
 }
 export function lifecycleRunView(state: DomainState, run: ValopayRecord) { return runView(state, run, latestReceipts(state, run.id)); }
 export function lifecycleView(state: DomainState, ctx: Context, external: LifecycleExternalCandidate[] = [], targetOffset = 0) {
   admin(ctx);
   if (!Number.isInteger(targetOffset) || targetOffset < 0 || targetOffset > 100000) refuse('Choose a valid retention inventory page.', 400);
   const { policy, revision } = lifecyclePolicy(state), holds = lifecycleHolds(state), candidates = lifecycleCandidates(state, external), rules = rulesOf(state, ctx, policy, holds), receipts = receiptsByRun(state);
-  return lifecycleViewSchema.parse({ merchantId: state.merchant.id, lenderName: state.merchant.name, actor: ctx.actor, asOf: ctx.now, policy, policyRevision: revision, holdRevision: holds.revision, eligibleCount: candidates.filter(candidate => eligible(rules, candidate)).length, evidenceTotal: candidates.filter(candidate => evidenceFor(rules, candidate).length).length, targets: candidates.slice(targetOffset, targetOffset + 100).map(candidate => ({ ...candidate, held: rules.held.has(candidateKey(candidate)), evidence: evidenceFor(rules, candidate) })), targetTotal: candidates.length, targetOffset, holds: holds.active.slice(0, 100).map(record => ({ kind: record.data.kind, sourceId: record.data.sourceId, reason: record.data.reason, actor: record.data.actor, at: record.createdAt })), holdTotal: holds.active.length, runs: rows(state, 'retention-runs').sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)).slice(0, 10).map(run => runView(state, run, receipts.get(run.id) ?? new Map())), auditRetained: true, financialRecordsRetained: true, syntheticOnly: true });
+  return contractAnswer(lifecycleViewSchema, { merchantId: state.merchant.id, lenderName: state.merchant.name, actor: ctx.actor, asOf: ctx.now, policy, policyRevision: revision, holdRevision: holds.revision, eligibleCount: candidates.filter(candidate => eligible(rules, candidate)).length, evidenceTotal: candidates.filter(candidate => evidenceFor(rules, candidate).length).length, targets: candidates.slice(targetOffset, targetOffset + 100).map(candidate => ({ ...candidate, held: rules.held.has(candidateKey(candidate)), evidence: evidenceFor(rules, candidate) })), targetTotal: candidates.length, targetOffset, holds: holds.active.slice(0, 100).map(record => ({ kind: record.data.kind, sourceId: record.data.sourceId, reason: record.data.reason, actor: record.data.actor, at: record.createdAt })), holdTotal: holds.active.length, runs: rows(state, 'retention-runs').sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)).slice(0, 10).map(run => runView(state, run, receipts.get(run.id) ?? new Map())), auditRetained: true, financialRecordsRetained: true, syntheticOnly: true });
 }
 export function saveLifecyclePolicy(state: DomainState, ctx: Context, raw: unknown) {
   admin(ctx); const input = retentionPolicyInputSchema.parse(raw);
@@ -184,7 +193,7 @@ export function eraseLifecycleRawCsv(state: DomainState, ctx: Context, runId: st
 }
 /** Only a verified executor outcome may be recorded; the UI cannot submit deletion receipts. */
 export function recordLifecycleReceipt(state: DomainState, ctx: Context, runId: string, candidate: LifecycleCandidate, result: 'deleted' | 'already_absent' | 'blocked' | 'failed', detail: string) {
-  admin(ctx); lifecycleReceiptStatusSchema.parse(result); const run = runOf(state, runId);
+  admin(ctx); contractAnswer(lifecycleReceiptStatusSchema, result); const run = runOf(state, runId);
   if (!run.data.approvedBy || !['approved', 'running', 'attention', 'completed'].includes(run.status)) refuse('This deletion run is not approved.');
   if (!run.data.candidates.some((saved: LifecycleCandidate) => sameJson(saved, candidate))) refuse('The receipt does not match the approved source identity.');
   const prior = latestReceipts(state, runId).get(candidateKey(candidate));

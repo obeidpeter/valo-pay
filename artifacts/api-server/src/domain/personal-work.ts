@@ -3,6 +3,7 @@ import type { Context, DomainState, ValopayRecord } from './types';
 import { makeRecord } from './records';
 import { reviewIsCurrent } from './close-review';
 import { canonicalDigest } from '../lib/digests';
+import { contractAnswer } from '../lib/contract';
 
 export type WorkAssignee = { actor: string; name: string; role: string };
 const workRoles = ['Admin', 'Operations', 'Finance', 'Compliance reviewer'];
@@ -26,7 +27,8 @@ function caseAssignment(records: ValopayRecord[], record: ValopayRecord): { even
   return { event: matching[0], ambiguous: false };
 }
 function receiptView(record: ValopayRecord, duplicate: boolean) {
-  return workReceiptSchema.parse({ id: record.id, merchantId: record.merchantId, action: record.data.action, sourceId: record.data.sourceId, eventId: record.data.eventId, actor: record.data.actor, at: record.createdAt, duplicate, syntheticOnly: true, financialStatusChanged: false });
+  // The answer is checked like any other: a mismatch is the service's 500 (response.invalid), never the request's 400.
+  return contractAnswer(workReceiptSchema, { id: record.id, merchantId: record.merchantId, action: record.data.action, sourceId: record.data.sourceId, eventId: record.data.eventId, actor: record.data.actor, at: record.createdAt, duplicate, syntheticOnly: true, financialStatusChanged: false });
 }
 
 /** Pure read model: saved assignment/review records are the source of truth, never notification delivery state. */
@@ -80,7 +82,7 @@ export function derivePersonalWork(state: DomainState, ctx: Context, people: Wor
     return { actor, name: items[0]!.assigneeName, total: items.length, overdue: items.filter(item => item.overdue).length, handovers: items.filter(item => item.type === 'handover').length, reviews: items.filter(item => item.type === 'review').length, escalated: items.filter(item => item.escalated).length };
   }) : [];
   const history = localRecords(state).filter(record => record.kind === 'work-events' && record.data.actor === ctx.actor && ['read', 'acknowledge'].includes(record.data.action)).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)).slice(0, 10).map(record => ({ id: record.id, action: record.data.action, sourceId: record.data.sourceId, summary: String(record.data.summary), at: record.createdAt, href: String(record.data.href) }));
-  return personalWorkViewSchema.parse({ merchantId: state.merchant.id, lenderName: state.merchant.name, actor: ctx.actor, role: ctx.role, asOf: ctx.now, syntheticOnly: true, canViewTeam: ctx.role === 'Admin', canWork, scope: q.scope, filter: q.filter, items: matches.slice(q.offset, q.offset + q.limit), total: matches.length, offset: q.offset, limit: q.limit, counts, workload, workloadTotal: q.scope === 'team' ? new Set(all.map(item => item.assignee)).size : 0, history, escalationRule: rule });
+  return contractAnswer(personalWorkViewSchema, { merchantId: state.merchant.id, lenderName: state.merchant.name, actor: ctx.actor, role: ctx.role, asOf: ctx.now, syntheticOnly: true, canViewTeam: ctx.role === 'Admin', canWork, scope: q.scope, filter: q.filter, items: matches.slice(q.offset, q.offset + q.limit), total: matches.length, offset: q.offset, limit: q.limit, counts, workload, workloadTotal: q.scope === 'team' ? new Set(all.map(item => item.assignee)).size : 0, history, escalationRule: rule });
 }
 
 /** Append a recipient-owned read/ack receipt. No case, allocation, review decision or financial status is changed. */

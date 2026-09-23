@@ -9,7 +9,7 @@ import type { CashActionOutcome } from './cashActionOutcome';
 import type { ValopayRecord } from './valopayRecord';
 
 /**
- * Committed sample operation: the record it produced or changed, or for a Cash Desk action its outcome with the record inside. A receipt is evidence from the server simulator only.
+ * Committed sample operation, in the shape its action gives (connectedActionResultFor in lib/valopay-schema): a cash.* action answers its outcome with the Cash Desk record it saved or changed (absent only when the Cash Desk was already set up) and, for an export, the manifest it prepared; every other action answers the record it produced or changed, of the lender the request named: a consent for consent.*, a checkout for payment.*, an assessment for credit.assess and a review for credit.review. A receipt is evidence from the server simulator only.
  */
 export interface ConnectedActionResult {
   message: string;

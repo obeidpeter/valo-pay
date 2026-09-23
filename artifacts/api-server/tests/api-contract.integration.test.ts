@@ -6,7 +6,11 @@
 // a staff host, so each described shape is tested against a real answer.
 // It also pins what the item fixed: the sandbox team directory's lenders, one
 // 400 for a missing merchantId, date-times with an offset, the writes that
-// take an optional Idempotency-Key, and an invalid answer that saves nothing.
+// take an optional Idempotency-Key, and an invalid answer that saves nothing;
+// and what its review found: a keyed write repeated after a retention run and
+// an export whose file retention deleted answer 410, the export queue and the
+// new-sandbox limit say when to retry, a replayed receipt never claims nothing
+// was saved, and a stored retention run's timestamp is not blamed on the request.
 import assert from "node:assert/strict";
 import express from "express";
 import { once } from "node:events";
@@ -27,10 +31,14 @@ const { withState } = await import("../src/routes/valopay");
 const { CreateRecordResponse } = await import("@workspace/api-zod");
 const store = await import("../src/lib/valopay-store");
 const { makeRecord } = await import("../src/domain/records");
+const { recoverableRequest } = await import("../src/lib/operation-recovery");
 const { clerkClient } = await import("@clerk/express");
 
 const spec = loadContract();
 const identities = new Map<string, any>();
+/** What the routes logged: an answer that does not match its contract is logged, never answered, in detail. */
+const logged: Array<{ level: string; fields: Record<string, any> }> = [];
+const events = (event: string) => logged.filter((line) => line.fields?.event === event);
 const app = express();
 let requests = 0;
 // The service gives every request an id (pino-http) that every error body quotes.
@@ -39,7 +47,8 @@ app.use(express.json({ limit: "2mb" }));
 app.use((req, _res, next) => {
   const auth = identities.get(String(req.header("X-Test-Identity"))) || { userId: null };
   (req as any).auth = Object.assign(() => auth, { [Symbol.for("@clerk/express.auth")]: true });
-  (req as any).log = { info() {}, warn() {}, error() {} };
+  const log = (level: string) => (fields: Record<string, any>) => { logged.push({ level, fields }); };
+  (req as any).log = { info: log("info"), warn: log("warn"), error: log("error") };
   next();
 });
 app.use("/api", router);
@@ -51,6 +60,9 @@ const cookie = `valopay_sandbox=${randomBytes(32).toString("hex")}`;
 
 /** Operation → statuses it answered in this run. */
 const answered = new Map<string, Set<number>>();
+/** The sandbox persona the journey is acting as, and every keyed write it saved: a retention run removes their stored results. */
+let persona = "Admin";
+const keyedWrites: Array<{ path: string; method: string; body: unknown; key: string; persona: string }> = [];
 async function call(path: string, method = "GET", body?: unknown, options: { key?: string; identity?: string; cookie?: string } = {}) {
   const response = await fetch(base + path, {
     method,
@@ -62,7 +74,9 @@ async function call(path: string, method = "GET", body?: unknown, options: { key
   const entry = operationFor(spec, method, path)!;
   const name = `${entry.method} ${entry.path}`;
   answered.set(name, (answered.get(name) ?? new Set()).add(response.status));
-  return { status: response.status, data };
+  if (response.status === 200 && options.key && !options.identity && !options.cookie) keyedWrites.push({ path, method, body, key: options.key, persona });
+  if (response.status === 200 && name === "POST /v1/actions" && (body as any)?.action === "set_role") persona = (body as any).data.role;
+  return { status: response.status, data, headers: response.headers };
 }
 const ok = (result: { status: number; data: any }) => { assert.equal(result.status, 200, JSON.stringify(result.data).slice(0, 800)); return result.data; };
 const refusedFor = (result: { status: number; data: any }, status: number, field: string) => {
@@ -237,6 +251,85 @@ try {
   // ---- The views again, now that they hold batches, profiles, events, cases, closes, reviews, receipts and holds ----
   for (const path of ["/v1/sources", "/v1/pilot/journey", "/v1/pilot/progress", "/v1/pilot/close-reviews", "/v1/pilot/batches", `/v1/pilot/batches/${batch.id}`, `/v1/pilot/cases/${exception.id}`, "/v1/operations", "/v1/work", "/v1/connected", "/v1/lifecycle"]) ok(await call(q(path)));
 
+  // ---- A retention run removes the stored results of completed requests: a repeat with the same key is gone (410) ----
+  // Every keyed write of the journey the journal records, made as the persona acting now, is repeated after the run.
+  const repeatable = keyedWrites.filter((write) => write.persona === persona && recoverableRequest(write.method, write.path.split("?")[0]!, write.body));
+  assert.ok(repeatable.length >= 10, `the journey saved keyed writes to repeat: ${repeatable.map((write) => `${write.method} ${write.path}`).join(", ")}`);
+  // As far as the policy can tell, those requests finished two days ago.
+  await pool.query("UPDATE valopay_operations SET updated_at=updated_at - interval '2 days' WHERE merchant_id=$1 AND status='completed' AND request_key=ANY($2::text[])", [lender, repeatable.map((write) => write.key)]);
+  lifecycle = ok(await call(q("/v1/lifecycle")));
+  lifecycle = ok(await call(q("/v1/lifecycle/policy"), "POST", { policy: { rawCsvDays: 30, journalPayloadDays: 1, exportFileDays: null, auditTrail: "retain" }, expectedRevision: lifecycle.policyRevision, reason: "Remove request payloads a day after they finish." }, { key: key() }));
+  let run = ok(await call(q("/v1/lifecycle/runs"), "POST", { expectedPolicyRevision: lifecycle.policyRevision }, { key: key() }));
+  assert.equal(run.candidates.filter((candidate: any) => candidate.kind === "journal_payload").length, repeatable.length, "the run removes each repeatable request's stored payload and result");
+  ok(await call(q(`/v1/lifecycle/runs/${run.id}`)));
+  run = ok(await call(q(`/v1/lifecycle/runs/${run.id}/approve`), "POST", { expectedUpdatedAt: withOffset(run.updatedAt), previewDigest: run.previewDigest, reason: "Reviewed the request payloads for the contract check." }, { key: key() }));
+  for (let step = 0; run.status !== "completed" && step <= run.candidateCount; step++) run = ok(await call(q(`/v1/lifecycle/runs/${run.id}/execute`), "POST", { previewDigest: run.previewDigest }, { key: key() }));
+  assert.equal(run.status, "completed", JSON.stringify(run.receipts));
+  for (const write of repeatable) {
+    const repeat = await call(write.path, write.method, write.body, { key: write.key });
+    assert.equal(repeat.status, 410, `${write.method} ${write.path} repeated after the retention run: ${JSON.stringify(repeat.data)}`);
+  }
+  // Recovering one from Operations is gone too; its entry keeps the request's identity and completion.
+  const purgedEntry = (await pool.query("SELECT id,status FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2", [lender, repeatable[0]!.key])).rows[0];
+  assert.equal(purgedEntry.status, "completed");
+  assert.equal((await call(q(`/v1/operations/${purgedEntry.id}/retry`), "POST")).status, 410);
+
+  // ---- An export whose file retention deleted can be neither downloaded nor retried (410) ----
+  // (The retention executor deletes the file in private storage, which this suite does not have; this is what it records.)
+  await pool.query(`UPDATE valopay_records SET status='ready', data=data || jsonb_build_object('fileDeletedAt', $3::text, 'fileRetentionRunId', $4::text, 'checksum', repeat('a', 64)) WHERE merchant_id=$1 AND id=$2`, [lender, job.id, new Date().toISOString(), run.id]);
+  assert.equal((await call(q(`/v1/exports/${job.id}/download`))).status, 410, "the file retention deleted is not downloaded");
+  assert.equal((await call(q(`/v1/exports/${job.id}/retry`), "POST")).status, 410, "nor generated again under the same identity");
+
+  // ---- A full export queue says when to retry: an eleventh waiting export is refused (429, Retry-After 30) ----
+  for (let index = 0; index < 10; index++) ok(await call(q("/v1/exports"), "POST", { kind: "customers", format: "json" }));
+  const queueFull = await call(q("/v1/exports"), "POST", { kind: "customers", format: "json" });
+  assert.equal(queueFull.status, 429, JSON.stringify(queueFull.data));
+  assert.equal(queueFull.headers.get("Retry-After"), "30", "the export queue's 429 says when to retry");
+
+  // ---- A replayed receipt was saved with its request: it is never answered as "nothing was saved" ----
+  // A receipt an earlier build stored with a field the contract no longer lists is answered without it, with a warning.
+  connected = ok(await call(q("/v1/connected")));
+  const replayKey = key(), replayGrant = { action: "consent.grant", reason: "Grant a synthetic permission for the replay check", data: { purpose: "erp_draft", subjectId: "sme", days: 30 }, expectedRevision: connected.revision };
+  const grantAnswer = ok(await call(q("/v1/connected/actions"), "POST", replayGrant, { key: replayKey }));
+  const receiptId = store.digest(`connected:${lender}:${replayKey}`);
+  const consents = async () => Number((await pool.query("SELECT count(*)::int AS n FROM valopay_records WHERE merchant_id=$1 AND kind='connected-consents'", [lender])).rows[0].n);
+  const consentCount = await consents();
+  assert.equal((await pool.query(`UPDATE valopay_idempotency SET response=jsonb_set(response,'{record,effectiveStatus}','"active"') WHERE merchant_id=$1 AND id=$2`, [lender, receiptId])).rowCount, 1);
+  logged.length = 0;
+  const replayed = await call(q("/v1/connected/actions"), "POST", replayGrant, { key: replayKey });
+  assert.deepEqual([replayed.status, replayed.data], [200, grantAnswer], "the replay answers the saved receipt without the field the contract no longer lists");
+  assert.deepEqual(events("response.invalid").map((line) => [line.level, line.fields.replayed]), [["warn", true]], "and logs it as a warning");
+  // A receipt that fails in any other way cannot be answered within the contract: the unconfirmed 500, never "nothing was saved".
+  await pool.query(`UPDATE valopay_idempotency SET response=response #- '{record,kind}' WHERE merchant_id=$1 AND id=$2`, [lender, receiptId]);
+  logged.length = 0;
+  const unanswerable = await call(q("/v1/connected/actions"), "POST", replayGrant, { key: replayKey });
+  assert.deepEqual([unanswerable.status, unanswerable.data.error, unanswerable.data.committed], [500, "We could not confirm this action. Check Operations or retry the same request before submitting a new one.", undefined], "a saved request is never answered as saving nothing");
+  assert.deepEqual(events("response.invalid").map((line) => [line.level, line.fields.replayed]), [["error", true]]);
+  assert.equal(await consents(), consentCount, "the consent was saved once");
+  assert.equal((await pool.query("SELECT status FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2", [lender, replayKey])).rows[0].status, "completed", "and its journal entry stays completed");
+  // The same for a write whose route answers from withState, and for a repeated lender set-up.
+  const manifestKey = key(), laterManifest = { ...manifest, businessDate: new Date(Date.now() + 10 * 86_400_000).toISOString().slice(0, 10) };
+  const declared = ok(await call(q("/v1/sources/manifests"), "POST", laterManifest, { key: manifestKey }));
+  await pool.query(`UPDATE valopay_idempotency SET response=response || '{"legacyField": true}'::jsonb WHERE merchant_id=$1 AND id=$2`, [lender, store.digest(`${lender}:${manifestKey}`)]);
+  assert.deepEqual(ok(await call(q("/v1/sources/manifests"), "POST", laterManifest, { key: manifestKey })), declared, "a replayed record answers without the field the contract no longer lists");
+  const setUp = keyedWrites.find((write) => write.path === "/v1/pilot/lenders")!;
+  await pool.query(`UPDATE valopay_merchants SET info=info || '{"legacyField": true}'::jsonb WHERE id=$1`, [created.id]);
+  assert.deepEqual(ok(await call("/v1/pilot/lenders", "POST", setUp.body, { key: setUp.key })), created, "a repeated set-up answers the lender it created, without the field the contract no longer lists");
+  await pool.query(`UPDATE valopay_merchants SET info=info - 'legacyField' WHERE id=$1`, [created.id]);
+
+  // ---- A stored retention run's timestamp is the service's to answer, never blamed on the request ----
+  // An expiry an earlier build stored with an offset is the same instant: the view answers it in UTC.
+  const storedRun = randomUUID();
+  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data) VALUES($1,$2,'retention-runs','Retention deletion preview','preview','',0,'',$3)`, [storedRun, lender, { candidates: [], previewDigest: "a".repeat(64), policyRevision: "b".repeat(64), moreEligible: 0, expiresAt: "2026-09-23T12:00:00+01:00", preparedBy: "Sandbox Admin", synthetic: true }]);
+  assert.equal(ok(await call(q("/v1/lifecycle"))).runs.find((item: any) => item.id === storedRun).expiresAt, "2026-09-23T11:00:00.000Z", "a stored offset is answered as its UTC instant");
+  // One that is no instant at all cannot be described: the service's 500, in a read's words, logged as response.invalid.
+  await pool.query(`UPDATE valopay_records SET data=jsonb_set(data,'{expiresAt}','"next Tuesday"') WHERE merchant_id=$1 AND id=$2`, [lender, storedRun]);
+  logged.length = 0;
+  const unreadable = await call(q("/v1/lifecycle"));
+  assert.deepEqual([unreadable.status, unreadable.data], [500, { error: "The service could not prepare this answer. Try again, and quote this reference if it happens again.", requestId: unreadable.data.requestId }], "a read's failure, without committed");
+  assert.deepEqual([events("response.invalid").map((line) => line.level), events("request.rejected").length], [["error"], 0], "logged as an invalid answer, never as a rejected request");
+  await pool.query("DELETE FROM valopay_records WHERE merchant_id=$1 AND id=$2", [lender, storedRun]);
+
   // ---- An answer that does not match its schema is a failure of the service, and saves nothing ----
   const before = Number((await pool.query("SELECT count(*)::int AS n FROM valopay_records WHERE merchant_id=$1 AND kind='customers'", [lender])).rows[0].n);
   const invalid = await withState({ ...sandboxRequest(), header: () => undefined, path: "/v1/records/customers", method: "POST", body: { name: "Invalid answer" }, params: {}, query: { merchantId: lender }, ip: "127.0.0.1" } as any, response, (state, ctx) => {
@@ -256,6 +349,18 @@ try {
   const otherState = await store.inWorkspace(sandboxRequest(), response, async (ctx) => { const state = await store.loadState(ctx, other); makeRecord(state, "connected-cash-forecasts", { name: "Malformed forecast", status: "planning_estimate", createdAt: ctx.now, data: { entityId: `${other}:sme`, forecast: { scenarios: "not a list" } } }); store.appendAudit(state, ctx, "test.contract.malformed", other, "Stored a malformed synthetic forecast."); await store.saveState(ctx, state); return state.merchant.id; });
   const malformed = await call(q("/v1/connected", otherState));
   assert.equal(malformed.status, 500, "a malformed stored forecast fails the read");
+  assert.deepEqual([malformed.data.error, malformed.data.committed], ["The service could not prepare this answer. Try again, and quote this reference if it happens again.", undefined], "in a read's words: a read saves nothing either way");
+
+  // ---- New sandboxes from one address are limited, and the refusal says when to retry (429, Retry-After an hour) ----
+  // Last of this suite's sandboxes: the limit is per process and address, and the staff host below needs none.
+  let crowded: Awaited<ReturnType<typeof call>> | undefined;
+  for (let visit = 0; visit < 25 && !crowded; visit++) {
+    const answer = await call("/v1/workspace", "GET", undefined, { cookie: `valopay_sandbox=${randomBytes(32).toString("hex")}` });
+    if (answer.status === 429) crowded = answer;
+    else cleanupWorkspaces.add(await workspaceOf(ok(answer).merchants[0].id));
+  }
+  assert.ok(crowded, "the new-sandbox limit refused a visitor");
+  assert.equal(crowded!.headers.get("Retry-After"), "3600", "and said to try again in an hour");
 
   // ---- A staff host: the team directory, invitations, memberships, lender access and readiness ----
   process.env.VALOPAY_STAFF_ACCESS = "staging";
@@ -296,13 +401,12 @@ try {
     "POST /v1/webhooks/{provider}", // always refused
     "POST /v1/providers/paystack/{connectionId}/events", // needs a configured Paystack test connection: tests/paystack.test.ts and tests/source-ingress.test.ts
     "GET /v1/exports/{id}/download", // needs private object storage: tests/export-streams.integration.test.ts
-    "POST /v1/lifecycle/runs", "POST /v1/lifecycle/runs/{id}/approve", "POST /v1/lifecycle/runs/{id}/execute", "GET /v1/lifecycle/runs/{id}", // need a source past its retention age: tests/source-close-controls.integration.test.ts
     "POST /v1/team/readiness/encryption", "POST /v1/team/readiness/protect", // need a managed key
     "POST /v1/pilot/close-reviews/{id}/decision", // needs a second person: tests/source-close-controls.integration.test.ts
   ].includes(name));
   const missing = expected.filter((name) => !answered.get(name)?.has(200));
   assert.deepEqual(missing, [], "every console-facing operation answered with its described shape");
-  console.log(`API contract checks passed against PostgreSQL: ${answered.size} operations answered as documented, the sandbox directory's lenders, one 400 for a missing merchantId, offset date-times, optional and required keys, and an invalid answer that saves nothing.`);
+  console.log(`API contract checks passed against PostgreSQL: ${answered.size} operations answered as documented, the sandbox directory's lenders, one 400 for a missing merchantId, offset date-times, optional and required keys, an invalid answer that saves nothing, ${repeatable.length} keyed writes gone (410) after a retention run, an export whose file expired, the export queue's and the new-sandbox limit's Retry-After, replayed receipts that never claim nothing was saved and a stored retention run's timestamps.`);
 } finally {
   (clerkClient.users as any).getUser = oldGetUser;
   for (const [name, value] of Object.entries({ VALOPAY_STAFF_ACCESS: savedEnv.mode, VALOPAY_STAFF_ISSUER: savedEnv.issuer, VALOPAY_STAFF_ORIGINS: savedEnv.origins })) {

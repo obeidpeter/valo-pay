@@ -1,5 +1,5 @@
 import type { Request } from "express";
-import type { z, ZodError } from "zod";
+import type { z, ZodError, ZodIssue } from "zod";
 import { IDEMPOTENCY_KEY_HEADER, idempotencyKeyHeaderSchema, lenderPageQuerySchema, lenderQuerySchema } from "@workspace/valopay-schema";
 
 /**
@@ -8,19 +8,26 @@ import { IDEMPOTENCY_KEY_HEADER, idempotencyKeyHeaderSchema, lenderPageQuerySche
  * the database, so the error handler and the offline suites can load it.
  */
 
+/** The paths that failed and their zod codes, never their values: what the log records of an answer that did not match. */
+const failedPaths = (error: ZodError) => error.issues.slice(0, 20).map((issue) => ({ path: issue.path.join("."), code: issue.code }));
+
 /**
  * An answer that does not match the schema its contract gives it: a fault in
  * the service, never in the request. The error handler answers it as a 500 in
  * general words (saying nothing was saved when the transaction was rolled
  * back, as it is when the answer is checked before COMMIT) and logs the paths
- * that failed, never their values.
+ * that failed, never their values. `saved` marks the stored answer of a
+ * request saved earlier: rolling back its repeat does not undo that request,
+ * so the answer never says nothing was saved.
  */
 export class ResponseContractError extends Error {
   readonly issues: ReadonlyArray<{ path: string; code: string }>;
-  constructor(error: ZodError) {
+  readonly saved: boolean;
+  constructor(error: ZodError, options: { saved?: boolean } = {}) {
     super("An answer did not match its contract.");
     this.name = "ResponseContractError";
-    this.issues = error.issues.slice(0, 20).map((issue) => ({ path: issue.path.join("."), code: issue.code }));
+    this.issues = failedPaths(error);
+    this.saved = options.saved === true;
   }
 }
 
@@ -29,6 +36,42 @@ export function contractAnswer<S extends z.ZodTypeAny>(schema: S, value: unknown
   const parsed = schema.safeParse(value);
   if (!parsed.success) throw new ResponseContractError(parsed.error);
   return parsed.data;
+}
+
+/** A copy of a stored answer without the keys the issues name as unrecognised. */
+function withoutUnrecognisedKeys(value: unknown, issues: ZodIssue[]): unknown {
+  const copy = structuredClone(value);
+  for (const issue of issues) {
+    if (issue.code !== "unrecognized_keys") continue;
+    let target: unknown = copy;
+    for (const key of issue.path) target = target && typeof target === "object" ? (target as Record<string | number, unknown>)[key] : undefined;
+    if (target && typeof target === "object") for (const key of issue.keys) delete (target as Record<string, unknown>)[key];
+  }
+  return copy;
+}
+
+/**
+ * The stored answer (an idempotency receipt, or a new lender) of a request
+ * saved earlier, for a repeat of that request with its key. It was checked
+ * when it was saved, but an earlier build may have stored fields this build's
+ * contract no longer lists: those are left out, which keeps the answer within
+ * the contract (whose answers allow no other fields), and the log records
+ * response.invalid as a warning with the paths that carried them. A stored
+ * answer that fails in any other way cannot be given within the contract: a
+ * ResponseContractError marked saved, answered as the general "could not
+ * confirm" 500, never as "nothing was saved", since the request was saved.
+ */
+export function replayedAnswer<S extends z.ZodTypeAny>(req: Request, schema: S, stored: unknown): z.output<S> {
+  const parsed = schema.safeParse(stored);
+  if (parsed.success) return parsed.data;
+  if (parsed.error.issues.every((issue) => issue.code === "unrecognized_keys")) {
+    const trimmed = schema.safeParse(withoutUnrecognisedKeys(stored, parsed.error.issues));
+    if (trimmed.success) {
+      (req as { log?: { warn?(fields: object, message: string): void } }).log?.warn?.({ event: "response.invalid", replayed: true, issues: failedPaths(parsed.error) }, "A replayed answer carried fields its contract no longer lists; it was answered without them");
+      return trimmed.data;
+    }
+  }
+  throw new ResponseContractError(parsed.error, { saved: true });
 }
 
 /** The lender a request is scoped to. Every lender-scoped route reads it first, so a missing merchantId is the same 400, naming the field, everywhere. */

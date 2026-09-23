@@ -28,6 +28,21 @@ export const instantInputSchema = z
   })
   .describe("An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.");
 
+const utcInstant = z.string().datetime();
+/**
+ * A timestamp read back from storage in the form every answer gives it. One
+ * already in UTC is returned exactly as stored, since stored values are also
+ * compared word for word. One with an offset (as data written by an earlier
+ * build may hold it) names the same instant, so it becomes that UTC instant,
+ * as instantInputSchema makes an input. Anything else is returned unchanged,
+ * so the answer's own check refuses it as the fault it is.
+ */
+export function storedInstant(value: unknown): unknown {
+  if (utcInstant.safeParse(value).success) return value;
+  const parsed = instantInputSchema.safeParse(value);
+  return parsed.success ? parsed.data : value;
+}
+
 /** The lender a request is scoped to, as its merchantId query value. */
 export const merchantIdSchema = z
   .string({ required_error: "Choose a lender: merchantId is required.", invalid_type_error: "Send merchantId once, as text." })
@@ -64,7 +79,7 @@ export const errorBodySchema = z.object({
   requestId: z.string().describe("The request's reference, also sent as X-Request-Id; quoting it finds the request in the log."),
   details: z.array(errorDetailSchema).optional().describe("Present when validation failed: each field and what is wrong with it."),
   code: z.enum(pilotAccessFailureCodes).optional().describe("Present when staff access was refused: why."),
-  committed: z.literal(false).optional().describe("Present on a failure that saved nothing: the transaction was rolled back, so the request may be sent again as new."),
+  committed: z.literal(false).optional().describe("Present on a failure that saved nothing: the transaction was rolled back, so the request may be sent again as new. A read's 500 never carries it, nor does the repeat of a request that was saved."),
   operation: z.literal("cancelled").optional().describe("Present when the request's operations-journal entry is cancelled: nothing sent with its Idempotency-Key was or can be saved."),
 }).strict();
 /** A refusal or failure as the service answers it. */

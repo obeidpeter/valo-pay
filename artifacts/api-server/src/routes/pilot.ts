@@ -39,7 +39,7 @@ import {
   fail,
 } from "../lib/valopay-store";
 import { withState } from "./valopay";
-import { contractAnswer, lenderPage, lenderQuery, requiredKey } from "../lib/contract";
+import { contractAnswer, lenderPage, lenderQuery, replayedAnswer, requiredKey } from "../lib/contract";
 import {
   batchView,
   saveImportBatch,
@@ -138,8 +138,13 @@ router.post("/v1/pilot/lenders", async (req, res) => {
     await inWorkspace(
       req,
       res,
-      async (ctx) =>
-        contractAnswer(merchantSchema, await createPilotLender(ctx, input, key)),
+      async (ctx) => {
+        const { lender, repeated } = await createPilotLender(ctx, input, key);
+        // A repeat answers the lender its key created earlier: that request was saved, whatever this answer's check finds.
+        return repeated
+          ? replayedAnswer(req, merchantSchema, lender)
+          : contractAnswer(merchantSchema, lender);
+      },
       "team",
     ),
   );

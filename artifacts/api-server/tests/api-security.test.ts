@@ -11,6 +11,8 @@ import { markRolledBack } from "../src/lib/transaction-outcome.js";
 import { storageFailure } from "../src/lib/export-download.js";
 import { DatabaseLimitError } from "../src/lib/database-limits.js";
 import { markOperationClosed, operationClosed, registerRefusalCloser } from "../src/lib/refused-operations.js";
+import { ResponseContractError, replayedAnswer } from "../src/lib/contract.js";
+import { connectedActionResultFor } from "@workspace/valopay-schema";
 
 let checks = 0;
 type Answer = { status?: number; body?: unknown; headers?: Record<string, string> };
@@ -90,6 +92,49 @@ function answer(error: unknown): Answer {
   assert.deepEqual(await answered(markRolledBack(new DatabaseLimitError("lock_timeout", { write: true })), async () => true), { status: 503, headers: { "Retry-After": "2" }, body: { error: "This lender is busy with another change. Nothing was saved. Try again in a moment.", committed: false, requestId: "test-request", operation: "cancelled" } }, "a not-saved 503 whose entry closed carries both committed:false and the marker");
   assert.equal(((await answered(Object.assign(new Error("The gateway timed out."), { status: 504 }))).body as { operation?: string }).operation, undefined, "a failure with no closed entry is never marked");
   checks += 7;
+}
+
+{
+  // An answer that does not match its contract is the service's 500, in the words of what was asked (audit item 24, review).
+  const answerTo = (error: unknown, method: string) => {
+    const out: Answer & { logged: Array<{ level: string; fields: Record<string, unknown> }> } = { logged: [] };
+    const log = (level: string) => (fields: Record<string, unknown>) => out.logged.push({ level, fields });
+    const req = { id: "test-request", method, log: { error: log("error"), warn: log("warn"), info: log("info") } };
+    const res = { headersSent: false, setHeader(name: string, value: string) { out.headers = { ...out.headers, [name]: value }; return this; }, status(code: number) { out.status = code; return this; }, json(body: unknown) { out.body = body; return this; } };
+    errorHandler(error, req as never, res as never, () => undefined);
+    return out;
+  };
+  const mismatch = () => new ZodError([{ code: "invalid_type", expected: "string", received: "undefined", path: ["record", "kind"], message: "Required" }]);
+  const write = answerTo(markRolledBack(new ResponseContractError(mismatch())), "POST");
+  assert.deepEqual([write.status, write.body], [500, { error: "This action failed and nothing was saved. Try again, and quote this reference if it happens again.", committed: false, requestId: "test-request" }], "a write's invalid answer, checked before COMMIT, saved nothing");
+  const read = answerTo(markRolledBack(new ResponseContractError(mismatch())), "GET");
+  assert.deepEqual([read.status, read.body], [500, { error: "The service could not prepare this answer. Try again, and quote this reference if it happens again.", requestId: "test-request" }], "a read's invalid answer is a read's failure: no action, nothing to save");
+  assert.deepEqual(answerTo(markRolledBack(new TypeError("x is undefined")), "GET").body, { error: "The service could not prepare this answer. Try again, and quote this reference if it happens again.", requestId: "test-request" }, "so is a read's programming error");
+  const replay = answerTo(markRolledBack(new ResponseContractError(mismatch(), { saved: true })), "POST");
+  assert.deepEqual([replay.status, replay.body], [500, { error: "We could not confirm this action. Check Operations or retry the same request before submitting a new one.", requestId: "test-request" }], "a saved request's stored answer that cannot be given never says nothing was saved, though the repeat's transaction rolled back");
+  assert.deepEqual(replay.logged.map((line) => [line.level, line.fields["event"], line.fields["replayed"]]), [["error", "response.invalid", true]], "and the log says which answer failed");
+  // A 429 says when to try again: the refusal's own wait, or a minute.
+  const queue = answerTo(Object.assign(new Error("Ten exports are already waiting or running for this lender."), { status: 429, retryAfterSeconds: 30 }), "POST");
+  assert.deepEqual([queue.status, queue.headers], [429, { "Retry-After": "30" }], "a refusal's own Retry-After is sent");
+  assert.deepEqual(answerTo(Object.assign(new Error("Slow down."), { status: 429 }), "POST").headers, { "Retry-After": "60" }, "every 429 says when to try again");
+  assert.equal(answerTo(Object.assign(new Error("Refused."), { status: 409, retryAfterSeconds: 30 }), "POST").headers, undefined, "only a 429 carries it");
+  checks += 10;
+}
+
+{
+  // A repeated request's stored answer: fields an earlier build stored and the contract no longer lists are left out,
+  // with a warning; any other mismatch cannot be answered within the contract, and is marked as saved.
+  const logged: Array<{ event?: unknown; replayed?: unknown }> = [];
+  const req = { log: { warn: (fields: { event?: unknown; replayed?: unknown }) => logged.push(fields) } } as never;
+  const record = { id: "consent-1", merchantId: "lender-1", kind: "connected-consents", name: "Consent", status: "active", reference: "", amountKobo: 0, customerId: "", createdAt: "2026-09-21T10:00:00.000Z", updatedAt: "2026-09-21T10:00:00.000Z", data: {} };
+  const receipt = { message: "Sample workspace updated.", record, mode: "synthetic", externalInstructionPerformed: false };
+  const schema = connectedActionResultFor("consent.grant", "lender-1");
+  assert.deepEqual(replayedAnswer(req, schema, { ...receipt, record: { ...record, effectiveStatus: "active" } }), receipt, "a field the contract no longer lists is left out of the replayed answer");
+  assert.deepEqual(logged, [{ event: "response.invalid", replayed: true, issues: [{ path: "record", code: "unrecognized_keys" }] }], "and logged as a warning with its path");
+  const { kind: _kind, ...incomplete } = record;
+  assert.throws(() => replayedAnswer(req, schema, { ...receipt, record: incomplete }), (error: unknown) => error instanceof ResponseContractError && error.saved, "a receipt missing a field cannot be answered, and is marked saved");
+  assert.throws(() => replayedAnswer(req, schema, { ...receipt, record: { ...record, merchantId: "lender-2", note: "added" } }), (error: unknown) => error instanceof ResponseContractError && error.saved, "an addition does not excuse a record of another lender");
+  checks += 4;
 }
 
 {

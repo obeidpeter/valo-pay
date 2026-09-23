@@ -205,7 +205,13 @@ export const cashActionOutcomeSchema = z.object({
     externalInstructionPerformed: z.literal(false).optional(),
   }).strict(),
 }).strict();
-/** A committed sample action: the record it produced (a Cash Desk action's outcome, with its record inside); never an external instruction. */
+/**
+ * A committed sample action: the record it produced (a Cash Desk action's
+ * outcome, with its record inside); never an external instruction. The
+ * contract's shape, which must accept either kind of answer because an answer
+ * does not say which action it answers. To check one answer, choose its shape
+ * by action with connectedActionResultFor.
+ */
 export const connectedActionResultSchema = z.object({
   message: z.string(),
   record: z.union([valopayRecordSchema, cashActionOutcomeSchema]),
@@ -214,3 +220,45 @@ export const connectedActionResultSchema = z.object({
 }).strict();
 /** A connected action's answer. */
 export type ConnectedActionResult = z.infer<typeof connectedActionResultSchema>;
+
+/** The record kind a connected action outside the Cash Desk answers with, from its prefix; undefined for an action the service does not know. */
+function connectedRecordKind(action: string): string | undefined {
+  if (action.startsWith("consent.")) return "connected-consents";
+  if (action.startsWith("payment.")) return "connected-intents";
+  if (action === "credit.review") return "connected-credit-reviews";
+  if (action.startsWith("credit.")) return "connected-credit-assessments";
+  return undefined;
+}
+/** The export each Cash Desk export action prepares and answers inside its outcome. */
+const cashExports: Record<string, z.ZodTypeAny> = { "cash.erp.export": erpManifestSchema, "cash.vat.export": vatScheduleSchema, "cash.payroll.export": payrollManifestSchema };
+
+/**
+ * A connected action's answer in the one shape its action gives. The service
+ * checks every answer with it before the answer is sent (and a stored receipt
+ * before it is replayed), and the console before an answer counts as a
+ * confirmation. The general schema cannot tell the two kinds of answer apart:
+ * a bare outcome ({ message, data: { synthetic: true } }) would pass for a
+ * consent, checkout or credit answer, and a malformed record could pass as an
+ * outcome carrying extra keys. Chosen by action, a cash.* action answers its
+ * outcome, with the Cash Desk record it saved or changed (absent only when
+ * cash.initialize finds the Cash Desk already set up) and, for an export, the
+ * manifest it prepared; every other action answers the record it produced or
+ * changed, of the kind its prefix names: a consent, a checkout, an assessment
+ * or a review. With merchantId, every record must belong to that lender.
+ */
+export function connectedActionResultFor(action: string, merchantId?: string): z.ZodType<ConnectedActionResult> {
+  const cash = action.startsWith("cash."), kind = cash ? undefined : connectedRecordKind(action);
+  const record = valopayRecordSchema.superRefine((value, context) => {
+    if (merchantId !== undefined && value.merchantId !== merchantId) context.addIssue({ code: z.ZodIssueCode.custom, path: ["merchantId"], message: "The record belongs to another lender." });
+    if (cash ? !value.kind.startsWith("connected-cash-") : kind !== undefined && value.kind !== kind) context.addIssue({ code: z.ZodIssueCode.custom, path: ["kind"], message: `This action answers with ${cash ? "a Cash Desk record" : `a ${kind} record`}.` });
+  });
+  if (!cash) return z.object({ message: z.string(), record, mode: z.literal("synthetic"), externalInstructionPerformed: z.literal(false) }).strict();
+  const manifest = cashExports[action];
+  const data = z.object({ synthetic: z.literal(true), externalInstructionPerformed: z.literal(false).optional() }).strict();
+  const outcome = z.object({
+    message: z.string(),
+    record: action === "cash.initialize" ? record.optional() : record,
+    data: manifest ? data.extend({ manifest }) : data,
+  }).strict();
+  return z.object({ message: z.string(), record: outcome, mode: z.literal("synthetic"), externalInstructionPerformed: z.literal(false) }).strict();
+}

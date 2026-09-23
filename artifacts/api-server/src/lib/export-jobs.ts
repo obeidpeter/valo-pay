@@ -13,6 +13,15 @@ export const EXPORT_ATTEMPT_MS = 4 * 60_000;
 export const EXPORT_CONFIRM_LEASE_MS = 30_000;
 export const EXPORT_WRITE_ATTEMPTS = 6;
 export const EXPORT_WRITE_BACKOFF_MS = 200;
+/** Exports one lender may have waiting or running at once. */
+export const EXPORT_QUEUE_LIMIT = 10;
+/**
+ * The seconds a request refused at the queue limit is told to wait
+ * (Retry-After): the worker looks every 1.5 s and runs two exports at once, so
+ * one of ten normally finishes well within this, and a stalled one is flagged
+ * after two minutes rather than holding every caller for that long.
+ */
+export const EXPORT_QUEUE_RETRY_AFTER_SECONDS = 30;
 export type ExportStage = 'queued' | 'checking' | 'rendering' | 'uploading' | 'confirming' | 'ready' | 'failed';
 export type ExportWriteResult = 'saved' | 'busy' | 'lost';
 export interface ExportLocation { bucket: string; objectName: string }
@@ -27,7 +36,7 @@ export interface ExportJobView {
   attempts: number; downloadUrl: string; checksum?: string; generatedAt?: string; byteLength?: number; generationMs?: number; error?: string;
   stage: ExportStage; lastProgressAt: string; stalled: boolean; retryAllowed: boolean; recoveryAt?: string;
 }
-const fail = (message: string, status: number): never => { throw Object.assign(new Error(message), { status }); };
+const fail = (message: string, status: number, details: { retryAfterSeconds?: number } = {}): never => { throw Object.assign(new Error(message), { status }, details); };
 
 export function findExportJob(state: DomainState, id: string): ValopayRecord {
   return state.records.find(record => record.kind === 'exports' && record.id === id) ?? fail('Export not found in this lender.', 404);
@@ -62,7 +71,7 @@ export function queueExport(state: DomainState, ctx: Context, input: ExportInput
   const review = input.kind === 'reviewed-close' ? reviewedCloseEvidence(state, input.closeReviewId || '', true) : undefined;
   if (!privateDirectory || !/^\/?[^/]+\/.+/.test(privateDirectory)) fail('Private export storage is not configured. Contact the workspace administrator.', 503);
   if (input.customerId && !state.records.some(record => record.kind === 'customers' && record.id === input.customerId)) fail('Customer not found in this lender.', 404);
-  if (state.records.filter(record => record.kind === 'exports' && ['queued', 'running'].includes(record.status)).length >= 10) fail('Ten exports are already waiting or running for this lender. Wait for one to finish before starting another.', 429);
+  if (state.records.filter(record => record.kind === 'exports' && ['queued', 'running'].includes(record.status)).length >= EXPORT_QUEUE_LIMIT) fail('Ten exports are already waiting or running for this lender. Wait for one to finish before starting another.', 429, { retryAfterSeconds: EXPORT_QUEUE_RETRY_AFTER_SECONDS });
   const id = randomUUID(), parts = privateDirectory.replace(/^\//, '').replace(/\/+$/, '').split('/'), bucket = parts.shift()!;
   const objectName = `${parts.join('/')}/exports/${state.merchant.id}/${id}.${input.format}`;
   return exportJobView(makeRecord(state, 'exports', { id, name: `${input.kind} · ${input.format.toUpperCase()}`, status: 'queued', customerId: input.customerId || '', createdAt: ctx.now, updatedAt: ctx.now,

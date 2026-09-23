@@ -4,6 +4,7 @@ import { seedMerchant } from '../src/lib/valopay-seed';
 import { makeRecord } from '../src/domain/records';
 import { derivePersonalWork, personalWorkItems, recordWorkReceipt } from '../src/domain/personal-work';
 import { bindCloseReviewBasis, closeReviewIssues, prepareCloseReview } from '../src/domain/close-review';
+import { ResponseContractError } from '../src/lib/contract';
 import type { DomainState, Context } from '../src/domain/types';
 
 const now = '2026-09-25T10:00:00.000Z';
@@ -132,5 +133,13 @@ function assigned(state: DomainState, options: { actor?: string; due?: string; h
   check(!personalWorkQuerySchema.safeParse({ merchantId: state.merchant.id, limit: 51 }).success, 'server rejects unbounded page size');
   check(!workReceiptInputSchema.safeParse({ ...request(first.items[0]!), actor: bob.actor }).success, 'body cannot inject a recipient or actor');
   check(derivePersonalWork(state, { ...ctx, role: 'Read-only' }, people).canWork === false, 'read-only current role is explicit in response');
+}
+{
+  // A stored receipt the view cannot describe (here a link off the console) is the service's fault: a
+  // ResponseContractError, answered as a 500 and logged as response.invalid, never a validation 400 (audit item 24, review).
+  const state = fixture('malformed-history');
+  makeRecord(state, 'work-events', { name: 'Notification read', status: 'recorded', createdAt: now, data: { action: 'read', actor: alice.actor, sourceId: 'case-1', eventId: 'event-1', summary: 'Read a case notification', href: 'https://elsewhere.example/case-1' } });
+  const failure = (() => { try { derivePersonalWork(state, ctx, people); return undefined; } catch (error) { return error; } })();
+  check(failure instanceof ResponseContractError && failure.issues.some(issue => issue.path === 'history.0.href'), 'an answer the view cannot describe is a fault in the answer, naming its path');
 }
 console.log(`Personal work: ${checks} checks passed.`);

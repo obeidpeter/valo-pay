@@ -14,6 +14,7 @@ import {
   assertNoDirectImportedCorrection,
 } from "../src/domain/import-corrections";
 import type { DomainState } from "../src/domain/types";
+import { ResponseContractError } from "../src/lib/contract";
 
 const ctx = {
   actor: "Clerk:operator",
@@ -106,6 +107,18 @@ assert.throws(
 const proposal = proposeImportCorrection(s, ctx, proposalInput, reviewers);
 assert.deepEqual(target, originalTarget);
 assert.deepEqual(batch, originalBatch);
+{
+  // A stored proposal the view cannot describe is the service's fault: a ResponseContractError, answered as a 500
+  // and logged as response.invalid, never a validation 400 that blames the request (audit item 24, review).
+  const tampered = structuredClone(s);
+  tampered.records.find((r) => r.id === proposal.id)!.data.reason = 42;
+  assert.throws(
+    () => listImportCorrections(tampered, ctx, batch.id),
+    (error: unknown) =>
+      error instanceof ResponseContractError &&
+      error.issues.some((issue) => issue.path === "reason"),
+  );
+}
 assert.throws(
   () => proposeImportCorrection(s, ctx, proposalInput, reviewers),
   /open correction/,

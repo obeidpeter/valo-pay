@@ -6,7 +6,7 @@
 // against these schemas before it is sent, so a gap here would be a 500 there.
 import assert from "node:assert/strict";
 import type { ZodTypeAny } from "zod";
-import { closeReviewListSchema, connectedActionResultSchema, connectedViewSchema, pilotProgressSchema } from "@workspace/valopay-schema";
+import { closeReviewListSchema, connectedActionResultFor, connectedActionResultSchema, connectedViewSchema, pilotProgressSchema } from "@workspace/valopay-schema";
 import { seedMerchant } from "../src/lib/valopay-seed";
 import { connectedActionSchema, connectedRevision, connectedView, runConnectedAction } from "../src/domain/connected";
 import { executeAction } from "../src/domain";
@@ -29,12 +29,18 @@ const finance: Context = { ...admin, role: "Finance", actor: "Sandbox Finance" }
 const compliance: Context = { ...admin, role: "Compliance reviewer", actor: "Sandbox Compliance reviewer" };
 const readOnly: Context = { ...admin, role: "Read-only", actor: "Sandbox Read-only" };
 const state = seedMerchant("tenant-answer-schemas");
+/** The last answer of each action, for the checks of the shape each action gives. */
+const answers = new Map<string, Record<string, any>>();
 
 /** Runs an action as the route does and checks its answer and the workspace view for every role. */
 function act(action: string, data: Record<string, unknown> = {}, recordId?: string, context = admin) {
   const input = connectedActionSchema.parse({ action, data, recordId, reason: "Check the answer shapes", expectedRevision: connectedRevision(state) });
   const record = runConnectedAction(state, context, input);
-  conforms(connectedActionResultSchema, { message: "Sample workspace updated.", record, mode: "synthetic", externalInstructionPerformed: false }, `${action} answer`);
+  const answer = { message: "Sample workspace updated.", record, mode: "synthetic", externalInstructionPerformed: false };
+  conforms(connectedActionResultSchema, answer, `${action} answer`);
+  // The shape this action gives, of this lender: what the route checks and the console reads.
+  conforms(connectedActionResultFor(action, state.merchant.id), answer, `${action} answer, by its action`);
+  answers.set(action, answer);
   for (const viewer of [admin, finance, compliance, readOnly]) conforms(connectedViewSchema, connectedView(state, viewer), `the view after ${action} for ${viewer.role}`);
   return record as ValopayRecord & { record?: ValopayRecord };
 }
@@ -97,6 +103,36 @@ checks += 1;
 // Later, every permission has expired.
 conforms(connectedViewSchema, connectedView(state, { ...admin, now: "2027-01-01T00:00:00.000Z" }), "the view once every permission expired");
 
+// Each action's answer has the one shape its action gives (audit item 24, review): the general schema accepts an
+// outcome for any action, so a bare outcome would pass for a consent, checkout or credit answer, and a malformed
+// record could pass as an outcome that carries extra keys.
+{
+  const refuses = (action: string, answer: unknown, what: string) => {
+    assert.equal(connectedActionResultFor(action, state.merchant.id).safeParse(answer).success, false, `${action}: ${what}`);
+    checks += 1;
+  };
+  const bare = { message: "Sample workspace updated.", record: { message: "Done.", data: { synthetic: true } }, mode: "synthetic", externalInstructionPerformed: false };
+  assert.ok(connectedActionResultSchema.safeParse(bare).success, "the general schema cannot tell a bare outcome from a record");
+  for (const action of ["consent.grant", "consent.revoke", "payment.create", "payment.outcome", "credit.assess", "credit.review"]) refuses(action, bare, "a bare outcome is no record");
+  const malformed = { ...bare, record: { message: "x", data: { synthetic: true, consent: "anything" }, status: "active" } };
+  refuses("credit.assess", malformed, "nor is an outcome-like record with extra keys");
+  const consent = answers.get("consent.grant")!;
+  refuses("consent.grant", { ...consent, record: { ...consent.record, merchantId: "another-lender" } }, "a record of another lender");
+  refuses("consent.grant", { ...consent, record: { ...consent.record, kind: "connected-intents" } }, "a record of another kind");
+  refuses("payment.create", consent, "a consent does not answer a checkout");
+  refuses("cash.forecast", consent, "a record does not answer a Cash Desk action");
+  const forecast = answers.get("cash.forecast")!;
+  refuses("cash.forecast", { ...forecast, record: { ...forecast.record, record: undefined } }, "an outcome without its record");
+  refuses("cash.forecast", { ...forecast, record: { ...forecast.record, record: consent.record } }, "an outcome whose record is not a Cash Desk record");
+  const vat = answers.get("cash.vat.export")!;
+  const { manifest: _manifest, ...unexported } = vat.record.data;
+  refuses("cash.vat.export", { ...vat, record: { ...vat.record, data: unexported } }, "an export without its manifest");
+  refuses("cash.erp.export", vat, "an export with another export's manifest");
+  // Set up twice, the Cash Desk answers without a record: only that action's outcome may.
+  assert.ok(connectedActionResultFor("cash.initialize", state.merchant.id).safeParse({ message: "Sample workspace updated.", record: { message: "The sample Cash Desk is already ready.", data: { synthetic: true } }, mode: "synthetic", externalInstructionPerformed: false }).success, "cash.initialize may answer without a record");
+  checks += 2;
+}
+
 // Pilot progress and the close review list, before and after a daily close.
 for (const accessMode of ["sandbox", "staff"]) conforms(pilotProgressSchema, pilotProgress(state, accessMode), `pilot progress on a ${accessMode} host`);
 const reviewList = () => ({ ...closeReviewList(state), actor: admin.actor, reviewers: [{ actor: "Sandbox Finance", name: "Demo Finance", role: "Finance" }], accessMode: "sandbox", ownPrincipal: "browser" });
@@ -107,4 +143,4 @@ for (const close of state.records.filter((record) => record.kind === "closes" &&
 conforms(closeReviewListSchema, reviewList(), "the close review list after a close");
 conforms(pilotProgressSchema, pilotProgress(state), "pilot progress after a close");
 
-console.log(`Answer schema checks passed (${checks} checks): every connected action, Credit Desk scenario and review, pay-by-bank path, Cash Desk step and permission state, pilot progress and the close review list, as built and after JSON.`);
+console.log(`Answer schema checks passed (${checks} checks): every connected action (in the shape its action gives, and refusing any other), Credit Desk scenario and review, pay-by-bank path, Cash Desk step and permission state, pilot progress and the close review list, as built and after JSON.`);

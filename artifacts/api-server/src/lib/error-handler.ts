@@ -24,13 +24,19 @@ import { ResponseContractError } from './contract';
  *
  * When the store rolled back the request's transaction before committing, a
  * 5xx answer says `committed: false`: nothing was saved, so the console need
- * not hold the request as unconfirmed.
+ * not hold the request as unconfirmed. A repeated request whose stored answer
+ * cannot be given (a ResponseContractError marked `saved`) is the exception:
+ * the request was saved when that answer was, so rolling back the repeat
+ * proves nothing, and the answer is the general "could not confirm" 500. A
+ * read that fails is a 500 in a read's words, without `committed`: a read
+ * saves nothing either way.
  *
  * A request the store turned away at a database limit (a busy lender or
  * workspace, a lock or statement past its limit, an idle or lost connection,
  * no free connection) is a 503 with Retry-After in plain words. A raw
  * PostgreSQL code is never guessed at here: the store translates it where it
- * knows whether COMMIT was sent.
+ * knows whether COMMIT was sent. A 429 always says when to try again: the
+ * seconds its refusal carries (`retryAfterSeconds`), or 60.
  *
  * Before a definitive refusal, or any answer for a request that saved
  * nothing, is sent, the request's operations-journal entry (when the recovery
@@ -51,6 +57,9 @@ const databaseCodes = ["23503", "23505", "23514", "P0001"];
 const characterCodes = ["22021", "22P05"];
 const GENERAL_FAILURE = "We could not confirm this action. Check Operations or retry the same request before submitting a new one.";
 const NOT_SAVED = "This action failed and nothing was saved. Try again, and quote this reference if it happens again.";
+const READ_FAILURE = "The service could not prepare this answer. Try again, and quote this reference if it happens again.";
+/** The wait a 429 names when its refusal carries none of its own: the request limit's minute. */
+const DEFAULT_RETRY_AFTER_SECONDS = 60;
 /** The body parser's refusals, in the words a person needs. */
 const bodyRefusals: Record<string, { status: number; error: string }> = {
   "entity.parse.failed": { status: 400, error: "The request body is not valid JSON. Check its format and try again." },
@@ -83,17 +92,20 @@ function describe(error: unknown, req: Parameters<ErrorRequestHandler>[1]): Answ
     req.log.info({ event: "request.rejected", status: unreadable.status, reason: unreadable.type }, "Request body refused");
     return { status: unreadable.status, body: { error: unreadable.error, requestId } };
   }
-  const notSaved = wasRolledBack(error);
+  // A repeat whose stored answer cannot be given was saved when that answer was: its rolled-back transaction proves nothing.
+  const replayed = error instanceof ResponseContractError && error.saved;
+  const notSaved = wasRolledBack(error) && !replayed;
   if (error instanceof DatabaseLimitError) {
     // A busy lender or workspace or a lock wait is load, not a fault: a warning. A stopped statement, a lost connection or a full pool is an error.
     const level = ["lender_busy", "lock_timeout", "lock_conflict", "workspace_busy", "workspace_changing"].includes(error.limit) ? "warn" : "error";
     req.log[level]({ event: "request.busy", status: 503, limit: error.limit, reason: error.message, ...(error.cause === undefined ? {} : { err: error.cause }) }, "Request turned away: a database limit was reached");
     return { status: 503, headers: { "Retry-After": String(error.retryAfterSeconds) }, body: { error: error.message, ...(notSaved ? { committed: false } : {}), requestId } };
   }
-  const general = (): Answer => ({ status: 500, body: notSaved ? { error: NOT_SAVED, committed: false, requestId } : { error: GENERAL_FAILURE, requestId } });
+  const reading = req.method === "GET" || req.method === "HEAD";
+  const general = (): Answer => ({ status: 500, body: reading ? { error: READ_FAILURE, requestId } : notSaved ? { error: NOT_SAVED, committed: false, requestId } : { error: GENERAL_FAILURE, requestId } });
   if (error instanceof ResponseContractError) {
     // The paths that failed locate the fault; the values stay out of the log.
-    req.log.error({ event: "response.invalid", issues: error.issues, err: error }, "An answer did not match its contract");
+    req.log.error({ event: "response.invalid", issues: error.issues, ...(replayed ? { replayed: true } : {}), err: error }, replayed ? "A saved request's stored answer did not match its contract" : "An answer did not match its contract");
     return general();
   }
   // A failure is logged with its stack, which is what locates it; the answer stays general.
@@ -130,7 +142,9 @@ function describe(error: unknown, req: Parameters<ErrorRequestHandler>[1]): Answ
   const answered = status >= 400 && status < 500 ? status : 400;
   // A rejection is the rule doing its job: one info line with the reason, for the question "why was this refused?".
   req.log.info({ event: "request.rejected", status: answered, reason: failure.message }, "Request rejected");
-  return { status: answered, body: { error: failure.message || "The operation was rejected.", requestId } };
+  const wait = Number((failure as { retryAfterSeconds?: unknown }).retryAfterSeconds);
+  const retry = answered === 429 ? { headers: { "Retry-After": String(Number.isInteger(wait) && wait > 0 ? wait : DEFAULT_RETRY_AFTER_SECONDS) } } : {};
+  return { status: answered, ...retry, body: { error: failure.message || "The operation was rejected.", requestId } };
 }
 
 export const errorHandler: ErrorRequestHandler = (error, req, res, _next) => {

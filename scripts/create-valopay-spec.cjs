@@ -64,9 +64,14 @@ function add(path, method, id, response, body, params = []) {
  (paths[path]??={})[method]=op;
 }
 // The Idempotency-Key header as a route takes it: required, or optional (the write runs without one).
-const keyRules = "8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.";
-const requiredKey = { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 }, description: `Required: a request without one is refused (400, naming the header). ${keyRules}` };
-const optionalKey = (detail = "") => ({ name: "Idempotency-Key", in: "header", required: false, schema: { type: "string", minLength: 8, maxLength: 200 }, description: `Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. ${keyRules}${detail ? ` ${detail}` : ""}` });
+// A key the operations journal records makes its request answer 410 once retention has removed its stored result.
+const journaled = new WeakSet();
+const journal = (parameter) => { journaled.add(parameter); return parameter; };
+const keyRules = "8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender's retention policy has removed that stored result, the repeat is refused (410).";
+const requiredKey = journal({ name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 }, description: `Required: a request without one is refused (400, naming the header). ${keyRules}` });
+const optionalKey = (detail = "") => journal({ name: "Idempotency-Key", in: "header", required: false, schema: { type: "string", minLength: 8, maxLength: 200 }, description: `Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. ${keyRules}${detail ? ` ${detail}` : ""}` });
+/** A new lender's key: it names the lender, and the journal does not record the request. */
+const lenderKey = { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 }, description: "Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per new lender. The key names the lender it creates: a repeat returns that lender, and the same key with different details is refused (409). The request is not recorded in Operations, so a request refused before the lender was created (by the caller's role, or at the sandbox's five-lender limit) may be sent again with the same key once the refusal no longer applies." };
 const pathDescriptions = { kind: "Record kind: one of the shared schema's recordKinds (customers, mandates, due-items, attempts, observations, payments, ...).", id: "The record's id.", provider: "Provider name; this generic address refuses every provider (the Paystack test ingress has its own address)." };
 const pathParam = (name) => ({name,in:"path",required:true,schema:str,description:pathDescriptions[name]});
 const merchant = {name:"merchantId",in:"query",required:true,schema:{type:"string",minLength:1,maxLength:100},description:"The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation."};
@@ -86,7 +91,7 @@ add("/v1/overview","get","getOverview","Overview",null,[merchant]);
 add("/v1/records/{kind}","get","listRecords","RecordList",null,[pathParam("kind"),merchant,search,status,limit,offset,updatedSince,customerId,recordId]);
 add("/v1/records/{kind}","post","createRecord","ValopayRecord","RecordInput",[pathParam("kind"),merchant,optionalKey()]);
 add("/v1/records/{kind}/{id}","patch","updateRecord","ValopayRecord","RecordUpdate",[pathParam("kind"),pathParam("id"),merchant,optionalKey()]);
-add("/v1/actions","post","performAction","ActionResult","ActionInput",[merchant,optionalKey("A set_role change is repeatable with its key but is not listed in Operations.")]);
+add("/v1/actions","post","performAction","ActionResult","ActionInput",[merchant,optionalKey("A set_role change is repeatable with its key but is not recorded in Operations, so a refused one may be sent again and retention never removes its result.")]);
 add("/v1/imports","post","importRecords","ImportResult","ImportInput",[merchant,optionalKey("Only a commit (commit true) uses it: a preview writes nothing.")]);
 add("/v1/customers/{id}/timeline","get","getCustomerTimeline","Timeline",null,[pathParam("id"),merchant]);
 add("/v1/reports","get","getReports","Report",null,[merchant]);
@@ -477,7 +482,7 @@ derived("CashDesk", shared.cashViewSchema, "The Cash Desk: a separate sample SME
 derived("ConnectedWorkspace", shared.connectedViewSchema, "Synthetic connected workspace: granular consents with their effective state, bound sample payment intents, the Credit and Cash Desks and the live gates, every one closed. No read creates sample records.");
 derived("ConnectedActionInput", shared.connectedActionInputSchema, "Action-specific data is validated by the server. Names use consent, payment, credit or cash prefixes. Every action requires a current whole-workspace revision and a reason. No input can enable live routes.");
 derived("CashActionOutcome", shared.cashActionOutcomeSchema, "What a Cash Desk action did: its message, the record it saved or changed, and any export it prepared.");
-derived("ConnectedActionResult", shared.connectedActionResultSchema, "Committed sample operation: the record it produced or changed, or for a Cash Desk action its outcome with the record inside. A receipt is evidence from the server simulator only.");
+derived("ConnectedActionResult", shared.connectedActionResultSchema, "Committed sample operation, in the shape its action gives (connectedActionResultFor in lib/valopay-schema): a cash.* action answers its outcome with the Cash Desk record it saved or changed (absent only when the Cash Desk was already set up) and, for an export, the manifest it prepared; every other action answers the record it produced or changed, of the lender the request named: a consent for consent.*, a checkout for payment.*, an assessment for credit.assess and a review for credit.review. A receipt is evidence from the server simulator only.");
 operation("/v1/connected", "get", "getConnectedWorkspace", "ConnectedWorkspace", null, [merchant], "Read the connected workspace", "Same-origin, private and tenant scoped. Returns granular consent state, bound sample payment intents, explained credit assessments, independent SME cash planning and closed live gates.");
 operation("/v1/connected/actions", "post", "performConnectedAction", "ConnectedActionResult", "ConnectedActionInput", [merchant, requiredKey], "Perform a synthetic connected-workspace action", "Runs inside the existing merchant transaction and audit boundary. Role, purpose, subject, expiry, ownership and version checks apply. Unknown payment outcomes hold retries. A repeat with the same key is answered before the revision is checked. No bank, credit bureau, accounting or tax endpoint is called.");
 
@@ -503,7 +508,7 @@ derived("CaseDetail", shared.caseDetailSchema, "One exception with the people it
 derived("CaseInput", shared.caseInputSchema, "A case handover or update: assignee, next action and its time, note and evidence, with the version being changed.");
 derived("PilotLenderInput", shared.lenderInputSchema, "A new synthetic lender: name and segment. A sandbox workspace holds at most five lenders, the two samples included.");
 operation("/v1/pilot/journey", "get", "getPilotJourney", "PilotJourney", null, [merchant], "Read the pilot journey counts", "Counts of the records each pilot step needs, for the journey page. No record is created by reading.");
-operation("/v1/pilot/lenders", "post", "createPilotLender", "Merchant", "PilotLenderInput", [requiredKey], "Create a synthetic lender", "An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused.");
+operation("/v1/pilot/lenders", "post", "createPilotLender", "Merchant", "PilotLenderInput", [lenderKey], "Create a synthetic lender", "An administrator: on a staff host with recent MFA; in a sandbox, the demo Administrator. A sandbox workspace holds at most five lenders, the two samples included, and a sixth is refused (409). The key makes creation repeatable; the same key with different details is refused.");
 operation("/v1/pilot/batches", "get", "listImportBatches", "ImportBatchList", null, [merchant, journalOffset], "List import batches", "Newest first, 25 a page, without source rows.");
 operation("/v1/pilot/batches/{id}", "get", "getImportBatch", "ImportBatchDetail", null, [pathParam("id"), merchant], "Open an import batch", "The batch with its source rows and revisions. Import operator roles only (403); unknown batches are 404.");
 operation("/v1/pilot/batches", "post", "saveImportBatch", "ValopayRecord", "ImportBatchInput", [merchant, optionalKey()], "Save a source batch", "Parses and checks the rows, screens them for raw bank details, and records the batch as ready or needing correction. A batch with the same source identity is refused (409).");
@@ -647,7 +652,7 @@ const failures = {
   403: "Refused: another origin, or the caller's role, membership, lender access, recent MFA or a readiness gate does not allow it.",
   404: "Not found in the caller's workspace: the lender, or what the path names.",
   409: "Conflict: what the request names changed since it was read, its Idempotency-Key belongs to another request or its journal entry is cancelled, or the change conflicts with saved records. Nothing was saved.",
-  410: "Gone: the stored request expired under the lender's retention policy and cannot run again.",
+  410: "Gone: a request with this Idempotency-Key already completed, and the lender's retention policy has since removed its stored result, so it cannot run again. Its entry in Operations remains.",
   413: "The body is larger than 2 MB.",
   415: "The body's character set or encoding is not supported; send UTF-8 JSON.",
   429: "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
@@ -665,24 +670,43 @@ const ownStatuses = {
   "POST /v1/team/accept": [401, 403, 409, 503],
   "POST /v1/operations/{id}/retry": [400, 401, 403, 404, 409, 410, 429, 503],
   "POST /v1/operations/{id}/cancel": [410],
-  "GET /v1/exports/{id}/download": [409, 502, 503, 504],
+  "GET /v1/exports/{id}/download": [409, 410, 502, 503, 504],
+  "POST /v1/exports/{id}/retry": [410],
   "POST /v1/providers/paystack/{connectionId}/events": [400, 401, 403, 404, 413, 429, 503],
 };
+const exportQueue = "the lender already has ten exports waiting or running (Retry-After 30, about the time one takes to finish)";
+const expiredRequest = "Gone: the stored request expired under the lender's retention policy and cannot run again.";
+/** What a status means where the operation gives it a meaning of its own. */
+const ownDescriptions = {
+  "POST /v1/operations/{id}/retry": { 410: `${expiredRequest.replace(/\.$/, "")}; or the request it repeats is gone itself, as an export whose file retention deleted is.`, 429: `${failures[429].replace(/\.$/, "")}, or, repeating an export, ${exportQueue}.` },
+  "POST /v1/operations/{id}/cancel": { 410: expiredRequest },
+  "POST /v1/exports": { 429: `Too many requests: ${exportQueue}, more than 300 requests came from this address in a minute, or too many new sandboxes came from it (try again in an hour).` },
+  "GET /v1/exports/{id}/download": { 410: "Gone: the lender's retention policy removed this export's file. Its checksum and deletion receipt are kept; start a new export if current evidence is needed." },
+  "POST /v1/exports/{id}/retry": { 410: "Gone: the lender's retention policy removed this export's file, so it cannot be generated again under the same identity (start a new export); or a request with this Idempotency-Key already completed and retention has since removed its stored result." },
+};
+/** What a 429's Retry-After says: the request limit's minute, the new-sandbox limit's hour and, where the export queue applies, about the time a queued export takes. */
+function retryAfter429(name) {
+  if (name === "POST /v1/providers/paystack/{connectionId}/events") return retryAfter("Seconds to wait: 60, the delivery limit's window.");
+  const queue = name === "POST /v1/exports" || name === "POST /v1/operations/{id}/retry" ? ", and 30 when the lender's export queue is full" : "";
+  return retryAfter(`Seconds to wait: 60 after the request limit, 3600 after the new-sandbox limit${queue}.`);
+}
 function listErrorAnswers(path, method, op) {
   const name = `${method.toUpperCase()} ${path}`, params = op.parameters ?? [], statuses = new Set([500, ...(ownStatuses[name] ?? [])]);
   const include = (...list) => list.forEach((status) => statuses.add(status));
   if (path.startsWith("/v1/") && !path.startsWith("/v1/providers/")) include(403, 429); // the origin rule and the request limit
-  if (op.requestBody) include(400, 413, 415); // the body parser and validation
+  if (method === "post" || method === "patch") include(400, 413, 415); // the body parser reads every POST and PATCH, whether or not the operation takes a body
   if (!outsideWorkspace.has(name)) include(401, 403, 409, 429, 503); // the workspace transaction: sign-in, membership, conflicts, a new sandbox's limit, database limits
   if (params.some((item) => item.name === "merchantId" && item.required)) include(400, 404); // the lender scope
   if (params.some((item) => item.in === "path" && ["id", "kind", "queue"].includes(item.name))) include(400, 404); // what the path names
   if (params.some((item) => item.name === "Idempotency-Key")) include(400, 403, 409); // the key and the journal
+  if (params.some((item) => journaled.has(item))) include(410); // a repeat whose stored result retention removed
   if (method !== "get" && !outsideWorkspace.has(name)) include(400, 403, 409); // a write: its rules, role and version
   for (const status of [...statuses].sort((a, b) => a - b)) {
-    const answer = (op.responses[status] ??= { description: failures[status] });
+    const read = method === "get" && status === 500 ? "The service could not prepare this answer; a read changes nothing, so it can be tried again." : undefined;
+    const answer = (op.responses[status] ??= { description: ownDescriptions[name]?.[status] ?? read ?? failures[status] });
     if (name === "GET /readyz" && status === 503) continue; // readiness answers its own body
     answer.content = { "application/json": { schema: name === "POST /v1/team/verify" && status === 403 ? { anyOf: [ref("ErrorBody"), ref("ReverificationRequired")] } : ref("ErrorBody") } };
-    if (status === 429) answer.headers = retryAfter("Seconds to wait: sent with the request limit (60 seconds; 60 for the Paystack test ingress too); the new-sandbox limit says to try again in an hour.");
+    if (status === 429) answer.headers = retryAfter429(name);
     if (status === 503) answer.headers = retryAfter("Seconds to wait before trying again: sent when a database limit turned the request away; absent when a service it needs is unavailable or not configured.");
   }
   op.responses = Object.fromEntries(Object.entries(op.responses).sort(([a], [b]) => Number(a) - Number(b)));

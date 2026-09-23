@@ -20,7 +20,7 @@ import { schedulerStatus } from "../lib/close-scheduler";
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../lib/valopay-close-views";
 import { listQueue } from '../lib/valopay-store';
 import { completeOperation, viewerScope } from '../lib/valopay-store';
-import { contractAnswer, lenderQuery, optionalKey } from '../lib/contract';
+import { contractAnswer, lenderQuery, optionalKey, replayedAnswer } from '../lib/contract';
 
 const router:IRouter=Router();
 const kinds=new Set<string>(recordKinds);
@@ -28,9 +28,12 @@ function safeKind(value:unknown):string { const kind=z.string().parse(value);if(
 /**
  * One lender's state for a route: read under a share lock, or written under the
  * exclusive lock with an audit entry and, when the request carries an
- * Idempotency-Key, a receipt its repeat is answered from. Every answer, fresh
- * or replayed, is checked against the route's response schema before COMMIT,
- * so an answer that does not match its contract is a 500 that saved nothing.
+ * Idempotency-Key, a receipt its repeat is answered from. A fresh answer is
+ * checked against the route's response schema before COMMIT, so an answer that
+ * does not match its contract is a 500 that saved nothing. A replayed receipt
+ * was saved with its request, so it is never answered as saving nothing: it is
+ * given without fields the contract no longer lists, or as the general
+ * unconfirmed 500 (replayedAnswer, lib/contract.ts).
  */
 export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>unknown,mutating:boolean,responseSchema:S):Promise<z.output<S>>{
  const {merchantId}=lenderQuery(req);
@@ -46,7 +49,7 @@ export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response
   const idempotencyKey=key?digest(`${merchantId}:${key}`):undefined;
   if(idempotencyKey){
     const found=await findIdempotency(ctx,idempotencyKey);
-    if(found){if(found.request_hash!==fingerprint)fail("This idempotency key was used with different input.",409);const receipt=contractAnswer(responseSchema,found.response);await completeOperation(ctx,receipt);return receipt;}
+    if(found){if(found.request_hash!==fingerprint)fail("This idempotency key was used with different input.",409);const receipt=replayedAnswer(req,responseSchema,found.response);await completeOperation(ctx,receipt);return receipt;}
   }
    const rawResult=await operation(state,ctx);
    // Versions advance before the response is built, so it carries them; the audit entry commits to exactly what changed.

@@ -14,6 +14,7 @@ import type { Context, DomainState, ValopayRecord } from "./types";
 import { makeRecord, assertNoRealBankDetails } from "./records";
 import { validateRecord } from "./validation";
 import { canonicalDigest } from "../lib/digests";
+import { contractAnswer } from "../lib/contract";
 
 // Impact, preview and proposal digests are stored in a proposal and computed
 // again when it is approved and saved: their first form.
@@ -195,7 +196,8 @@ function calculate(
       after,
       impactDigest,
     });
-  const preview = importCorrectionPreviewSchema.parse({
+  // The comparison is an answer: a mismatch is the service's 500 (response.invalid), never the request's 400.
+  const preview = contractAnswer(importCorrectionPreviewSchema, {
     merchantId: state.merchant.id,
     batchId: batch.id,
     targetId: target.id,
@@ -250,7 +252,7 @@ export function importCorrectionView(
   } catch {
     /* changed source or dependencies */
   }
-  return importCorrectionViewSchema.parse({
+  return contractAnswer(importCorrectionViewSchema, {
     id: proposal.id,
     merchantId: state.merchant.id,
     createdAt: proposal.createdAt,

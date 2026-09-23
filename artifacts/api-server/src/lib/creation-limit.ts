@@ -6,6 +6,8 @@
 export const WORKSPACE_CREATION_LIMIT = 20;
 /** The window: one hour. */
 export const WORKSPACE_CREATION_WINDOW_MS = 60 * 60 * 1000;
+/** The seconds a refused creation is told to wait (Retry-After): the whole window, as its message says ("in an hour"). */
+export const WORKSPACE_CREATION_RETRY_AFTER_SECONDS = WORKSPACE_CREATION_WINDOW_MS / 1000;
 
 /** A fixed-window counter keyed by client address. */
 export interface CreationLimiter {

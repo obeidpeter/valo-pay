@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { connectedActionResultSchema, connectedViewSchema } from "@workspace/valopay-schema";
+import { connectedActionResultFor, connectedViewSchema } from "@workspace/valopay-schema";
 import {
   inWorkspace,
   loadState,
@@ -13,7 +13,7 @@ import {
   completeOperation,
 } from "../lib/valopay-store";
 import { requestFingerprint } from "../lib/digests";
-import { contractAnswer, lenderQuery, requiredKey } from "../lib/contract";
+import { contractAnswer, lenderQuery, replayedAnswer, requiredKey } from "../lib/contract";
 import {
   connectedActionSchema,
   connectedView,
@@ -49,12 +49,14 @@ router.post("/v1/connected/actions", async (req, res) => {
         const state = await loadState(ctx, merchantId, "update");
         const id = digest(`connected:${merchantId}:${key}`),
           fingerprint = requestFingerprint({ input, actor: ctx.actor });
+        // The one shape this action answers with, of this lender: an outcome never passes for a record.
+        const answer = connectedActionResultFor(input.action, merchantId);
         const prior = await findIdempotency(ctx, id);
         if (prior) {
           if (prior.request_hash !== fingerprint)
             fail("This request key was already used for different input.", 409);
-          // A receipt saved by an earlier build is checked like a fresh answer.
-          const receipt = contractAnswer(connectedActionResultSchema, prior.response);
+          // The action was saved with this receipt: never answered as saving nothing, even when it no longer matches.
+          const receipt = replayedAnswer(req, answer, prior.response);
           await completeOperation(ctx, receipt);
           return receipt;
         }
@@ -69,7 +71,7 @@ router.post("/v1/connected/actions", async (req, res) => {
         }
         // Versions advance first, so the answer carries them; it is checked before anything is saved.
         const changes = settleChanges(ctx, state);
-        const result = contractAnswer(connectedActionResultSchema, {
+        const result = contractAnswer(answer, {
           message: "Sample workspace updated.",
           record,
           mode: "synthetic",

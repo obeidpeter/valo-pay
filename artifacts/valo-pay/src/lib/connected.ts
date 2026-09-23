@@ -10,7 +10,7 @@ import {
 } from "./safe-mutations";
 import { useUnsavedChanges } from "./unsaved-changes";
 import { answerProblem, readAnswer, UNREADABLE_ANSWER } from "./answers";
-import { connectedActionResultSchema, connectedViewSchema, type ConnectedView as SharedConnectedView } from "@workspace/valopay-schema";
+import { connectedActionResultFor, connectedViewSchema, type ConnectedView as SharedConnectedView } from "@workspace/valopay-schema";
 
 /** A consent or payment intent as the connected view lists it; its data is read field by field. */
 export type ConnectedRecord = Omit<SharedConnectedView["payments"]["intents"][number], "data"> & { data: Record<string, any>; effectiveStatus?: string };
@@ -129,8 +129,9 @@ export function useConnected() {
             body: current.body,
           },
         );
-        // Only the confirmation the contract describes counts: anything else leaves the outcome unconfirmed.
-        if (!readAnswer(connectedActionResultSchema, result)) throw answerProblem(UNCONFIRMED_SAMPLE);
+        // Only the confirmation this action gives counts, with its record in this lender (a Cash Desk action's
+        // outcome, every other action's record): anything else leaves the outcome unconfirmed.
+        if (!readAnswer(connectedActionResultFor(current.input.action, merchantId), result)) throw answerProblem(UNCONFIRMED_SAMPLE);
         if (attempt.current === current) attempt.current = null;
       } catch (error) {
         // A definite request rejection did not commit; a reviewed retry may

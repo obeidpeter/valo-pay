@@ -18,7 +18,7 @@ import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { recordsOf } from "../domain/records";
 import { nextCloseRetry, type CloseRetry } from "../domain/close";
 import { seedMerchant } from "./valopay-seed";
-import { createCreationLimiter } from "./creation-limit";
+import { createCreationLimiter, WORKSPACE_CREATION_RETRY_AFTER_SECONDS } from "./creation-limit";
 import { foldForSearch, LIST_PAGE_CEILING, type ListQuery } from "./valopay-list";
 import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
 import { validateCloseRange, pageOffset, type ReadPageQuery, type ReconciliationQueue } from './console-read-models';
@@ -460,13 +460,14 @@ export async function provisionStaffWorkspace(organizationId: string, userId: st
   } finally { guard.release(); }
 }
 
-export async function createPilotLender(ctx: StoreContext, input: { name: string; segment: string }, key: string) {
+/** A new synthetic lender, or, for a repeat of the same request (repeated), the lender its key created earlier. */
+export async function createPilotLender(ctx: StoreContext, input: { name: string; segment: string }, key: string): Promise<{ lender: DomainState["merchant"]; repeated: boolean }> {
   const session = sessionFor(ctx);
   if (ctx.role !== 'Admin' || session.access !== 'team') fail('An administrator must set up a lender.', 403);
   // Workspace lock and deterministic ID make a repeated onboarding request safe.
   const id = digest(`onboarding:${session.workspace.id}:${session.owner}:${key}`), fingerprint = requestFingerprint(input);
   const found = (await session.client.query<MerchantRow>('SELECT id,info,settings FROM valopay_merchants WHERE workspace_id=$1 AND id=$2', [session.workspace.id, id])).rows[0];
-  if (found) { if (found.settings.onboardingFingerprint !== fingerprint) fail('This setup request was already used for different details.', 409); return found.info; }
+  if (found) { if (found.settings.onboardingFingerprint !== fingerprint) fail('This setup request was already used for different details.', 409); return { lender: found.info, repeated: true }; }
   // 'team' access holds the workspace lock exclusively (lockWorkspace), so two creations at once are counted one after the other.
   if (ctx.accessMode !== 'staff') {
     const held = (await session.client.query<{ count: number }>('SELECT count(*)::int AS count FROM valopay_merchants WHERE workspace_id=$1', [session.workspace.id])).rows[0]!.count;
@@ -480,7 +481,7 @@ export async function createPilotLender(ctx: StoreContext, input: { name: string
   await loadState(ctx, id, 'update');
   appendAudit(state, ctx, 'lender.created', id, 'Created an empty synthetic lender for pilot rehearsal.');
   await saveState(ctx, state);
-  return state.merchant;
+  return { lender: state.merchant, repeated: false };
 }
 
 function principalFor(req: Request, res: Response) {
@@ -633,7 +634,7 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
     }
     if (!workspace) {
       // A new anonymous sandbox seeds two lenders; creation is bounded per client address on top of the request limit.
-      if (!identity.authenticated && !creationLimiter.take(identity.address, Date.now())) fail("Too many new sandboxes from this address; please try again in an hour.", 429);
+      if (!identity.authenticated && !creationLimiter.take(identity.address, Date.now())) throw Object.assign(new Error("Too many new sandboxes from this address; please try again in an hour."), { status: 429, retryAfterSeconds: WORKSPACE_CREATION_RETRY_AFTER_SECONDS });
       const inserted = (await client.query<WorkspaceRow>(
         `INSERT INTO valopay_workspaces(id,principal_hash,role) VALUES($1,$2,'Admin')
          ON CONFLICT (principal_hash) DO NOTHING RETURNING id,principal_hash,role`,

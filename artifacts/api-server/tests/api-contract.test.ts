@@ -68,11 +68,33 @@ await section("error body and statuses", () => {
       assert.ok(responses["400"] && responses["404"], `${label(entry)} lists 400 and 404 for its lender`);
       assert.deepEqual({ minLength: parameter(entry.operation, "merchantId").schema.minLength, maxLength: parameter(entry.operation, "merchantId").schema.maxLength }, { minLength: 1, maxLength: 100 }, `${label(entry)}: merchantId is 1 to 100 characters`);
     }
-    if (entry.operation.requestBody) assert.ok(responses["400"] && responses["413"] && responses["415"], `${label(entry)} lists the body refusals 400, 413 and 415`);
+    // The body parser reads every POST and PATCH, whether or not the operation takes a body.
+    if (entry.method === "POST" || entry.method === "PATCH") assert.ok(responses["400"] && responses["413"] && responses["415"], `${label(entry)} lists the body refusals 400, 413 and 415`);
     checks += 1;
   }
   for (const path of ["/v1/operations/{id}/retry", "/v1/operations/{id}/cancel"]) assert.ok(spec.paths[path].post.responses["410"], `${path} lists 410 for a request whose stored payload expired`);
-  checks += 2;
+  // An export whose file retention deleted can be neither downloaded nor retried.
+  assert.ok(spec.paths["/v1/exports/{id}/download"].get.responses["410"], "the export download lists 410 for a file retention deleted");
+  assert.ok(spec.paths["/v1/exports/{id}/retry"].post.responses["410"], "the export retry lists 410 for a file retention deleted");
+  // The export queue's 429 is described, with its Retry-After.
+  assert.match(spec.paths["/v1/exports"].post.responses["429"].description, /ten exports waiting or running/);
+  assert.match(spec.paths["/v1/exports"].post.responses["429"].headers["Retry-After"].description, /30 when the lender's export queue is full/);
+  checks += 6;
+});
+
+// ---- 1b. A repeat after retention: every write whose key the journal records lists 410, and only those ----
+await section("410 on repeated keys", () => {
+  for (const entry of writes) {
+    const key = parameter(entry.operation, "Idempotency-Key");
+    if (!key) continue;
+    // The journal keeps the request; retention may remove its stored result, and a repeat with the key is then gone.
+    const journaled = recoverableRequest(entry.method, concrete(entry), journalBody(entry.path));
+    if (journaled) assert.ok(entry.operation.responses["410"], `${label(entry)} is journaled when it carries a key, so a repeat after retention can answer 410`);
+    // The new lender's key names the lender; nothing retention removes answers its repeat.
+    else assert.equal(entry.operation.responses["410"], undefined, `${label(entry)} is not journaled, so it never answers 410`);
+    assert.equal(/journal entry is closed|410/.test(key.description), journaled, `${label(entry)}: the key's description says what the journal does with it`);
+    checks += 2;
+  }
 });
 
 // ---- 2. Every write says exactly what its route does with an Idempotency-Key ----
@@ -142,6 +164,28 @@ try {
     checks += 3;
   } });
 
+  // The body parser reads every POST and PATCH: one that takes no body still refuses a body it cannot read, as its
+  // contract says. From another client address, so the request limit these checks share stays clear.
+  await section("body refusals without a request body", async () => {
+    const elsewhere = { "X-Forwarded-For": "198.51.100.24" };
+    for (const entry of writes.filter((item) => !item.operation.requestBody)) {
+      const path = `${concrete(entry)}${lenderScoped(entry.operation) ? "?merchantId=offline-lender" : ""}`;
+      const bodies: Array<[string, Record<string, string>, number]> = [["x".repeat(2_100_000), elsewhere, 413], ["{}", { ...elsewhere, "Content-Type": "application/json; charset=latin1" }, 415], ['{"', elsewhere, 400]];
+      for (const [body, headers, status] of bodies) {
+        const answer = await send(entry.method, path, body, headers);
+        assert.equal(answer.status, status, `${label(entry)} with an unreadable body: ${JSON.stringify(answer.data)}`);
+        documented(entry.method, path, answer);
+        checks += 2;
+      }
+    }
+    // The Paystack test ingress reads its own raw body, and refuses an encoding it cannot read.
+    const ingress = `/v1/providers/paystack/${"a".repeat(64)}/events`;
+    const encoded = await send("POST", ingress, "{}", { ...elsewhere, "Content-Encoding": "x-unknown" });
+    assert.equal(encoded.status, 415, JSON.stringify(encoded.data));
+    documented("POST", ingress, encoded);
+    checks += 2;
+  });
+
   // Date-times with an offset pass validation and reach the lender (here, the database-limit answer).
   await section("offset date-times", async () => {
   const offset = await send("POST", `/v1/pilot/batches/${"b".repeat(64)}/commit?merchantId=offline-lender`, { expectedUpdatedAt: "2026-09-23T11:00:00.000+01:00" });
@@ -183,5 +227,5 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`API contract checks passed (${checks} checks): the error body and statuses, the Idempotency-Key each write takes, a missing merchantId, offset date-times and the documented refusals.`);
+console.log(`API contract checks passed (${checks} checks): the error body and statuses, the Idempotency-Key each write takes and the 410 of a repeat after retention, a missing merchantId, unreadable bodies on writes without one, offset date-times and the documented refusals.`);
 process.exit(0);
