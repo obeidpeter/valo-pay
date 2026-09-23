@@ -19,7 +19,7 @@ import { countedAttempts, evaluateRetry, policyIdFor, policyLineage, policySumma
 import { buildAlerts } from "./alerts";
 
 const requiresReason = new Set([
-  "kill_switch", "mandate_suspend", "mandate_cancel", "mandate_reinstate", "mandate_reissue", "activation_reminder",
+  "kill_switch", "approve_kill_switch_off", "mandate_suspend", "mandate_cancel", "mandate_reinstate", "mandate_reissue", "activation_reminder",
   "submit_policy", "approve_policy", "reject_policy", "new_policy_version", "submit_template", "approve_template", "reject_template", "new_template_version",
   "confirm_allocation", "reject_allocation", "manual_allocate", "review_allocation", "resolve_exception", "record_refund",
   "simulate_failure", "backtest_policy", "preregister_experiment", "hand_back", "mark_pack_used", "issue_invoice", "notify_policy_change", "apply_policy_version",
@@ -57,6 +57,28 @@ function cancelScheduledAttempts(state: DomainState, now: string, cancellationRe
     touch(attempt, now);
     return attempt.id;
   });
+}
+
+/** Where a request to lift an emergency stop waits in settings.emergencyStopReleases: the lender's own stop, or a policy version's. */
+const stopScope = (policyId?: string) => policyId ? `policy:${policyId}` : "lender";
+/** Drops the waiting request to lift a stop, once the stop was set either way. */
+function settleStopRelease(state: DomainState, policyId?: string): void {
+  const { [stopScope(policyId)]: _settled, ...waiting } = state.settings.emergencyStopReleases || {};
+  if (Object.keys(waiting).length) state.settings.emergencyStopReleases = waiting;
+  else delete state.settings.emergencyStopReleases;
+}
+/**
+ * Sets a lender's or policy version's emergency stop; turning it on cancels the scheduled attempts under it. Either way a
+ * waiting request to lift it is settled: once the stop is on again, or off, there is nothing left to approve.
+ */
+function switchStop(state: DomainState, ctx: Context, policyId: string | undefined, enabled: boolean): ActionResult {
+  if (policyId) state.settings.policyKillSwitches = { ...(state.settings.policyKillSwitches || {}), [policyId]: enabled };
+  else state.merchant.killSwitch = enabled;
+  settleStopRelease(state, policyId);
+  const cancelled = enabled
+    ? cancelScheduledAttempts(state, ctx.now, policyId ? "Policy version kill switch" : "Merchant kill switch", (attempt) => !policyId || policyIdFor(state, findRecord(state, String(attempt.data.dueItemId), "due-items")) === policyId)
+    : [];
+  return result(`${policyId ? "Policy" : "Lender"} emergency stop is ${enabled ? "on" : "off"}. No collection instruction was sent.`, undefined, { enabled, policyId, cancelledScheduledAttemptIds: cancelled });
 }
 
 function dueItemsUnderMandate(state: DomainState, mandateId: string): Set<string> {
@@ -125,18 +147,25 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
   if (input.action === "kill_switch") {
     assertActionRole(ctx, ["Admin"]);
     if (typeof data.enabled !== "boolean") throw new Error("Choose whether the emergency stop is on or off.");
-    let policyId: string | undefined;
-    if (data.policyId) {
-      // Approved policy versions are immutable, so the switch lives in merchant settings (DEB-06).
-      policyId = findRecord(state, String(data.policyId), "policies").id;
-      state.settings.policyKillSwitches = { ...(state.settings.policyKillSwitches || {}), [policyId]: data.enabled };
-    } else {
-      state.merchant.killSwitch = data.enabled;
+    // Approved policy versions are immutable, so a version's switch lives in merchant settings (DEB-06).
+    const policyId = data.policyId ? findRecord(state, String(data.policyId), "policies").id : undefined;
+    const scope = stopScope(policyId), on = policyId ? state.settings.policyKillSwitches?.[policyId] === true : state.merchant.killSwitch === true;
+    if (!data.enabled && on && ctx.accessMode === "staff") {
+      // A staff pilot lifts a stop only with a second administrator: this is the request, and the stop stays on (approve_kill_switch_off).
+      state.settings.emergencyStopReleases = { ...(state.settings.emergencyStopReleases || {}), [scope]: { requestedBy: ctx.actor, requestedAt: now, reason: reason(input), policyId: policyId ?? null } };
+      return result(`The ${policyId ? "policy" : "lender"} emergency stop stays on until a second administrator approves turning it off. Your request is saved; no collection instruction was sent.`, undefined, { enabled: true, policyId, releaseRequested: true, cancelledScheduledAttemptIds: [] });
     }
-    const cancelled = data.enabled
-      ? cancelScheduledAttempts(state, now, policyId ? "Policy version kill switch" : "Merchant kill switch", (attempt) => !policyId || policyIdFor(state, findRecord(state, String(attempt.data.dueItemId), "due-items")) === policyId)
-      : [];
-    return result(`${policyId ? "Policy" : "Lender"} emergency stop is ${data.enabled ? "on" : "off"}. No collection instruction was sent.`, undefined, { enabled: data.enabled, policyId, cancelledScheduledAttemptIds: cancelled });
+    return switchStop(state, ctx, policyId, data.enabled);
+  }
+  if (input.action === "approve_kill_switch_off") {
+    assertActionRole(ctx, ["Admin"]);
+    const policyId = data.policyId ? findRecord(state, String(data.policyId), "policies").id : undefined;
+    const request = state.settings.emergencyStopReleases?.[stopScope(policyId)];
+    if (!request) throw Object.assign(new Error(`No request to turn off the ${policyId ? "policy" : "lender"} emergency stop is waiting. An administrator asks first; a different administrator approves.`), { status: 409 });
+    // A staff actor is the verified Clerk user the principal is derived from, so a different actor is a different person.
+    if (request.requestedBy === ctx.actor) throw Object.assign(new Error("A different administrator must approve turning off the emergency stop: the administrator who asked cannot approve it. A pilot with one administrator asks the operator to add a second with the provisioning command's --add-administrator mode."), { status: 403 });
+    const lifted = switchStop(state, ctx, policyId, false);
+    return { ...lifted, data: { ...lifted.data, requestedBy: request.requestedBy, requestedAt: request.requestedAt, auditNote: `Approved the request by ${request.requestedBy} at ${request.requestedAt}: ${request.reason}` } };
   }
   if (["mandate_suspend", "mandate_cancel", "mandate_reinstate"].includes(input.action)) {
     assertActionRole(ctx, ["Admin", "Operations"]);
@@ -462,6 +491,7 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     const reverted = recordsOf(state, "due-items").filter((item) => item.data.owner === PLATFORM_OWNER).map((item) => { item.data.owner = fallbackOwner; item.data.handBackAt = now; touch(item, now); return item.id; });
     const cancelled = cancelScheduledAttempts(state, now, "Hand-back: no future instruction is held.", () => true);
     state.merchant.killSwitch = true;
+    settleStopRelease(state);
     const checklist = [`Ownership of ${reverted.length} obligations reverted to ${fallbackOwner}`, `${cancelled.length} scheduled attempts cancelled with notices`, "Incumbent schedules re-enabled by the merchant against this checklist", "Full export delivered", "No future instructions are held for this merchant"];
     const cutover = makeRecord(state, "cutovers", { name: "Hand-back", status: "handed_back", createdAt: now, data: { checklist, fallbackOwner, confirmation: reason(input), revertedDueItemIds: reverted, cancelledAttemptIds: cancelled, handedBackAt: now } });
     return result("Collection ownership returned to the configured fallback owner. Scheduled attempts were cancelled and no future instructions remain queued.", cutover, { fallbackOwner, reverted: reverted.length, cancelled: cancelled.length });

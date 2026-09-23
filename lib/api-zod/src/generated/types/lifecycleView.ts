@@ -6,12 +6,13 @@
  * OpenAPI spec version: 1.1.0
  */
 import type { LifecycleViewHoldsItem } from './lifecycleViewHoldsItem';
+import type { LifecycleViewMinimumDays } from './lifecycleViewMinimumDays';
 import type { LifecycleViewPolicy } from './lifecycleViewPolicy';
 import type { LifecycleViewRunsItem } from './lifecycleViewRunsItem';
 import type { LifecycleViewTargetsItem } from './lifecycleViewTargetsItem';
 
 /**
- * The lender's retention policy, holds, bounded inventory of what the policy would touch, and saved retention runs.
+ * The lender's retention policy, the shortest periods it may set (minimumDays) and whether a second administrator approves runs (secondApprover), holds, bounded inventory of what the policy would touch, and saved retention runs.
  */
 export interface LifecycleView {
   /**
@@ -27,6 +28,8 @@ export interface LifecycleView {
   actor: string;
   asOf: Date;
   policy: LifecycleViewPolicy;
+  minimumDays?: LifecycleViewMinimumDays;
+  secondApprover?: boolean;
   /** @pattern ^[a-f0-9]{64}$ */
   policyRevision: string;
   /** @pattern ^[a-f0-9]{64}$ */

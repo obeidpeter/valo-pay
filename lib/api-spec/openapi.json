@@ -2237,7 +2237,7 @@
           }
         },
         "summary": "Queue a private export",
-        "description": "Durably saves a queued export job and returns immediately. Poll its status before downloading. Rendering and private storage run outside the database transaction; retries use the same immutable object key. A record kind, gate pack, billing statement or customer dispute pack supports JSON, CSV or PDF."
+        "description": "Durably saves a queued export job and returns immediately. Poll its status before downloading. Rendering and private storage run outside the database transaction; retries use the same immutable object key. A record kind, gate pack, billing statement or customer dispute pack supports JSON, CSV or PDF. A dispute pack (either name), the customer register or the audit trail is queued only by an Admin, Finance or Compliance reviewer (403 otherwise)."
       }
     },
     "/v1/exports/{id}": {
@@ -2562,7 +2562,7 @@
           }
         },
         "summary": "Retry a saved export",
-        "description": "Requeues a failed or expired job while preserving its identity and private object key. Running and ready jobs are returned unchanged; retries cannot overwrite a completed file."
+        "description": "Requeues a failed or expired job while preserving its identity and private object key. Running and ready jobs are returned unchanged; retries cannot overwrite a completed file. A dispute pack, the customer register or the audit trail is retried only by an Admin, Finance or Compliance reviewer (403 otherwise)."
       }
     },
     "/v1/exports/{id}/download": {
@@ -2735,7 +2735,7 @@
           }
         },
         "summary": "Download an export",
-        "description": "The bytes are read from private storage and checked against the recorded SHA-256 before any are sent."
+        "description": "The bytes are read from private storage and checked against the recorded SHA-256 before any are sent. A dispute pack (either name), the customer register or the audit trail is downloaded only by an Admin, Finance or Compliance reviewer (403 otherwise); every role may read a job's status."
       }
     },
     "/v1/openapi.json": {
@@ -6630,6 +6630,157 @@
         "description": "Administrator with recent MFA. A revoked token cannot be accepted; an invitation that is no longer pending is refused (409)."
       }
     },
+    "/v1/team/invitations/{id}/approve": {
+      "post": {
+        "operationId": "approveInvitation",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The record's id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: a parameter, header or body field failed validation (details names each one), the body is not valid JSON or holds a NUL character, or a rule refused the request in its own words. Nothing was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required: a staff host answers only a signed-in pilot staff session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Refused: another origin, or the caller's role, membership, lender access, recent MFA or a readiness gate does not allow it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: what the request names changed since it was read, its Idempotency-Key belongs to another request or its journal entry is cancelled, or the change conflicts with saved records. Nothing was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is larger than 2 MB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The body's character set or encoding is not supported; send UTF-8 JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait: 60 after the request limit, 3600 after the new-sandbox limit.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The service failed. With committed false nothing was saved; otherwise the outcome is unconfirmed: check Operations, or repeat the same request with its Idempotency-Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Busy or unavailable: a database limit turned the request away (a busy lender or workspace, a lock or statement past its limit, a lost or unavailable connection), or a service it needs, such as the key service or private storage, is unavailable or not configured. committed false says nothing was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again: sent when a database limit turned the request away; absent when a service it needs is unavailable or not configured.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        },
+        "summary": "Approve an invitation as the second administrator",
+        "description": "Administrator with recent MFA, other than the one who sent it (403); the approval is recorded in the access history. Only a pending Admin, Finance or Compliance reviewer invitation waits for one: any other, or one already approved, is refused (409). The invited person can accept it afterwards."
+      }
+    },
     "/v1/team/members/{id}": {
       "patch": {
         "operationId": "updateStaffMember",
@@ -6653,7 +6804,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/StaffMember"
+                  "$ref": "#/components/schemas/StaffMemberChange"
                 }
               }
             }
@@ -6788,7 +6939,309 @@
           }
         },
         "summary": "Change a membership",
-        "description": "Administrator with recent MFA; nobody changes their own membership. Records the reason in the access history."
+        "description": "Administrator with recent MFA; nobody changes their own membership. Records the reason in the access history. A change that leaves the membership active as Admin, Finance or Compliance reviewer when it was not (a new role, or a reactivation) is saved as a request for a second administrator: the answer names it (pendingChange), the membership stays as it is until another administrator approves it, and the same request again answers the same waiting request. Every other change takes effect at once."
+      }
+    },
+    "/v1/team/changes/{id}/approve": {
+      "post": {
+        "operationId": "approveStaffChange",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The record's id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaffMemberChange"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: a parameter, header or body field failed validation (details names each one), the body is not valid JSON or holds a NUL character, or a rule refused the request in its own words. Nothing was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required: a staff host answers only a signed-in pilot staff session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Refused: another origin, or the caller's role, membership, lender access, recent MFA or a readiness gate does not allow it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: what the request names changed since it was read, its Idempotency-Key belongs to another request or its journal entry is cancelled, or the change conflicts with saved records. Nothing was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is larger than 2 MB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The body's character set or encoding is not supported; send UTF-8 JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait: 60 after the request limit, 3600 after the new-sandbox limit.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The service failed. With committed false nothing was saved; otherwise the outcome is unconfirmed: check Operations, or repeat the same request with its Idempotency-Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Busy or unavailable: a database limit turned the request away (a busy lender or workspace, a lock or statement past its limit, a lost or unavailable connection), or a service it needs, such as the key service or private storage, is unavailable or not configured. committed false says nothing was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again: sent when a database limit turned the request away; absent when a service it needs is unavailable or not configured.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        },
+        "summary": "Approve a membership change as the second administrator",
+        "description": "Administrator with recent MFA, other than the one who asked and other than the person changed (403). Applies exactly the requested change and records who asked and who approved. A request already approved or declined, or whose membership changed since it was made, is refused (409)."
+      }
+    },
+    "/v1/team/changes/{id}/decline": {
+      "post": {
+        "operationId": "declineStaffChange",
+        "tags": [
+          "valopay"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The record's id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: a parameter, header or body field failed validation (details names each one), the body is not valid JSON or holds a NUL character, or a rule refused the request in its own words. Nothing was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required: a staff host answers only a signed-in pilot staff session.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Refused: another origin, or the caller's role, membership, lender access, recent MFA or a readiness gate does not allow it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found in the caller's workspace: the lender, or what the path names.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict: what the request names changed since it was read, its Idempotency-Key belongs to another request or its journal entry is cancelled, or the change conflicts with saved records. Nothing was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The body is larger than 2 MB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The body's character set or encoding is not supported; send UTF-8 JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait: 60 after the request limit, 3600 after the new-sandbox limit.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The service failed. With committed false nothing was saved; otherwise the outcome is unconfirmed: check Operations, or repeat the same request with its Idempotency-Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Busy or unavailable: a database limit turned the request away (a busy lender or workspace, a lock or statement past its limit, a lost or unavailable connection), or a service it needs, such as the key service or private storage, is unavailable or not configured. committed false says nothing was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again: sent when a database limit turned the request away; absent when a service it needs is unavailable or not configured.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        },
+        "summary": "Decline or withdraw a membership change",
+        "description": "Administrator with recent MFA; the administrator who asked withdraws it the same way. Recorded in the access history; the membership is unchanged. A request already approved or declined is refused (409)."
       }
     },
     "/v1/team/members/{id}/lenders": {
@@ -7090,7 +7543,7 @@
           }
         },
         "summary": "Accept an invitation",
-        "description": "The signed-in person's verified email must match the invitation. Creates a 90-day membership."
+        "description": "The signed-in person's verified email must match the invitation. Creates a 90-day membership. An Admin, Finance or Compliance reviewer invitation is refused (403) until a second administrator has approved it."
       }
     },
     "/v1/team/readiness": {
@@ -11039,7 +11492,7 @@
           }
         },
         "summary": "Change the retention policy",
-        "description": "Administrators only. Keeps every previous policy version with its reason."
+        "description": "Administrators only. Keeps every previous policy version with its reason. A period shorter than the workspace's minimum (minimumDays: 30 days in the sandbox; in a staff pilot, six years for original source files and export files and a year for recovery payloads) is refused (400)."
       }
     },
     "/v1/lifecycle/holds": {
@@ -11600,7 +12053,7 @@
           }
         },
         "summary": "Approve a retention run",
-        "description": "Administrators only. The manifest digest must match the preview; a changed inventory must be previewed again."
+        "description": "Administrators only; in a staff pilot, an administrator other than the one who prepared the preview (403). The manifest digest must match the preview; a changed inventory must be previewed again."
       }
     },
     "/v1/lifecycle/runs/{id}/execute": {
@@ -16516,9 +16969,79 @@
           "updatedAt"
         ],
         "additionalProperties": false,
-        "description": "A staff membership as a change answers it: its role, state, expiry and version."
+        "description": "A staff membership: its role, state, expiry and version."
       },
-      "StaffDirectoryMember": {
+      "StaffAccess": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "Admin",
+              "Operations",
+              "Finance",
+              "Compliance reviewer",
+              "Read-only"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suspended",
+              "revoked"
+            ]
+          }
+        },
+        "required": [
+          "role",
+          "status"
+        ],
+        "additionalProperties": false,
+        "description": "A membership's role and state, before or after a change."
+      },
+      "StaffChangeRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "memberId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "from": {
+            "$ref": "#/components/schemas/StaffAccess"
+          },
+          "to": {
+            "$ref": "#/components/schemas/StaffAccess"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "requestedBy": {
+            "type": "string"
+          },
+          "requestedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "memberId",
+          "name",
+          "from",
+          "to",
+          "reason",
+          "requestedBy",
+          "requestedAt"
+        ],
+        "additionalProperties": false,
+        "description": "A membership change that grants Admin, Finance or Compliance reviewer and waits for a second administrator: who asked, when and why. Approving it applies exactly this change; a later change to the membership leaves it out of date, and it is no longer listed."
+      },
+      "StaffMemberChange": {
         "type": "object",
         "properties": {
           "id": {
@@ -16554,6 +17077,73 @@
           "updatedAt": {
             "type": "string"
           },
+          "message": {
+            "type": "string"
+          },
+          "pendingChange": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StaffChangeRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "actor",
+          "name",
+          "role",
+          "status",
+          "expiresAt",
+          "updatedAt",
+          "message",
+          "pendingChange"
+        ],
+        "additionalProperties": false,
+        "description": "A membership change's answer: the membership as it now stands, what happened in plain words, and the waiting request when the change needs a second administrator (the membership is then unchanged)."
+      },
+      "StaffDirectoryMember": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "Admin",
+              "Operations",
+              "Finance",
+              "Compliance reviewer",
+              "Read-only"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suspended",
+              "revoked"
+            ]
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "type": "string"
+          },
           "lenderIds": {
             "type": "array",
             "items": {
@@ -16576,7 +17166,7 @@
           "allLenders"
         ],
         "additionalProperties": false,
-        "description": "A membership in the team directory, with the lenders it may open; an administrator opens every lender and lists none."
+        "description": "A membership in the team directory, with the lenders it may open; an administrator opens every lender and lists none. A viewer who is not an administrator sees only the colleagues who share a lender with them, only the lenders they share, and no one's expiry but their own (expiresAt null)."
       },
       "StaffInvitation": {
         "type": "object",
@@ -16607,6 +17197,23 @@
           },
           "expiresAt": {
             "type": "string"
+          },
+          "invitedBy": {
+            "type": "string"
+          },
+          "approval": {
+            "type": "string",
+            "enum": [
+              "not_required",
+              "awaiting",
+              "approved"
+            ]
+          },
+          "approvedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -16614,10 +17221,13 @@
           "email",
           "role",
           "status",
-          "expiresAt"
+          "expiresAt",
+          "invitedBy",
+          "approval",
+          "approvedBy"
         ],
         "additionalProperties": false,
-        "description": "A pending, accepted or revoked invitation; the token is shown once, at creation."
+        "description": "A pending, accepted or revoked invitation, who sent it and whether it waits for, or has, the second administrator's approval an Admin, Finance or Compliance reviewer invitation needs; the token is shown once, at creation."
       },
       "StaffEvent": {
         "type": "object",
@@ -16684,6 +17294,13 @@
             },
             "maxItems": 100
           },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StaffChangeRequest"
+            },
+            "maxItems": 100
+          },
           "events": {
             "type": "array",
             "items": {
@@ -16701,11 +17318,12 @@
           "members",
           "lenders",
           "invitations",
+          "changes",
           "events",
           "message"
         ],
         "additionalProperties": false,
-        "description": "The team as the caller may see it: members for everyone; lenders, invitations and history for administrators. In the sandbox every list, lenders included, is empty and the message says why."
+        "description": "The team as the caller may see it: members as StaffDirectoryMember describes; lenders, invitations, changes awaiting a second administrator and history for administrators. In the sandbox every list, lenders included, is empty and the message says why."
       },
       "InvitationInput": {
         "type": "object",
@@ -16743,6 +17361,13 @@
             "type": "string",
             "pattern": "^[a-f0-9]{64}$"
           },
+          "approval": {
+            "type": "string",
+            "enum": [
+              "not_required",
+              "awaiting"
+            ]
+          },
           "message": {
             "type": "string"
           }
@@ -16750,10 +17375,11 @@
         "required": [
           "id",
           "token",
+          "approval",
           "message"
         ],
         "additionalProperties": false,
-        "description": "The invitation and its one-time acceptance token; no email is sent."
+        "description": "The invitation, its one-time acceptance token and whether it waits for a second administrator's approval; no email is sent."
       },
       "AcceptInvitationInput": {
         "type": "object",
@@ -19409,6 +20035,32 @@
             ],
             "additionalProperties": false
           },
+          "minimumDays": {
+            "type": "object",
+            "properties": {
+              "rawCsvDays": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "journalPayloadDays": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "exportFileDays": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "rawCsvDays",
+              "journalPayloadDays",
+              "exportFileDays"
+            ],
+            "additionalProperties": false
+          },
+          "secondApprover": {
+            "type": "boolean"
+          },
           "policyRevision": {
             "type": "string",
             "pattern": "^[a-f0-9]{64}$"
@@ -19695,6 +20347,12 @@
                   "type": "integer",
                   "minimum": 0
                 },
+                "preparedBy": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "approvedBy": {
                   "type": [
                     "string",
@@ -19846,7 +20504,7 @@
           "syntheticOnly"
         ],
         "additionalProperties": false,
-        "description": "The lender's retention policy, holds, bounded inventory of what the policy would touch, and saved retention runs."
+        "description": "The lender's retention policy, the shortest periods it may set (minimumDays) and whether a second administrator approves runs (secondApprover), holds, bounded inventory of what the policy would touch, and saved retention runs."
       },
       "LifecycleRunView": {
         "type": "object",
@@ -19965,6 +20623,12 @@
             "type": "integer",
             "minimum": 0
           },
+          "preparedBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "approvedBy": {
             "type": [
               "string",
@@ -20079,7 +20743,7 @@
           "syntheticOnly"
         ],
         "additionalProperties": false,
-        "description": "One retention run: its reviewed manifest, approval state and per-item receipts."
+        "description": "One retention run: its reviewed manifest, who prepared it, approval state and per-item receipts."
       },
       "RetentionPolicyInput": {
         "type": "object",

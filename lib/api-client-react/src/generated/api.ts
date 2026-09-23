@@ -151,7 +151,7 @@ import type {
   StaffDirectory,
   StaffLenderAccess,
   StaffLenderAccessInput,
-  StaffMember,
+  StaffMemberChange,
   Timeline,
   UpdateRecordParams,
   UpdateSettingsParams,
@@ -1449,7 +1449,7 @@ export const getCreateExportUrl = (params: CreateExportParams,) => {
 }
 
 /**
- * Durably saves a queued export job and returns immediately. Poll its status before downloading. Rendering and private storage run outside the database transaction; retries use the same immutable object key. A record kind, gate pack, billing statement or customer dispute pack supports JSON, CSV or PDF.
+ * Durably saves a queued export job and returns immediately. Poll its status before downloading. Rendering and private storage run outside the database transaction; retries use the same immutable object key. A record kind, gate pack, billing statement or customer dispute pack supports JSON, CSV or PDF. A dispute pack (either name), the customer register or the audit trail is queued only by an Admin, Finance or Compliance reviewer (403 otherwise).
  * @summary Queue a private export
  */
 export const createExport = async (exportInput: ExportInput,
@@ -1637,7 +1637,7 @@ export const getRetryExportJobUrl = (id: string,
 }
 
 /**
- * Requeues a failed or expired job while preserving its identity and private object key. Running and ready jobs are returned unchanged; retries cannot overwrite a completed file.
+ * Requeues a failed or expired job while preserving its identity and private object key. Running and ready jobs are returned unchanged; retries cannot overwrite a completed file. A dispute pack, the customer register or the audit trail is retried only by an Admin, Finance or Compliance reviewer (403 otherwise).
  * @summary Retry a saved export
  */
 export const retryExportJob = async (id: string,
@@ -1721,7 +1721,7 @@ export const getDownloadExportUrl = (id: string,
 }
 
 /**
- * The bytes are read from private storage and checked against the recorded SHA-256 before any are sent.
+ * The bytes are read from private storage and checked against the recorded SHA-256 before any are sent. A dispute pack (either name), the customer register or the audit trail is downloaded only by an Admin, Finance or Compliance reviewer (403 otherwise); every role may read a job's status.
  * @summary Download an export
  */
 export const downloadExport = async (id: string,
@@ -3977,6 +3977,81 @@ export const useRevokeInvitation = <TError = ErrorType<ErrorBody>,
       return useMutation(getRevokeInvitationMutationOptions(options));
     }
 
+export const getApproveInvitationUrl = (id: string,) => {
+
+
+
+
+  return `/api/v1/team/invitations/${id}/approve`
+}
+
+/**
+ * Administrator with recent MFA, other than the one who sent it (403); the approval is recorded in the access history. Only a pending Admin, Finance or Compliance reviewer invitation waits for one: any other, or one already approved, is refused (409). The invited person can accept it afterwards.
+ * @summary Approve an invitation as the second administrator
+ */
+export const approveInvitation = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<Message> => {
+
+  return customFetch<Message>(getApproveInvitationUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getApproveInvitationMutationKey = () => ['approveInvitation'] as const;
+
+export const getApproveInvitationMutationOptions = <TError = ErrorType<ErrorBody>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof approveInvitation>>, TError,ApproveInvitationMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof approveInvitation>>, TError,ApproveInvitationMutationVariables, TContext> => {
+
+const mutationKey = getApproveInvitationMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof approveInvitation>>, ApproveInvitationMutationVariables> = (props) => {
+          const {id} = props ?? {};
+
+          return  approveInvitation(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ApproveInvitationMutationResult = NonNullable<Awaited<ReturnType<typeof approveInvitation>>>
+
+    export type ApproveInvitationMutationError = ErrorType<ErrorBody>
+    export type ApproveInvitationMutationVariables = {id: string}
+
+    /**
+ * @summary Approve an invitation as the second administrator
+ */
+export const useApproveInvitation = <TError = ErrorType<ErrorBody>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof approveInvitation>>, TError,ApproveInvitationMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof approveInvitation>>,
+        TError,
+        ApproveInvitationMutationVariables,
+        TContext
+      > => {
+      return useMutation(getApproveInvitationMutationOptions(options));
+    }
+
 export const getUpdateStaffMemberUrl = (id: string,) => {
 
 
@@ -3986,11 +4061,11 @@ export const getUpdateStaffMemberUrl = (id: string,) => {
 }
 
 /**
- * Administrator with recent MFA; nobody changes their own membership. Records the reason in the access history.
+ * Administrator with recent MFA; nobody changes their own membership. Records the reason in the access history. A change that leaves the membership active as Admin, Finance or Compliance reviewer when it was not (a new role, or a reactivation) is saved as a request for a second administrator: the answer names it (pendingChange), the membership stays as it is until another administrator approves it, and the same request again answers the same waiting request. Every other change takes effect at once.
  * @summary Change a membership
  */
 export const updateStaffMember = async (id: string,
-    membershipInput: MembershipInput, options?: Parameters<typeof customFetch>[1]): Promise<StaffMember> => {
+    membershipInput: MembershipInput, options?: Parameters<typeof customFetch>[1]): Promise<StaffMemberChange> => {
 
     const getHeaders = (h?: NonNullable<RequestInit['headers']>): Record<string, string | readonly string[]> => {
     if (!h) return {};
@@ -4006,7 +4081,7 @@ export const updateStaffMember = async (id: string,
     }
     return headers;
   };
-return customFetch<StaffMember>(getUpdateStaffMemberUrl(id),
+return customFetch<StaffMemberChange>(getUpdateStaffMemberUrl(id),
   {
     ...options,
     method: 'PATCH',
@@ -4065,6 +4140,156 @@ export const useUpdateStaffMember = <TError = ErrorType<ErrorBody>,
         TContext
       > => {
       return useMutation(getUpdateStaffMemberMutationOptions(options));
+    }
+
+export const getApproveStaffChangeUrl = (id: string,) => {
+
+
+
+
+  return `/api/v1/team/changes/${id}/approve`
+}
+
+/**
+ * Administrator with recent MFA, other than the one who asked and other than the person changed (403). Applies exactly the requested change and records who asked and who approved. A request already approved or declined, or whose membership changed since it was made, is refused (409).
+ * @summary Approve a membership change as the second administrator
+ */
+export const approveStaffChange = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<StaffMemberChange> => {
+
+  return customFetch<StaffMemberChange>(getApproveStaffChangeUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getApproveStaffChangeMutationKey = () => ['approveStaffChange'] as const;
+
+export const getApproveStaffChangeMutationOptions = <TError = ErrorType<ErrorBody>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof approveStaffChange>>, TError,ApproveStaffChangeMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof approveStaffChange>>, TError,ApproveStaffChangeMutationVariables, TContext> => {
+
+const mutationKey = getApproveStaffChangeMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof approveStaffChange>>, ApproveStaffChangeMutationVariables> = (props) => {
+          const {id} = props ?? {};
+
+          return  approveStaffChange(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type ApproveStaffChangeMutationResult = NonNullable<Awaited<ReturnType<typeof approveStaffChange>>>
+
+    export type ApproveStaffChangeMutationError = ErrorType<ErrorBody>
+    export type ApproveStaffChangeMutationVariables = {id: string}
+
+    /**
+ * @summary Approve a membership change as the second administrator
+ */
+export const useApproveStaffChange = <TError = ErrorType<ErrorBody>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof approveStaffChange>>, TError,ApproveStaffChangeMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof approveStaffChange>>,
+        TError,
+        ApproveStaffChangeMutationVariables,
+        TContext
+      > => {
+      return useMutation(getApproveStaffChangeMutationOptions(options));
+    }
+
+export const getDeclineStaffChangeUrl = (id: string,) => {
+
+
+
+
+  return `/api/v1/team/changes/${id}/decline`
+}
+
+/**
+ * Administrator with recent MFA; the administrator who asked withdraws it the same way. Recorded in the access history; the membership is unchanged. A request already approved or declined is refused (409).
+ * @summary Decline or withdraw a membership change
+ */
+export const declineStaffChange = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<Message> => {
+
+  return customFetch<Message>(getDeclineStaffChangeUrl(id),
+  {
+    ...options,
+    method: 'POST'
+
+
+  }
+);}
+
+
+
+
+
+export const getDeclineStaffChangeMutationKey = () => ['declineStaffChange'] as const;
+
+export const getDeclineStaffChangeMutationOptions = <TError = ErrorType<ErrorBody>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof declineStaffChange>>, TError,DeclineStaffChangeMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof declineStaffChange>>, TError,DeclineStaffChangeMutationVariables, TContext> => {
+
+const mutationKey = getDeclineStaffChangeMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof declineStaffChange>>, DeclineStaffChangeMutationVariables> = (props) => {
+          const {id} = props ?? {};
+
+          return  declineStaffChange(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeclineStaffChangeMutationResult = NonNullable<Awaited<ReturnType<typeof declineStaffChange>>>
+
+    export type DeclineStaffChangeMutationError = ErrorType<ErrorBody>
+    export type DeclineStaffChangeMutationVariables = {id: string}
+
+    /**
+ * @summary Decline or withdraw a membership change
+ */
+export const useDeclineStaffChange = <TError = ErrorType<ErrorBody>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof declineStaffChange>>, TError,DeclineStaffChangeMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof declineStaffChange>>,
+        TError,
+        DeclineStaffChangeMutationVariables,
+        TContext
+      > => {
+      return useMutation(getDeclineStaffChangeMutationOptions(options));
     }
 
 export const getUpdateStaffLendersUrl = (id: string,) => {
@@ -4166,7 +4391,7 @@ export const getAcceptInvitationUrl = () => {
 }
 
 /**
- * The signed-in person's verified email must match the invitation. Creates a 90-day membership.
+ * The signed-in person's verified email must match the invitation. Creates a 90-day membership. An Admin, Finance or Compliance reviewer invitation is refused (403) until a second administrator has approved it.
  * @summary Accept an invitation
  */
 export const acceptInvitation = async (acceptInvitationInput: AcceptInvitationInput, options?: Parameters<typeof customFetch>[1]): Promise<InvitationAccepted> => {
@@ -6352,7 +6577,7 @@ export const getSaveRetentionPolicyUrl = (params: SaveRetentionPolicyParams,) =>
 }
 
 /**
- * Administrators only. Keeps every previous policy version with its reason.
+ * Administrators only. Keeps every previous policy version with its reason. A period shorter than the workspace's minimum (minimumDays: 30 days in the sandbox; in a staff pilot, six years for original source files and export files and a year for recovery payloads) is refused (400).
  * @summary Change the retention policy
  */
 export const saveRetentionPolicy = async (retentionPolicyInput: RetentionPolicyInput,
@@ -6644,7 +6869,7 @@ export const getApproveLifecycleRunUrl = (id: string,
 }
 
 /**
- * Administrators only. The manifest digest must match the preview; a changed inventory must be previewed again.
+ * Administrators only; in a staff pilot, an administrator other than the one who prepared the preview (403). The manifest digest must match the preview; a changed inventory must be previewed again.
  * @summary Approve a retention run
  */
 export const approveLifecycleRun = async (id: string,

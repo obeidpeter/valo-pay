@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { ZodError } from 'zod';
-import { retentionPolicySchema, lifecycleRunViewSchema, type LifecycleCandidate, type LifecycleExternalCandidate } from '@workspace/valopay-schema';
+import { retentionPolicySchema, lifecycleRunViewSchema, type LifecycleCandidate, type LifecycleExternalCandidate, type RetentionPolicy } from '@workspace/valopay-schema';
 import { seedMerchant } from '../src/lib/valopay-seed';
 import { makeRecord } from '../src/domain/records';
 import { ResponseContractError } from '../src/lib/contract';
@@ -209,5 +209,39 @@ function counted(state: DomainState) {
   const after = lifecycleView(state, ctx, external());
   check(after.targets.every(item => item.sourceId === reviewFile.id || item.evidence.length === 0) && after.evidenceTotal === 1, 'resolving the case releases its evidence');
   check(assertLifecycleCandidate(state, ctx, approved.id, file, external()), 'and the approved file may then be deleted');
+}
+{
+  // A staff pilot (audit decision): the administrator who prepared a preview cannot approve it, and a policy keeps the
+  // documented minimums: six years for original source files and export files, which are evidence, and a year for recovery payloads.
+  const first = { ...ctx, principalId: 'principal:admin', accessMode: 'staff' as const }, second = { actor: 'Clerk:second', principalId: 'principal:second', role: 'Admin', now: ctx.now, accessMode: 'staff' as const };
+  const { state, batch } = fixture('staff-approval');
+  batch.data.committedAt = '2019-09-01T10:00:00.000Z';
+  const save = (actor: typeof first, days: RetentionPolicy) => saveLifecyclePolicy(state, actor, { policy: days, expectedRevision: lifecyclePolicy(state).revision, reason: 'Agreed source retention for the staff rehearsal.' });
+  assert.throws(() => save(first, policy), (error: any) => error.status === 400 && /original source files and export files for at least 2,192 days \(six years\)/.test(error.message)); checks += 1;
+  assert.throws(() => save(first, { ...policy, rawCsvDays: 2192, exportFileDays: 2192 }), (error: any) => error.status === 400 && /recovery payloads for at least 366 days/.test(error.message)); checks += 1;
+  save(first, { rawCsvDays: 2192, journalPayloadDays: 366, exportFileDays: null, auditTrail: 'retain' });
+  const view = lifecycleView(state, first);
+  check(view.secondApprover === true && view.minimumDays?.rawCsvDays === 2192 && view.minimumDays?.journalPayloadDays === 366 && view.minimumDays?.exportFileDays === 2192, 'the view names the staff minimums and the second approver');
+  const run = lifecyclePreview(state, first, { expectedPolicyRevision: lifecyclePolicy(state).revision });
+  check(run.preparedBy === 'Clerk:admin', 'the run names who prepared it');
+  const approval = { expectedUpdatedAt: run.updatedAt, previewDigest: run.previewDigest, reason: 'Reviewed the exact eligible sample source artifacts.' };
+  assert.throws(() => approveLifecycleRun(state, first, run.id, approval), (error: any) => error.status === 403 && /A different administrator must approve this deletion run/.test(error.message)); checks += 1;
+  // The same person in another session is still the preparer: the verified staff actor decides.
+  refuses(() => approveLifecycleRun(state, { ...first, principalId: 'principal:another-session' }, run.id, approval), 403);
+  check(approveLifecycleRun(state, second, run.id, approval).approvedBy === 'Clerk:second', 'a second administrator approves it');
+}
+{
+  // The sandbox keeps 30 days in every category: a one-day policy is refused, and one stored before the minimum existed is read with it.
+  const { state, batch } = fixture('sandbox-minimum');
+  assert.throws(() => saveLifecyclePolicy(state, ctx, { policy: { ...policy, rawCsvDays: 1 }, expectedRevision: lifecyclePolicy(state).revision, reason: 'Delete sample sources the next day.' }), (error: any) => error.status === 400 && /each category for at least 30 days, the time an inactive sandbox is kept/.test(error.message)); checks += 1;
+  check(lifecycleView(state, ctx).secondApprover === false && lifecycleView(state, ctx).minimumDays?.rawCsvDays === 30, 'the sandbox explains the rule without a second approver');
+  makeRecord(state, 'retention-policies', { name: 'Retention policy saved', status: 'recorded', createdAt: '2026-09-01T10:00:00.000Z', data: { policy: { ...policy, rawCsvDays: 1 }, actor: ctx.actor, reason: 'Saved before the minimum.', sequence: 1 } });
+  batch.data.committedAt = '2026-09-15T10:00:00.000Z';
+  check(lifecycleView(state, ctx).eligibleCount === 0, 'a stored one-day policy deletes nothing younger than 30 days');
+  batch.data.committedAt = '2026-08-20T10:00:00.000Z';
+  check(lifecycleView(state, ctx).eligibleCount === 1, 'and a source older than 30 days stays eligible');
+  // One person plays every role in the sandbox, so the preparer may approve there.
+  const run = preview(state);
+  check(approve(state, run).status === 'approved' && run.preparedBy === ctx.actor, 'the sandbox preparer approves their own preview');
 }
 console.log(`Lifecycle retention: ${checks} checks passed.`);

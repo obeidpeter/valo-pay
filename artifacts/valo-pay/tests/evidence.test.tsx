@@ -78,21 +78,23 @@ describe('evidence register and operational reviews', () => {
     expect(window.open).toHaveBeenCalledWith(link.getAttribute('href'), '_blank');
   });
 
-  it('saves the named tasks and review date, keeping partial reviews distinct from complete reviews', async () => {
+  it('records the named tasks in the reviewer\'s own name at the service\'s time, keeping partial reviews distinct from complete reviews', async () => {
     const user = userEvent.setup();
     renderApp('/evidence');
     await user.click(await screen.findByRole('button', { name: 'Log review' }));
     const dialog = screen.getByRole('dialog');
+    // MEA-05: nobody types a reviewer or a date; the review is the signed-in person's, at the time the service saves it.
+    expect(within(dialog).queryByLabelText(/Reviewer name|Review date/)).toBeNull();
+    expect(within(dialog).getByText(/Sandbox Admin \(you\)/)).toBeTruthy();
     await user.click(within(dialog).getByRole('button', { name: 'Save review' }));
-    expect(await screen.findByText('Choose the date the review took place.')).toBeTruthy();
-    await user.type(within(dialog).getByLabelText('Review date'), '2026-09-01');
+    expect(await screen.findByText('Describe what was checked and any tasks still outstanding.')).toBeTruthy();
     await user.click(within(dialog).getByRole('checkbox', { name: 'Mandate operations' }));
     await user.click(within(dialog).getByRole('checkbox', { name: 'Payment matching' }));
     await user.type(within(dialog).getByRole('textbox', { name: 'Review notes' }), 'Checked mandates and matches; retries and dispute records still need review.');
     await user.click(within(dialog).getByRole('button', { name: 'Save review' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     const record = api.state().records.find(record => record.kind === 'reviews');
-    expect(record?.data).toMatchObject({ confirmedJobs: ['mandates', 'reconciliation'], reviewedAt: '2026-09-01' });
+    expect(record?.data).toMatchObject({ confirmedJobs: ['mandates', 'reconciliation'], reviewer: 'Sandbox Admin', reviewedAt: api.now });
     expect(await screen.findByText('Mandate operations, Payment matching')).toBeTruthy();
     expect(screen.getByText('Review recorded')).toBeTruthy();
   });

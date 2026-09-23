@@ -135,4 +135,51 @@ describe("settings", () => {
     expect(state.records.filter((record) => [first, second].includes(record.id)).map((record) => record.data.owner)).toEqual(["merchant_manual", "merchant_manual"]);
     expect(state.records.filter((record) => record.kind === "attempts" && record.status === "scheduled")).toEqual([]);
   });
+
+  it("lifts the emergency stop at once in the sandbox, and says a pilot needs a second administrator", async () => {
+    const user = userEvent.setup();
+    api.mutate((state) => { state.merchant.killSwitch = true; });
+    renderApp("/settings");
+    expect(await screen.findByText(/In a pilot, turning the stop off needs a second administrator’s approval\. In this sandbox one person plays every role, so it takes effect at once\./)).toBeTruthy();
+    await user.type(screen.getByLabelText("Reason for changing the emergency stop"), "The rehearsal incident is over.");
+    await user.click(screen.getByRole("button", { name: "Turn off emergency stop" }));
+    await screen.findByText("Emergency stop updated");
+    expect(api.state().merchant.killSwitch).toBe(false);
+  });
+
+  it("shows a pilot's request to lift the stop, which only another administrator approves", async () => {
+    const user = userEvent.setup();
+    // A staff workspace, signed in as one administrator; another asked to lift the stop.
+    const send = globalThis.fetch;
+    globalThis.fetch = async (input, options) => {
+      const response = await send(input, options);
+      if (new URL(String(input instanceof Request ? input.url : input), "http://localhost").pathname !== "/api/v1/workspace") return response;
+      return new Response(JSON.stringify({ ...(await response.json()), accessMode: "staff", actor: "Clerk:user_a" }), { status: 200, headers: { "Content-Type": "application/json" } });
+    };
+    api.mutate((state) => { state.merchant.killSwitch = true; state.settings.emergencyStopReleases = { lender: { requestedBy: "Clerk:user_b", requestedAt: api.now, reason: "The incident is closed.", policyId: null } }; });
+    renderApp("/settings");
+    expect(await screen.findByText(/Clerk:user_b asked to turn the emergency stop off on .*: “The incident is closed\.”\. The stop stays on until another administrator approves it/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Turn off emergency stop|Ask to turn off emergency stop/ })).toBeNull();
+    await user.type(screen.getByLabelText("Reason for changing the emergency stop"), "Checked the incident notes with Operations.");
+    await user.click(screen.getByRole("button", { name: "Approve turning it off" }));
+    await screen.findByText("Emergency stop turned off");
+    expect(api.state().merchant.killSwitch).toBe(false);
+    expect(api.state().settings.emergencyStopReleases).toBeUndefined();
+    globalThis.fetch = send;
+  });
+
+  it("never offers a pilot administrator the approval of their own request to lift the stop", async () => {
+    const send = globalThis.fetch;
+    globalThis.fetch = async (input, options) => {
+      const response = await send(input, options);
+      if (new URL(String(input instanceof Request ? input.url : input), "http://localhost").pathname !== "/api/v1/workspace") return response;
+      return new Response(JSON.stringify({ ...(await response.json()), accessMode: "staff", actor: "Clerk:user_a" }), { status: 200, headers: { "Content-Type": "application/json" } });
+    };
+    api.mutate((state) => { state.merchant.killSwitch = true; state.settings.emergencyStopReleases = { lender: { requestedBy: "Clerk:user_a", requestedAt: api.now, reason: "The incident is closed.", policyId: null } }; });
+    renderApp("/settings");
+    expect(await screen.findByText("You asked for this, so another administrator must approve it.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Approve turning it off" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Keep the stop on" })).toBeTruthy();
+    globalThis.fetch = send;
+  });
 });

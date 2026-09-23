@@ -24,8 +24,8 @@ import { randomUUID } from "node:crypto";
 import * as S from "@workspace/api-zod";
 import { ZodError, type ZodTypeAny, type z } from "zod";
 import {
-  ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, isCloseTime,
-  nextCloseInstant, recordKinds, roles,
+  ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, exportPermitted, handBackOwners, isCloseTime,
+  nextCloseInstant, recordKinds, roles, sensitiveExportRefusal,
 } from "@workspace/valopay-schema";
 import { amendDueItem, customerTimeline, executeAction, makeRecord, rescheduleAfterSettings, validateRecord } from "../../api-server/src/domain";
 import { enrolEligibleFailures } from "../../api-server/src/domain/policy-engine";
@@ -153,7 +153,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
   const roster = () => roles.filter(role => role !== 'Read-only').map(role => ({ actor: 'Sandbox ' + role, name: 'Demo ' + role, role }));
   const pilotWrite = (q: Record<string,string>, fn: (s: DomainState,c: Context)=>ValopayRecord) => withState(merchantOf(q), (state,ctx) => { const before=structuredClone(state); const result=fn(state,ctx); advanceRecordVersions(before,state,ctx.now); return contract(valopayRecordSchema, result); }, { action:'pilot.change',objectId:'workspace',summary:'Synthetic pilot workflow' });
   const routes: Array<[string, RegExp, Handler]> = [
-    ['GET', /^\/v1\/team$/, () => contract(staffDirectorySchema, {mode:'sandbox', actor:context().actor, members:[], lenders:[], invitations:[], events:[], message:'Demo personas are active.'})],
+    ['GET', /^\/v1\/team$/, () => contract(staffDirectorySchema, {mode:'sandbox', actor:context().actor, members:[], lenders:[], invitations:[], changes:[], events:[], message:'Demo personas are active.'})],
     ['GET', /^\/v1\/team\/readiness$/, () => contract(accessReadinessSchema, {syntheticOnly:true,canCommission:false,checkedAt:api.now,checks:[{id:'identity',name:'Staff identity',state:'not_configured',detail:'Configure a separate Clerk staging organisation and provision its first administrator.'},{id:'mfa',name:'Multi-factor authentication',state:'not_configured',detail:'Demo role changes do not verify a staff member or a second factor.'},{id:'origin',name:'Allowed staff origins',state:'not_configured',detail:'Staff changes need a configured staging address.'},{id:'database',name:'Restricted database access',state:'not_configured',detail:'The offline console test does not verify a restricted database connection.'},{id:'encryption',name:'Managed payload encryption',state:'not_configured',detail:'No external wrapping key is configured in this offline test.'}]})],
     ['GET', /^\/v1\/operations$/, () => contract(operationListSchema, {items:[],total:0,offset:0})],
     ['GET', /^\/v1\/pilot\/journey$/, (_p,q) => {const s=api.state(merchantOf(q)),count=(kind:string,statuses?:string[])=>s.records.filter(r=>r.kind===kind&&(!statuses||statuses.includes(r.status))).length,open=s.records.filter(r=>r.kind==='exceptions'&&!['closed','resolved'].includes(r.status));return contract(pilotJourneySchema,{lender:s.merchant,accessMode:'sandbox',actor:context().actor,syntheticOnly:true,counts:{customers:count('customers'),batches:count('import-batches',['committed']),receipts:count('payments'),openCases:open.length,unassignedCases:open.filter(r=>!r.data.case?.assignee).length,closes:count('closes'),exports:count('exports',['ready'])}});}],
@@ -288,6 +288,8 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
       const merchantId = merchantOf(query);
       return S.CreateExportResponse.parse(withState(merchantId, (state, ctx) => {
         if(options.queuedExports)return queueExport(state,ctx,body,'/private/test');
+        // export_sensitive, as queueExport checks it.
+        if (!exportPermitted(ctx.role, body.kind)) fail(sensitiveExportRefusal, 403);
         if (body.customerId && !state.records.some((record) => record.kind === "customers" && record.id === body.customerId)) fail("Customer not found.", 404);
         const review = body.kind === 'reviewed-close' ? state.records.find(r=>r.kind==='close-reviews'&&r.id===(body as any).closeReviewId) : undefined;
         if(body.kind==='reviewed-close'&&(!review||review.status!=='approved'||!reviewIsCurrent(state,review)))fail('An approved, current close review is required.',409);

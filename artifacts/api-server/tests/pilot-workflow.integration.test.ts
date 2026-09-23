@@ -827,6 +827,12 @@ try {
       "admin",
     ),
   );
+  // A Finance grant waits for a second administrator: the operator adds one, and that administrator approves it.
+  assert.equal(invitation.approval, "awaiting");
+  const secondAdmin = `user_${randomUUID().replaceAll("-", "")}`;
+  identities.set("second-admin", staffAuth(secondAdmin));
+  await store.addStaffAdministrator(organisation, secondAdmin, "Second administrator");
+  ok(await call(`/v1/team/invitations/${invitation.id}/approve`, "POST", undefined, undefined, "second-admin"));
   (clerkClient.users as any).getUser = async () => ({
     emailAddresses: [
       {

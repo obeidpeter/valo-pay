@@ -263,10 +263,10 @@ try {
   // Every keyed write of the journey the journal records, made as the persona acting now, is repeated after the run.
   const repeatable = keyedWrites.filter((write) => write.persona === persona && recoverableRequest(write.method, write.path.split("?")[0]!, write.body));
   assert.ok(repeatable.length >= 10, `the journey saved keyed writes to repeat: ${repeatable.map((write) => `${write.method} ${write.path}`).join(", ")}`);
-  // As far as the policy can tell, those requests finished two days ago.
-  await pool.query("UPDATE valopay_operations SET updated_at=updated_at - interval '2 days' WHERE merchant_id=$1 AND status='completed' AND request_key=ANY($2::text[])", [lender, repeatable.map((write) => write.key)]);
+  // As far as the policy can tell, those requests finished a month ago: the sandbox keeps every category at least 30 days.
+  await pool.query("UPDATE valopay_operations SET updated_at=updated_at - interval '31 days' WHERE merchant_id=$1 AND status='completed' AND request_key=ANY($2::text[])", [lender, repeatable.map((write) => write.key)]);
   lifecycle = ok(await call(q("/v1/lifecycle")));
-  lifecycle = ok(await call(q("/v1/lifecycle/policy"), "POST", { policy: { rawCsvDays: 30, journalPayloadDays: 1, exportFileDays: null, auditTrail: "retain" }, expectedRevision: lifecycle.policyRevision, reason: "Remove request payloads a day after they finish." }, { key: key() }));
+  lifecycle = ok(await call(q("/v1/lifecycle/policy"), "POST", { policy: { rawCsvDays: 30, journalPayloadDays: 30, exportFileDays: null, auditTrail: "retain" }, expectedRevision: lifecycle.policyRevision, reason: "Remove request payloads thirty days after they finish." }, { key: key() }));
   let run = ok(await call(q("/v1/lifecycle/runs"), "POST", { expectedPolicyRevision: lifecycle.policyRevision }, { key: key() }));
   assert.equal(run.candidates.filter((candidate: any) => candidate.kind === "journal_payload").length, repeatable.length, "the run removes each repeatable request's stored payload and result");
   ok(await call(q(`/v1/lifecycle/runs/${run.id}`)));
@@ -388,6 +388,11 @@ try {
   const invitation = ok(await call("/v1/team/invitations", "POST", { email: "finance@example.test", role: "Finance" }, { identity: "admin" }));
   const spare = ok(await call("/v1/team/invitations", "POST", { email: "spare@example.test", role: "Operations" }, { identity: "admin" }));
   ok(await call(`/v1/team/invitations/${spare.id}/revoke`, "POST", undefined, { identity: "admin" }));
+  // A Finance grant waits for a second administrator, whom the operator adds.
+  const second = `user_${randomUUID().replaceAll("-", "")}`;
+  identities.set("second", staffAuth(second));
+  await store.addStaffAdministrator(organisation, second, "Second contract administrator");
+  ok(await call(`/v1/team/invitations/${invitation.id}/approve`, "POST", undefined, { identity: "second" }));
   (clerkClient.users as any).getUser = async () => ({ emailAddresses: [{ emailAddress: "finance@example.test", verification: { status: "verified" } }] });
   const accepted = ok(await call("/v1/team/accept", "POST", { token: invitation.token }, { identity: "finance" }));
   assert.equal(accepted.role, "Finance");
@@ -396,7 +401,13 @@ try {
   assert.ok(directory.invitations.length >= 2 && directory.events.length >= 3, "an administrator sees invitations and access history");
   const member = directory.members.find((row: any) => row.actor === `Clerk:${finance}`);
   const granted = ok(await call(`/v1/team/members/${member.id}/lenders`, "PATCH", { expectedUpdatedAt: withOffset(member.updatedAt), lenderIds: [staffLender.id], reason: "Assign Finance to the contract lender." }, { identity: "admin" }));
-  ok(await call(`/v1/team/members/${member.id}`, "PATCH", { role: "Finance", status: "suspended", expectedUpdatedAt: withOffset(granted.updatedAt), reason: "Suspended at the end of the contract check." }, { identity: "admin" }));
+  const suspended = ok(await call(`/v1/team/members/${member.id}`, "PATCH", { role: "Finance", status: "suspended", expectedUpdatedAt: withOffset(granted.updatedAt), reason: "Suspended at the end of the contract check." }, { identity: "admin" }));
+  // Reactivating Finance is a grant again: a request the second administrator declines, and then one it approves.
+  const reactivate = { role: "Finance", status: "active", expectedUpdatedAt: withOffset(suspended.updatedAt), reason: "Back for the contract check." };
+  const declined = ok(await call(`/v1/team/members/${member.id}`, "PATCH", reactivate, { identity: "admin" }));
+  ok(await call(`/v1/team/changes/${declined.pendingChange.id}/decline`, "POST", undefined, { identity: "second" }));
+  const requested = ok(await call(`/v1/team/members/${member.id}`, "PATCH", reactivate, { identity: "admin" }));
+  assert.equal(ok(await call(`/v1/team/changes/${requested.pendingChange.id}/approve`, "POST", undefined, { identity: "second" })).status, "active");
   const financeTeam = ok(await call("/v1/team", "GET", undefined, { identity: "admin" }));
   assert.ok(financeTeam.members.every((row: any) => Array.isArray(row.lenderIds) && typeof row.allLenders === "boolean"));
   const readiness = ok(await call("/v1/team/readiness", "GET", undefined, { identity: "admin" }));

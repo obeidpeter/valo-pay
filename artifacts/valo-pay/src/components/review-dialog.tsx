@@ -17,23 +17,22 @@ export const reviewJobs = [
   { value: 'audit', label: 'Audit and dispute records' },
 ] as const;
 
-/** Records the tasks actually checked; a count cannot establish which tasks were reviewed. */
+/** Records the tasks actually checked; a count cannot establish which tasks were reviewed. The reviewer is the person
+ * signed in and the time is the service's when it saves the review (MEA-05): neither is typed in. */
 export function ReviewDialog({ onClose }: { onClose: () => void }) {
   const { merchantId, workspace } = useWorkspace();
   const queryClient = useQueryClient();
-  const [reviewer, setReviewer] = useState(workspace?.actor || '');
-  const [reviewedAt, setReviewedAt] = useState('');
   const [confirmedJobs, setConfirmedJobs] = useState<string[]>([]);
   const [note, setNote] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState('');
   const restoreOpenerFocus = useDialogFocusReturn(true);
-  const reviewFields = [{ name: 'reviewer', label: 'Reviewer name' }, { name: 'reviewedAt', label: 'Review date' }, { name: 'note', label: 'Review notes' }];
+  const reviewFields = [{ name: 'note', label: 'Review notes' }];
   const corrected = (field: string) => setErrors(previous => { const next = { ...previous }; delete next[field]; return next; });
   const visit = useRef({ merchantId });
   if (visit.current.merchantId !== merchantId) visit.current = { merchantId };
   useEffect(() => () => { visit.current = { merchantId: null }; }, []);
-  const { confirmDiscard } = useUnsavedChanges(Boolean(reviewedAt || confirmedJobs.length || note || reviewer !== (workspace?.actor || '')));
+  const { confirmDiscard } = useUnsavedChanges(Boolean(confirmedJobs.length || note));
   const close = () => {
     if (create.isPending) return;
     if (create.hasUnconfirmedOutcome) {
@@ -42,7 +41,6 @@ export function ReviewDialog({ onClose }: { onClose: () => void }) {
     }
     if (confirmDiscard()) onClose();
   };
-  const todayInWAT = new Date(Date.now() + 60 * 60 * 1000).toISOString().slice(0, 10);
   const create = useCreateRecord({ mutation: {
     onMutate: () => visit.current,
     onSuccess: (_data, _variables, submitted) => {
@@ -59,17 +57,13 @@ export function ReviewDialog({ onClose }: { onClose: () => void }) {
     const blocked = permissionReason(workspace, { kind: 'reviews' });
     if (blocked) { setFailure(blocked); return; }
     const next: Record<string, string> = {};
-    if (!reviewer.trim()) next.reviewer = 'Enter the reviewer’s name.';
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(reviewedAt) || Number.isNaN(Date.parse(reviewedAt)) || new Date(reviewedAt).toISOString().slice(0, 10) !== reviewedAt) next.reviewedAt = 'Choose the date the review took place.';
-    else if (reviewedAt > todayInWAT) next.reviewedAt = 'The review date cannot be in the future.';
     if (!note.trim()) next.note = 'Describe what was checked and any tasks still outstanding.';
     setErrors(next); setFailure('');
-    const first = ['reviewer', 'reviewedAt', 'note'].find(key => next[key]);
-    if (first) { focusField(`review-${first}`); return; }
+    if (next.note) { focusField('review-note'); return; }
     if (!merchantId) return;
     create.mutate({ kind: 'reviews', params: { merchantId }, data: {
-      name: `Operational review · ${reviewedAt}`, status: 'recorded',
-      data: { reviewer: reviewer.trim(), reviewedAt, confirmedJobs, note: note.trim() },
+      name: 'Operational review', status: 'recorded',
+      data: { confirmedJobs, note: note.trim() },
     } });
   };
   return (
@@ -77,7 +71,7 @@ export function ReviewDialog({ onClose }: { onClose: () => void }) {
       <DialogContent onCloseAutoFocus={restoreOpenerFocus}>
         <DialogHeader>
           <DialogTitle>Log fortnightly review</DialogTitle>
-          <DialogDescription>Record what was checked with sample data. Only a review confirming all four tasks counts towards the review schedule. Reviewer name, review date and notes are required.</DialogDescription>
+          <DialogDescription>Record what was checked with sample data. Only a review confirming all four tasks counts towards the review schedule. Review notes are required.</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} noValidate className="space-y-5">
           {create.hasUnconfirmedOutcome && <div role="alert" className="space-y-2 rounded-lg border border-warning-border bg-warning/20 p-3 text-sm">
@@ -89,15 +83,9 @@ export function ReviewDialog({ onClose }: { onClose: () => void }) {
           </div>}
           <fieldset disabled={create.isPending || create.hasUnconfirmedOutcome} className="contents">
           {!create.hasUnconfirmedOutcome && (failure || Object.keys(errors).length > 0) && <FormAlert title="Review not saved">{failure || 'Check the highlighted fields.'}<FormErrorLinks errors={errors} fields={reviewFields} prefix="review" /></FormAlert>}
-          <div className="space-y-1.5">
-            <label htmlFor="review-reviewer" className="text-sm font-medium">Reviewer name</label>
-            <input id="review-reviewer" required {...invalidProps('review-reviewer', errors.reviewer)} value={reviewer} onChange={event => { setReviewer(event.target.value); corrected('reviewer'); }} className="w-full rounded-md border bg-background px-3 py-2 text-sm" />
-            <FieldError id="review-reviewer" message={errors.reviewer} />
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor="review-reviewedAt" className="text-sm font-medium">Review date</label>
-            <input id="review-reviewedAt" required {...invalidProps('review-reviewedAt', errors.reviewedAt)} type="date" max={todayInWAT} value={reviewedAt} onChange={event => { setReviewedAt(event.target.value); corrected('reviewedAt'); }} className="w-full rounded-md border bg-background px-3 py-2 text-sm" />
-            <FieldError id="review-reviewedAt" message={errors.reviewedAt} />
+          <div className="space-y-1 rounded-md border bg-secondary/20 px-3 py-2 text-sm">
+            <p><span className="font-medium">Reviewer:</span> {workspace?.actor || 'you'} (you)</p>
+            <p className="text-xs text-muted-foreground">The review is recorded in your name, with the time the service saves it. To record another person’s review, they sign in and log it themselves.</p>
           </div>
           <fieldset className="space-y-2">
             <legend className="mb-2 text-sm font-medium">Tasks confirmed</legend>

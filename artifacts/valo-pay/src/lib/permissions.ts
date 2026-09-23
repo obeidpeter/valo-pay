@@ -11,9 +11,10 @@ const recordRoles: Record<string, string[]> = {
   policies: ['Admin'], templates: ['Admin'], experiments: ['Admin'], evidence: ['Admin'], cutovers: ['Admin'],
   commercial: ['Admin', 'Finance'], costs: ['Admin', 'Finance'], 'settlement-batches': ['Admin', 'Finance'],
   exceptions: [...operators, 'Compliance reviewer'], reviews: [...operators, 'Compliance reviewer'],
+  calendar: ['Admin', 'Operations'],
 };
 const actionRoles: Record<string, string[]> = {
-  kill_switch: ['Admin'], update_settings: ['Admin'], import_records: operators,
+  kill_switch: ['Admin'], approve_kill_switch_off: ['Admin'], update_settings: ['Admin'], import_records: operators,
   mandate_suspend: ['Admin', 'Operations'], mandate_cancel: ['Admin', 'Operations'], mandate_reinstate: ['Admin', 'Operations'],
   mandate_reissue: ['Admin', 'Operations'], activation_reminder: ['Admin', 'Operations'],
   notify_policy_change: ['Admin', 'Operations'], apply_policy_version: ['Admin', 'Operations'],

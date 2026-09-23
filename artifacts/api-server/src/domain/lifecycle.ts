@@ -1,4 +1,4 @@
-import { retentionPolicySchema, retentionPolicyInputSchema, retentionHoldInputSchema, lifecycleCandidateSchema, lifecyclePreviewInputSchema, lifecycleApproveInputSchema, lifecycleRunViewSchema, lifecycleViewSchema, lifecycleReceiptStatusSchema, type LifecycleCandidate, type LifecycleEvidence, type LifecycleExternalCandidate, type RetentionPolicy, canonicalJson, sameJson, legacyCollatedCompare, storedInstant } from '@workspace/valopay-schema';
+import { retentionPolicySchema, retentionPolicyInputSchema, retentionHoldInputSchema, lifecycleCandidateSchema, lifecyclePreviewInputSchema, lifecycleApproveInputSchema, lifecycleRunViewSchema, lifecycleViewSchema, lifecycleReceiptStatusSchema, retentionMinimumDays, type LifecycleCandidate, type LifecycleEvidence, type LifecycleExternalCandidate, type RetentionMinimum, type RetentionPolicy, canonicalJson, sameJson, legacyCollatedCompare, storedInstant } from '@workspace/valopay-schema';
 import type { Context, DomainState, ValopayRecord } from './types';
 import { makeRecord, touch, assertSourceOpened } from './records';
 import { canonicalDigest } from '../lib/digests';
@@ -15,6 +15,9 @@ const defaults: RetentionPolicy = { rawCsvDays: null, journalPayloadDays: null, 
 const hash = (value: unknown) => canonicalDigest(value, 'legacy-en-us-replacer');
 function refuse(message: string, status = 409): never { throw Object.assign(new Error(message), { status }); }
 function admin(ctx: Context) { if (ctx.role !== 'Admin') refuse('A currently authorised administrator is required for retention controls.', 403); }
+/** The shortest retention the caller's workspace allows (retentionMinimumDays): a staff pilot's, or the sandbox's. */
+const minimumOf = (ctx: Context): RetentionMinimum => retentionMinimumDays[ctx.accessMode === 'staff' ? 'staff' : 'sandbox'];
+const daysText = (days: number) => `${days.toLocaleString('en-GB')} days${days === 2192 ? ' (six years)' : ''}`;
 const rows = (state: DomainState, kind: string) => state.records.filter(record => record.kind === kind && record.merchantId === state.merchant.id);
 const ordered = (records: ValopayRecord[]) => [...records].sort((a, b) => Number(b.data.sequence || 0) - Number(a.data.sequence || 0) || b.createdAt.localeCompare(a.createdAt));
 const nextSequence = (state: DomainState, kind: string) => Math.max(0, ...rows(state, kind).map(record => Number(record.data.sequence || 0))) + 1;
@@ -60,7 +63,7 @@ function lifecycleEvidence(state: DomainState): Map<string, LifecycleEvidence[]>
  * after the state changes.
  */
 function rulesOf(state: DomainState, ctx: Context, policy = lifecyclePolicy(state).policy, holds = lifecycleHolds(state)) {
-  return { policy, held: new Set(holds.active.map(record => `${record.data.kind}:${record.data.sourceId}`)), evidence: lifecycleEvidence(state), now: Date.parse(ctx.now) };
+  return { policy, minimum: minimumOf(ctx), held: new Set(holds.active.map(record => `${record.data.kind}:${record.data.sourceId}`)), evidence: lifecycleEvidence(state), now: Date.parse(ctx.now) };
 }
 type Rules = ReturnType<typeof rulesOf>;
 const evidenceFor = (rules: Rules, candidate: LifecycleCandidate): LifecycleEvidence[] => candidate.kind === 'export_file' ? rules.evidence.get(candidate.sourceId) ?? [] : [];
@@ -85,8 +88,9 @@ export function lifecycleCandidates(state: DomainState, external: LifecycleExter
   return [...raw, ...validateExternal(state, external)].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || candidateKey(a).localeCompare(candidateKey(b)));
 }
 function eligible(rules: Rules, candidate: LifecycleCandidate) {
-  const days = candidate.kind === 'raw_csv' ? rules.policy.rawCsvDays : candidate.kind === 'journal_payload' ? rules.policy.journalPayloadDays : rules.policy.exportFileDays;
-  return days !== null && Date.parse(candidate.createdAt) + days * DAY <= rules.now && !rules.held.has(candidateKey(candidate)) && !evidenceFor(rules, candidate).length;
+  const key = candidate.kind === 'raw_csv' ? 'rawCsvDays' : candidate.kind === 'journal_payload' ? 'journalPayloadDays' : 'exportFileDays', days = rules.policy[key];
+  // A policy saved before the minimum existed, or under the sandbox's shorter one, never deletes sooner than this workspace's minimum.
+  return days !== null && Date.parse(candidate.createdAt) + Math.max(days, rules.minimum[key]) * DAY <= rules.now && !rules.held.has(candidateKey(candidate)) && !evidenceFor(rules, candidate).length;
 }
 function runOf(state: DomainState, id: string) { return rows(state, 'retention-runs').find(record => record.id === id) || refuse('Retention run not found in this lender.', 404); }
 /** The latest receipt for each source of each run, from one pass over the lender's receipts. */
@@ -104,18 +108,22 @@ function runView(state: DomainState, run: ValopayRecord, latest: Map<string, Val
   const receipts = [...latest.values()];
   const successful = receipts.filter(receipt => ['deleted', 'already_absent'].includes(receipt.data.result)).length;
   const candidates: unknown[] = Array.isArray(run.data.candidates) ? run.data.candidates : [];
-  return contractAnswer(lifecycleRunViewSchema, { id: run.id, merchantId: state.merchant.id, status: run.status, updatedAt: run.updatedAt, createdAt: run.createdAt, expiresAt: storedInstant(run.data.expiresAt), previewDigest: run.data.previewDigest, policyRevision: run.data.policyRevision, candidates: candidates.map(storedCandidate), candidateCount: candidates.length, moreEligible: run.data.moreEligible || 0, approvedBy: run.data.approvedBy || null, approvedAt: run.data.approvedAt ? storedInstant(run.data.approvedAt) : null, receipts: receipts.map(receipt => ({ id: receipt.id, kind: receipt.data.kind, sourceId: receipt.data.sourceId, status: receipt.data.result, at: receipt.createdAt, detail: receipt.data.detail, actor: receipt.data.actor })), successful, remaining: candidates.length - successful, auditRetained: true, financialRecordsRetained: true, syntheticOnly: true });
+  return contractAnswer(lifecycleRunViewSchema, { id: run.id, merchantId: state.merchant.id, status: run.status, updatedAt: run.updatedAt, createdAt: run.createdAt, expiresAt: storedInstant(run.data.expiresAt), previewDigest: run.data.previewDigest, policyRevision: run.data.policyRevision, candidates: candidates.map(storedCandidate), candidateCount: candidates.length, moreEligible: run.data.moreEligible || 0, preparedBy: typeof run.data.preparedBy === 'string' ? run.data.preparedBy : null, approvedBy: run.data.approvedBy || null, approvedAt: run.data.approvedAt ? storedInstant(run.data.approvedAt) : null, receipts: receipts.map(receipt => ({ id: receipt.id, kind: receipt.data.kind, sourceId: receipt.data.sourceId, status: receipt.data.result, at: receipt.createdAt, detail: receipt.data.detail, actor: receipt.data.actor })), successful, remaining: candidates.length - successful, auditRetained: true, financialRecordsRetained: true, syntheticOnly: true });
 }
 export function lifecycleRunView(state: DomainState, run: ValopayRecord) { return runView(state, run, latestReceipts(state, run.id)); }
 export function lifecycleView(state: DomainState, ctx: Context, external: LifecycleExternalCandidate[] = [], targetOffset = 0) {
   admin(ctx);
   if (!Number.isInteger(targetOffset) || targetOffset < 0 || targetOffset > 100000) refuse('Choose a valid retention inventory page.', 400);
   const { policy, revision } = lifecyclePolicy(state), holds = lifecycleHolds(state), candidates = lifecycleCandidates(state, external), rules = rulesOf(state, ctx, policy, holds), receipts = receiptsByRun(state);
-  return contractAnswer(lifecycleViewSchema, { merchantId: state.merchant.id, lenderName: state.merchant.name, actor: ctx.actor, asOf: ctx.now, policy, policyRevision: revision, holdRevision: holds.revision, eligibleCount: candidates.filter(candidate => eligible(rules, candidate)).length, evidenceTotal: candidates.filter(candidate => evidenceFor(rules, candidate).length).length, targets: candidates.slice(targetOffset, targetOffset + 100).map(candidate => ({ ...candidate, held: rules.held.has(candidateKey(candidate)), evidence: evidenceFor(rules, candidate) })), targetTotal: candidates.length, targetOffset, holds: holds.active.slice(0, 100).map(record => ({ kind: record.data.kind, sourceId: record.data.sourceId, reason: record.data.reason, actor: record.data.actor, at: record.createdAt })), holdTotal: holds.active.length, runs: rows(state, 'retention-runs').sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)).slice(0, 10).map(run => runView(state, run, receipts.get(run.id) ?? new Map())), auditRetained: true, financialRecordsRetained: true, syntheticOnly: true });
+  return contractAnswer(lifecycleViewSchema, { merchantId: state.merchant.id, lenderName: state.merchant.name, actor: ctx.actor, asOf: ctx.now, policy, minimumDays: minimumOf(ctx), secondApprover: ctx.accessMode === 'staff', policyRevision: revision, holdRevision: holds.revision, eligibleCount: candidates.filter(candidate => eligible(rules, candidate)).length, evidenceTotal: candidates.filter(candidate => evidenceFor(rules, candidate).length).length, targets: candidates.slice(targetOffset, targetOffset + 100).map(candidate => ({ ...candidate, held: rules.held.has(candidateKey(candidate)), evidence: evidenceFor(rules, candidate) })), targetTotal: candidates.length, targetOffset, holds: holds.active.slice(0, 100).map(record => ({ kind: record.data.kind, sourceId: record.data.sourceId, reason: record.data.reason, actor: record.data.actor, at: record.createdAt })), holdTotal: holds.active.length, runs: rows(state, 'retention-runs').sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)).slice(0, 10).map(run => runView(state, run, receipts.get(run.id) ?? new Map())), auditRetained: true, financialRecordsRetained: true, syntheticOnly: true });
 }
 export function saveLifecyclePolicy(state: DomainState, ctx: Context, raw: unknown) {
-  admin(ctx); const input = retentionPolicyInputSchema.parse(raw);
+  admin(ctx); const input = retentionPolicyInputSchema.parse(raw), minimum = minimumOf(ctx);
   if (input.expectedRevision !== lifecyclePolicy(state).revision) refuse('The retention policy changed. Refresh and review the current policy.');
+  const keys = Object.keys(minimum) as Array<keyof RetentionMinimum>;
+  if (keys.some(key => input.policy[key] !== null && input.policy[key]! < minimum[key])) refuse(`${ctx.accessMode === 'staff'
+    ? `Keep original source files and export files for at least ${daysText(minimum.rawCsvDays)}, and recovery payloads for at least ${daysText(minimum.journalPayloadDays)}: source files and exports are evidence, kept for the six years the pilot documents name, and recovery payloads for one annual audit cycle.`
+    : `Keep each category for at least ${daysText(minimum.rawCsvDays)}, the time an inactive sandbox is kept.`} Raise the shorter periods, or leave a category off.`, 400);
   makeRecord(state, 'retention-policies', { name: 'Retention policy saved', status: 'recorded', createdAt: ctx.now, updatedAt: ctx.now, data: { policy: input.policy, actor: ctx.actor, reason: input.reason, sequence: nextSequence(state, 'retention-policies'), synthetic: true } });
   return lifecyclePolicy(state);
 }
@@ -140,6 +148,9 @@ export function lifecyclePreview(state: DomainState, ctx: Context, raw: unknown,
 export function approveLifecycleRun(state: DomainState, ctx: Context, id: string, raw: unknown, external: LifecycleExternalCandidate[] = []) {
   admin(ctx); const input = lifecycleApproveInputSchema.parse(raw), run = runOf(state, id);
   if (run.status !== 'preview' || input.expectedUpdatedAt !== run.updatedAt || input.previewDigest !== run.data.previewDigest) refuse('This preview changed or has already been approved. Refresh its saved status.');
+  // A staff pilot needs a second person: its actor is the verified Clerk user the principal is derived from, so a different actor is a
+  // different person. The anonymous sandbox has one person playing every role, so there the console explains the rule instead.
+  if (ctx.accessMode === 'staff' && run.data.preparedBy === ctx.actor) refuse('A different administrator must approve this deletion run: the administrator who prepared the preview cannot approve it. A pilot with one administrator asks the operator to add a second with the provisioning command\'s --add-administrator mode.', 403);
   if (Date.parse(ctx.now) >= Date.parse(run.data.expiresAt)) refuse('This preview expired. Prepare a new preview and review its current sources.');
   const policy = lifecyclePolicy(state);
   if (policy.revision !== run.data.policyRevision) refuse('The retention policy changed. Prepare a new preview.');

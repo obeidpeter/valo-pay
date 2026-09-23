@@ -119,3 +119,33 @@ it('says why an export file kept as evidence is never offered for deletion', asy
   expect(screen.getByText(new RegExp(`Kept as evidence \\(linked to open case ${caseId}\\), so it is not eligible for deletion`))).toBeTruthy();
   expect(screen.getByRole('option', { name: new RegExp(`${exportId} · Evidence`) })).toBeTruthy();
 });
+
+it('explains the retention minimum, and in the sandbox that a pilot needs a second administrator to approve a run', async () => {
+  enable();
+  const user = userEvent.setup(); renderApp('/lifecycle');
+  expect(await screen.findByText('The sandbox keeps every category for at least 30 days, the time an inactive sandbox is kept. A pilot keeps evidence for six years.')).toBeTruthy();
+  expect(screen.getByRole('spinbutton', { name: 'Raw CSV after import: minimum days' }).getAttribute('min')).toBe('30');
+  await prepare(user);
+  expect(screen.getByText(/In a pilot, an administrator other than the one who prepared a preview must approve it\. This sandbox has one person playing every role, so here you may approve your own preview\./)).toBeTruthy();
+  await approve(user);
+  await screen.findByRole('button', { name: 'Execute approved run' });
+});
+
+it('keeps a pilot administrator from approving the preview they prepared', async () => {
+  enable();
+  // A staff pilot's view: its minimums, and a second administrator approves each run.
+  const send = globalThis.fetch;
+  globalThis.fetch = async (input, options) => {
+    const response = await send(input, options);
+    if (new URL(String(input instanceof Request ? input.url : input), 'http://localhost').pathname !== '/api/v1/lifecycle' || (options?.method ?? 'GET') !== 'GET') return response;
+    return new Response(JSON.stringify({ ...(await response.json()), secondApprover: true, minimumDays: { rawCsvDays: 2192, journalPayloadDays: 366, exportFileDays: 2192 } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const user = userEvent.setup(); renderApp('/lifecycle');
+  expect(await screen.findByText(/This pilot keeps raw CSV and export files for at least 2,192 days \(six years\)/)).toBeTruthy();
+  await prepare(user);
+  expect(screen.getByText('You prepared this preview, so another administrator must approve it. Either of you can execute it once approved.')).toBeTruthy();
+  await user.click(screen.getByRole('checkbox', { name: /I reviewed every source identity/ }));
+  await user.type(screen.getByRole('textbox', { name: 'Reason for approving this deletion' }), 'Approving my own preview is not allowed in a pilot.');
+  expect((screen.getByRole('button', { name: 'Approve exact deletion run' }) as HTMLButtonElement).disabled).toBe(true);
+  globalThis.fetch = send;
+});

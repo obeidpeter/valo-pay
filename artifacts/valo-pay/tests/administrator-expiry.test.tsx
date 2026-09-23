@@ -17,7 +17,7 @@ const DAY = 24 * 60 * 60 * 1000;
 const now = Date.parse("2026-09-23T09:00:00.000Z");
 const inDays = (days: number) => new Date(now + days * DAY).toISOString();
 const member = (actor: string, role: string, expiresAt: string, status = "active") => ({ id: `member-${actor}`, actor, name: actor, role, status, expiresAt, updatedAt: inDays(-1), lenderIds: [], allLenders: role === "Admin" }) as StaffDirectory["members"][number];
-const directory = (members: StaffDirectory["members"], actor = "Clerk:user_me"): StaffDirectory => ({ mode: "staff", actor, members, lenders: [], invitations: [], events: [], message: "Verified staff access." });
+const directory = (members: StaffDirectory["members"], actor = "Clerk:user_me"): StaffDirectory => ({ mode: "staff", actor, members, lenders: [], invitations: [], changes: [], events: [], message: "Verified staff access." });
 
 it("names the viewer's own ending access and the last administrator's, only within 14 days", () => {
   expect(ADMINISTRATOR_EXPIRY_WARNING_DAYS).toBe(14);

@@ -17,6 +17,7 @@ const tsx = path.join(root, "scripts", "node_modules", "tsx", "dist", "cli.mjs")
 export const suites = [
   'artifacts/api-server/tests/source-close-controls.integration.test.ts',
   'artifacts/api-server/tests/staff-lender-access.integration.test.ts',
+  'artifacts/api-server/tests/staff-governance.integration.test.ts',
   'artifacts/api-server/tests/runtime-isolation.integration.test.ts',
   'artifacts/api-server/tests/operations-controls.integration.test.ts',
   "artifacts/api-server/tests/pilot-workflow.integration.test.ts",
