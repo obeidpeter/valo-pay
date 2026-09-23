@@ -24,7 +24,7 @@ const {createPaystackIngress}=await import("../src/routes/sources");
 const {paystackConnectionTransaction,paystackIngress}=await import("../src/lib/paystack-connection");
 const {receivePaystackEvent}=await import("../src/providers/paystack-inbox");
 const {runDueCloses}=await import("../src/lib/close-scheduler");
-const {inMerchantAsSystem,loadState,revealImportPayloads,SYSTEM_ACTOR_PREFIX,digest}=await import("../src/lib/valopay-store");
+const {inMerchantAsSystem,loadState,revealImportPayloads,SYSTEM_ACTOR_PREFIX}=await import("../src/lib/valopay-store");
 // The Paystack test ingress reads its own raw body, so it is mounted before JSON parsing, as in app.ts.
 const app=express();app.use((req,_res,next)=>{(req as any).log={info(){},warn(){},error(){}};next();});app.use("/api",createPaystackIngress(paystackIngress));
 app.use(express.json({limit:"2mb"}));app.use((req,_res,next)=>{(req as any).auth=Object.assign(()=>({userId:null}),{[Symbol.for("@clerk/express.auth")]:true});next();});app.use("/api",router);app.use(errorHandler);
@@ -119,7 +119,8 @@ try{
   // A completed request's answer is stored once, as the replay copy under its key; the journal keeps only a reference
   // to what it saved, which is what Operations shows. A daily close answers with its whole record (about 100 KB for a
   // pilot-scale lender), and both tables used to hold it. A retried key still replays the copy and never runs twice.
-  const replayCopy=async(key:string)=>{const row=(await pool.query("SELECT id,response,pg_column_size(response) AS size FROM valopay_idempotency WHERE merchant_id=$1 AND id=$2",[lender,digest(`${lender}:${key}`)])).rows[0];return {size:Number(row.size),response:await openPayload(row.response,{lender,record:row.id,field:"response"},managedWrappingKeys)};};
+  // A journaled request's answer is kept under its journal entry.
+  const replayCopy=async(key:string)=>{const row=(await pool.query("SELECT i.id,i.response,pg_column_size(i.response) AS size FROM valopay_idempotency i JOIN valopay_operations o ON o.id=i.id AND o.merchant_id=i.merchant_id WHERE i.merchant_id=$1 AND o.request_key=$2",[lender,key])).rows[0];return {size:Number(row.size),response:await openPayload(row.response,{lender,record:row.id,field:"response"},managedWrappingKeys)};};
   // The reference names only the record's ID and kind, so it is not sealed: Operations links to the saved result
   // without the key service, as it does with encryption off.
   assert.deepEqual(completed.receipt,{id:customer.id,kind:"customers"},"the journal keeps a reference to the saved record, unsealed");

@@ -4,13 +4,16 @@
 // exercised with a fake request and response.
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
+import http from "node:http";
 import { ZodError } from "zod";
 import { errorHandler } from "../src/lib/error-handler.js";
 import { validateRecord } from "../src/domain/validation.js";
 import { markRolledBack } from "../src/lib/transaction-outcome.js";
 import { storageFailure } from "../src/lib/export-download.js";
 import { DatabaseLimitError } from "../src/lib/database-limits.js";
-import { markOperationClosed, operationClosed, registerRefusalCloser } from "../src/lib/refused-operations.js";
+import { markKeyed, markKeyUnused, markOperationClosed, operationClosed, registerRefusalCloser, type OperationState } from "../src/lib/refused-operations.js";
+import { parsePublishableKey } from "@clerk/shared/keys";
+import { ClerkAPIResponseError, ClerkRuntimeError } from "@clerk/shared/error";
 import { ResponseContractError, replayedAnswer } from "../src/lib/contract.js";
 import { connectedActionResultFor } from "@workspace/valopay-schema";
 
@@ -37,7 +40,7 @@ function answer(error: unknown): Answer {
   assert.equal(answer(new ReferenceError("x is not defined")).status, 500);
   assert.equal(answer("a string thrown by mistake").status, 500, "something that is not an Error is a 500");
   assert.equal(answer(Object.assign(new Error("duplicate key"), { code: "23505" })).status, 409, "a database safety constraint is a conflict");
-  assert.equal(answer(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" })).status, 500, "an error with a code the application does not own is a 500");
+  assert.equal(answer(Object.assign(new Error("resource busy"), { code: "EBUSY" })).status, 500, "an error with a code the application does not own is a 500");
   // The body parser's errors are the request's fault, even the JSON SyntaxError.
   const parserError = (type: string, status: number) => Object.assign(new SyntaxError("Unexpected token } in JSON at position 9"), { type, status, statusCode: status, expose: true });
   assert.deepEqual(answer(parserError("entity.parse.failed", 400)), { status: 400, body: { error: "The request body is not valid JSON. Check its format and try again.", requestId: "test-request" } }, "malformed JSON is a 400 in plain words");
@@ -74,7 +77,7 @@ function answer(error: unknown): Answer {
 
 {
   // A refusal whose request's journal entry is cancelled says so: neither this request nor an earlier one with its key was or can be saved.
-  const answered = (error: unknown, closer?: () => Promise<boolean>) => new Promise<Answer>((resolve) => {
+  const answered = (error: unknown, closer?: () => Promise<OperationState | undefined>) => new Promise<Answer>((resolve) => {
     const out: Answer = {};
     const quiet = () => undefined;
     const req = { id: "test-request", log: { error: quiet, warn: quiet, info: quiet } };
@@ -83,15 +86,16 @@ function answer(error: unknown): Answer {
     errorHandler(error, req as never, res as never, () => undefined);
   });
   const stale = () => Object.assign(new Error("The workspace changed. Refresh and review before trying again."), { status: 409 });
-  assert.deepEqual(await answered(stale(), async () => true), { status: 409, body: { error: "The workspace changed. Refresh and review before trying again.", requestId: "test-request", operation: "cancelled" } }, "a refusal that leaves its journal entry cancelled says so");
-  assert.deepEqual(await answered(stale(), async () => false), { status: 409, body: { error: "The workspace changed. Refresh and review before trying again.", requestId: "test-request" } }, "a refusal whose entry was already completed, or could not be closed, carries no marker");
+  assert.deepEqual(await answered(stale(), async () => "cancelled"), { status: 409, body: { error: "The workspace changed. Refresh and review before trying again.", requestId: "test-request", operation: "cancelled" } }, "a refusal that leaves its journal entry cancelled says so");
+  assert.deepEqual(await answered(stale(), async () => "completed"), { status: 409, body: { error: "The workspace changed. Refresh and review before trying again.", requestId: "test-request", operation: "completed" } }, "a refusal whose entry an earlier attempt completed says so: that request was saved");
+  assert.deepEqual(await answered(stale(), async () => undefined), { status: 409, body: { error: "The workspace changed. Refresh and review before trying again.", requestId: "test-request" } }, "a refusal whose entry could not be read carries no marker");
   assert.deepEqual(await answered(stale(), () => Promise.reject(new Error("pool closed"))), { status: 409, body: { error: "The workspace changed. Refresh and review before trying again.", requestId: "test-request" } }, "a closer that fails never marks the refusal");
   assert.deepEqual(await answered(markOperationClosed(Object.assign(new Error("This request was cancelled before it completed and saved nothing."), { status: 409 }))), { status: 409, body: { error: "This request was cancelled before it completed and saved nothing.", requestId: "test-request", operation: "cancelled" } }, "a refusal of a key whose entry was already cancelled says so without a closer");
   assert.equal(operationClosed(new Error("unmarked")), false);
   // A write the store rolled back at a database limit: the not-saved 503 closes the entry and says both.
-  assert.deepEqual(await answered(markRolledBack(new DatabaseLimitError("lock_timeout", { write: true })), async () => true), { status: 503, headers: { "Retry-After": "2" }, body: { error: "This lender is busy with another change. Nothing was saved. Try again in a moment.", committed: false, requestId: "test-request", operation: "cancelled" } }, "a not-saved 503 whose entry closed carries both committed:false and the marker");
+  assert.deepEqual(await answered(markRolledBack(new DatabaseLimitError("lock_timeout", { write: true })), async () => "cancelled"), { status: 503, headers: { "Retry-After": "2" }, body: { error: "This lender is busy with another change. Nothing was saved. Try again in a moment.", committed: false, requestId: "test-request", operation: "cancelled" } }, "a not-saved 503 whose entry closed carries both committed:false and the marker");
   assert.equal(((await answered(Object.assign(new Error("The gateway timed out."), { status: 504 }))).body as { operation?: string }).operation, undefined, "a failure with no closed entry is never marked");
-  checks += 7;
+  checks += 8;
 }
 
 {
@@ -135,6 +139,103 @@ function answer(error: unknown): Answer {
   assert.throws(() => replayedAnswer(req, schema, { ...receipt, record: incomplete }), (error: unknown) => error instanceof ResponseContractError && error.saved, "a receipt missing a field cannot be answered, and is marked saved");
   assert.throws(() => replayedAnswer(req, schema, { ...receipt, record: { ...record, merchantId: "lender-2", note: "added" } }), (error: unknown) => error instanceof ResponseContractError && error.saved, "an addition does not excuse a record of another lender");
   checks += 4;
+}
+
+{
+  // Malformed input is the request's fault, never a server failure (audit 23 September, items 3 and 4; security item 7):
+  // a library's own 4xx it marks safe to expose, a body that cannot be decompressed and a path the router cannot decode
+  // keep their 4xx, in plain words, and are logged as refusals at info, never as failures at error.
+  type Logged = Array<{ level: string; fields: Record<string, unknown> }>;
+  const handled = (error: unknown, method = "POST") => {
+    const out: Answer & { logged: Logged } = { logged: [] };
+    const log = (level: string) => (fields: Record<string, unknown>) => out.logged.push({ level, fields });
+    const req = { id: "test-request", method, log: { error: log("error"), warn: log("warn"), info: log("info") } };
+    const res = { headersSent: false, setHeader(name: string, value: string) { out.headers = { ...out.headers, [name]: value }; return this; }, status(code: number) { out.status = code; return this; }, json(body: unknown) { out.body = body; return this; } };
+    errorHandler(error, req as never, res as never, () => undefined);
+    return out;
+  };
+  const levels = (answered: { logged: Logged }) => answered.logged.map((line) => [line.level, line.fields["event"]]);
+  // The router's decodeParam marks a path parameter it cannot decode 400, as a URIError.
+  const undecodable = handled(Object.assign(new URIError("Failed to decode param '%E0%A4%A'"), { status: 400 }), "GET");
+  assert.deepEqual([undecodable.status, undecodable.body], [400, { error: "The address is not valid: it holds a malformed percent-encoded character. Check the link and try again.", requestId: "test-request" }], "a path the router cannot decode is a 400, not a programming error's 500");
+  assert.deepEqual(levels(undecodable), [["info", "request.rejected"]], "logged as a refusal at info");
+  assert.equal(handled(new URIError("URI malformed")).status, 500, "a URIError the application raised without a status is still a programming error");
+  // body-parser answers a body zlib cannot inflate with zlib's own error, marked 400 and safe to expose, without a type.
+  const gzip = handled(Object.assign(new Error("incorrect header check"), { code: "Z_DATA_ERROR", errno: -3, status: 400, statusCode: 400, expose: true }));
+  assert.deepEqual([gzip.status, gzip.body], [400, { error: "The request body could not be decompressed. Check its Content-Encoding and try again.", requestId: "test-request" }], "a body that cannot be decompressed is a 400");
+  assert.deepEqual(gzip.logged, [{ level: "info", fields: { event: "request.rejected", status: 400, reason: "Z_DATA_ERROR" } }]);
+  const exposed = handled(Object.assign(new Error("Range Not Satisfiable"), { status: 416, expose: true }));
+  assert.deepEqual([exposed.status, (exposed.body as { error: string }).error, levels(exposed)], [416, "Range Not Satisfiable", [["info", "request.rejected"]]], "any 4xx a library marks safe to expose keeps its status and words");
+  assert.equal(handled(Object.assign(new TypeError("Converting circular structure to JSON"), { status: 400 })).status, 500, "a 4xx not marked safe to expose is not honoured before the programming-error check");
+  checks += 9;
+
+  // A validation refusal names at most 20 fields and says how many there were.
+  const many = handled(new ZodError(Array.from({ length: 120 }, (_, index) => ({ code: "custom" as const, path: ["files", index, "kind"], message: "Unknown kind" }))));
+  const manyBody = many.body as { details: Array<{ field: string }>; detailCount: number };
+  assert.equal(many.status, 400);
+  assert.deepEqual([manyBody.details.length, manyBody.detailCount, manyBody.details[0]?.field, manyBody.details[19]?.field], [20, 120, "files.0.kind", "files.19.kind"], "the first 20 fields and the count of all");
+  assert.equal(JSON.stringify(many.body).length < 2_000, true, "so the answer stays small whatever the request holds");
+  checks += 3;
+
+  // A service the request depends on that could not be reached is an outage: 503 with Retry-After, never a general 500.
+  const unreachable = handled(Object.assign(new Error("request to http://127.0.0.1:1106/credential failed, reason: connect ECONNREFUSED 127.0.0.1:1106"), { name: "GaxiosError", code: "ECONNREFUSED" }), "GET");
+  assert.deepEqual([unreachable.status, unreachable.headers, unreachable.body], [503, { "Retry-After": "10" }, { error: "A service this request depends on could not be reached. Try again shortly.", requestId: "test-request" }], "object storage out of reach is a 503 that says when to try again");
+  assert.deepEqual(levels(unreachable), [["error", "request.unavailable"]], "and an error line: the outage needs attention");
+  const fetchFailed = handled(new TypeError("fetch failed", { cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), { code: "ECONNREFUSED" }) }));
+  assert.deepEqual([fetchFailed.status, fetchFailed.headers?.["Retry-After"]], [503, "10"], "so is a fetch that failed on the network, though it is a TypeError");
+  // The identity provider's SDK answers a request it could not send as an API error without a status.
+  const identity = (status?: number) => new ClerkAPIResponseError("", { data: [{ code: "unexpected_error", message: "fetch failed" }], status: status as number });
+  assert.deepEqual([handled(identity()).status, handled(identity(503)).status, handled(identity(429)).status], [503, 503, 503], "an identity-provider call that got no answer, or an overloaded one, is an outage");
+  const misconfigured = handled(new ClerkRuntimeError("clerkMiddleware() was not run", { code: "middleware_not_run" }), "GET");
+  assert.deepEqual([misconfigured.status, levels(misconfigured)], [500, [["error", "request.failed"]]], "while the SDK's own runtime error is a failure of this service, not an outage");
+  assert.equal(handled(storageFailure(503)).headers?.["Retry-After"], "10", "storage that answered it is unavailable says when to try again");
+  assert.equal(handled(Object.assign(new Error("Private export storage is not configured. Contact the workspace administrator."), { status: 503 })).headers, undefined, "a service that is not configured does not");
+  checks += 8;
+
+  // A dependency's error without a status is never the request's fault: the identity provider's missing key is a 500 at error level.
+  let missingKey: unknown;
+  try { parsePublishableKey("", { fatal: true }); } catch (error) { missingKey = error; }
+  assert.ok(missingKey instanceof Error && !("status" in missingKey) && !("code" in missingKey), "a real dependency error: a plain Error without a status or code");
+  const dependency = handled(missingKey, "GET");
+  assert.deepEqual([dependency.status, (dependency.body as { error: string }).error], [500, "The service could not prepare this answer. Try again, and quote this reference if it happens again."], "it is the service's 500 in general words, never a 400 that blames the request");
+  assert.deepEqual(levels(dependency), [["error", "request.failed"]], "logged at error level with its stack, not as a rejection at info");
+  const rule = handled(new Error("A reason is required for this business or destructive action."));
+  assert.deepEqual([rule.status, levels(rule)], [400, [["info", "request.rejected"]]], "while the application's own rule without a status stays a 400");
+  checks += 4;
+}
+
+{
+  // A request with an Idempotency-Key is answered for its key, not for this attempt alone (audit 23 September, items 1
+  // and 2): nothing was saved (committed false) only when nothing sent with the key was or can be saved.
+  const keyedAnswer = (error: unknown, options: { unused?: boolean; closer?: () => Promise<OperationState | undefined> } = {}) => new Promise<Answer & { closed: number }>((resolve) => {
+    const out: Answer & { closed: number } = { closed: 0 };
+    const quiet = () => undefined;
+    const req = { id: "test-request", method: "POST", log: { error: quiet, warn: quiet, info: quiet } };
+    markKeyed(req as never);
+    if (options.unused) markKeyUnused(req as never);
+    if (options.closer) registerRefusalCloser(req as never, () => { out.closed++; return options.closer!(); });
+    const res = { headersSent: false, setHeader(name: string, value: string) { out.headers = { ...out.headers, [name]: value }; return this; }, status(code: number) { out.status = code; return this; }, json(body: unknown) { out.body = body; resolve(out); return this; } };
+    errorHandler(error, req as never, res as never, () => undefined);
+  });
+  const busy = () => markRolledBack(new DatabaseLimitError("lock_timeout", { write: true }));
+  const saved = await keyedAnswer(busy(), { closer: async () => "completed" });
+  assert.deepEqual([saved.status, saved.headers, saved.body], [503, { "Retry-After": "2" }, { error: "This lender is busy with another change. This request was saved. Try again in a moment.", operation: "completed", requestId: "test-request" }], "a repeat of a saved request turned away by a busy lender never says nothing was saved: it says the request was saved");
+  const running = await keyedAnswer(busy(), { closer: async () => "running" });
+  assert.deepEqual([running.body, running.status], [{ error: "This lender is busy with another change. This request is still running. Try again in a moment.", operation: "running", requestId: "test-request" }, 503], "nor while another attempt is still running it");
+  const pending = await keyedAnswer(busy(), { closer: async () => "pending" });
+  assert.deepEqual(pending.body, { error: "This lender is busy with another change. Its outcome is not confirmed yet. Try again in a moment.", operation: "pending", requestId: "test-request" }, "nor while its entry waits for confirmation");
+  assert.deepEqual((await keyedAnswer(busy())).body, { error: "This lender is busy with another change. Its outcome is not confirmed yet. Try again in a moment.", requestId: "test-request" }, "nor when what the key holds is unknown (it failed before its journal entry was read)");
+  assert.deepEqual((await keyedAnswer(busy(), { unused: true })).body, { error: "This lender is busy with another change. Nothing was saved. Try again in a moment.", committed: false, requestId: "test-request" }, "a key this attempt found unused saved nothing");
+  assert.deepEqual((await keyedAnswer(busy(), { closer: async () => "cancelled" })).body, { error: "This lender is busy with another change. Nothing was saved. Try again in a moment.", committed: false, operation: "cancelled", requestId: "test-request" }, "and so did a key whose entry is cancelled");
+  const unopened = await keyedAnswer(markRolledBack(Object.assign(new Error("Protected data cannot be opened. Ask the administrator to check the configured encryption key."), { status: 503 })), { closer: async () => "completed" });
+  assert.deepEqual([unopened.status, unopened.body], [503, { error: "Protected data cannot be opened. Ask the administrator to check the configured encryption key. This request was saved.", operation: "completed", requestId: "test-request" }], "a saved request whose stored answer cannot be opened says it was saved");
+  const failed = await keyedAnswer(markRolledBack(new TypeError("x is undefined")), { closer: async () => "completed" });
+  assert.deepEqual([failed.status, failed.body], [500, { error: "This request was saved, but the service could not give its answer. Retry the same request, or check Operations, to see its saved result.", operation: "completed", requestId: "test-request" }], "so does a general failure of a repeat of a saved request");
+  // A repeat turned away because its request is still running leaves the entry to the attempt running it.
+  const stillRunning = await keyedAnswer(markRolledBack(new DatabaseLimitError("operation_running")), { closer: async () => "cancelled" });
+  assert.deepEqual([stillRunning.status, stillRunning.headers, stillRunning.body, stillRunning.closed], [503, { "Retry-After": "2" }, { error: "This request is still running. Wait a moment, then retry the same request to see its result.", operation: "running", requestId: "test-request" }, 0], "a duplicate of a running request is a non-definitive 503 with Retry-After that never touches the entry");
+  assert.equal(new DatabaseLimitError("operation_running", { write: true }).message.includes("Nothing was saved"), false, "and never says nothing was saved");
+  checks += 12;
 }
 
 {
@@ -187,6 +288,53 @@ try {
   assert.equal(nul.status, 400, "a NUL character is refused at the edge");
   assert.equal(await errorOf(nul), "Text cannot contain the NUL character (\\u0000). Remove it from data.name and try again.");
   checks += 21;
+
+  // Malformed input is refused before anything runs or is journaled, never answered as a server failure (audit
+  // 23 September, items 3, 7 and 9). The database is unreachable here, so a request that reached a transaction
+  // would be a 503: each 4xx below was answered first.
+  const raw = (method: string, path: string, body: string | Buffer, headers: Record<string, string>) => new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const sent = http.request({ host: "127.0.0.1", port, method, path, headers: { ...headers, "Content-Length": String(Buffer.byteLength(body)) } }, (answer) => {
+      const chunks: Buffer[] = [];
+      answer.on("data", (chunk: Buffer) => chunks.push(chunk));
+      answer.on("end", () => resolve({ status: answer.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+    sent.on("error", reject);
+    sent.end(body);
+  });
+  const post = (body: string, headers: Record<string, string> = {}) => fetch(`${base}/api/v1/webhooks/test`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body });
+  const undecodable = await fetch(`${base}/api/v1/customers/%E0%A4%A/history?merchantId=offline-lender`);
+  assert.deepEqual([undecodable.status, await errorOf(undecodable)], [400, "The address is not valid: it holds a malformed percent-encoded character. Check the link and try again."], "a path that cannot be decoded is a 400");
+  const keyedUndecodable = await fetch(`${base}/api/v1/records/customers/%25%?merchantId=offline-lender`, { method: "PATCH", headers: { "Content-Type": "application/json", "Idempotency-Key": "edge-inputs-0001" }, body: JSON.stringify({ name: "x" }) });
+  assert.equal(keyedUndecodable.status, 400, "a keyed write to such a path is refused before its journal entry is made");
+  const gzip = await post("not gzip", { "Content-Encoding": "gzip" });
+  assert.deepEqual([gzip.status, await errorOf(gzip)], [400, "The request body could not be decompressed. Check its Content-Encoding and try again."], "a body that cannot be decompressed is a 400");
+  const nested = (levels: number) => `{"name":"Deep","junk":${"[".repeat(levels - 1)}${"]".repeat(levels - 1)}}`;
+  assert.equal((await post(nested(32))).status, 403, "32 levels of nesting reach the route");
+  const tooDeep = await post(nested(33));
+  assert.equal(tooDeep.status, 400, "33 levels are refused");
+  assert.match(await errorOf(tooDeep), /^The request body is nested more than 32 levels deep, at junk(\.0)+\. Send a flatter body\.$/, "naming where");
+  const keyedDeep = await fetch(`${base}/api/v1/records/customers?merchantId=offline-lender`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": "edge-inputs-0002" }, body: nested(3000) });
+  assert.deepEqual([keyedDeep.status, (await errorOf(keyedDeep)).startsWith("The request body is nested more than 32 levels deep")], [400, true], "a keyed write 3,000 levels deep is refused before anything walks it");
+  const surrogate = await post('{"name":"x\\udfff y"}');
+  assert.deepEqual([surrogate.status, await errorOf(surrogate)], [400, "Text must be valid Unicode: name holds an unpaired surrogate (\\ud800 to \\udfff). Remove it and try again."], "an unpaired surrogate is refused, naming the field");
+  const surrogateKey = await post('{"data":{"\\ud800":"x"}}');
+  assert.deepEqual([surrogateKey.status, await errorOf(surrogateKey)], [400, "Text must be valid Unicode: data holds an unpaired surrogate (\\ud800 to \\udfff). Remove it and try again."], "also in a field name, naming the object that holds it");
+  assert.equal((await post('{"name":"Ada \\ud83d\\ude00"}')).status, 403, "a surrogate pair is ordinary text");
+  const form = await raw("POST", "/api/v1/webhooks/test", "action=verify_audit&reason=form", { "Content-Type": "application/x-www-form-urlencoded" });
+  assert.deepEqual([form.status, JSON.parse(form.body).error], [415, "Send the request body as JSON, with the Content-Type application/json."], "a form body is refused: the service reads JSON only");
+  assert.equal((await raw("POST", "/api/v1/webhooks/test", "{}", { "Content-Type": "text/plain" })).status, 415, "as is any other format");
+  assert.equal((await raw("POST", "/api/v1/webhooks/test", "", { "Content-Type": "application/x-www-form-urlencoded" })).status, 403, "an empty body in any format is no body");
+  const readBody = await raw("GET", "/api/healthz", '{"broken', { "Content-Type": "application/json" });
+  assert.equal(readBody.status, 200, "a read's body is ignored, not parsed");
+  assert.equal((await raw("GET", "/api/healthz", nested(3000), { "Content-Type": "application/json; charset=latin1" })).status, 200, "nor checked");
+  checks += 16;
+
+  // Routing is strict and case-sensitive: another spelling of a path is not a route (audit 23 September, item 7).
+  for (const variant of ["/api/v1/Webhooks/test", "/api/v1/webhooks/test/"]) {
+    const answer = await fetch(`${base}${variant}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    assert.deepEqual([answer.status, await errorOf(answer)], [404, "Unknown resource."], `${variant} is not the route`);
+    checks += 1;
+  }
 
   // In staff mode a change must come from a configured pilot origin: without one, or from another, it is refused first.
   const staffNames = ["VALOPAY_STAFF_ACCESS", "VALOPAY_STAFF_ORIGINS"] as const;

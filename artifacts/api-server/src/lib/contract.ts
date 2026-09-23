@@ -1,6 +1,7 @@
 import type { Request } from "express";
 import type { z, ZodError, ZodIssue } from "zod";
 import { IDEMPOTENCY_KEY_HEADER, idempotencyKeyHeaderSchema, lenderPageQuerySchema, lenderQuerySchema } from "@workspace/valopay-schema";
+import { markKeyed } from "./refused-operations";
 
 /**
  * The request and answer rules every route shares, as the contract
@@ -18,7 +19,7 @@ const failedPaths = (error: ZodError) => error.issues.slice(0, 20).map((issue) =
  * back, as it is when the answer is checked before COMMIT) and logs the paths
  * that failed, never their values. `saved` marks the stored answer of a
  * request saved earlier: rolling back its repeat does not undo that request,
- * so the answer never says nothing was saved.
+ * so the answer never says nothing was saved, and says it was saved.
  */
 export class ResponseContractError extends Error {
   readonly issues: ReadonlyArray<{ path: string; code: string }>;
@@ -58,8 +59,8 @@ function withoutUnrecognisedKeys(value: unknown, issues: ZodIssue[]): unknown {
  * the contract (whose answers allow no other fields), and the log records
  * response.invalid as a warning with the paths that carried them. A stored
  * answer that fails in any other way cannot be given within the contract: a
- * ResponseContractError marked saved, answered as the general "could not
- * confirm" 500, never as "nothing was saved", since the request was saved.
+ * ResponseContractError marked saved, answered as a 500 that says the request
+ * was saved, never as "nothing was saved".
  */
 export function replayedAnswer<S extends z.ZodTypeAny>(req: Request, schema: S, stored: unknown): z.output<S> {
   const parsed = schema.safeParse(stored);
@@ -83,9 +84,12 @@ export function lenderPage(req: Request): z.output<typeof lenderPageQuerySchema>
   return lenderPageQuerySchema.parse(req.query);
 }
 
-/** The Idempotency-Key a write must carry, refused by name (400) when it is missing or is not 8 to 200 characters. */
+/** The Idempotency-Key a write must carry, refused by name (400) when it is missing or is not 8 to 200 characters.
+ * A request whose key a route reads is answered for its key when it fails (lib/error-handler.ts). */
 export function requiredKey(req: Request): string {
-  return idempotencyKeyHeaderSchema.parse({ [IDEMPOTENCY_KEY_HEADER]: req.header(IDEMPOTENCY_KEY_HEADER) })[IDEMPOTENCY_KEY_HEADER];
+  const key = idempotencyKeyHeaderSchema.parse({ [IDEMPOTENCY_KEY_HEADER]: req.header(IDEMPOTENCY_KEY_HEADER) })[IDEMPOTENCY_KEY_HEADER];
+  markKeyed(req);
+  return key;
 }
 /** The Idempotency-Key of a write that may carry one: undefined when absent or empty, refused by name when it is not 8 to 200 characters. */
 export function optionalKey(req: Request): string | undefined {

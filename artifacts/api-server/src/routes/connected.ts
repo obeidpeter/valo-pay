@@ -8,7 +8,7 @@ import {
   appendAudit,
   findIdempotency,
   saveIdempotency,
-  digest,
+  receiptOf,
   fail,
   completeOperation,
 } from "../lib/valopay-store";
@@ -21,7 +21,8 @@ import {
 } from "../domain/connected";
 import { ConnectedCashError } from "../domain/connected-cash";
 import { CreditDomainError } from "../domain/connected-credit";
-const router: IRouter = Router();
+import { routerOptions } from "./router-options";
+const router: IRouter = Router(routerOptions);
 router.get("/v1/connected", async (req, res) => {
   const { merchantId } = lenderQuery(req);
   res.json(
@@ -47,18 +48,18 @@ router.post("/v1/connected/actions", async (req, res) => {
       res,
       async (ctx) => {
         const state = await loadState(ctx, merchantId, "update");
-        const id = digest(`connected:${merchantId}:${key}`),
+        const receipt = receiptOf(req, merchantId, key, "connected"),
           fingerprint = requestFingerprint({ input, actor: ctx.actor });
         // The one shape this action answers with, of this lender: an outcome never passes for a record.
         const answer = connectedActionResultFor(input.action, merchantId);
-        const prior = await findIdempotency(ctx, id);
+        const prior = await findIdempotency(ctx, receipt.id, receipt.earlier);
         if (prior) {
           if (prior.request_hash !== fingerprint)
             fail("This request key was already used for different input.", 409);
           // The action was saved with this receipt: never answered as saving nothing, even when it no longer matches.
-          const receipt = replayedAnswer(req, answer, prior.response);
-          await completeOperation(ctx, receipt);
-          return receipt;
+          const saved = replayedAnswer(req, answer, prior.response);
+          await completeOperation(ctx, saved);
+          return saved;
         }
         let record;
         try {
@@ -90,7 +91,7 @@ router.post("/v1/connected/actions", async (req, res) => {
           },
         );
         await saveState(ctx, state);
-        await saveIdempotency(ctx, id, fingerprint, result);
+        await saveIdempotency(ctx, receipt.id, fingerprint, result);
         return result;
       },
       "write",

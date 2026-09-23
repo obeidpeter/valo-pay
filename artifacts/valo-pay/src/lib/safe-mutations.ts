@@ -38,11 +38,19 @@ export function requestClosed(error: unknown): boolean {
   return Boolean(response?.status && response.status >= 400 && response.data?.operation === 'cancelled' && typeof response.data.error === 'string');
 }
 
+/** The service says a request with this key was saved, is still running or is not confirmed yet (`operation`
+ * completed, running or pending): whatever this answer refused, the key is kept to recover its result. */
+export function requestOpen(error: unknown): boolean {
+  const operation = (error as { data?: { operation?: unknown } } | null)?.data?.operation;
+  return operation === 'completed' || operation === 'running' || operation === 'pending';
+}
+
 /** A structured refusal the service treats as final for its key (400, 403, 404, 409, 410, 413, 415, 422): the same
- * request would be refused again, and its key cannot run again. A 401 or 429 keeps the key. */
+ * request would be refused again, and its key cannot run again. A 401 or 429 keeps the key, as does a refusal that
+ * says a request with the key was saved or is still open (requestOpen). */
 export function definitiveRefusal(error: unknown): boolean {
   const response = error as { status?: number; data?: { error?: unknown } } | null;
-  return (definitiveRefusalStatuses as readonly number[]).includes(response?.status ?? 0) && typeof response?.data?.error === 'string';
+  return (definitiveRefusalStatuses as readonly number[]).includes(response?.status ?? 0) && typeof response?.data?.error === 'string' && !requestOpen(error);
 }
 
 function recoveryError(message: string) {

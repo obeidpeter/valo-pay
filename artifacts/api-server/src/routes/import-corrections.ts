@@ -17,7 +17,8 @@ import {
   proposeImportCorrection,
   decideImportCorrection,
 } from "../domain/import-corrections";
-const router: IRouter = Router();
+import { routerOptions } from "./router-options";
+const router: IRouter = Router(routerOptions);
 router.get("/v1/pilot/import-corrections", async (req, res) => {
   lenderQuery(req);
   const { batchId } = z.object({ batchId: z.string().min(1).max(100) }).parse(req.query);

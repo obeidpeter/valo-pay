@@ -124,6 +124,7 @@ export * from './erpManifestCreditNotesItem';
 export * from './erpManifestInvoiceAllocationsItem';
 export * from './errorBody';
 export * from './errorBodyCode';
+export * from './errorBodyOperation';
 export * from './errorDetail';
 export * from './evidenceLink';
 export * from './executeLifecycleRunParams';

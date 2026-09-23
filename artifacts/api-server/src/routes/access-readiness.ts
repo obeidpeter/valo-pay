@@ -4,7 +4,8 @@ import { payloadEncryptionKey } from '../lib/protected-payloads';
 import { accessReadinessSchema, encryptionVerificationSchema, payloadProtectionSchema } from '@workspace/valopay-schema';
 import { contractAnswer } from '../lib/contract';
 import { staffMode, staffPolicy } from '../lib/staff-access';
-const router=Router();
+import { routerOptions } from './router-options';
+const router=Router(routerOptions);
 /** The readiness checks for one workspace transaction. The database check is this transaction's own:
  * a set that differs from the reviewed one refuses the request before this runs, and a transaction that
  * recorded no check reports none, whatever the configuration says. */

@@ -218,6 +218,29 @@ describe('safe mutation intentions', () => {
     expect(result.current.hasUnconfirmedOutcome).toBe(false);
   });
 
+  it('keeps the key when a refusal says a request with it was saved',async()=>{
+    const keys:string[]=[];
+    globalThis.fetch=async(_input,options)=>{keys.push(new Headers(options?.headers).get('Idempotency-Key')!);return jsonAnswer(409,{error:'Refused by the current rules',operation:'completed',requestId:'r'});};
+    const {result}=hookFor();
+    for(let attempt=0;attempt<2;attempt+=1) await act(async()=>{await result.current.mutateAsync(actionVariables()).catch(()=>{});});
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it('holds a request the service says is still running, and retries it with the same key',async()=>{
+    const keys:string[]=[];
+    globalThis.fetch=async(_input,options)=>{
+      keys.push(new Headers(options?.headers).get('Idempotency-Key')!);
+      return keys.length===1?jsonAnswer(503,{error:'This request is still running. Wait a moment, then retry the same request to see its result.',operation:'running',requestId:'r1'}):jsonAnswer(200,{message:'Saved',data:{}});
+    };
+    const {result}=hookFor();
+    await act(async()=>{await result.current.mutateAsync(actionVariables()).catch(()=>{});});
+    await waitFor(()=>expect(result.current.hasUnconfirmedOutcome).toBe(true));
+    await act(async()=>{await result.current.retryUnconfirmed();});
+    await waitFor(()=>expect(result.current.isSuccess).toBe(true));
+    expect(keys[1]).toBe(keys[0]);
+    expect(result.current.hasUnconfirmedOutcome).toBe(false);
+  });
+
   it.each([401,429])('keeps the key after a %s, which the service does not treat as final',async status=>{
     const keys:string[]=[];
     globalThis.fetch=async(_input,options)=>{keys.push(new Headers(options?.headers).get('Idempotency-Key')!);return jsonAnswer(status,{error:'Wait',requestId:'r'});};

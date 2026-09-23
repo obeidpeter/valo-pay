@@ -34,6 +34,7 @@ const suites = [
   "artifacts/api-server/tests/priority-queues.integration.test.ts",
   "artifacts/api-server/tests/console-read-models.integration.test.ts",
   "artifacts/api-server/tests/workspace-concurrency.integration.test.ts",
+  "artifacts/api-server/tests/journal-outcomes.integration.test.ts",
   "artifacts/api-server/tests/export-jobs.integration.test.ts",
   "artifacts/api-server/tests/workflow-performance.integration.test.ts",
 ];
