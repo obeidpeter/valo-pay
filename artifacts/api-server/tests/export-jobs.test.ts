@@ -268,6 +268,10 @@ for(const stage of ['rendering','uploading','confirming'] as const){
  assert.equal(exportIsClaimable(requeued,new Date(clock).toISOString()),true);assert.equal(exportJobView(requeued,new Date(clock).toISOString()).stalled,false);
  assert.equal(await processExportJob(repository,storage,generate,{...target,id:busyJob.id}),'ready');checks+=6;
 }
+// So does a failure the lender stays too busy to record: the job is queued again, not left running under its lease.
+const failedBusy=queueExport(state,ctx,{kind:'customers',format:'json'},'/private/test'),failReasons:unknown[]=[];
+assert.equal(await processExportJob({...repository,fail:async()=>'busy',release:async(claim,reason)=>{failReasons.push(reason);return repository.release(claim,reason);}},{existing:async()=>null,put:async()=>{throw new Error('Private provider failure');}},generate,{...target,id:failedBusy.id},{backoffMs:0}),'requeued');
+assert.deepEqual(failReasons,['busy']);assert.equal(state.records.find(record=>record.id===failedBusy.id)!.status,'queued');checks+=2;
 // A hand-back the lender is still too busy for leaves the lease to recover the job, as a stop does; a superseded lease is left alone.
 const stillBusy=queueExport(state,ctx,{kind:'customers',format:'json'},'/private/test');
 assert.equal(await processExportJob({...repository,progress:async()=>'busy',release:async()=>'busy'},storage,generate,{...target,id:stillBusy.id},{backoffMs:0}),'interrupted');

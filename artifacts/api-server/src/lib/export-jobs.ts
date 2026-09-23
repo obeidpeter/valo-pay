@@ -106,14 +106,14 @@ export interface ExportJobRepository {
   progress?(claim: ClaimedExport, stage: ExportStage): Promise<ExportWriteResult>;
   finish(claim: ClaimedExport, artifact: ExportArtifact): Promise<ExportWriteResult>;
   fail(claim: ClaimedExport, message: string): Promise<ExportWriteResult>;
-  /** A worker hands its claim back, because it is stopping or the lender stayed busy past a progress write: queued
-   * again, fenced by the lease token, never marked failed. */
+  /** A worker hands its claim back, because it is stopping or the lender stayed busy past a progress or failure
+   * write: queued again, fenced by the lease token, never marked failed. */
   release(claim: ClaimedExport, reason?: ExportReleaseReason): Promise<ExportWriteResult>;
 }
 /** Why a claim goes back to the queue unfinished: the worker is stopping, or its lender stayed busy. */
 export type ExportReleaseReason = 'stopping' | 'busy';
 /** 'released': a stopping worker returned the job to the queue. 'requeued': the lender stayed busy for longer than a
- * progress write waits, so the worker returned the job to the queue for a later look. 'interrupted': it could not
+ * progress or failure write waits, so the worker returned the job to the queue for a later look. 'interrupted': it could not
  * hand the job back either way, so the job keeps its lease and a later poll recovers it once the lease expires. */
 export type ExportAttemptResult = 'ready' | 'failed' | 'skipped' | 'released' | 'requeued' | 'interrupted';
 export interface ExportJobStorage {
@@ -184,8 +184,11 @@ export async function processExportJob(repository: ExportJobRepository, storage:
       : (error as { exportTooLarge?: boolean })?.exportTooLarge
       ? 'Export exceeds the 32 MB file limit. Export a customer pack or a smaller record category.'
       : 'Export generation could not finish. Retry this export. If it fails again, contact the workspace administrator.';
-    // A stop is handled above. If the database is unavailable, leave the durable running lease to expire and recover on a later poll.
-    try { await retryExportWrite(() => repository.fail(claim, message), undefined, options.backoffMs); } catch { /* durable lease recovery */ }
+    // A stop is handled above. A failure the lender stays too busy to record goes back to the queue, as a busy progress
+    // write does. If the database is unavailable, leave the durable running lease to expire and recover on a later poll.
+    try {
+      if (await retryExportWrite(() => repository.fail(claim, message), undefined, options.backoffMs) === 'busy') return await release('busy', 'requeued');
+    } catch { /* durable lease recovery */ }
     return 'failed';
   } finally { clearTimeout(timer); }
 }

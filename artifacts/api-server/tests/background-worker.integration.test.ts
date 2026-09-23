@@ -133,7 +133,9 @@ try {
   assert.ok(pass.durationMs >= 300, `the close of ${seeded} records took ${pass.durationMs} ms; the fixture is too small to show a blocked event loop`);
   assert.ok(during.length >= 5, `${during.length} probes were answered while the close ran`);
   assert.ok(slowest < bound, `a health probe during a ${pass.durationMs} ms close took ${Math.round(slowest)} ms`);
-  assert.ok(stalled < bound, `the main thread's event loop stalled for ${stalled} ms during a ${pass.durationMs} ms close`);
+  // The loop's delay also counts time the operating system gave the process no CPU, so it gets a wider margin; a
+  // close on this loop stalls it for seconds.
+  assert.ok(stalled < 1000, `the main thread's event loop stalled for ${stalled} ms during a ${pass.durationMs} ms close`);
   const [close] = await closesOf(lender);
   assert.equal(close?.data.schedule.trigger, "scheduled");
   const threadLines = lines().filter((line) => line.thread === "background");
@@ -142,12 +144,13 @@ try {
   assert.ok(lines().some((line) => line.event === "background.started" && line.thread === undefined && line.poolSize === 3), "the main thread logs the thread's start and its pool");
 
   // ---- The export: claimed and settled by the thread, one audit chain ----
-  let job = queued.body;
-  // Each storage call is bounded to a minute; without App Storage the first fails at once.
-  for (const give = Date.now() + 150_000; job.status === "queued" || job.status === "running"; await delay(100)) {
-    assert.ok(Date.now() < give, `the export stayed ${job.status}`);
-    job = (await api(`/exports/${queued.body.id}`)).body;
+  // The job's row is read without the lender's lock, so this look never holds up the thread's writes to the job. Each
+  // storage call is bounded to a minute; without App Storage the first fails at once.
+  const statusOf = async (id: string) => (await pool.query<{ status: string }>("SELECT status FROM valopay_records WHERE id=$1", [id])).rows[0]!.status;
+  for (let status = String(queued.body.status), give = Date.now() + 150_000; status === "queued" || status === "running"; await delay(250), status = await statusOf(queued.body.id)) {
+    assert.ok(Date.now() < give, `the export stayed ${status}`);
   }
+  const job = (await api(`/exports/${queued.body.id}`)).body;
   assert.ok(["ready", "failed"].includes(job.status), job.status);
   const state = await inWorkspace(request(), response(), (ctx) => loadState(ctx, other, "share"), "read");
   const actions = state.records.filter((record) => record.kind === "audit" && record.data.objectId === queued.body.id).sort((a, b) => a.data.sequence - b.data.sequence).map((record) => [record.data.actor, record.data.action]);

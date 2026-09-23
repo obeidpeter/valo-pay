@@ -200,7 +200,7 @@ export const exportJobRepository: ExportJobRepository = {
       returnExportToQueue(job, scope.now.toISOString());
       await writeJob(client, scope, job);
       await audit(client, scope, job, 'export.released', reason === 'busy'
-        ? 'The lender stayed busy for longer than the export worker waits to record its progress; the saved job returns to the queue and resumes when the lender is free.'
+        ? 'The lender stayed busy for longer than the export worker waits to record this attempt; the saved job returns to the queue and is tried again when the lender is free.'
         : 'The export worker stopped before finishing; the saved job returns to the queue for the next worker.', head);
       return 'saved';
     }) ?? 'busy';
