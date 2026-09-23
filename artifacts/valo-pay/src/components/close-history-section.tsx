@@ -18,7 +18,7 @@ import {
 } from "@/lib/formatters";
 import { Button } from "./ui/button";
 import { RecordPagination } from "./record-pagination";
-import { LoadProblem } from "./load-problem";
+import { LoadProblem, RefreshProblem } from "./load-problem";
 
 function CloseEvidence({ close }: { close: ValopayRecord }) {
   const { merchantId } = useWorkspace();
@@ -220,11 +220,14 @@ export function CloseHistorySection({ active }: { active: boolean }) {
               ? `Showing ${formatCount(query.data.total, "recorded close")}${from ? ` from ${from}` : ""}${to ? ` through ${to}` : ""}. Dates include the full day in West Africa Time. Current totals above are unchanged.`
               : "Loading recorded closes…")}
         </p>
+        {!validation.error && (
+          <RefreshProblem what="The close history" shown="closes" query={query} />
+        )}
         {validation.error ? (
           <p role="alert" className="text-sm text-destructive">
             The close history is hidden until the date range is corrected.
           </p>
-        ) : query.error ? (
+        ) : query.error && !query.data ? (
           <LoadProblem
             what="daily close history"
             error={query.error}
@@ -275,7 +278,7 @@ export function CloseHistorySection({ active }: { active: boolean }) {
           )
         )}
       </div>
-      {!validation.error && !query.error && query.data && (
+      {!validation.error && query.data && (
         <>
           {!query.data.items.length ? (
             <div className="p-5">

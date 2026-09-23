@@ -21,6 +21,7 @@ import { LoadProblem } from "@/components/load-problem";
 import { useConnected, type ConnectedRecord } from "@/lib/connected";
 import { formatKobo, formatDate } from "@/lib/formatters";
 import { nairaToKobo, koboToNaira } from "@/lib/money-input";
+import { useFormDraft } from "@/lib/unsaved-changes";
 import { useWorkspace } from "@/lib/workspace-context";
 import { useDialogFocusReturn } from "@/lib/focus";
 export default function PayByBank() {
@@ -45,6 +46,8 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
   // A confirmed step usually removes the button that opened its review, so focus then goes to the result.
   const result = useRef<HTMLParagraphElement>(null);
   const restoreFocus = useDialogFocusReturn(!!review, () => result.current);
+  // A checkout, or a review's reason, typed but not sent is a draft: leaving asks first.
+  const draft = useFormDraft({ dueId, amount, reason: review ? reason : "" });
   const act = async (
     action: string,
     data: Record<string, unknown> = {},
@@ -53,8 +56,12 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
   ) => {
     setError("");
     setSuccess("");
+    draft.sending(
+      action === "payment.create" ? { dueId, amount, reason: "" } : null,
+    );
     try {
       await api.run(action, data, recordId, why);
+      draft.saved();
       const messages: Record<string, string> = {
         "payment.create":
           "Sample checkout created. Review the customer, instalment, recipient and amount before authorising it.",
@@ -88,7 +95,7 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
     }
   };
   if (api.isLoading) return <Loading what="pay-by-bank" />;
-  if (api.error || !api.data)
+  if (!api.data)
     return (
       <>
         <LoadProblem
@@ -157,6 +164,7 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
         setError("");
         setReview(null);
         setReason("");
+        draft.saved();
       }}
       onReleased={() => setError("")}
     >

@@ -37,6 +37,7 @@ import { useWorkspace } from "@/lib/workspace-context";
 import { useDialogFocusReturn } from "@/lib/focus";
 import { formatCompactDate, formatDate, formatKobo } from "@/lib/formatters";
 import { nairaToKobo } from "@/lib/money-input";
+import { useFormDraft } from "@/lib/unsaved-changes";
 
 type Point = {
   day: number;
@@ -367,6 +368,8 @@ export default function CashDeskPage() {
   // A confirmed step can remove or disable the button that opened its review, so focus then goes to the result.
   const result = useRef<HTMLParagraphElement>(null);
   const restoreFocus = useDialogFocusReturn(!!action, () => result.current);
+  // Planning inputs, or a review note, typed but not saved are a draft: leaving asks first.
+  const draft = useFormDraft({ downside, delay, buffer, reason: action ? reason : "" });
   useEffect(() => {
     setAction(null);
     setReason("");
@@ -377,6 +380,7 @@ export default function CashDeskPage() {
     setDelay("7");
     setBuffer("1500000");
     setTab("cash");
+    draft.reset({ downside: "70", delay: "7", buffer: "1500000", reason: "" });
   }, [merchantId]);
   const maker = ["Admin", "Operations"].includes(workspace?.role ?? "");
   const finance = workspace?.role === "Finance";
@@ -388,8 +392,14 @@ export default function CashDeskPage() {
   };
   const act = async () => {
     if (!action) return;
+    draft.sending(
+      action.action === "cash.forecast"
+        ? { downside, delay, buffer, reason: "" }
+        : null,
+    );
     try {
       await run(action.action, action.data, action.recordId, reason);
+      draft.saved();
       const message: Record<string, string> = {
         "cash.initialize":
           "Sample Cash Desk set up. Review the account timestamps and planning assumptions before preparing work.",
@@ -466,7 +476,7 @@ export default function CashDeskPage() {
     });
   };
   if (isLoading) return <Loading what="Cash Desk" />;
-  if (error)
+  if (error && !cash)
     return (
       <>
         <LoadProblem
@@ -495,6 +505,7 @@ export default function CashDeskPage() {
         setProblem("");
         setAction(null);
         setReason("");
+        draft.saved();
       }}
       onReleased={() => setProblem("")}
     >
@@ -1587,6 +1598,7 @@ export default function CashDeskPage() {
               setProblem("");
               setAction(null);
               setReason("");
+              draft.saved();
               setSuccess(
                 "Original sample request confirmed. Review the refreshed records below. No live financial instruction was sent.",
               );

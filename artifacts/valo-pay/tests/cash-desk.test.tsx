@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, waitFor, within } from "./harness";
 import { makeRecord } from "../../api-server/src/domain/records";
@@ -122,7 +122,8 @@ describe("Cash Desk", () => {
     );
   });
 
-  it("clears planning inputs when switching to another lender's SME workspace", async () => {
+  it("asks before switching lender with typed planning inputs, then clears them for the other lender's SME workspace", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
     const user = userEvent.setup();
     renderApp("/cash-desk");
     const buffer = await screen.findByLabelText("Planning buffer (₦)");
@@ -132,12 +133,19 @@ describe("Cash Desk", () => {
       screen.getAllByLabelText("Active lender")[0]!,
       api.merchantIds[1]!,
     );
+    expect(confirm).toHaveBeenCalledTimes(1);
     await waitFor(() =>
       expect(
         (screen.getByLabelText("Planning buffer (₦)") as HTMLInputElement)
           .value,
       ).toBe("1500000"),
     );
+    // The cleared inputs are the new lender's starting point, not a draft.
+    await user.selectOptions(
+      screen.getAllByLabelText("Active lender")[0]!,
+      api.merchantIds[0]!,
+    );
+    expect(confirm).toHaveBeenCalledTimes(1);
   });
 
   it("rejects fractional kobo and invalid planning assumptions before review, then saves exact amounts with confirmed feedback", async () => {

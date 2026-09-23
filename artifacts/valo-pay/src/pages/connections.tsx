@@ -11,6 +11,7 @@ import { Loading } from "@/components/loading";
 import { LoadProblem } from "@/components/load-problem";
 import { useConnected } from "@/lib/connected";
 import { formatDate } from "@/lib/formatters";
+import { useFormDraft } from "@/lib/unsaved-changes";
 import { useWorkspace } from "@/lib/workspace-context";
 export default function ConnectionsPage() {
   const api = useConnected(),
@@ -26,6 +27,8 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
     [success, setSuccess] = useState(""),
     [revoke, setRevoke] = useState("");
   const revokeTrigger = useRef<HTMLButtonElement | null>(null);
+  // A grant or revocation typed but not saved is a draft: leaving asks first.
+  const draft = useFormDraft({ purpose, subject, days, reason });
   useEffect(() => {
     if (revoke) document.getElementById("permission-reason")?.focus();
   }, [revoke]);
@@ -41,6 +44,9 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
   ) => {
     setFailure("");
     setSuccess("");
+    draft.sending(
+      action === "consent.grant" ? { purpose, subject, days, reason: "" } : null,
+    );
     try {
       await api.run(action, data, id, reason);
       setSuccess(
@@ -50,12 +56,13 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
       );
       setRevoke("");
       setReason("");
+      draft.saved();
     } catch (e) {
       setFailure((e as Error).message);
     }
   };
   if (api.isLoading) return <Loading what="permissions" />;
-  if (api.error || !api.data)
+  if (!api.data)
     return (
       <>
         <LoadProblem
@@ -85,6 +92,7 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
         setFailure("");
         setRevoke("");
         setReason("");
+        draft.saved();
       }}
       onReleased={() => setFailure("")}
     >

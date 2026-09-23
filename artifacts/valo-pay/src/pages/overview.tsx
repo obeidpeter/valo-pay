@@ -4,6 +4,7 @@ import { Link } from 'wouter';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow, EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
+import { RefreshProblem } from '@/components/load-problem';
 import { DailyCloseStatus } from '@/components/daily-close-status';
 import { Button } from '@/components/ui/button';
 import { readableLabel } from '@/components/record-label';
@@ -30,14 +31,16 @@ const metricIcons = [ArrowDownLeft, ArrowUpRight, CheckCheck, AlertCircle];
 
 export default function OverviewPage() {
   const { merchantId } = useWorkspace();
-  const { data: overview, isLoading, error, refetch } = useGetOverview(
+  const overviewQuery = useGetOverview(
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, refetchInterval: 60_000, queryKey: getGetOverviewQueryKey({ merchantId: merchantId! }) } }
   );
+  const { data: overview, isLoading, error, refetch } = overviewQuery;
 
   if (!merchantId) return null;
   if (isLoading) return <Loading what="the overview" />;
-  if (error) return <div role="alert" className="rounded-xl border bg-card p-6"><p className="font-semibold">Unable to load the overview</p><p className="mt-1 text-sm text-muted-foreground">Your records are unchanged. Try loading this page again.</p><Button variant="outline" className="mt-4" onClick={() => refetch()}>Try again</Button></div>;
+  // A failed refresh keeps the figures on the page, with a notice; only a first load that failed shows this card.
+  if (error && !overview) return <div role="alert" className="rounded-xl border bg-card p-6"><p className="font-semibold">Unable to load the overview</p><p className="mt-1 text-sm text-muted-foreground">Your records are unchanged. Try loading this page again.</p><Button variant="outline" className="mt-4" onClick={() => refetch()}>Try again</Button></div>;
   if (!overview) return null;
 
   const upcoming = [...overview.upcoming].sort((a, b) => String(a.data.dueDate || '').localeCompare(String(b.data.dueDate || '')));
@@ -52,6 +55,8 @@ export default function OverviewPage() {
         </div>
         <Button asChild variant="outline" className="gap-2"><Link href="/reports"><FileBarChart2 aria-hidden="true" className="h-4 w-4" /> View reports</Link></Button>
       </header>
+
+      <RefreshProblem what="The overview" query={overviewQuery} />
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border bg-card px-4 py-3 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-2 font-medium text-foreground"><Clock aria-hidden="true" className="h-4 w-4 text-muted-foreground" /> Daily close</span>

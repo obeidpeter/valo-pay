@@ -20,6 +20,7 @@ import { LoadProblem } from "@/components/load-problem";
 import { useConnected } from "@/lib/connected";
 import { formatDate, formatKobo } from "@/lib/formatters";
 import { nairaToKobo } from "@/lib/money-input";
+import { useFormDraft, useUnsavedChanges } from "@/lib/unsaved-changes";
 import { useWorkspace } from "@/lib/workspace-context";
 
 interface Assessment {
@@ -181,8 +182,10 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
     "assessment",
   );
   const [amountErrors, setAmountErrors] = useState<Record<string, string>>({});
+  // An assessment typed but not run is a draft: leaving asks first.
+  const draft = useFormDraft({ customerId, scenario, principal, repayment, months, reason });
   if (api.isLoading) return <Loading what="Credit Desk" />;
-  if (api.error || !api.data)
+  if (!api.data)
     return (
       <>
         <LoadProblem
@@ -229,6 +232,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
       setError("Choose an applicant before running an assessment.");
       return;
     }
+    draft.sending({ customerId, scenario, principal, repayment, months, reason: "" });
     try {
       await api.run(
         "credit.assess",
@@ -248,6 +252,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
         "A new immutable sample assessment has been recorded. Review its evidence and explanations below.",
       );
       setReason("");
+      draft.saved();
     } catch (failure) {
       setError((failure as Error).message);
     }
@@ -263,6 +268,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
         setReason("");
         setSelectedId("");
         setTab("assessment");
+        draft.saved();
       }}
     >
       <div className="connected-metrics">
@@ -828,6 +834,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
           }
           pending={api.pending}
           onReview={async (reviewData) => {
+            draft.sending(null);
             await api.run(
               "credit.review",
               reviewData,
@@ -909,6 +916,11 @@ function ReviewPanel({
     [explanation, setExplanation] = useState(""),
     [override, setOverride] = useState(""),
     [error, setError] = useState("");
+  // A review typed but not recorded is a draft: leaving asks first.
+  useUnsavedChanges(
+    !assessment.reviews.length &&
+      Boolean(outcome || rationale || explanation || override),
+  );
   const needsOverride =
     outcome === "approve" &&
     assessment.result.policy.recommendation === "policy_not_met";
@@ -942,6 +954,10 @@ function ReviewPanel({
                 ],
                 ...(needsOverride ? { overrideRationale: override } : {}),
               });
+              setOutcome("");
+              setRationale("");
+              setExplanation("");
+              setOverride("");
             } catch (failure) {
               setError((failure as Error).message);
             }

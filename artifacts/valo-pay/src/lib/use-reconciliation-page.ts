@@ -25,11 +25,17 @@ export function useReconciliationPage(
     query: {
       enabled: !!merchantId,
       queryKey: getListReconciliationQueryKey(queue, params),
+      // Paging keeps the current rows until the next page arrives, so the table, its pager
+      // and the pressed button stay in place. Another lender, search or instalment never does.
+      placeholderData: (previous, previousQuery) => {
+        const before = previousQuery?.queryKey[1] as Partial<typeof params> | undefined;
+        return before?.merchantId === params.merchantId && before.q === params.q && before.dueItem === params.dueItem ? previous : undefined;
+      },
     },
   });
   useEffect(() => {
-    if (query.data && query.data.offset !== pagination.offset)
+    if (query.data && !query.isPlaceholderData && query.data.offset !== pagination.offset)
       pagination.correctPage(Math.floor(query.data.offset / pagination.pageSize));
-  }, [query.data, pagination.offset, pagination.pageSize]);
+  }, [query.data, query.isPlaceholderData, pagination.offset, pagination.pageSize]);
   return { ...query, pagination };
 }

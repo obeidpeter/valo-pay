@@ -15,7 +15,7 @@ import { RecordDialog } from '@/components/record-dialog';
 import { readableLabel } from '@/components/record-label';
 import { Link, useSearchParams } from 'wouter';
 import { useQueryClient } from '@tanstack/react-query';
-import { LoadProblem } from '@/components/load-problem';
+import { LoadProblem, RefreshProblem } from '@/components/load-problem';
 import { notifyProblem, saidBy } from '@/lib/notify';
 import { useHashTarget } from '@/lib/use-hash-target';
 import { Input } from '@/components/ui/input';
@@ -98,10 +98,11 @@ export default function ReportsPage() {
   const [closeResult, setCloseResult] = useState<{ merchantId: string; message: string; failed: boolean } | null>(null);
   useEffect(() => { setExperimentDialog(null); setInvoiceDialogOpen(false); setSourceBusinessDate(''); }, [merchantId]);
 
-  const { data: reports, isLoading, error: reportsError, isFetching: fetchingReports, refetch } = useGetReports(
+  const reportsQuery = useGetReports(
     { merchantId: merchantId!, includeCloses: 'false' as const },
     { query: { enabled: !!merchantId, refetchInterval: 60_000, queryKey: getGetReportsQueryKey({ merchantId: merchantId!, includeCloses: 'false' as const }) } }
   );
+  const { data: reports, isLoading, error: reportsError, isFetching: fetchingReports, refetch } = reportsQuery;
   useHashTarget('daily-closes', view === 'operations' && !!merchantId && !!reports && !isLoading && !reportsError);
 
   const dailyClose = usePerformAction({
@@ -175,10 +176,11 @@ export default function ReportsPage() {
 
       {isLoading ? (
         <Loading what="reports" />
-      ) : reportsError || !reports ? (
+      ) : !reports ? (
         <LoadProblem what="reports" error={reportsError} retry={() => { void refetch(); }} busy={fetchingReports} />
       ) : (
         <div className="space-y-6">
+          <RefreshProblem what="Reports" query={reportsQuery} />
           <p className="text-xs text-muted-foreground">{view === 'operations' ? `Current workspace totals${reports.operational?.asOf ? ` as at ${formatDate(String(reports.operational.asOf))}` : ''}.` : view === 'billing' ? `Billing period: ${String(reports.billing?.period || 'not available')}. Amounts are in Nigerian naira.` : `Accuracy sample: ${String((reports.operational?.precisionAudit as any)?.month || 'completed month')}.`} All figures use sample data.</p>
           <section hidden={view !== 'operations'} aria-label="Operational metrics" className={view === 'operations' ? 'grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4' : ''}>
             {reports.metrics.map(metric => (

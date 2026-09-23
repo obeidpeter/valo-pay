@@ -18,7 +18,7 @@ import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { RecordDialog } from '@/components/record-dialog';
 import { HandBackContext, handBackResult } from '@/components/hand-back-context';
-import { LoadProblem } from '@/components/load-problem';
+import { LoadProblem, RefreshProblem } from '@/components/load-problem';
 import { DiscardOriginalRequest, DISCARD_ORIGINAL_WARNING } from '@/components/discard-original-request';
 
 export default function SettingsPage() {
@@ -41,10 +41,11 @@ export default function SettingsPage() {
   useUnsavedChanges(Boolean(killReason) || role !== (workspace?.role || 'Admin'));
   const captureVisit = () => { const submitted = visit.current; return () => visit.current === submitted; };
   
-  const { data: settings, isLoading, error: settingsError, isFetching: fetchingSettings, refetch } = useGetSettings(
+  const settingsQuery = useGetSettings(
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, refetchInterval: 60_000, queryKey: getGetSettingsQueryKey({ merchantId: merchantId! }) } }
   );
+  const { data: settings, isLoading, error: settingsError, isFetching: fetchingSettings, refetch } = settingsQuery;
 
   const changedData = () => { void queryClient.invalidateQueries(); };
   const updateRole = usePerformAction({ mutation: { onSuccess: changedData } }, merchantId);
@@ -224,10 +225,11 @@ export default function SettingsPage() {
         {otherOutcomeUnconfirmed && <p className="text-sm text-muted-foreground mt-3">Resolve the unconfirmed settings or control request before changing roles.</p>}
       </section>}
 
-      {/* Collection settings */}
+      {/* Collection settings: a failed refresh keeps them, and any draft, on the page with a notice. */}
+      <RefreshProblem what="Collection settings" shown="settings" query={settingsQuery} />
       {isLoading ? (
         <Loading what="settings" className="bg-card border rounded-xl" />
-      ) : settingsError || !settings ? (
+      ) : !settings ? (
         <LoadProblem what="collection settings" error={settingsError} retry={() => { void refetch(); }} busy={fetchingSettings} />
       ) : settings ? (
         <section className="bg-card border rounded-xl shadow-sm overflow-hidden">

@@ -1,16 +1,25 @@
 import { useLayoutEffect, useRef, type RefObject } from 'react';
 
-/** Session-only offsets, never records/drafts; discard them when lender or authority changes. */
+/**
+ * Session-only offsets, never records/drafts; discard them when lender or authority changes.
+ * Another page starts at its remembered offset, or at the top. Paging, filtering or searching
+ * on the same page changes only the query string, so the view stays with the table in use.
+ */
 export function useQueuePosition(main: RefObject<HTMLElement | null>, route: string, scope: string) {
   const positions = useRef(new Map<string, { top: number; left: number }>());
   const priorScope = useRef(scope);
+  const priorPage = useRef<string | null>(null);
   useLayoutEffect(() => {
-    if (scope !== priorScope.current) { positions.current.clear(); priorScope.current = scope; }
+    const sameScope = scope === priorScope.current;
+    if (!sameScope) { positions.current.clear(); priorScope.current = scope; }
     const node = main.current;
     if (!node) return;
-    const saved = positions.current.get(route) || { top: 0, left: 0 };
+    const page = route.split('?')[0];
+    const samePage = sameScope && page === priorPage.current;
+    priorPage.current = page;
+    const saved = samePage ? { top: node.scrollTop, left: node.scrollLeft } : positions.current.get(route) || { top: 0, left: 0 };
     let latest = { ...saved };
-    let restoring = true;
+    let restoring = !samePage;
     let observer: ResizeObserver | undefined;
     const stop = () => { restoring = false; observer?.disconnect(); };
     const restore = () => {
@@ -20,7 +29,7 @@ export function useQueuePosition(main: RefObject<HTMLElement | null>, route: str
       if (node.scrollHeight - node.clientHeight >= saved.top) stop();
     };
     // Cached content normally restores immediately; allow lazy pages to acquire height.
-    if (typeof ResizeObserver !== 'undefined') {
+    if (restoring && typeof ResizeObserver !== 'undefined') {
       observer = new ResizeObserver(restore);
       for (const child of node.children) observer.observe(child);
     }
