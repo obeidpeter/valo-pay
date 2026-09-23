@@ -52,7 +52,7 @@ checks += 4;
 // ---- The migration rehearsals: a loopback server whose login can create databases, or a skip that says why ----
 const suite = (file, env) => spawnSync(process.execPath, [tsx, `artifacts/api-server/tests/${file}`], { cwd: root, env: { ...clean, ...env }, encoding: "utf8", timeout: 60_000 });
 const remote = { VALOPAY_RUN_INTEGRATION: "1", DATABASE_URL: "postgres://synthetic@db.example.test:5432/valopay" };
-for (const [file, name] of [["record-index-migration.integration.test.ts", "Record index migration rehearsal"], ["pilot-workflow-migration.integration.test.ts", "Pilot workflow migration rehearsal"]]) {
+for (const [file, name] of [["record-index-migration.integration.test.ts", "Record index migration rehearsal"], ["pilot-workflow-migration.integration.test.ts", "Pilot workflow migration rehearsal"], ["schema-push.integration.test.ts", "Schema push rehearsal"]]) {
   let result = suite(file, remote);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, new RegExp(`^${name} skipped: it creates throwaway databases beside DATABASE_URL, so it runs only against a loopback PostgreSQL`, "m"));

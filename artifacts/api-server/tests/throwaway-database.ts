@@ -34,10 +34,10 @@ export async function requireCreateDatabase(suite: string, pool: { query(sql: st
 }
 
 /** A throwaway database's name: the database in DATABASE_URL (or valopay, when that name is not plain), what it is for and a random suffix. */
-export function throwawayDatabaseName(connection: URL, purpose: "index_rehearsal" | "pilot_rehearsal"): string {
+export function throwawayDatabaseName(connection: URL, purpose: "index_rehearsal" | "pilot_rehearsal" | "push_rehearsal"): string {
   const base = decodeURIComponent(connection.pathname.slice(1));
   const name = `${/^[a-z][a-z0-9_]{0,29}$/.test(base) ? base : "valopay"}_${purpose}_${randomBytes(8).toString("hex")}`;
   // Checked before it is written into SQL: only these characters, and within PostgreSQL's 63-byte names.
-  if (!/^[a-z][a-z0-9_]*_(?:index|pilot)_rehearsal_[a-f0-9]{16}$/.test(name) || name.length > 63) throw new Error("The throwaway database name is not the expected shape.");
+  if (!/^[a-z][a-z0-9_]*_(?:index|pilot|push)_rehearsal_[a-f0-9]{16}$/.test(name) || name.length > 63) throw new Error("The throwaway database name is not the expected shape.");
   return name;
 }
