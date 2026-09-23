@@ -30,6 +30,15 @@ function decisionDetail(data: Record<string, any>): string {
   ].filter(Boolean).join(' ');
 }
 
+/** How an allocation was made, then the reason recorded with it: an automatic match names its rule and whether it was certain. */
+function allocationDetail(data: Record<string, any>): string {
+  const rule = String(data.rule || 'not recorded');
+  const how = data.automatic === true ? `Matched automatically${data.confidence === 'certain' ? ' and with certainty' : ''} by rule ${rule}.`
+    : data.confidence === 'manual' ? ''
+    : `Proposed by rule ${rule}${data.confidence ? ` as ${String(data.confidence)}` : ''} for Finance to confirm.`;
+  return [how, String(data.explanation || '')].filter(Boolean).join(' ');
+}
+
 /** The address is a customer page, but the current lender has no customer with that reference. */
 function MissingCustomer({ id }: { id: string }) {
   useEffect(() => { document.title = 'Customer not found · Valo Pay'; }, []);
@@ -252,6 +261,9 @@ export default function CustomerTimelinePage() {
                       )}
                       {event.kind === 'retry-decisions' && (
                         <span className="text-xs leading-relaxed text-muted-foreground mt-2">{decisionDetail((event.data || {}) as Record<string, any>)}</span>
+                      )}
+                      {event.kind === 'allocations' && (
+                        <span className="text-xs leading-relaxed text-muted-foreground mt-2">{allocationDetail((event.data || {}) as Record<string, any>)}</span>
                       )}
                       <span className="mt-2"><StatusBadge status={event.status} /></span>
                     </div>

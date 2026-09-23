@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'wouter';
 import { ArrowRight, Check, Download, FileText, Play, Presentation } from 'lucide-react';
 import { useWorkspace } from '@/lib/workspace-context';
-import { usePresentation } from '@/components/presentation-guide';
+import { usePresentation, usePresentationHref } from '@/components/presentation-guide';
 import { presentationChecks, presentationSteps, presentationSamples, presenterBrief, downloadPresentationFile } from '@/lib/presentation';
 import { Button } from '@/components/ui/button';
 
@@ -12,6 +12,7 @@ export default function PresentationPage() {
   const [date] = useState(() => new Date(Date.now() + 3_600_000).toISOString().slice(0, 10));
   const [notice, setNotice] = useState('');
   const lender = workspace?.merchants.find(m => m.id === merchantId);
+  const hrefFor = usePresentationHref(true);
   function download(filename: string, content: string, csv = false) {
     try { downloadPresentationFile(filename, content, csv); setNotice(`Download requested: ${filename}. Check your browser’s downloads.`); }
     catch { setNotice('The download could not start. Try again or use the guidance on this page.'); }
@@ -29,7 +30,7 @@ export default function PresentationPage() {
     </section>
 
     <section aria-labelledby="demo-story"><div className="mb-4 flex flex-wrap items-end justify-between gap-2"><div><p className="text-xs font-semibold uppercase tracking-wider text-primary">The product story</p><h2 id="demo-story" className="mt-2 text-2xl font-semibold tracking-tight">Six moments that explain the value</h2></div><p className="text-sm text-muted-foreground">Open a workflow when you are ready.</p></div>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{presentationSteps.map((step, index) => <article key={step.href} className="flex flex-col rounded-xl border bg-card p-5"><div className="flex items-center justify-between"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-sm font-semibold text-primary">0{index + 1}</span><span className="text-xs text-muted-foreground">{step.time}</span></div><h3 className="mt-4 font-semibold">{step.title}</h3><p className="mt-2 flex-1 text-sm leading-6 text-muted-foreground">{step.value}</p><Link href={step.href} className="mt-4 inline-flex min-h-10 items-center gap-2 text-sm font-medium text-primary underline underline-offset-4" onClick={() => save({ ...state, step: index })}>{step.action}<ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></article>)}</div>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{presentationSteps.map((step, index) => <article key={step.href} className="flex flex-col rounded-xl border bg-card p-5"><div className="flex items-center justify-between"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-sm font-semibold text-primary">0{index + 1}</span><span className="text-xs text-muted-foreground">{step.time}</span></div><h3 className="mt-4 font-semibold">{step.title}</h3><p className="mt-2 flex-1 text-sm leading-6 text-muted-foreground">{step.value}</p><Link href={hrefFor(step)} className="mt-4 inline-flex min-h-10 items-center gap-2 text-sm font-medium text-primary underline underline-offset-4" onClick={() => save({ ...state, step: index })}>{step.action}<ArrowRight className="h-4 w-4" aria-hidden="true" /></Link></article>)}</div>
     </section>
 
     <div className="grid items-start gap-6 lg:grid-cols-2">
