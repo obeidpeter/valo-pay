@@ -28,6 +28,10 @@ import LandingPage from '@/pages/landing';
 const SignInPage: PageLoader = () => import('@/pages/sign-in').then((m) => ({ default: m.SignInPage }));
 const SignUpPage: PageLoader = () => import('@/pages/sign-in').then((m) => ({ default: m.SignUpPage }));
 
+// When the app loads, before the router first subscribes to the browser's location, so the
+// unsaved-changes guard hears Back and Forward before the router changes the page.
+installUnsavedNavigationGuard();
+
 // Console pages load on first visit, each in its own chunk, so the landing page does not carry the
 // console and the console does not carry every page at once (design rationale, Performance).
 const OverviewPage: PageLoader = () => import('@/pages/overview');
@@ -248,7 +252,6 @@ function ClerkProviderWithRoutes() {
 }
 
 function App() {
-  useEffect(installUnsavedNavigationGuard, []);
   return (
     <WouterRouter base={basePath}>
       <ClerkProviderWithRoutes />

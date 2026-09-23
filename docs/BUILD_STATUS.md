@@ -1,4 +1,11 @@
 # Valo Pay — build status
+## Audit fixes, 23 September audit · September 2026
+
+The findings of the 23 September 2026 audit are fixed and covered by tests:
+
+- **Console survives a failed workspace refresh.** Only a workspace that cannot be loaded at all replaces the console with the unavailable notice. A background refresh that fails (the service unreachable for a few seconds, or one 429) keeps every page, form and dialog, with its draft and any "Outcome not confirmed" retry, and a notice above the page says the workspace could not be refreshed, why, when the workspace shown was loaded and that a save whose outcome is unknown can be checked in Operations, with Try again. After a 429 or 503 with `Retry-After`, the next automatic refresh waits that long and the notice says when. Neither notice says any more that no lender data has been changed: the unavailable notice points to Operations instead.
+- **Back and Forward keep a draft.** The unsaved-changes guard is installed when the app loads, before the router subscribes to the browser's location, and its listener no longer relies on capturing: in Chromium, listeners on the window run in the order they were added, so Back used to unmount the draft before the guard was asked. A browser test checks Back and Forward with a Settings draft and a case note, and the jsdom test now fails if the order is lost.
+
 ## Audit fixes, items 21 to 31 · September 2026
 
 Items 21 to 31 of the 22 September 2026 audit are fixed and covered by tests:

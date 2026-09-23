@@ -60,7 +60,7 @@ export interface FakeApi {
   lifecycleExternal: LifecycleExternalCandidate[];
   setNow(iso: string): void;
   /** Makes the next request whose path (and method, when given) matches fail: with an API-style error body and status, or as a network failure ("offline"). */
-  failNext(pattern: RegExp, failure: { status: number; error: string; details?: Array<{ field: string; message: string }> } | "offline", method?: string): void;
+  failNext(pattern: RegExp, failure: { status: number; error: string; details?: Array<{ field: string; message: string }>; headers?: Record<string, string> } | "offline", method?: string): void;
   /** Holds every request whose path matches until the returned function is called, so a loading or busy state can be seen. */
   hold(pattern: RegExp): () => void;
   uninstall(): void;
@@ -103,7 +103,7 @@ type Handler = (params: Record<string, string>, query: Record<string, string>, b
 
 export function installFakeApi(options: { now?: string; role?: string; queuedExports?: boolean } = {}): FakeApi {
   const states = new Map<string, DomainState>();
-  const failures: Array<{ pattern: RegExp; method?: string; failure: { status: number; error: string; details?: Array<{ field: string; message: string }> } | "offline" }> = [];
+  const failures: Array<{ pattern: RegExp; method?: string; failure: { status: number; error: string; details?: Array<{ field: string; message: string }>; headers?: Record<string, string> } | "offline" }> = [];
   const holds: Array<{ pattern: RegExp; promise: Promise<void> }> = [];
   const api: FakeApi = {
     merchantIds: [], role: options.role ?? "Admin", principalId: 'synthetic-console-person-1', now: options.now ?? new Date().toISOString(), calls: [],
@@ -323,7 +323,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
       api.calls.push({ method, path, query, body, status: failure.status });
       // As the API does: the request id in the body and on the answer, so the console can quote it.
       const requestId = `fake-${(++failureCount).toString(16).padStart(4, "0")}`;
-      return new Response(JSON.stringify({ error: failure.error, ...(failure.details ? { details: failure.details } : {}), requestId }), { status: failure.status, headers: { "content-type": "application/json", "x-request-id": requestId } });
+      return new Response(JSON.stringify({ error: failure.error, ...(failure.details ? { details: failure.details } : {}), requestId }), { status: failure.status, headers: { "content-type": "application/json", "x-request-id": requestId, ...failure.headers } });
     }
     let status = 200, payload: unknown;
     try {
