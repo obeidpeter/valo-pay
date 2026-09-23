@@ -24,6 +24,24 @@ test('unmatched searches explain the result and reconciliation search survives c
   await expect(page.getByLabel('Search reconciliation')).toHaveValue('BROWSER-MATCH');
   await expect(page.getByText('1–25 of 55 proposed matches',{exact:true})).toBeVisible();
 });
+test("the allocation picker counts only the instalments it offers", async ({ page }) => {
+  await page.goto("/reconciliation");
+  await page.getByRole("row").filter({ hasText: "SBX-UNIDENTIFIED-001" }).getByRole("button", { name: "Allocate", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Allocate payment" });
+  const pager = dialog.getByText(/^1–\d+ of \d+ instalment choices$/);
+  await expect(pager).toBeVisible();
+  const [, shown, total] = /^1–(\d+) of (\d+)/.exec(await pager.innerText())!;
+  const offered = dialog.getByLabel(/^Instalment/).locator("option:not([value=''])");
+  await expect(offered).toHaveCount(Number(shown));
+  // Every page is full of choices, so the count is the number of instalments that can take a payment.
+  expect(Number(total)).toBeGreaterThan(Number(shown));
+  await expect(dialog.getByText("Instalments that are paid, cancelled, closed or in dispute cannot take a payment and are not listed.")).toBeVisible();
+  // DEMO-LOAN-1001 is paid: searching for it offers nothing and says so, with no pager.
+  await dialog.getByRole("searchbox", { name: "Find an instalment" }).fill("DEMO-LOAN-1001");
+  await expect(dialog.getByText("No instalment that can take a payment matches this search.")).toBeVisible();
+  await expect(offered).toHaveCount(0);
+  await expect(dialog.getByRole("navigation", { name: "instalment choices pagination" })).toHaveCount(0);
+});
 test("paged queue search, saved view, record return and browser history", async ({
   page,
 }) => {
