@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 if (process.env.VALOPAY_RUN_INTEGRATION !== "1") { console.log("Opt in on a disposable PostgreSQL database to test staff lender access."); process.exit(0); }
-const { pool } = await import("@workspace/db"), store = await import("../src/lib/valopay-store"), { default: router } = await import("../src/routes/index"), { errorHandler } = await import("../src/lib/error-handler");
+const { pool, poolSize } = await import("@workspace/db"), store = await import("../src/lib/valopay-store"), { default: router } = await import("../src/routes/index"), { errorHandler } = await import("../src/lib/error-handler");
 const saved = { VALOPAY_STAFF_ACCESS: process.env.VALOPAY_STAFF_ACCESS, VALOPAY_STAFF_ISSUER: process.env.VALOPAY_STAFF_ISSUER, VALOPAY_STAFF_ORIGINS: process.env.VALOPAY_STAFF_ORIGINS };
 Object.assign(process.env, { VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://identity.example", VALOPAY_STAFF_ORIGINS: "https://pilot.example" });
 const identities = new Map<string, any>(), app = express();
@@ -62,7 +62,24 @@ try {
   assert.equal((await late).status, 404, "The queued request runs after the revocation, without the removed grant.");
   assert.equal((await call(`/v1/records/customers?merchantId=${a.id}`, "finance")).status, 404, "An existing session cannot read after its lender grant is removed.");
   assert.equal((await call(`/v1/pilot/close-reviews?merchantId=${a.id}`, "finance")).status, 404);
-  console.log("Staff lender API/PostgreSQL checks passed: default denial, explicit grants, MFA, lender-filtered reviewers, independent concurrent close approval and synchronised access removal that later requests cannot overtake.");
+  // Another organisation that names this organisation's lender in its own requests fills only its own gate slots, never this organisation's.
+  const otherOrg = `org_${randomUUID().replaceAll("-", "")}`, outsider = `user_${randomUUID().replaceAll("-", "")}`;
+  identities.set("outsider", { ...auth(outsider), orgId: otherOrg });
+  owned.push((await store.provisionStaffWorkspace(otherOrg, outsider, "Another organisation")).workspaceId);
+  let releaseOutsiders!: () => void;
+  const outsidersHeld = new Promise<void>(resolve => { releaseOutsiders = resolve; }), outsidersIn: Promise<void>[] = [];
+  const outsiders = Array.from({ length: Math.floor(poolSize / 2) }, () => {
+    let inside!: () => void; outsidersIn.push(new Promise<void>(resolve => { inside = resolve; }));
+    return store.inWorkspace({ ...requestFor("outsider"), query: { merchantId: a.id } }, responseStub, async () => { inside(); await outsidersHeld; }, "read").finally(() => inside());
+  });
+  try {
+    await Promise.all(outsidersIn);
+    const started = Date.now();
+    await store.inWorkspace({ ...requestFor("admin"), query: { merchantId: a.id } }, responseStub, ctx => store.loadState(ctx, a.id, "share"), "read");
+    assert.ok(Date.now() - started < 1_000, `An organisation's read of its own lender is not held up by another organisation naming it (${Date.now() - started} ms).`);
+  } finally { releaseOutsiders(); }
+  await Promise.all(outsiders);
+  console.log("Staff lender API/PostgreSQL checks passed: default denial, explicit grants, MFA, lender-filtered reviewers, independent concurrent close approval, synchronised access removal that later requests cannot overtake, and another organisation naming a lender never holds it up.");
 } finally {
   server.close(); await once(server, "close");
   for (const id of owned) { await pool.query("DELETE FROM valopay_staff_events WHERE workspace_id=$1", [id]); await pool.query("DELETE FROM valopay_staff_invitations WHERE workspace_id=$1", [id]); await pool.query("DELETE FROM valopay_staff_memberships WHERE workspace_id=$1", [id]); await pool.query("DELETE FROM valopay_teams WHERE workspace_id=$1", [id]); await pool.query("DELETE FROM valopay_idempotency WHERE merchant_id IN(SELECT id FROM valopay_merchants WHERE workspace_id=$1)", [id]); await pool.query("DELETE FROM valopay_records WHERE merchant_id IN(SELECT id FROM valopay_merchants WHERE workspace_id=$1)", [id]); await pool.query("DELETE FROM valopay_merchants WHERE workspace_id=$1", [id]); await pool.query("DELETE FROM valopay_workspaces WHERE id=$1", [id]); }

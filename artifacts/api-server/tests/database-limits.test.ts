@@ -41,8 +41,10 @@ const state = <T>(promise: Promise<T>) => { const seen: { value?: T; error?: unk
   const gate = createLenderGate({ capacity: 1, waitMs: () => 50, maxWaiting: 1 });
   const holder = await gate.enter("lender-a", true);
   const waiting = gate.enter("lender-a", true).then(() => undefined, (error: unknown) => error);
-  const refused = await gate.enter("lender-a", false).then(() => undefined, (error: unknown) => error);
-  ok(refused instanceof DatabaseLimitError && refused.limit === "lender_busy", "past the waiting limit a request is turned away at once");
+  const refusal = state(gate.enter("lender-a", false));
+  await sleep(0);
+  ok(refusal.settled && refusal.error instanceof DatabaseLimitError && refusal.error.limit === "lender_busy", "past the waiting limit a request is turned away at once, not after the wait limit");
+  const refused = refusal.error;
   const started = Date.now();
   const error = await waiting;
   ok(Date.now() - started < 1_000, "a waiter gives up after the wait limit");
@@ -128,11 +130,26 @@ const state = <T>(promise: Promise<T>) => { const seen: { value?: T; error?: unk
   eq(terminated.limit, "connection_lost", "any other lost connection is connection_lost");
   const busy = markRolledBack(new DatabaseLimitError("pool_timeout", { write: false }));
   eq(failedTransaction(busy, { committing: false, write: false }), busy, "an error that already names its limit passes through");
+  const answer = (error: unknown) => {
+    const answered: { status?: number; retryAfter?: unknown; body?: { error: string; committed?: boolean } } = {};
+    errorHandler(error, { id: "req-commit", log: { error() {}, warn() {}, info() {} } } as never, { headersSent: false, setHeader(name: string, value: unknown) { if (name === "Retry-After") answered.retryAfter = value; }, status(code: number) { answered.status = code; return this; }, json(body: { error: string }) { answered.body = body; return this; } } as never, () => undefined);
+    return answered;
+  };
   const atCommit = failedTransaction(new Error("Connection terminated unexpectedly"), { committing: true, lost: new Error("Connection terminated unexpectedly"), write: true });
   ok(!(atCommit instanceof DatabaseLimitError) && !wasRolledBack(atCommit), "a connection lost during COMMIT is not a 503: the change may have been saved");
-  const answered: { status?: number; body?: { error: string; committed?: boolean } } = {};
-  errorHandler(atCommit, { id: "req-commit", log: { error() {}, warn() {}, info() {} } } as never, { headersSent: false, setHeader() {}, status(code: number) { answered.status = code; return this; }, json(body: { error: string }) { answered.body = body; return this; } } as never, () => undefined);
-  eq([answered.status, answered.body?.committed], [500, undefined], "it is answered as the general, unconfirmed 500");
+  const unconfirmed = answer(atCommit);
+  eq([unconfirmed.status, unconfirmed.body?.committed], [500, undefined], "it is answered as the general, unconfirmed 500");
+  // The server ended the session as the COMMIT reached it: it may have been read, so the outcome stays unconfirmed.
+  const endedAtCommit = failedTransaction(Object.assign(new Error("terminating connection due to idle-in-transaction timeout"), { code: "25P03" }), { committing: true, write: true });
+  ok(!(endedAtCommit instanceof DatabaseLimitError) && !wasRolledBack(endedAtCommit), "a COMMIT that reached the server and then failed stays unconfirmed");
+  // The idle limit ended the session after the last statement: pg refuses the COMMIT without sending it, so nothing can have been saved.
+  const notQueryable = new Error("Client has encountered a connection error and is not queryable");
+  const unsent = failedTransaction(notQueryable, { committing: true, lost: Object.assign(new Error("terminating connection due to idle-in-transaction timeout"), { code: "25P03" }), write: true }) as DatabaseLimitError;
+  eq([unsent instanceof DatabaseLimitError, unsent.limit, wasRolledBack(unsent), unsent.cause], [true, "idle_timeout", true, notQueryable], "a COMMIT refused before it was sent is the idle limit's 503, and nothing was saved");
+  const unsentAnswer = answer(unsent);
+  eq([unsentAnswer.status, unsentAnswer.retryAfter, unsentAnswer.body?.committed, unsentAnswer.body?.error], [503, "5", false, "This request took too long and was stopped. Nothing was saved. Try again in a moment, and quote this reference if it happens again."], "answered 503 with Retry-After and committed: false");
+  const unsentLost = failedTransaction(notQueryable, { committing: true, lost: new Error("Connection terminated unexpectedly"), write: true }) as DatabaseLimitError;
+  eq([unsentLost instanceof DatabaseLimitError, unsentLost.limit, wasRolledBack(unsentLost)], [true, "connection_lost", true], "and so is a COMMIT refused after any other lost connection");
   const refusal = Object.assign(new Error("This record changed."), { status: 409 });
   eq(failedTransaction(refusal, { committing: false, write: true }), refusal, "a domain refusal is returned unchanged");
   eq(failedTransaction(Object.assign(new Error("duplicate key"), { code: "23505" }), { committing: false, write: true }) instanceof DatabaseLimitError, false, "and so is a constraint");

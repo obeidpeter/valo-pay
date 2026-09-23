@@ -103,12 +103,20 @@ export function bindOperation(req: Request, id: string, merchantId: string) { re
 /** The journal entry the recovery middleware bound to this request, if any. */
 export function boundOperation(req: Request) { return requestOperations.get(req); }
 const databaseConflictCodes = new Set(["23503", "23505", "23514", "P0001"]);
-/** One lender holds at most half this process's connections; a request past that waits, without one, for up to the lock limit. */
+/** One workspace's requests for one lender hold at most half this process's connections; a request past that waits, without one, for up to the lock limit. */
 const lenderGate = createLenderGate({ capacity: Math.max(1, Math.floor(poolSize / 2)), waitMs: () => databaseLimits().request.lockMs });
-/** The lender a request names: every lender-scoped route carries it as the merchantId query value. */
-function gatedLender(req: Request): string | undefined {
+/**
+ * The gate lane of the lender a request names: every lender-scoped route
+ * carries it as the merchantId query value. The value is read before anything
+ * is authorised, so the lane is the caller's own (the staff organisation, or
+ * the sandbox principal) as well as the lender's: a caller that names another
+ * tenant's lender only queues behind its own requests, never that tenant's.
+ */
+function gatedLender(req: Request, principal: string): string | undefined {
   const lender = (req.query as Record<string, unknown> | undefined)?.merchantId;
-  return typeof lender === "string" && lender.length >= 1 && lender.length <= 100 ? lender : undefined;
+  if (typeof lender !== "string" || lender.length < 1 || lender.length > 100) return undefined;
+  const caller = staffMode() ? `org:${getAuth(req).orgId || ""}` : `principal:${principal}`;
+  return `${caller}\u0000${lender}`;
 }
 
 /** Throws an error carrying the HTTP status the error handler answers with (400 unless given). */
@@ -518,11 +526,11 @@ async function lockWorkspace(client: PoolClient, workspaceId: string, mode: "sha
  * Only first-visit bootstrap needs the principal advisory lock. Every
  * transaction is bounded (database-limits.ts): a lock wait, a statement and
  * idle time each have a limit, and one lender holds at most half the pool, so
- * a busy lender turns its own requests away with a 503 instead of holding up
- * other tenants. */
+ * one busy lender turns its own requests away with a 503 instead of taking
+ * every connection (two busy at once can still fill it). */
 export async function inWorkspace<T>(req: Request, res: Response, fn: (context: StoreContext) => Promise<T>, access: WorkspaceAccess = "write"): Promise<T> {
   const identity = principalFor(req, res);
-  const write = access !== "read", lender = gatedLender(req);
+  const write = access !== "read", lender = gatedLender(req, identity.principal);
   const leave = lender ? await lenderGate.enter(lender, write) : undefined;
   let guard: Checkout<PoolClient> | undefined;
   let context: StoreContext | undefined, committing = false, isolationVerified = false;

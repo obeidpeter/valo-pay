@@ -102,8 +102,10 @@ const codeLimits = new Map<string, DatabaseLimit>([
   // Starting up or out of connections.
   ['57P03', 'database_unavailable'], ['53300', 'database_unavailable'],
 ]);
+/** pg's refusal of a query on a connection it already knows is gone: the query was never sent. */
+const NOT_SENT = 'Client has encountered a connection error and is not queryable';
 /** pg's own errors for a connection that has gone, which carry no code. */
-const lostConnection = new Set(['Connection terminated unexpectedly', 'Connection terminated', 'Client has encountered a connection error and is not queryable']);
+const lostConnection = new Set(['Connection terminated unexpectedly', 'Connection terminated', NOT_SENT]);
 
 /** The limit a failure reached, or undefined when it is anything else (a constraint, a domain refusal, a bug). */
 export function databaseLimitOf(error: unknown): DatabaseLimit | undefined {
@@ -155,15 +157,19 @@ export async function checkOut<C extends PooledClient>(connect: () => Promise<C>
 /**
  * What a failed transaction throws. A limit reached before COMMIT was sent is
  * a 503 that says nothing was saved; a connection lost to the idle limit says
- * so rather than "lost". A limit reached during COMMIT (a connection lost
- * while it was on its way) is answered as the general, unconfirmed 500: the
- * server may have committed. Anything else is returned unchanged.
+ * so rather than "lost". A COMMIT that pg refused without sending it, because
+ * the connection was already gone (the idle limit struck after the last
+ * statement), cannot have saved anything either. A limit reached once COMMIT
+ * was sent (a connection lost while it was on its way or being run) is
+ * answered as the general, unconfirmed 500: the server may have committed.
+ * Anything else is returned unchanged.
  */
 export function failedTransaction(error: unknown, outcome: { committing: boolean; lost?: Error; write: boolean }): unknown {
   if (error instanceof DatabaseLimitError) return error;
   let limit = databaseLimitOf(error);
   if (limit === 'connection_lost' && outcome.lost) limit = databaseLimitOf(outcome.lost) ?? 'connection_lost';
   if (!limit) return error;
-  if (outcome.committing) return Object.assign(new Error('The database did not confirm whether this change was saved.', { cause: error }), { status: 500 });
+  const sent = !(error instanceof Error && error.message === NOT_SENT && (error as { code?: unknown }).code === undefined);
+  if (outcome.committing && sent) return Object.assign(new Error('The database did not confirm whether this change was saved.', { cause: error }), { status: 500 });
   return markRolledBack(new DatabaseLimitError(limit, { write: outcome.write, cause: error }));
 }
