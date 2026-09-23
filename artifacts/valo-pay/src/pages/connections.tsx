@@ -5,6 +5,7 @@ import {
   ConnectedPanel,
   ConnectedStatus,
   ConnectedRecovery,
+  ConnectedState,
 } from "@/components/connected-frame";
 import { Button } from "@/components/ui/button";
 import { Loading } from "@/components/loading";
@@ -13,6 +14,9 @@ import { useConnected } from "@/lib/connected";
 import { formatDate, formatNumber } from "@/lib/formatters";
 import { useFormDraft } from "@/lib/unsaved-changes";
 import { useWorkspace } from "@/lib/workspace-context";
+const TITLE = "Permissions & readiness",
+  DESCRIPTION =
+    "Know what each connection may do, who authorised it, and when that permission ends.";
 export default function ConnectionsPage() {
   const api = useConnected(),
     { merchantId } = useWorkspace();
@@ -61,17 +65,17 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
       setFailure((e as Error).message);
     }
   };
-  if (api.isLoading) return <Loading what="permissions" />;
+  if (api.isLoading) return <Loading what="permissions" heading />;
   if (!api.data)
     return (
-      <>
+      <ConnectedState title={TITLE} description={DESCRIPTION}>
         <LoadProblem
           what="permissions"
           error={api.error}
           retry={() => void api.refetch()}
         />
         <ConnectedRecovery recovery={api} />
-      </>
+      </ConnectedState>
     );
   const data = api.data;
   const canGrant = api.canWrite && ["Admin", "Operations"].includes(data.role);
@@ -85,8 +89,8 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
       : data.customers.find((c) => c.id === id)?.name || "Unknown subject";
   return (
     <ConnectedFrame
-      title="Permissions & readiness"
-      description="Know what each connection may do, who authorised it, and when that permission ends."
+      title={TITLE}
+      description={DESCRIPTION}
       recovery={api}
       onRecovered={() => {
         setFailure("");

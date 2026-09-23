@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { useMutation } from "@tanstack/react-query";
 import { pilotRequest } from "@/lib/pilot";
@@ -18,6 +18,10 @@ const UNCONFIRMED_ACCEPTANCE =
 export default function TeamInvitePage() {
   const [token] = useState(() => window.location.hash.slice(1)),
     { userId } = useSessionUser();
+  // Outside the console's layout, which names each page, so the page names itself.
+  useEffect(() => {
+    document.title = "Join your pilot workspace · Valo Pay";
+  }, []);
   const accept = useMutation({
     mutationFn: () =>
       pilotRequest("/team/accept", invitationAcceptedSchema, {

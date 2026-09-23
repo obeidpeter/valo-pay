@@ -111,7 +111,7 @@ describe('guided synthetic CSV imports', () => {
     const input = screen.getByLabelText('CSV content');
     await user.click(input); await user.paste('name,reference,consentProvenance\nValid,CSV-VALID,Synthetic\nInvalid,CSV-BAD,');
     await user.click(screen.getByRole('button', { name: 'Check data' }));
-    await screen.findByText(/0 imported · 0 skipped as duplicates · 1 rows to fix · 1 valid rows/);
+    await screen.findByText(/0 imported · 0 skipped as duplicates · 1 row to fix · 1 valid row/);
     expect(screen.getByRole('button', { name: 'Import data' }).hasAttribute('disabled')).toBe(true);
     expect(screen.getByRole('button', { name: 'Download errors CSV' })).toBeTruthy();
     expect(api.state().records.some(record => record.reference === 'CSV-VALID')).toBe(false);

@@ -1,4 +1,5 @@
 import { type ReactNode } from 'react';
+import { errorWords } from '@/lib/notify';
 
 /**
  * What every form in the console shares when a value is missing or refused:
@@ -83,7 +84,8 @@ export function formErrorMessage(message: string, fields: Array<{ name: string; 
  */
 export function serverFieldErrors(error: unknown, resolve: (path: string) => string | null): { fields: Record<string, string>; general: string[] } {
   const data = (error as { data?: { error?: unknown; details?: unknown } } | null)?.data;
-  const said = typeof data?.error === 'string' ? data.error : (error as { message?: string } | null)?.message || 'This was not saved.';
+  // Without the service's words, plain ones: never the browser's own error text ("Failed to fetch") or an HTTP status line.
+  const said = typeof data?.error === 'string' ? data.error : errorWords(error, 'The service did not confirm the result.');
   const details = Array.isArray(data?.details) ? (data.details as Detail[]) : [];
   const fields: Record<string, string> = {};
   const general: string[] = [];

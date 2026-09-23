@@ -6,6 +6,7 @@ import {
   ConnectedPanel,
   ConnectedStatus,
   ConnectedRecovery,
+  ConnectedState,
 } from "@/components/connected-frame";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,7 +24,10 @@ import { formatKobo, formatDate, formatNumber } from "@/lib/formatters";
 import { nairaToKobo, koboToNaira } from "@/lib/money-input";
 import { useFormDraft } from "@/lib/unsaved-changes";
 import { useWorkspace } from "@/lib/workspace-context";
-import { useDialogFocusReturn } from "@/lib/focus";
+import { useDialogFocusReturn, useFocusWhenLost } from "@/lib/focus";
+const TITLE = "Pay-by-bank",
+  DESCRIPTION =
+    "A clear journey from bank authorisation to a verified receipt, tied to the instalment it pays.";
 export default function PayByBank() {
   const api = useConnected(),
     { merchantId } = useWorkspace();
@@ -44,8 +48,13 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
     } | null>(null),
     [reason, setReason] = useState("");
   // A confirmed step usually removes the button that opened its review, so focus then goes to the result.
-  const result = useRef<HTMLParagraphElement>(null);
+  const result = useRef<HTMLParagraphElement>(null),
+    problem = useRef<HTMLParagraphElement>(null);
   const restoreFocus = useDialogFocusReturn(!!review, () => result.current);
+  // A step taken without a review (Simulate browser return, the outcomes) also removes or disables its own
+  // button: when focus has fallen to the page, it goes to what the step did, or to why it was refused.
+  useFocusWhenLost(result, success);
+  useFocusWhenLost(problem, error);
   // A checkout, or a review's reason, typed but not sent is a draft: leaving asks first.
   const draft = useFormDraft({ dueId, amount, reason: review ? reason : "" });
   const act = async (
@@ -94,17 +103,17 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
       return false;
     }
   };
-  if (api.isLoading) return <Loading what="pay-by-bank" />;
+  if (api.isLoading) return <Loading what="pay-by-bank" heading />;
   if (!api.data)
     return (
-      <>
+      <ConnectedState title={TITLE} description={DESCRIPTION}>
         <LoadProblem
           what="pay-by-bank"
           error={api.error}
           retry={() => void api.refetch()}
         />
         <ConnectedRecovery recovery={api} />
-      </>
+      </ConnectedState>
     );
   const { payments } = api.data,
     due = payments.dues.find((d) => d.id === dueId) || payments.dues[0],
@@ -157,8 +166,8 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
   };
   return (
     <ConnectedFrame
-      title="Pay-by-bank"
-      description="A clear journey from bank authorisation to a verified receipt, tied to the instalment it pays."
+      title={TITLE}
+      description={DESCRIPTION}
       recovery={api}
       onRecovered={() => {
         setError("");
@@ -199,7 +208,7 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
         counts as proof of payment.
       </p>
       {error && !api.hasUnconfirmedOutcome && (
-        <p role="alert" className="connected-error">
+        <p role="alert" className="connected-error" ref={problem}>
           {error}
         </p>
       )}

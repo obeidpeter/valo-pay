@@ -12,6 +12,11 @@ import { GetExportJobResponse } from '@workspace/api-zod';
 import { Link } from 'wouter';
 
 type Format = 'pdf' | 'csv' | 'json';
+/** What a saved export holds, in words: the packs by their names, anything else as `fallback`. */
+export function exportKindTitle(kind: string, fallback = 'Saved export'): string {
+  return kind === 'billing' ? 'Billing CSV' : kind === 'gate-pack' ? 'Evidence pack' : kind === 'reviewed-close' ? 'Reviewed close evidence' : kind === 'closes' ? 'Close evidence' : ['customer-pack','dispute-pack'].includes(kind) ? 'Dispute pack' : fallback;
+}
+
 /** Jobs survive page changes and reloads. Poll only the selected lender/job; downloads always re-authorise on the server. */
 export function ExportJobControl({ kind, customerId, closeReviewId, savedJobId, formats = ['pdf'], label }: { kind: string; customerId?: string; closeReviewId?: string; savedJobId?: string; formats?: Format[]; label: string }) {
   const { merchantId, workspace } = useWorkspace();
@@ -22,7 +27,7 @@ export function ExportJobControl({ kind, customerId, closeReviewId, savedJobId, 
   if (visit.current.scope !== scope) visit.current = { scope };
   const [selected, setSelected] = useState<{ scope: string; job: ExportResult } | null>(null);
   const [problem, setProblem] = useState<{ scope: string; message: string } | null>(null);
-  const title = kind === 'billing' ? 'Billing CSV' : kind === 'gate-pack' ? 'Evidence pack' : kind === 'reviewed-close' ? 'Reviewed close evidence' : kind === 'closes' ? 'Close evidence' : ['customer-pack','dispute-pack'].includes(kind) ? 'Dispute pack' : 'Saved export';
+  const title = exportKindTitle(kind);
   const openLabel = kind === 'billing' ? 'Open billing CSV' : `Open ${title.toLowerCase()}`;
   // Search the saved review identity before paging, then enforce the exact match.
   const params = { merchantId: merchantId!, customerId, search: closeReviewId || kind, limit: 5 };

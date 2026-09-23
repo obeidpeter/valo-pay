@@ -87,7 +87,7 @@ export function LazyPage({ load, ...props }: { load: PageLoader; [prop: string]:
     return () => { current = false; };
   }, [load]);
   if (failure) throw failure;
-  if (!Component) return <Loading what="the page" />;
+  if (!Component) return <Loading what="the page" heading />;
   return <Component {...props} />;
 }
 

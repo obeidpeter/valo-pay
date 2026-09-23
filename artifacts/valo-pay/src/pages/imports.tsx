@@ -21,7 +21,7 @@ import {
   pilotField,
 } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
-import { formatDate, formatKobo, formatNumber } from "@/lib/formatters";
+import { formatCount, formatDate, formatKobo, formatNumber } from "@/lib/formatters";
 import { ScrollFrame } from "@/components/scroll-frame";
 import { readableLabel } from "@/components/record-label";
 import { ImportCorrections } from "@/components/import-corrections";
@@ -839,27 +839,27 @@ function BatchEditor({
                 : "Saved check results"}
           </h3>
           <p role="status" className="text-sm">
-            {check.imported} imported · {check.skipped} already present ·{" "}
-            {check.invalid} to fix · {check.valid} valid
+            {formatNumber(check.imported)} imported ·{" "}
+            {formatNumber(check.skipped)} already present ·{" "}
+            {formatNumber(check.invalid)} to fix ·{" "}
+            {formatNumber(check.valid)} valid
           </p>
           {batch.data.sourceQuality && (
             <div className="rounded-lg border p-3 text-sm space-y-2">
               <h4 className="font-medium">Source quality checks</h4>
+              {/* Customers carry no amounts, so a customer batch has rows to count but no total to show. */}
               <p>
-                {batch.data.sourceQuality.sourceRows} source rows ·{" "}
-                {batch.data.sourceQuality.sourceAmountKobo == null
-                  ? "Source total unavailable"
-                  : formatKobo(batch.data.sourceQuality.sourceAmountKobo)}{" "}
-                source total
+                {formatCount(batch.data.sourceQuality.sourceRows, "source row")}
+                {batch.data.kind !== "customers" &&
+                  ` · ${batch.data.sourceQuality.sourceAmountKobo == null ? "Source total unavailable" : `${formatKobo(batch.data.sourceQuality.sourceAmountKobo)} source total`}`}
               </p>
               <p>
-                {batch.data.sourceQuality.importedRows} newly imported rows ·{" "}
-                {batch.data.sourceQuality.importedAmountKobo == null
-                  ? "Imported total unavailable"
-                  : formatKobo(
-                      batch.data.sourceQuality.importedAmountKobo,
-                    )}{" "}
-                newly imported total
+                {formatCount(
+                  batch.data.sourceQuality.importedRows,
+                  "newly imported row",
+                )}
+                {batch.data.kind !== "customers" &&
+                  ` · ${batch.data.sourceQuality.importedAmountKobo == null ? "Imported total unavailable" : `${formatKobo(batch.data.sourceQuality.importedAmountKobo)} newly imported total`}`}
               </p>
               {batch.data.sourceQuality.issues.map((issue: string) => (
                 <p key={issue} className="text-destructive">
