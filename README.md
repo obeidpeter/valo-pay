@@ -120,7 +120,6 @@ Provide credentials through your environment's secret manager, never through com
 | `VALOPAY_EXPIRED_WORKSPACE_CLEANUP` | Optional; `on` allows new anonymous workspace bootstrap to delete a small batch of expired anonymous workspaces; unset or any other value keeps automatic cleanup off |
 | `VITE_PILOT_EMAIL` | Optional pilot enquiry address shown on the landing page; without it the page names no address |
 | `VALOPAY_RUN_INTEGRATION` | Set to `1` to run the database-backed suites (`pnpm run test:integration`), never against a deployed database |
-| `VALOPAY_RUN_PILOT_RLS` | With the above, `1` runs the isolated-schema row-level-security rehearsal |
 | `VALOPAY_RUN_RECOVERY` | With the above, `1` runs the measured backup and restore rehearsal on a loopback `valopay` database |
 | `VALOPAY_REHEARSAL_REPORT` | Optional path where the recovery rehearsal writes its timings and counts |
 | `VALOPAY_BROWSER_TEST` | Set to `1` by the browser test runner for its loopback fixture server; test only |
@@ -187,7 +186,7 @@ The scheduler and the export worker run inside the API process, not as a separat
 
 `docs/paystack.md` covers the Paystack test adapter, the connection check and the optional signed test ingress: the address to register with a Paystack test account, its configuration and its answers. The API reads `PAYSTACK_TEST_SECRET_KEY` only while `VALOPAY_PAYSTACK_INGRESS` is `test`, and checks each delivery's signature on its raw bytes before it locks or reads a lender. Received events are test evidence only: there is no charging method, live-mode events are refused, and Direct Debit availability in test mode must still be confirmed separately.
 
-`docs/pilot-security.md` covers the access and MFA check every staff request passes when `VALOPAY_STAFF_ACCESS` is `staging`, and the tenant-bound field-encryption helpers. `docs/pilot-database.md` covers the guarded staging RLS migration and disposable-database tests, and `docs/pilot-operations-controls.md` the restricted runtime `VALOPAY_RUNTIME_ISOLATION=staging` opts into. Each is off unless configured, and none of them opens the sandbox to real customer data or live instructions.
+`docs/pilot-security.md` covers the access and MFA check every staff request passes when `VALOPAY_STAFF_ACCESS` is `staging`, and the tenant-bound field-encryption helpers. `docs/pilot-database.md` covers the restricted runtime's row-level-security rehearsal and disposable-database tests, and `docs/pilot-operations-controls.md` the restricted runtime `VALOPAY_RUNTIME_ISOLATION=staging` opts into. Each is off unless configured, and none of them opens the sandbox to real customer data or live instructions.
 
 These checks need no production credentials or running services and do not write to a runtime database:
 

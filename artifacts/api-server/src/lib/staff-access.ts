@@ -33,7 +33,7 @@ export function verifyStaff(
   now: string,
 ) {
   // Domain services enforce the specific operation's role. This check requires
-  // fresh MFA even for role actions not present in the older staging adapter.
+  // fresh MFA for every write, including actions pilot-access.ts does not list.
   return authorizePilotAccess(
     auth,
     membership,

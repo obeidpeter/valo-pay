@@ -43,7 +43,7 @@ function storeCanonical(value: unknown): string {
   if (value && typeof value === "object") return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${storeCanonical(item)}`).join(",")}}`;
   return JSON.stringify(value) ?? "null";
 }
-// artifacts/api-server/src/lib/pilot-staging-store.ts
+// artifacts/api-server/src/lib/pilot-staging-store.ts (since removed with the staging rehearsal)
 const stagingCanonical = (value: any): string => Array.isArray(value) ? `[${value.map(stagingCanonical).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${stagingCanonical(item)}`).join(',')}}` : JSON.stringify(value) ?? 'null';
 // artifacts/api-server/src/domain/close-review.ts
 const closeReviewCanonical = (value: any): string => Array.isArray(value) ? `[${value.map(closeReviewCanonical).join(",")}]` : value && typeof value === "object" ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${closeReviewCanonical(value[key])}`).join(",")}}` : JSON.stringify(value) ?? "null";

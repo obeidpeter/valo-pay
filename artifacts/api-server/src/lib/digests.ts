@@ -9,7 +9,7 @@ import { canonicalJson, type CanonicalJsonForm } from "@workspace/valopay-schema
  *
  * - the audit chain (entry hash and change digest) and the request
  *   fingerprints (idempotency receipts, the operations journal, lender
- *   onboarding, connected actions, the staging rehearsal):
+ *   onboarding, connected actions):
  *   `legacy-en-us-null`, through this module;
  * - retention policy and hold revisions, retention candidate and preview
  *   digests, import-correction impact, preview and proposal digests, work-item
@@ -71,8 +71,8 @@ export function auditEntryHash(body: object): string {
 /**
  * The one audit-entry builder: the data of the entry that follows
  * `previousHash` (GENESIS for the first), with the digest of what changed and
- * the chain hash. The repository, the export worker and the staging rehearsal
- * each find the chain's head their own way and pass it in.
+ * the chain hash. The repository and the export worker each find the chain's
+ * head their own way and pass it in.
  */
 export function auditEntryData(entry: {
   sequence: number; actor: string; action: string; objectId: string; summary: string;

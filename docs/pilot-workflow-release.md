@@ -18,7 +18,7 @@ Create an empty synthetic lender → save/check/correct an import batch → comm
 
 Apply the additive schema to a disposable database first. Verify the code and migration before applying them to the existing synthetic development preview. Keep the pull request draft. Production, live financial operations, external email, real customer ingestion and real Clerk/provider acceptance are separate gates.
 
-The existing forced-RLS rehearsal is independent of this application repository. This release must not claim it protects the default runtime. Staff access supplements the repository's explicit workspace/lender predicates and requires an independent security review before real data.
+The forced-RLS rehearsal of the time, since removed, was independent of this application repository. This release must not claim forced row security protects the default runtime. Staff access supplements the repository's explicit workspace/lender predicates and requires an independent security review before real data.
 
 Authoritative references: [Clerk session claims](https://clerk.com/docs/guides/sessions/session-tokens), [Clerk Express SDK](https://clerk.com/docs/reference/express/overview), [PostgreSQL locking](https://www.postgresql.org/docs/current/explicit-locking.html).
 

@@ -143,6 +143,24 @@ try {
   assert.equal(await errorOf(nul), "Text cannot contain the NUL character (\\u0000). Remove it from data.name and try again.");
   checks += 21;
 
+  // In staff mode a change must come from a configured pilot origin: without one, or from another, it is refused first.
+  const staffNames = ["VALOPAY_STAFF_ACCESS", "VALOPAY_STAFF_ORIGINS"] as const;
+  const staffSaved = Object.fromEntries(staffNames.map((name) => [name, process.env[name]]));
+  try {
+    process.env["VALOPAY_STAFF_ACCESS"] = "staging";
+    process.env["VALOPAY_STAFF_ORIGINS"] = base;
+    for (const origin of [undefined, "https://pilot.example"]) {
+      const refused = await fetch(`${base}/api/v1/webhooks/test`, { method: "POST", headers: { "Content-Type": "application/json", ...(origin ? { Origin: origin } : {}) }, body: "{}" });
+      assert.equal(refused.status, 403);
+      assert.equal(await errorOf(refused), "Use the configured pilot origin for staff changes.", `refused from ${origin ?? "no origin"}`);
+    }
+    const configured = await fetch(`${base}/api/v1/webhooks/test`, { method: "POST", headers: { "Content-Type": "application/json", Origin: base }, body: "{}" });
+    assert.match(await errorOf(configured), /ingress is disabled/, "a change from the configured origin reaches its route");
+  } finally {
+    for (const name of staffNames) { if (staffSaved[name] === undefined) delete process.env[name]; else process.env[name] = staffSaved[name]; }
+  }
+  checks += 5;
+
   // The Paystack test ingress checks a delivery's signature on its raw bytes before it touches a lender:
   // with the database unreachable, a forged delivery to a mapped connection is still a 401, not a 500.
   const paystackNames = ["VALOPAY_PAYSTACK_INGRESS", "PAYSTACK_TEST_SECRET_KEY", "VALOPAY_PAYSTACK_CONNECTIONS"] as const;
@@ -169,4 +187,4 @@ try {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-console.log(`API security tests passed (${checks} checks): error answers and statuses, body-parser and NUL refusals, unavailable services and storage failures, prototype keys, response headers, origin rule before the body, body limit, webhook ingress, Paystack signature before any lender work.`);
+console.log(`API security tests passed (${checks} checks): error answers and statuses, body-parser and NUL refusals, unavailable services and storage failures, prototype keys, response headers, origin rule before the body, the staff pilot origin for changes, body limit, webhook ingress, Paystack signature before any lender work.`);
