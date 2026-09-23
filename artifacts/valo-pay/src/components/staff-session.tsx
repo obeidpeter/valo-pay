@@ -72,7 +72,7 @@ function VerifiedSession() {
           Verify identity
         </Button>
       </div>
-      <PilotError error={error} />
+      <PilotError error={error} fallback="Verification could not be completed. Try again." />
       <p role="status" className="text-sm">
         {message}
       </p>

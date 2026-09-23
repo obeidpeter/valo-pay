@@ -314,6 +314,10 @@ it("offers to check or discard a lost invitation revocation, and discarding it f
   expect(
     screen.getByRole("button", { name: "Check original request" }),
   ).toBeTruthy();
+  // Team changes are not recorded in Operations, so the notice sends the person to this page, not there.
+  const lost = screen.getByText("Outcome not confirmed").closest('[role="alert"]') as HTMLElement;
+  expect(lost.textContent).toContain("The request could not be completed. Refresh this page to see whether it was saved before you try again.");
+  expect(lost.textContent).not.toMatch(/Operations/);
   const second = () =>
     screen.getAllByRole("button", {
       name: "Revoke invitation",
@@ -464,3 +468,25 @@ it("does not offer a newer version while the save's own outcome is unconfirmed",
   expect(screen.queryByText(/A newer version of this batch was saved/)).toBeNull();
   expect(answers.size).toBe(1);
 });
+
+it("says a failed read on a pilot page changed nothing, and sends a lost change to Operations", async () => {
+  const user = userEvent.setup();
+  // A read that got no answer asked the service only to read: no request is waiting anywhere.
+  api.failNext(/^\/v1\/lifecycle$/, "offline");
+  renderApp("/lifecycle");
+  const problem = await screen.findByText("This information could not be loaded. Check your connection and try again.");
+  expect(problem.closest('[role="alert"]')!.textContent).not.toMatch(/Operations/);
+  cleanup();
+  api.failNext(/^\/v1\/pilot\/close-reviews$/, { status: 502, error: "" });
+  renderApp("/close-review");
+  expect(await screen.findByText(/^This information could not be loaded\. Check your connection and try again\. Support reference: fake-\w+\.$/)).toBeTruthy();
+  cleanup();
+  // A batch save is recorded in Operations, so a save whose answer was lost is checked there.
+  renderApp("/imports");
+  await user.click(await screen.findByRole("button", { name: "Use sample" }));
+  api.failNext(/^\/v1\/pilot\/batches$/, "offline", "POST");
+  await user.click(screen.getByRole("button", { name: "Save and check batch" }));
+  const lost = (await screen.findByText("Outcome not confirmed")).closest('[role="alert"]') as HTMLElement;
+  expect(lost.textContent).toContain("The request could not be completed. If it reached the service, Operations lists it with its outcome.");
+});
+

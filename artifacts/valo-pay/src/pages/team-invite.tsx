@@ -8,6 +8,9 @@ import { PilotError, PilotHeading, PilotPanel } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
 import { useSessionUser } from "@/lib/auth";
 
+/** Shown when the acceptance got no answer: team changes are not in Operations, so the pilot workspace shows whether it took effect. */
+const ACCEPTANCE_PROBLEM =
+  "Your invitation could not be accepted. Open the pilot workspace to check whether your membership is active before you try again.";
 /** Shown when the acceptance's answer is not the confirmation its schema describes: the membership may already be active. */
 const UNCONFIRMED_ACCEPTANCE =
   "The service returned an incomplete confirmation. Open the pilot workspace to check whether your membership is active before accepting again.";
@@ -59,7 +62,7 @@ export default function TeamInvitePage() {
         >
           Accept invitation
         </Button>
-        <PilotError error={accept.error} />
+        <PilotError error={accept.error} fallback={ACCEPTANCE_PROBLEM} />
         {accept.isSuccess && (
           <p role="status" className="text-sm">
             {accept.data.message}{" "}
