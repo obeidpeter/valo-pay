@@ -11,6 +11,7 @@
  */
 export interface InvitationCreated {
   id: string;
+  /** @pattern ^[a-f0-9]{64}$ */
   token: string;
   message: string;
 }

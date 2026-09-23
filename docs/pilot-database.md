@@ -1,56 +1,38 @@
 # Pilot database isolation and recovery rehearsal
 
-This is a **staging-only foundation**, not an enabled control on the deployed sandbox. The application still uses the existing repository boundary. No migration in this document runs during installation, build, startup or deployment.
+This is a **staging-only foundation**, not an enabled control on the deployed sandbox. By default the application uses its repository boundary and its existing credentials. No migration in this document runs during installation, build, startup or deployment.
 
-`lib/db/migrations/001_pilot_rls.sql` is deliberately incompatible with the current bootstrap, workspace expiry and scheduled-close paths: those paths do not establish the database context that these policies require. It refuses the deployed `public` schema and accepts only schemas named `valopay_pilot_staging_<suffix>` or `valopay_pilot_test_<suffix>`. Do not replace deployed database credentials with the pilot role.
+## Restricted runtime isolation
 
-## What the isolation rehearsal provides
+The database isolation the application can run under is the optional restricted runtime described in `docs/pilot-operations-controls.md`: the migrations `lib/db/migrations/005_runtime_isolation.sql` and `lib/db/migrations/006_runtime_isolation_scope.sql`, applied in a separate `valopay_runtime_staging_<suffix>` schema, and `artifacts/api-server/src/lib/runtime-isolation.ts`, which checks the connection and the reviewed isolation set in every staff transaction and then binds it to the verified organisation and person. Each migration needs its own explicit `valopay.runtime_migration=staging-only` opt-in and refuses the `public` schema; 005 also refuses existing roles and policies, and 006 runs once, after 005. Do not replace deployed database credentials with the runtime login.
 
-The migration creates `valopay_pilot_app`, a role with no login, superuser, database creation, role creation, replication or RLS-bypass capability. It enables and forces row-level security on the four Valo Pay tables in the selected schema. The role does not own these tables.
+005 creates a login with no superuser, database creation, role creation, replication or RLS-bypass capability, and a separate owner for the scope helpers that cannot log in. Row-level security is enabled and forced on the ten application tables, which neither role owns. A transaction sees only the workspace of its organisation and person, and only the lenders that person may use: every lender of the workspace for an administrator, otherwise those granted explicitly. Missing, partial or mismatched settings expose no rows and allow no writes. Column grants keep record, lender and workspace identifiers fixed, and the login cannot delete records, change a workspace row, alter policies, disable row security or give itself `BYPASSRLS`.
 
-Both `valopay.workspace_id` and `valopay.principal_hash` must be set for the transaction. A workspace ID alone is insufficient. Merchant visibility follows the visible workspace; records and idempotency entries follow the visible merchant. Missing, empty or mismatched settings expose no rows. Insert policies apply the same checks.
-
-Grants are narrower than row visibility:
-
-| Table | Pilot role capabilities |
-| --- | --- |
-| Workspaces | Select the scoped workspace; no provisioning, persona change or deletion |
-| Merchants | Scoped select and insert; update `info` and `settings` only |
-| Records | Scoped select and insert; update operational fields, excluding record ID, merchant ID, kind and creation time |
-| Idempotency | Scoped select and insert; no update or deletion |
-
-The role cannot delete records, move a lender to another workspace, move a record to another lender, alter policies, disable RLS or give itself `BYPASSRLS`. Provisioning, deletion and expiry require separate administrative capabilities. Existing domain validation and audit protections remain necessary: an RLS policy does not validate money, consent, record transitions or an audit chain.
-
-The two transaction settings are **scope controls, not authentication credentials**. A database role that can issue arbitrary SQL can set custom PostgreSQL settings. Before this can protect a pilot, the server must verify the identity and workspace membership, derive both values itself, use parameterised SQL, and prevent callers from supplying or overriding scope. This foundation does not claim to contain a compromised database account or arbitrary SQL execution.
+The scope settings are **scope controls, not authentication credentials**. A login that can issue arbitrary SQL can set custom PostgreSQL settings, so the server derives them from a verified Clerk session and a current membership, uses parameterised SQL and never lets a caller supply them. This does not claim to contain a compromised database account or arbitrary SQL execution. Domain validation and the audit chain remain necessary: a policy does not validate money, consent, record transitions or an audit chain.
 
 ## Run the automated isolation test
 
-Use an ephemeral PostgreSQL 16 instance with administrative privileges and the ordinary Valo Pay schema already pushed. The existing GitHub database job is such an environment. Never use a production connection string.
+Use an ephemeral PostgreSQL 16 instance with administrative privileges and the ordinary Valo Pay schema already pushed. The GitHub database job is such an environment, and runs this test with the other database suites in `pnpm run test:integration`. Never use a production connection string.
 
 ```sh
 # DATABASE_URL must already point to that disposable PostgreSQL instance.
-VALOPAY_RUN_INTEGRATION=1 VALOPAY_RUN_PILOT_RLS=1 \
-  scripts/node_modules/.bin/tsx artifacts/api-server/tests/pilot-rls.integration.test.ts
+VALOPAY_RUN_INTEGRATION=1 \
+  scripts/node_modules/.bin/tsx artifacts/api-server/tests/runtime-isolation.integration.test.ts
 ```
 
-The test creates a uniquely named `valopay_pilot_test_<random>` schema, copies the four table definitions into it, adds their foreign keys, and inserts synthetic fixtures for two workspaces. It applies the migration only to that schema. The application's original tables are not changed.
+The test copies the ten table definitions into a uniquely named `valopay_runtime_test_<random>` schema, inserts synthetic fixtures for two workspaces and applies 005 and 006 only there. It checks that each migration refuses to run without its opt-in and in the application's own schema, creating no role; the attributes of the roles 005 creates; forced row security and the reviewed policies, helpers and workspace guard, refusing eleven weakenings of them; that no scope, or only an organisation or only a person, sees and writes nothing; own-lender reads and writes, and that a rolled-back write leaves nothing; that writes to another workspace or an ungranted lender, changes to scope and identity columns, deletions, changes to row security or the login's own attributes and `row_security=off` are refused; that a reused connection keeps no scope; that an elevated connection is refused; and the application's repository, staff access and MFA under the restricted login. Its cleanup removes only the schema and roles it created, and it checks that the application's own tables are left as they were.
 
-It verifies explicit opt-in, all four forced policies, role restrictions, unscoped queries, mismatched principals, cross-workspace reads and writes, inserts, attempted tenant moves, committed changes, rolled-back changes, and reuse of the same physical connection without leaking transaction settings. Its cleanup removes only the schema it created and the role created by its own successful migration. It refuses to run if that role already exists. If a process is forcibly killed, an administrator must inspect the leftover test schema and role before retrying; the test does not silently remove pre-existing objects.
+## The earlier four-table rehearsal
 
-The SQL also refuses to proceed without `valopay.pilot_migration=staging-only`, with missing tables, or when the role or policies already exist. Its changes are transactional. For a separate manual rehearsal, clone the four definitions and foreign keys into a named rehearsal schema in a disposable database, set the search path to that schema, and run with `psql -v ON_ERROR_STOP=1`; the opt-in and SQL file must run on the same connection. It revokes public table privileges and public schema creation rights **only in the selected staging schema**.
+`lib/db/migrations/001_pilot_rls.sql` was the first form of this rehearsal: a `valopay_pilot_app` role with workspace and principal settings over four tables, used by a separate staging store and route. The restricted runtime replaces it. The staging store, route and their suite have been removed, and no procedure or test applies this migration any more; do not apply it.
 
-## Work required before enabling the role
+## Before a pilot uses it
 
-The synthetic-note staging repository and HTTP route described in `docs/operational-rehearsals.md` now demonstrate the transaction, access and encryption integration below. The remaining list applies to full pilot workflows and commissioning, not to missing rehearsal code. The deployed sandbox still uses its original repository and credentials.
+Staff access and the restricted runtime carry the transaction, access and scope integration this rehearsal was for: in staff mode verified memberships replace the sandbox personas, each staff transaction sets its scope with transaction-local `set_config(..., true)` after checking its connection, the background worker runs as a provisioned service member, and a transaction whose COMMIT PostgreSQL answers with ROLLBACK is reported as not saved. Before a pilot uses them:
 
-1. Replace sandbox personas with verified user membership and permission checks. Decide how team membership maps to the current one-principal-per-workspace model.
-2. Implement a separate pilot repository adapter that starts a transaction, establishes server-derived workspace and principal settings using `set_config(..., true)`, and then performs scoped reads and writes. The final boolean makes the values local to that transaction. Never use a session-level tenant setting on a pool.
-3. Keep application queries under the restricted login/role. Never give that login table ownership, schema creation, migration-role membership, superuser or `BYPASSRLS` privileges.
-4. Move workspace provisioning and expiry to narrow administrative operations. Do not make the web process an administrator to get around a policy denial.
-5. Replace the global scheduler scan with a reviewed scheduling capability. Each lender's work must execute inside a verified scope; request and scheduler tests must run under the actual pilot login, including concurrent tenants.
-6. Retest the complete runtime: bootstrap, sign-in, invitations, permission changes, reconciliation, exports, idempotency, daily closes, recovery and connection-pool reuse. Record migration, rollback and recovery evidence before applying anything to a pilot database.
-
-The adapter must roll back on every error and must not report success if PostgreSQL answers `ROLLBACK` to a `COMMIT` following a swallowed statement error. Release the connection only after the transaction is closed. The isolation test demonstrates that transaction-local context clears after both commit and rollback; it does not wire this adapter into the running application.
+1. Provision the restricted login, schema, service member, identity application and key access on the host. Never give that login table ownership, schema creation, migration-role membership, superuser or `BYPASSRLS`.
+2. Keep workspace provisioning and expiry as narrow administrative operations. Do not make the web process an administrator to get around a policy denial.
+3. Retest the complete runtime under the restricted login: bootstrap, sign-in, invitations, permission changes, reconciliation, exports, idempotency, daily closes, recovery and connection-pool reuse. Record migration, rollback and recovery evidence before applying anything to a pilot database.
 
 ## Rehearse backup and restore before a pilot
 
@@ -80,6 +62,6 @@ pg_restore --dbname="$EMPTY_RESTORE_REHEARSAL_URL" --no-owner --no-acl \
   --exit-on-error --single-transaction valopay-synthetic-recovery.dump
 ```
 
-After restoring, compare row counts and IDs for all four tables; compare lender settings, outstanding amounts, allocations, daily-close snapshots, and idempotency responses. Verify the complete audit chain with the application verifier. Run the existing repository and scheduler integration suites against the restored target, then perform a UI smoke test using synthetic data. Record elapsed backup and restore time, the snapshot timestamp, verification results, operator and evidence references. Agree acceptable recovery time and data loss with the pilot owner; do not treat an unmeasured target as a successful recovery claim.
+After restoring, compare row counts and IDs for all ten application tables; compare lender settings, outstanding amounts, allocations, daily-close snapshots, and idempotency responses. Verify the complete audit chain with the application verifier. Run the existing repository and scheduler integration suites against the restored target, then perform a UI smoke test using synthetic data. Record elapsed backup and restore time, the snapshot timestamp, verification results, operator and evidence references. Agree acceptable recovery time and data loss with the pilot owner; do not treat an unmeasured target as a successful recovery claim.
 
 This logical dump does not establish point-in-time recovery, restore external object storage or export files, recover encryption keys, or reproduce roles/grants (`--no-acl` intentionally excludes those for the rehearsal). A pilot needs separate tested procedures for each, with restricted backup access, retention, restore credentials, key recovery and a full disaster rehearsal. A successful database test alone does not satisfy the production security or restore readiness gates.

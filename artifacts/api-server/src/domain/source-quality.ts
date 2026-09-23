@@ -1,7 +1,7 @@
 import { parse } from "csv-parse/sync";
 import { csvAmountToKobo, sourceProfileInputSchema, type SourceProfileInput, type SourceBatchQuality } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "./types";
-import { makeRecord, assertSourceOpened } from "./records";
+import { makeRecord, assertSourceOpened, recordsOf } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
 import { sourceCompleteness, watBusinessDate } from "./source-completeness";
 
@@ -36,7 +36,7 @@ export function saveSourceProfile(state: DomainState, ctx: Context, raw: SourceP
 /** Every row is summed with integer arithmetic; invalid or excessive totals cannot masquerade as zero. */
 export function batchSourceQuality(state: DomainState, batch: ValopayRecord): SourceBatchQuality {
   assertSourceOpened(batch, ["csv", "check"]);
-  const profile = state.records.find(r => r.kind === "source-profiles" && r.status === "active" && r.data.source === batch.data.source && r.data.kind === batch.data.kind);
+  const profile = recordsOf(state, "source-profiles").find(r => r.status === "active" && r.data.source === batch.data.source && r.data.kind === batch.data.kind);
   const check = batch.data.check || {}, issues: string[] = [];
   const quality: SourceBatchQuality = { profileId: profile?.id || null, profileVersion: profile?.updatedAt || null,
     sourceRows: 0, sourceAmountKobo: null, importedRows: 0, importedAmountKobo: null,
@@ -47,7 +47,8 @@ export function batchSourceQuality(state: DomainState, batch: ValopayRecord): So
     quality.sourceRows = rows.length;
     const columns = Object.keys(rows[0] || {});
     const amountColumn = columns.find(column => ["amount", "amountKobo"].includes(Object.hasOwn(batch.data.mapping || {}, column) ? batch.data.mapping[column] : column));
-    if (amountColumn) quality.sourceAmountKobo = safeSum(rows.map(row => csvAmountToKobo(row[amountColumn] || "", batch.data.amountUnit)));
+    // As in the import, a customer row's amount is optional: a blank one counts for nothing.
+    if (amountColumn) quality.sourceAmountKobo = safeSum(rows.map(row => batch.data.kind === "customers" && !row[amountColumn]?.trim() ? 0 : csvAmountToKobo(row[amountColumn] || "", batch.data.amountUnit)));
     else if (batch.data.kind === "customers") quality.sourceAmountKobo = 0;
     else issues.push("Map an amount column to compare source and imported totals.");
     const imported = state.records.filter(r => r.kind === batch.data.kind && r.data.importIdentity?.batchId === batch.id);

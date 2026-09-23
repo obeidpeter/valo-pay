@@ -1,15 +1,27 @@
 import { Router, type IRouter } from "express";
 import { z } from "zod";
-import { CreateRecordResponse } from "@workspace/api-zod";
 import { getAuth } from "@clerk/express";
 import { reverificationErrorResponse } from "@clerk/shared/authorization-errors";
 import { staffMode } from "../lib/staff-access";
 import {
+  acceptInvitationInputSchema,
   batchInputSchema,
+  batchVersionInputSchema,
+  caseDetailSchema,
   caseInputSchema,
+  importBatchDetailSchema,
+  importBatchListSchema,
+  invitationCreatedSchema,
   invitationInputSchema,
   lenderInputSchema,
   membershipInputSchema,
+  merchantSchema,
+  messageSchema,
+  operationListSchema,
+  pilotJourneySchema,
+  staffDirectorySchema,
+  staffMemberSchema,
+  valopayRecordSchema,
 } from "@workspace/valopay-schema";
 import {
   inWorkspace,
@@ -27,6 +39,7 @@ import {
   fail,
 } from "../lib/valopay-store";
 import { withState } from "./valopay";
+import { contractAnswer, lenderPage, lenderQuery, replayedAnswer, requiredKey } from "../lib/contract";
 import {
   batchView,
   saveImportBatch,
@@ -35,14 +48,7 @@ import {
 } from "../domain/pilot-workflow";
 
 const router: IRouter = Router();
-const query = z.object({
-  merchantId: z.string().min(1).max(100),
-  offset: z.coerce.number().int().min(0).max(100000).default(0),
-});
 const idOf = (value: unknown) => z.string().min(1).max(100).parse(value);
-const versionBody = z
-  .object({ expectedUpdatedAt: z.string().datetime() })
-  .strict();
 router.post("/v1/team/verify", async (req, res) => {
   if (!staffMode()) fail("Staff access is not enabled on this host.", 403);
   const auth = getAuth(req, { acceptsToken: "session_token" });
@@ -57,30 +63,34 @@ router.post("/v1/team/verify", async (req, res) => {
     res.status(response.status).json(await response.json());
     return;
   }
-  res.json({ message: "Identity verified." });
+  res.json(contractAnswer(messageSchema, { message: "Identity verified." }));
 });
 router.get("/v1/operations", async (req, res) => {
-  const q = query.parse(req.query);
+  const q = lenderPage(req);
   res.json(
     await inWorkspace(
       req,
       res,
-      (ctx) => listOperations(ctx, q.merchantId, q.offset),
+      async (ctx) =>
+        contractAnswer(
+          operationListSchema,
+          await listOperations(ctx, q.merchantId, q.offset),
+        ),
       "read",
     ),
   );
 });
 router.post("/v1/operations/:id/cancel", async (req, res) => {
-  const q = query.parse(req.query),
+  const q = lenderQuery(req),
     id = idOf(req.params.id);
   res.json(
-    await inWorkspace(req, res, (ctx) =>
-      cancelOperation(ctx, q.merchantId, id),
+    await inWorkspace(req, res, async (ctx) =>
+      contractAnswer(messageSchema, await cancelOperation(ctx, q.merchantId, id)),
     ),
   );
 });
 router.get("/v1/pilot/journey", async (req, res) => {
-  const q = query.parse(req.query);
+  const q = lenderQuery(req);
   res.json(
     await inWorkspace(
       req,
@@ -92,7 +102,7 @@ router.get("/v1/pilot/journey", async (req, res) => {
             (r) =>
               r.kind === kind && (!statuses || statuses.includes(r.status)),
           ).length;
-        return {
+        return contractAnswer(pilotJourneySchema, {
           lender: state.merchant,
           accessMode: ctx.accessMode,
           actor: ctx.actor,
@@ -115,26 +125,32 @@ router.get("/v1/pilot/journey", async (req, res) => {
             closes: count("closes"),
             exports: count("exports", ["ready"]),
           },
-        };
+        });
       },
       "read",
     ),
   );
 });
 router.post("/v1/pilot/lenders", async (req, res) => {
-  const input = lenderInputSchema.parse(req.body),
-    key = z.string().min(8).max(200).parse(req.header("Idempotency-Key"));
+  const key = requiredKey(req),
+    input = lenderInputSchema.parse(req.body);
   res.json(
     await inWorkspace(
       req,
       res,
-      (ctx) => createPilotLender(ctx, input, key),
+      async (ctx) => {
+        const { lender, repeated } = await createPilotLender(ctx, input, key);
+        // A repeat answers the lender its key created earlier: that request was saved, whatever this answer's check finds.
+        return repeated
+          ? replayedAnswer(req, merchantSchema, lender)
+          : contractAnswer(merchantSchema, lender);
+      },
       "team",
     ),
   );
 });
 router.get("/v1/pilot/batches", async (req, res) => {
-  const q = query.parse(req.query);
+  const q = lenderPage(req);
   res.json(
     await inWorkspace(
       req,
@@ -170,20 +186,20 @@ router.get("/v1/pilot/batches", async (req, res) => {
             return false;
           },
         );
-        return {
+        return contractAnswer(importBatchListSchema, {
           items: page.map((batch) =>
             batchView(batch, false, opened ? "refuse" : "omit"),
           ),
           total: all.length,
           offset: q.offset,
-        };
+        });
       },
       "read",
     ),
   );
 });
 router.get("/v1/pilot/batches/:id", async (req, res) => {
-  const q = query.parse(req.query),
+  const q = lenderQuery(req),
     id = idOf(req.params.id);
   res.json(
     await inWorkspace(
@@ -198,12 +214,12 @@ router.get("/v1/pilot/batches/:id", async (req, res) => {
         );
         if (!batch) fail("Import batch not found.", 404);
         await revealImportPayloads(ctx, state, (r) => r.id === id);
-        return {
+        return contractAnswer(importBatchDetailSchema, {
           batch,
           revisions: state.records.filter(
             (r) => r.kind === "import-revisions" && r.data.batchId === id,
           ),
-        };
+        });
       },
       "read",
     ),
@@ -217,7 +233,7 @@ router.post("/v1/pilot/batches", async (req, res) => {
       res,
       (state, ctx) => saveImportBatch(state, ctx, input),
       true,
-      CreateRecordResponse,
+      valopayRecordSchema,
     ),
   );
 });
@@ -230,12 +246,12 @@ router.post("/v1/pilot/batches/:id/save", async (req, res) => {
       res,
       (state, ctx) => saveImportBatch(state, ctx, input, id),
       true,
-      CreateRecordResponse,
+      valopayRecordSchema,
     ),
   );
 });
 router.post("/v1/pilot/batches/:id/commit", async (req, res) => {
-  const input = versionBody.parse(req.body),
+  const input = batchVersionInputSchema.parse(req.body),
     id = idOf(req.params.id);
   res.json(
     await withState(
@@ -248,12 +264,12 @@ router.post("/v1/pilot/batches/:id/commit", async (req, res) => {
         return commitImportBatch(state, ctx, id, input.expectedUpdatedAt);
       },
       true,
-      CreateRecordResponse,
+      valopayRecordSchema,
     ),
   );
 });
 router.get("/v1/pilot/cases/:id", async (req, res) => {
-  const q = query.parse(req.query),
+  const q = lenderQuery(req),
     id = idOf(req.params.id);
   res.json(
     await inWorkspace(
@@ -265,7 +281,7 @@ router.get("/v1/pilot/cases/:id", async (req, res) => {
             (r) => r.kind === "exceptions" && r.id === id,
           );
         if (!record) fail("Exception not found.", 404);
-        return {
+        return contractAnswer(caseDetailSchema, {
           record,
           assignees: await caseAssignees(ctx),
           events: state.records.filter(
@@ -299,7 +315,7 @@ router.get("/v1/pilot/cases/:id", async (req, res) => {
               reference: r.reference,
               kind: r.kind,
             })),
-        };
+        });
       },
       "read",
     ),
@@ -315,12 +331,19 @@ router.post("/v1/pilot/cases/:id", async (req, res) => {
       async (state, ctx) =>
         coordinateCase(state, ctx, id, input, await caseAssignees(ctx)),
       true,
-      CreateRecordResponse,
+      valopayRecordSchema,
     ),
   );
 });
 router.get("/v1/team", async (req, res) =>
-  res.json(await inWorkspace(req, res, staffDirectory, "read")),
+  res.json(
+    await inWorkspace(
+      req,
+      res,
+      async (ctx) => contractAnswer(staffDirectorySchema, await staffDirectory(ctx)),
+      "read",
+    ),
+  ),
 );
 router.post("/v1/team/invitations", async (req, res) => {
   const input = invitationInputSchema.parse(req.body);
@@ -328,33 +351,41 @@ router.post("/v1/team/invitations", async (req, res) => {
     await inWorkspace(
       req,
       res,
-      (ctx) => inviteStaff(ctx, input.email, input.role),
+      async (ctx) =>
+        contractAnswer(
+          invitationCreatedSchema,
+          await inviteStaff(ctx, input.email, input.role),
+        ),
       "team",
     ),
   );
 });
-router.post("/v1/team/invitations/:id/revoke", async (req, res) =>
+router.post("/v1/team/invitations/:id/revoke", async (req, res) => {
+  const id = idOf(req.params.id);
   res.json(
     await inWorkspace(
       req,
       res,
-      (ctx) => revokeInvitation(ctx, idOf(req.params.id)),
+      async (ctx) => contractAnswer(messageSchema, await revokeInvitation(ctx, id)),
       "team",
     ),
-  ),
-);
+  );
+});
 router.patch("/v1/team/members/:id", async (req, res) => {
   const input = membershipInputSchema.parse(req.body),
     id = idOf(req.params.id);
   res.json(
-    await inWorkspace(req, res, (ctx) => updateStaff(ctx, id, input), "team"),
+    await inWorkspace(
+      req,
+      res,
+      async (ctx) => contractAnswer(staffMemberSchema, await updateStaff(ctx, id, input)),
+      "team",
+    ),
   );
 });
 router.post("/v1/team/accept", async (req, res) => {
-  const input = z
-    .object({ token: z.string().regex(/^[a-f0-9]{64}$/) })
-    .strict()
-    .parse(req.body);
+  const input = acceptInvitationInputSchema.parse(req.body);
+  // The answer is checked against its schema inside the acceptance's own transaction.
   res.json(await acceptStaffInvitation(req, input.token));
 });
 export default router;

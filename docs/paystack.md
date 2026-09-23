@@ -33,16 +33,16 @@ pnpm run check:paystack
 To verify an existing test payment against its expected amount (in kobo), add:
 
 ```sh
-pnpm run check:paystack -- --reference TEST_REFERENCE --amount-kobo 100000 --direct-debit
+pnpm run check:paystack --reference TEST_REFERENCE --amount-kobo 100000 --direct-debit
 ```
 
 To inspect an existing test mandate without creating or charging one:
 
 ```sh
-pnpm run check:paystack -- --mandate-reference TEST_MANDATE_REFERENCE
+pnpm run check:paystack --mandate-reference TEST_MANDATE_REFERENCE
 ```
 
-The checker prints only safe check results and states. It never prints the secret, transaction reference, amount, customer details, authorisation code or full provider response. `webhookIngestion` (`disabled`, `test_only` or `misconfigured`) and `mappedConnections` (a count, never the IDs) report the ingress setting of the process the check runs in, so run it with the API's environment to see what the API would do. Exit 0 means the requested read checks succeeded; it does not mark the Valo Pay integration connected. Missing or rejected credentials and failed/mismatched checks exit 1.
+A `--` before the options is skipped, since pnpm passes one on to the script where npm would not. The checker prints only safe check results and states. It never prints the secret, transaction reference, amount, customer details, authorisation code or full provider response. `webhookIngestion` (`disabled`, `test_only` or `misconfigured`) and `mappedConnections` (a count, never the IDs) report the ingress setting of the process the check runs in, so run it with the API's environment to see what the API would do. Exit 0 means the requested read checks succeeded; it does not mark the Valo Pay integration connected. Missing or rejected credentials and failed/mismatched checks exit 1.
 
 ## Signed test ingress
 
@@ -85,6 +85,6 @@ Not yet introduced: verification of inbox receipts against Paystack, a database-
 
 ## Offline verification
 
-`artifacts/api-server/tests/paystack.test.ts` exercises the adapter with injected responses and signed synthetic bytes. It covers valid and mismatched payments, live-mode refusal, tampering, repeated and reordered deliveries, conflicting and stale evidence, timeout recovery using the original reference, key/redirect restrictions, response limits and redacted failures. `artifacts/api-server/tests/source-ingress.test.ts` checks that the ingress opens no lender for a tampered, forged, unsigned or live-mode delivery or while it is off, and reads its settings from the environment; `artifacts/api-server/tests/api-security.test.ts` sends a forged delivery through the whole application with no database and gets 401. No test calls Paystack or needs a key.
+`artifacts/api-server/tests/paystack.test.ts` exercises the adapter with injected responses and signed synthetic bytes. It covers valid and mismatched payments, live-mode refusal, tampering, repeated and reordered deliveries, conflicting and stale evidence, timeout recovery using the original reference, key/redirect restrictions, response limits and redacted failures. `artifacts/api-server/tests/source-ingress.test.ts` checks that the ingress opens no lender for a tampered, forged, unsigned or live-mode delivery or while it is off, and reads its settings from the environment; `artifacts/api-server/tests/api-security.test.ts` sends a forged delivery through the whole application with no database and gets 401. `scripts/operator-commands.test.mjs` runs the checker's command line: options after a `--`, a reference without its amount and a missing key, each refused before any request, with the reference never printed. No test calls Paystack or needs a key.
 
 Documentation checked against the official pages on 18 September 2026. Provider behaviour observed with real test credentials must be recorded separately from these offline checks.

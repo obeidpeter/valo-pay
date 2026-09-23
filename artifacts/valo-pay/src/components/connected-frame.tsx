@@ -1,7 +1,7 @@
 import { Link, useLocation } from "wouter";
 import {
-  ArrowUpRight,
   Building2,
+  KeyRound,
   Landmark,
   ShieldCheck,
   Sparkles,
@@ -9,15 +9,17 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { DiscardOriginalRequest } from "@/components/discard-original-request";
+import { RefreshProblem, type RefreshableQuery } from "@/components/load-problem";
 import { requestClosed } from "@/lib/safe-mutations";
 import "@/connected.css";
+/** The connected workspace's held request and, for a failed refresh, its query. */
 type Recovery = {
   scope: string;
   pending: boolean;
   hasUnconfirmedOutcome: boolean;
   retryUnconfirmed: () => Promise<void>;
   abandonUnconfirmed: () => void;
-};
+} & Partial<RefreshableQuery>;
 export function ConnectedFrame({
   title,
   description,
@@ -59,7 +61,7 @@ export function ConnectedFrame({
           {
             href: "/connections",
             label: "Permissions & readiness",
-            icon: ArrowUpRight,
+            icon: KeyRound,
           },
         ].map((i) => (
           <Link
@@ -72,6 +74,7 @@ export function ConnectedFrame({
           </Link>
         ))}
       </nav>
+      <RefreshProblem what={title} shown="records" query={recovery} />
       <ConnectedRecovery
         recovery={recovery}
         onRecovered={onRecovered}

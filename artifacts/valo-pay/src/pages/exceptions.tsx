@@ -1,4 +1,4 @@
-import { Link, useSearch } from 'wouter';
+import { Link, useSearchParams } from 'wouter';
 import { QueueSearch } from '@/components/queue-search';
 import { QueueFreshness } from '@/components/queue-freshness';
 import React, { useEffect, useRef, useState } from 'react';
@@ -10,19 +10,29 @@ import { usePagedQueue } from '@/lib/use-paged-queue';
 import { SavedQueueViews } from '@/components/saved-queue-views';
 import { AlertTriangle, User, Calendar } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
-import { formatKobo, formatDate } from '@/lib/formatters';
+import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { exceptionSeverities, failureCodeList, resolutionCodesFor, resolveExceptionType } from '@workspace/valopay-schema';
 import { readableLabel, RecordLabel, StatusBadge } from '@/components/record-label';
 import { deadlineInstant, isDueToday, isDeadlineOverdue as isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { RecordPagination } from '@/components/record-pagination';
 import { ExceptionContext } from '@/components/exception-context';
+import { useHashTarget } from '@/lib/use-hash-target';
 
 const exceptionViews = ['open', 'high', 'overdue', 'due-today', 'resolved'] as const;
 
 export default function ExceptionsPage() {
   const { merchantId } = useWorkspace();
-  const q=new URLSearchParams(useSearch()).get('q')?.trim();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const q = searchParams.get('q')?.trim();
+  // A link to one exception (from its case) shows that exception alone, whatever its status, until the queue is chosen again.
+  const targetId = searchParams.get('record');
+  const wrongLender = Boolean(searchParams.get('lender') && searchParams.get('lender') !== merchantId);
+  const leaveSelectedRecord = () => setSearchParams(current => {
+    const next = new URLSearchParams(current);
+    next.delete('record'); next.delete('lender');
+    return next;
+  });
   const [selectedEx, setSelectedEx] = useState<any>(null);
   const [actionKind, setActionKind] = useState<'update' | 'resolve' | ''>('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -39,8 +49,9 @@ export default function ExceptionsPage() {
     tabRefs.current[next]?.focus();
   };
 
-  const exceptionsQuery = usePagedQueue('exceptions', { view: filter, owner, type });
+  const exceptionsQuery = usePagedQueue('exceptions', { view: filter, owner, type, record: targetId ? wrongLender ? 'unavailable' : targetId : undefined });
   const { data, isLoading, error, refetch, pagination } = exceptionsQuery;
+  useHashTarget(`record-${targetId || ''}`, !!targetId && !isLoading && !error && !wrongLender);
   const customerById = new Map(data?.related.filter(row => row.kind === 'customers').map(row => [row.id, row]));
 
   const handleAction = (ex: any, kind: 'update' | 'resolve') => {
@@ -57,7 +68,7 @@ export default function ExceptionsPage() {
   const filters: Array<{ key: typeof filter; label: string }> = [
     { key: 'open', label: 'All open' }, { key: 'high', label: 'High severity' },
     { key: 'overdue', label: 'Overdue' }, { key: 'due-today', label: 'Due today' }, { key: 'resolved', label: 'Resolved' },
-  ].map(item => ({ ...item, key: item.key as typeof filter, label: item.label + ' (' + (data?.counts[item.key] ?? '…') + ')' }));
+  ].map(item => ({ ...item, key: item.key as typeof filter, label: item.label + ' (' + (typeof data?.counts[item.key] === 'number' ? formatNumber(data.counts[item.key]!) : '…') + ')' }));
 
   if (!merchantId) return null;
 
@@ -75,7 +86,7 @@ export default function ExceptionsPage() {
       <QueueSearch /><SavedQueueViews queue="exceptions" views={exceptionViews} fallback="open" />
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
-        <div className="p-5 border-b flex flex-wrap items-center gap-4">
+        {targetId ? <div className="flex flex-wrap items-center justify-between gap-3 border-b p-5"><p className="text-sm font-medium">Selected exception</p><Button size="sm" variant="outline" onClick={leaveSelectedRecord}>View exception queue</Button></div> : <div className="p-5 border-b flex flex-wrap items-center gap-4">
           <p className="hidden print:block text-sm">Showing: {filters.find(option => option.key === filter)?.label}</p>
           <div className="flex flex-wrap gap-2" role="tablist" aria-label="Exception filter">
             {filters.map((option, index) => (
@@ -97,13 +108,17 @@ export default function ExceptionsPage() {
             </select>
           </label>
           <p className="w-full text-xs text-muted-foreground">Overdue items first, then severity and deadline. Dates use West Africa Time.</p>
-        </div>
+        </div>}
 
-        <div id="exception-results" role="tabpanel" aria-labelledby={`exception-tab-${filter}`} tabIndex={0}>
+        <div id="exception-results" {...(targetId ? {} : { role: 'tabpanel', 'aria-labelledby': `exception-tab-${filter}`, tabIndex: 0 })}>
         {isLoading ? (
           <Loading what="exceptions" />
         ) : error && !data ? (
           <div role="alert" className="p-6 text-sm"><p>Exceptions could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => refetch()}>Try again</Button></div>
+        ) : targetId && items.length === 0 ? (
+          <EmptyState title={wrongLender ? 'This exception link belongs to another lender' : 'The selected exception is unavailable'} action={<Button size="sm" variant="outline" onClick={leaveSelectedRecord}>View exception queue</Button>}>
+            {wrongLender ? 'Switch to the lender you were reviewing to open this exception.' : 'It could not be found for the active lender. Open the exception queue to find it.'}
+          </EmptyState>
         ) : items.length === 0 ? (
           <EmptyState filtered title={q ? 'No results match your search' : owner || type ? 'No exceptions match these filters' : filter === 'resolved' ? 'Nothing resolved yet' : filter === 'high' ? 'No high-severity exceptions open' : filter === 'overdue' ? 'No overdue exceptions' : filter === 'due-today' ? 'No exceptions due today' : 'All clear: no open exceptions'}>
             {q ? 'Try another name or reference, or clear the search. Your status, owner and type filters will stay selected.' : filter === 'resolved'
@@ -125,7 +140,7 @@ export default function ExceptionsPage() {
               </thead>
               <tbody className="divide-y">
                 {items.map(exception => (
-                  <tr key={exception.id} className="hover:bg-secondary/10 transition-colors">
+                  <tr key={exception.id} id={`record-${exception.id}`} tabIndex={-1} className="hover:bg-secondary/10 transition-colors target:bg-primary/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
                         {String(exception.data?.severity) === 'high' && <AlertTriangle className="h-4 w-4 text-destructive" />}
@@ -182,7 +197,7 @@ export default function ExceptionsPage() {
             </table>
           </ScrollFrame>
         )}
-        {!isLoading && !error && (data?.total || 0) > 25 && <RecordPagination pagination={pagination} total={data?.total || 0} label="exceptions" />}
+        {!isLoading && !error && !targetId && (data?.total || 0) > 25 && <RecordPagination pagination={pagination} total={data?.total || 0} label="exceptions" />}
         </div>
       </div>
 

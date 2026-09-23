@@ -11,7 +11,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useWorkspace } from '@/lib/workspace-context';
 import { permissionReason } from '@/lib/permissions';
 import { useListRecords, getListRecordsQueryKey, } from '@workspace/api-client-react';
-import { formatKobo, formatDate } from '@/lib/formatters';
+import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { RecordDialog } from '@/components/record-dialog';
 import { useQueryClient } from '@tanstack/react-query';
@@ -168,7 +168,7 @@ export default function MandatesPage() {
   const views: Array<{ key: typeof view; label: string; count: number | string }> = [
     { key: 'all', label: 'All mandates' }, { key: 'awaiting-activation', label: 'Awaiting activation' },
     { key: 'overdue', label: 'Overdue activation' }, { key: 'due-today', label: 'Activation due today' },
-  ].map(item => ({ ...item, key: item.key as typeof view, count: data?.counts[item.key] ?? '…' }));
+  ].map(item => ({ ...item, key: item.key as typeof view, count: typeof data?.counts[item.key] === 'number' ? formatNumber(data.counts[item.key]!) : '…' }));
   if (!merchantId) return null;
 
   return (

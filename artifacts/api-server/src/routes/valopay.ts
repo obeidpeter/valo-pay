@@ -3,13 +3,14 @@ import { listReconciliation, listCloseHistory, getCloseDetail, loadReportsView }
 import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
 import { z } from "zod";
-import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, roles, fail, appendAudit, verifyAudit, digest, canonical, listMerchants, findIdempotency, saveIdempotency, changeRole, type StoreContext } from "../lib/valopay-store";
+import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, roles, fail, appendAudit, verifyAudit, digest, listMerchants, findIdempotency, saveIdempotency, changeRole, type StoreContext } from "../lib/valopay-store";
+import { requestFingerprint } from "../lib/digests";
 import { amendDueItem, customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction, type TypedRecord } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
 import { bindCloseReviewBasis } from '../domain/close-review';
 import { assertNoDirectImportedCorrection } from '../domain/import-corrections';
 import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, isCloseTime, recordKinds } from "@workspace/valopay-schema";
-import type { DomainState } from "../domain/types";
+import type { DomainState, ValopayRecord } from "../domain/types";
 import { getGates } from "../lib/valopay-readiness";
 import { importCsv } from "../lib/valopay-import";
 import { exportDescriptorForRecord, exportKinds, readExport } from "../lib/valopay-exports";
@@ -19,32 +20,43 @@ import { schedulerStatus } from "../lib/close-scheduler";
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../lib/valopay-close-views";
 import { listQueue } from '../lib/valopay-store';
 import { completeOperation, viewerScope } from '../lib/valopay-store';
+import { contractAnswer, lenderQuery, optionalKey, replayedAnswer } from '../lib/contract';
 
 const router:IRouter=Router();
 const kinds=new Set<string>(recordKinds);
 function safeKind(value:unknown):string { const kind=z.string().parse(value);if(!kinds.has(kind))fail("Unknown resource.",404);return kind; }
-export async function withState<T>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>Promise<T>|T,mutating=false,responseSchema?:z.ZodTypeAny){
- const {merchantId}=S.GetOverviewQueryParams.parse(req.query);
+/**
+ * One lender's state for a route: read under a share lock, or written under the
+ * exclusive lock with an audit entry and, when the request carries an
+ * Idempotency-Key, a receipt its repeat is answered from. A fresh answer is
+ * checked against the route's response schema before COMMIT, so an answer that
+ * does not match its contract is a 500 that saved nothing. A replayed receipt
+ * was saved with its request, so it is never answered as saving nothing: it is
+ * given without fields the contract no longer lists, or as the general
+ * unconfirmed 500 (replayedAnswer, lib/contract.ts).
+ */
+export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>unknown,mutating:boolean,responseSchema:S):Promise<z.output<S>>{
+ const {merchantId}=lenderQuery(req);
+ // A write's key is checked by name before anything runs; a read ignores one.
+ const key=mutating?optionalKey(req):undefined;
  return inWorkspace(req,res,async ctx=>{
   // A read takes a share lock so it never queues behind other reads; a mutation takes the exclusive lock.
   const state=await loadState(ctx,merchantId,mutating?"update":"share");
-  const key=req.header("Idempotency-Key");
   // A demo-role switch changes ctx.actor itself. Its unchanged retry must keep
   // the original request identity; all other actions stay persona-bound.
   const replayActor=req.path==="/v1/actions"&&req.body?.action==="set_role"?"Sandbox role switch":ctx.actor;
-  const fingerprint=digest(canonical({path:req.path,method:req.method,body:req.body,actor:replayActor}));
+  const fingerprint=requestFingerprint({path:req.path,method:req.method,body:req.body,actor:replayActor});
   const idempotencyKey=key?digest(`${merchantId}:${key}`):undefined;
-  if(mutating&&key){
-   if(key.length>200)fail("Idempotency-Key must be at most 200 characters.");
-    const found=await findIdempotency(ctx,idempotencyKey!);
-    if(found){if(found.request_hash!==fingerprint)fail("This idempotency key was used with different input.",409);const receipt=responseSchema?responseSchema.parse(found.response):found.response;await completeOperation(ctx,receipt);return receipt;}
+  if(idempotencyKey){
+    const found=await findIdempotency(ctx,idempotencyKey);
+    if(found){if(found.request_hash!==fingerprint)fail("This idempotency key was used with different input.",409);const receipt=replayedAnswer(req,responseSchema,found.response);await completeOperation(ctx,receipt);return receipt;}
   }
    const rawResult=await operation(state,ctx);
    // Versions advance before the response is built, so it carries them; the audit entry commits to exactly what changed.
    let changes:ReturnType<typeof settleChanges>|undefined;
    if(mutating){enrolEligibleFailures(state,ctx);for(const close of addedRecords(ctx,state).filter(r=>r.kind==='closes'))bindCloseReviewBasis(state,close);changes=settleChanges(ctx,state);}
    // Validate before committing: an invalid response must not leave durable writes.
-   const result=responseSchema?responseSchema.parse(rawResult):rawResult;
+   const result=contractAnswer(responseSchema,rawResult);
   if(mutating){
    appendAudit(state,ctx,req.path.includes("/actions")?String(req.body.action):`${req.method.toLowerCase()}.${req.path.split("/").slice(2).join(".")}`,req.body.recordId||String(req.params.id||"workspace"),req.body.reason||"Synthetic workspace operation",changes);
     await saveState(ctx,state);
@@ -54,28 +66,27 @@ export async function withState<T>(req:Request,res:Response,operation:(state:Dom
  },!mutating?"read":req.path==="/v1/actions"&&req.body?.action==="set_role"?"persona":"write");
 }
 router.get("/v1/workspace",async(req,res)=>{
- const result=await inWorkspace(req,res,async ctx=>({
+ res.json(await inWorkspace(req,res,async ctx=>contractAnswer(S.GetWorkspaceResponse,{
   name:"Valo Pay",environment:"sandbox",actor:ctx.actor,role:ctx.role,authenticated:ctx.authenticated,
    merchants:await listMerchants(ctx),roles,productionEnabled:false,accessMode:ctx.accessMode,viewerScope:viewerScope(ctx)
- }),"read");
- res.json(S.GetWorkspaceResponse.parse(result));
+ }),"read"));
 });
 router.get("/v1/overview",async(req,res)=>{
- const result=await withState(req,res,(state,ctx)=>buildConsoleOverview(state,ctx.now,verifyAudit(state),schedulerStatus()));
- res.json(S.GetOverviewResponse.parse(result));
+ res.json(await withState(req,res,(state,ctx)=>buildConsoleOverview(state,ctx.now,verifyAudit(state),schedulerStatus()),false,S.GetOverviewResponse));
 });
 router.get("/v1/records/:kind",async(req,res)=>{
+ lenderQuery(req);
  const kind=safeKind(req.params.kind),query=S.ListRecordsQueryParams.parse(req.query);
- const result=await inWorkspace(req,res,async ctx=>{
+ res.json(await inWorkspace(req,res,async ctx=>{
   const page=await listRecords(ctx,query.merchantId,kind,query);
   // Never leak internal storage location through collection APIs.
-  return {...page,items:page.items.map(r=>r.kind==="exports"?publicExportRecord(r):r)};
- },"read");
- res.json(S.ListRecordsResponse.parse(result));
+  return contractAnswer(S.ListRecordsResponse,{...page,items:page.items.map(r=>r.kind==="exports"?publicExportRecord(r):r)});
+ },"read"));
 });
 router.get('/v1/queues/:queue', async (req, res) => {
+ lenderQuery(req);
  const { queue } = S.ListQueueParams.parse(req.params), query = S.ListQueueQueryParams.parse(req.query);
- res.json(S.ListQueueResponse.parse(await inWorkspace(req, res, ctx => listQueue(ctx, query.merchantId, queue, query), 'read')));
+ res.json(await inWorkspace(req, res, async ctx => contractAnswer(S.ListQueueResponse, await listQueue(ctx, query.merchantId, queue, query)), 'read'));
 });
 router.post("/v1/records/:kind",async(req,res)=>{
  const kind=safeKind(req.params.kind),body=S.CreateRecordBody.parse(req.body);
@@ -88,7 +99,7 @@ router.post("/v1/records/:kind",async(req,res)=>{
   if(body.reference&&state.records.some(r=>r.kind===kind&&r.reference===body.reference&&kind!=="observations"))fail("Reference already exists. Use an idempotency key for safe replay.",409);
   return makeRecord(state,kind,input);
   },true,S.CreateRecordResponse);
- res.json(S.CreateRecordResponse.parse(result));
+ res.json(result);
 });
 router.patch("/v1/records/:kind/:id",async(req,res)=>{
  const kind=safeKind(req.params.kind),{id}=S.UpdateRecordParams.parse(req.params),body=S.UpdateRecordBody.parse(req.body);
@@ -104,9 +115,10 @@ router.patch("/v1/records/:kind/:id",async(req,res)=>{
   if(kind==="due-items")return amendDueItem(state,ctx,old as TypedRecord<"due-items">,input as TypedRecord<"due-items">);
   validateRecord(state,ctx,kind,input,true);Object.assign(old,input);return old;
   },true,S.UpdateRecordResponse);
- res.json(S.UpdateRecordResponse.parse(result));
+ res.json(result);
 });
 router.post("/v1/actions",async(req,res)=>{
+ lenderQuery(req);
  const body=S.PerformActionBody.parse(req.body);
  const result=await withState(req,res,async(state,ctx)=>{
   if (body.action === 'resolve_exception' && state.records.find(r=>r.id===body.recordId)?.data.case && !body.expectedUpdatedAt) fail('Refresh this coordinated case before resolving it.',409);
@@ -123,49 +135,54 @@ router.post("/v1/actions",async(req,res)=>{
   if(body.action==="mark_pack_used")fail("Synthetic packs cannot be recorded as evidence used in a real case.",403);
   return executeAction(state,ctx,body);
   },true,S.PerformActionResponse);
- res.json(S.PerformActionResponse.parse(result));
+ res.json(result);
 });
 router.post("/v1/imports",async(req,res)=>{
+ lenderQuery(req);
  const body=S.ImportRecordsBody.parse(req.body);
-  const result=await withState(req,res,(state,ctx)=>importCsv(state,ctx,body),body.commit,S.ImportRecordsResponse);
- res.json(S.ImportRecordsResponse.parse(result));
+ res.json(await withState(req,res,(state,ctx)=>importCsv(state,ctx,body),body.commit,S.ImportRecordsResponse));
 });
 router.get('/v1/customers/:id/history',async(req,res)=>{
+ lenderQuery(req);
  const {id}=S.GetCustomerHistoryParams.parse(req.params), query=S.GetCustomerHistoryQueryParams.parse(req.query);
- const result=await inWorkspace(req,res,ctx=>getCustomerHistory(ctx,query.merchantId,id,query),'read');
- res.json(S.GetCustomerHistoryResponse.parse({...result,events:result.events.map(record=>record.kind==='exports'?publicExportRecord(record):record),...(result.focusedRecord?{focusedRecord:result.focusedRecord.kind==='exports'?publicExportRecord(result.focusedRecord):result.focusedRecord}:{})}));
+ res.json(await inWorkspace(req,res,async ctx=>{
+  const result=await getCustomerHistory(ctx,query.merchantId,id,query);
+  return contractAnswer(S.GetCustomerHistoryResponse,{...result,events:result.events.map(record=>record.kind==='exports'?publicExportRecord(record):record),...(result.focusedRecord?{focusedRecord:result.focusedRecord.kind==='exports'?publicExportRecord(result.focusedRecord):result.focusedRecord}:{})});
+ },'read'));
 });
 router.get("/v1/customers/:id/timeline",async(req,res)=>{
+ const {merchantId}=lenderQuery(req);
  const {id}=S.GetCustomerTimelineParams.parse(req.params);
- const {merchantId}=S.GetOverviewQueryParams.parse(req.query);
- res.json(S.GetCustomerTimelineResponse.parse(await inWorkspace(req,res,async ctx=>{
+ res.json(await inWorkspace(req,res,async ctx=>{
   const timeline=customerTimeline(await loadCustomerView(ctx,merchantId,id),id);
-  return {...timeline,events:timeline.events.map(record=>record.kind==='exports'?publicExportRecord(record):record)};
- },"read")));
+  return contractAnswer(S.GetCustomerTimelineResponse,{...timeline,events:timeline.events.map(record=>record.kind==='exports'?publicExportRecord(record):record)});
+ },"read"));
 });
 router.get('/v1/reconciliation/:queue',async(req,res)=>{
+ lenderQuery(req);
  const {queue}=S.ListReconciliationParams.parse(req.params), query=S.ListReconciliationQueryParams.parse(req.query);
- res.json(S.ListReconciliationResponse.parse(await inWorkspace(req,res,ctx=>listReconciliation(ctx,query.merchantId,queue,query),'read')));
+ res.json(await inWorkspace(req,res,async ctx=>contractAnswer(S.ListReconciliationResponse,await listReconciliation(ctx,query.merchantId,queue,query)),'read'));
 });
 router.get('/v1/close-history',async(req,res)=>{
+ lenderQuery(req);
  const query=S.ListCloseHistoryQueryParams.parse(req.query);
- res.json(S.ListCloseHistoryResponse.parse(await inWorkspace(req,res,ctx=>listCloseHistory(ctx,query.merchantId,query),'read')));
+ res.json(await inWorkspace(req,res,async ctx=>contractAnswer(S.ListCloseHistoryResponse,await listCloseHistory(ctx,query.merchantId,query)),'read'));
 });
 router.get('/v1/close-history/:id',async(req,res)=>{
- const {id}=S.GetCloseDetailParams.parse(req.params),{merchantId}=S.GetCloseDetailQueryParams.parse(req.query);
- res.json(S.GetCloseDetailResponse.parse(await inWorkspace(req,res,ctx=>getCloseDetail(ctx,merchantId,id),'read')));
+ const {merchantId}=lenderQuery(req),{id}=S.GetCloseDetailParams.parse(req.params);
+ res.json(await inWorkspace(req,res,async ctx=>contractAnswer(S.GetCloseDetailResponse,await getCloseDetail(ctx,merchantId,id)),'read'));
 });
 router.get('/v1/reports',async(req,res)=>{
+ lenderQuery(req);
  const {merchantId,includeCloses}=S.GetReportsQueryParams.parse(req.query);
- const report=includeCloses==='false' ? await inWorkspace(req,res,async ctx=>({...buildConsoleReports(await loadReportsView(ctx,merchantId),ctx.now,schedulerStatus()),closes:[]}),'read') : await withState(req,res,(state,ctx)=>buildConsoleReports(state,ctx.now,schedulerStatus()));
- res.json(S.GetReportsResponse.parse(report));
+ res.json(includeCloses==='false' ? await inWorkspace(req,res,async ctx=>contractAnswer(S.GetReportsResponse,{...buildConsoleReports(await loadReportsView(ctx,merchantId),ctx.now,schedulerStatus()),closes:[]}),'read') : await withState(req,res,(state,ctx)=>buildConsoleReports(state,ctx.now,schedulerStatus()),false,S.GetReportsResponse));
 });
 router.get("/v1/gates",async(req,res)=>{
- res.json(S.GetGatesResponse.parse(await withState(req,res,getGates)));
+ res.json(await withState(req,res,getGates,false,S.GetGatesResponse));
 });
 router.get("/v1/settings",async(req,res)=>{
- const {merchantId}=S.GetOverviewQueryParams.parse(req.query);
- res.json(S.GetSettingsResponse.parse(await inWorkspace(req,res,async ctx=>buildConsoleSettings(await loadSettingsView(ctx,merchantId),ctx.role,ctx.now,schedulerStatus()),"read")));
+ const {merchantId}=lenderQuery(req);
+ res.json(await inWorkspace(req,res,async ctx=>contractAnswer(S.GetSettingsResponse,buildConsoleSettings(await loadSettingsView(ctx,merchantId),ctx.role,ctx.now,schedulerStatus())),"read"));
 });
 router.patch("/v1/settings",async(req,res)=>{
  const body=S.UpdateSettingsBody.parse(req.body);
@@ -186,7 +203,7 @@ router.patch("/v1/settings",async(req,res)=>{
   rescheduleAfterSettings(state,previous,ctx.now);
   return buildConsoleSettings(state,ctx.role,ctx.now,schedulerStatus());
   },true,S.UpdateSettingsResponse);
- res.json(S.UpdateSettingsResponse.parse(result));
+ res.json(result);
 });
 router.post("/v1/exports",async(req,res)=>{
  const body=S.CreateExportBody.parse(req.body);
@@ -194,26 +211,25 @@ router.post("/v1/exports",async(req,res)=>{
  if(["customer-pack","dispute-pack"].includes(body.kind)&&!body.customerId)fail("A dispute pack needs customerId.");
   const result=await withState(req,res,(state,ctx)=>queueExport(state,ctx,body,process.env.PRIVATE_OBJECT_DIR||''),true,S.CreateExportResponse);
  req.log.info({event:"export.queued",kind:body.kind,format:body.format,exportId:result.id},"Export queued durably");
- res.json(S.CreateExportResponse.parse(result));
+ res.json(result);
 });
-async function authorisedExport(req:Request,res:Response){
- const {merchantId}=S.GetOverviewQueryParams.parse(req.query);
+/** An export of the request's lender, read in the tenant transaction and handed to `use` there, with the transaction clock. */
+async function authorisedExport<T>(req:Request,res:Response,use:(record:ValopayRecord,now:string)=>T){
+ const {merchantId}=lenderQuery(req);
  return inWorkspace(req,res,async ctx=>{
   const page=await listRecords(ctx,merchantId,'exports',{id:String(req.params.id),limit:1});
   if(!page.items[0])fail('Export not found in this lender.',404);
   // The transaction clock decides whether the export is stalled or its lease expired.
-  return {record:page.items[0],now:ctx.now};
+  return use(page.items[0],ctx.now);
  },'read');
 }
 router.get('/v1/exports/:id',async(req,res)=>{
  res.setHeader('Cache-Control','private, no-store');
- const found=await authorisedExport(req,res);
- res.json(S.GetExportJobResponse.parse(exportJobView(found.record,found.now)));
+ res.json(await authorisedExport(req,res,(record,now)=>contractAnswer(S.GetExportJobResponse,exportJobView(record,now))));
 });
 router.post('/v1/exports/:id/retry',async(req,res)=>{
  req.body={};
- const result=await withState(req,res,(state,ctx)=>retryExport(state,ctx,String(req.params.id)),true,S.RetryExportJobResponse);
- res.json(S.RetryExportJobResponse.parse(result));
+ res.json(await withState(req,res,(state,ctx)=>retryExport(state,ctx,String(req.params.id)),true,S.RetryExportJobResponse));
 });
 router.get("/v1/exports/:id/download",async(req,res)=>{
  const cancellation=new AbortController();
@@ -223,7 +239,7 @@ router.get("/v1/exports/:id/download",async(req,res)=>{
  res.once("close",close);
  try{
  // The authorised metadata is read inside the transaction; the object-storage read happens after it ends, so no merchant lock is held across the download.
- const descriptor=exportDescriptorForRecord((await authorisedExport(req,res)).record);
+ const descriptor=await authorisedExport(req,res,record=>exportDescriptorForRecord(record));
  if(cancellation.signal.aborted)return;
  const result=await readExport(descriptor,cancellation.signal);
  if(cancellation.signal.aborted)return;
@@ -239,8 +255,8 @@ router.get("/v1/exports/:id/download",async(req,res)=>{
  }
 });
 // Unconfigured ingress fails closed; fabricated webhooks can never become evidence.
-router.post("/v1/webhooks/:provider",(_req,res)=>{
- res.status(403).json({error:"Production provider webhook ingress is disabled. No partner signature configuration is available."});
+router.post("/v1/webhooks/:provider",(req,res)=>{
+ res.status(403).json({error:"Production provider webhook ingress is disabled. No partner signature configuration is available.",requestId:req.id});
 });
 router.get("/v1/openapi.json",async(_req,res)=>{
  const {readFile}=await import("node:fs/promises");

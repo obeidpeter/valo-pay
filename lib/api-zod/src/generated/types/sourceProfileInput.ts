@@ -32,6 +32,7 @@ export interface SourceProfileInput {
      */
   identityColumn: string;
   amountUnit: SourceProfileInputAmountUnit;
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
   firstExpectedAt: Date;
   /**
      * @minimum 1
@@ -57,5 +58,6 @@ export interface SourceProfileInput {
   expectedAmountKobo?: number | null;
   status?: SourceProfileInputStatus;
   syntheticOnly: true;
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
   expectedUpdatedAt?: Date;
 }

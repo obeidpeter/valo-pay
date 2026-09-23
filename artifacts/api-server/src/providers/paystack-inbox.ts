@@ -1,13 +1,14 @@
 import { createHash, createHmac } from "node:crypto";
+import { sameJson } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { makeRecord } from "../domain/records";
 import { assertRecordVersion } from "../lib/edit-versions";
 import { parsePaystackTestWebhook, reconcilePaystackEvidence, reconcilePaystackMandateEvidence, type PaystackWebhook } from "./paystack";
 
 function refuse(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
+// The parser builds each event with a fixed key order; stored payload digests are of that text.
 const digest = (input: unknown) => createHash("sha256").update(JSON.stringify(input)).digest("hex");
 export type PaystackEventContext = { connectionId: string; mode: "fixture" | "test" };
-const canonical = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === "object" && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 /** Repository guard: delivery/replay bookkeeping can grow without rewriting the authenticated evidence. */
 export function assertProviderEventChange(before: ValopayRecord, after: ValopayRecord) {
   const stable = (record: ValopayRecord) => {
@@ -16,11 +17,11 @@ export function assertProviderEventChange(before: ValopayRecord, after: ValopayR
     return { ...record, status: before.status, updatedAt: before.updatedAt, data };
   };
   const reject = () => refuse("Provider evidence is immutable; only delivery counts and recorded rechecks may change.", 409);
-  if (canonical(stable(before)) !== canonical(stable(after))) reject();
+  if (!sameJson(stable(before), stable(after))) reject();
   const previousCount = before.data.deliveryCount, nextCount = after.data.deliveryCount;
   if (!Number.isSafeInteger(nextCount) || nextCount < previousCount) reject();
   const previousHistory = before.data.replayHistory || [], nextHistory = after.data.replayHistory || [];
-  if (!Array.isArray(nextHistory) || nextHistory.length < previousHistory.length || nextHistory.length > previousHistory.length + 1 || canonical(nextHistory.slice(0, previousHistory.length)) !== canonical(previousHistory)) reject();
+  if (!Array.isArray(nextHistory) || nextHistory.length < previousHistory.length || nextHistory.length > previousHistory.length + 1 || !sameJson(nextHistory.slice(0, previousHistory.length), previousHistory)) reject();
   const replayed = nextHistory.length > previousHistory.length;
   if (!replayed && (before.status !== after.status || before.data.message !== after.data.message)) reject();
   if (replayed && (["quarantined", "rejected_fixture"].includes(before.status) || nextHistory.at(-1)?.result !== after.status)) reject();

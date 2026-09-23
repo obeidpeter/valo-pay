@@ -5,12 +5,14 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
+import type { PilotAccessMode } from './pilotAccessMode';
+import type { PilotAccessState } from './pilotAccessState';
 
 /**
  * Whether real staff access is enabled on this host and what demo progress does not establish.
  */
 export interface PilotAccess {
-  mode: string;
-  state: string;
+  mode: PilotAccessMode;
+  state: PilotAccessState;
   message: string;
 }

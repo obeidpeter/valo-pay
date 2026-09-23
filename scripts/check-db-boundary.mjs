@@ -6,8 +6,6 @@ import ts from "typescript";
 
 const root = path.resolve(import.meta.dirname, "..");
 const repository = "artifacts/api-server/src/lib/valopay-store.ts";
-// The isolated rehearsal uses its own restricted pool and forced-RLS scope.
-const stagingRepository = "artifacts/api-server/src/lib/pilot-staging-store.ts";
 // Durable export claims and completion use explicit lender-scoped worker transactions.
 const exportRepository = "artifacts/api-server/src/lib/export-job-store.ts";
 // Opt-in restricted runtime transactions verify and bind the forced-RLS scope.
@@ -31,7 +29,7 @@ for (const file of [...await walk(path.join(root, "artifacts")), ...await walk(p
   if (!relative.includes("/src/") || !/\.[cm]?[jt]sx?$/.test(relative) || relative.startsWith("lib/db/")) continue;
   const source = ts.createSourceFile(file, await readFile(file, "utf8"), ts.ScriptTarget.Latest, true);
   checked++;
-  const allowed = relative === repository || relative === stagingRepository || relative === exportRepository || relative === isolatedRuntime;
+  const allowed = relative === repository || relative === exportRepository || relative === isolatedRuntime;
   function reject(node, message) {
     const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
     violations.push(`${relative}:${line + 1}: ${message}`);

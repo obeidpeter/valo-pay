@@ -5,6 +5,7 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
+import type { StaffLenderAccessRole } from './staffLenderAccessRole';
 import type { StaffLenderAccessStatus } from './staffLenderAccessStatus';
 
 /**
@@ -14,11 +15,11 @@ export interface StaffLenderAccess {
   id: string;
   actor: string;
   name: string;
-  role: string;
+  role: StaffLenderAccessRole;
   status: StaffLenderAccessStatus;
   expiresAt: string;
   updatedAt: string;
   lenderIds: string[];
-  allLenders: boolean;
+  allLenders: false;
   message: string;
 }

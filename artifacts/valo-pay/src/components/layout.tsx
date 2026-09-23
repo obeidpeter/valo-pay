@@ -1,8 +1,8 @@
-import React, { ReactNode, useEffect, useRef, useState } from 'react';
+import React, { ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { Link, useLocation, useSearch } from 'wouter';
 import { useWorkspace } from '@/lib/workspace-context';
 import { AuthShow, useSignOut } from '@/lib/auth';
-import { Shield, Home, Users, FileText, ArrowRightLeft, CheckSquare, AlertTriangle, FileBarChart, HardDrive, FileCheck, Settings, Lock, LogOut, Menu, Sun, Moon, ChevronRight, Layers, Landmark, Building2, ShieldCheck, Link2 } from 'lucide-react';
+import { type LucideIcon, LayoutDashboard, Inbox, AlertTriangle, Scale, ArrowRightLeft, Upload, ClipboardCheck, Users, FileSignature, ScrollText, Landmark, ShieldCheck, Building2, KeyRound, FileBarChart, Download, History, BadgeCheck, Route, Database, Activity, UserCog, Archive, Settings, Presentation, Lock, LogOut, Menu, Sun, Moon, ChevronRight, Layers } from 'lucide-react';
 import { Button } from './ui/button';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from './ui/sheet';
 import { BrandLockup } from './brand';
@@ -14,34 +14,63 @@ import { SandboxGuide } from './sandbox-guide';
 import { PresentationGuide, usePresentation } from './presentation-guide';
 import { useQueuePosition } from '@/lib/queue-position';
 
-/** The console's pages, in the one order they are listed: the sidebar, the phone drawer and the page title. */
-const navItems = [
-  { href: '/overview', label: 'Overview', icon: Home },
-  { href: '/customers', label: 'Customers', icon: Users },
-  { href: '/mandates', label: 'Mandates', icon: FileText },
-  { href: '/collections', label: 'Collections', icon: ArrowRightLeft },
-  { href: '/reconciliation', label: 'Reconciliation', icon: CheckSquare },
-  { href: '/exceptions', label: 'Exceptions', icon: AlertTriangle },
-  { href: '/pay-by-bank', label: 'Pay-by-bank', icon: Landmark },
-  { href: '/credit-desk', label: 'Credit Desk', icon: ShieldCheck },
-  { href: '/cash-desk', label: 'Cash Desk', icon: Building2 },
-  { href: '/connections', label: 'Permissions & readiness', icon: Link2 },
-  { href: '/policies', label: 'Policies & templates', icon: Shield },
-  { href: '/reports', label: 'Reports', icon: FileBarChart },
-  { href: '/evidence', label: 'Evidence & readiness', icon: FileCheck },
-  { href: '/audit', label: 'Audit log', icon: HardDrive },
-  { href: '/settings', label: 'Settings', icon: Settings },
-  { href: '/pilot', label: 'Pilot journey', icon: CheckSquare },
-  { href: '/imports', label: 'Import batches', icon: FileText },
-  { href: '/operations', label: 'Operations', icon: HardDrive },
-  { href: '/team', label: 'Team & access', icon: Users },
-  { href: '/work', label: 'My work', icon: CheckSquare },
-  { href: '/sources', label: 'Sources & connections', icon: Link2 },
-  { href: '/close-review', label: 'Close review', icon: FileCheck },
-  { href: '/lifecycle', label: 'Data retention', icon: HardDrive },
-  { href: '/exports', label: 'Saved exports', icon: HardDrive },
-  { href: '/presentation', label: 'Presentation', icon: Layers },
+type NavItem = { href: string; label: string; icon: LucideIcon };
+/**
+ * The console's pages in named groups, daily work first, each with its own
+ * label and icon: the sidebar, the phone drawer and the page title all read
+ * this one list, so a page is found in the same place on every screen.
+ */
+const navGroups: Array<{ id: string; label: string; items: NavItem[] }> = [
+  { id: 'daily', label: 'Daily work', items: [
+    { href: '/overview', label: 'Overview', icon: LayoutDashboard },
+    { href: '/work', label: 'My work', icon: Inbox },
+    { href: '/exceptions', label: 'Exceptions', icon: AlertTriangle },
+    { href: '/reconciliation', label: 'Reconciliation', icon: Scale },
+    { href: '/collections', label: 'Collections', icon: ArrowRightLeft },
+    { href: '/imports', label: 'Import batches', icon: Upload },
+    { href: '/close-review', label: 'Close review', icon: ClipboardCheck },
+  ] },
+  { id: 'customers', label: 'Customers and policies', items: [
+    { href: '/customers', label: 'Customers', icon: Users },
+    { href: '/mandates', label: 'Mandates', icon: FileSignature },
+    { href: '/policies', label: 'Policies & templates', icon: ScrollText },
+  ] },
+  { id: 'connected', label: 'Connected banking', items: [
+    { href: '/pay-by-bank', label: 'Pay-by-bank', icon: Landmark },
+    { href: '/credit-desk', label: 'Credit Desk', icon: ShieldCheck },
+    { href: '/cash-desk', label: 'Cash Desk', icon: Building2 },
+    { href: '/connections', label: 'Permissions & readiness', icon: KeyRound },
+  ] },
+  { id: 'oversight', label: 'Oversight', items: [
+    { href: '/reports', label: 'Reports', icon: FileBarChart },
+    { href: '/exports', label: 'Saved exports', icon: Download },
+    { href: '/audit', label: 'Audit log', icon: History },
+    { href: '/evidence', label: 'Go-live evidence', icon: BadgeCheck },
+  ] },
+  { id: 'setup', label: 'Setup and administration', items: [
+    { href: '/pilot', label: 'Pilot journey', icon: Route },
+    { href: '/sources', label: 'Data sources', icon: Database },
+    { href: '/operations', label: 'Operations', icon: Activity },
+    { href: '/team', label: 'Team & access', icon: UserCog },
+    { href: '/lifecycle', label: 'Data retention', icon: Archive },
+    { href: '/settings', label: 'Settings', icon: Settings },
+    { href: '/presentation', label: 'Presentation', icon: Presentation },
+  ] },
 ];
+const navItems = navGroups.flatMap(group => group.items);
+
+/**
+ * Scrolls a list of pages so the current page's link is in view, moving the
+ * list alone and never the page. A link out of view is brought to the
+ * middle, so the pages around it show too.
+ */
+export function revealCurrentPage(list: HTMLElement | null): void {
+  const current = list?.querySelector<HTMLElement>('[aria-current="page"]');
+  if (!list || !current) return;
+  const frame = list.getBoundingClientRect(), link = current.getBoundingClientRect();
+  if (link.top >= frame.top && link.bottom <= frame.bottom) return;
+  list.scrollTop += link.top - frame.top - (frame.height - link.height) / 2;
+}
 
 /** The breakpoint at which the sidebar replaces the phone bar; the same value as Tailwind's `md`. */
 const SIDEBAR_QUERY = '(min-width: 768px)';
@@ -52,20 +81,24 @@ const SIDEBAR_QUERY = '(min-width: 768px)';
  * because they are pressed with a thumb, not a pointer.
  */
 function NavLinks({ location, spacious = false, onNavigate }: { location: string; spacious?: boolean; onNavigate?: () => void }) {
+  // The sidebar and the drawer each render the list, so their group names need ids of their own.
+  const id = useId();
   return (
     <>
-      {navItems.map((item, index) => {
-        const active = location === item.href || location.startsWith(`${item.href}/`);
-        return (
-          <React.Fragment key={item.href}>
-          {[0, 6, 10, 14].includes(index) && <p className={`nav-group-label ${index > 0 ? 'mt-2' : 'mt-0'}`}>{index === 0 ? 'Collections' : index === 6 ? 'Connected banking' : index === 10 ? 'Oversight' : 'Workspace'}</p>}
-          <Link href={item.href} aria-current={active ? 'page' : undefined} onClick={onNavigate} className={`console-nav-link flex items-center gap-3 px-3 rounded-lg text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${spacious ? 'py-3' : 'py-1.5'} ${active ? 'is-active' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}>
-            <item.icon className="h-4 w-4" aria-hidden="true" />
-            {item.label}
-          </Link>
-          </React.Fragment>
-        );
-      })}
+      {navGroups.map((group, index) => (
+        <div key={group.id} role="group" aria-labelledby={`${id}-${group.id}`} className="space-y-0.5">
+          <p id={`${id}-${group.id}`} className={`nav-group-label ${index > 0 ? 'mt-2' : 'mt-0'}`}>{group.label}</p>
+          {group.items.map(item => {
+            const active = location === item.href || location.startsWith(`${item.href}/`);
+            return (
+              <Link key={item.href} href={item.href} aria-current={active ? 'page' : undefined} onClick={onNavigate} className={`console-nav-link flex items-center gap-3 px-3 rounded-lg text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${spacious ? 'py-3' : 'py-1.5'} ${active ? 'is-active' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'}`}>
+                <item.icon className="h-4 w-4" aria-hidden="true" />
+                {item.label}
+              </Link>
+            );
+          })}
+        </div>
+      ))}
     </>
   );
 }
@@ -119,6 +152,17 @@ export function Layout({ children }: { children: ReactNode }) {
   const currentLocation = useRef(location);
   currentLocation.current = location;
   const drawerPages = useRef<HTMLElement>(null);
+  // A long list may put the current page below the fold of a short window: keep its link in view, also when the
+  // list's height changes, as it does when the lender selector arrives with the workspace or the window is resized.
+  const sidebarPages = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const list = sidebarPages.current;
+    revealCurrentPage(list);
+    if (!list) return;
+    const resized = new ResizeObserver(() => revealCurrentPage(list));
+    resized.observe(list);
+    return () => resized.disconnect();
+  }, [location]);
   useEffect(() => { if (location !== openedAt.current) setMenuOpen(false); }, [location]);
   useEffect(() => {
     const sidebar = window.matchMedia(SIDEBAR_QUERY);
@@ -168,7 +212,7 @@ export function Layout({ children }: { children: ReactNode }) {
             </Button>
           </SheetTrigger>
           <SheetContent side="left" className="flex w-72 flex-col p-0" aria-describedby={undefined}
-            onOpenAutoFocus={(event) => { event.preventDefault(); drawerPages.current?.querySelector('a')?.focus(); }}
+            onOpenAutoFocus={(event) => { event.preventDefault(); (drawerPages.current?.querySelector<HTMLElement>('a[aria-current="page"]') ?? drawerPages.current?.querySelector('a'))?.focus(); }}
             onCloseAutoFocus={(event) => { if (currentLocation.current !== openedAt.current) { event.preventDefault(); focusMain(); } }}>
             <SheetHeader className="border-b p-4 pr-12 text-left">
               <SheetTitle className="text-base">Menu</SheetTitle>
@@ -185,7 +229,7 @@ export function Layout({ children }: { children: ReactNode }) {
       </header>
       <div className="flex flex-1 overflow-hidden print:block print:overflow-visible">
         {/* Sidebar */}
-        <aside className="console-sidebar w-60 border-r bg-card flex flex-col hidden md:flex shrink-0 print:hidden">
+        <aside aria-label="Console sidebar" className="console-sidebar w-60 border-r bg-card flex flex-col hidden md:flex shrink-0 print:hidden">
           <div className="px-5 py-3 flex items-center justify-between">
             <BrandLockup descriptor={false} />
             <span className="text-[9px] tracking-widest uppercase text-muted-foreground border rounded px-1.5 py-1">Console</span>
@@ -199,7 +243,7 @@ export function Layout({ children }: { children: ReactNode }) {
             </div>
           )}
 
-          <nav aria-label="Pages" className="flex-1 overflow-y-auto px-3 py-2 space-y-0.5">
+          <nav ref={sidebarPages} aria-label="Pages" className="flex-1 overflow-y-auto px-3 py-2 space-y-0.5">
             <NavLinks location={location} />
           </nav>
 
@@ -235,7 +279,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 A page that stops working keeps the sidebar and the lender selector as the way out. */}
             {isLoading && !workspace
               ? <p role="status" className="text-sm text-muted-foreground">Loading your workspace…</p>
-              : <ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{!embedded && <PresentationGuide />}{!embedded && !presentation.state.active && !location.startsWith('/cases/') && !['/presentation','/pilot','/imports','/operations','/team','/pay-by-bank','/credit-desk','/cash-desk','/connections'].includes(location) && <SandboxGuide />}{children}</ErrorBoundary>}
+              : <>{/* The presentation toolbar sits above the page's boundary, so a page that stops working keeps it and its End presentation. */}{!embedded && <PresentationGuide />}<ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{!embedded && !presentation.state.active && !location.startsWith('/cases/') && !['/presentation','/pilot','/imports','/operations','/team','/pay-by-bank','/credit-desk','/cash-desk','/connections'].includes(location) && <SandboxGuide />}{children}</ErrorBoundary></>}
             <p className="hidden print:block mt-8 border-t pt-3 text-xs text-muted-foreground">Printed {printedAt} from the Valo Pay sandbox · {pageTitle}{lenderName ? ` · ${lenderName}` : ''}.</p>
           </div>
         </main>

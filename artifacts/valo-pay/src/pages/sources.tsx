@@ -3,11 +3,12 @@ import { Link, useSearchParams } from "wouter";
 import type { SourceProfileInput } from "@workspace/valopay-schema";
 import { useWorkspace } from "@/lib/workspace-context";
 import { usePilotMutation, usePilotQuery } from "@/lib/pilot";
+import { sourcesViewSchema } from "@workspace/valopay-schema";
 import { useUnsavedChanges, confirmUnsavedChanges } from "@/lib/unsaved-changes";
 import { PilotHeading, PilotPanel, PilotError, RecoveryNotice, pilotField } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
 import { ScrollFrame } from "@/components/scroll-frame";
-import { formatDate, formatKobo } from "@/lib/formatters";
+import { formatCount, formatDate, formatKobo, formatNumber } from "@/lib/formatters";
 import { readableLabel } from "@/components/record-label";
 import { SourceCompletenessPanel, SourceManifestEditor } from "@/components/source-manifest-editor";
 
@@ -33,13 +34,13 @@ export default function SourcesPage() { const { merchantId } = useWorkspace(); r
 function Sources() {
   const { workspace } = useWorkspace(), [params] = useSearchParams();
   const [businessDate,setBusinessDate] = useState(params.get("businessDate") || new Date(Date.now()+3600000).toISOString().slice(0,10));
-  const query = usePilotQuery(`/sources?businessDate=${encodeURIComponent(businessDate)}`);
+  const query = usePilotQuery(`/sources?businessDate=${encodeURIComponent(businessDate)}`, sourcesViewSchema);
   const [selected, setSelected] = useState<any>(null), [revision, setRevision] = useState(0), [message, setMessage] = useState("");
   const fixture = usePilotMutation(result => setMessage(result.event.message));
   const canWrite = ["Admin", "Operations", "Finance"].includes(workspace?.role || "");
   const canReplay = ["Admin", "Finance"].includes(workspace?.role || "");
   return <div className="space-y-6">
-    <PilotHeading title="Sources & connections">Check what arrived, what is missing and whether every source row is accounted for. All records in this pilot remain synthetic.</PilotHeading>
+    <PilotHeading title="Data sources">Check what arrived, what is missing and whether every source row is accounted for. All records in this pilot remain synthetic.</PilotHeading>
     <PilotError error={query.error} retry={() => { void query.refetch(); }} />
     {query.isLoading && <p role="status">Loading source controls…</p>}
     <label className="block max-w-xs text-sm font-medium">Business date (WAT)<input type="date" required className={pilotField} value={businessDate} onChange={event=>{if(event.target.value&&confirmUnsavedChanges())setBusinessDate(event.target.value);}}/></label>
@@ -67,7 +68,7 @@ function Sources() {
       {canWrite && <div className="flex flex-wrap gap-2">{([ ["payment", "Receive sample payment"], ["duplicate", "Repeat delivery"], ["amount_mismatch", "Rehearse amount conflict"], ["out_of_order", "Rehearse out-of-order events"], ["tampered", "Check tampered signature"] ] as const).map(([scenario,label]) => <Button key={scenario} variant="outline" disabled={fixture.isPending || fixture.hasUnconfirmedOutcome} onClick={() => fixture.mutate({ path: "/sources/paystack/fixtures", data: { scenario, syntheticOnly: true } })}>{label}</Button>)}</div>}
       <RecoveryNotice mutation={fixture} /><p role="status" className="text-sm">{message}</p>
       <div className="space-y-3">{query.data?.paystack.events.map((event: any) => <EventCard key={event.id} event={event} canReplay={canReplay} />)}</div>
-      {query.data?.paystack.total > 50 && <p className="text-sm text-muted-foreground">Showing the latest 50 of {query.data.paystack.total} receipts. Earlier receipts remain saved.</p>}
+      {query.data && query.data.paystack.total > 50 && <p className="text-sm text-muted-foreground">Showing the latest 50 of {formatNumber(query.data.paystack.total)} receipts. Earlier receipts remain saved.</p>}
     </PilotPanel>
   </div>;
 }
@@ -101,5 +102,5 @@ function ProfileEditor({ profile, onSaved, onNew }: { profile: any; onSaved(): v
 
 function EventCard({ event, canReplay }: { event: any; canReplay: boolean }) {
   const [reason,setReason] = useState(""), mutation = usePilotMutation(()=>setReason(""));
-  return <article className="rounded-lg border p-4 space-y-2"><div className="flex flex-wrap justify-between gap-2"><h3 className="font-medium">{event.name}</h3><span className="text-xs rounded-full bg-muted px-2 py-1">{event.mode === "fixture" ? "Synthetic fixture" : "Signed test event"} · {readableLabel(event.status)}</span></div><p className="text-sm">{event.message}</p><p className="text-xs text-muted-foreground">{formatDate(event.createdAt)} · {event.deliveryCount} deliveries · {event.replayCount} replays · No financial records created</p>{canReplay && !["quarantined","rejected_fixture"].includes(event.status) && <form className="flex flex-wrap gap-2" onSubmit={e=>{e.preventDefault();mutation.mutate({path:`/sources/events/${event.id}/replay`,data:{expectedUpdatedAt:event.updatedAt,reason}});}}><label className="flex-1 min-w-[180px] text-sm">Reason to recheck this receipt<input className={pilotField} minLength={3} maxLength={500} required value={reason} disabled={mutation.isPending||mutation.hasUnconfirmedOutcome} onChange={e=>setReason(e.target.value)}/></label><Button className="self-end" variant="outline" disabled={mutation.isPending||mutation.hasUnconfirmedOutcome} type="submit">Recheck saved receipt</Button></form>}<RecoveryNotice mutation={mutation}/></article>;
+  return <article className="rounded-lg border p-4 space-y-2"><div className="flex flex-wrap justify-between gap-2"><h3 className="font-medium">{event.name}</h3><span className="text-xs rounded-full bg-muted px-2 py-1">{event.mode === "fixture" ? "Synthetic fixture" : "Signed test event"} · {readableLabel(event.status)}</span></div><p className="text-sm">{event.message}</p><p className="text-xs text-muted-foreground">{formatDate(event.createdAt)} · {formatCount(event.deliveryCount, "delivery", "deliveries")} · {formatCount(event.replayCount, "replay")} · No financial records created</p>{canReplay && !["quarantined","rejected_fixture"].includes(event.status) && <form className="flex flex-wrap gap-2" onSubmit={e=>{e.preventDefault();mutation.mutate({path:`/sources/events/${event.id}/replay`,data:{expectedUpdatedAt:event.updatedAt,reason}});}}><label className="flex-1 min-w-[180px] text-sm">Reason to recheck this receipt<input className={pilotField} minLength={3} maxLength={500} required value={reason} disabled={mutation.isPending||mutation.hasUnconfirmedOutcome} onChange={e=>setReason(e.target.value)}/></label><Button className="self-end" variant="outline" disabled={mutation.isPending||mutation.hasUnconfirmedOutcome} type="submit">Recheck saved receipt</Button></form>}<RecoveryNotice mutation={mutation}/></article>;
 }

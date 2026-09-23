@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { ArrowRight, CheckCircle2, Circle, Building2, AlertCircle, Clock3 } from "lucide-react";
-import type { PilotProgressStep } from "@workspace/valopay-schema";
+import { pilotProgressSchema } from "@workspace/valopay-schema";
 import { useWorkspace } from "@/lib/workspace-context";
 import { usePilotMutation, usePilotQuery } from "@/lib/pilot";
 import {
@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 
 export default function PilotPage() {
   const { merchantId, workspace, setMerchantId } = useWorkspace();
-  const journey = usePilotQuery<{ steps: PilotProgressStep[]; access: { message: string; state: string } }>("/pilot/progress");
+  const journey = usePilotQuery("/pilot/progress", pilotProgressSchema);
   const [name, setName] = useState(""),
     [segment, setSegment] = useState("Consumer lending");
   const create = usePilotMutation((data) => {
@@ -38,11 +38,11 @@ export default function PilotPage() {
         }}
       />
       {journey.isLoading && <p role="status">Checking the saved evidence for each step…</p>}
-      {journey.data?.access && <aside className="rounded-xl border bg-secondary/20 p-4 text-sm">
+      {journey.data?.access && <section className="rounded-xl border bg-secondary/20 p-4 text-sm">
         <p className="font-semibold">Staff access · {journey.data.access.state === "configured" ? "Configured for synthetic testing" : "Not configured"}</p>
         <p className="mt-1 text-muted-foreground">{journey.data.access.message}</p>
         <Link href="/team" className="mt-2 inline-flex min-h-11 items-center text-primary underline">Review staff access</Link>
-      </aside>}
+      </section>}
       <div className="grid gap-4 lg:grid-cols-3">
         {steps.map((step, index) => (
           <Link

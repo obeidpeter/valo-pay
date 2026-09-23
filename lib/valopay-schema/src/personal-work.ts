@@ -1,10 +1,11 @@
 import { z } from 'zod';
+import { instantInputSchema, merchantIdSchema } from './api';
 
 const identity = z.string().min(1).max(300);
 const instant = z.string().datetime();
 /** All work is scoped to the selected lender; team scope is authorised by the server. */
 export const personalWorkQuerySchema = z.object({
-  merchantId: z.string().min(1).max(100),
+  merchantId: merchantIdSchema,
   scope: z.enum(['mine', 'team']).default('mine'),
   filter: z.enum(['all', 'overdue', 'handover', 'review', 'unread']).default('all'),
   offset: z.coerce.number().int().min(0).max(100000).default(0),
@@ -17,7 +18,7 @@ export type PersonalWorkQuery = z.infer<typeof personalWorkQuerySchema>;
 export const workReceiptInputSchema = z.object({
   sourceId: identity,
   eventId: identity,
-  expectedUpdatedAt: instant,
+  expectedUpdatedAt: instantInputSchema,
   expectedDigest: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 /** Validated read or handover acknowledgement request. */

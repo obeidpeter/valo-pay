@@ -12,5 +12,5 @@
 export interface EncryptionVerification {
   message: string;
   checkedAt: string;
-  verified: boolean;
+  verified: true;
 }

@@ -105,7 +105,7 @@ function ofKind(state: DomainState, kind: string) { return state.records.filter(
   assert.equal(closeReviewBasis(state), basis, "Transaction revision bookkeeping must not invalidate a just-created close.");
   makeRecord(state, "work-events", { status: "recorded" });
   assert.equal(reviewIsCurrent(state, review), true, "Work-queue acknowledgements do not change financial evidence.");
-  review.data.snapshot.data.summary = "tampered";
+  review.data.snapshot!.data.summary = "tampered";
   assert.equal(reviewIsCurrent(state, review), false);
 }
 console.log("Close review: independent approval, exact snapshots, discrepancies, stale edits and evidence-led progress passed.");

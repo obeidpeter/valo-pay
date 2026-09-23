@@ -12,6 +12,7 @@ import type { DecideCloseReviewInputSourceExceptionsItem } from './decideCloseRe
  * A review decision: approve or reject with the version being decided, a note and an answer to every source exception.
  */
 export interface DecideCloseReviewInput {
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
   expectedUpdatedAt: Date;
   action: DecideCloseReviewInputAction;
   /**

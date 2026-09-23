@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -34,8 +34,10 @@ import {
 } from "@/components/connected-frame";
 import { useConnected } from "@/lib/connected";
 import { useWorkspace } from "@/lib/workspace-context";
-import { formatCompactDate, formatDate, formatKobo } from "@/lib/formatters";
+import { useDialogFocusReturn } from "@/lib/focus";
+import { formatCompactDate, formatCount, formatDate, formatKobo, formatPercent } from "@/lib/formatters";
 import { nairaToKobo } from "@/lib/money-input";
+import { useFormDraft } from "@/lib/unsaved-changes";
 
 type Point = {
   day: number;
@@ -363,6 +365,11 @@ export default function CashDeskPage() {
   const [downside, setDownside] = useState("70");
   const [delay, setDelay] = useState("7");
   const [buffer, setBuffer] = useState("1500000");
+  // A confirmed step can remove or disable the button that opened its review, so focus then goes to the result.
+  const result = useRef<HTMLParagraphElement>(null);
+  const restoreFocus = useDialogFocusReturn(!!action, () => result.current);
+  // Planning inputs, or a review note, typed but not saved are a draft: leaving asks first.
+  const draft = useFormDraft({ downside, delay, buffer, reason: action ? reason : "" });
   useEffect(() => {
     setAction(null);
     setReason("");
@@ -373,6 +380,7 @@ export default function CashDeskPage() {
     setDelay("7");
     setBuffer("1500000");
     setTab("cash");
+    draft.reset({ downside: "70", delay: "7", buffer: "1500000", reason: "" });
   }, [merchantId]);
   const maker = ["Admin", "Operations"].includes(workspace?.role ?? "");
   const finance = workspace?.role === "Finance";
@@ -384,8 +392,14 @@ export default function CashDeskPage() {
   };
   const act = async () => {
     if (!action) return;
+    draft.sending(
+      action.action === "cash.forecast"
+        ? { downside, delay, buffer, reason: "" }
+        : null,
+    );
     try {
       await run(action.action, action.data, action.recordId, reason);
+      draft.saved();
       const message: Record<string, string> = {
         "cash.initialize":
           "Sample Cash Desk set up. Review the account timestamps and planning assumptions before preparing work.",
@@ -453,7 +467,7 @@ export default function CashDeskPage() {
     ask({
       action: "cash.forecast",
       title: "Save forecast version",
-      detail: `Keep ${downside}% of expected receipts, delayed by ${delay} days, with a ${formatKobo(bufferMinor)} planning buffer. The base case keeps approved amounts. No bank balance or commitment will be changed.`,
+      detail: `Keep ${formatPercent(downsideInflowBps / 10000)} of expected receipts, delayed by ${formatCount(Number(delay), "day")}, with a ${formatKobo(bufferMinor)} planning buffer. The base case keeps approved amounts. No bank balance or commitment will be changed.`,
       data: {
         downsideInflowBps,
         downsideDelayDays: Number(delay),
@@ -462,7 +476,7 @@ export default function CashDeskPage() {
     });
   };
   if (isLoading) return <Loading what="Cash Desk" />;
-  if (error)
+  if (error && !cash)
     return (
       <>
         <LoadProblem
@@ -491,11 +505,12 @@ export default function CashDeskPage() {
         setProblem("");
         setAction(null);
         setReason("");
+        draft.saved();
       }}
       onReleased={() => setProblem("")}
     >
       {success && (
-        <p className="connected-note" role="status">
+        <p className="connected-note" role="status" ref={result}>
           {success}
         </p>
       )}
@@ -569,7 +584,7 @@ export default function CashDeskPage() {
             <Metric
               title="Booked cash"
               value={amount(position?.bookedMinor)}
-              detail={`${position?.accountCount ?? 0} business accounts · own-account transfers excluded from income`}
+              detail={`${formatCount(position?.accountCount ?? 0, "business account")} · own-account transfers excluded from income`}
               accent
             />
             <Metric
@@ -1277,7 +1292,7 @@ export default function CashDeskPage() {
                         Approved sample net-pay run
                       </h3>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {r.summary.itemCount} items · planned for{" "}
+                        {formatCount(r.summary.itemCount, "item")} · planned for{" "}
                         {formatCompactDate(r.plan.paymentDate)} · source balance{" "}
                         {formatDate(r.plan.asOf)}
                       </p>
@@ -1571,7 +1586,7 @@ export default function CashDeskPage() {
           if (!open && !pending && !api.hasUnconfirmedOutcome) setAction(null);
         }}
       >
-        <DialogContent>
+        <DialogContent onCloseAutoFocus={restoreFocus}>
           <DialogHeader>
             <DialogTitle>{action?.title}</DialogTitle>
             <DialogDescription>{action?.detail}</DialogDescription>
@@ -1583,6 +1598,7 @@ export default function CashDeskPage() {
               setProblem("");
               setAction(null);
               setReason("");
+              draft.saved();
               setSuccess(
                 "Original sample request confirmed. Review the refreshed records below. No live financial instruction was sent.",
               );

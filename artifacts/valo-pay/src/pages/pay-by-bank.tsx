@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "wouter";
 import { ArrowRight, CheckCircle2, Landmark, ShieldCheck } from "lucide-react";
 import {
@@ -19,9 +19,11 @@ import {
 import { Loading } from "@/components/loading";
 import { LoadProblem } from "@/components/load-problem";
 import { useConnected, type ConnectedRecord } from "@/lib/connected";
-import { formatKobo, formatDate } from "@/lib/formatters";
+import { formatKobo, formatDate, formatNumber } from "@/lib/formatters";
 import { nairaToKobo, koboToNaira } from "@/lib/money-input";
+import { useFormDraft } from "@/lib/unsaved-changes";
 import { useWorkspace } from "@/lib/workspace-context";
+import { useDialogFocusReturn } from "@/lib/focus";
 export default function PayByBank() {
   const api = useConnected(),
     { merchantId } = useWorkspace();
@@ -41,6 +43,11 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
       data?: Record<string, unknown>;
     } | null>(null),
     [reason, setReason] = useState("");
+  // A confirmed step usually removes the button that opened its review, so focus then goes to the result.
+  const result = useRef<HTMLParagraphElement>(null);
+  const restoreFocus = useDialogFocusReturn(!!review, () => result.current);
+  // A checkout, or a review's reason, typed but not sent is a draft: leaving asks first.
+  const draft = useFormDraft({ dueId, amount, reason: review ? reason : "" });
   const act = async (
     action: string,
     data: Record<string, unknown> = {},
@@ -49,8 +56,12 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
   ) => {
     setError("");
     setSuccess("");
+    draft.sending(
+      action === "payment.create" ? { dueId, amount, reason: "" } : null,
+    );
     try {
       await api.run(action, data, recordId, why);
+      draft.saved();
       const messages: Record<string, string> = {
         "payment.create":
           "Sample checkout created. Review the customer, instalment, recipient and amount before authorising it.",
@@ -84,7 +95,7 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
     }
   };
   if (api.isLoading) return <Loading what="pay-by-bank" />;
-  if (api.error || !api.data)
+  if (!api.data)
     return (
       <>
         <LoadProblem
@@ -153,6 +164,7 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
         setError("");
         setReview(null);
         setReason("");
+        draft.saved();
       }}
       onReleased={() => setError("")}
     >
@@ -160,17 +172,19 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
         <div className="connected-metric">
           <span>Confirmed sample receipts</span>
           <strong>
-            {payments.intents.filter((i) => i.status === "confirmed").length}
+            {formatNumber(
+              payments.intents.filter((i) => i.status === "confirmed").length,
+            )}
           </strong>
         </div>
         <div className="connected-metric">
           <span>Awaiting a verified outcome</span>
           <strong>
-            {
+            {formatNumber(
               payments.intents.filter((i) =>
                 ["authorised", "pending", "unknown"].includes(i.status),
-              ).length
-            }
+              ).length,
+            )}
           </strong>
         </div>
         <div className="connected-metric">
@@ -190,7 +204,7 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
         </p>
       )}
       {success && (
-        <p role="status" className="connected-note">
+        <p role="status" className="connected-note" ref={result}>
           {success}
         </p>
       )}
@@ -573,7 +587,7 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
               setReview(null);
           }}
         >
-          <DialogContent>
+          <DialogContent onCloseAutoFocus={restoreFocus}>
             <DialogHeader>
               <DialogTitle>{review.title}</DialogTitle>
               <DialogDescription>

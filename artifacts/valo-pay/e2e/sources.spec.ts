@@ -32,7 +32,7 @@ test("a dated declaration becomes complete only after its matching source file i
 });
 test("source schedules and signed fixture receipts stay clear and usable on small screens",async({page},testInfo)=>{
   await page.goto("/sources");
-  await expect(page.getByRole("heading",{name:"Sources & connections",exact:true})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"Data sources",exact:true})).toBeVisible();
   await page.getByLabel("Profile name",{exact:true}).fill("Scheduled loan feed");
   await page.getByLabel("Source name",{exact:true}).fill("synthetic-loan-feed");
   const firstDelivery=page.getByLabel("First delivery expected (WAT)",{exact:true});

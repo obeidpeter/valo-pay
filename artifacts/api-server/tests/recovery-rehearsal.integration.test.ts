@@ -17,7 +17,8 @@ assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(connection.hostname), 're
 assert.equal(connection.pathname, '/valopay', 'use the disposable CI database named valopay');
 const { pool, Pool } = await import('@workspace/db');
 const { seedMerchant } = await import('../src/lib/valopay-seed');
-const { appendAudit, verifyAudit, canonical } = await import('../src/lib/valopay-store');
+const { appendAudit, verifyAudit } = await import('../src/lib/valopay-store');
+const { canonicalJson } = await import('@workspace/valopay-schema');
 const { encryptField, decryptField, rotateField } = await import('../src/lib/field-encryption');
 const { runDailyClose } = await import('../src/domain/actions');
 const { makeRecord } = await import('../src/domain/records');
@@ -153,7 +154,7 @@ try {
     const rows: Record<string, any>[] = (await target.query('SELECT * FROM valopay_records WHERE merchant_id=$1 ORDER BY created_at,id', [expected.merchant.id])).rows;
     const restored: DomainState = { ...expected, records: rows.map(row => ({ id: row.id, merchantId: row.merchant_id, kind: row.kind, name: row.name, status: row.status, reference: row.reference, amountKobo: Number(row.amount_kobo), customerId: row.customer_id, data: row.data, createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString() })) };
     assert.equal(verifyAudit(restored).valid, true);
-    for (const kind of ['allocations', 'due-items', 'closes']) assert.equal(canonical(restored.records.filter(item => item.kind === kind).sort((a,b) => a.id.localeCompare(b.id))), canonical(expected.records.filter(item => item.kind === kind).sort((a,b) => a.id.localeCompare(b.id))));
+    for (const kind of ['allocations', 'due-items', 'closes']) assert.equal(canonicalJson(restored.records.filter(item => item.kind === kind).sort((a,b) => a.id.localeCompare(b.id))), canonicalJson(expected.records.filter(item => item.kind === kind).sort((a,b) => a.id.localeCompare(b.id))));
     const customer = restored.records.find(item => item.kind === 'customers' && item.data.protectedTest)!;
     const scope = { tenantId: expected.merchant.id, recordId: customer.id, field: 'protectedTest' };
     const ring = { activeKeyId: 'rehearsal-v2', keys: new Map([['rehearsal-v1', oldKey], ['rehearsal-v2', newKey]]) };

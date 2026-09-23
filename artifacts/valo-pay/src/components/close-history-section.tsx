@@ -18,7 +18,7 @@ import {
 } from "@/lib/formatters";
 import { Button } from "./ui/button";
 import { RecordPagination } from "./record-pagination";
-import { LoadProblem } from "./load-problem";
+import { LoadProblem, RefreshProblem } from "./load-problem";
 
 function CloseEvidence({ close }: { close: ValopayRecord }) {
   const { merchantId } = useWorkspace();
@@ -31,50 +31,52 @@ function CloseEvidence({ close }: { close: ValopayRecord }) {
     },
   });
   const report = query.data?.data?.report as Record<string, any> | undefined;
+  // A count from the recorded report, grouped the market's way; one the report left out is 0.
+  const count = (value: unknown) => formatNumber(Number(value ?? 0));
   const money = (value: any) =>
-    `${value?.count ?? 0} · ${formatKobo(Number(value?.kobo || 0))}`;
+    `${count(value?.count)} · ${formatKobo(Number(value?.kobo || 0))}`;
   const measures = report
     ? [
         ["Unmatched at start", money(report.openingUnallocated)],
         [
           "Payment records received",
-          String(report.observations?.received ?? 0),
+          count(report.observations?.received),
         ],
         [
           "Payment records by source",
           Object.entries(report.observations?.bySource || {})
             .map(
               ([key, v]: [string, any]) =>
-                `${key}: ${v.received} records linked to ${formatCount(v.paymentsResolvedTo, "payment")}`,
+                `${key}: ${formatCount(Number(v.received ?? 0), "record")} linked to ${formatCount(v.paymentsResolvedTo, "payment")}`,
             )
             .join("; ") || "None",
         ],
         [
           "Matches by rule",
           Object.entries(report.allocatedByRule || {})
-            .map(([key, v]: [string, any]) => `${key}: ${v.count}`)
+            .map(([key, v]: [string, any]) => `${key}: ${count(v.count)}`)
             .join("; ") || "None",
         ],
         ["Proposed matches", money(report.proposed)],
         [
           "Unmatched at close",
-          `${money(report.unallocated)} · ${report.unallocated?.olderThan24Hours ?? 0} older than 24 hours`,
+          `${money(report.unallocated)} · ${count(report.unallocated?.olderThan24Hours)} older than 24 hours`,
         ],
         [
           "Settlement differences",
-          `${report.variances?.count ?? 0} · ${formatKobo(Number(report.variances?.feeVarianceKobo || 0))}`,
+          `${count(report.variances?.count)} · ${formatKobo(Number(report.variances?.feeVarianceKobo || 0))}`,
         ],
         [
           "Exceptions",
-          `${report.exceptions?.opened?.count ?? 0} opened · ${report.exceptions?.closed?.count ?? 0} closed · ${report.exceptions?.openAtClose ?? 0} open`,
+          `${count(report.exceptions?.opened?.count)} opened · ${count(report.exceptions?.closed?.count)} closed · ${count(report.exceptions?.openAtClose)} open`,
         ],
         [
           "Customer totals changed",
-          String(report.customerPositionsChanged?.length ?? 0),
+          count(report.customerPositionsChanged?.length),
         ],
         [
           "Retry decisions",
-          `${report.retryDecisions?.recorded ?? 0} recorded · ${report.retryDecisions?.finalAttempts ?? 0} final attempts · ${report.retryDecisions?.noticesNotEvidenced ?? 0} deferred for missing notice evidence`,
+          `${count(report.retryDecisions?.recorded)} recorded · ${formatCount(Number(report.retryDecisions?.finalAttempts ?? 0), "final attempt")} · ${count(report.retryDecisions?.noticesNotEvidenced)} deferred for missing notice evidence`,
         ],
       ]
     : [];
@@ -117,7 +119,7 @@ function CloseEvidence({ close }: { close: ValopayRecord }) {
             <p>
               {String((query.data.data.schedule as any).trigger || "manual")}
               {(query.data.data.schedule as any).late
-                ? ` · ${(query.data.data.schedule as any).delayMinutes} min late`
+                ? ` · ${count((query.data.data.schedule as any).delayMinutes)} min late`
                 : ""}
             </p>
           )}
@@ -220,11 +222,14 @@ export function CloseHistorySection({ active }: { active: boolean }) {
               ? `Showing ${formatCount(query.data.total, "recorded close")}${from ? ` from ${from}` : ""}${to ? ` through ${to}` : ""}. Dates include the full day in West Africa Time. Current totals above are unchanged.`
               : "Loading recorded closes…")}
         </p>
+        {!validation.error && (
+          <RefreshProblem what="The close history" shown="closes" query={query} />
+        )}
         {validation.error ? (
           <p role="alert" className="text-sm text-destructive">
             The close history is hidden until the date range is corrected.
           </p>
-        ) : query.error ? (
+        ) : query.error && !query.data ? (
           <LoadProblem
             what="daily close history"
             error={query.error}
@@ -275,7 +280,7 @@ export function CloseHistorySection({ active }: { active: boolean }) {
           )
         )}
       </div>
-      {!validation.error && !query.error && query.data && (
+      {!validation.error && query.data && (
         <>
           {!query.data.items.length ? (
             <div className="p-5">

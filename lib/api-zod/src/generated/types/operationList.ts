@@ -11,7 +11,10 @@ import type { OperationView } from './operationView';
  * The caller's journal for one lender, newest first, 25 rows a page.
  */
 export interface OperationList {
+  /** @maxItems 25 */
   items: OperationView[];
+  /** @minimum 0 */
   total: number;
+  /** @minimum 0 */
   offset: number;
 }

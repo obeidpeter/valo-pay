@@ -1,7 +1,8 @@
 import { pool, type PoolClient } from '@workspace/db';
 import { randomUUID } from 'node:crypto';
 import type { Context, DomainState, ValopayRecord } from '../domain/types';
-import { canonical, digest, SYSTEM_ACTOR_PREFIX } from './valopay-store';
+import { SYSTEM_ACTOR_PREFIX } from './valopay-store';
+import { auditEntryData } from './digests';
 import { EXPORT_LEASE_MS, EXPORT_CONFIRM_LEASE_MS, exportIsClaimable, returnExportToQueue, type ClaimedExport, type ExportArtifact, type ExportJobRepository, type ExportWriteResult } from './export-jobs';
 import { bindRuntimeService, runtimeExportRequesterAllowed } from './runtime-isolation';
 import { beginStatement, checkOut, databaseLimits } from './database-limits';
@@ -37,8 +38,8 @@ async function audit(client: PoolClient, scope: Scope, job: ValopayRecord, actio
   const sequence=previous?Number(previous.data.sequence)+1:1;
   if(!Number.isSafeInteger(sequence)||sequence<1)throw new Error('Invalid audit sequence.');
   const now=scope.now.toISOString();
-  const body={sequence,actor,action,objectId:job.id,summary,changeDigest:digest(canonical({status:job.status,attempt:job.data.attempts,checksum:job.data.checksum})),previousHash:previous?.data.hash??'GENESIS',timestamp:now};
-  const entry:ValopayRecord={id:randomUUID(),merchantId:scope.id,kind:'audit',name:action,status:'recorded',reference:'',amountKobo:0,customerId:job.customerId,createdAt:now,updatedAt:now,data:{...body,hash:digest(canonical(body))}};
+  const data=auditEntryData({sequence,actor,action,objectId:job.id,summary,changes:{status:job.status,attempt:job.data.attempts,checksum:job.data.checksum},previousHash:previous?.data.hash,timestamp:now});
+  const entry:ValopayRecord={id:randomUUID(),merchantId:scope.id,kind:'audit',name:action,status:'recorded',reference:'',amountKobo:0,customerId:job.customerId,createdAt:now,updatedAt:now,data};
   await client.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at)
     SELECT $4,$1,'audit',$5,$6,$7,$8,$9,$10,$11,$12 WHERE ${ownership}`,
   [scope.id, scope.workspace_id, scope.principal_hash, entry.id, entry.name, entry.status, entry.reference, entry.amountKobo, entry.customerId, entry.data, entry.createdAt, entry.updatedAt]);

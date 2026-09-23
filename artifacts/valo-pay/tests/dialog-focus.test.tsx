@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useDialogActivationTracking, useDialogFocusReturn } from '@/lib/focus';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { renderApp, screen, userEvent, waitFor, within } from './harness';
+import { makeRecord } from '../../api-server/src/domain/records';
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); vi.spyOn(window, 'confirm').mockReturnValue(true); });
@@ -81,5 +82,59 @@ describe('dialog opener restoration across browser click behavior', () => {
     view.rerender(<FocusHarness open removeOpener />);
     fireEvent.click(screen.getByRole('button', { name: 'Restore focus' }));
     expect(document.activeElement).toBe(screen.getByRole('main'));
+  });
+});
+
+describe('connected review dialogs hand focus back after confirming', () => {
+  it('returns Pay-by-bank focus to the opener after Go back, and to the result when confirming removed the opener', async () => {
+    const user = userEvent.setup();
+    renderApp('/pay-by-bank');
+    await screen.findByRole('heading', { name: 'Pay-by-bank', level: 1 });
+    const due = api.state().records.find((r) => r.reference === 'DEMO-LOAN-1005')!;
+    await user.selectOptions(screen.getByLabelText('Customer and instalment'), due.id);
+    await user.click(screen.getByRole('button', { name: /Create sample checkout/ }));
+    const cancel = await screen.findByRole('button', { name: 'Cancel checkout' });
+    await user.click(cancel);
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Go back' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(cancel));
+
+    // Authorising removes the button that opened the review: focus goes to the result, not the page body.
+    await user.click(screen.getByRole('button', { name: 'Review & authorise' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText('Reason'), 'Review sample payment details');
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm sample action' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.queryByRole('button', { name: 'Review & authorise' })).toBeNull();
+    await waitFor(() => expect(document.activeElement?.textContent).toMatch(/^Sample bank authorisation recorded\./));
+    expect(document.activeElement?.getAttribute('role')).toBe('status');
+  });
+
+  it('returns Cash Desk focus to the result when setting up removed its button, and to the opener that stays', async () => {
+    api.uninstall();
+    api = installFakeApi({ role: 'Operations', now: '2026-09-21T10:00:00Z' });
+    api.mutate((state) => {
+      for (const purpose of ['merchant_account_read', 'erp_draft', 'payroll_prepare']) makeRecord(state, 'connected-consents', {
+        status: 'active', createdAt: api.now, data: { purpose, subjectId: 'sme', entityId: `${state.merchant.id}:sme`, expiresAt: '2026-10-21T10:00:00Z' },
+      });
+    });
+    const user = userEvent.setup();
+    const confirmIn = async (note: string) => {
+      const dialog = await screen.findByRole('dialog');
+      await user.type(within(dialog).getByRole('textbox', { name: 'Review note' }), note);
+      await user.click(within(dialog).getByRole('button', { name: 'Confirm and save' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    };
+    renderApp('/cash-desk');
+    await user.click(await screen.findByRole('button', { name: /Set up sample Cash Desk/ }));
+    await confirmIn('Set up the sample workspace for review');
+    expect(screen.queryByRole('button', { name: /Set up sample Cash Desk/ })).toBeNull();
+    await waitFor(() => expect(document.activeElement?.textContent).toMatch(/^Sample Cash Desk set up\./));
+
+    const save = await screen.findByRole('button', { name: /Save forecast/ });
+    await user.click(save);
+    await confirmIn('Save the planning assumptions for review');
+    await waitFor(() => expect(document.activeElement).toBe(save));
+    expect(screen.getByText(/^New sample forecast saved\./)).toBeTruthy();
   });
 });

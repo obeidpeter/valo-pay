@@ -40,6 +40,13 @@ try {
   assert.deepEqual(ok(await call("/v1/workspace", "finance")).merchants.map((m: any) => m.id), [a.id]);
   ok(await call(`/v1/records/customers?merchantId=${a.id}`, "finance"));
   assert.equal((await call(`/v1/records/customers?merchantId=${b.id}`, "finance")).status, 404);
+  // A saved request replayed with stale MFA is refused, not answered from its receipt; with fresh MFA the receipt answers.
+  const customerKey = randomUUID(), customer = { name: "Other lender customer", reference: `OTHER-${randomUUID()}`, data: { consentProvenance: "Synthetic consent" } };
+  const foreign = ok(await call(`/v1/records/customers?merchantId=${b.id}`, "admin", "POST", customer, customerKey));
+  assert.equal((await call(`/v1/records/customers?merchantId=${b.id}`, "old-mfa", "POST", customer, customerKey)).status, 403);
+  assert.equal(ok(await call(`/v1/records/customers?merchantId=${b.id}`, "admin", "POST", customer, customerKey)).id, foreign.id);
+  // One lender's record is not found through another lender's address, even by an administrator of both.
+  for (const who of ["finance", "admin"]) assert.equal((await call(`/v1/records/customers/${foreign.id}?merchantId=${a.id}`, who, "PATCH", { name: "Reached across lenders", expectedUpdatedAt: foreign.updatedAt })).status, 404, who);
   assert.equal((await call(`/v1/team/members/${memberId}/lenders`, "admin", "PATCH", grant)).status, 409);
   assert.equal((await call(`/v1/team/members/${memberId}/lenders`, "admin", "PATCH", { ...grant, expectedUpdatedAt: allowed.updatedAt, lenderIds: ["outside-this-workspace"] })).status, 404);
   assert.equal(ok(await call(`/v1/pilot/close-reviews?merchantId=${a.id}`)).reviewers.length, 1);
@@ -102,7 +109,7 @@ try {
     assert.ok(Date.now() - started < 1_000, `An organisation's read of its own lender is not held up by another organisation naming it (${Date.now() - started} ms).`);
   } finally { releaseOutsiders(); }
   await Promise.all(outsiders);
-  console.log("Staff lender API/PostgreSQL checks passed: default denial, explicit grants, MFA, lender-filtered reviewers, independent concurrent close approval, synchronised access removal and invitation acceptance that later requests cannot overtake, and another organisation naming a lender never holds it up.");
+  console.log("Staff lender API/PostgreSQL checks passed: default denial, explicit grants, MFA (a replay included), no record reached through another lender's address, lender-filtered reviewers, independent concurrent close approval, synchronised access removal and invitation acceptance that later requests cannot overtake, and another organisation naming a lender never holds it up.");
 } finally {
   server.close(); await once(server, "close");
   for (const id of owned) { await pool.query("DELETE FROM valopay_staff_events WHERE workspace_id=$1", [id]); await pool.query("DELETE FROM valopay_staff_invitations WHERE workspace_id=$1", [id]); await pool.query("DELETE FROM valopay_staff_memberships WHERE workspace_id=$1", [id]); await pool.query("DELETE FROM valopay_teams WHERE workspace_id=$1", [id]); await pool.query("DELETE FROM valopay_idempotency WHERE merchant_id IN(SELECT id FROM valopay_merchants WHERE workspace_id=$1)", [id]); await pool.query("DELETE FROM valopay_records WHERE merchant_id IN(SELECT id FROM valopay_merchants WHERE workspace_id=$1)", [id]); await pool.query("DELETE FROM valopay_merchants WHERE workspace_id=$1", [id]); await pool.query("DELETE FROM valopay_workspaces WHERE id=$1", [id]); }

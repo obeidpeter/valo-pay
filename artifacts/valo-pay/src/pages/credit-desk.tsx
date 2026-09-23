@@ -18,8 +18,9 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Loading } from "@/components/loading";
 import { LoadProblem } from "@/components/load-problem";
 import { useConnected } from "@/lib/connected";
-import { formatDate, formatKobo } from "@/lib/formatters";
+import { formatCount, formatDate, formatKobo, formatNumber } from "@/lib/formatters";
 import { nairaToKobo } from "@/lib/money-input";
+import { useFormDraft, useUnsavedChanges } from "@/lib/unsaved-changes";
 import { useWorkspace } from "@/lib/workspace-context";
 
 interface Assessment {
@@ -181,8 +182,10 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
     "assessment",
   );
   const [amountErrors, setAmountErrors] = useState<Record<string, string>>({});
+  // An assessment typed but not run is a draft: leaving asks first.
+  const draft = useFormDraft({ customerId, scenario, principal, repayment, months, reason });
   if (api.isLoading) return <Loading what="Credit Desk" />;
-  if (api.error || !api.data)
+  if (!api.data)
     return (
       <>
         <LoadProblem
@@ -229,6 +232,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
       setError("Choose an applicant before running an assessment.");
       return;
     }
+    draft.sending({ customerId, scenario, principal, repayment, months, reason: "" });
     try {
       await api.run(
         "credit.assess",
@@ -248,6 +252,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
         "A new immutable sample assessment has been recorded. Review its evidence and explanations below.",
       );
       setReason("");
+      draft.saved();
     } catch (failure) {
       setError((failure as Error).message);
     }
@@ -263,16 +268,17 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
         setReason("");
         setSelectedId("");
         setTab("assessment");
+        draft.saved();
       }}
     >
       <div className="connected-metrics">
         <div className="connected-metric">
           <span>Sample assessments</span>
-          <strong>{data.assessments.length}</strong>
+          <strong>{formatNumber(data.assessments.length)}</strong>
         </div>
         <div className="connected-metric">
           <span>Awaiting a reviewer</span>
-          <strong>{completeCount}</strong>
+          <strong>{formatNumber(completeCount)}</strong>
         </div>
         <div className="connected-metric">
           <span>Decision model</span>
@@ -437,7 +443,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
               >
                 {[1, 2, 3, 6, 9, 12, 18, 24].map((value) => (
                   <option key={value} value={value}>
-                    {value} repayment{value === 1 ? "" : "s"}
+                    {formatCount(value, "repayment")}
                   </option>
                 ))}
               </select>
@@ -680,11 +686,11 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
                   <dl className="text-sm space-y-3">
                     <div className="flex justify-between gap-3">
                       <dt>Source accounts</dt>
-                      <dd>{result!.evidence.sourceCount}</dd>
+                      <dd>{formatNumber(result!.evidence.sourceCount)}</dd>
                     </div>
                     <div className="flex justify-between gap-3">
                       <dt>Complete history</dt>
-                      <dd>{result!.evidence.coverageDays} days</dd>
+                      <dd>{formatCount(result!.evidence.coverageDays, "day")}</dd>
                     </div>
                     <div>
                       <dt className="text-muted-foreground">
@@ -726,11 +732,20 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
                         />
                       </dl>
                       <p className="text-sm">
-                        {result!.features.includedTransactionRefs.length}{" "}
-                        included observations ·{" "}
-                        {result!.features.excludedTransactions.length} excluded
-                        · {result!.features.duplicatesIgnored} duplicate
-                        observations ignored.
+                        {formatCount(
+                          result!.features.includedTransactionRefs.length,
+                          "included observation",
+                        )}{" "}
+                        ·{" "}
+                        {formatNumber(
+                          result!.features.excludedTransactions.length,
+                        )}{" "}
+                        excluded ·{" "}
+                        {formatCount(
+                          result!.features.duplicatesIgnored,
+                          "duplicate observation",
+                        )}{" "}
+                        ignored.
                       </p>
                       <p className="text-xs text-muted-foreground">
                         Matched own-account transfers, loan proceeds, refunds
@@ -828,6 +843,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
           }
           pending={api.pending}
           onReview={async (reviewData) => {
+            draft.sending(null);
             await api.run(
               "credit.review",
               reviewData,
@@ -909,6 +925,11 @@ function ReviewPanel({
     [explanation, setExplanation] = useState(""),
     [override, setOverride] = useState(""),
     [error, setError] = useState("");
+  // A review typed but not recorded is a draft: leaving asks first.
+  useUnsavedChanges(
+    !assessment.reviews.length &&
+      Boolean(outcome || rationale || explanation || override),
+  );
   const needsOverride =
     outcome === "approve" &&
     assessment.result.policy.recommendation === "policy_not_met";
@@ -942,6 +963,10 @@ function ReviewPanel({
                 ],
                 ...(needsOverride ? { overrideRationale: override } : {}),
               });
+              setOutcome("");
+              setRationale("");
+              setExplanation("");
+              setOverride("");
             } catch (failure) {
               setError((failure as Error).message);
             }

@@ -4,7 +4,8 @@ import { RECORD_PAGE_SIZES } from "./use-record-pagination";
  * never reuses the previous lender's page. Filter controls clear their page.
  * A person's page change adds a history entry; correcting a page past the end
  * (correctPage) replaces the address, so Back leaves the list instead of
- * returning to the out-of-range page. */
+ * returning to the out-of-range page, and so does returning to the first page
+ * while a search is typed (resetPage), so Back never steps through letters. */
 export function useUrlPagination(
   merchantId: string | null | undefined,
   prefix = "",
@@ -36,6 +37,9 @@ export function useUrlPagination(
     offset: page * pageSize,
     setPage: (next: number) => update(next),
     correctPage: (next: number) => update(next, pageSize, true),
+    resetPage: () => {
+      if (page !== 0) update(0, pageSize, true);
+    },
     setPageSize: (next: number) => {
       if (RECORD_PAGE_SIZES.some((n) => n === next)) update(0, next);
     },

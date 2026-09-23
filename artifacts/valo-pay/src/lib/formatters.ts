@@ -19,15 +19,47 @@ const day = new Intl.DateTimeFormat(DATE_LOCALE, { day: 'numeric', month: 'short
 const naira = new Intl.NumberFormat(MARKET_LOCALE, { style: 'currency', currency: 'NGN', minimumFractionDigits: 2 });
 const number = new Intl.NumberFormat(MARKET_LOCALE);
 const plural = new Intl.PluralRules(MARKET_LOCALE);
+// The currency's own layout (sign, symbol and separators) for an amount above zero and one below.
+const nairaLayout = { positive: naira.formatToParts(1), negative: naira.formatToParts(-1) };
+const percents = new Map<string, Intl.NumberFormat>();
+const percentFormat = (minimumFractionDigits: number, maximumFractionDigits: number) => {
+  const key = `${minimumFractionDigits}-${maximumFractionDigits}`;
+  if (!percents.has(key)) percents.set(key, new Intl.NumberFormat(MARKET_LOCALE, { style: 'percent', minimumFractionDigits, maximumFractionDigits }));
+  return percents.get(key)!;
+};
+const points = new Intl.NumberFormat(MARKET_LOCALE, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
-/** An amount in kobo as naira: ₦25,000.00. */
+/**
+ * An amount in kobo as naira: ₦25,000.00. A whole number of kobo is split into
+ * naira and kobo with integer arithmetic, so every safe integer shows exactly;
+ * dividing by 100 as a float loses a kobo above about ₦70 trillion.
+ */
 export function formatKobo(kobo: number): string {
-  return naira.format(kobo / 100);
+  if (!Number.isSafeInteger(kobo)) return naira.format(kobo / 100);
+  const minor = BigInt(kobo), whole = minor < 0n ? -minor : minor;
+  return (minor < 0n ? nairaLayout.negative : nairaLayout.positive)
+    .map(part => part.type === 'integer' ? number.format(whole / 100n) : part.type === 'fraction' ? String(whole % 100n).padStart(2, '0') : part.value)
+    .join('');
 }
 
 /** A plain number with the market's grouping: 20,000. */
 export function formatNumber(value: number): string {
   return number.format(value);
+}
+
+/**
+ * A ratio as a percentage in the market's conventions: 0.123 is "12.3%". With
+ * `fractionDigits`, exactly that many decimal places (0.12 at one place is
+ * "12.0%"); without, only the places the value needs, up to two (0.12 is
+ * "12%", 0.0025 is "0.25%"), as for basis points (bps / 10000).
+ */
+export function formatPercent(ratio: number, fractionDigits?: number): string {
+  return (fractionDigits === undefined ? percentFormat(0, 2) : percentFormat(fractionDigits, fractionDigits)).format(ratio);
+}
+
+/** A difference between two ratios in percentage points, to one decimal place: 0.085 is "8.5 percentage points". */
+export function formatPercentagePoints(difference: number): string {
+  return `${points.format(difference * 100)} percentage points`;
 }
 
 /** A count with its noun in the right number: "1 item", "0 items", "1,234 records". An irregular plural is passed in. (The API's `counted` in the schema package is the same rule; the console keeps its own so the shell does not carry that package.) */

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { renderApp, screen, userEvent, waitFor, within } from './harness';
@@ -197,5 +198,31 @@ describe('allocation amounts', () => {
     const call = api.calls.find(call => (call.body as { action?: string })?.action === 'manual_allocate');
     expect(call?.body).toMatchObject({ recordId: payment.id, data: { amountKobo: 100029, dueItemId: due.id } });
     expect(call?.status).toBe(200);
+  });
+});
+
+describe('allocation picker search', () => {
+  it('asks for instalment choices once after a pause in typing, and Back leaves the page instead of stepping through letters', async () => {
+    const user = userEvent.setup();
+    const dueItem = api.state().records.find(record => record.kind === 'due-items' && record.status === 'scheduled')!;
+    renderApp('/overview');
+    await screen.findByRole('heading', { name: 'Operations overview' });
+    await user.click(screen.getAllByRole('link', { name: 'Reconciliation' })[0]!);
+    await user.click((await screen.findAllByRole('button', { name: 'Allocate' }))[0]!);
+    const dialog = await screen.findByRole('dialog', { name: 'Allocate payment' });
+    const choiceRequests = () => api.calls.filter(call => call.path === '/v1/records/due-items').map(call => call.query.search);
+    await waitFor(() => expect(choiceRequests()).toEqual(['']));
+    const entries = window.history.length;
+    await user.type(within(dialog).getByLabelText('Find an instalment'), dueItem.reference);
+    await waitFor(() => expect(choiceRequests()).toContain(dueItem.reference));
+    expect(choiceRequests()).toEqual(['', dueItem.reference]);
+    await waitFor(() => expect(within(dialog).queryByText('Loading instalment choices…')).toBeNull());
+    const choices = within(within(dialog).getByLabelText(/^Instalment/)).getAllByRole('option').filter(option => (option as HTMLOptionElement).value);
+    expect(choices.length).toBeGreaterThan(0);
+    expect(choices.every(option => option.textContent!.includes(dueItem.reference))).toBe(true);
+    expect(window.history.length).toBe(entries);
+    await act(async () => { window.history.back(); });
+    await screen.findByRole('heading', { name: 'Operations overview' });
+    expect(window.location.pathname).toBe('/overview');
   });
 });

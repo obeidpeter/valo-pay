@@ -3,7 +3,7 @@ import pg from "pg";
 import * as schema from "./schema";
 
 const { Pool } = pg;
-/** Separate pools are used by the readiness check, explicitly configured staging adapters and disposable rehearsals. */
+/** Separate pools are used by the readiness check and disposable rehearsals. */
 export { Pool };
 
 if (!process.env.DATABASE_URL) {

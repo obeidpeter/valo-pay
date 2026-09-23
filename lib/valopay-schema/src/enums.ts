@@ -26,6 +26,11 @@ export function normaliseOwner(raw: unknown): ExecutionOwner | undefined {
   if (value === "valo" || value === "valopay" || value === "valo_pay") return "valopay";
   return (executionOwners as readonly string[]).includes(value) ? (value as ExecutionOwner) : undefined;
 }
+/** DEB-12: who a hand-back returns collection to: the owner the cutover contract names, or the loan management system when it names none the platform may hand back to. */
+export function handBackFallbackOwner(contractOwner: unknown): HandBackOwner {
+  const owner = normaliseOwner(contractOwner);
+  return isHandBackOwner(owner) ? owner : "lms";
+}
 
 /** MAN-15 activation workflow registry types. */
 export const activationWorkflows = ["transfer_to_activate", "hosted_consent"] as const;

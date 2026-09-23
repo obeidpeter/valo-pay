@@ -46,6 +46,7 @@ import type {
   DecideImportCorrectionParams,
   DownloadExportParams,
   EncryptionVerification,
+  ErrorBody,
   ExecuteLifecycleRunParams,
   ExportInput,
   ExportResult,
@@ -134,6 +135,7 @@ import type {
   RetentionPolicyInput,
   RetryExportJobParams,
   RetryOperationParams,
+  ReverificationRequired,
   RunPaystackFixtureParams,
   SaveImportBatchParams,
   SaveImportBatchRevisionParams,
@@ -220,7 +222,7 @@ export const getHealthCheckQueryKey = () => {
     }
 
 
-export const getHealthCheckQueryOptions = <TData = Awaited<ReturnType<typeof healthCheck>>, TError = ErrorType<void>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof healthCheck>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getHealthCheckQueryOptions = <TData = Awaited<ReturnType<typeof healthCheck>>, TError = ErrorType<ErrorBody>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof healthCheck>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -239,14 +241,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type HealthCheckQueryResult = NonNullable<Awaited<ReturnType<typeof healthCheck>>>
-export type HealthCheckQueryError = ErrorType<void>
+export type HealthCheckQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Liveness: the process answers, with its build, uptime and scheduler state
  */
 
-export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, TError = ErrorType<void>>(
+export function useHealthCheck<TData = Awaited<ReturnType<typeof healthCheck>>, TError = ErrorType<ErrorBody>>(
   options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof healthCheck>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -273,8 +275,8 @@ export const getReadinessCheckUrl = () => {
 }
 
 /**
- * Answers 503 with status degraded while the database does not answer within the check's time limit; the reason is in the log, not the answer. Needs no sandbox or sign-in.
- * @summary Readiness: one bounded round trip to the database
+ * Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table or column this build needs. A missing index leaves the answer ready, with checks.schema.status indexes_missing, since every request still works, only slower. The log names what is missing and the migration that adds it, and any connection error; the answer does not. Needs no sandbox or sign-in.
+ * @summary Readiness: one bounded round trip to the database, which also checks its schema
  */
 export const readinessCheck = async ( options?: Parameters<typeof customFetch>[1]): Promise<ReadinessStatus> => {
 
@@ -298,7 +300,7 @@ export const getReadinessCheckQueryKey = () => {
     }
 
 
-export const getReadinessCheckQueryOptions = <TData = Awaited<ReturnType<typeof readinessCheck>>, TError = ErrorType<void | ReadinessStatus>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof readinessCheck>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getReadinessCheckQueryOptions = <TData = Awaited<ReturnType<typeof readinessCheck>>, TError = ErrorType<ErrorBody | ReadinessStatus>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof readinessCheck>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -317,14 +319,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type ReadinessCheckQueryResult = NonNullable<Awaited<ReturnType<typeof readinessCheck>>>
-export type ReadinessCheckQueryError = ErrorType<void | ReadinessStatus>
+export type ReadinessCheckQueryError = ErrorType<ErrorBody | ReadinessStatus>
 
 
 /**
- * @summary Readiness: one bounded round trip to the database
+ * @summary Readiness: one bounded round trip to the database, which also checks its schema
  */
 
-export function useReadinessCheck<TData = Awaited<ReturnType<typeof readinessCheck>>, TError = ErrorType<void | ReadinessStatus>>(
+export function useReadinessCheck<TData = Awaited<ReturnType<typeof readinessCheck>>, TError = ErrorType<ErrorBody | ReadinessStatus>>(
   options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof readinessCheck>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -376,7 +378,7 @@ export const getGetWorkspaceQueryKey = () => {
     }
 
 
-export const getGetWorkspaceQueryOptions = <TData = Awaited<ReturnType<typeof getWorkspace>>, TError = ErrorType<void>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getWorkspace>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetWorkspaceQueryOptions = <TData = Awaited<ReturnType<typeof getWorkspace>>, TError = ErrorType<ErrorBody>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getWorkspace>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -395,14 +397,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetWorkspaceQueryResult = NonNullable<Awaited<ReturnType<typeof getWorkspace>>>
-export type GetWorkspaceQueryError = ErrorType<void>
+export type GetWorkspaceQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary The caller's workspace: its lenders, roles and actor
  */
 
-export function useGetWorkspace<TData = Awaited<ReturnType<typeof getWorkspace>>, TError = ErrorType<void>>(
+export function useGetWorkspace<TData = Awaited<ReturnType<typeof getWorkspace>>, TError = ErrorType<ErrorBody>>(
   options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getWorkspace>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -461,7 +463,7 @@ export const getGetOverviewQueryKey = (params?: GetOverviewParams,) => {
     }
 
 
-export const getGetOverviewQueryOptions = <TData = Awaited<ReturnType<typeof getOverview>>, TError = ErrorType<void>>(params: GetOverviewParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getOverview>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetOverviewQueryOptions = <TData = Awaited<ReturnType<typeof getOverview>>, TError = ErrorType<ErrorBody>>(params: GetOverviewParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getOverview>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -480,14 +482,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetOverviewQueryResult = NonNullable<Awaited<ReturnType<typeof getOverview>>>
-export type GetOverviewQueryError = ErrorType<void>
+export type GetOverviewQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary The operations overview for one lender
  */
 
-export function useGetOverview<TData = Awaited<ReturnType<typeof getOverview>>, TError = ErrorType<void>>(
+export function useGetOverview<TData = Awaited<ReturnType<typeof getOverview>>, TError = ErrorType<ErrorBody>>(
  params: GetOverviewParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getOverview>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -549,7 +551,7 @@ export const getListRecordsQueryKey = (kind: string,
     }
 
 
-export const getListRecordsQueryOptions = <TData = Awaited<ReturnType<typeof listRecords>>, TError = ErrorType<void>>(kind: string,
+export const getListRecordsQueryOptions = <TData = Awaited<ReturnType<typeof listRecords>>, TError = ErrorType<ErrorBody>>(kind: string,
     params: ListRecordsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listRecords>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
@@ -569,14 +571,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type ListRecordsQueryResult = NonNullable<Awaited<ReturnType<typeof listRecords>>>
-export type ListRecordsQueryError = ErrorType<void>
+export type ListRecordsQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Records of one kind for one lender, newest first
  */
 
-export function useListRecords<TData = Awaited<ReturnType<typeof listRecords>>, TError = ErrorType<void>>(
+export function useListRecords<TData = Awaited<ReturnType<typeof listRecords>>, TError = ErrorType<ErrorBody>>(
  kind: string,
     params: ListRecordsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listRecords>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
@@ -648,7 +650,7 @@ return customFetch<ValopayRecord>(getCreateRecordUrl(kind,params),
 
 export const getCreateRecordMutationKey = () => ['createRecord'] as const;
 
-export const getCreateRecordMutationOptions = <TError = ErrorType<void>,
+export const getCreateRecordMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createRecord>>, TError,CreateRecordMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof createRecord>>, TError,CreateRecordMutationVariables, TContext> => {
 
@@ -677,13 +679,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type CreateRecordMutationResult = NonNullable<Awaited<ReturnType<typeof createRecord>>>
     export type CreateRecordMutationBody = BodyType<RecordInput>
-    export type CreateRecordMutationError = ErrorType<void>
+    export type CreateRecordMutationError = ErrorType<ErrorBody>
     export type CreateRecordMutationVariables = {kind: string;data: BodyType<RecordInput>;params: CreateRecordParams}
 
     /**
  * @summary Create a record of an editable kind
  */
-export const useCreateRecord = <TError = ErrorType<void>,
+export const useCreateRecord = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createRecord>>, TError,CreateRecordMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof createRecord>>,
@@ -749,7 +751,7 @@ return customFetch<ValopayRecord>(getUpdateRecordUrl(kind,id,params),
 
 export const getUpdateRecordMutationKey = () => ['updateRecord'] as const;
 
-export const getUpdateRecordMutationOptions = <TError = ErrorType<void>,
+export const getUpdateRecordMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateRecord>>, TError,UpdateRecordMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof updateRecord>>, TError,UpdateRecordMutationVariables, TContext> => {
 
@@ -778,13 +780,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type UpdateRecordMutationResult = NonNullable<Awaited<ReturnType<typeof updateRecord>>>
     export type UpdateRecordMutationBody = BodyType<RecordUpdate>
-    export type UpdateRecordMutationError = ErrorType<void>
+    export type UpdateRecordMutationError = ErrorType<ErrorBody>
     export type UpdateRecordMutationVariables = {kind: string;id: string;data: BodyType<RecordUpdate>;params: UpdateRecordParams}
 
     /**
  * @summary Update a record
  */
-export const useUpdateRecord = <TError = ErrorType<void>,
+export const useUpdateRecord = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateRecord>>, TError,UpdateRecordMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof updateRecord>>,
@@ -846,7 +848,7 @@ return customFetch<ActionResult>(getPerformActionUrl(params),
 
 export const getPerformActionMutationKey = () => ['performAction'] as const;
 
-export const getPerformActionMutationOptions = <TError = ErrorType<void>,
+export const getPerformActionMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof performAction>>, TError,PerformActionMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof performAction>>, TError,PerformActionMutationVariables, TContext> => {
 
@@ -875,13 +877,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type PerformActionMutationResult = NonNullable<Awaited<ReturnType<typeof performAction>>>
     export type PerformActionMutationBody = BodyType<ActionInput>
-    export type PerformActionMutationError = ErrorType<void>
+    export type PerformActionMutationError = ErrorType<ErrorBody>
     export type PerformActionMutationVariables = {data: BodyType<ActionInput>;params: PerformActionParams}
 
     /**
  * @summary Run a domain action on the lender's state
  */
-export const usePerformAction = <TError = ErrorType<void>,
+export const usePerformAction = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof performAction>>, TError,PerformActionMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof performAction>>,
@@ -943,7 +945,7 @@ return customFetch<ImportResult>(getImportRecordsUrl(params),
 
 export const getImportRecordsMutationKey = () => ['importRecords'] as const;
 
-export const getImportRecordsMutationOptions = <TError = ErrorType<void>,
+export const getImportRecordsMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof importRecords>>, TError,ImportRecordsMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof importRecords>>, TError,ImportRecordsMutationVariables, TContext> => {
 
@@ -972,13 +974,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type ImportRecordsMutationResult = NonNullable<Awaited<ReturnType<typeof importRecords>>>
     export type ImportRecordsMutationBody = BodyType<ImportInput>
-    export type ImportRecordsMutationError = ErrorType<void>
+    export type ImportRecordsMutationError = ErrorType<ErrorBody>
     export type ImportRecordsMutationVariables = {data: BodyType<ImportInput>;params: ImportRecordsParams}
 
     /**
  * @summary Preview or commit a synthetic CSV import
  */
-export const useImportRecords = <TError = ErrorType<void>,
+export const useImportRecords = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof importRecords>>, TError,ImportRecordsMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof importRecords>>,
@@ -1033,7 +1035,7 @@ export const getGetCustomerTimelineQueryKey = (id: string,
     }
 
 
-export const getGetCustomerTimelineQueryOptions = <TData = Awaited<ReturnType<typeof getCustomerTimeline>>, TError = ErrorType<void>>(id: string,
+export const getGetCustomerTimelineQueryOptions = <TData = Awaited<ReturnType<typeof getCustomerTimeline>>, TError = ErrorType<ErrorBody>>(id: string,
     params: GetCustomerTimelineParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCustomerTimeline>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
@@ -1053,14 +1055,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetCustomerTimelineQueryResult = NonNullable<Awaited<ReturnType<typeof getCustomerTimeline>>>
-export type GetCustomerTimelineQueryError = ErrorType<void>
+export type GetCustomerTimelineQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary A customer's position and complete timeline
  */
 
-export function useGetCustomerTimeline<TData = Awaited<ReturnType<typeof getCustomerTimeline>>, TError = ErrorType<void>>(
+export function useGetCustomerTimeline<TData = Awaited<ReturnType<typeof getCustomerTimeline>>, TError = ErrorType<ErrorBody>>(
  id: string,
     params: GetCustomerTimelineParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCustomerTimeline>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
@@ -1120,7 +1122,7 @@ export const getGetReportsQueryKey = (params?: GetReportsParams,) => {
     }
 
 
-export const getGetReportsQueryOptions = <TData = Awaited<ReturnType<typeof getReports>>, TError = ErrorType<void>>(params: GetReportsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getReports>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetReportsQueryOptions = <TData = Awaited<ReturnType<typeof getReports>>, TError = ErrorType<ErrorBody>>(params: GetReportsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getReports>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -1139,14 +1141,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetReportsQueryResult = NonNullable<Awaited<ReturnType<typeof getReports>>>
-export type GetReportsQueryError = ErrorType<void>
+export type GetReportsQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Reports for one lender
  */
 
-export function useGetReports<TData = Awaited<ReturnType<typeof getReports>>, TError = ErrorType<void>>(
+export function useGetReports<TData = Awaited<ReturnType<typeof getReports>>, TError = ErrorType<ErrorBody>>(
  params: GetReportsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getReports>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -1205,7 +1207,7 @@ export const getGetGatesQueryKey = (params?: GetGatesParams,) => {
     }
 
 
-export const getGetGatesQueryOptions = <TData = Awaited<ReturnType<typeof getGates>>, TError = ErrorType<void>>(params: GetGatesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getGates>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetGatesQueryOptions = <TData = Awaited<ReturnType<typeof getGates>>, TError = ErrorType<ErrorBody>>(params: GetGatesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getGates>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -1224,14 +1226,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetGatesQueryResult = NonNullable<Awaited<ReturnType<typeof getGates>>>
-export type GetGatesQueryError = ErrorType<void>
+export type GetGatesQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Production readiness gates
  */
 
-export function useGetGates<TData = Awaited<ReturnType<typeof getGates>>, TError = ErrorType<void>>(
+export function useGetGates<TData = Awaited<ReturnType<typeof getGates>>, TError = ErrorType<ErrorBody>>(
  params: GetGatesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getGates>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -1290,7 +1292,7 @@ export const getGetSettingsQueryKey = (params?: GetSettingsParams,) => {
     }
 
 
-export const getGetSettingsQueryOptions = <TData = Awaited<ReturnType<typeof getSettings>>, TError = ErrorType<void>>(params: GetSettingsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSettings>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetSettingsQueryOptions = <TData = Awaited<ReturnType<typeof getSettings>>, TError = ErrorType<ErrorBody>>(params: GetSettingsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSettings>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -1309,14 +1311,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetSettingsQueryResult = NonNullable<Awaited<ReturnType<typeof getSettings>>>
-export type GetSettingsQueryError = ErrorType<void>
+export type GetSettingsQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary A lender's settings, permissions, integrations, members and calendar
  */
 
-export function useGetSettings<TData = Awaited<ReturnType<typeof getSettings>>, TError = ErrorType<void>>(
+export function useGetSettings<TData = Awaited<ReturnType<typeof getSettings>>, TError = ErrorType<ErrorBody>>(
  params: GetSettingsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSettings>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -1385,7 +1387,7 @@ return customFetch<Settings>(getUpdateSettingsUrl(params),
 
 export const getUpdateSettingsMutationKey = () => ['updateSettings'] as const;
 
-export const getUpdateSettingsMutationOptions = <TError = ErrorType<void>,
+export const getUpdateSettingsMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateSettings>>, TError,UpdateSettingsMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof updateSettings>>, TError,UpdateSettingsMutationVariables, TContext> => {
 
@@ -1414,13 +1416,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type UpdateSettingsMutationResult = NonNullable<Awaited<ReturnType<typeof updateSettings>>>
     export type UpdateSettingsMutationBody = BodyType<SettingsInput>
-    export type UpdateSettingsMutationError = ErrorType<void>
+    export type UpdateSettingsMutationError = ErrorType<ErrorBody>
     export type UpdateSettingsMutationVariables = {data: BodyType<SettingsInput>;params: UpdateSettingsParams}
 
     /**
  * @summary Change a lender's execution settings
  */
-export const useUpdateSettings = <TError = ErrorType<void>,
+export const useUpdateSettings = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateSettings>>, TError,UpdateSettingsMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof updateSettings>>,
@@ -1482,7 +1484,7 @@ return customFetch<ExportResult>(getCreateExportUrl(params),
 
 export const getCreateExportMutationKey = () => ['createExport'] as const;
 
-export const getCreateExportMutationOptions = <TError = ErrorType<void>,
+export const getCreateExportMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createExport>>, TError,CreateExportMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof createExport>>, TError,CreateExportMutationVariables, TContext> => {
 
@@ -1511,13 +1513,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type CreateExportMutationResult = NonNullable<Awaited<ReturnType<typeof createExport>>>
     export type CreateExportMutationBody = BodyType<ExportInput>
-    export type CreateExportMutationError = ErrorType<void>
+    export type CreateExportMutationError = ErrorType<ErrorBody>
     export type CreateExportMutationVariables = {data: BodyType<ExportInput>;params: CreateExportParams}
 
     /**
  * @summary Queue a private export
  */
-export const useCreateExport = <TError = ErrorType<void>,
+export const useCreateExport = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createExport>>, TError,CreateExportMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof createExport>>,
@@ -1572,7 +1574,7 @@ export const getGetExportJobQueryKey = (id: string,
     }
 
 
-export const getGetExportJobQueryOptions = <TData = Awaited<ReturnType<typeof getExportJob>>, TError = ErrorType<void>>(id: string,
+export const getGetExportJobQueryOptions = <TData = Awaited<ReturnType<typeof getExportJob>>, TError = ErrorType<ErrorBody>>(id: string,
     params: GetExportJobParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getExportJob>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
@@ -1592,14 +1594,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetExportJobQueryResult = NonNullable<Awaited<ReturnType<typeof getExportJob>>>
-export type GetExportJobQueryError = ErrorType<void>
+export type GetExportJobQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Check a saved export
  */
 
-export function useGetExportJob<TData = Awaited<ReturnType<typeof getExportJob>>, TError = ErrorType<void>>(
+export function useGetExportJob<TData = Awaited<ReturnType<typeof getExportJob>>, TError = ErrorType<ErrorBody>>(
  id: string,
     params: GetExportJobParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getExportJob>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
@@ -1656,7 +1658,7 @@ export const retryExportJob = async (id: string,
 
 export const getRetryExportJobMutationKey = () => ['retryExportJob'] as const;
 
-export const getRetryExportJobMutationOptions = <TError = ErrorType<void>,
+export const getRetryExportJobMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retryExportJob>>, TError,RetryExportJobMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof retryExportJob>>, TError,RetryExportJobMutationVariables, TContext> => {
 
@@ -1685,13 +1687,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type RetryExportJobMutationResult = NonNullable<Awaited<ReturnType<typeof retryExportJob>>>
 
-    export type RetryExportJobMutationError = ErrorType<void>
+    export type RetryExportJobMutationError = ErrorType<ErrorBody>
     export type RetryExportJobMutationVariables = {id: string;params: RetryExportJobParams}
 
     /**
  * @summary Retry a saved export
  */
-export const useRetryExportJob = <TError = ErrorType<void>,
+export const useRetryExportJob = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retryExportJob>>, TError,RetryExportJobMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof retryExportJob>>,
@@ -1746,7 +1748,7 @@ export const getDownloadExportQueryKey = (id: string,
     }
 
 
-export const getDownloadExportQueryOptions = <TData = Awaited<ReturnType<typeof downloadExport>>, TError = ErrorType<void>>(id: string,
+export const getDownloadExportQueryOptions = <TData = Awaited<ReturnType<typeof downloadExport>>, TError = ErrorType<ErrorBody>>(id: string,
     params: DownloadExportParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof downloadExport>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
@@ -1766,14 +1768,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type DownloadExportQueryResult = NonNullable<Awaited<ReturnType<typeof downloadExport>>>
-export type DownloadExportQueryError = ErrorType<void>
+export type DownloadExportQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Download an export
  */
 
-export function useDownloadExport<TData = Awaited<ReturnType<typeof downloadExport>>, TError = ErrorType<void>>(
+export function useDownloadExport<TData = Awaited<ReturnType<typeof downloadExport>>, TError = ErrorType<ErrorBody>>(
  id: string,
     params: DownloadExportParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof downloadExport>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
@@ -1826,7 +1828,7 @@ export const getGetOpenApiDocumentQueryKey = () => {
     }
 
 
-export const getGetOpenApiDocumentQueryOptions = <TData = Awaited<ReturnType<typeof getOpenApiDocument>>, TError = ErrorType<unknown>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getOpenApiDocument>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetOpenApiDocumentQueryOptions = <TData = Awaited<ReturnType<typeof getOpenApiDocument>>, TError = ErrorType<ErrorBody>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getOpenApiDocument>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -1845,14 +1847,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetOpenApiDocumentQueryResult = NonNullable<Awaited<ReturnType<typeof getOpenApiDocument>>>
-export type GetOpenApiDocumentQueryError = ErrorType<unknown>
+export type GetOpenApiDocumentQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary This specification
  */
 
-export function useGetOpenApiDocument<TData = Awaited<ReturnType<typeof getOpenApiDocument>>, TError = ErrorType<unknown>>(
+export function useGetOpenApiDocument<TData = Awaited<ReturnType<typeof getOpenApiDocument>>, TError = ErrorType<ErrorBody>>(
   options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getOpenApiDocument>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -1899,7 +1901,7 @@ export const disabledProviderWebhook = async (provider: string, options?: Parame
 
 export const getDisabledProviderWebhookMutationKey = () => ['disabledProviderWebhook'] as const;
 
-export const getDisabledProviderWebhookMutationOptions = <TError = ErrorType<void>,
+export const getDisabledProviderWebhookMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof disabledProviderWebhook>>, TError,DisabledProviderWebhookMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof disabledProviderWebhook>>, TError,DisabledProviderWebhookMutationVariables, TContext> => {
 
@@ -1928,13 +1930,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type DisabledProviderWebhookMutationResult = NonNullable<Awaited<ReturnType<typeof disabledProviderWebhook>>>
 
-    export type DisabledProviderWebhookMutationError = ErrorType<void>
+    export type DisabledProviderWebhookMutationError = ErrorType<ErrorBody>
     export type DisabledProviderWebhookMutationVariables = {provider: string}
 
     /**
  * @summary Generic provider webhook address, always refused
  */
-export const useDisabledProviderWebhook = <TError = ErrorType<void>,
+export const useDisabledProviderWebhook = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof disabledProviderWebhook>>, TError,DisabledProviderWebhookMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof disabledProviderWebhook>>,
@@ -1989,7 +1991,7 @@ export const getListQueueQueryKey = (queue: 'exceptions' | 'mandates' | 'collect
     }
 
 
-export const getListQueueQueryOptions = <TData = Awaited<ReturnType<typeof listQueue>>, TError = ErrorType<void>>(queue: 'exceptions' | 'mandates' | 'collections',
+export const getListQueueQueryOptions = <TData = Awaited<ReturnType<typeof listQueue>>, TError = ErrorType<ErrorBody>>(queue: 'exceptions' | 'mandates' | 'collections',
     params: ListQueueParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listQueue>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
@@ -2009,14 +2011,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type ListQueueQueryResult = NonNullable<Awaited<ReturnType<typeof listQueue>>>
-export type ListQueueQueryError = ErrorType<void>
+export type ListQueueQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary A priority-sorted, lender-scoped queue with complete filter counts and page-specific linked records
  */
 
-export function useListQueue<TData = Awaited<ReturnType<typeof listQueue>>, TError = ErrorType<void>>(
+export function useListQueue<TData = Awaited<ReturnType<typeof listQueue>>, TError = ErrorType<ErrorBody>>(
  queue: 'exceptions' | 'mandates' | 'collections',
     params: ListQueueParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listQueue>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
@@ -2079,7 +2081,7 @@ export const getListReconciliationQueryKey = (queue: 'proposals' | 'duplicates' 
     }
 
 
-export const getListReconciliationQueryOptions = <TData = Awaited<ReturnType<typeof listReconciliation>>, TError = ErrorType<void>>(queue: 'proposals' | 'duplicates' | 'payments' | 'observations' | 'audit' | 'batches',
+export const getListReconciliationQueryOptions = <TData = Awaited<ReturnType<typeof listReconciliation>>, TError = ErrorType<ErrorBody>>(queue: 'proposals' | 'duplicates' | 'payments' | 'observations' | 'audit' | 'batches',
     params: ListReconciliationParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listReconciliation>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
@@ -2099,14 +2101,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type ListReconciliationQueryResult = NonNullable<Awaited<ReturnType<typeof listReconciliation>>>
-export type ListReconciliationQueryError = ErrorType<void>
+export type ListReconciliationQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Page a reconciliation work queue
  */
 
-export function useListReconciliation<TData = Awaited<ReturnType<typeof listReconciliation>>, TError = ErrorType<void>>(
+export function useListReconciliation<TData = Awaited<ReturnType<typeof listReconciliation>>, TError = ErrorType<ErrorBody>>(
  queue: 'proposals' | 'duplicates' | 'payments' | 'observations' | 'audit' | 'batches',
     params: ListReconciliationParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listReconciliation>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
@@ -2166,7 +2168,7 @@ export const getListCloseHistoryQueryKey = (params?: ListCloseHistoryParams,) =>
     }
 
 
-export const getListCloseHistoryQueryOptions = <TData = Awaited<ReturnType<typeof listCloseHistory>>, TError = ErrorType<void>>(params: ListCloseHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCloseHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getListCloseHistoryQueryOptions = <TData = Awaited<ReturnType<typeof listCloseHistory>>, TError = ErrorType<ErrorBody>>(params: ListCloseHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCloseHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -2185,14 +2187,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type ListCloseHistoryQueryResult = NonNullable<Awaited<ReturnType<typeof listCloseHistory>>>
-export type ListCloseHistoryQueryError = ErrorType<void>
+export type ListCloseHistoryQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Page recorded daily closes
  */
 
-export function useListCloseHistory<TData = Awaited<ReturnType<typeof listCloseHistory>>, TError = ErrorType<void>>(
+export function useListCloseHistory<TData = Awaited<ReturnType<typeof listCloseHistory>>, TError = ErrorType<ErrorBody>>(
  params: ListCloseHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCloseHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -2254,7 +2256,7 @@ export const getGetCloseDetailQueryKey = (id: string,
     }
 
 
-export const getGetCloseDetailQueryOptions = <TData = Awaited<ReturnType<typeof getCloseDetail>>, TError = ErrorType<void>>(id: string,
+export const getGetCloseDetailQueryOptions = <TData = Awaited<ReturnType<typeof getCloseDetail>>, TError = ErrorType<ErrorBody>>(id: string,
     params: GetCloseDetailParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCloseDetail>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
@@ -2274,14 +2276,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetCloseDetailQueryResult = NonNullable<Awaited<ReturnType<typeof getCloseDetail>>>
-export type GetCloseDetailQueryError = ErrorType<void>
+export type GetCloseDetailQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Read the evidence for one recorded close
  */
 
-export function useGetCloseDetail<TData = Awaited<ReturnType<typeof getCloseDetail>>, TError = ErrorType<void>>(
+export function useGetCloseDetail<TData = Awaited<ReturnType<typeof getCloseDetail>>, TError = ErrorType<ErrorBody>>(
  id: string,
     params: GetCloseDetailParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCloseDetail>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
@@ -2344,7 +2346,7 @@ export const getGetCustomerHistoryQueryKey = (id: string,
     }
 
 
-export const getGetCustomerHistoryQueryOptions = <TData = Awaited<ReturnType<typeof getCustomerHistory>>, TError = ErrorType<void>>(id: string,
+export const getGetCustomerHistoryQueryOptions = <TData = Awaited<ReturnType<typeof getCustomerHistory>>, TError = ErrorType<ErrorBody>>(id: string,
     params: GetCustomerHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCustomerHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
@@ -2364,14 +2366,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetCustomerHistoryQueryResult = NonNullable<Awaited<ReturnType<typeof getCustomerHistory>>>
-export type GetCustomerHistoryQueryError = ErrorType<void>
+export type GetCustomerHistoryQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Page a customer history with complete balances
  */
 
-export function useGetCustomerHistory<TData = Awaited<ReturnType<typeof getCustomerHistory>>, TError = ErrorType<void>>(
+export function useGetCustomerHistory<TData = Awaited<ReturnType<typeof getCustomerHistory>>, TError = ErrorType<ErrorBody>>(
  id: string,
     params: GetCustomerHistoryParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCustomerHistory>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
@@ -2431,7 +2433,7 @@ export const getGetConnectedWorkspaceQueryKey = (params?: GetConnectedWorkspaceP
     }
 
 
-export const getGetConnectedWorkspaceQueryOptions = <TData = Awaited<ReturnType<typeof getConnectedWorkspace>>, TError = ErrorType<void>>(params: GetConnectedWorkspaceParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getConnectedWorkspace>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetConnectedWorkspaceQueryOptions = <TData = Awaited<ReturnType<typeof getConnectedWorkspace>>, TError = ErrorType<ErrorBody>>(params: GetConnectedWorkspaceParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getConnectedWorkspace>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -2450,14 +2452,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetConnectedWorkspaceQueryResult = NonNullable<Awaited<ReturnType<typeof getConnectedWorkspace>>>
-export type GetConnectedWorkspaceQueryError = ErrorType<void>
+export type GetConnectedWorkspaceQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Read the connected workspace
  */
 
-export function useGetConnectedWorkspace<TData = Awaited<ReturnType<typeof getConnectedWorkspace>>, TError = ErrorType<void>>(
+export function useGetConnectedWorkspace<TData = Awaited<ReturnType<typeof getConnectedWorkspace>>, TError = ErrorType<ErrorBody>>(
  params: GetConnectedWorkspaceParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getConnectedWorkspace>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -2491,7 +2493,7 @@ export const getPerformConnectedActionUrl = (params: PerformConnectedActionParam
 }
 
 /**
- * Runs inside the existing merchant transaction and audit boundary. Role, purpose, subject, expiry, ownership and version checks apply. Unknown payment outcomes hold retries. No bank, credit bureau, accounting or tax endpoint is called.
+ * Runs inside the existing merchant transaction and audit boundary. Role, purpose, subject, expiry, ownership and version checks apply. Unknown payment outcomes hold retries. A repeat with the same key is answered before the revision is checked. No bank, credit bureau, accounting or tax endpoint is called.
  * @summary Perform a synthetic connected-workspace action
  */
 export const performConnectedAction = async (connectedActionInput: ConnectedActionInput,
@@ -2526,7 +2528,7 @@ return customFetch<ConnectedActionResult>(getPerformConnectedActionUrl(params),
 
 export const getPerformConnectedActionMutationKey = () => ['performConnectedAction'] as const;
 
-export const getPerformConnectedActionMutationOptions = <TError = ErrorType<void>,
+export const getPerformConnectedActionMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof performConnectedAction>>, TError,PerformConnectedActionMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof performConnectedAction>>, TError,PerformConnectedActionMutationVariables, TContext> => {
 
@@ -2555,13 +2557,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type PerformConnectedActionMutationResult = NonNullable<Awaited<ReturnType<typeof performConnectedAction>>>
     export type PerformConnectedActionMutationBody = BodyType<ConnectedActionInput>
-    export type PerformConnectedActionMutationError = ErrorType<void>
+    export type PerformConnectedActionMutationError = ErrorType<ErrorBody>
     export type PerformConnectedActionMutationVariables = {data: BodyType<ConnectedActionInput>;params: PerformConnectedActionParams}
 
     /**
  * @summary Perform a synthetic connected-workspace action
  */
-export const usePerformConnectedAction = <TError = ErrorType<void>,
+export const usePerformConnectedAction = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof performConnectedAction>>, TError,PerformConnectedActionMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof performConnectedAction>>,
@@ -2613,7 +2615,7 @@ export const getListOperationsQueryKey = (params?: ListOperationsParams,) => {
     }
 
 
-export const getListOperationsQueryOptions = <TData = Awaited<ReturnType<typeof listOperations>>, TError = ErrorType<void>>(params: ListOperationsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listOperations>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getListOperationsQueryOptions = <TData = Awaited<ReturnType<typeof listOperations>>, TError = ErrorType<ErrorBody>>(params: ListOperationsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listOperations>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -2632,14 +2634,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type ListOperationsQueryResult = NonNullable<Awaited<ReturnType<typeof listOperations>>>
-export type ListOperationsQueryError = ErrorType<void>
+export type ListOperationsQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary List the caller's recovery journal
  */
 
-export function useListOperations<TData = Awaited<ReturnType<typeof listOperations>>, TError = ErrorType<void>>(
+export function useListOperations<TData = Awaited<ReturnType<typeof listOperations>>, TError = ErrorType<ErrorBody>>(
  params: ListOperationsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listOperations>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -2674,7 +2676,7 @@ export const getRetryOperationUrl = (id: string,
 }
 
 /**
- * Re-enters the original route with the stored request and key under the current rules. A completed entry returns its saved result; a cancelled or refused one is refused (409); a different role cannot repeat it (403).
+ * Re-enters the original route with the stored request and key under the current rules, so it can answer anything that route answers. A completed entry returns its saved result; a cancelled or refused one is refused (409); a different role cannot repeat it (403); a request whose stored payload expired under retention is gone (410).
  * @summary Recover or repeat a journaled request
  */
 export const retryOperation = async (id: string,
@@ -2695,7 +2697,7 @@ export const retryOperation = async (id: string,
 
 export const getRetryOperationMutationKey = () => ['retryOperation'] as const;
 
-export const getRetryOperationMutationOptions = <TError = ErrorType<void>,
+export const getRetryOperationMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retryOperation>>, TError,RetryOperationMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof retryOperation>>, TError,RetryOperationMutationVariables, TContext> => {
 
@@ -2724,13 +2726,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type RetryOperationMutationResult = NonNullable<Awaited<ReturnType<typeof retryOperation>>>
 
-    export type RetryOperationMutationError = ErrorType<void>
+    export type RetryOperationMutationError = ErrorType<ErrorBody>
     export type RetryOperationMutationVariables = {id: string;params: RetryOperationParams}
 
     /**
  * @summary Recover or repeat a journaled request
  */
-export const useRetryOperation = <TError = ErrorType<void>,
+export const useRetryOperation = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof retryOperation>>, TError,RetryOperationMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof retryOperation>>,
@@ -2758,7 +2760,7 @@ export const getCancelOperationUrl = (id: string,
 }
 
 /**
- * Confirms with the server that the request never completed and closes it, so its key cannot run again. A completed entry, or one whose receipt already exists, is refused (409).
+ * Confirms with the server that the request never completed and closes it, so its key cannot run again. A completed entry, or one whose receipt already exists, is refused (409); one whose stored payload expired under retention is gone (410).
  * @summary Cancel an unconfirmed request
  */
 export const cancelOperation = async (id: string,
@@ -2779,7 +2781,7 @@ export const cancelOperation = async (id: string,
 
 export const getCancelOperationMutationKey = () => ['cancelOperation'] as const;
 
-export const getCancelOperationMutationOptions = <TError = ErrorType<void>,
+export const getCancelOperationMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelOperation>>, TError,CancelOperationMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof cancelOperation>>, TError,CancelOperationMutationVariables, TContext> => {
 
@@ -2808,13 +2810,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type CancelOperationMutationResult = NonNullable<Awaited<ReturnType<typeof cancelOperation>>>
 
-    export type CancelOperationMutationError = ErrorType<void>
+    export type CancelOperationMutationError = ErrorType<ErrorBody>
     export type CancelOperationMutationVariables = {id: string;params: CancelOperationParams}
 
     /**
  * @summary Cancel an unconfirmed request
  */
-export const useCancelOperation = <TError = ErrorType<void>,
+export const useCancelOperation = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof cancelOperation>>, TError,CancelOperationMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof cancelOperation>>,
@@ -2866,7 +2868,7 @@ export const getGetPilotJourneyQueryKey = (params?: GetPilotJourneyParams,) => {
     }
 
 
-export const getGetPilotJourneyQueryOptions = <TData = Awaited<ReturnType<typeof getPilotJourney>>, TError = ErrorType<void>>(params: GetPilotJourneyParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPilotJourney>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetPilotJourneyQueryOptions = <TData = Awaited<ReturnType<typeof getPilotJourney>>, TError = ErrorType<ErrorBody>>(params: GetPilotJourneyParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPilotJourney>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -2885,14 +2887,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetPilotJourneyQueryResult = NonNullable<Awaited<ReturnType<typeof getPilotJourney>>>
-export type GetPilotJourneyQueryError = ErrorType<void>
+export type GetPilotJourneyQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Read the pilot journey counts
  */
 
-export function useGetPilotJourney<TData = Awaited<ReturnType<typeof getPilotJourney>>, TError = ErrorType<void>>(
+export function useGetPilotJourney<TData = Awaited<ReturnType<typeof getPilotJourney>>, TError = ErrorType<ErrorBody>>(
  params: GetPilotJourneyParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPilotJourney>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -2953,7 +2955,7 @@ return customFetch<Merchant>(getCreatePilotLenderUrl(),
 
 export const getCreatePilotLenderMutationKey = () => ['createPilotLender'] as const;
 
-export const getCreatePilotLenderMutationOptions = <TError = ErrorType<void>,
+export const getCreatePilotLenderMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createPilotLender>>, TError,CreatePilotLenderMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof createPilotLender>>, TError,CreatePilotLenderMutationVariables, TContext> => {
 
@@ -2982,13 +2984,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type CreatePilotLenderMutationResult = NonNullable<Awaited<ReturnType<typeof createPilotLender>>>
     export type CreatePilotLenderMutationBody = BodyType<PilotLenderInput>
-    export type CreatePilotLenderMutationError = ErrorType<void>
+    export type CreatePilotLenderMutationError = ErrorType<ErrorBody>
     export type CreatePilotLenderMutationVariables = {data: BodyType<PilotLenderInput>}
 
     /**
  * @summary Create a synthetic lender
  */
-export const useCreatePilotLender = <TError = ErrorType<void>,
+export const useCreatePilotLender = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createPilotLender>>, TError,CreatePilotLenderMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof createPilotLender>>,
@@ -3040,7 +3042,7 @@ export const getListImportBatchesQueryKey = (params?: ListImportBatchesParams,) 
     }
 
 
-export const getListImportBatchesQueryOptions = <TData = Awaited<ReturnType<typeof listImportBatches>>, TError = ErrorType<void>>(params: ListImportBatchesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listImportBatches>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getListImportBatchesQueryOptions = <TData = Awaited<ReturnType<typeof listImportBatches>>, TError = ErrorType<ErrorBody>>(params: ListImportBatchesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listImportBatches>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -3059,14 +3061,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type ListImportBatchesQueryResult = NonNullable<Awaited<ReturnType<typeof listImportBatches>>>
-export type ListImportBatchesQueryError = ErrorType<void>
+export type ListImportBatchesQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary List import batches
  */
 
-export function useListImportBatches<TData = Awaited<ReturnType<typeof listImportBatches>>, TError = ErrorType<void>>(
+export function useListImportBatches<TData = Awaited<ReturnType<typeof listImportBatches>>, TError = ErrorType<ErrorBody>>(
  params: ListImportBatchesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listImportBatches>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -3135,7 +3137,7 @@ return customFetch<ValopayRecord>(getSaveImportBatchUrl(params),
 
 export const getSaveImportBatchMutationKey = () => ['saveImportBatch'] as const;
 
-export const getSaveImportBatchMutationOptions = <TError = ErrorType<void>,
+export const getSaveImportBatchMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveImportBatch>>, TError,SaveImportBatchMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof saveImportBatch>>, TError,SaveImportBatchMutationVariables, TContext> => {
 
@@ -3164,13 +3166,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type SaveImportBatchMutationResult = NonNullable<Awaited<ReturnType<typeof saveImportBatch>>>
     export type SaveImportBatchMutationBody = BodyType<ImportBatchInput>
-    export type SaveImportBatchMutationError = ErrorType<void>
+    export type SaveImportBatchMutationError = ErrorType<ErrorBody>
     export type SaveImportBatchMutationVariables = {data: BodyType<ImportBatchInput>;params: SaveImportBatchParams}
 
     /**
  * @summary Save a source batch
  */
-export const useSaveImportBatch = <TError = ErrorType<void>,
+export const useSaveImportBatch = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveImportBatch>>, TError,SaveImportBatchMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof saveImportBatch>>,
@@ -3225,7 +3227,7 @@ export const getGetImportBatchQueryKey = (id: string,
     }
 
 
-export const getGetImportBatchQueryOptions = <TData = Awaited<ReturnType<typeof getImportBatch>>, TError = ErrorType<void>>(id: string,
+export const getGetImportBatchQueryOptions = <TData = Awaited<ReturnType<typeof getImportBatch>>, TError = ErrorType<ErrorBody>>(id: string,
     params: GetImportBatchParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getImportBatch>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
@@ -3245,14 +3247,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetImportBatchQueryResult = NonNullable<Awaited<ReturnType<typeof getImportBatch>>>
-export type GetImportBatchQueryError = ErrorType<void>
+export type GetImportBatchQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Open an import batch
  */
 
-export function useGetImportBatch<TData = Awaited<ReturnType<typeof getImportBatch>>, TError = ErrorType<void>>(
+export function useGetImportBatch<TData = Awaited<ReturnType<typeof getImportBatch>>, TError = ErrorType<ErrorBody>>(
  id: string,
     params: GetImportBatchParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getImportBatch>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
@@ -3324,7 +3326,7 @@ return customFetch<ValopayRecord>(getSaveImportBatchRevisionUrl(id,params),
 
 export const getSaveImportBatchRevisionMutationKey = () => ['saveImportBatchRevision'] as const;
 
-export const getSaveImportBatchRevisionMutationOptions = <TError = ErrorType<void>,
+export const getSaveImportBatchRevisionMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveImportBatchRevision>>, TError,SaveImportBatchRevisionMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof saveImportBatchRevision>>, TError,SaveImportBatchRevisionMutationVariables, TContext> => {
 
@@ -3353,13 +3355,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type SaveImportBatchRevisionMutationResult = NonNullable<Awaited<ReturnType<typeof saveImportBatchRevision>>>
     export type SaveImportBatchRevisionMutationBody = BodyType<ImportBatchInput>
-    export type SaveImportBatchRevisionMutationError = ErrorType<void>
+    export type SaveImportBatchRevisionMutationError = ErrorType<ErrorBody>
     export type SaveImportBatchRevisionMutationVariables = {id: string;data: BodyType<ImportBatchInput>;params: SaveImportBatchRevisionParams}
 
     /**
  * @summary Correct an uncommitted batch
  */
-export const useSaveImportBatchRevision = <TError = ErrorType<void>,
+export const useSaveImportBatchRevision = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveImportBatchRevision>>, TError,SaveImportBatchRevisionMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof saveImportBatchRevision>>,
@@ -3423,7 +3425,7 @@ return customFetch<ValopayRecord>(getCommitImportBatchUrl(id,params),
 
 export const getCommitImportBatchMutationKey = () => ['commitImportBatch'] as const;
 
-export const getCommitImportBatchMutationOptions = <TError = ErrorType<void>,
+export const getCommitImportBatchMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof commitImportBatch>>, TError,CommitImportBatchMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof commitImportBatch>>, TError,CommitImportBatchMutationVariables, TContext> => {
 
@@ -3452,13 +3454,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type CommitImportBatchMutationResult = NonNullable<Awaited<ReturnType<typeof commitImportBatch>>>
     export type CommitImportBatchMutationBody = BodyType<BatchVersion>
-    export type CommitImportBatchMutationError = ErrorType<void>
+    export type CommitImportBatchMutationError = ErrorType<ErrorBody>
     export type CommitImportBatchMutationVariables = {id: string;data: BodyType<BatchVersion>;params: CommitImportBatchParams}
 
     /**
  * @summary Commit a checked batch
  */
-export const useCommitImportBatch = <TError = ErrorType<void>,
+export const useCommitImportBatch = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof commitImportBatch>>, TError,CommitImportBatchMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof commitImportBatch>>,
@@ -3513,7 +3515,7 @@ export const getGetCaseQueryKey = (id: string,
     }
 
 
-export const getGetCaseQueryOptions = <TData = Awaited<ReturnType<typeof getCase>>, TError = ErrorType<void>>(id: string,
+export const getGetCaseQueryOptions = <TData = Awaited<ReturnType<typeof getCase>>, TError = ErrorType<ErrorBody>>(id: string,
     params: GetCaseParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCase>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
@@ -3533,14 +3535,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetCaseQueryResult = NonNullable<Awaited<ReturnType<typeof getCase>>>
-export type GetCaseQueryError = ErrorType<void>
+export type GetCaseQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Open a case
  */
 
-export function useGetCase<TData = Awaited<ReturnType<typeof getCase>>, TError = ErrorType<void>>(
+export function useGetCase<TData = Awaited<ReturnType<typeof getCase>>, TError = ErrorType<ErrorBody>>(
  id: string,
     params: GetCaseParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getCase>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
@@ -3612,7 +3614,7 @@ return customFetch<ValopayRecord>(getCoordinateCaseUrl(id,params),
 
 export const getCoordinateCaseMutationKey = () => ['coordinateCase'] as const;
 
-export const getCoordinateCaseMutationOptions = <TError = ErrorType<void>,
+export const getCoordinateCaseMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof coordinateCase>>, TError,CoordinateCaseMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof coordinateCase>>, TError,CoordinateCaseMutationVariables, TContext> => {
 
@@ -3641,13 +3643,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type CoordinateCaseMutationResult = NonNullable<Awaited<ReturnType<typeof coordinateCase>>>
     export type CoordinateCaseMutationBody = BodyType<CaseInput>
-    export type CoordinateCaseMutationError = ErrorType<void>
+    export type CoordinateCaseMutationError = ErrorType<ErrorBody>
     export type CoordinateCaseMutationVariables = {id: string;data: BodyType<CaseInput>;params: CoordinateCaseParams}
 
     /**
  * @summary Hand over or update a case
  */
-export const useCoordinateCase = <TError = ErrorType<void>,
+export const useCoordinateCase = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof coordinateCase>>, TError,CoordinateCaseMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof coordinateCase>>,
@@ -3667,7 +3669,7 @@ export const getVerifyStaffIdentityUrl = () => {
 }
 
 /**
- * Staff hosts only (403 elsewhere). Requires a signed-in session with an enrolled second factor used recently; otherwise answers with the identity provider's re-verification instruction.
+ * Staff hosts only (403 elsewhere). Requires a signed-in session with an enrolled second factor used recently; otherwise answers 403 with the identity provider's re-verification instruction.
  * @summary Verify staff identity with a fresh second factor
  */
 export const verifyStaffIdentity = async ( options?: Parameters<typeof customFetch>[1]): Promise<Message> => {
@@ -3687,7 +3689,7 @@ export const verifyStaffIdentity = async ( options?: Parameters<typeof customFet
 
 export const getVerifyStaffIdentityMutationKey = () => ['verifyStaffIdentity'] as const;
 
-export const getVerifyStaffIdentityMutationOptions = <TError = ErrorType<void>,
+export const getVerifyStaffIdentityMutationOptions = <TError = ErrorType<ErrorBody | ReverificationRequired>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof verifyStaffIdentity>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof verifyStaffIdentity>>, TError,void, TContext> => {
 
@@ -3716,13 +3718,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type VerifyStaffIdentityMutationResult = NonNullable<Awaited<ReturnType<typeof verifyStaffIdentity>>>
 
-    export type VerifyStaffIdentityMutationError = ErrorType<void>
+    export type VerifyStaffIdentityMutationError = ErrorType<ErrorBody | ReverificationRequired>
 
 
     /**
  * @summary Verify staff identity with a fresh second factor
  */
-export const useVerifyStaffIdentity = <TError = ErrorType<void>,
+export const useVerifyStaffIdentity = <TError = ErrorType<ErrorBody | ReverificationRequired>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof verifyStaffIdentity>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof verifyStaffIdentity>>,
@@ -3742,7 +3744,7 @@ export const getGetTeamUrl = () => {
 }
 
 /**
- * Members, lenders, invitations and access history as the caller's role allows.
+ * Members, lenders, invitations and access history as the caller's role allows. In the sandbox every list is empty.
  * @summary Read the team directory
  */
 export const getTeam = async ( options?: Parameters<typeof customFetch>[1]): Promise<StaffDirectory> => {
@@ -3767,7 +3769,7 @@ export const getGetTeamQueryKey = () => {
     }
 
 
-export const getGetTeamQueryOptions = <TData = Awaited<ReturnType<typeof getTeam>>, TError = ErrorType<void>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getTeam>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetTeamQueryOptions = <TData = Awaited<ReturnType<typeof getTeam>>, TError = ErrorType<ErrorBody>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getTeam>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -3786,14 +3788,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetTeamQueryResult = NonNullable<Awaited<ReturnType<typeof getTeam>>>
-export type GetTeamQueryError = ErrorType<void>
+export type GetTeamQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Read the team directory
  */
 
-export function useGetTeam<TData = Awaited<ReturnType<typeof getTeam>>, TError = ErrorType<void>>(
+export function useGetTeam<TData = Awaited<ReturnType<typeof getTeam>>, TError = ErrorType<ErrorBody>>(
   options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getTeam>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -3854,7 +3856,7 @@ return customFetch<InvitationCreated>(getInviteStaffUrl(),
 
 export const getInviteStaffMutationKey = () => ['inviteStaff'] as const;
 
-export const getInviteStaffMutationOptions = <TError = ErrorType<void>,
+export const getInviteStaffMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof inviteStaff>>, TError,InviteStaffMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof inviteStaff>>, TError,InviteStaffMutationVariables, TContext> => {
 
@@ -3883,13 +3885,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type InviteStaffMutationResult = NonNullable<Awaited<ReturnType<typeof inviteStaff>>>
     export type InviteStaffMutationBody = BodyType<InvitationInput>
-    export type InviteStaffMutationError = ErrorType<void>
+    export type InviteStaffMutationError = ErrorType<ErrorBody>
     export type InviteStaffMutationVariables = {data: BodyType<InvitationInput>}
 
     /**
  * @summary Invite a staff member
  */
-export const useInviteStaff = <TError = ErrorType<void>,
+export const useInviteStaff = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof inviteStaff>>, TError,InviteStaffMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof inviteStaff>>,
@@ -3909,7 +3911,7 @@ export const getRevokeInvitationUrl = (id: string,) => {
 }
 
 /**
- * Administrator with recent MFA. A revoked token cannot be accepted.
+ * Administrator with recent MFA. A revoked token cannot be accepted; an invitation that is no longer pending is refused (409).
  * @summary Revoke an invitation
  */
 export const revokeInvitation = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<Message> => {
@@ -3929,7 +3931,7 @@ export const revokeInvitation = async (id: string, options?: Parameters<typeof c
 
 export const getRevokeInvitationMutationKey = () => ['revokeInvitation'] as const;
 
-export const getRevokeInvitationMutationOptions = <TError = ErrorType<void>,
+export const getRevokeInvitationMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof revokeInvitation>>, TError,RevokeInvitationMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof revokeInvitation>>, TError,RevokeInvitationMutationVariables, TContext> => {
 
@@ -3958,13 +3960,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type RevokeInvitationMutationResult = NonNullable<Awaited<ReturnType<typeof revokeInvitation>>>
 
-    export type RevokeInvitationMutationError = ErrorType<void>
+    export type RevokeInvitationMutationError = ErrorType<ErrorBody>
     export type RevokeInvitationMutationVariables = {id: string}
 
     /**
  * @summary Revoke an invitation
  */
-export const useRevokeInvitation = <TError = ErrorType<void>,
+export const useRevokeInvitation = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof revokeInvitation>>, TError,RevokeInvitationMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof revokeInvitation>>,
@@ -4019,7 +4021,7 @@ return customFetch<StaffMember>(getUpdateStaffMemberUrl(id),
 
 export const getUpdateStaffMemberMutationKey = () => ['updateStaffMember'] as const;
 
-export const getUpdateStaffMemberMutationOptions = <TError = ErrorType<void>,
+export const getUpdateStaffMemberMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateStaffMember>>, TError,UpdateStaffMemberMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof updateStaffMember>>, TError,UpdateStaffMemberMutationVariables, TContext> => {
 
@@ -4048,13 +4050,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type UpdateStaffMemberMutationResult = NonNullable<Awaited<ReturnType<typeof updateStaffMember>>>
     export type UpdateStaffMemberMutationBody = BodyType<MembershipInput>
-    export type UpdateStaffMemberMutationError = ErrorType<void>
+    export type UpdateStaffMemberMutationError = ErrorType<ErrorBody>
     export type UpdateStaffMemberMutationVariables = {id: string;data: BodyType<MembershipInput>}
 
     /**
  * @summary Change a membership
  */
-export const useUpdateStaffMember = <TError = ErrorType<void>,
+export const useUpdateStaffMember = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateStaffMember>>, TError,UpdateStaffMemberMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof updateStaffMember>>,
@@ -4109,7 +4111,7 @@ return customFetch<StaffLenderAccess>(getUpdateStaffLendersUrl(id),
 
 export const getUpdateStaffLendersMutationKey = () => ['updateStaffLenders'] as const;
 
-export const getUpdateStaffLendersMutationOptions = <TError = ErrorType<void>,
+export const getUpdateStaffLendersMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateStaffLenders>>, TError,UpdateStaffLendersMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof updateStaffLenders>>, TError,UpdateStaffLendersMutationVariables, TContext> => {
 
@@ -4138,13 +4140,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type UpdateStaffLendersMutationResult = NonNullable<Awaited<ReturnType<typeof updateStaffLenders>>>
     export type UpdateStaffLendersMutationBody = BodyType<StaffLenderAccessInput>
-    export type UpdateStaffLendersMutationError = ErrorType<void>
+    export type UpdateStaffLendersMutationError = ErrorType<ErrorBody>
     export type UpdateStaffLendersMutationVariables = {id: string;data: BodyType<StaffLenderAccessInput>}
 
     /**
  * @summary Set a member's lender access
  */
-export const useUpdateStaffLenders = <TError = ErrorType<void>,
+export const useUpdateStaffLenders = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateStaffLenders>>, TError,UpdateStaffLendersMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof updateStaffLenders>>,
@@ -4198,7 +4200,7 @@ return customFetch<InvitationAccepted>(getAcceptInvitationUrl(),
 
 export const getAcceptInvitationMutationKey = () => ['acceptInvitation'] as const;
 
-export const getAcceptInvitationMutationOptions = <TError = ErrorType<void>,
+export const getAcceptInvitationMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof acceptInvitation>>, TError,AcceptInvitationMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof acceptInvitation>>, TError,AcceptInvitationMutationVariables, TContext> => {
 
@@ -4227,13 +4229,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type AcceptInvitationMutationResult = NonNullable<Awaited<ReturnType<typeof acceptInvitation>>>
     export type AcceptInvitationMutationBody = BodyType<AcceptInvitationInput>
-    export type AcceptInvitationMutationError = ErrorType<void>
+    export type AcceptInvitationMutationError = ErrorType<ErrorBody>
     export type AcceptInvitationMutationVariables = {data: BodyType<AcceptInvitationInput>}
 
     /**
  * @summary Accept an invitation
  */
-export const useAcceptInvitation = <TError = ErrorType<void>,
+export const useAcceptInvitation = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof acceptInvitation>>, TError,AcceptInvitationMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof acceptInvitation>>,
@@ -4278,7 +4280,7 @@ export const getGetAccessReadinessQueryKey = () => {
     }
 
 
-export const getGetAccessReadinessQueryOptions = <TData = Awaited<ReturnType<typeof getAccessReadiness>>, TError = ErrorType<void>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getAccessReadiness>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetAccessReadinessQueryOptions = <TData = Awaited<ReturnType<typeof getAccessReadiness>>, TError = ErrorType<ErrorBody>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getAccessReadiness>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -4297,14 +4299,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetAccessReadinessQueryResult = NonNullable<Awaited<ReturnType<typeof getAccessReadiness>>>
-export type GetAccessReadinessQueryError = ErrorType<void>
+export type GetAccessReadinessQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Read the access readiness checks
  */
 
-export function useGetAccessReadiness<TData = Awaited<ReturnType<typeof getAccessReadiness>>, TError = ErrorType<void>>(
+export function useGetAccessReadiness<TData = Awaited<ReturnType<typeof getAccessReadiness>>, TError = ErrorType<ErrorBody>>(
   options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getAccessReadiness>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -4351,7 +4353,7 @@ export const verifyEncryption = async ( options?: Parameters<typeof customFetch>
 
 export const getVerifyEncryptionMutationKey = () => ['verifyEncryption'] as const;
 
-export const getVerifyEncryptionMutationOptions = <TError = ErrorType<void>,
+export const getVerifyEncryptionMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof verifyEncryption>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof verifyEncryption>>, TError,void, TContext> => {
 
@@ -4380,13 +4382,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type VerifyEncryptionMutationResult = NonNullable<Awaited<ReturnType<typeof verifyEncryption>>>
 
-    export type VerifyEncryptionMutationError = ErrorType<void>
+    export type VerifyEncryptionMutationError = ErrorType<ErrorBody>
 
 
     /**
  * @summary Verify managed payload encryption
  */
-export const useVerifyEncryption = <TError = ErrorType<void>,
+export const useVerifyEncryption = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof verifyEncryption>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof verifyEncryption>>,
@@ -4406,7 +4408,7 @@ export const getProtectPayloadsUrl = () => {
 }
 
 /**
- * Administrator with recent MFA. Seals one bounded batch of unprotected import rows and recovery payloads; run until none remain.
+ * Administrator with recent MFA. Seals one bounded batch of unprotected import rows and recovery payloads; run until none remain (503 when no key is configured).
  * @summary Protect stored payloads
  */
 export const protectPayloads = async ( options?: Parameters<typeof customFetch>[1]): Promise<PayloadProtection> => {
@@ -4426,7 +4428,7 @@ export const protectPayloads = async ( options?: Parameters<typeof customFetch>[
 
 export const getProtectPayloadsMutationKey = () => ['protectPayloads'] as const;
 
-export const getProtectPayloadsMutationOptions = <TError = ErrorType<void>,
+export const getProtectPayloadsMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof protectPayloads>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof protectPayloads>>, TError,void, TContext> => {
 
@@ -4455,13 +4457,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type ProtectPayloadsMutationResult = NonNullable<Awaited<ReturnType<typeof protectPayloads>>>
 
-    export type ProtectPayloadsMutationError = ErrorType<void>
+    export type ProtectPayloadsMutationError = ErrorType<ErrorBody>
 
 
     /**
  * @summary Protect stored payloads
  */
-export const useProtectPayloads = <TError = ErrorType<void>,
+export const useProtectPayloads = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof protectPayloads>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof protectPayloads>>,
@@ -4513,7 +4515,7 @@ export const getGetPilotProgressQueryKey = (params?: GetPilotProgressParams,) =>
     }
 
 
-export const getGetPilotProgressQueryOptions = <TData = Awaited<ReturnType<typeof getPilotProgress>>, TError = ErrorType<void>>(params: GetPilotProgressParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPilotProgress>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetPilotProgressQueryOptions = <TData = Awaited<ReturnType<typeof getPilotProgress>>, TError = ErrorType<ErrorBody>>(params: GetPilotProgressParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPilotProgress>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -4532,14 +4534,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetPilotProgressQueryResult = NonNullable<Awaited<ReturnType<typeof getPilotProgress>>>
-export type GetPilotProgressQueryError = ErrorType<void>
+export type GetPilotProgressQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Read the pilot progress steps
  */
 
-export function useGetPilotProgress<TData = Awaited<ReturnType<typeof getPilotProgress>>, TError = ErrorType<void>>(
+export function useGetPilotProgress<TData = Awaited<ReturnType<typeof getPilotProgress>>, TError = ErrorType<ErrorBody>>(
  params: GetPilotProgressParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPilotProgress>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -4598,7 +4600,7 @@ export const getListCloseReviewsQueryKey = (params?: ListCloseReviewsParams,) =>
     }
 
 
-export const getListCloseReviewsQueryOptions = <TData = Awaited<ReturnType<typeof listCloseReviews>>, TError = ErrorType<void>>(params: ListCloseReviewsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCloseReviews>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getListCloseReviewsQueryOptions = <TData = Awaited<ReturnType<typeof listCloseReviews>>, TError = ErrorType<ErrorBody>>(params: ListCloseReviewsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCloseReviews>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -4617,14 +4619,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type ListCloseReviewsQueryResult = NonNullable<Awaited<ReturnType<typeof listCloseReviews>>>
-export type ListCloseReviewsQueryError = ErrorType<void>
+export type ListCloseReviewsQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary List closes and their reviews
  */
 
-export function useListCloseReviews<TData = Awaited<ReturnType<typeof listCloseReviews>>, TError = ErrorType<void>>(
+export function useListCloseReviews<TData = Awaited<ReturnType<typeof listCloseReviews>>, TError = ErrorType<ErrorBody>>(
  params: ListCloseReviewsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listCloseReviews>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -4693,7 +4695,7 @@ return customFetch<ValopayRecord>(getPrepareCloseReviewUrl(params),
 
 export const getPrepareCloseReviewMutationKey = () => ['prepareCloseReview'] as const;
 
-export const getPrepareCloseReviewMutationOptions = <TError = ErrorType<void>,
+export const getPrepareCloseReviewMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof prepareCloseReview>>, TError,PrepareCloseReviewMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof prepareCloseReview>>, TError,PrepareCloseReviewMutationVariables, TContext> => {
 
@@ -4722,13 +4724,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type PrepareCloseReviewMutationResult = NonNullable<Awaited<ReturnType<typeof prepareCloseReview>>>
     export type PrepareCloseReviewMutationBody = BodyType<PrepareCloseReviewInput>
-    export type PrepareCloseReviewMutationError = ErrorType<void>
+    export type PrepareCloseReviewMutationError = ErrorType<ErrorBody>
     export type PrepareCloseReviewMutationVariables = {data: BodyType<PrepareCloseReviewInput>;params: PrepareCloseReviewParams}
 
     /**
  * @summary Prepare a close for review
  */
-export const usePrepareCloseReview = <TError = ErrorType<void>,
+export const usePrepareCloseReview = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof prepareCloseReview>>, TError,PrepareCloseReviewMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof prepareCloseReview>>,
@@ -4756,7 +4758,7 @@ export const getDecideCloseReviewUrl = (id: string,
 }
 
 /**
- * Only the named reviewer decides, and only while the snapshot is current; a changed close or source declaration must be prepared again.
+ * Only the named reviewer decides, and only while the snapshot is current; a changed close or source declaration must be prepared again. One browser switching demo roles is one person, so a sandbox cannot decide its own preparation (403).
  * @summary Approve or reject a close review
  */
 export const decideCloseReview = async (id: string,
@@ -4792,7 +4794,7 @@ return customFetch<ValopayRecord>(getDecideCloseReviewUrl(id,params),
 
 export const getDecideCloseReviewMutationKey = () => ['decideCloseReview'] as const;
 
-export const getDecideCloseReviewMutationOptions = <TError = ErrorType<void>,
+export const getDecideCloseReviewMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof decideCloseReview>>, TError,DecideCloseReviewMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof decideCloseReview>>, TError,DecideCloseReviewMutationVariables, TContext> => {
 
@@ -4821,13 +4823,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type DecideCloseReviewMutationResult = NonNullable<Awaited<ReturnType<typeof decideCloseReview>>>
     export type DecideCloseReviewMutationBody = BodyType<DecideCloseReviewInput>
-    export type DecideCloseReviewMutationError = ErrorType<void>
+    export type DecideCloseReviewMutationError = ErrorType<ErrorBody>
     export type DecideCloseReviewMutationVariables = {id: string;data: BodyType<DecideCloseReviewInput>;params: DecideCloseReviewParams}
 
     /**
  * @summary Approve or reject a close review
  */
-export const useDecideCloseReview = <TError = ErrorType<void>,
+export const useDecideCloseReview = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof decideCloseReview>>, TError,DecideCloseReviewMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof decideCloseReview>>,
@@ -4879,7 +4881,7 @@ export const getListImportCorrectionsQueryKey = (params?: ListImportCorrectionsP
     }
 
 
-export const getListImportCorrectionsQueryOptions = <TData = Awaited<ReturnType<typeof listImportCorrections>>, TError = ErrorType<void>>(params: ListImportCorrectionsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listImportCorrections>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getListImportCorrectionsQueryOptions = <TData = Awaited<ReturnType<typeof listImportCorrections>>, TError = ErrorType<ErrorBody>>(params: ListImportCorrectionsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listImportCorrections>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -4898,14 +4900,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type ListImportCorrectionsQueryResult = NonNullable<Awaited<ReturnType<typeof listImportCorrections>>>
-export type ListImportCorrectionsQueryError = ErrorType<void>
+export type ListImportCorrectionsQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary List import corrections for a batch
  */
 
-export function useListImportCorrections<TData = Awaited<ReturnType<typeof listImportCorrections>>, TError = ErrorType<void>>(
+export function useListImportCorrections<TData = Awaited<ReturnType<typeof listImportCorrections>>, TError = ErrorType<ErrorBody>>(
  params: ListImportCorrectionsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof listImportCorrections>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -4974,7 +4976,7 @@ return customFetch<ImportCorrectionView>(getProposeImportCorrectionUrl(params),
 
 export const getProposeImportCorrectionMutationKey = () => ['proposeImportCorrection'] as const;
 
-export const getProposeImportCorrectionMutationOptions = <TError = ErrorType<void>,
+export const getProposeImportCorrectionMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof proposeImportCorrection>>, TError,ProposeImportCorrectionMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof proposeImportCorrection>>, TError,ProposeImportCorrectionMutationVariables, TContext> => {
 
@@ -5003,13 +5005,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type ProposeImportCorrectionMutationResult = NonNullable<Awaited<ReturnType<typeof proposeImportCorrection>>>
     export type ProposeImportCorrectionMutationBody = BodyType<ImportCorrectionProposalInput>
-    export type ProposeImportCorrectionMutationError = ErrorType<void>
+    export type ProposeImportCorrectionMutationError = ErrorType<ErrorBody>
     export type ProposeImportCorrectionMutationVariables = {data: BodyType<ImportCorrectionProposalInput>;params: ProposeImportCorrectionParams}
 
     /**
  * @summary Propose an import correction
  */
-export const useProposeImportCorrection = <TError = ErrorType<void>,
+export const useProposeImportCorrection = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof proposeImportCorrection>>, TError,ProposeImportCorrectionMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof proposeImportCorrection>>,
@@ -5071,7 +5073,7 @@ return customFetch<ImportCorrectionPreview>(getPreviewImportCorrectionUrl(params
 
 export const getPreviewImportCorrectionMutationKey = () => ['previewImportCorrection'] as const;
 
-export const getPreviewImportCorrectionMutationOptions = <TError = ErrorType<void>,
+export const getPreviewImportCorrectionMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof previewImportCorrection>>, TError,PreviewImportCorrectionMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof previewImportCorrection>>, TError,PreviewImportCorrectionMutationVariables, TContext> => {
 
@@ -5100,13 +5102,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type PreviewImportCorrectionMutationResult = NonNullable<Awaited<ReturnType<typeof previewImportCorrection>>>
     export type PreviewImportCorrectionMutationBody = BodyType<ImportCorrectionPreviewInput>
-    export type PreviewImportCorrectionMutationError = ErrorType<void>
+    export type PreviewImportCorrectionMutationError = ErrorType<ErrorBody>
     export type PreviewImportCorrectionMutationVariables = {data: BodyType<ImportCorrectionPreviewInput>;params: PreviewImportCorrectionParams}
 
     /**
  * @summary Compare a proposed correction
  */
-export const usePreviewImportCorrection = <TError = ErrorType<void>,
+export const usePreviewImportCorrection = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof previewImportCorrection>>, TError,PreviewImportCorrectionMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof previewImportCorrection>>,
@@ -5170,7 +5172,7 @@ return customFetch<ImportCorrectionView>(getDecideImportCorrectionUrl(id,params)
 
 export const getDecideImportCorrectionMutationKey = () => ['decideImportCorrection'] as const;
 
-export const getDecideImportCorrectionMutationOptions = <TError = ErrorType<void>,
+export const getDecideImportCorrectionMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof decideImportCorrection>>, TError,DecideImportCorrectionMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof decideImportCorrection>>, TError,DecideImportCorrectionMutationVariables, TContext> => {
 
@@ -5199,13 +5201,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type DecideImportCorrectionMutationResult = NonNullable<Awaited<ReturnType<typeof decideImportCorrection>>>
     export type DecideImportCorrectionMutationBody = BodyType<ImportCorrectionDecisionInput>
-    export type DecideImportCorrectionMutationError = ErrorType<void>
+    export type DecideImportCorrectionMutationError = ErrorType<ErrorBody>
     export type DecideImportCorrectionMutationVariables = {id: string;data: BodyType<ImportCorrectionDecisionInput>;params: DecideImportCorrectionParams}
 
     /**
  * @summary Decide an import correction
  */
-export const useDecideImportCorrection = <TError = ErrorType<void>,
+export const useDecideImportCorrection = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof decideImportCorrection>>, TError,DecideImportCorrectionMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof decideImportCorrection>>,
@@ -5257,7 +5259,7 @@ export const getGetSourcesQueryKey = (params?: GetSourcesParams,) => {
     }
 
 
-export const getGetSourcesQueryOptions = <TData = Awaited<ReturnType<typeof getSources>>, TError = ErrorType<void>>(params: GetSourcesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSources>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetSourcesQueryOptions = <TData = Awaited<ReturnType<typeof getSources>>, TError = ErrorType<ErrorBody>>(params: GetSourcesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSources>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -5276,14 +5278,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetSourcesQueryResult = NonNullable<Awaited<ReturnType<typeof getSources>>>
-export type GetSourcesQueryError = ErrorType<void>
+export type GetSourcesQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Read the sources page
  */
 
-export function useGetSources<TData = Awaited<ReturnType<typeof getSources>>, TError = ErrorType<void>>(
+export function useGetSources<TData = Awaited<ReturnType<typeof getSources>>, TError = ErrorType<ErrorBody>>(
  params: GetSourcesParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSources>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -5352,7 +5354,7 @@ return customFetch<ValopayRecord>(getCreateSourceProfileUrl(params),
 
 export const getCreateSourceProfileMutationKey = () => ['createSourceProfile'] as const;
 
-export const getCreateSourceProfileMutationOptions = <TError = ErrorType<void>,
+export const getCreateSourceProfileMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSourceProfile>>, TError,CreateSourceProfileMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof createSourceProfile>>, TError,CreateSourceProfileMutationVariables, TContext> => {
 
@@ -5381,13 +5383,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type CreateSourceProfileMutationResult = NonNullable<Awaited<ReturnType<typeof createSourceProfile>>>
     export type CreateSourceProfileMutationBody = BodyType<SourceProfileInput>
-    export type CreateSourceProfileMutationError = ErrorType<void>
+    export type CreateSourceProfileMutationError = ErrorType<ErrorBody>
     export type CreateSourceProfileMutationVariables = {data: BodyType<SourceProfileInput>;params: CreateSourceProfileParams}
 
     /**
  * @summary Create a source profile
  */
-export const useCreateSourceProfile = <TError = ErrorType<void>,
+export const useCreateSourceProfile = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof createSourceProfile>>, TError,CreateSourceProfileMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof createSourceProfile>>,
@@ -5451,7 +5453,7 @@ return customFetch<ValopayRecord>(getSaveSourceProfileUrl(id,params),
 
 export const getSaveSourceProfileMutationKey = () => ['saveSourceProfile'] as const;
 
-export const getSaveSourceProfileMutationOptions = <TError = ErrorType<void>,
+export const getSaveSourceProfileMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveSourceProfile>>, TError,SaveSourceProfileMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof saveSourceProfile>>, TError,SaveSourceProfileMutationVariables, TContext> => {
 
@@ -5480,13 +5482,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type SaveSourceProfileMutationResult = NonNullable<Awaited<ReturnType<typeof saveSourceProfile>>>
     export type SaveSourceProfileMutationBody = BodyType<SourceProfileInput>
-    export type SaveSourceProfileMutationError = ErrorType<void>
+    export type SaveSourceProfileMutationError = ErrorType<ErrorBody>
     export type SaveSourceProfileMutationVariables = {id: string;data: BodyType<SourceProfileInput>;params: SaveSourceProfileParams}
 
     /**
  * @summary Change a source profile
  */
-export const useSaveSourceProfile = <TError = ErrorType<void>,
+export const useSaveSourceProfile = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveSourceProfile>>, TError,SaveSourceProfileMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof saveSourceProfile>>,
@@ -5548,7 +5550,7 @@ return customFetch<ValopayRecord>(getSaveSourceManifestUrl(params),
 
 export const getSaveSourceManifestMutationKey = () => ['saveSourceManifest'] as const;
 
-export const getSaveSourceManifestMutationOptions = <TError = ErrorType<void>,
+export const getSaveSourceManifestMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveSourceManifest>>, TError,SaveSourceManifestMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof saveSourceManifest>>, TError,SaveSourceManifestMutationVariables, TContext> => {
 
@@ -5577,13 +5579,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type SaveSourceManifestMutationResult = NonNullable<Awaited<ReturnType<typeof saveSourceManifest>>>
     export type SaveSourceManifestMutationBody = BodyType<SourceManifestInput>
-    export type SaveSourceManifestMutationError = ErrorType<void>
+    export type SaveSourceManifestMutationError = ErrorType<ErrorBody>
     export type SaveSourceManifestMutationVariables = {data: BodyType<SourceManifestInput>;params: SaveSourceManifestParams}
 
     /**
  * @summary Declare the expected source files
  */
-export const useSaveSourceManifest = <TError = ErrorType<void>,
+export const useSaveSourceManifest = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveSourceManifest>>, TError,SaveSourceManifestMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof saveSourceManifest>>,
@@ -5645,7 +5647,7 @@ return customFetch<PaystackFixtureResult>(getRunPaystackFixtureUrl(params),
 
 export const getRunPaystackFixtureMutationKey = () => ['runPaystackFixture'] as const;
 
-export const getRunPaystackFixtureMutationOptions = <TError = ErrorType<void>,
+export const getRunPaystackFixtureMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof runPaystackFixture>>, TError,RunPaystackFixtureMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof runPaystackFixture>>, TError,RunPaystackFixtureMutationVariables, TContext> => {
 
@@ -5674,13 +5676,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type RunPaystackFixtureMutationResult = NonNullable<Awaited<ReturnType<typeof runPaystackFixture>>>
     export type RunPaystackFixtureMutationBody = BodyType<PaystackFixtureInput>
-    export type RunPaystackFixtureMutationError = ErrorType<void>
+    export type RunPaystackFixtureMutationError = ErrorType<ErrorBody>
     export type RunPaystackFixtureMutationVariables = {data: BodyType<PaystackFixtureInput>;params: RunPaystackFixtureParams}
 
     /**
  * @summary Deliver a recorded Paystack scenario
  */
-export const useRunPaystackFixture = <TError = ErrorType<void>,
+export const useRunPaystackFixture = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof runPaystackFixture>>, TError,RunPaystackFixtureMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof runPaystackFixture>>,
@@ -5744,7 +5746,7 @@ return customFetch<ProviderEvent>(getReplayProviderEventUrl(id,params),
 
 export const getReplayProviderEventMutationKey = () => ['replayProviderEvent'] as const;
 
-export const getReplayProviderEventMutationOptions = <TError = ErrorType<void>,
+export const getReplayProviderEventMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof replayProviderEvent>>, TError,ReplayProviderEventMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof replayProviderEvent>>, TError,ReplayProviderEventMutationVariables, TContext> => {
 
@@ -5773,13 +5775,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type ReplayProviderEventMutationResult = NonNullable<Awaited<ReturnType<typeof replayProviderEvent>>>
     export type ReplayProviderEventMutationBody = BodyType<ProviderReplayInput>
-    export type ReplayProviderEventMutationError = ErrorType<void>
+    export type ReplayProviderEventMutationError = ErrorType<ErrorBody>
     export type ReplayProviderEventMutationVariables = {id: string;data: BodyType<ProviderReplayInput>;params: ReplayProviderEventParams}
 
     /**
  * @summary Replay a stored provider event
  */
-export const useReplayProviderEvent = <TError = ErrorType<void>,
+export const useReplayProviderEvent = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof replayProviderEvent>>, TError,ReplayProviderEventMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof replayProviderEvent>>,
@@ -5834,7 +5836,7 @@ return customFetch<PaystackDeliveryReceipt>(getReceivePaystackTestEventUrl(conne
 
 export const getReceivePaystackTestEventMutationKey = () => ['receivePaystackTestEvent'] as const;
 
-export const getReceivePaystackTestEventMutationOptions = <TError = ErrorType<void>,
+export const getReceivePaystackTestEventMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof receivePaystackTestEvent>>, TError,ReceivePaystackTestEventMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof receivePaystackTestEvent>>, TError,ReceivePaystackTestEventMutationVariables, TContext> => {
 
@@ -5863,13 +5865,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type ReceivePaystackTestEventMutationResult = NonNullable<Awaited<ReturnType<typeof receivePaystackTestEvent>>>
     export type ReceivePaystackTestEventMutationBody = BodyType<PaystackTestEvent>
-    export type ReceivePaystackTestEventMutationError = ErrorType<void>
+    export type ReceivePaystackTestEventMutationError = ErrorType<ErrorBody>
     export type ReceivePaystackTestEventMutationVariables = {connectionId: string;data: BodyType<PaystackTestEvent>}
 
     /**
  * @summary Receive a signed Paystack test event
  */
-export const useReceivePaystackTestEvent = <TError = ErrorType<void>,
+export const useReceivePaystackTestEvent = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof receivePaystackTestEvent>>, TError,ReceivePaystackTestEventMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof receivePaystackTestEvent>>,
@@ -5921,7 +5923,7 @@ export const getGetPersonalWorkQueryKey = (params?: GetPersonalWorkParams,) => {
     }
 
 
-export const getGetPersonalWorkQueryOptions = <TData = Awaited<ReturnType<typeof getPersonalWork>>, TError = ErrorType<void>>(params: GetPersonalWorkParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPersonalWork>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetPersonalWorkQueryOptions = <TData = Awaited<ReturnType<typeof getPersonalWork>>, TError = ErrorType<ErrorBody>>(params: GetPersonalWorkParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPersonalWork>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -5940,14 +5942,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetPersonalWorkQueryResult = NonNullable<Awaited<ReturnType<typeof getPersonalWork>>>
-export type GetPersonalWorkQueryError = ErrorType<void>
+export type GetPersonalWorkQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Read personal work
  */
 
-export function useGetPersonalWork<TData = Awaited<ReturnType<typeof getPersonalWork>>, TError = ErrorType<void>>(
+export function useGetPersonalWork<TData = Awaited<ReturnType<typeof getPersonalWork>>, TError = ErrorType<ErrorBody>>(
  params: GetPersonalWorkParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getPersonalWork>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -6016,7 +6018,7 @@ return customFetch<WorkReceipt>(getReadNotificationUrl(params),
 
 export const getReadNotificationMutationKey = () => ['readNotification'] as const;
 
-export const getReadNotificationMutationOptions = <TError = ErrorType<void>,
+export const getReadNotificationMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof readNotification>>, TError,ReadNotificationMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof readNotification>>, TError,ReadNotificationMutationVariables, TContext> => {
 
@@ -6045,13 +6047,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type ReadNotificationMutationResult = NonNullable<Awaited<ReturnType<typeof readNotification>>>
     export type ReadNotificationMutationBody = BodyType<WorkReceiptInput>
-    export type ReadNotificationMutationError = ErrorType<void>
+    export type ReadNotificationMutationError = ErrorType<ErrorBody>
     export type ReadNotificationMutationVariables = {data: BodyType<WorkReceiptInput>;params: ReadNotificationParams}
 
     /**
  * @summary Mark a notification read
  */
-export const useReadNotification = <TError = ErrorType<void>,
+export const useReadNotification = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof readNotification>>, TError,ReadNotificationMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof readNotification>>,
@@ -6113,7 +6115,7 @@ return customFetch<WorkReceipt>(getAcknowledgeHandoverUrl(params),
 
 export const getAcknowledgeHandoverMutationKey = () => ['acknowledgeHandover'] as const;
 
-export const getAcknowledgeHandoverMutationOptions = <TError = ErrorType<void>,
+export const getAcknowledgeHandoverMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof acknowledgeHandover>>, TError,AcknowledgeHandoverMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof acknowledgeHandover>>, TError,AcknowledgeHandoverMutationVariables, TContext> => {
 
@@ -6142,13 +6144,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type AcknowledgeHandoverMutationResult = NonNullable<Awaited<ReturnType<typeof acknowledgeHandover>>>
     export type AcknowledgeHandoverMutationBody = BodyType<WorkReceiptInput>
-    export type AcknowledgeHandoverMutationError = ErrorType<void>
+    export type AcknowledgeHandoverMutationError = ErrorType<ErrorBody>
     export type AcknowledgeHandoverMutationVariables = {data: BodyType<WorkReceiptInput>;params: AcknowledgeHandoverParams}
 
     /**
  * @summary Acknowledge a handover
  */
-export const useAcknowledgeHandover = <TError = ErrorType<void>,
+export const useAcknowledgeHandover = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof acknowledgeHandover>>, TError,AcknowledgeHandoverMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof acknowledgeHandover>>,
@@ -6200,7 +6202,7 @@ export const getGetLifecycleQueryKey = (params?: GetLifecycleParams,) => {
     }
 
 
-export const getGetLifecycleQueryOptions = <TData = Awaited<ReturnType<typeof getLifecycle>>, TError = ErrorType<void>>(params: GetLifecycleParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getLifecycle>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+export const getGetLifecycleQueryOptions = <TData = Awaited<ReturnType<typeof getLifecycle>>, TError = ErrorType<ErrorBody>>(params: GetLifecycleParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getLifecycle>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
 const {query: queryOptions, request: requestOptions} = options ?? {};
@@ -6219,14 +6221,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetLifecycleQueryResult = NonNullable<Awaited<ReturnType<typeof getLifecycle>>>
-export type GetLifecycleQueryError = ErrorType<void>
+export type GetLifecycleQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Read retention controls
  */
 
-export function useGetLifecycle<TData = Awaited<ReturnType<typeof getLifecycle>>, TError = ErrorType<void>>(
+export function useGetLifecycle<TData = Awaited<ReturnType<typeof getLifecycle>>, TError = ErrorType<ErrorBody>>(
  params: GetLifecycleParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getLifecycle>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
@@ -6288,7 +6290,7 @@ export const getGetLifecycleRunQueryKey = (id: string,
     }
 
 
-export const getGetLifecycleRunQueryOptions = <TData = Awaited<ReturnType<typeof getLifecycleRun>>, TError = ErrorType<void>>(id: string,
+export const getGetLifecycleRunQueryOptions = <TData = Awaited<ReturnType<typeof getLifecycleRun>>, TError = ErrorType<ErrorBody>>(id: string,
     params: GetLifecycleRunParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getLifecycleRun>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 ) => {
 
@@ -6308,14 +6310,14 @@ const {query: queryOptions, request: requestOptions} = options ?? {};
 }
 
 export type GetLifecycleRunQueryResult = NonNullable<Awaited<ReturnType<typeof getLifecycleRun>>>
-export type GetLifecycleRunQueryError = ErrorType<void>
+export type GetLifecycleRunQueryError = ErrorType<ErrorBody>
 
 
 /**
  * @summary Read a retention run
  */
 
-export function useGetLifecycleRun<TData = Awaited<ReturnType<typeof getLifecycleRun>>, TError = ErrorType<void>>(
+export function useGetLifecycleRun<TData = Awaited<ReturnType<typeof getLifecycleRun>>, TError = ErrorType<ErrorBody>>(
  id: string,
     params: GetLifecycleRunParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getLifecycleRun>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
 
@@ -6385,7 +6387,7 @@ return customFetch<LifecycleView>(getSaveRetentionPolicyUrl(params),
 
 export const getSaveRetentionPolicyMutationKey = () => ['saveRetentionPolicy'] as const;
 
-export const getSaveRetentionPolicyMutationOptions = <TError = ErrorType<void>,
+export const getSaveRetentionPolicyMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveRetentionPolicy>>, TError,SaveRetentionPolicyMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof saveRetentionPolicy>>, TError,SaveRetentionPolicyMutationVariables, TContext> => {
 
@@ -6414,13 +6416,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type SaveRetentionPolicyMutationResult = NonNullable<Awaited<ReturnType<typeof saveRetentionPolicy>>>
     export type SaveRetentionPolicyMutationBody = BodyType<RetentionPolicyInput>
-    export type SaveRetentionPolicyMutationError = ErrorType<void>
+    export type SaveRetentionPolicyMutationError = ErrorType<ErrorBody>
     export type SaveRetentionPolicyMutationVariables = {data: BodyType<RetentionPolicyInput>;params: SaveRetentionPolicyParams}
 
     /**
  * @summary Change the retention policy
  */
-export const useSaveRetentionPolicy = <TError = ErrorType<void>,
+export const useSaveRetentionPolicy = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof saveRetentionPolicy>>, TError,SaveRetentionPolicyMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof saveRetentionPolicy>>,
@@ -6482,7 +6484,7 @@ return customFetch<LifecycleView>(getSetRetentionHoldUrl(params),
 
 export const getSetRetentionHoldMutationKey = () => ['setRetentionHold'] as const;
 
-export const getSetRetentionHoldMutationOptions = <TError = ErrorType<void>,
+export const getSetRetentionHoldMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof setRetentionHold>>, TError,SetRetentionHoldMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof setRetentionHold>>, TError,SetRetentionHoldMutationVariables, TContext> => {
 
@@ -6511,13 +6513,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type SetRetentionHoldMutationResult = NonNullable<Awaited<ReturnType<typeof setRetentionHold>>>
     export type SetRetentionHoldMutationBody = BodyType<RetentionHoldInput>
-    export type SetRetentionHoldMutationError = ErrorType<void>
+    export type SetRetentionHoldMutationError = ErrorType<ErrorBody>
     export type SetRetentionHoldMutationVariables = {data: BodyType<RetentionHoldInput>;params: SetRetentionHoldParams}
 
     /**
  * @summary Place or release a hold
  */
-export const useSetRetentionHold = <TError = ErrorType<void>,
+export const useSetRetentionHold = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof setRetentionHold>>, TError,SetRetentionHoldMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof setRetentionHold>>,
@@ -6544,7 +6546,7 @@ export const getPreviewLifecycleRunUrl = (params: PreviewLifecycleRunParams,) =>
 }
 
 /**
- * Administrators only. Records the exact manifest of what would be deleted; nothing is deleted.
+ * Administrators only. Records the exact manifest of what would be deleted; nothing is deleted. With nothing old enough to delete, the preview is refused (400).
  * @summary Preview a retention run
  */
 export const previewLifecycleRun = async (lifecyclePreviewInput: LifecyclePreviewInput,
@@ -6579,7 +6581,7 @@ return customFetch<LifecycleRunView>(getPreviewLifecycleRunUrl(params),
 
 export const getPreviewLifecycleRunMutationKey = () => ['previewLifecycleRun'] as const;
 
-export const getPreviewLifecycleRunMutationOptions = <TError = ErrorType<void>,
+export const getPreviewLifecycleRunMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof previewLifecycleRun>>, TError,PreviewLifecycleRunMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof previewLifecycleRun>>, TError,PreviewLifecycleRunMutationVariables, TContext> => {
 
@@ -6608,13 +6610,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type PreviewLifecycleRunMutationResult = NonNullable<Awaited<ReturnType<typeof previewLifecycleRun>>>
     export type PreviewLifecycleRunMutationBody = BodyType<LifecyclePreviewInput>
-    export type PreviewLifecycleRunMutationError = ErrorType<void>
+    export type PreviewLifecycleRunMutationError = ErrorType<ErrorBody>
     export type PreviewLifecycleRunMutationVariables = {data: BodyType<LifecyclePreviewInput>;params: PreviewLifecycleRunParams}
 
     /**
  * @summary Preview a retention run
  */
-export const usePreviewLifecycleRun = <TError = ErrorType<void>,
+export const usePreviewLifecycleRun = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof previewLifecycleRun>>, TError,PreviewLifecycleRunMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof previewLifecycleRun>>,
@@ -6678,7 +6680,7 @@ return customFetch<LifecycleRunView>(getApproveLifecycleRunUrl(id,params),
 
 export const getApproveLifecycleRunMutationKey = () => ['approveLifecycleRun'] as const;
 
-export const getApproveLifecycleRunMutationOptions = <TError = ErrorType<void>,
+export const getApproveLifecycleRunMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof approveLifecycleRun>>, TError,ApproveLifecycleRunMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof approveLifecycleRun>>, TError,ApproveLifecycleRunMutationVariables, TContext> => {
 
@@ -6707,13 +6709,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type ApproveLifecycleRunMutationResult = NonNullable<Awaited<ReturnType<typeof approveLifecycleRun>>>
     export type ApproveLifecycleRunMutationBody = BodyType<LifecycleApproveInput>
-    export type ApproveLifecycleRunMutationError = ErrorType<void>
+    export type ApproveLifecycleRunMutationError = ErrorType<ErrorBody>
     export type ApproveLifecycleRunMutationVariables = {id: string;data: BodyType<LifecycleApproveInput>;params: ApproveLifecycleRunParams}
 
     /**
  * @summary Approve a retention run
  */
-export const useApproveLifecycleRun = <TError = ErrorType<void>,
+export const useApproveLifecycleRun = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof approveLifecycleRun>>, TError,ApproveLifecycleRunMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof approveLifecycleRun>>,
@@ -6777,7 +6779,7 @@ return customFetch<LifecycleRunView>(getExecuteLifecycleRunUrl(id,params),
 
 export const getExecuteLifecycleRunMutationKey = () => ['executeLifecycleRun'] as const;
 
-export const getExecuteLifecycleRunMutationOptions = <TError = ErrorType<void>,
+export const getExecuteLifecycleRunMutationOptions = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof executeLifecycleRun>>, TError,ExecuteLifecycleRunMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
 ): UseMutationOptions<Awaited<ReturnType<typeof executeLifecycleRun>>, TError,ExecuteLifecycleRunMutationVariables, TContext> => {
 
@@ -6806,13 +6808,13 @@ const {mutation: mutationOptions, request: requestOptions} = options ?
 
     export type ExecuteLifecycleRunMutationResult = NonNullable<Awaited<ReturnType<typeof executeLifecycleRun>>>
     export type ExecuteLifecycleRunMutationBody = BodyType<LifecycleExecuteInput>
-    export type ExecuteLifecycleRunMutationError = ErrorType<void>
+    export type ExecuteLifecycleRunMutationError = ErrorType<ErrorBody>
     export type ExecuteLifecycleRunMutationVariables = {id: string;data: BodyType<LifecycleExecuteInput>;params: ExecuteLifecycleRunParams}
 
     /**
  * @summary Execute an approved run
  */
-export const useExecuteLifecycleRun = <TError = ErrorType<void>,
+export const useExecuteLifecycleRun = <TError = ErrorType<ErrorBody>,
     TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof executeLifecycleRun>>, TError,ExecuteLifecycleRunMutationVariables, TContext>, request?: SecondParameter<typeof customFetch>}
  ): UseMutationResult<
         Awaited<ReturnType<typeof executeLifecycleRun>>,

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { useWorkspace } from "@/lib/workspace-context";
 import { usePilotMutation, usePilotQuery } from "@/lib/pilot";
+import { caseDetailSchema } from "@workspace/valopay-schema";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import {
   PilotError,
@@ -11,6 +12,7 @@ import {
   pilotField,
 } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
+import { FieldError, FormAlert, attentionTitle, focusField, invalidProps } from "@/components/form-field";
 import { formatDate, formatKobo } from "@/lib/formatters";
 import { readableLabel } from "@/components/record-label";
 import { LookedFor } from "@/components/notice";
@@ -18,6 +20,28 @@ import { NotFoundNotice } from "@/pages/not-found";
 
 const watInput = (iso: string) =>
   new Date(Date.parse(iso) + 3600000).toISOString().slice(0, 16);
+/** The roles the service lets work on a case (coordinateCase); Read-only can review it only. */
+const caseRoles = ["Admin", "Operations", "Finance", "Compliance reviewer"];
+type Assignee = { actor: string; name: string; role: string };
+/** Why this person cannot change the case, in the service's rules, or "" when they can. */
+function caseLock(
+  role: string | undefined,
+  actor: string,
+  record: any,
+  assignees: Assignee[],
+): string {
+  const holder = record.data.case?.assignee as string | undefined;
+  const holderName = record.data.case?.assigneeName || holder;
+  if (!caseRoles.includes(role || ""))
+    return "Your role can review this case but cannot change it.";
+  if (["closed", "resolved"].includes(record.status))
+    return "Resolved cases keep their history and cannot be reassigned.";
+  if (!holder && !assignees.some((person) => person.actor === actor))
+    return "You are not on this lender’s list of people who can work on cases, so you cannot claim this one. Ask an administrator to hand it to you.";
+  if (holder && holder !== actor && role !== "Admin")
+    return `This case is assigned to ${holderName}. Only ${holderName} or an Admin can record its next step or hand it over.`;
+  return "";
+}
 /** The address is a case page, but the current lender has no exception with that ID. */
 function MissingCase({ id }: { id: string }) {
   useEffect(() => {
@@ -39,7 +63,7 @@ function MissingCase({ id }: { id: string }) {
 }
 export default function CasePage({ params }: { params: { id: string } }) {
   const { merchantId } = useWorkspace(),
-    query = usePilotQuery(`/pilot/cases/${params.id}`);
+    query = usePilotQuery(`/pilot/cases/${params.id}`, caseDetailSchema);
   // A confirmed 404 is its own page; any other failure keeps the retry below.
   if ((query.error as { status?: number } | null)?.status === 404)
     return <MissingCase id={params.id} />;
@@ -70,9 +94,10 @@ export default function CasePage({ params }: { params: { id: string } }) {
   );
 }
 function CaseWork({ data, refresh }: { data: any; refresh(): Promise<any> }) {
-  const { workspace } = useWorkspace();
+  const { workspace, merchantId } = useWorkspace();
   const [record, setRecord] = useState(data.record),
     [note, setNote] = useState("");
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const [assignee, setAssignee] = useState(
     record.data.case?.assignee || workspace?.actor || "",
   );
@@ -101,12 +126,35 @@ function CaseWork({ data, refresh }: { data: any; refresh(): Promise<any> }) {
     setNote("");
     setAssignee(saved.data.case?.assignee || "");
   });
-  const denied =
-    workspace?.role === "Read-only" ||
-    ["closed", "resolved"].includes(record.status);
+  const assignees: Assignee[] = data.assignees;
+  const holder = record.data.case?.assignee as string | undefined;
+  const holderName = record.data.case?.assigneeName || holder;
+  // The service refuses a change from anyone but the assignee or an Admin, and gives a case only to someone on the lender's list.
+  const locked = caseLock(workspace?.role, workspace?.actor || "", record, assignees);
+  const denied = Boolean(locked);
+  const formerHolder = Boolean(holder) && !assignees.some((person) => person.actor === holder);
+  const mustHandOver = formerHolder && assignee === holder;
   const busy = mutation.isPending || mutation.hasUnconfirmedOutcome,
     changed = Date.parse(data.record.updatedAt) > Date.parse(record.updatedAt);
-  const submit = (action: "claim" | "update" | "handover") =>
+  /** The service's own limits, checked before asking it, so each problem is named at its field. */
+  const check = () => {
+    const found: Record<string, string> = {};
+    if (nextAction.trim().length < 3)
+      found["case-next-action"] = "Enter the next action, in at least 3 characters.";
+    if (!when || !(Date.parse(`${when}:00+01:00`) > Date.now()))
+      found["case-follow-up"] = "Choose a follow-up time in the future. The exception deadline stays as it is.";
+    if (note.trim().length < 3)
+      found["case-note"] = "Enter a handover or progress note, in at least 3 characters.";
+    return found;
+  };
+  const submit = (action: "claim" | "update" | "handover") => {
+    const found = check();
+    setErrors(found);
+    const first = ["case-next-action", "case-follow-up", "case-note"].find((id) => found[id]);
+    if (first) {
+      focusField(first);
+      return;
+    }
     mutation.mutate({
       path: `/pilot/cases/${record.id}`,
       data: {
@@ -119,6 +167,20 @@ function CaseWork({ data, refresh }: { data: any; refresh(): Promise<any> }) {
         evidenceIds: evidence,
       },
     });
+  };
+  const described = (id: string, help?: string) => {
+    const props = invalidProps(id, errors[id]);
+    return { ...props, "aria-describedby": [help, props["aria-describedby"]].filter(Boolean).join(" ") || undefined };
+  };
+  const edit = (id: string, apply: () => void) => {
+    apply();
+    setErrors((current) => {
+      if (!current[id]) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  };
   return (
     <>
       <div className="grid gap-5 lg:grid-cols-[1fr_1.4fr]">
@@ -148,10 +210,10 @@ function CaseWork({ data, refresh }: { data: any; refresh(): Promise<any> }) {
           </dl>
           <p className="text-sm text-muted-foreground">{record.data.notes}</p>
           <Link
-            href={`/exceptions?record=${encodeURIComponent(record.id)}`}
+            href={`/exceptions?${new URLSearchParams({ record: record.id, ...(merchantId ? { lender: merchantId } : {}) })}#record-${record.id}`}
             className="inline-block text-sm text-primary underline"
           >
-            Review the controlled resolution
+            Resolve this exception in Exceptions
           </Link>
           <Link
             href="/reconciliation"
@@ -174,6 +236,7 @@ function CaseWork({ data, refresh }: { data: any; refresh(): Promise<any> }) {
           )}
           <form
             className="space-y-4"
+            noValidate
             onSubmit={(event) => {
               event.preventDefault();
               submit(
@@ -189,55 +252,99 @@ function CaseWork({ data, refresh }: { data: any; refresh(): Promise<any> }) {
               disabled={busy || denied || changed}
               className="space-y-4"
             >
-              <label className="block space-y-1 text-sm font-medium">
-                Assigned to
-                <select
-                  className={pilotField}
-                  value={assignee}
-                  disabled={!record.data.case?.assignee}
-                  onChange={(e) => setAssignee(e.target.value)}
-                >
-                  {data.assignees.map((person: any) => (
-                    <option key={person.actor} value={person.actor}>
-                      {person.name} · {person.role}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block space-y-1 text-sm font-medium">
-                Next action
-                <input
-                  className={pilotField}
-                  required
-                  minLength={3}
-                  maxLength={240}
-                  value={nextAction}
-                  onChange={(e) => setNextAction(e.target.value)}
-                  placeholder="Confirm the payer and review the matching evidence"
-                />
-              </label>
-              <label className="block space-y-1 text-sm font-medium">
-                Follow-up time (WAT)
-                <input
-                  className={pilotField}
-                  type="datetime-local"
-                  required
-                  value={when}
-                  onChange={(e) => setWhen(e.target.value)}
-                />
-              </label>
-              <label className="block space-y-1 text-sm font-medium">
-                Handover or progress note
-                <textarea
-                  className={`${pilotField} min-h-24`}
-                  required
-                  minLength={3}
-                  maxLength={2000}
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  placeholder="What was checked, what remains and why this next step is needed"
-                />
-              </label>
+              {Object.keys(errors).length > 0 && (
+                <FormAlert title={attentionTitle(Object.keys(errors).length)} />
+              )}
+              <p className="text-xs text-muted-foreground">
+                Every field is required except linked evidence.
+              </p>
+              <div className="space-y-1">
+                <label className="block space-y-1 text-sm font-medium">
+                  Assigned to
+                  <select
+                    id="case-assignee"
+                    className={pilotField}
+                    value={assignee}
+                    disabled={!holder}
+                    aria-describedby="case-assignee-help"
+                    onChange={(e) => setAssignee(e.target.value)}
+                  >
+                    {!holder && !assignees.some((person) => person.actor === assignee) && (
+                      <option value={assignee} disabled>
+                        You · not on this lender’s case list
+                      </option>
+                    )}
+                    {formerHolder && (
+                      <option value={holder} disabled>
+                        {holderName} · can no longer work on cases
+                      </option>
+                    )}
+                    {assignees.map((person) => (
+                      <option key={person.actor} value={person.actor}>
+                        {person.name} · {person.role}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p id="case-assignee-help" className="text-xs text-muted-foreground">
+                  {!holder
+                    ? "Claiming assigns this case to you. Once it is yours, you can hand it over."
+                    : formerHolder
+                      ? `${holderName} can no longer work on cases for this lender. Choose who takes the case over.`
+                      : "Only people who can work on cases for this lender are listed. Read-only staff cannot be given a case."}
+                </p>
+              </div>
+              <div className="space-y-1">
+                <label className="block space-y-1 text-sm font-medium">
+                  Next action
+                  <input
+                    id="case-next-action"
+                    className={pilotField}
+                    required
+                    maxLength={240}
+                    value={nextAction}
+                    {...described("case-next-action")}
+                    onChange={(e) => edit("case-next-action", () => setNextAction(e.target.value))}
+                    placeholder="Confirm the payer and review the matching evidence"
+                  />
+                </label>
+                <FieldError id="case-next-action" message={errors["case-next-action"]} />
+              </div>
+              <div className="space-y-1">
+                <label className="block space-y-1 text-sm font-medium">
+                  Follow-up time (WAT)
+                  <input
+                    id="case-follow-up"
+                    className={pilotField}
+                    type="datetime-local"
+                    required
+                    min={watInput(new Date().toISOString())}
+                    value={when}
+                    {...described("case-follow-up", "case-follow-up-help")}
+                    onChange={(e) => edit("case-follow-up", () => setWhen(e.target.value))}
+                  />
+                </label>
+                <p id="case-follow-up-help" className="text-xs text-muted-foreground">
+                  A time in the future. The exception’s own deadline does not change.
+                </p>
+                <FieldError id="case-follow-up" message={errors["case-follow-up"]} />
+              </div>
+              <div className="space-y-1">
+                <label className="block space-y-1 text-sm font-medium">
+                  Handover or progress note
+                  <textarea
+                    id="case-note"
+                    className={`${pilotField} min-h-24`}
+                    required
+                    maxLength={2000}
+                    value={note}
+                    {...described("case-note")}
+                    onChange={(e) => edit("case-note", () => setNote(e.target.value))}
+                    placeholder="What was checked, what remains and why this next step is needed"
+                  />
+                </label>
+                <FieldError id="case-note" message={errors["case-note"]} />
+              </div>
               <details>
                 <summary className="cursor-pointer py-2 text-sm font-medium">
                   Linked evidence ({evidence.length})
@@ -295,8 +402,9 @@ function CaseWork({ data, refresh }: { data: any; refresh(): Promise<any> }) {
             <div className="flex flex-wrap gap-3">
               <Button
                 type="submit"
-                disabled={denied || busy || changed}
+                disabled={denied || busy || changed || mustHandOver}
                 busy={mutation.isPending}
+                aria-describedby={locked ? "case-locked" : undefined}
               >
                 {!record.data.case?.assignee
                   ? "Claim and save next step"
@@ -315,6 +423,7 @@ function CaseWork({ data, refresh }: { data: any; refresh(): Promise<any> }) {
                       const latest = result.data.record;
                       setRecord(latest);
                       setNote("");
+                      setErrors({});
                       setNextAction(latest.data.case?.nextAction || "");
                       setAssignee(
                         latest.data.case?.assignee || workspace?.actor,
@@ -338,11 +447,9 @@ function CaseWork({ data, refresh }: { data: any; refresh(): Promise<any> }) {
                 Case update saved with its handover history.
               </p>
             )}
-            {denied && (
-              <p className="text-sm text-muted-foreground">
-                {workspace?.role === "Read-only"
-                  ? "Your role can review this case but cannot change it."
-                  : "Resolved cases keep their history and cannot be reassigned."}
+            {locked && (
+              <p id="case-locked" className="text-sm text-muted-foreground">
+                {locked}
               </p>
             )}
           </form>

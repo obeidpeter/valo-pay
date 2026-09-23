@@ -94,9 +94,22 @@ export async function sendEmail(event, { apiKey, from, to, fetchImpl = fetch, ti
   finally { clearTimeout(timer); }
 }
 
+const USAGE = 'Use: pnpm run check:operations [--deliver], with the origin and receiver in the environment (docs/operational-rehearsals.md).';
+/** A mistake on the command line: the one failure described in its own words. */
+export class UsageError extends Error {}
+/** The one option. A leading `--`, which `pnpm run check:operations -- --deliver` passes on, is skipped. An unknown option is named; any other word is only counted, since it could be a receiver address or a key pasted by mistake. */
+export function monitorArguments(argv) {
+  const args = argv[0] === '--' ? argv.slice(1) : argv;
+  for (const [index, arg] of args.entries()) {
+    // An option is named, but not a value given with it (--name=value), which could be a credential.
+    const option = /^(--?[A-Za-z][\w-]{0,40})(=?)/.exec(arg), named = option && (option[2] || option[0] === arg) ? option[1] : undefined;
+    if (arg !== '--deliver') throw new UsageError(named ? `${named === '--deliver' ? 'The option --deliver takes no value' : `Unknown option ${named}`}${option[2] ? ' (its value is not repeated here)' : ''}.` : `Argument ${index + 1} is not an option (not repeated here, in case it is a credential).`);
+  }
+  return { deliver: args.includes('--deliver') };
+}
+
 async function main() {
-  const deliver = process.argv.includes('--deliver');
-  if (process.argv.slice(2).some(arg => arg !== '--deliver')) throw new Error('Only --deliver is supported. Configure the origin and receiver in the environment.');
+  const { deliver } = monitorArguments(process.argv.slice(2));
   const origin = process.env.VALOPAY_MONITOR_ORIGIN;
   if (!origin) throw new Error('Set VALOPAY_MONITOR_ORIGIN.');
   const probe = await probeService({ origin, expectScheduler: process.env.VALOPAY_MONITOR_EXPECT_SCHEDULER === 'on' });
@@ -119,4 +132,5 @@ async function main() {
   await rename(temporary, target);
   console.log(JSON.stringify({ ...probe, delivered: result.delivered }));
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(() => { console.error('Operational monitoring failed. Check configuration, probe connectivity and the alert receiver. Credentials and response bodies are not logged.'); process.exitCode = 1; });
+// Only a usage mistake is described: any other failure could carry a receiver address, a key or a response body.
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => { console.error(error instanceof UsageError ? `${error.message} ${USAGE}` : 'Operational monitoring failed. Check configuration, probe connectivity and the alert receiver. Credentials and response bodies are not logged.'); process.exitCode = 1; });

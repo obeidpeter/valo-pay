@@ -18,7 +18,7 @@ Create an empty synthetic lender → save/check/correct an import batch → comm
 
 Apply the additive schema to a disposable database first. Verify the code and migration before applying them to the existing synthetic development preview. Keep the pull request draft. Production, live financial operations, external email, real customer ingestion and real Clerk/provider acceptance are separate gates.
 
-The existing forced-RLS rehearsal is independent of this application repository. This release must not claim it protects the default runtime. Staff access supplements the repository's explicit workspace/lender predicates and requires an independent security review before real data.
+The forced-RLS rehearsal of the time, since removed, was independent of this application repository. This release must not claim forced row security protects the default runtime. Staff access supplements the repository's explicit workspace/lender predicates and requires an independent security review before real data.
 
 Authoritative references: [Clerk session claims](https://clerk.com/docs/guides/sessions/session-tokens), [Clerk Express SDK](https://clerk.com/docs/reference/express/overview), [PostgreSQL locking](https://www.postgresql.org/docs/current/explicit-locking.html).
 
@@ -26,13 +26,13 @@ Authoritative references: [Clerk session claims](https://clerk.com/docs/guides/s
 
 Apply `lib/db/migrations/003_pilot_workflow.sql` with the existing migration procedure before deploying this API. It adds five tables without rewriting existing financial records. It is repeatable and transactional. Every constraint carries the name the Drizzle schema gives it, so a database built by the file and one built by `pnpm --filter @workspace/db run push` are identical; `artifacts/api-server/tests/pilot-workflow-migration.integration.test.ts` rehearses the file (with `004_staff_lender_access.sql`) on a throwaway database and compares the result with the pushed schema, column by column and constraint by constraint. A database built by an earlier draft of the file keeps its unnamed constraints; they enforce the same rules. Back up the synthetic development database first. Rollback means restoring the previous application build and leaving the additive tables in place; do not drop the journal or access history during rollback.
 
-Default development access remains unchanged. A separate synthetic staff staging host requires the existing Clerk keys, `VALOPAY_STAFF_ACCESS=staging`, the exact `VALOPAY_STAFF_ISSUER`, and HTTPS origins in `VALOPAY_STAFF_ORIGINS`. Enable organisations and second-factor authentication in Clerk. Provision the first administrator explicitly with:
+Default development access remains unchanged. A separate synthetic staff staging host requires the existing Clerk keys, `VALOPAY_STAFF_ACCESS=staging`, the exact `VALOPAY_STAFF_ISSUER`, and HTTPS origins in `VALOPAY_STAFF_ORIGINS`. Enable organisations and second-factor authentication in Clerk. Provision the first administrator explicitly, with the staging host's `DATABASE_URL` in the environment:
 
 ```sh
-pnpm --filter @workspace/scripts exec tsx ../scripts/provision-pilot.ts --synthetic-staging org_EXAMPLE user_EXAMPLE "Pilot workspace"
+VALOPAY_STAFF_ACCESS=staging pnpm --filter @workspace/scripts exec tsx ./provision-pilot.ts --synthetic-staging org_EXAMPLE user_EXAMPLE "Pilot workspace"
 ```
 
-The command accepts existing Clerk organisation/user IDs and creates an empty application workspace. Confirm those identities with the operator before running it. It never grants live-data access. Add invitees to the same Clerk organisation, create their Valo Pay invitation, and share the link manually. Acceptance checks verified email, organisation, invitation expiry and both authentication factors. Memberships expire after 90 days; a new invitation is needed after revocation or expiry. Read access requires MFA within 12 hours; writes require it within 10 minutes. Team & access provides Account security and Verify identity controls. Never send identity-service secrets in invitations.
+The command (`scripts/provision-pilot.ts`) accepts existing Clerk organisation/user IDs and creates an empty application workspace. It checks its four arguments and `VALOPAY_STAFF_ACCESS=staging` before it loads the database pool, and prints the usage or the missing setting instead; with restricted runtime isolation on, it refuses, because isolated workspaces are provisioned through the migration owner's connection. `scripts/operator-commands.test.mjs` runs these refusals offline, and `pnpm run typecheck` covers the script. Confirm those identities with the operator before running it. It never grants live-data access. Add invitees to the same Clerk organisation, create their Valo Pay invitation, and share the link manually. Acceptance checks verified email, organisation, invitation expiry and both authentication factors. Memberships expire after 90 days; a new invitation is needed after revocation or expiry. Read access requires MFA within 12 hours; writes require it within 10 minutes. Team & access provides Account security and Verify identity controls. Never send identity-service secrets in invitations.
 
 ## API supplement
 
@@ -52,7 +52,7 @@ All paths below are beneath `/api/v1`. Lender paths require `merchantId`; paged 
 | `POST /pilot/batches/:id/commit` | Current version required; all-or-nothing revalidation and import; returns the saved batch record |
 | `GET /pilot/cases/:id` | Exception, eligible assignees, evidence choices and immutable handover events |
 | `POST /pilot/cases/:id` | Claim, handover or update with current version, note, next action, future follow-up and up to 20 evidence links; current assignee or Admin controls an assigned case |
-| `GET /team` | Staff directory; invitations and access history are Admin-only |
+| `GET /team` | Staff directory; the lenders to grant, invitations and access history are Admin-only; in the sandbox every list is empty (`lenders: []`) |
 | `POST /team/invitations` | Staff Admin; verified email and application role; returns the one-time invitation token once |
 | `POST /team/invitations/:id/revoke` | Staff Admin; revoke an unused invitation |
 | `PATCH /team/members/:id` | Staff Admin; role, status, reason and current version; no self-edit or reactivation of revoked membership |
@@ -67,6 +67,6 @@ Staff membership changes take the organisation lock before the member lock. Fina
 
 The pure pilot suite covers source identity, changed-payload conflicts, batch correction, stale commits, immutable evidence, case ownership and financial invariants. The opt-in PostgreSQL suite exercises actual routes, persistent receipts, duplicate concurrent requests, cancellation, cross-workspace isolation, invitation binding, MFA, and revocation ordering. Identity-service results in that suite are controlled verified-session fixtures: real Clerk organisation selection, MFA and invitation acceptance still require a configured staging acceptance test. Provider credentials and external message delivery are not prerequisites for the synthetic journey and remain unconfigured.
 
-The browser/database rehearsal creates an empty lender, saves and reopens a batch, loses a successful commit response and finds its completion after reloading Operations, with exactly one imported customer. Lender selection is retained in tab storage under the server's opaque user/workspace scope; only the lender ID is stored. Customer evidence packs include source-row provenance and case handover notes. The backup/restore rehearsal compares all nine application tables, including unfinished requests and revoked memberships.
+The browser/database rehearsal creates an empty lender, saves and reopens a batch, loses a successful commit response and finds its completion after reloading Operations, with exactly one imported customer. Lender selection is retained in tab storage under the server's opaque user/workspace scope; only the lender ID is stored. Customer evidence packs include source-row provenance and case handover notes. The backup/restore rehearsal compares all ten application tables, including unfinished requests, revoked memberships and lender access grants.
 
 This foundation covers the core collections pilot. Connected credit and cash modules retain their existing simulation-specific authority checks; it does not approve real underwriting, payroll, bank instructions or new provider access.

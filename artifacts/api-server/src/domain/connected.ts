@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { connectedActionInputSchema, connectedConsentPurposes, legacyCollatedCompare } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord, RecordOf } from "./types";
 import { makeRecord, recordsOf, touch } from "./records";
 import {
@@ -12,27 +13,10 @@ import {
 import { creditView, runCreditAction } from "./connected-credit-service";
 import { cashView, runCashAction } from "./connected-cash-service";
 
-export const connectedActionSchema = z
-  .object({
-    action: z.string().min(1).max(80),
-    recordId: z.string().max(100).optional(),
-    reason: z
-      .string()
-      .trim()
-      .min(8, "Explain the reason in at least eight characters.")
-      .max(500),
-    data: z.record(z.string(), z.unknown()).default({}),
-    expectedRevision: z.string().max(80),
-  })
-  .strict();
+// The action's shape and the consent purposes are the shared definitions the contract and the console read.
+export const connectedActionSchema = connectedActionInputSchema;
 export type ConnectedAction = z.infer<typeof connectedActionSchema>;
-export const consentPurposes = [
-  "account_read",
-  "credit_assessment",
-  "merchant_account_read",
-  "erp_draft",
-  "payroll_prepare",
-] as const;
+export const consentPurposes = connectedConsentPurposes;
 export const purposeLabels: Record<string, string> = {
   account_read: "Read applicant accounts",
   credit_assessment: "Assess an application",
@@ -103,7 +87,7 @@ export function connectedRevision(state: DomainState): string {
       r.customerId,
       r.data,
     ])
-    .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    .sort((a, b) => legacyCollatedCompare(String(a[0]), String(b[0])));
   return createHash("sha256")
     .update(JSON.stringify([state.merchant, state.settings, rows]))
     .digest("hex");
@@ -261,14 +245,14 @@ function paymentAction(
   const due = owned(state, String(intent.data.dueItemId), "due-items");
   const event = (status: string, detail: string) => {
     intent.status = status;
-    intent.data.events.push({ at: ctx.now, status, detail });
+    intent.data.events!.push({ at: ctx.now, status, detail });
     touch(intent, ctx.now);
     return intent;
   };
   if (input.action === "payment.authorise") {
     if (intent.status !== "created")
       reject("Only a new checkout can be authorised.", 409);
-    if (Date.parse(intent.data.expiresAt) <= Date.parse(ctx.now))
+    if (Date.parse(String(intent.data.expiresAt)) <= Date.parse(ctx.now))
       reject("This checkout expired. Cancel it and create a new one.", 409);
     if (state.merchant.killSwitch)
       reject("The workspace emergency stop is on.", 403);

@@ -77,7 +77,7 @@ it("keeps incomplete delivery edits recoverable and converts valid WAT dates inc
     expect(delivery.getAttribute("aria-invalid")).toBe("true");
     fireEvent.submit(delivery.closest("form")!);
     expect(api.calls.filter(call=>call.method==="POST"&&call.path.startsWith("/v1/sources/profiles"))).toHaveLength(0);
-    expect(screen.getByRole("heading",{name:"Sources & connections"})).toBeTruthy();
+    expect(screen.getByRole("heading",{name:"Data sources"})).toBeTruthy();
   }
   fireEvent.change(delivery,{target:{value:"2026-09-24T07:30"}});
   expect(screen.queryByRole("alert")).toBeNull();

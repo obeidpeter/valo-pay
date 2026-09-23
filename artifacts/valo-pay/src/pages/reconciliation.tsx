@@ -7,7 +7,7 @@ import { EmptyRow } from '@/components/empty-state';
 import { LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
-import { formatKobo, formatDate, formatCount } from '@/lib/formatters';
+import { formatKobo, formatDate, formatCount, formatNumber, formatPercent } from '@/lib/formatters';
 import { CheckSquare, Info, ShieldAlert, CornerUpLeft, Plus, ClipboardCheck, RefreshCw } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { RecordDialog } from '@/components/record-dialog';
@@ -20,6 +20,7 @@ import { useHashTarget } from '@/lib/use-hash-target';
 import { safeCollectionReturnTo } from '@/lib/record-navigation';
 import { RecordPagination } from '@/components/record-pagination';
 import { useUrlPagination } from '@/lib/use-url-pagination';
+import { useDebouncedSearch } from '@/lib/use-record-pagination';
 import { useReconciliationPage } from '@/lib/use-reconciliation-page';
 import { LoadProblem } from '@/components/load-problem';
 import { paymentUnappliedKobo } from '@workspace/valopay-schema';
@@ -88,9 +89,12 @@ export default function ReconciliationPage() {
   const {data:confirmedAllocations,isLoading:isLoadingAudit,error:auditError,pagination:auditPage}=confirmedAllocationsQuery;
   const {data:batches,isLoading:isLoadingBatches,error:batchesError,pagination:batchPage}=batchesQuery;
   const [allocationSearch,setAllocationSearch]=useState('');
+  // Each opening of the picker starts from an empty search, never the last one typed.
+  const [allocationSession,setAllocationSession]=useState(0);
+  const {search:allocationTerm,searchPending:allocationSearchPending}=useDebouncedSearch(allocationSearch,`${merchantId}:${allocationSession}`);
   const choicePage=useUrlPagination(merchantId,'allocation-');
-  const choiceParams={merchantId:merchantId!,search:allocationSearch,limit:choicePage.pageSize,offset:choicePage.offset};
-  const choicesQuery=useListRecords('due-items',choiceParams,{query:{enabled:!!merchantId && isDialogOpen && actionKind==='manual_allocate',queryKey:getListRecordsQueryKey('due-items',choiceParams)}});
+  const choiceParams={merchantId:merchantId!,search:allocationTerm,limit:choicePage.pageSize,offset:choicePage.offset};
+  const choicesQuery=useListRecords('due-items',choiceParams,{query:{enabled:!!merchantId && isDialogOpen && actionKind==='manual_allocate' && !allocationSearchPending,queryKey:getListRecordsQueryKey('due-items',choiceParams)}});
   const rows=[...(proposals?.related||[]),...(payments?.related||[]),...(allPayments?.related||[]),...(observations?.related||[]),...(confirmedAllocations?.related||[])];
   const customerById=new Map(rows.filter(r=>r.kind==='customers').map(r=>[r.id,r]));
   const paymentById=new Map(rows.filter(r=>r.kind==='payments').map(r=>[r.id,r]));
@@ -118,7 +122,7 @@ export default function ReconciliationPage() {
   };
 
   const handleAction = (record: any, action: string) => {
-    if (action === 'manual_allocate') { setAllocationSearch(''); choicePage.setPage(0); }
+    if (action === 'manual_allocate') { setAllocationSearch(''); setAllocationSession(session => session + 1); choicePage.resetPage(); }
     setSelectedRecord(record);
     setActionKind(action);
     setIsDialogOpen(true);
@@ -180,7 +184,7 @@ export default function ReconciliationPage() {
           {[
             ['Evidence resolved', runResult.data?.observationsResolved], ['Awaiting review', runResult.data?.proposed],
             ['Unallocated payments', runResult.data?.unallocated], ['Possible duplicates', runResult.data?.possibleDuplicates],
-          ].map(([label, count]) => <div key={String(label)}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-lg font-semibold tabular-nums">{Number(count || 0)}</dd></div>)}
+          ].map(([label, count]) => <div key={String(label)}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-lg font-semibold tabular-nums">{formatNumber(Number(count || 0))}</dd></div>)}
         </dl>
       </section>}
 
@@ -192,6 +196,7 @@ export default function ReconciliationPage() {
         ].map(item => <Button key={item.key} asChild size="sm" variant={view === item.key ? 'default' : 'outline'}><Link href={searchHref(item.key)} aria-current={view === item.key ? 'page' : undefined}>{item.label}</Link></Button>)}
       </nav>
 
+      {/* Paging keeps each table's rows until the next page arrives; the frames never anchor the scroll, so the browser holds the pager in place when a page has fewer rows. */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Allocations requiring review */}
         {view !== 'duplicates' && <div className="bg-card border rounded-xl shadow-sm flex flex-col xl:col-span-2">
@@ -199,11 +204,11 @@ export default function ReconciliationPage() {
             <CheckSquare className="h-5 w-5 text-warning-strong" />
             <h2 className="font-semibold">Proposed matches</h2>
             <span className="ml-auto bg-warning text-warning-foreground text-xs font-bold px-2 py-1 rounded-full">
-              {proposals?.total || 0} pending
+              {formatNumber(proposals?.total || 0)} pending
             </span>
           </div>
           
-          <ScrollFrame label="Proposed matches" className="p-0 overflow-x-auto">
+          <ScrollFrame label="Proposed matches" className="p-0 overflow-x-auto [overflow-anchor:none]">
             <table className="min-w-[780px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground">
                 <tr>
@@ -258,7 +263,7 @@ export default function ReconciliationPage() {
 
         {view !== 'review' && <section aria-label="Possible duplicate payments" className="bg-card border rounded-xl shadow-sm overflow-hidden xl:col-span-2">
           <div className="border-b p-4"><h2 className="font-semibold">Possible duplicate payments</h2><p className="mt-1 text-xs text-muted-foreground">These payments are held for Finance review and are never allocated automatically.</p></div>
-          <ScrollFrame label="Possible duplicate payments" className="overflow-x-auto">
+          <ScrollFrame label="Possible duplicate payments table" className="overflow-x-auto [overflow-anchor:none]">
             <table className="min-w-[650px] w-full text-left text-sm"><thead className="border-b bg-secondary/30 text-muted-foreground"><tr><th className="p-4 font-medium">Payment</th><th className="p-4 font-medium">Customer</th><th className="p-4 font-medium">Reason for review</th><th className="p-4 text-right font-medium">Amount</th><th className="p-4 text-right font-medium">Next step</th></tr></thead>
               <tbody className="divide-y">{isLoadingAllPayments ? <LoadingRow colSpan={5} what="possible duplicate payments" /> : allPaymentsError && !allPayments ? <tr><td colSpan={5} className="p-4"><p role="alert" className="text-destructive">Possible duplicate payments could not be loaded. Use Refresh queue above to try again.</p></td></tr> : duplicates.length === 0 ? <EmptyRow colSpan={5} title={q ? 'No results match your search' : "No possible duplicates"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Payments needing a duplicate check will appear here.</>}</EmptyRow> : duplicates.map(payment => <tr key={payment.id}>
                 <td className="p-4"><RecordLabel record={payment} id={payment.id} /></td><td className="p-4"><RecordLabel record={customerById.get(String(payment.customerId))} id={payment.customerId} customer /></td>
@@ -281,7 +286,7 @@ export default function ReconciliationPage() {
               {formatCount(payments?.total || 0, 'item')}
             </span>
           </div>
-          <ScrollFrame label="Unallocated payments" className="p-0 overflow-auto max-h-[400px]">
+          <ScrollFrame label="Unallocated payments" className="p-0 overflow-auto max-h-[400px] [overflow-anchor:none]">
             <table className="min-w-[460px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
@@ -329,7 +334,7 @@ export default function ReconciliationPage() {
               {formatCount(observations?.total || 0, 'item')}
             </span>
           </div>
-          <ScrollFrame label="Unresolved payment evidence" className="p-0 overflow-auto max-h-[400px]">
+          <ScrollFrame label="Unresolved payment evidence" className="p-0 overflow-auto max-h-[400px] [overflow-anchor:none]">
              <table className="min-w-[440px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
@@ -369,9 +374,9 @@ export default function ReconciliationPage() {
             <ClipboardCheck className="h-5 w-5 text-primary" />
             <h2 className="font-semibold">Match accuracy review</h2>
             <p className="w-full text-xs leading-relaxed text-muted-foreground">Finance checks a sample of automatic matches from the last completed month. Marking a match incorrect stops counting that allocation and reopens the payment and instalment.</p>
-            <p className="text-xs font-medium">{precision?.reviewed || 0} of {precision?.sampleSize || 0} sampled matches reviewed{precision?.falseMatchRate !== null && precision?.falseMatchRate !== undefined ? ` · incorrect match rate ${(Number(precision.falseMatchRate) * 100).toFixed(1)}% (95% confidence interval: ${(Number(precision.interval?.low) * 100).toFixed(1)}% to ${(Number(precision.interval?.high) * 100).toFixed(1)}%)` : ''}.</p>
+            <p className="text-xs font-medium">{formatNumber(Number(precision?.reviewed || 0))} of {formatNumber(Number(precision?.sampleSize || 0))} sampled matches reviewed{precision?.falseMatchRate !== null && precision?.falseMatchRate !== undefined ? ` · incorrect match rate ${formatPercent(Number(precision.falseMatchRate), 1)} (95% confidence interval: ${formatPercent(Number(precision.interval?.low), 1)} to ${formatPercent(Number(precision.interval?.high), 1)})` : ''}.</p>
           </div>
-          <ScrollFrame label="Match accuracy review" className="p-0 overflow-x-auto max-h-[400px]">
+          <ScrollFrame label="Match accuracy review table" className="p-0 overflow-x-auto max-h-[400px] [overflow-anchor:none]">
             <table className="min-w-[780px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
@@ -421,7 +426,7 @@ export default function ReconciliationPage() {
             <h2 className="font-semibold flex items-center gap-2"><Info className="h-5 w-5 text-primary" /> Settlement batches</h2>
             <Button size="sm" kind="settlement-batches" onClick={handleCreateBatch}><Plus className="h-4 w-4 mr-2" /> Add batch</Button>
           </div>
-          <ScrollFrame label="Settlement batches" className="p-0 overflow-x-auto max-h-[400px]">
+          <ScrollFrame label="Settlement batches" className="p-0 overflow-x-auto max-h-[400px] [overflow-anchor:none]">
              <table className="min-w-[650px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
@@ -489,8 +494,8 @@ export default function ReconciliationPage() {
           let amount: number | null = null;
           try { amount = nairaToKobo(String(values.amountKobo ?? '')); } catch { /* The field reports incomplete or invalid input on submit. */ }
           return <section aria-label="Allocation preview" className="space-y-2 rounded-lg border bg-secondary/20 p-3 text-sm">
-            <label className="grid gap-1 text-xs">Find an instalment<input type="search" value={allocationSearch} onChange={event=>{setAllocationSearch(event.target.value);choicePage.setPage(0);}} placeholder="Name or reference" className="min-h-10 rounded-md border bg-background px-3" /></label>
-            {choicesQuery.error ? <LoadProblem what="instalment choices" error={choicesQuery.error} retry={()=>{void choicesQuery.refetch();}} /> : choicesQuery.isFetching ? <p role="status">Loading instalment choices…</p> : <RecordPagination pagination={choicePage} total={choicesQuery.data?.total || 0} label="instalment choices" />}
+            <label className="grid gap-1 text-xs">Find an instalment<input type="search" value={allocationSearch} onChange={event=>{setAllocationSearch(event.target.value);choicePage.resetPage();}} placeholder="Name or reference" className="min-h-10 rounded-md border bg-background px-3" /></label>
+            {choicesQuery.error ? <LoadProblem what="instalment choices" error={choicesQuery.error} retry={()=>{void choicesQuery.refetch();}} /> : choicesQuery.isFetching || allocationSearchPending ? <p role="status">Loading instalment choices…</p> : <RecordPagination pagination={choicePage} total={choicesQuery.data?.total || 0} label="instalment choices" />}
             <p className="font-semibold">Payment {selectedRecord?.reference}</p>
             <p>Recorded payer: <strong>{customerById.get(String(selectedRecord?.customerId))?.name || (selectedRecord?.customerId ? 'Customer name unavailable' : 'Not identified')}</strong></p>
             {!selectedRecord?.customerId && <p className="text-xs text-muted-foreground">Confirm the payer from the payment evidence before choosing their instalment.</p>}

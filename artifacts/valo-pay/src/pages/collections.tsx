@@ -16,7 +16,7 @@ import { ImportWizard } from '@/components/import-wizard';
 import { confirmUnsavedChanges } from '@/lib/unsaved-changes';
 import { failureCodeList } from '@workspace/valopay-schema';
 import { RecordLabel, StatusBadge, readableLabel } from '@/components/record-label';
-import { formatKobo, formatDate } from '@/lib/formatters';
+import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
 import { deadlineOrder, isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { collectionReturnTo, recordDestination } from '@/lib/record-navigation';
 import { useHashTarget } from '@/lib/use-hash-target';
@@ -83,7 +83,7 @@ export default function CollectionsPage() {
   const views: Array<{ key: typeof view; label: string; count: number | string }> = [
     { key: 'all', label: 'All instalments' }, { key: 'overdue', label: 'Overdue' },
     { key: 'due-today', label: 'Due today' }, { key: 'failed', label: 'Failed attempts' },
-  ].map(item => ({ ...item, key: item.key as typeof view, count: data?.counts[item.key] ?? '…' }));
+  ].map(item => ({ ...item, key: item.key as typeof view, count: typeof data?.counts[item.key] === 'number' ? formatNumber(data.counts[item.key]!) : '…' }));
   if (!merchantId) return null;
   const nextAction = (item: typeof instalments[number] | undefined, attempt: typeof failedAttempts[number] | undefined) => {
     const rowId = attempt?.id || item?.id;

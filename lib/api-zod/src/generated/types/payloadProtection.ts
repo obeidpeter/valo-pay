@@ -11,6 +11,7 @@
  */
 export interface PayloadProtection {
   message: string;
+  /** @minimum 0 */
   protectedCount: number;
   mayHaveMore: boolean;
 }

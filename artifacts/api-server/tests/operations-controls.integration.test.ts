@@ -24,7 +24,7 @@ const {createPaystackIngress}=await import("../src/routes/sources");
 const {paystackConnectionTransaction,paystackIngress}=await import("../src/lib/paystack-connection");
 const {receivePaystackEvent}=await import("../src/providers/paystack-inbox");
 const {runDueCloses}=await import("../src/lib/close-scheduler");
-const {inMerchantAsSystem,loadState,revealImportPayloads,SYSTEM_ACTOR_PREFIX}=await import("../src/lib/valopay-store");
+const {inMerchantAsSystem,loadState,revealImportPayloads,SYSTEM_ACTOR_PREFIX,digest}=await import("../src/lib/valopay-store");
 // The Paystack test ingress reads its own raw body, so it is mounted before JSON parsing, as in app.ts.
 const app=express();app.use((req,_res,next)=>{(req as any).log={info(){},warn(){},error(){}};next();});app.use("/api",createPaystackIngress(paystackIngress));
 app.use(express.json({limit:"2mb"}));app.use((req,_res,next)=>{(req as any).auth=Object.assign(()=>({userId:null}),{[Symbol.for("@clerk/express.auth")]:true});next();});app.use("/api",router);app.use(errorHandler);
@@ -36,6 +36,9 @@ const ok=(result:{status:number;data:any})=>{assert.equal(result.status,200,JSON
 const post=(path:string,body:unknown,key=randomUUID())=>call(path,"POST",body,key);
 try{
   for(const name of ["003_pilot_workflow.sql","004_staff_lender_access.sql"])await pool.query(await readFile(new URL(`../../../lib/db/migrations/${name}`,import.meta.url),"utf8"));
+  // Readiness finds every table, column and index this build needs (a missing table or column would answer 503; the log, not the answer, names it).
+  const readyz=await fetch(`${base}/readyz`),readyzBody=await readyz.json() as {status:string;checks:{database:{status:string};schema:unknown}};
+  assert.deepEqual([readyz.status,readyzBody.status,readyzBody.checks.database.status,readyzBody.checks.schema],[200,"ok","ok",{status:"ok"}]);
   const workspace=ok(await call("/v1/workspace")),lender=workspace.merchants[0].id,other=workspace.merchants[1].id;
   const workspaceId=(await pool.query("SELECT workspace_id FROM valopay_merchants WHERE id=$1",[lender])).rows[0].workspace_id;workspaces.add(workspaceId);
   const at=(days:number)=>new Date(Date.now()-days*86400000).toISOString();
@@ -110,9 +113,31 @@ try{
   const customerPath=`/v1/records/customers?merchantId=${lender}`,customerKey=randomUUID(),customerBody={name:"Retention request fixture",reference:`RETAIN-${randomUUID()}`,data:{consentProvenance:"Synthetic retention consent"}};
   const customer=ok(await post(customerPath,customerBody,customerKey));
   const completed=(await pool.query("SELECT * FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2",[lender,customerKey])).rows[0];
-  assert.equal(completed.request.protectedPayload,1);assert.equal(completed.receipt.protectedPayload,1);
+  assert.equal(completed.request.protectedPayload,1);
   const idempotent=(await pool.query("SELECT * FROM valopay_idempotency WHERE merchant_id=$1 AND response->>'protectedPayload'='1'",[lender])).rows;
   assert.ok(idempotent.length>0);
+  // A completed request's answer is stored once, as the replay copy under its key; the journal keeps only a reference
+  // to what it saved, which is what Operations shows. A daily close answers with its whole record (about 100 KB for a
+  // pilot-scale lender), and both tables used to hold it. A retried key still replays the copy and never runs twice.
+  const replayCopy=async(key:string)=>{const row=(await pool.query("SELECT id,response,pg_column_size(response) AS size FROM valopay_idempotency WHERE merchant_id=$1 AND id=$2",[lender,digest(`${lender}:${key}`)])).rows[0];return {size:Number(row.size),response:await openPayload(row.response,{lender,record:row.id,field:"response"},managedWrappingKeys)};};
+  // The reference names only the record's ID and kind, so it is not sealed: Operations links to the saved result
+  // without the key service, as it does with encryption off.
+  assert.deepEqual(completed.receipt,{id:customer.id,kind:"customers"},"the journal keeps a reference to the saved record, unsealed");
+  const listed=(ok(await call(`/v1/operations?merchantId=${lender}`)) as {items:Array<{id:string;recordId:string|null;recordKind:string|null}>}).items.find(item=>item.id===completed.id);
+  assert.deepEqual([listed?.recordId,listed?.recordKind],[customer.id,"customers"],"so Operations offers the saved result while payloads are encrypted");
+  assert.deepEqual((await replayCopy(customerKey)).response,customer,"the replay copy is the whole answer");
+  assert.deepEqual(ok(await post(customerPath,customerBody,customerKey)),customer,"a retried key replays the saved answer");
+  assert.deepEqual(ok(await post(`/v1/operations/${completed.id}/retry?merchantId=${lender}`,{})),customer,"so does a retry from Operations");
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM valopay_records WHERE merchant_id=$1 AND kind='customers' AND reference=$2",[lender,customerBody.reference])).rows[0].n,1,"and neither ran the request again");
+  const closeKey=randomUUID(),closed=ok(await post(`/v1/actions?merchantId=${lender}`,{action:"daily_close"},closeKey));
+  const closeEntry=(await pool.query("SELECT id,receipt,pg_column_size(receipt) AS size FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2",[lender,closeKey])).rows[0];
+  assert.deepEqual(closeEntry.receipt,{record:{id:closed.record.id,kind:"closes"}},"a close's journal entry keeps a reference to the close");
+  const closeCopy=await replayCopy(closeKey);
+  assert.deepEqual(closeCopy.response,closed,"its replay copy is the whole answer");
+  assert.ok(Number(closeEntry.size)<1024&&closeCopy.size>4*Number(closeEntry.size),`the journal's reference (${closeEntry.size} bytes) is a fraction of the answer (${closeCopy.size} bytes)`);
+  const closes=(await pool.query("SELECT count(*)::int AS n FROM valopay_records WHERE merchant_id=$1 AND kind='closes'",[lender])).rows[0].n;
+  assert.deepEqual(ok(await post(`/v1/operations/${closeEntry.id}/retry?merchantId=${lender}`,{})),closed,"a retried close replays its answer");
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM valopay_records WHERE merchant_id=$1 AND kind='closes'",[lender])).rows[0].n,closes,"and closes nothing again");
   const pendingKey=randomUUID(),cancelledKey=randomUUID();
   assert.equal((await post(customerPath,{name:"Missing consent"},pendingKey)).status,400);
   assert.equal((await post(customerPath,{name:"Cancelled missing consent"},cancelledKey)).status,400);

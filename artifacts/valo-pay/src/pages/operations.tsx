@@ -3,13 +3,14 @@ import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { lenderPath, pilotRequest, usePilotMutation } from "@/lib/pilot";
+import { operationListSchema } from "@workspace/valopay-schema";
 import {
   PilotError,
   PilotHeading,
   RecoveryNotice,
 } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
-import { formatDate } from "@/lib/formatters";
+import { formatDate, formatNumber } from "@/lib/formatters";
 
 export default function OperationsPage() {
   const { merchantId, workspace } = useWorkspace(),
@@ -19,12 +20,12 @@ export default function OperationsPage() {
     setOffset(0);
     setMessage("");
   }, [merchantId, workspace?.actor]);
-  const list = useQuery<any>({
+  const list = useQuery({
     queryKey: ["pilot", "operations", workspace?.actor, merchantId, offset],
     enabled: !!merchantId,
     refetchInterval: 15000,
     queryFn: ({ signal }) =>
-      pilotRequest(lenderPath("/operations", merchantId, offset), { signal }),
+      pilotRequest(lenderPath("/operations", merchantId, offset), operationListSchema, { signal }),
   });
   const action = usePilotMutation((result) => {
     setMessage(
@@ -131,10 +132,14 @@ export default function OperationsPage() {
       {list.data?.total === 0 && (
         <p className="rounded-xl border bg-card p-8 text-sm text-muted-foreground">
           No received requests yet. Saved imports, case changes, reconciliation
-          and evidence requests will appear here.
+          and evidence requests will appear here.{" "}
+          {/* The next step, and something to focus: a keyboard user can then scroll the page on a short screen. */}
+          <Link className="text-primary underline" href="/imports">
+            Start with an import batch
+          </Link>
         </p>
       )}
-      {list.data?.total > 25 && (
+      {list.data && list.data.total > 25 && (
         <div className="flex items-center gap-3">
           <Button
             variant="outline"
@@ -144,8 +149,9 @@ export default function OperationsPage() {
             Previous
           </Button>
           <span className="text-sm">
-            {offset + 1}–{Math.min(offset + 25, list.data.total)} of{" "}
-            {list.data.total}
+            {formatNumber(offset + 1)}–
+            {formatNumber(Math.min(offset + 25, list.data.total))} of{" "}
+            {formatNumber(list.data.total)}
           </span>
           <Button
             variant="outline"

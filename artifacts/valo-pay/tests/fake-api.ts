@@ -1,6 +1,6 @@
 import { saveImportBatch, commitImportBatch, coordinateCase, batchView } from '../../api-server/src/domain/pilot-workflow';
 import { listImportCorrections, previewImportCorrection, proposeImportCorrection, decideImportCorrection, assertNoDirectImportedCorrection } from '../../api-server/src/domain/import-corrections';
-import { importCorrectionsResponseSchema, importCorrectionPreviewSchema, importCorrectionViewSchema } from '@workspace/valopay-schema';
+import { importCorrectionsResponseSchema, importCorrectionPreviewSchema, importCorrectionViewSchema, accessReadinessSchema, caseDetailSchema, closeReviewListSchema, connectedActionResultSchema, connectedViewSchema, importBatchDetailSchema, importBatchListSchema, lifecycleRunViewSchema, lifecycleViewSchema, operationListSchema, paystackFixtureResultSchema, pilotJourneySchema, pilotProgressSchema, providerEventViewSchema, sourcesViewSchema, staffDirectorySchema, valopayRecordSchema, type LifecycleExternalCandidate } from '@workspace/valopay-schema';
 import { saveSourceProfile, sourceQuality } from '../../api-server/src/domain/source-quality';
 import { saveSourceManifest } from '../../api-server/src/domain/source-completeness';
 import { providerEventView, replayProviderEvent, runPaystackFixture } from '../../api-server/src/providers/paystack-inbox';
@@ -17,11 +17,12 @@ import { pageReconciliation, pageCloseHistory } from '../../api-server/src/lib/c
 // routes, with every response validated by the same zod contract the server
 // uses, so a page is tested against what the API actually returns.  No
 // database and no network.  What the server owns and this stands in for: the
-// sandbox cookie and locks, the audit hash chain (a local chain here) and
-// object storage (exports get a descriptor and a record, no file).
-import { createHash, randomUUID } from "node:crypto";
+// sandbox cookie and locks, the audit hash chain (built here by the server's
+// entry builder over the whole state) and object storage (exports get a
+// descriptor and a record, no file).
+import { randomUUID } from "node:crypto";
 import * as S from "@workspace/api-zod";
-import { ZodError } from "zod";
+import { ZodError, type ZodTypeAny, type z } from "zod";
 import {
   ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, isCloseTime,
   nextCloseInstant, recordKinds, roles,
@@ -37,6 +38,7 @@ import { importCsv } from "../../api-server/src/lib/valopay-import";
 import { exportJobView, publicExportRecord, queueExport, retryExport } from '../../api-server/src/lib/export-jobs';
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../../api-server/src/lib/valopay-close-views";
 import type { CloseRuntime } from "../../api-server/src/domain/effective-close-schedule";
+import { auditEntryData, canonicalDigest, verifyAuditChain } from "../../api-server/src/lib/digests";
 
 export interface FakeCall { method: string; path: string; query: Record<string, string>; body: unknown; status: number }
 export interface FakeApi {
@@ -54,6 +56,8 @@ export interface FakeApi {
   state(merchantId?: string): DomainState;
   /** Applies a change as a committed mutation with an audit entry, the way a request would. */
   mutate<T>(fn: (state: DomainState, ctx: Context) => T, merchantId?: string): T;
+  /** The terminal request payloads and export files the server's storage inventory would list for retention (none by default). */
+  lifecycleExternal: LifecycleExternalCandidate[];
   setNow(iso: string): void;
   /** Makes the next request whose path (and method, when given) matches fail: with an API-style error body and status, or as a network failure ("offline"). */
   failNext(pattern: RegExp, failure: { status: number; error: string; details?: Array<{ field: string; message: string }> } | "offline", method?: string): void;
@@ -68,27 +72,22 @@ const exportKinds = ["gate-pack", "billing", "reviewed-close", ...packKinds];
 /** A declared function returning never, so a check such as `if (!old) fail(...)` narrows the way the server's does. */
 function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
 
-/** Same shape of canonical digest the repository uses; only consistency within this fake matters. */
-const canonical = (value: unknown): string => JSON.stringify(value, (_key, item) => (item && typeof item === "object" && !Array.isArray(item) ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))) : item));
-const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
-
 function appendAudit(state: DomainState, ctx: Context, action: string, objectId: string, summary: string, changes?: unknown): ValopayRecord {
   const chain = state.records.filter((record) => record.kind === "audit").sort((a, b) => Number(a.data.sequence || 0) - Number(b.data.sequence || 0));
-  const previous = chain.at(-1);
-  const body = { sequence: chain.length + 1, actor: ctx.actor, action, objectId, summary, changeDigest: digest(canonical(changes ?? {})), previousHash: previous?.data.hash ?? "GENESIS", timestamp: ctx.now };
-  const record: ValopayRecord = { id: randomUUID(), merchantId: state.merchant.id, kind: "audit", name: action, status: "recorded", reference: "", amountKobo: 0, customerId: state.records.find((item) => item.id === objectId)?.customerId || "", createdAt: ctx.now, updatedAt: ctx.now, data: { ...body, hash: digest(canonical(body)) } };
+  const data = auditEntryData({ sequence: chain.length + 1, actor: ctx.actor, action, objectId, summary, changes, previousHash: chain.at(-1)?.data.hash, timestamp: ctx.now });
+  const record: ValopayRecord = { id: randomUUID(), merchantId: state.merchant.id, kind: "audit", name: action, status: "recorded", reference: "", amountKobo: 0, customerId: state.records.find((item) => item.id === objectId)?.customerId || "", createdAt: ctx.now, updatedAt: ctx.now, data };
   state.records.push(record);
   return record;
 }
 function verifyAudit(state: DomainState): { valid: boolean; count: number; headHash: string } {
-  const chain = state.records.filter((record) => record.kind === "audit").sort((a, b) => Number(a.data.sequence) - Number(b.data.sequence));
-  let hash = "GENESIS", valid = true, index = 0;
-  for (const event of chain) {
-    const { hash: recorded, ...body } = event.data;
-    if (body.sequence !== ++index || body.previousHash !== hash || digest(canonical(body)) !== recorded) { valid = false; break; }
-    hash = String(recorded);
-  }
-  return { valid, count: chain.length, headHash: hash };
+  return verifyAuditChain(state.records.filter((record) => record.kind === "audit"));
+}
+
+/** An answer checked against the schema the server checks it with; one that does not match is the service's failure (500), as it is on the server. */
+function contract<S extends ZodTypeAny>(schema: S, value: unknown): z.output<S> {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) fail(`The fake API's answer does not match its contract: ${JSON.stringify(parsed.error.issues.slice(0, 3))}`, 500);
+  return parsed.data;
 }
 
 /** Mirrors the server's error handler: zod details, a status carried by the error, or the permission wording that maps to 403. */
@@ -111,6 +110,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
     scheduler: { state: 'running', intervalMs: 60_000, lastTickAt: options.now ?? new Date().toISOString(), lastSuccessAt: options.now ?? new Date().toISOString(), lastErrorAt: null },
     state(merchantId) { const id = merchantId ?? api.merchantIds[0]!; return states.get(id) ?? fail("Lender not found in this workspace.", 404); },
     mutate(fn, merchantId) { return withState(merchantId ?? api.merchantIds[0]!, fn, { action: "test.mutation", objectId: "workspace", summary: "Arranged by a console test" }); },
+    lifecycleExternal: [],
     setNow(iso) { api.now = iso; if (api.scheduler.state === 'running') { api.scheduler.lastTickAt = iso; api.scheduler.lastSuccessAt = iso; } },
     failNext(pattern, failure, method) { failures.push({ pattern, failure, method: method?.toUpperCase() }); },
     hold(pattern) {
@@ -139,54 +139,54 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
     const ctx = context();
     if (!audit) return fn(current, ctx);
     const draft = structuredClone(current);
-    const before = digest(canonical(draft));
+    const before = canonicalDigest(draft);
     const result = fn(draft, ctx);
     enrolEligibleFailures(draft, ctx);
     for (const close of draft.records.filter(r => r.kind === 'closes' && !current.records.some(old => old.id === r.id))) bindCloseReviewBasis(draft, close);
     advanceRecordVersions(current, draft, ctx.now);
-    appendAudit(draft, ctx, audit.action, audit.objectId, audit.summary, { beforeDigest: before, afterDigest: digest(canonical(draft)) });
+    appendAudit(draft, ctx, audit.action, audit.objectId, audit.summary, { beforeDigest: before, afterDigest: canonicalDigest(draft) });
     states.set(merchantId, draft);
     return result;
   }
   const merchantOf = (query: Record<string, string>) => S.GetOverviewQueryParams.parse(query).merchantId;
 
   const roster = () => roles.filter(role => role !== 'Read-only').map(role => ({ actor: 'Sandbox ' + role, name: 'Demo ' + role, role }));
-  const pilotWrite = (q: Record<string,string>, fn: (s: DomainState,c: Context)=>ValopayRecord) => withState(merchantOf(q), (state,ctx) => { const before=structuredClone(state); const result=fn(state,ctx); advanceRecordVersions(before,state,ctx.now); return S.CreateRecordResponse.parse(result); }, { action:'pilot.change',objectId:'workspace',summary:'Synthetic pilot workflow' });
+  const pilotWrite = (q: Record<string,string>, fn: (s: DomainState,c: Context)=>ValopayRecord) => withState(merchantOf(q), (state,ctx) => { const before=structuredClone(state); const result=fn(state,ctx); advanceRecordVersions(before,state,ctx.now); return contract(valopayRecordSchema, result); }, { action:'pilot.change',objectId:'workspace',summary:'Synthetic pilot workflow' });
   const routes: Array<[string, RegExp, Handler]> = [
-    ['GET', /^\/v1\/team$/, () => ({mode:'sandbox', message:'Demo personas are active.',members:[],invitations:[],events:[]})],
-    ['GET', /^\/v1\/team\/readiness$/, () => ({syntheticOnly:true,canCommission:false,checkedAt:api.now,checks:[{id:'identity',name:'Staff identity',state:'not_configured',detail:'Configure a separate Clerk staging organisation and provision its first administrator.'},{id:'mfa',name:'Multi-factor authentication',state:'not_configured',detail:'Demo role changes do not verify a staff member or a second factor.'},{id:'origin',name:'Allowed staff origins',state:'not_configured',detail:'Staff changes need a configured staging address.'},{id:'database',name:'Restricted database access',state:'not_configured',detail:'The offline console test does not verify a restricted database connection.'},{id:'encryption',name:'Managed payload encryption',state:'not_configured',detail:'No external wrapping key is configured in this offline test.'}]})],
-    ['GET', /^\/v1\/operations$/, () => ({items:[],total:0,offset:0})],
-    ['GET', /^\/v1\/pilot\/journey$/, (_p,q) => pilotProgress(api.state(merchantOf(q)),'sandbox')],
+    ['GET', /^\/v1\/team$/, () => contract(staffDirectorySchema, {mode:'sandbox', actor:context().actor, members:[], lenders:[], invitations:[], events:[], message:'Demo personas are active.'})],
+    ['GET', /^\/v1\/team\/readiness$/, () => contract(accessReadinessSchema, {syntheticOnly:true,canCommission:false,checkedAt:api.now,checks:[{id:'identity',name:'Staff identity',state:'not_configured',detail:'Configure a separate Clerk staging organisation and provision its first administrator.'},{id:'mfa',name:'Multi-factor authentication',state:'not_configured',detail:'Demo role changes do not verify a staff member or a second factor.'},{id:'origin',name:'Allowed staff origins',state:'not_configured',detail:'Staff changes need a configured staging address.'},{id:'database',name:'Restricted database access',state:'not_configured',detail:'The offline console test does not verify a restricted database connection.'},{id:'encryption',name:'Managed payload encryption',state:'not_configured',detail:'No external wrapping key is configured in this offline test.'}]})],
+    ['GET', /^\/v1\/operations$/, () => contract(operationListSchema, {items:[],total:0,offset:0})],
+    ['GET', /^\/v1\/pilot\/journey$/, (_p,q) => {const s=api.state(merchantOf(q)),count=(kind:string,statuses?:string[])=>s.records.filter(r=>r.kind===kind&&(!statuses||statuses.includes(r.status))).length,open=s.records.filter(r=>r.kind==='exceptions'&&!['closed','resolved'].includes(r.status));return contract(pilotJourneySchema,{lender:s.merchant,accessMode:'sandbox',actor:context().actor,syntheticOnly:true,counts:{customers:count('customers'),batches:count('import-batches',['committed']),receipts:count('payments'),openCases:open.length,unassignedCases:open.filter(r=>!r.data.case?.assignee).length,closes:count('closes'),exports:count('exports',['ready'])}});}],
     ['GET', /^\/v1\/pilot\/import-corrections$/, (_p,q) => importCorrectionsResponseSchema.parse({...listImportCorrections(api.state(merchantOf(q)),context(),q.batchId!),reviewers:roster().filter(p=>p.role==='Finance')} )],
     ['POST', /^\/v1\/pilot\/import-corrections\/preview$/, (_p,q,b) => importCorrectionPreviewSchema.parse(previewImportCorrection(api.state(merchantOf(q)),context(),b))],
     ['POST', /^\/v1\/pilot\/import-corrections$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>importCorrectionViewSchema.parse(proposeImportCorrection(s,c,b,roster())),{action:'import.correction.propose',objectId:'imports',summary:'Propose an imported record correction'})],
     ['POST', /^\/v1\/pilot\/import-corrections\/(?<id>[^/]+)\/decision$/, (p,q,b) => withState(merchantOf(q),(s,c)=>importCorrectionViewSchema.parse(decideImportCorrection(s,c,p.id!,b,roster())),{action:'import.correction.decide',objectId:p.id!,summary:'Record independent correction decision'})],
-    ['GET', /^\/v1\/pilot\/progress$/, (_p,q) => pilotProgress(api.state(merchantOf(q)),'sandbox')],
-    ['GET', /^\/v1\/pilot\/close-reviews$/, (_p,q) => ({...closeReviewList(api.state(merchantOf(q))),actor:context().actor,reviewers:roster().filter(person=>person.role==='Finance'),accessMode:'sandbox',ownPrincipal:api.principalId})],
+    ['GET', /^\/v1\/pilot\/progress$/, (_p,q) => contract(pilotProgressSchema, pilotProgress(api.state(merchantOf(q)),'sandbox'))],
+    ['GET', /^\/v1\/pilot\/close-reviews$/, (_p,q) => contract(closeReviewListSchema, {...closeReviewList(api.state(merchantOf(q))),actor:context().actor,reviewers:roster().filter(person=>person.role==='Finance'),accessMode:'sandbox',ownPrincipal:api.principalId})],
     ['POST', /^\/v1\/pilot\/close-reviews\/prepare$/, (_p,q,b) => pilotWrite(q,(s,c)=>prepareCloseReview(s,c,prepareCloseReviewSchema.parse(b),roster()))],
     ['POST', /^\/v1\/pilot\/close-reviews\/(?<id>[^/]+)\/decision$/, (p,q,b) => pilotWrite(q,(s,c)=>decideCloseReview(s,c,p.id!,decideCloseReviewSchema.parse(b)))],
-    ['GET', /^\/v1\/sources$/, (_p,q) => {const s=api.state(merchantOf(q)), events=s.records.filter(r=>r.kind==='provider-events').sort((a,b)=>b.createdAt.localeCompare(a.createdAt));return {...sourceQuality(s,api.now,q.businessDate||undefined),paystack:{mode:'test_only',externalConnectionVerified:false,canRunFixtures:['Admin','Operations','Finance'].includes(api.role),state:'configuration_required',message:'A Paystack account, test credentials and an operator-provisioned connection are required for an external test. Local fixture results do not verify a Paystack connection.',events:events.slice(0,50).map(providerEventView),total:events.length,quarantined:events.filter(e=>e.status==='quarantined').length,duplicates:events.reduce((sum,e)=>sum+Math.max(0,Number(e.data.deliveryCount||0)-1),0)}};}],
+    ['GET', /^\/v1\/sources$/, (_p,q) => {const s=api.state(merchantOf(q)), events=s.records.filter(r=>r.kind==='provider-events').sort((a,b)=>b.createdAt.localeCompare(a.createdAt));return contract(sourcesViewSchema, {...sourceQuality(s,api.now,q.businessDate||undefined),paystack:{mode:'test_only',externalConnectionVerified:false,canRunFixtures:['Admin','Operations','Finance'].includes(api.role),state:'configuration_required',message:'A Paystack account, test credentials and an operator-provisioned connection are required for an external test. Local fixture results do not verify a Paystack connection.',events:events.slice(0,50).map(providerEventView),total:events.length,quarantined:events.filter(e=>e.status==='quarantined').length,duplicates:events.reduce((sum,e)=>sum+Math.max(0,Number(e.data.deliveryCount||0)-1),0)}});}],
     ['POST', /^\/v1\/sources\/manifests$/, (_p,q,b) => pilotWrite(q,(s,c)=>saveSourceManifest(s,c,b as any))],
     ['POST', /^\/v1\/sources\/profiles$/, (_p,q,b) => pilotWrite(q,(s,c)=>saveSourceProfile(s,c,sourceProfileInputSchema.parse(b)))],
     ['POST', /^\/v1\/sources\/profiles\/(?<id>[^/]+)\/save$/, (p,q,b) => pilotWrite(q,(s,c)=>saveSourceProfile(s,c,sourceProfileInputSchema.parse(b),p.id))],
-    ['POST', /^\/v1\/sources\/paystack\/fixtures$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>{const result=runPaystackFixture(s,c,paystackFixtureInputSchema.parse(b).scenario);return {...result,event:providerEventView(result.event)};},{action:'source.fixture',objectId:'sources',summary:'Explicit synthetic Paystack rehearsal'})],
-    ['POST', /^\/v1\/sources\/events\/(?<id>[^/]+)\/replay$/, (p,q,b) => withState(merchantOf(q),(s,c)=>{const input=providerReplayInputSchema.parse(b);return providerEventView(replayProviderEvent(s,c,p.id!,input.expectedUpdatedAt,input.reason));},{action:'source.replay',objectId:p.id!,summary:'Recheck saved provider evidence'})],
+    ['POST', /^\/v1\/sources\/paystack\/fixtures$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>{const result=runPaystackFixture(s,c,paystackFixtureInputSchema.parse(b).scenario);return contract(paystackFixtureResultSchema, {...result,event:providerEventView(result.event)});},{action:'source.fixture',objectId:'sources',summary:'Explicit synthetic Paystack rehearsal'})],
+    ['POST', /^\/v1\/sources\/events\/(?<id>[^/]+)\/replay$/, (p,q,b) => withState(merchantOf(q),(s,c)=>{const input=providerReplayInputSchema.parse(b);return contract(providerEventViewSchema, providerEventView(replayProviderEvent(s,c,p.id!,input.expectedUpdatedAt,input.reason)));},{action:'source.replay',objectId:p.id!,summary:'Recheck saved provider evidence'})],
     ['GET', /^\/v1\/work$/, (_p,q) => personalWorkViewSchema.parse(derivePersonalWork(api.state(merchantOf(q)),context(),roster(),personalWorkQuerySchema.parse(q)))],
     ['POST', /^\/v1\/work\/notifications\/read$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>workReceiptSchema.parse(recordWorkReceipt(s,c,roster(),'read',workReceiptInputSchema.parse(b))),{action:'work.read',objectId:'work',summary:'Read in-app notification'})],
     ['POST', /^\/v1\/work\/handovers\/acknowledge$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>workReceiptSchema.parse(recordWorkReceipt(s,c,roster(),'acknowledge',workReceiptInputSchema.parse(b))),{action:'work.acknowledge',objectId:'work',summary:'Acknowledge case handover'})],
-    ['GET', /^\/v1\/lifecycle$/, (_p,q) => lifecycleView(api.state(merchantOf(q)),context(),[],Number(q.offset||0))],
-    ['GET', /^\/v1\/lifecycle\/runs\/(?<id>[^/]+)$/, (p,q) => {if(api.role!=='Admin')fail('An administrator is required.',403);const s=api.state(merchantOf(q)),r=s.records.find(r=>r.kind==='retention-runs'&&r.id===p.id);if(!r)fail('Retention run not found.',404);return lifecycleRunView(s,r);}],
-    ['POST', /^\/v1\/lifecycle\/policy$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>{saveLifecyclePolicy(s,c,b);return lifecycleView(s,c);},{action:'retention.policy',objectId:'retention',summary:'Save synthetic retention policy'})],
-    ['POST', /^\/v1\/lifecycle\/holds$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>{setLifecycleHold(s,c,b);return lifecycleView(s,c);},{action:'retention.hold',objectId:'retention',summary:'Change preservation hold'})],
-    ['POST', /^\/v1\/lifecycle\/runs$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>lifecyclePreview(s,c,b),{action:'retention.preview',objectId:'retention',summary:'Save bounded deletion preview'})],
-    ['POST', /^\/v1\/lifecycle\/runs\/(?<id>[^/]+)\/approve$/, (p,q,b) => withState(merchantOf(q),(s,c)=>approveLifecycleRun(s,c,p.id!,b),{action:'retention.approve',objectId:p.id!,summary:'Approve exact retention preview'})],
+    ['GET', /^\/v1\/lifecycle$/, (_p,q) => contract(lifecycleViewSchema, lifecycleView(api.state(merchantOf(q)),context(),api.lifecycleExternal,Number(q.offset||0)))],
+    ['GET', /^\/v1\/lifecycle\/runs\/(?<id>[^/]+)$/, (p,q) => {if(api.role!=='Admin')fail('An administrator is required.',403);const s=api.state(merchantOf(q)),r=s.records.find(r=>r.kind==='retention-runs'&&r.id===p.id);if(!r)fail('Retention run not found.',404);return contract(lifecycleRunViewSchema, lifecycleRunView(s,r));}],
+    ['POST', /^\/v1\/lifecycle\/policy$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>{saveLifecyclePolicy(s,c,b);return lifecycleView(s,c,api.lifecycleExternal);},{action:'retention.policy',objectId:'retention',summary:'Save synthetic retention policy'})],
+    ['POST', /^\/v1\/lifecycle\/holds$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>{setLifecycleHold(s,c,b,api.lifecycleExternal);return lifecycleView(s,c,api.lifecycleExternal);},{action:'retention.hold',objectId:'retention',summary:'Change preservation hold'})],
+    ['POST', /^\/v1\/lifecycle\/runs$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>lifecyclePreview(s,c,b,api.lifecycleExternal),{action:'retention.preview',objectId:'retention',summary:'Save bounded deletion preview'})],
+    ['POST', /^\/v1\/lifecycle\/runs\/(?<id>[^/]+)\/approve$/, (p,q,b) => withState(merchantOf(q),(s,c)=>approveLifecycleRun(s,c,p.id!,b,api.lifecycleExternal),{action:'retention.approve',objectId:p.id!,summary:'Approve exact retention preview'})],
     ['POST', /^\/v1\/lifecycle\/runs\/(?<id>[^/]+)\/execute$/, (p,q,b) => withState(merchantOf(q),(s,c)=>{if(c.role!=='Admin')fail('An administrator is required.',403);const run=s.records.find(r=>r.kind==='retention-runs'&&r.id===p.id);if(!run||run.data.previewDigest!==b.previewDigest)fail('The approved preview does not match.',409);for(const candidate of run.data.candidates){try{if(!assertLifecycleCandidate(s,c,run.id,candidate))continue;if(candidate.kind==='raw_csv'){eraseLifecycleRawCsv(s,c,run.id,candidate);recordLifecycleReceipt(s,c,run.id,candidate,'deleted','Raw synthetic CSV removed; imported records and audit retained.');}else recordLifecycleReceipt(s,c,run.id,candidate,'blocked','External storage deletion is not simulated.');}catch(error){recordLifecycleReceipt(s,c,run.id,candidate,'blocked',error instanceof Error?error.message:'Source check failed.');}}return lifecycleRunView(s,run);},{action:'retention.execute',objectId:p.id!,summary:'Execute approved synthetic raw CSV cleanup'})],
-    ['GET', /^\/v1\/pilot\/batches$/, (_p,q)=>{const all=api.state(merchantOf(q)).records.filter(r=>r.kind==='import-batches');return {items:all.slice(Number(q.offset||0),Number(q.offset||0)+25).map(r=>batchView(r)),total:all.length,offset:Number(q.offset||0)};}],
-    ['GET', /^\/v1\/pilot\/batches\/(?<id>[^/]+)$/, (p,q)=>{const s=api.state(merchantOf(q)), batch=s.records.find(r=>r.kind==='import-batches'&&r.id===p.id);if(!batch)fail('Batch not found.',404);if(!['Admin','Operations','Finance'].includes(api.role))fail('An import operator role is required.',403);return {batch,revisions:s.records.filter(r=>r.kind==='import-revisions'&&r.data.batchId===p.id)};}],
+    ['GET', /^\/v1\/pilot\/batches$/, (_p,q)=>{const all=api.state(merchantOf(q)).records.filter(r=>r.kind==='import-batches');return contract(importBatchListSchema, {items:all.slice(Number(q.offset||0),Number(q.offset||0)+25).map(r=>batchView(r)),total:all.length,offset:Number(q.offset||0)});}],
+    ['GET', /^\/v1\/pilot\/batches\/(?<id>[^/]+)$/, (p,q)=>{const s=api.state(merchantOf(q)), batch=s.records.find(r=>r.kind==='import-batches'&&r.id===p.id);if(!batch)fail('Batch not found.',404);if(!['Admin','Operations','Finance'].includes(api.role))fail('An import operator role is required.',403);return contract(importBatchDetailSchema, {batch,revisions:s.records.filter(r=>r.kind==='import-revisions'&&r.data.batchId===p.id)});}],
     ['POST', /^\/v1\/pilot\/batches$/, (_p,q,b)=>pilotWrite(q,(s,c)=>saveImportBatch(s,c,b))],
     ['POST', /^\/v1\/pilot\/batches\/(?<id>[^/]+)\/save$/, (p,q,b)=>pilotWrite(q,(s,c)=>saveImportBatch(s,c,b,p.id))],
     ['POST', /^\/v1\/pilot\/batches\/(?<id>[^/]+)\/commit$/, (p,q,b)=>pilotWrite(q,(s,c)=>commitImportBatch(s,c,p.id!,b.expectedUpdatedAt))],
-    ['GET', /^\/v1\/pilot\/cases\/(?<id>[^/]+)$/, (p,q)=>{const s=api.state(merchantOf(q)),record=s.records.find(r=>r.kind==='exceptions'&&r.id===p.id);if(!record)fail('Exception not found.',404);return {record,assignees:roster(),events:s.records.filter(r=>r.kind==='case-events'&&r.data.exceptionId===p.id),evidence:s.records.filter(r=>r.kind==='payments')};}],
+    ['GET', /^\/v1\/pilot\/cases\/(?<id>[^/]+)$/, (p,q)=>{const s=api.state(merchantOf(q)),record=s.records.find(r=>r.kind==='exceptions'&&r.id===p.id);if(!record)fail('Exception not found.',404);return contract(caseDetailSchema, {record,assignees:roster(),events:s.records.filter(r=>r.kind==='case-events'&&r.data.exceptionId===p.id),evidence:s.records.filter(r=>r.kind==='payments').map(r=>({id:r.id,name:r.name,reference:r.reference,kind:r.kind}))});}],
     ['POST', /^\/v1\/pilot\/cases\/(?<id>[^/]+)$/, (p,q,b)=>pilotWrite(q,(s,c)=>coordinateCase(s,c,p.id!,b,roster()))],
     ['GET', /^\/v1\/customers\/(?<id>[^/]+)\/history$/, (params,query)=>{const parsed=S.GetCustomerHistoryQueryParams.parse(query);return S.GetCustomerHistoryResponse.parse(withState(parsed.merchantId,state=>pageCustomerHistory(state,params.id!,parsed)));}],
     ['GET', /^\/v1\/reconciliation\/(?<queue>[^/]+)$/, (params,query)=>{
@@ -203,8 +203,8 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
       name: "Valo Pay", environment: "sandbox", actor: `Sandbox ${api.role}`, role: api.role, authenticated: false,
       merchants: api.merchantIds.map((id) => states.get(id)!.merchant), roles: [...roles], productionEnabled: false,
     })],
-    ['GET', /^\/v1\/connected$/, (_p,query)=>withState(merchantOf(query),(state,ctx)=>connectedView(state,ctx))],
-    ['POST', /^\/v1\/connected\/actions$/, (_p,query,raw)=>{const input=connectedActionSchema.parse(raw);return withState(merchantOf(query),(state,ctx)=>({message:'Sample workspace updated.',record:runConnectedAction(state,ctx,input),mode:'synthetic',externalInstructionPerformed:false}),{action:input.action,objectId:input.recordId||'connected-workspace',summary:input.reason});}],
+    ['GET', /^\/v1\/connected$/, (_p,query)=>withState(merchantOf(query),(state,ctx)=>contract(connectedViewSchema, connectedView(state,ctx)))],
+    ['POST', /^\/v1\/connected\/actions$/, (_p,query,raw)=>{const input=connectedActionSchema.parse(raw);return withState(merchantOf(query),(state,ctx)=>contract(connectedActionResultSchema, {message:'Sample workspace updated.',record:runConnectedAction(state,ctx,input),mode:'synthetic',externalInstructionPerformed:false}),{action:input.action,objectId:input.recordId||'connected-workspace',summary:input.reason});}],
     ["GET", /^\/v1\/overview$/, (_p, query) => S.GetOverviewResponse.parse(withState(merchantOf(query), (state, ctx) => buildConsoleOverview(state, ctx.now, verifyAudit(state), api.scheduler)))],
     ["GET", /^\/v1\/records\/(?<kind>[^/]+)$/, (params, query) => {
       if (!kinds.has(params.kind!)) fail("Unknown resource.", 404);
@@ -291,7 +291,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
         if (body.customerId && !state.records.some((record) => record.kind === "customers" && record.id === body.customerId)) fail("Customer not found.", 404);
         const review = body.kind === 'reviewed-close' ? state.records.find(r=>r.kind==='close-reviews'&&r.id===(body as any).closeReviewId) : undefined;
         if(body.kind==='reviewed-close'&&(!review||review.status!=='approved'||!reviewIsCurrent(state,review)))fail('An approved, current close review is required.',409);
-        const checksum = digest(canonical({ kind: body.kind, format: body.format, customerId: body.customerId ?? null, at: ctx.now, records: state.records.length }));
+        const checksum = canonicalDigest({ kind: body.kind, format: body.format, customerId: body.customerId ?? null, at: ctx.now, records: state.records.length });
         const record = makeRecord(state, "exports", { name: `${body.kind} ${body.format}`, status: "ready", customerId: body.customerId ?? "", createdAt: ctx.now, data: { kind: body.kind, format: body.format, checksum, usedInRealCase: false, byteLength: 0, generationMs: 0, synthetic: true,...(review?{closeReviewId:review.id,closeSnapshotDigest:review.data.snapshotDigest}:{}) } });
         return { id: record.id, downloadUrl: `/api/v1/exports/${record.id}/download?merchantId=${merchantId}`, checksum, generatedAt: ctx.now };
       }, { action: "post.exports", objectId: "workspace", summary: "Synthetic workspace operation" }));

@@ -9,4 +9,4 @@
 /**
  * The original route's answer, recovered or re-run under the current validation and authorisation; its shape is that route's response.
  */
-export interface OperationReplayResult { [key: string]: unknown }
+export interface OperationReplayResult {[key: string]: unknown}

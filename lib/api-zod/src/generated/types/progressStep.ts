@@ -5,6 +5,7 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
+import type { ProgressStepState } from './progressStepState';
 
 /**
  * One pilot step with its state, the evidence behind that state and what is still missing.
@@ -12,8 +13,9 @@
 export interface ProgressStep {
   id: string;
   name: string;
+  /** @pattern ^/ */
   href: string;
-  state: string;
+  state: ProgressStepState;
   evidence: string[];
   missing: string[];
 }

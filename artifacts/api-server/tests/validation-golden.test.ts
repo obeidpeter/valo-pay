@@ -186,6 +186,52 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   checks += 25;
 }
 
+// CSV numbers: a blank optional number is absent, while a blank amount and a receipt of ₦0 are row errors.
+{
+  const state = seedMerchant("blank-numbers");
+  const rows = (kind: string, csv: string, extra: Partial<Parameters<typeof importCsv>[2]> = {}) => importCsv(state, admin, { kind, csv, syntheticOnly: true, commit: true, amountUnit: "kobo", ...extra });
+  const saved = (reference: string) => state.records.find((record) => record.reference === reference)!;
+  // Each row was refused before: a blank count read as 0 failed its minimum, and a blank fee failed the amount parser.
+  for (const [kind, csv] of [
+    ["customers", "name,reference,consentProvenance,payDay\nBlank pay day,IMP-C-BLANK,Synthetic consent,"],
+    ["due-items", "name,reference,customerId,amountKobo,dueDate,owner,outstandingKobo\nBlank outstanding,IMP-D-BLANK,DEMO-C1001,1000000,2028-12-01,lms,"],
+    ["attempts", "name,reference,customerId,amountKobo,dueItemId,number,failureCode,occurredAt\nBlank number,IMP-A-BLANK,DEMO-C1001,2500000,DEMO-LOAN-1001,,INSUFFICIENT_FUNDS,2028-12-02"],
+    ["observations", "name,reference,customerId,amountKobo,source,feeKobo,grossAmountKobo\nBlank fees,IMP-O-BLANK,DEMO-C1001,2500000,webhook,,"],
+  ] as const) { const result = rows(kind, csv); assert.equal(result.imported, 1, `${kind}: ${JSON.stringify(result.rows)}`); }
+  assert.equal(saved("IMP-C-BLANK").data.payDay, undefined, "a blank pay day is absent, not 0");
+  assert.equal(saved("IMP-D-BLANK").data.outstandingKobo, 1000000, "the whole instalment is outstanding");
+  assert.equal(saved("IMP-A-BLANK").data.number, 2, "a blank attempt number is worked out after the instalment's earlier attempt");
+  assert.deepEqual([saved("IMP-O-BLANK").data.feeKobo, saved("IMP-O-BLANK").data.grossAmountKobo], [undefined, undefined], "blank fees are absent, not ₦0");
+  // A quoted cell of spaces survives the parser's trim; it is blank all the same.
+  for (const [kind, csv] of [
+    ["customers", 'name,reference,consentProvenance,payDay\nSpaced pay day,IMP-C-SPACED,Synthetic consent," "'],
+    ["observations", 'name,reference,customerId,amountKobo,source,feeKobo,grossAmountKobo\nSpaced fees,IMP-O-SPACED,DEMO-C1001,2500000,webhook," ","\t"'],
+  ] as const) { const result = rows(kind, csv); assert.equal(result.imported, 1, `${kind} with quoted spaces: ${JSON.stringify(result.rows)}`); }
+  assert.equal(saved("IMP-C-SPACED").data.payDay, undefined, "a pay day of spaces is absent");
+  assert.deepEqual([saved("IMP-O-SPACED").data.feeKobo, saved("IMP-O-SPACED").data.grossAmountKobo], [undefined, undefined], "fees of spaces are absent");
+  // A blank count was read as 0, so such a row could be valid: its fingerprint is still the one the previous build stored.
+  const identities = { source: "blank-lms", batchId: "blank-batch", ids: ["row-1"] };
+  const mandate = "name,reference,customerId,amountKobo,workflow,consentEvidence,reminderCount\nBlank reminders,IMP-M-BLANK,DEMO-C1001,5000000,hosted_consent,SYNTHETIC-CONSENT-BLANK,";
+  assert.equal(rows("mandates", mandate, { identities }).imported, 1);
+  assert.equal(saved("IMP-M-BLANK").data.reminderCount, undefined);
+  assert.equal(saved("IMP-M-BLANK").data.importIdentity.fingerprint, "463d15b91cfdf3bc9a19ed3f974bcfb3deb73f0b46319e3989c9cd166372f3f0");
+  assert.equal(rows("mandates", mandate, { identities }).rows[0]!.status, "duplicate", "importing the same row again is recognised");
+  // The amount is still required wherever a kind has one, with the same row error.
+  const noAmount = "name,reference,customerId,amountKobo,dueDate,owner\nBlank amount,IMP-D-NOAMOUNT,DEMO-C1001,,2028-12-01,lms";
+  assert.match(rows("due-items", noAmount).rows[0]!.message, /Enter kobo as a whole number/);
+  assert.match(rows("due-items", noAmount, { amountUnit: "naira" }).rows[0]!.message, /Enter an amount in naira/);
+  // Payment evidence records money received: ₦0, or no amount at all, is refused by the import and the record API alike.
+  for (const csv of ["name,reference,customerId,amountKobo,source\nZero receipt,IMP-O-ZERO,DEMO-C1001,0,webhook", "name,reference,customerId,source\nNo amount,IMP-O-NONE,DEMO-C1001,webhook"]) {
+    const refused = rows("observations", csv);
+    assert.deepEqual([refused.invalid, refused.imported, refused.rows[0]!.message], [1, 0, "Enter the amount received. Payment evidence must be for more than ₦0."]);
+  }
+  assert.equal(state.records.some((record) => ["IMP-O-ZERO", "IMP-O-NONE", "IMP-D-NOAMOUNT"].includes(record.reference)), false);
+  const customerId = saved("IMP-C-BLANK").id;
+  assert.throws(() => validateRecord(state, ops, "observations", { name: "Zero", reference: "API-O-ZERO", customerId, amountKobo: 0, data: { source: "webhook" } }), /more than ₦0/);
+  assert.doesNotThrow(() => validateRecord(state, ops, "observations", { name: "One kobo", reference: "API-O-ONE", customerId, amountKobo: 1, data: { source: "webhook" } }));
+  checks += 19;
+}
+
 // ---------- The bank-detail screen refuses account and card numbers, not record IDs ----------
 {
   for (const value of [{ accountId: "1234567890" }, { "Account number": "0123456789" }, { bank: "1234-5678-9012" }, { cardNumber: "4111111111111111" }, { virtualAccountCustomerId: "0123456789" }, { accounts: "0123456789" }, { payerCards: "4111 1111 1111 1111" }]) {
@@ -210,4 +256,4 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   checks += 16;
 }
 
-console.log(`Validation golden tests passed (${checks} checks): state machines, exception codes, cutover contract, failure-code normalisation, batch/status vocabularies, template lifecycle, guided CSV imports and the bank-detail screen.`);
+console.log(`Validation golden tests passed (${checks} checks): state machines, exception codes, cutover contract, failure-code normalisation, batch/status vocabularies, template lifecycle, guided CSV imports, blank CSV numbers and ₦0 receipts, and the bank-detail screen.`);

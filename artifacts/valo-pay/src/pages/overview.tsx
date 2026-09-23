@@ -4,12 +4,13 @@ import { Link } from 'wouter';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow, EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
+import { RefreshProblem } from '@/components/load-problem';
 import { DailyCloseStatus } from '@/components/daily-close-status';
 import { Button } from '@/components/ui/button';
 import { readableLabel } from '@/components/record-label';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetOverview, getGetOverviewQueryKey } from '@workspace/api-client-react';
-import { formatKobo, formatDate, formatCompactDate, formatNumber, formatCount } from '@/lib/formatters';
+import { formatKobo, formatDate, formatCompactDate, formatNumber, formatCount, formatPercent } from '@/lib/formatters';
 import { ArrowDownLeft, ArrowUpRight, ArrowRight, AlertCircle, CheckCheck, Clock, Activity, FileBarChart2, ShieldCheck } from 'lucide-react';
 
 const queueDestinations: Record<string, string> = {
@@ -30,14 +31,16 @@ const metricIcons = [ArrowDownLeft, ArrowUpRight, CheckCheck, AlertCircle];
 
 export default function OverviewPage() {
   const { merchantId } = useWorkspace();
-  const { data: overview, isLoading, error, refetch } = useGetOverview(
+  const overviewQuery = useGetOverview(
     { merchantId: merchantId! },
     { query: { enabled: !!merchantId, refetchInterval: 60_000, queryKey: getGetOverviewQueryKey({ merchantId: merchantId! }) } }
   );
+  const { data: overview, isLoading, error, refetch } = overviewQuery;
 
   if (!merchantId) return null;
   if (isLoading) return <Loading what="the overview" />;
-  if (error) return <div role="alert" className="rounded-xl border bg-card p-6"><p className="font-semibold">Unable to load the overview</p><p className="mt-1 text-sm text-muted-foreground">Your records are unchanged. Try loading this page again.</p><Button variant="outline" className="mt-4" onClick={() => refetch()}>Try again</Button></div>;
+  // A failed refresh keeps the figures on the page, with a notice; only a first load that failed shows this card.
+  if (error && !overview) return <div role="alert" className="rounded-xl border bg-card p-6"><p className="font-semibold">Unable to load the overview</p><p className="mt-1 text-sm text-muted-foreground">Your records are unchanged. Try loading this page again.</p><Button variant="outline" className="mt-4" onClick={() => refetch()}>Try again</Button></div>;
   if (!overview) return null;
 
   const upcoming = [...overview.upcoming].sort((a, b) => String(a.data.dueDate || '').localeCompare(String(b.data.dueDate || '')));
@@ -52,6 +55,8 @@ export default function OverviewPage() {
         </div>
         <Button asChild variant="outline" className="gap-2"><Link href="/reports"><FileBarChart2 aria-hidden="true" className="h-4 w-4" /> View reports</Link></Button>
       </header>
+
+      <RefreshProblem what="The overview" query={overviewQuery} />
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl border bg-card px-4 py-3 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-2 font-medium text-foreground"><Clock aria-hidden="true" className="h-4 w-4 text-muted-foreground" /> Daily close</span>
@@ -72,7 +77,7 @@ export default function OverviewPage() {
                   <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${metric.key === 'settled' ? 'bg-success/10 text-success' : metric.key === 'exceptions' ? 'bg-warning text-warning-foreground' : 'bg-secondary/60 text-muted-foreground'}`}><Icon aria-hidden="true" className="h-4 w-4" /></span>
                 </div>
                 <p className="mt-4 break-words text-[1.75rem] font-semibold leading-none tracking-tight tabular-nums">
-                  {metric.unit === 'kobo' ? formatKobo(metric.value) : formatNumber(metric.value)}{metric.unit === 'percent' ? '%' : ''}
+                  {metric.unit === 'kobo' ? formatKobo(metric.value) : metric.unit === 'percent' ? formatPercent(metric.value / 100) : formatNumber(metric.value)}
                   {metric.unit !== 'kobo' && metric.unit !== 'percent' && metric.unit !== 'count' && <span className="ml-1 text-sm font-normal text-muted-foreground">{metric.unit}</span>}
                 </p>
                 {metric.detail && <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{metric.detail}</p>}
@@ -85,7 +90,7 @@ export default function OverviewPage() {
       <section aria-labelledby="overview-alerts-title">
         <div className="mb-3 flex items-center gap-2">
           <h2 id="overview-alerts-title" className="text-sm font-semibold">Alerts</h2>
-          {overview.alerts.length > 0 && <span className="rounded-full bg-warning px-2 py-0.5 text-xs font-medium text-warning-foreground">{overview.alerts.length}</span>}
+          {overview.alerts.length > 0 && <span className="rounded-full bg-warning px-2 py-0.5 text-xs font-medium text-warning-foreground">{formatNumber(overview.alerts.length)}</span>}
         </div>
         {overview.alerts.length === 0 ? (
           <div className="flex items-start gap-3 rounded-xl border border-success/20 bg-success/5 p-4">
@@ -124,7 +129,7 @@ export default function OverviewPage() {
             {overview.queues.map(queue => (
               <Link key={queue.key} href={queueDestinations[queue.key] || '/exceptions'} className="group flex min-h-16 items-center gap-3 px-5 py-3.5 transition-colors hover:bg-secondary/40">
                 <div className="min-w-0 flex-1"><p className="text-sm font-medium">{queue.label}</p><p className="mt-0.5 text-xs text-muted-foreground">{queue.detail}</p></div>
-                <span className={`flex h-7 min-w-7 items-center justify-center rounded-md px-1.5 text-xs font-semibold tabular-nums ${queue.value > 0 ? 'bg-warning text-warning-foreground' : 'bg-secondary/60 text-muted-foreground'}`}>{queue.value}</span>
+                <span className={`flex h-7 min-w-7 items-center justify-center rounded-md px-1.5 text-xs font-semibold tabular-nums ${queue.value > 0 ? 'bg-warning text-warning-foreground' : 'bg-secondary/60 text-muted-foreground'}`}>{formatNumber(queue.value)}</span>
                 <ArrowRight aria-hidden="true" className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 motion-reduce:transform-none" />
               </Link>
             ))}

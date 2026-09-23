@@ -7,12 +7,11 @@ import {
   type ImportRecordsMutationVariables, type CreateExportMutationVariables, type RetryExportJobMutationVariables,
 } from '@workspace/api-client-react';
 import { CreateRecordResponse, UpdateRecordResponse, PerformActionResponse, ImportRecordsResponse, UpdateSettingsResponse, CreateExportResponse, RetryExportJobResponse } from '@workspace/api-zod';
-import { definitiveRefusalStatuses } from '@workspace/valopay-schema';
+import { canonicalJson, definitiveRefusalStatuses } from '@workspace/valopay-schema';
 
-/** Object key order must not turn an unchanged retry into another operation. */
+/** Object key order must not turn an unchanged retry into another operation: the canonical form, the same in any browser locale. */
 export function submissionFingerprint(value: unknown): string {
-  return JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
-    ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
+  return canonicalJson(value);
 }
 
 type RequestOptions = Parameters<typeof performAction>[2];

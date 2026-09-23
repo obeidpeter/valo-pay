@@ -11,7 +11,10 @@ const suffix = randomBytes(6).toString("hex"), schema = `valopay_runtime_test_${
 const tables = ["valopay_workspaces", "valopay_merchants", "valopay_records", "valopay_idempotency", "valopay_operations", "valopay_teams", "valopay_staff_memberships", "valopay_staff_invitations", "valopay_staff_events", "valopay_staff_lender_access"];
 let runtimePool: InstanceType<typeof Pool> | undefined;
 const scopeMigration = await readFile(new URL("../../../lib/db/migrations/006_runtime_isolation_scope.sql", import.meta.url), "utf8");
+// The application's own tables, which nothing here may change.
+const publicFlags = async () => (await admin.query("SELECT c.relname,c.relrowsecurity,c.relforcerowsecurity,pg_get_userbyid(c.relowner) AS owner FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname=ANY($1::text[]) ORDER BY c.relname", [tables])).rows;
 try {
+  const publicBefore = await publicFlags();
   const owner = await admin.connect();
   try {
     // All destructive cleanup later is restricted to these generated names.
@@ -35,10 +38,25 @@ try {
       await owner.query(`INSERT INTO "${schema}".valopay_staff_memberships(id,workspace_id,user_id,display_name,role,expires_at) VALUES($1,'workspace-a',$2,'Synthetic member',$3,now()+interval '30 days')`, [id, user, role]);
       await owner.query(`INSERT INTO "${schema}".valopay_staff_lender_access(membership_id,merchant_id,granted_by) VALUES($1,'lender-a','fixture')`, [id]);
     }
+    const migration = await readFile(new URL("../../../lib/db/migrations/005_runtime_isolation.sql", import.meta.url), "utf8");
+    const roles = async () => (await owner.query("SELECT rolname,rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolreplication,rolbypassrls FROM pg_roles WHERE rolname=ANY($1::text[]) ORDER BY rolname=$2 DESC", [[appRole, helperRole], appRole])).rows;
+    // 005 refuses without its explicit opt-in, and in the application's own schema even with it.
+    await owner.query(`SET search_path TO "${schema}", public`);
+    await owner.query("SELECT set_config('valopay.runtime_app_role',$1,false),set_config('valopay.runtime_helper_role',$2,false)", [appRole, helperRole]);
+    await assert.rejects(() => owner.query(migration), /explicit commissioning/, "005 needs the explicit opt-in.");
+    await owner.query("ROLLBACK");
+    await owner.query("SET search_path TO public");
+    await owner.query("SELECT set_config('valopay.runtime_migration','staging-only',false)");
+    await assert.rejects(() => owner.query(migration), /public is refused/, "005 refuses the application's own schema.");
+    await owner.query("ROLLBACK");
+    assert.deepEqual([await roles(), await publicFlags()], [[], publicBefore], "A refused migration creates no role and leaves the application's tables as they were.");
     await owner.query(`SET search_path TO "${schema}", public`);
     await owner.query("SELECT set_config('valopay.runtime_migration','staging-only',false),set_config('valopay.runtime_app_role',$1,false),set_config('valopay.runtime_helper_role',$2,false)", [appRole, helperRole]);
-    const migration = await readFile(new URL("../../../lib/db/migrations/005_runtime_isolation.sql", import.meta.url), "utf8");
     await owner.query(migration);
+    assert.deepEqual(await roles(), [
+      { rolname: appRole, rolcanlogin: true, rolsuper: false, rolcreatedb: false, rolcreaterole: false, rolreplication: false, rolbypassrls: false },
+      { rolname: helperRole, rolcanlogin: false, rolsuper: false, rolcreatedb: false, rolcreaterole: false, rolreplication: false, rolbypassrls: true },
+    ], "005 creates a restricted login, and a helper owner that cannot log in.");
     // 006 runs as its own explicit step: 005 clears the commissioning opt-in when it finishes.
     await assert.rejects(() => owner.query(scopeMigration), /explicit commissioning/, "006 needs its own explicit opt-in.");
     await owner.query("ROLLBACK");
@@ -96,6 +114,36 @@ try {
     assert.deepEqual((await client.query("SELECT DISTINCT merchant_id FROM valopay_staff_lender_access")).rows.map(row => row.merchant_id), ["lender-a"]);
     assert.equal((await client.query("UPDATE valopay_records SET name='forbidden' WHERE merchant_id='lender-b'")).rowCount, 0);
     assert.equal((await client.query("UPDATE valopay_records SET name='forbidden' WHERE merchant_id='lender-a-private'")).rowCount, 0);
+    assert.equal((await client.query("UPDATE valopay_merchants SET info=info WHERE id='lender-b'")).rowCount, 0);
+    assert.equal((await client.query("UPDATE valopay_idempotency SET response='{}'::jsonb WHERE merchant_id='lender-a'")).rowCount, 0, "Only an administrator may replace a stored answer.");
+    // Its own lender's records and journal it may write; a rolled-back write leaves nothing.
+    await client.query("SAVEPOINT own_writes");
+    assert.equal((await client.query("UPDATE valopay_records SET name='Synthetic edit' WHERE id='record-lender-a'")).rowCount, 1);
+    assert.equal((await client.query("INSERT INTO valopay_records(id,merchant_id,kind,name,status,data) VALUES('finance-new','lender-a','customers','Synthetic addition','active','{}')")).rowCount, 1);
+    assert.equal((await client.query("INSERT INTO valopay_idempotency(id,merchant_id,request_hash,response) VALUES('finance-key','lender-a','fixture','{}')")).rowCount, 1);
+    await client.query("ROLLBACK TO SAVEPOINT own_writes");
+    assert.equal((await client.query("SELECT count(*)::int AS count FROM valopay_records WHERE id='finance-new' OR name='Synthetic edit'")).rows[0].count, 0);
+    // Nothing for another lender or workspace, no scope or identity column, no deletion and no change to row security itself.
+    const refused: [string, RegExp][] = [
+      ["INSERT INTO valopay_records(id,merchant_id,kind,name,status,data) VALUES('foreign-new','lender-b','customers','Forbidden','active','{}')", /row-level security/],
+      ["INSERT INTO valopay_records(id,merchant_id,kind,name,status,data) VALUES('private-new','lender-a-private','customers','Forbidden','active','{}')", /row-level security/],
+      ["INSERT INTO valopay_idempotency(id,merchant_id,request_hash,response) VALUES('foreign-key','lender-b','fixture','{}')", /row-level security/],
+      ["INSERT INTO valopay_merchants(id,workspace_id,info,settings) VALUES('finance-lender','workspace-a','{}','{}')", /row-level security/],
+      ["INSERT INTO valopay_workspaces(id,principal_hash) VALUES('unprovisioned','new-principal')", /permission denied/],
+      ["UPDATE valopay_workspaces SET principal_hash='spoofed' WHERE id='workspace-a'", /permission denied/],
+      ["UPDATE valopay_merchants SET workspace_id='workspace-b' WHERE id='lender-a'", /permission denied/],
+      ["UPDATE valopay_records SET merchant_id='lender-b' WHERE id='record-lender-a'", /permission denied/],
+      ["UPDATE valopay_records SET merchant_id='lender-a-private' WHERE id='record-lender-a'", /permission denied/],
+      ["UPDATE valopay_records SET id='moved' WHERE id='record-lender-a'", /permission denied/],
+      ["DELETE FROM valopay_records WHERE id='record-lender-a'", /permission denied/],
+      ["ALTER TABLE valopay_records DISABLE ROW LEVEL SECURITY", /must be owner/],
+      ["ALTER TABLE valopay_records NO FORCE ROW LEVEL SECURITY", /must be owner/],
+      ["DROP POLICY valopay_runtime_scope ON valopay_records", /must be owner/],
+      [`ALTER ROLE "${appRole}" BYPASSRLS`, /permission denied/],
+      // Turning row security off makes a read fail, never skip a policy.
+      ["SET LOCAL row_security = off; SELECT id FROM valopay_records", /row-level security/],
+    ];
+    for (const [sql, refusal] of refused) { await client.query("SAVEPOINT refused"); await assert.rejects(() => client.query(sql), refusal, sql); await client.query("ROLLBACK TO SAVEPOINT refused"); }
     await client.query("SAVEPOINT escalation");
     await assert.rejects(() => client.query("UPDATE valopay_staff_memberships SET role='Admin' WHERE id='finance-a'"), /row-level security/);
     await client.query("ROLLBACK TO SAVEPOINT escalation");
@@ -122,12 +170,27 @@ try {
     for (const sql of blockedInserts) { await assert.rejects(() => client.query(sql), /row-level security/); await client.query("ROLLBACK TO SAVEPOINT reader_write"); }
     await client.query("ROLLBACK");
     await client.query("BEGIN"); await isolation.bindRuntimeIdentity(client, { organizationId: "org_runtimeA", userId: "user_adminA" });
-    assert.equal((await client.query("UPDATE valopay_idempotency SET response='{}'::jsonb WHERE merchant_id='lender-a'")).rowCount, 1, "Admin lifecycle redaction can replace the scoped idempotency response."); await client.query("ROLLBACK");
+    assert.equal((await client.query("UPDATE valopay_idempotency SET response='{}'::jsonb WHERE merchant_id='lender-a'")).rowCount, 1, "Admin lifecycle redaction can replace the scoped idempotency response.");
+    // An administrator adds lenders to its own workspace only: the workspace scope, not the role, refuses another's.
+    await client.query("SAVEPOINT admin_scope");
+    await assert.rejects(() => client.query("INSERT INTO valopay_merchants(id,workspace_id,info,settings) VALUES('admin-foreign','workspace-b','{}','{}')"), /row-level security/, "An administrator of workspace A cannot add a lender to workspace B.");
+    await client.query("ROLLBACK TO SAVEPOINT admin_scope");
+    assert.equal((await client.query("INSERT INTO valopay_merchants(id,workspace_id,info,settings) VALUES('admin-own','workspace-a','{}','{}')")).rowCount, 1, "It can add one to its own.");
+    await client.query("ROLLBACK");
     await client.query("BEGIN"); await client.query(`SET LOCAL search_path TO "${schema}", pg_catalog`);
     for (const table of tables) assert.equal((await client.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count, 0, `${table}: transaction scope does not leak through the pool.`);
+    await client.query("SAVEPOINT unscoped");
+    await assert.rejects(() => client.query("INSERT INTO valopay_records(id,merchant_id,kind,name,status,data) VALUES('unscoped-new','lender-a','customers','Forbidden','active','{}')"), /row-level security/, "Nothing is written without a scope.");
+    await client.query("ROLLBACK TO SAVEPOINT unscoped");
+    // Half a scope, or an empty one, is none: the organisation and the person must match an active membership together.
+    for (const [org, user] of [["org_runtimeA", ""], ["", "user_financeA"], ["", ""]]) {
+      await client.query("SELECT set_config('valopay.runtime_org',$1,true),set_config('valopay.runtime_user',$2,true)", [org, user]);
+      for (const table of tables) assert.equal((await client.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count, 0, `${table}: organisation "${org}" and user "${user}" see nothing.`);
+    }
     await client.query("ROLLBACK");
     await client.query("BEGIN"); await isolation.bindRuntimeIdentity(client, { organizationId: "org_runtimeB", userId: "user_financeA" });
-    assert.equal((await client.query("SELECT count(*)::int AS count FROM valopay_records")).rows[0].count, 0, "User/organisation mixing produces no authorised rows."); await client.query("ROLLBACK");
+    for (const table of tables) assert.equal((await client.query(`SELECT count(*)::int AS count FROM ${table}`)).rows[0].count, 0, `${table}: user/organisation mixing produces no authorised rows.`);
+    await client.query("ROLLBACK");
     await client.query("BEGIN"); await isolation.bindRuntimeIdentity(client, { organizationId: "org_runtimeA", userId: "user_invitee" }, { token: "token-workspace-a", verifiedEmails: ["workspace-a@example.test"] });
     assert.equal((await client.query("SELECT id FROM valopay_staff_invitations")).rows[0].id, "invite-workspace-a");
     assert.equal((await client.query("SELECT count(*)::int AS count FROM valopay_merchants")).rows[0].count, 0, "An invitation scope has no lender grants."); await client.query("ROLLBACK");
@@ -166,7 +229,8 @@ try {
     const placeholderGuard = guardFunction.replace(`session_user='${appRole}'`, "session_user='{role}'");
     assert.notEqual(placeholderGuard, guardFunction, "The guard tests the runtime login by name.");
     const guard = "CREATE TRIGGER valopay_runtime_workspace_guard BEFORE UPDATE ON valopay_workspaces FOR EACH ROW EXECUTE FUNCTION valopay_runtime_guard_workspace()";
-    const policyRefusal = /differ from the reviewed runtime policy set/, helperRefusal = /differs from the reviewed runtime helper set/;
+    const policyRefusal = /differ from the reviewed runtime policy set/, helperRefusal = /differs from the reviewed runtime helper set/, tableRefusal = /forced row security and a separate owner/;
+    const tableOwner = (await dba.query("SELECT pg_get_userbyid(c.relowner) AS owner FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname='valopay_teams'", [schema])).rows[0].owner as string;
     const weakenings = [
       { name: "a lender scope that admits every lender", apply: "ALTER POLICY valopay_runtime_scope ON valopay_merchants USING (true)", restore: `ALTER POLICY valopay_runtime_scope ON valopay_merchants USING (${merchantsScope})`, refusal: policyRefusal, differences: ["valopay_merchants:valopay_runtime_scope:SELECT: USING expression differs"] },
       { name: "an insert check that admits any lender", apply: "ALTER POLICY valopay_runtime_insert ON valopay_records WITH CHECK (true)", restore: `ALTER POLICY valopay_runtime_insert ON valopay_records WITH CHECK (${recordsInsert})`, refusal: policyRefusal, differences: ["valopay_records:valopay_runtime_insert:INSERT: WITH CHECK expression differs"] },
@@ -179,6 +243,10 @@ try {
       { name: "a workspace guard narrowed to one column", apply: `DROP TRIGGER valopay_runtime_workspace_guard ON valopay_workspaces; ${guard.replace("UPDATE ON", "UPDATE OF principal_hash ON")}`, restore: `DROP TRIGGER valopay_runtime_workspace_guard ON valopay_workspaces; ${guard}`, refusal: policyRefusal, differences: ["valopay_runtime_workspace_guard: definition differs"] },
       // Read with the runtime schema first, this policy would render exactly as reviewed.
       { name: "a built-in shadowed from the runtime schema", apply: `CREATE FUNCTION "${schema}".current_setting(text, boolean) RETURNS text LANGUAGE sql STABLE AS $body$ SELECT pg_catalog.current_setting($1, $2) $body$; ALTER POLICY valopay_runtime_insert ON valopay_staff_events WITH CHECK (${eventsInsert.replace("current_setting(", `"${schema}".current_setting(`)})`, restore: `ALTER POLICY valopay_runtime_insert ON valopay_staff_events WITH CHECK (${eventsInsert}); DROP FUNCTION "${schema}".current_setting(text, boolean)`, refusal: policyRefusal, differences: ["valopay_staff_events:valopay_runtime_insert:INSERT: WITH CHECK expression differs"] },
+      // The tables themselves, which the check has always refused: row security no longer forced, or a table the runtime login owns and so could unforce.
+      { name: "a table whose row security is no longer forced", apply: "ALTER TABLE valopay_records NO FORCE ROW LEVEL SECURITY", restore: "ALTER TABLE valopay_records FORCE ROW LEVEL SECURITY", refusal: tableRefusal, differences: undefined },
+      // Handing the table back merges the login's own grant into the owner's, so the restore grants it again.
+      { name: "a table the runtime login owns", apply: `ALTER TABLE valopay_teams OWNER TO "${appRole}"`, restore: `ALTER TABLE valopay_teams OWNER TO "${tableOwner}"; GRANT SELECT ON valopay_teams TO "${appRole}"`, refusal: tableRefusal, differences: undefined },
     ];
     for (const weakening of weakenings) {
       await dba.query(weakening.apply);
@@ -291,7 +359,12 @@ try {
   await assert.rejects(() => store.inWorkspace(req, { cookie() {} } as any, ctx => store.loadState(ctx, "lender-a", "share"), "read"), /not found/);
   const elevated = await admin.connect(); try { await elevated.query("BEGIN"); await assert.rejects(() => isolation.bindRuntimeIdentity(elevated, { organizationId: "org_runtimeA", userId: "user_adminA" }), /elevated/); await elevated.query("ROLLBACK"); } finally { elevated.release(); }
   const configured = process.env.VALOPAY_RUNTIME_SCHEMA; process.env.VALOPAY_RUNTIME_SCHEMA = "public"; assert.throws(() => isolation.runtimeIsolationConfiguration(), /public/); process.env.VALOPAY_RUNTIME_SCHEMA = configured;
-  console.log("Runtime isolation passed: actual restricted login, ten forced-RLS tables, the reviewed policies, helpers and workspace guard compared by definition (nine weakenings refused), readiness from the transaction's own check, once-per-statement lender scope at pilot scale, pooled-scope reset, mixed-tenant denial, per-lender grants, concurrent invitation acceptance and renewal, a read queued behind a change to its own membership refused with a 409, service requester checks and real repository/MFA integration.");
+  // /api/readyz reads the isolated schema, as the restricted login: its copied tables carry every column and, under generated names, every index this build needs.
+  const ready = await store.pingDatabase();
+  assert.deepEqual([ready.status, ready.schema], ["ok", { status: "ok", missing: [] }], "readiness checks the isolated runtime schema");
+  await store.closeDatabase(); runtimePool = undefined;
+  assert.deepEqual(await publicFlags(), publicBefore, "The rehearsal leaves the application's own tables as they were.");
+  console.log("Runtime isolation passed: migrations refused without opt-in or in the application's schema, actual restricted login, ten forced-RLS tables, the reviewed policies, helpers and workspace guard compared by definition (eleven weakenings refused), readiness from the transaction's own check and of the isolated schema, once-per-statement lender scope at pilot scale, pooled-scope reset, no rows or writes without a full scope, own-lender writes and rollback, cross-lender, identity-column, delete and row-security changes refused, mixed-tenant denial, per-lender grants, concurrent invitation acceptance and renewal, a read queued behind a change to its own membership refused with a 409, service requester checks and real repository/MFA integration.");
 } finally {
   if (runtimePool) await runtimePool.end();
   if (!/^valopay_runtime_test_[a-f0-9]+$/.test(schema) || !/^runtime_(app|helper)_[a-f0-9]+$/.test(appRole) || !/^runtime_(app|helper)_[a-f0-9]+$/.test(helperRole)) throw new Error("Unsafe generated test cleanup target.");

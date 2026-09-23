@@ -287,6 +287,7 @@ it("offers to check or discard a lost invitation revocation, and discarding it f
     if (path === "/api/v1/team" && (options?.method ?? "GET") === "GET")
       return json({
         mode: "staff",
+        actor: "Pilot Admin",
         message: "Staff access is active.",
         members: [],
         lenders: [],

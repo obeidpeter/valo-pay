@@ -21,5 +21,6 @@ export type PersonalWorkViewHistoryItem = {
   sourceId: string;
   summary: string;
   at: Date;
+  /** @pattern ^/ */
   href: string;
 };

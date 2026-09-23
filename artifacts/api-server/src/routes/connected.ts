@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { z } from "zod";
+import { connectedActionResultFor, connectedViewSchema } from "@workspace/valopay-schema";
 import {
   inWorkspace,
   loadState,
@@ -9,10 +9,11 @@ import {
   findIdempotency,
   saveIdempotency,
   digest,
-  canonical,
   fail,
   completeOperation,
 } from "../lib/valopay-store";
+import { requestFingerprint } from "../lib/digests";
+import { contractAnswer, lenderQuery, replayedAnswer, requiredKey } from "../lib/contract";
 import {
   connectedActionSchema,
   connectedView,
@@ -21,23 +22,25 @@ import {
 import { ConnectedCashError } from "../domain/connected-cash";
 import { CreditDomainError } from "../domain/connected-credit";
 const router: IRouter = Router();
-const query = z.object({ merchantId: z.string().min(1).max(100) });
 router.get("/v1/connected", async (req, res) => {
-  const { merchantId } = query.parse(req.query);
+  const { merchantId } = lenderQuery(req);
   res.json(
     await inWorkspace(
       req,
       res,
       async (ctx) =>
-        connectedView(await loadState(ctx, merchantId, "share"), ctx),
+        contractAnswer(
+          connectedViewSchema,
+          connectedView(await loadState(ctx, merchantId, "share"), ctx),
+        ),
       "read",
     ),
   );
 });
 router.post("/v1/connected/actions", async (req, res) => {
-  const { merchantId } = query.parse(req.query),
+  const key = requiredKey(req),
+    { merchantId } = lenderQuery(req),
     input = connectedActionSchema.parse(req.body);
-  const key = z.string().min(8).max(200).parse(req.header("Idempotency-Key"));
   res.json(
     await inWorkspace(
       req,
@@ -45,13 +48,17 @@ router.post("/v1/connected/actions", async (req, res) => {
       async (ctx) => {
         const state = await loadState(ctx, merchantId, "update");
         const id = digest(`connected:${merchantId}:${key}`),
-          fingerprint = digest(canonical({ input, actor: ctx.actor }));
+          fingerprint = requestFingerprint({ input, actor: ctx.actor });
+        // The one shape this action answers with, of this lender: an outcome never passes for a record.
+        const answer = connectedActionResultFor(input.action, merchantId);
         const prior = await findIdempotency(ctx, id);
         if (prior) {
           if (prior.request_hash !== fingerprint)
             fail("This request key was already used for different input.", 409);
-          await completeOperation(ctx, prior.response);
-          return prior.response;
+          // The action was saved with this receipt: never answered as saving nothing, even when it no longer matches.
+          const receipt = replayedAnswer(req, answer, prior.response);
+          await completeOperation(ctx, receipt);
+          return receipt;
         }
         let record;
         try {
@@ -62,6 +69,14 @@ router.post("/v1/connected/actions", async (req, res) => {
           if (error instanceof ConnectedCashError) fail(error.message, 400);
           throw error;
         }
+        // Versions advance first, so the answer carries them; it is checked before anything is saved.
+        const changes = settleChanges(ctx, state);
+        const result = contractAnswer(answer, {
+          message: "Sample workspace updated.",
+          record,
+          mode: "synthetic",
+          externalInstructionPerformed: false,
+        });
         appendAudit(
           state,
           ctx,
@@ -69,18 +84,12 @@ router.post("/v1/connected/actions", async (req, res) => {
           input.recordId || "connected-workspace",
           input.reason,
           {
-            ...settleChanges(ctx, state),
+            ...changes,
             mode: "synthetic",
             externalInstructionPerformed: false,
           },
         );
         await saveState(ctx, state);
-        const result = {
-          message: "Sample workspace updated.",
-          record,
-          mode: "synthetic",
-          externalInstructionPerformed: false,
-        };
         await saveIdempotency(ctx, id, fingerprint, result);
         return result;
       },

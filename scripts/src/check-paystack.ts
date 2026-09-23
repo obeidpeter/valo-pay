@@ -4,13 +4,19 @@ import { paystackIngressStatus } from '../../artifacts/api-server/src/providers/
 // Operator-only, read-only check. Never accept a key as a command-line argument.
 const usage = 'Use: check-paystack [--reference TEST_REFERENCE --amount-kobo POSITIVE_INTEGER] [--direct-debit] [--mandate-reference TEST_MANDATE_REFERENCE]';
 try {
-  const args = process.argv.slice(2);
+  // `pnpm run check:paystack -- --reference …` passes the `--` on: skip it, so both forms work.
+  const given = process.argv.slice(2);
+  const args = given[0] === '--' ? given.slice(1) : given;
   const flags = new Map<string, string>();
   for (let index = 0; index < args.length; index++) {
     const key = args[index]!;
     if (key === '--help') { console.log(usage); process.exit(0); }
     if (key === '--direct-debit') { flags.set(key, 'true'); continue; }
-    if (!['--reference', '--amount-kobo', '--mandate-reference'].includes(key) || flags.has(key) || !args[index + 1] || args[index + 1]!.startsWith('--')) throw new PaystackError('invalid_input', usage);
+    const valued = ['--reference', '--amount-kobo', '--mandate-reference'], option = /^(--?[A-Za-z][\w-]{0,40})(=?)/.exec(key)?.[1];
+    // A mistyped option is named, and an option written as --name=value is shown the form it takes; neither repeats a value.
+    if (option && !valued.includes(option) && !['--direct-debit', '--help'].includes(option)) throw new PaystackError('invalid_input', `Unknown option ${option}. ${usage}`);
+    if (option && key !== option) throw new PaystackError('invalid_input', `Give ${option}'s value after a space, not after "=". ${usage}`);
+    if (!valued.includes(key) || flags.has(key) || !args[index + 1] || args[index + 1]!.startsWith('--')) throw new PaystackError('invalid_input', usage);
     flags.set(key, args[++index]!);
   }
   const paymentReference = flags.get('--reference');

@@ -119,6 +119,25 @@ test("close range uses native date fields, pages summaries and loads evidence on
     page.getByRole("button", { name: "New experiment" }),
   ).toBeVisible();
 });
+test("arriving at the accuracy review scrolls there once; paging a table keeps the view on that table", async ({
+  page,
+}) => {
+  await page.goto("/reconciliation#precision-audit");
+  const review = page.locator("#precision-audit");
+  await expect(review).toBeFocused();
+  await expect(review).toBeInViewport();
+  const pager = page.getByRole("navigation", {
+    name: "proposed matches pagination",
+  });
+  for (const next of ["Page 2 of 3", "Page 3 of 3"]) {
+    await pager
+      .getByRole("button", { name: "Next page of proposed matches" })
+      .click();
+    await expect(pager.getByText(next, { exact: true })).toBeVisible();
+    await expect(pager).toBeInViewport();
+    await expect(review).not.toBeFocused();
+  }
+});
 test("reconciliation pages retain evidence and reject a proposed match with a reason", async ({
   page,
   request,

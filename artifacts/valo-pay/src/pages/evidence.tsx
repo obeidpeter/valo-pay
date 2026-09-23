@@ -7,7 +7,7 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { useGetGates, useListRecords, getGetGatesQueryKey, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { ShieldCheck, AlertTriangle, FileCheck, CheckCircle, Search } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
-import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
+import { formatKobo, formatDate, formatNumber, formatPercent } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { readableLabel } from '@/components/record-label';
 import { LoadProblem } from '@/components/load-problem';
@@ -86,7 +86,7 @@ export default function EvidencePage() {
     <div className="space-y-8">
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Evidence & readiness</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Go-live evidence</h1>
           <p className="text-muted-foreground mt-1">Track requirements, commercial terms and evidence for readiness decisions. Sample data cannot establish live readiness.</p>
         </div>
         <ExportJobControl kind="gate-pack" formats={['pdf']} label="Export evidence pack" />
@@ -182,7 +182,7 @@ export default function EvidencePage() {
             {gateOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </div>
-        {evidenceError ? <LoadProblem what="evidence" error={evidenceError} retry={() => { void retryEvidence(); }} busy={fetchingEvidence} /> : <ScrollFrame label="Evidence register" className="overflow-x-auto">
+        {evidenceError ? <LoadProblem what="evidence" error={evidenceError} retry={() => { void retryEvidence(); }} busy={fetchingEvidence} /> : <ScrollFrame label="Evidence register table" className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead className="border-b bg-secondary/30 text-muted-foreground"><tr>{['Evidence', 'Requirement or decision', 'Owner', 'Date', 'Status', 'Action'].map(label => <th key={label} scope="col" className="px-5 py-3 font-medium">{label}</th>)}</tr></thead>
             <tbody className="divide-y">
@@ -239,7 +239,7 @@ export default function EvidencePage() {
                     <td className="px-6 py-4 font-mono">{formatKobo(Number(comm.data?.averageTicketKobo || 0))}</td>
                     <td className="px-6 py-4 font-mono">{formatKobo(Number(comm.data?.licenceKobo || 0))}</td>
                     <td className="px-6 py-4 font-mono text-xs text-muted-foreground">
-                      {Number(comm.data?.usageBps || 30) / 100}% (up to {formatKobo(Number(comm.data?.usageCapKobo || 15000))} per collection)
+                      {formatPercent(Number(comm.data?.usageBps || 30) / 10000)} (up to {formatKobo(Number(comm.data?.usageCapKobo || 15000))} per collection)
                     </td>
                     <td className="px-6 py-4">
                       {comm.data?.signed ? (

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { useWorkspace } from "@/lib/workspace-context";
 import { usePilotMutation, usePilotQuery } from "@/lib/pilot";
+import { staffDirectorySchema } from "@workspace/valopay-schema";
 import {
   PilotError,
   PilotHeading,
@@ -11,7 +12,7 @@ import {
 } from "@/components/pilot-ui";
 import { StaffSession } from "@/components/staff-session";
 import { Button } from "@/components/ui/button";
-import { formatDate } from "@/lib/formatters";
+import { formatCount, formatDate } from "@/lib/formatters";
 import { AccessReadiness } from '@/components/access-readiness';
 
 const roles = [
@@ -23,7 +24,7 @@ const roles = [
 ];
 export default function TeamPage() {
   const { workspace } = useWorkspace(),
-    query = usePilotQuery("/team", false);
+    query = usePilotQuery("/team", staffDirectorySchema, false);
   const [email, setEmail] = useState(""),
     [role, setRole] = useState("Operations"),
     [link, setLink] = useState(""),
@@ -36,7 +37,9 @@ export default function TeamPage() {
     setEmail("");
   });
   const revoke = usePilotMutation((result) => setMessage(result.message));
-  const admin = query.data?.mode === "staff" && workspace?.role === "Admin";
+  // The directory as the shared schema read it: every list present, lenders included.
+  const directory = query.data;
+  const admin = directory?.mode === "staff" && workspace?.role === "Admin";
   return (
     <div className="space-y-6">
       <PilotHeading title="Team & access">
@@ -51,9 +54,9 @@ export default function TeamPage() {
       />
       <PilotPanel title="Access status">
         <p className="text-sm">
-          {query.data?.message || "Checking this environment…"}
+          {directory?.message || "Checking this environment…"}
         </p>
-        {query.data?.mode === "staff" ? (
+        {directory?.mode === "staff" ? (
           <StaffSession />
         ) : (
           <p className="text-sm text-muted-foreground">
@@ -63,18 +66,18 @@ export default function TeamPage() {
           </p>
         )}
       </PilotPanel>
-      {query.data?.mode === "staff" && (
+      {directory?.mode === "staff" && (
         <>
           {workspace?.role !== "Admin" && !workspace?.merchants.length && <PilotPanel title="Waiting for lender access"><p className="text-sm text-muted-foreground">Your staff account is active. An administrator must assign the lenders you may work on before their records appear here.</p></PilotPanel>}
           <PilotPanel title="Staff members">
             <p className="text-sm text-muted-foreground">Administrators manage every lender in this workspace. Other roles need explicit lender access. New invitations and role changes start with no lender grants.</p>
             <div className="space-y-3">
-              {query.data.members.map((member: any) => (
+              {directory.members.map((member: any) => (
                 <Member
                   key={`${member.id}:${member.updatedAt}`}
                   member={member}
                   editable={admin && member.actor !== workspace?.actor}
-                  lenders={query.data.lenders || []}
+                  lenders={directory.lenders}
                 />
               ))}
             </div>
@@ -149,7 +152,7 @@ export default function TeamPage() {
                 {message}
               </p>
               <div className="space-y-3">
-                {query.data.invitations.map((item: any) => (
+                {directory.invitations.map((item: any) => (
                   <div
                     key={item.id}
                     className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 text-sm"
@@ -184,7 +187,7 @@ export default function TeamPage() {
           {admin && (
             <PilotPanel title="Access history">
               <ol className="space-y-3 text-sm">
-                {query.data.events.map((event: any) => (
+                {directory.events.map((event: any) => (
                   <li key={event.id} className="border-b pb-3">
                     <strong>{event.action.replaceAll(".", " ")}</strong>
                     <p className="text-xs text-muted-foreground">
@@ -224,7 +227,7 @@ function Member({ member, editable, lenders }: { member: any; editable: boolean;
           {formatDate(member.expiresAt)}
         </p>
       </div>
-      <p className="text-sm text-muted-foreground">{member.role === "Admin" ? "All lenders in this workspace" : `${member.lenderIds?.length || 0} permitted lenders`}</p>
+      <p className="text-sm text-muted-foreground">{member.role === "Admin" ? "All lenders in this workspace" : formatCount(member.lenderIds?.length || 0, "permitted lender")}</p>
       {editable && (
         <form
           className="space-y-3"

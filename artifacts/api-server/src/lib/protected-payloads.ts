@@ -8,6 +8,11 @@ export interface WrappingKeyProvider { wrap(key: string, dataKey: Buffer, aad: B
 export interface PayloadScope { lender: string; record: string; field: string; }
 const unavailable = (): never => { throw Object.assign(new Error('Protected data cannot be opened. Ask the administrator to check the configured encryption key.'), { status: 503 }); };
 const aadFor = (scope: PayloadScope) => Buffer.from(JSON.stringify(['valopay', 1, scope.lender, scope.record, scope.field]));
+/** The bytes of canonical base64 text of exactly `bytes` bytes, else undefined: Node's decoder skips stray characters and stops at padding, so the text's length proves nothing. */
+const exactBase64 = (text: string, bytes: number): Buffer | undefined => {
+  const decoded = Buffer.from(text, 'base64');
+  return decoded.length === bytes && decoded.toString('base64') === text ? decoded : undefined;
+};
 export const isProtectedPayload = (value: unknown): boolean => !!value && typeof value === 'object' && 'protectedPayload' in value;
 
 /** Data keys live only for one operation. Managed KMS wraps them; the database
@@ -18,7 +23,7 @@ export async function sealPayload(value: unknown, scope: PayloadScope, key: stri
   if (plaintext.length > 8 * 1024 * 1024) throw new Error('Protected payload exceeds the supported size.');
   const dataKey = randomBytes(32), iv = randomBytes(12);
   try {
-    const cipher = createCipheriv('aes-256-gcm', dataKey, iv); cipher.setAAD(aad);
+    const cipher = createCipheriv('aes-256-gcm', dataKey, iv, { authTagLength: 16 }); cipher.setAAD(aad);
     const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
     const wrapped = await provider.wrap(key, dataKey, aad);
     return envelopeSchema.parse({ protectedPayload: 1, key, wrappedKey: wrapped.toString('base64'), iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), ciphertext: ciphertext.toString('base64') });
@@ -28,9 +33,12 @@ export async function openPayload(value: unknown, scope: PayloadScope, provider:
   let dataKey: Buffer | undefined, plaintext: Buffer | undefined;
   try {
     const sealed = envelopeSchema.parse(value), aad = aadFor(scope);
+    // GCM takes any IV length, and a tag as short as 4 bytes unless its length is fixed: a shortened tag checks only its own bytes.
+    const iv = exactBase64(sealed.iv, 12), tag = exactBase64(sealed.tag, 16);
+    if (!iv || !tag) return unavailable();
     dataKey = await provider.unwrap(sealed.key, Buffer.from(sealed.wrappedKey, 'base64'), aad);
     if (dataKey.length !== 32) return unavailable();
-    const decipher = createDecipheriv('aes-256-gcm', dataKey, Buffer.from(sealed.iv, 'base64')); decipher.setAAD(aad); decipher.setAuthTag(Buffer.from(sealed.tag, 'base64'));
+    const decipher = createDecipheriv('aes-256-gcm', dataKey, iv, { authTagLength: 16 }); decipher.setAAD(aad); decipher.setAuthTag(tag);
     plaintext = Buffer.concat([decipher.update(Buffer.from(sealed.ciphertext, 'base64')), decipher.final()]);
     return JSON.parse(plaintext.toString('utf8'));
   } catch { return unavailable(); } finally { dataKey?.fill(0); plaintext?.fill(0); }

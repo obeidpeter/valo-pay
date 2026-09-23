@@ -1,8 +1,9 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
 import { Link } from 'wouter';
 import { ArrowRight, Presentation, X } from 'lucide-react';
+import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { useWorkspace } from '@/lib/workspace-context';
-import { presentationChecks, presentationSteps } from '@/lib/presentation';
+import { PRESENTATION_CUSTOMER, presentationChecks, presentationSteps } from '@/lib/presentation';
 import { Button } from './ui/button';
 
 type Rehearsal = { active: boolean; step: number; checked: string[] };
@@ -41,16 +42,34 @@ export function usePresentation() {
   return context;
 }
 
+type PresentationStep = (typeof presentationSteps)[number];
+/**
+ * Where a talking point's link goes. The match step opens the sample customer's
+ * history, where the automatic R1 match and its explanation are shown, once the
+ * pack is imported for this lender; until then it opens the customer search for
+ * it, which says plainly that the customer is not there yet. Read only while
+ * `enabled`, so the guide asks nothing on the other talking points.
+ */
+export function usePresentationHref(enabled: boolean): (step: PresentationStep) => string {
+  const { merchantId } = useWorkspace();
+  const params = { merchantId: merchantId!, search: PRESENTATION_CUSTOMER, limit: 5 };
+  const found = useListRecords('customers', params, { query: { enabled: enabled && !!merchantId, queryKey: getListRecordsQueryKey('customers', params) } });
+  const customer = found.data?.items.find(item => item.reference === PRESENTATION_CUSTOMER);
+  return step => 'customer' in step && customer ? `/customers/${encodeURIComponent(customer.id)}` : step.href;
+}
+
 export function PresentationGuide() {
   const { state, save } = usePresentation();
   const { workspace } = useWorkspace();
-  if (!state.active || workspace?.environment !== 'sandbox') return null;
   const step = presentationSteps[state.step];
+  const visible = state.active && workspace?.environment === 'sandbox';
+  const hrefFor = usePresentationHref(visible && 'customer' in step);
+  if (!visible) return null;
   return <section aria-label="Presentation guide" className="mb-5 rounded-xl border border-primary/25 bg-card p-4 print:hidden">
     <div className="flex flex-wrap items-center gap-3">
       <Presentation className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
       <div className="min-w-0 flex-1"><p className="text-xs font-medium text-muted-foreground">Presentation · Sample data only</p><p className="mt-1 text-sm font-semibold" aria-live="polite">{state.step + 1} of {presentationSteps.length} · {step.title}</p></div>
-      <Button asChild size="sm"><Link href={step.href}>{step.action}<ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" /></Link></Button>
+      <Button asChild size="sm"><Link href={hrefFor(step)}>{step.action}<ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" /></Link></Button>
       <Button variant="ghost" size="sm" onClick={() => save({ ...state, active: false })}><X className="mr-1 h-4 w-4" aria-hidden="true" />End presentation</Button>
     </div>
     <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3">

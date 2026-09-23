@@ -1,13 +1,14 @@
-import { createHash } from "node:crypto";
-import { prepareCloseReviewSchema, decideCloseReviewSchema, type PrepareCloseReviewInput, type DecideCloseReviewInput, type PilotProgressStep } from "@workspace/valopay-schema";
+import { prepareCloseReviewSchema, decideCloseReviewSchema, legacyCollatedCompare, type PrepareCloseReviewInput, type DecideCloseReviewInput, type PilotProgressStep } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "./types";
 import { makeRecord, touch } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
 import { sourceCompleteness, watBusinessDate } from "./source-completeness";
+import { canonicalDigest } from "../lib/digests";
 
 function refuse(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
-const canonical = (value: any): string => Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : value && typeof value === "object" ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}` : JSON.stringify(value) ?? "null";
-const digest = (value: unknown) => createHash("sha256").update(canonical(value)).digest("hex");
+// Canonical form: for a record read back from the database it is the text the earlier code-unit helper wrote, so stored
+// input and snapshot digests still match, and a close's own in-memory records now hash as they will be stored.
+const digest = (value: unknown) => canonicalDigest(value);
 const principal = (ctx: Context & { principalId?: string }) => ctx.principalId || (ctx.actor.startsWith("Sandbox ") ? "unidentified-demo-person" : ctx.actor);
 const open = (record: ValopayRecord) => !["resolved", "closed"].includes(record.status);
 const newest = (records: ValopayRecord[]) => [...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || Number(b.data.reviewNumber || b.data.reviewBasis?.sequence || 0) - Number(a.data.reviewNumber || a.data.reviewBasis?.sequence || 0) || b.id.localeCompare(a.id));
@@ -21,7 +22,7 @@ const basisKinds = new Set(["customers", "mandates", "due-items", "observations"
 export function closeReviewBasis(state: DomainState) {
   const approvedCorrections = ofKind(state, "import-correction-events").filter(r => r.data.action === "approve");
   const proposals = ofKind(state, "import-corrections").filter(r => approvedCorrections.some(event => event.data.proposalId === r.id));
-  return digest({ merchantId: state.merchant.id, records: [...state.records.filter(r => basisKinds.has(r.kind)), ...approvedCorrections, ...proposals].map(({ updatedAt: _, ...record }) => record).sort((a, b) => a.id.localeCompare(b.id)) });
+  return digest({ merchantId: state.merchant.id, records: [...state.records.filter(r => basisKinds.has(r.kind)), ...approvedCorrections, ...proposals].map(({ updatedAt: _, ...record }) => record).sort((a, b) => legacyCollatedCompare(a.id, b.id)) });
 }
 const pendingFinancialCorrections = (state: DomainState) => ofKind(state, "import-corrections").filter(record => record.data.preview?.financial && !ofKind(state, "import-correction-events").some(event => event.data.proposalId === record.id));
 export interface CloseReviewIssue { id: string; label: string; detail: string; unresolved: boolean; }

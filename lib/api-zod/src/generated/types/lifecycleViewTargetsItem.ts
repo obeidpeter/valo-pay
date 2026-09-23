@@ -5,6 +5,7 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
+import type { LifecycleViewTargetsItemEvidenceItem } from './lifecycleViewTargetsItemEvidenceItem';
 import type { LifecycleViewTargetsItemKind } from './lifecycleViewTargetsItemKind';
 import type { LifecycleViewTargetsItemStatus } from './lifecycleViewTargetsItemStatus';
 
@@ -35,4 +36,6 @@ export type LifecycleViewTargetsItem = {
   digest: string;
   status: LifecycleViewTargetsItemStatus;
   held: boolean;
+  /** @maxItems 10 */
+  evidence: LifecycleViewTargetsItemEvidenceItem[];
 };

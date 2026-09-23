@@ -11,6 +11,8 @@ import { markRolledBack } from "../src/lib/transaction-outcome.js";
 import { storageFailure } from "../src/lib/export-download.js";
 import { DatabaseLimitError } from "../src/lib/database-limits.js";
 import { markOperationClosed, operationClosed, registerRefusalCloser } from "../src/lib/refused-operations.js";
+import { ResponseContractError, replayedAnswer } from "../src/lib/contract.js";
+import { connectedActionResultFor } from "@workspace/valopay-schema";
 
 let checks = 0;
 type Answer = { status?: number; body?: unknown; headers?: Record<string, string> };
@@ -93,6 +95,49 @@ function answer(error: unknown): Answer {
 }
 
 {
+  // An answer that does not match its contract is the service's 500, in the words of what was asked (audit item 24, review).
+  const answerTo = (error: unknown, method: string) => {
+    const out: Answer & { logged: Array<{ level: string; fields: Record<string, unknown> }> } = { logged: [] };
+    const log = (level: string) => (fields: Record<string, unknown>) => out.logged.push({ level, fields });
+    const req = { id: "test-request", method, log: { error: log("error"), warn: log("warn"), info: log("info") } };
+    const res = { headersSent: false, setHeader(name: string, value: string) { out.headers = { ...out.headers, [name]: value }; return this; }, status(code: number) { out.status = code; return this; }, json(body: unknown) { out.body = body; return this; } };
+    errorHandler(error, req as never, res as never, () => undefined);
+    return out;
+  };
+  const mismatch = () => new ZodError([{ code: "invalid_type", expected: "string", received: "undefined", path: ["record", "kind"], message: "Required" }]);
+  const write = answerTo(markRolledBack(new ResponseContractError(mismatch())), "POST");
+  assert.deepEqual([write.status, write.body], [500, { error: "This action failed and nothing was saved. Try again, and quote this reference if it happens again.", committed: false, requestId: "test-request" }], "a write's invalid answer, checked before COMMIT, saved nothing");
+  const read = answerTo(markRolledBack(new ResponseContractError(mismatch())), "GET");
+  assert.deepEqual([read.status, read.body], [500, { error: "The service could not prepare this answer. Try again, and quote this reference if it happens again.", requestId: "test-request" }], "a read's invalid answer is a read's failure: no action, nothing to save");
+  assert.deepEqual(answerTo(markRolledBack(new TypeError("x is undefined")), "GET").body, { error: "The service could not prepare this answer. Try again, and quote this reference if it happens again.", requestId: "test-request" }, "so is a read's programming error");
+  const replay = answerTo(markRolledBack(new ResponseContractError(mismatch(), { saved: true })), "POST");
+  assert.deepEqual([replay.status, replay.body], [500, { error: "We could not confirm this action. Check Operations or retry the same request before submitting a new one.", requestId: "test-request" }], "a saved request's stored answer that cannot be given never says nothing was saved, though the repeat's transaction rolled back");
+  assert.deepEqual(replay.logged.map((line) => [line.level, line.fields["event"], line.fields["replayed"]]), [["error", "response.invalid", true]], "and the log says which answer failed");
+  // A 429 says when to try again: the refusal's own wait, or a minute.
+  const queue = answerTo(Object.assign(new Error("Ten exports are already waiting or running for this lender."), { status: 429, retryAfterSeconds: 30 }), "POST");
+  assert.deepEqual([queue.status, queue.headers], [429, { "Retry-After": "30" }], "a refusal's own Retry-After is sent");
+  assert.deepEqual(answerTo(Object.assign(new Error("Slow down."), { status: 429 }), "POST").headers, { "Retry-After": "60" }, "every 429 says when to try again");
+  assert.equal(answerTo(Object.assign(new Error("Refused."), { status: 409, retryAfterSeconds: 30 }), "POST").headers, undefined, "only a 429 carries it");
+  checks += 10;
+}
+
+{
+  // A repeated request's stored answer: fields an earlier build stored and the contract no longer lists are left out,
+  // with a warning; any other mismatch cannot be answered within the contract, and is marked as saved.
+  const logged: Array<{ event?: unknown; replayed?: unknown }> = [];
+  const req = { log: { warn: (fields: { event?: unknown; replayed?: unknown }) => logged.push(fields) } } as never;
+  const record = { id: "consent-1", merchantId: "lender-1", kind: "connected-consents", name: "Consent", status: "active", reference: "", amountKobo: 0, customerId: "", createdAt: "2026-09-21T10:00:00.000Z", updatedAt: "2026-09-21T10:00:00.000Z", data: {} };
+  const receipt = { message: "Sample workspace updated.", record, mode: "synthetic", externalInstructionPerformed: false };
+  const schema = connectedActionResultFor("consent.grant", "lender-1");
+  assert.deepEqual(replayedAnswer(req, schema, { ...receipt, record: { ...record, effectiveStatus: "active" } }), receipt, "a field the contract no longer lists is left out of the replayed answer");
+  assert.deepEqual(logged, [{ event: "response.invalid", replayed: true, issues: [{ path: "record", code: "unrecognized_keys" }] }], "and logged as a warning with its path");
+  const { kind: _kind, ...incomplete } = record;
+  assert.throws(() => replayedAnswer(req, schema, { ...receipt, record: incomplete }), (error: unknown) => error instanceof ResponseContractError && error.saved, "a receipt missing a field cannot be answered, and is marked saved");
+  assert.throws(() => replayedAnswer(req, schema, { ...receipt, record: { ...record, merchantId: "lender-2", note: "added" } }), (error: unknown) => error instanceof ResponseContractError && error.saved, "an addition does not excuse a record of another lender");
+  checks += 4;
+}
+
+{
   // A record's data cannot smuggle a key that names an object's own machinery.
   for (const key of ["__proto__", "constructor", "prototype"]) {
     const data = JSON.parse(`{"${key}": {"polluted": true}, "note": "x"}`) as Record<string, unknown>;
@@ -143,6 +188,24 @@ try {
   assert.equal(await errorOf(nul), "Text cannot contain the NUL character (\\u0000). Remove it from data.name and try again.");
   checks += 21;
 
+  // In staff mode a change must come from a configured pilot origin: without one, or from another, it is refused first.
+  const staffNames = ["VALOPAY_STAFF_ACCESS", "VALOPAY_STAFF_ORIGINS"] as const;
+  const staffSaved = Object.fromEntries(staffNames.map((name) => [name, process.env[name]]));
+  try {
+    process.env["VALOPAY_STAFF_ACCESS"] = "staging";
+    process.env["VALOPAY_STAFF_ORIGINS"] = base;
+    for (const origin of [undefined, "https://pilot.example"]) {
+      const refused = await fetch(`${base}/api/v1/webhooks/test`, { method: "POST", headers: { "Content-Type": "application/json", ...(origin ? { Origin: origin } : {}) }, body: "{}" });
+      assert.equal(refused.status, 403);
+      assert.equal(await errorOf(refused), "Use the configured pilot origin for staff changes.", `refused from ${origin ?? "no origin"}`);
+    }
+    const configured = await fetch(`${base}/api/v1/webhooks/test`, { method: "POST", headers: { "Content-Type": "application/json", Origin: base }, body: "{}" });
+    assert.match(await errorOf(configured), /ingress is disabled/, "a change from the configured origin reaches its route");
+  } finally {
+    for (const name of staffNames) { if (staffSaved[name] === undefined) delete process.env[name]; else process.env[name] = staffSaved[name]; }
+  }
+  checks += 5;
+
   // The Paystack test ingress checks a delivery's signature on its raw bytes before it touches a lender:
   // with the database unreachable, a forged delivery to a mapped connection is still a 401, not a 500.
   const paystackNames = ["VALOPAY_PAYSTACK_INGRESS", "PAYSTACK_TEST_SECRET_KEY", "VALOPAY_PAYSTACK_CONNECTIONS"] as const;
@@ -169,4 +232,4 @@ try {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-console.log(`API security tests passed (${checks} checks): error answers and statuses, body-parser and NUL refusals, unavailable services and storage failures, prototype keys, response headers, origin rule before the body, body limit, webhook ingress, Paystack signature before any lender work.`);
+console.log(`API security tests passed (${checks} checks): error answers and statuses, body-parser and NUL refusals, unavailable services and storage failures, prototype keys, response headers, origin rule before the body, the staff pilot origin for changes, body limit, webhook ingress, Paystack signature before any lender work.`);

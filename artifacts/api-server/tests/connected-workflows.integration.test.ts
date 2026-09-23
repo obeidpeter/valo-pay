@@ -21,9 +21,9 @@ const {
   saveIdempotency,
   findIdempotency,
   digest,
-  canonical,
   fail,
 } = await import("../src/lib/valopay-store");
+const { requestFingerprint } = await import("../src/lib/digests");
 const {
   connectedRevision,
   connectedActionSchema,
@@ -72,7 +72,7 @@ async function dispatch(
     const state = await loadState(ctx, merchantId, "update");
     const command = connectedActionSchema.parse(input);
     const id = digest(`connected:${merchantId}:${key}`),
-      fingerprint = digest(canonical({ input: command, actor: ctx.actor }));
+      fingerprint = requestFingerprint({ input: command, actor: ctx.actor });
     const prior = await findIdempotency(ctx, id);
     if (prior) {
       if (prior.request_hash !== fingerprint)
