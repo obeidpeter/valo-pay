@@ -803,7 +803,9 @@ export default function CashDeskPage() {
                 <p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
                   <CircleHelp className="mt-0.5 h-4 w-4 shrink-0" />
                   Only information known at the forecast date is included. Draft
-                  commitments and future knowledge are excluded.
+                  commitments and future knowledge are excluded. An approved
+                  outflow past its due date counts as due now; an overdue
+                  receipt is left out.
                 </p>
               </div>
             </Section>
