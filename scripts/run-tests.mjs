@@ -20,6 +20,7 @@ const steps = [
   ["node", ["scripts/github-snapshot.test.mjs"]],
   ["node", ["scripts/check-docs.mjs"]],
   ["node", ["scripts/monitor-valopay.test.mjs"]],
+  ["node", ["scripts/operator-commands.test.mjs"]],
   [tsx, ["artifacts/api-server/tests/edit-versions.test.ts"]],
   [tsx, ["artifacts/api-server/tests/canonical-json.test.ts"]],
   [tsx, ["artifacts/api-server/tests/canonical-json-golden.test.ts"]],

@@ -4,7 +4,9 @@ import { paystackIngressStatus } from '../../artifacts/api-server/src/providers/
 // Operator-only, read-only check. Never accept a key as a command-line argument.
 const usage = 'Use: check-paystack [--reference TEST_REFERENCE --amount-kobo POSITIVE_INTEGER] [--direct-debit] [--mandate-reference TEST_MANDATE_REFERENCE]';
 try {
-  const args = process.argv.slice(2);
+  // `pnpm run check:paystack -- --reference …` passes the `--` on: skip it, so both forms work.
+  const given = process.argv.slice(2);
+  const args = given[0] === '--' ? given.slice(1) : given;
   const flags = new Map<string, string>();
   for (let index = 0; index < args.length; index++) {
     const key = args[index]!;
