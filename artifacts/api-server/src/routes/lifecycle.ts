@@ -6,8 +6,9 @@ import { inWorkspace, loadState, lifecycleInventory, executeLifecycleRun, reveal
 import { withState } from './valopay';
 import { lifecycleView, lifecycleRunView, saveLifecyclePolicy, setLifecycleHold, lifecyclePreview, approveLifecycleRun } from '../domain/lifecycle';
 import type { DomainState } from '../domain/types';
+import { routerOptions } from './router-options';
 
-const router: IRouter = Router();
+const router: IRouter = Router(routerOptions);
 const idOf = (id: unknown) => z.string().min(1).max(100).parse(id);
 /** The raw-CSV inventory digests each committed batch's source rows, so an administrator's retention screens open them first; before the domain changes anything in a write. */
 const openRawSources = (ctx: StoreContext, state: DomainState) => ctx.role === 'Admin' ? revealImportPayloads(ctx, state, record => record.status === 'committed' && record.data.csv !== undefined) : Promise.resolve(0);

@@ -3,7 +3,7 @@ import { listReconciliation, listCloseHistory, getCloseDetail, loadReportsView }
 import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
 import { z } from "zod";
-import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, roles, fail, appendAudit, verifyAudit, digest, listMerchants, findIdempotency, saveIdempotency, changeRole, type StoreContext } from "../lib/valopay-store";
+import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, roles, fail, appendAudit, verifyAudit, listMerchants, findIdempotency, saveIdempotency, receiptOf, changeRole, type StoreContext } from "../lib/valopay-store";
 import { requestFingerprint } from "../lib/digests";
 import { amendDueItem, customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction, type TypedRecord } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
@@ -21,8 +21,9 @@ import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from 
 import { listQueue } from '../lib/valopay-store';
 import { completeOperation, viewerScope } from '../lib/valopay-store';
 import { contractAnswer, lenderQuery, optionalKey, replayedAnswer } from '../lib/contract';
+import { routerOptions } from './router-options';
 
-const router:IRouter=Router();
+const router:IRouter=Router(routerOptions);
 const kinds=new Set<string>(recordKinds);
 function safeKind(value:unknown):string { const kind=z.string().parse(value);if(!kinds.has(kind))fail("Unknown resource.",404);return kind; }
 /**
@@ -32,24 +33,26 @@ function safeKind(value:unknown):string { const kind=z.string().parse(value);if(
  * checked against the route's response schema before COMMIT, so an answer that
  * does not match its contract is a 500 that saved nothing. A replayed receipt
  * was saved with its request, so it is never answered as saving nothing: it is
- * given without fields the contract no longer lists, or as the general
- * unconfirmed 500 (replayedAnswer, lib/contract.ts).
+ * given without fields the contract no longer lists, or as a 500 that says the
+ * request was saved (replayedAnswer, lib/contract.ts). A receipt is kept where
+ * receiptOf says, and a read is never fingerprinted.
  */
 export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>unknown,mutating:boolean,responseSchema:S):Promise<z.output<S>>{
  const {merchantId}=lenderQuery(req);
- // A write's key is checked by name before anything runs; a read ignores one.
+ // A write's key is checked by name before anything runs; a read ignores one, and nothing of a read is fingerprinted.
  const key=mutating?optionalKey(req):undefined;
+ const setRole=req.path==="/v1/actions"&&req.body?.action==="set_role";
+ // Where a keyed write's answer is kept for its repeats; a demo-role switch is never journaled, so it keeps its own (receiptOf).
+ const receipt=key?receiptOf(req,merchantId,key,setRole?"persona":"workspace"):undefined;
  return inWorkspace(req,res,async ctx=>{
   // A read takes a share lock so it never queues behind other reads; a mutation takes the exclusive lock.
   const state=await loadState(ctx,merchantId,mutating?"update":"share");
   // A demo-role switch changes ctx.actor itself. Its unchanged retry must keep
   // the original request identity; all other actions stay persona-bound.
-  const replayActor=req.path==="/v1/actions"&&req.body?.action==="set_role"?"Sandbox role switch":ctx.actor;
-  const fingerprint=requestFingerprint({path:req.path,method:req.method,body:req.body,actor:replayActor});
-  const idempotencyKey=key?digest(`${merchantId}:${key}`):undefined;
-  if(idempotencyKey){
-    const found=await findIdempotency(ctx,idempotencyKey);
-    if(found){if(found.request_hash!==fingerprint)fail("This idempotency key was used with different input.",409);const receipt=replayedAnswer(req,responseSchema,found.response);await completeOperation(ctx,receipt);return receipt;}
+  const fingerprint=receipt?requestFingerprint({path:req.path,method:req.method,body:req.body,actor:setRole?"Sandbox role switch":ctx.actor}):"";
+  if(receipt){
+    const found=await findIdempotency(ctx,receipt.id,receipt.earlier);
+    if(found){if(found.request_hash!==fingerprint)fail("This idempotency key was used with different input.",409);const saved=replayedAnswer(req,responseSchema,found.response);await completeOperation(ctx,saved);return saved;}
   }
    const rawResult=await operation(state,ctx);
    // Versions advance before the response is built, so it carries them; the audit entry commits to exactly what changed.
@@ -62,7 +65,7 @@ export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response
    const reason=req.body.reason||"Synthetic workspace operation",auditNote=(rawResult as {data?:{auditNote?:unknown}}|undefined)?.data?.auditNote;
    appendAudit(state,ctx,req.path.includes("/actions")?String(req.body.action):`${req.method.toLowerCase()}.${req.path.split("/").slice(2).join(".")}`,req.body.recordId||String(req.params.id||"workspace"),typeof auditNote==="string"&&auditNote?`${reason}${/[.!?]$/.test(reason)?"":"."} ${auditNote}`:reason,changes);
     await saveState(ctx,state);
-    if(idempotencyKey)await saveIdempotency(ctx,idempotencyKey,fingerprint,result);
+    if(receipt)await saveIdempotency(ctx,receipt.id,fingerprint,result);
   }
   return result;
  },!mutating?"read":req.path==="/v1/actions"&&req.body?.action==="set_role"?"persona":"write");

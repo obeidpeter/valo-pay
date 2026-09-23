@@ -8,7 +8,8 @@ import { markRolledBack } from './transaction-outcome';
  * with an error listener, so a connection the server ends (the idle limit, a
  * restart, an administrator) is a failed request, not an uncaught error that
  * ends the process. A limit reached before COMMIT is a 503 with Retry-After
- * that says nothing was saved.
+ * that says nothing was saved (for a request with an Idempotency-Key, only when
+ * nothing sent with its key was: lib/error-handler.ts).
  *
  * Kept free of database imports, so the error handler and the offline suites
  * can load it.
@@ -62,9 +63,12 @@ export function beginStatement(limits: TransactionLimits, mode?: 'ISOLATION LEVE
  * workspace limits are the workspace lock's lock limit: a team, lender-access,
  * invitation or persona change that the requests already running in its
  * workspace kept waiting (`workspace_busy`), and a request queued behind such
- * a change (`workspace_changing`).
+ * a change (`workspace_changing`). `operation_running` is a repeat of a
+ * journaled request (its Idempotency-Key) while another attempt of it still
+ * holds its journal entry: it is turned away at once, and the entry is left
+ * to the attempt running it.
  */
-export type DatabaseLimit = 'lender_busy' | 'lock_timeout' | 'lock_conflict' | 'workspace_busy' | 'workspace_changing' | 'statement_timeout' | 'idle_timeout' | 'connection_lost' | 'pool_timeout' | 'database_unavailable';
+export type DatabaseLimit = 'lender_busy' | 'lock_timeout' | 'lock_conflict' | 'workspace_busy' | 'workspace_changing' | 'statement_timeout' | 'idle_timeout' | 'connection_lost' | 'pool_timeout' | 'database_unavailable' | 'operation_running';
 const described: Record<DatabaseLimit, { what: string; next: string; retryAfterSeconds: number }> = {
   lender_busy: { what: 'This lender is busy with other requests.', next: 'Try again in a moment.', retryAfterSeconds: 2 },
   workspace_busy: { what: 'Other requests in this workspace are still finishing.', next: 'Try this change again in a moment.', retryAfterSeconds: 2 },
@@ -76,6 +80,7 @@ const described: Record<DatabaseLimit, { what: string; next: string; retryAfterS
   connection_lost: { what: 'The connection to the database was lost.', next: 'Try again in a moment.', retryAfterSeconds: 2 },
   pool_timeout: { what: 'The service is busy.', next: 'Try again in a moment.', retryAfterSeconds: 2 },
   database_unavailable: { what: 'The database is not available.', next: 'Try again shortly.', retryAfterSeconds: 10 },
+  operation_running: { what: 'This request is still running.', next: 'Wait a moment, then retry the same request to see its result.', retryAfterSeconds: 2 },
 };
 
 /** A request turned away at a database limit: a 503 in plain words, with how many seconds to wait before a retry. */
@@ -83,13 +88,20 @@ export class DatabaseLimitError extends Error {
   readonly status = 503;
   readonly limit: DatabaseLimit;
   readonly retryAfterSeconds: number;
-  /** `write` says the request would have changed something, so its answer says nothing was saved. */
+  /** The message's two halves, what happened and what to do next, so an answer can say between them what
+   * became of a request whose Idempotency-Key may have saved something (lib/error-handler.ts). */
+  readonly situation: string;
+  readonly advice: string;
+  /** `write` says the request would have changed something, so its answer says nothing was saved. A request
+   * still running elsewhere is never told that: the attempt running it may save it. */
   constructor(limit: DatabaseLimit, options: { write?: boolean; cause?: unknown } = {}) {
     const { what, next, retryAfterSeconds } = described[limit];
-    super(`${what} ${options.write === false ? '' : 'Nothing was saved. '}${next}`, options.cause === undefined ? undefined : { cause: options.cause });
+    super(`${what} ${options.write === false || limit === 'operation_running' ? '' : 'Nothing was saved. '}${next}`, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = 'DatabaseLimitError';
     this.limit = limit;
     this.retryAfterSeconds = retryAfterSeconds;
+    this.situation = what;
+    this.advice = next;
   }
 }
 

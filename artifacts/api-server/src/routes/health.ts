@@ -5,8 +5,9 @@ import { schedulerStatus } from "../lib/close-scheduler";
 import { pingDatabase, type DatabaseReadiness } from "../lib/valopay-store";
 import { contractAnswer } from "../lib/contract";
 import { clientNetwork, createWindowCounter, refuseRequest } from "../lib/request-limits";
+import { routerOptions } from "./router-options";
 
-const router: IRouter = Router();
+const router: IRouter = Router(routerOptions);
 
 /**
  * The readiness answer for one check: 200 when the database answers and holds

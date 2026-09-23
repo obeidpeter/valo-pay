@@ -46,8 +46,9 @@ import {
   commitImportBatch,
   coordinateCase,
 } from "../domain/pilot-workflow";
+import { routerOptions } from "./router-options";
 
-const router: IRouter = Router();
+const router: IRouter = Router(routerOptions);
 const idOf = (value: unknown) => z.string().min(1).max(100).parse(value);
 router.post("/v1/team/verify", async (req, res) => {
   if (!staffMode()) fail("Staff access is not enabled on this host.", 403);

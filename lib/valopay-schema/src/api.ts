@@ -73,14 +73,25 @@ export const errorDetailSchema = z.object({
   field: z.string().describe("The field, query value or header, as a dotted path; empty for the body as a whole."),
   message: z.string(),
 }).strict();
+/** A validation refusal names at most this many fields, and says how many there were (detailCount). */
+export const ERROR_DETAIL_LIMIT = 20;
+/**
+ * The state of a request's operations-journal entry, as a refusal or failure
+ * names it: `completed` (a request with its Idempotency-Key was saved),
+ * `running` (another attempt with the key is still running it), `pending` (its
+ * outcome is not confirmed yet) or `cancelled` (nothing sent with the key was
+ * saved, or can be).
+ */
+export const operationStates = ["pending", "running", "completed", "cancelled"] as const;
 /** The body of every refusal and failure the service answers (lib/error-handler.ts and the app's own refusals). */
 export const errorBodySchema = z.object({
   error: z.string().describe("What happened, in plain words: a refusal in its rule's own wording, a failure in general words."),
   requestId: z.string().describe("The request's reference, also sent as X-Request-Id; quoting it finds the request in the log."),
-  details: z.array(errorDetailSchema).optional().describe("Present when validation failed: each field and what is wrong with it."),
+  details: z.array(errorDetailSchema).max(ERROR_DETAIL_LIMIT).optional().describe("Present when validation failed: the first 20 fields at most, each with what is wrong with it."),
+  detailCount: z.number().int().min(0).optional().describe("Present with details: how many problems validation found, which may be more than details lists."),
   code: z.enum(pilotAccessFailureCodes).optional().describe("Present when staff access was refused: why."),
-  committed: z.literal(false).optional().describe("Present on a failure that saved nothing: the transaction was rolled back, so the request may be sent again as new. A read's 500 never carries it, nor does the repeat of a request that was saved."),
-  operation: z.literal("cancelled").optional().describe("Present when the request's operations-journal entry is cancelled: nothing sent with its Idempotency-Key was or can be saved."),
+  committed: z.literal(false).optional().describe("Present on a failure that saved nothing: the transaction was rolled back, so the request may be sent again as new. For a request with an Idempotency-Key it is decided for the key: present only when nothing sent with the key was or can be saved (its journal entry is cancelled, or nothing was saved under it before this request failed), never while a request with the key was saved or is still running. A read's 500 never carries it."),
+  operation: z.enum(operationStates).optional().describe("Present when the request's Idempotency-Key has an operations-journal entry whose state is known: completed (a request with the key was saved), running (another attempt with the key is still running it), pending (its outcome is not confirmed yet) or cancelled (nothing sent with the key was or can be saved)."),
 }).strict();
 /** A refusal or failure as the service answers it. */
 export type ErrorBody = z.infer<typeof errorBodySchema>;

@@ -245,7 +245,7 @@ export const createRecordHeaderIdempotencyKeyMax = 200;
 
 
 export const CreateRecordHeader = zod.object({
-  "Idempotency-Key": zod.string().min(createRecordHeaderIdempotencyKeyMin).max(createRecordHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(createRecordHeaderIdempotencyKeyMin).max(createRecordHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const createRecordBodyAmountKoboMin = 0;
@@ -299,7 +299,7 @@ export const updateRecordHeaderIdempotencyKeyMax = 200;
 
 
 export const UpdateRecordHeader = zod.object({
-  "Idempotency-Key": zod.string().min(updateRecordHeaderIdempotencyKeyMin).max(updateRecordHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(updateRecordHeaderIdempotencyKeyMin).max(updateRecordHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const updateRecordBodyAmountKoboMin = 0;
@@ -349,7 +349,7 @@ export const performActionHeaderIdempotencyKeyMax = 200;
 
 
 export const PerformActionHeader = zod.object({
-  "Idempotency-Key": zod.string().min(performActionHeaderIdempotencyKeyMin).max(performActionHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A set_role change is repeatable with its key but is not recorded in Operations, so a refused one may be sent again and retention never removes its result.')
+  "Idempotency-Key": zod.string().min(performActionHeaderIdempotencyKeyMin).max(performActionHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender. A set_role change is repeatable with its key but is not recorded in Operations, so a refused one may be sent again and retention never removes its result. Its result is kept apart from the journal\'s, so a journaled write sent with the same key is a separate request.')
 })
 
 export const PerformActionBody = zod.object({
@@ -397,7 +397,7 @@ export const importRecordsHeaderIdempotencyKeyMax = 200;
 
 
 export const ImportRecordsHeader = zod.object({
-  "Idempotency-Key": zod.string().min(importRecordsHeaderIdempotencyKeyMin).max(importRecordsHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). Only a commit (commit true) uses it: a preview writes nothing.')
+  "Idempotency-Key": zod.string().min(importRecordsHeaderIdempotencyKeyMin).max(importRecordsHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender. Only a commit (commit true) uses it: a preview writes nothing.')
 })
 
 export const ImportRecordsBody = zod.object({
@@ -696,7 +696,7 @@ export const updateSettingsHeaderIdempotencyKeyMax = 200;
 
 
 export const UpdateSettingsHeader = zod.object({
-  "Idempotency-Key": zod.string().min(updateSettingsHeaderIdempotencyKeyMin).max(updateSettingsHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(updateSettingsHeaderIdempotencyKeyMin).max(updateSettingsHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const UpdateSettingsBody = zod.object({
@@ -809,7 +809,7 @@ export const createExportHeaderIdempotencyKeyMax = 200;
 
 
 export const CreateExportHeader = zod.object({
-  "Idempotency-Key": zod.string().min(createExportHeaderIdempotencyKeyMin).max(createExportHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(createExportHeaderIdempotencyKeyMin).max(createExportHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const CreateExportBody = zod.object({
@@ -903,7 +903,7 @@ export const retryExportJobHeaderIdempotencyKeyMax = 200;
 
 
 export const RetryExportJobHeader = zod.object({
-  "Idempotency-Key": zod.string().min(retryExportJobHeaderIdempotencyKeyMin).max(retryExportJobHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(retryExportJobHeaderIdempotencyKeyMin).max(retryExportJobHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const RetryExportJobResponse = zod.object({
@@ -1993,7 +1993,7 @@ export const performConnectedActionHeaderIdempotencyKeyMax = 200;
 
 
 export const PerformConnectedActionHeader = zod.object({
-  "Idempotency-Key": zod.string().min(performConnectedActionHeaderIdempotencyKeyMin).max(performConnectedActionHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(performConnectedActionHeaderIdempotencyKeyMin).max(performConnectedActionHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const performConnectedActionBodyActionMax = 80;
@@ -2373,7 +2373,7 @@ export const saveImportBatchHeaderIdempotencyKeyMax = 200;
 
 
 export const SaveImportBatchHeader = zod.object({
-  "Idempotency-Key": zod.string().min(saveImportBatchHeaderIdempotencyKeyMin).max(saveImportBatchHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(saveImportBatchHeaderIdempotencyKeyMin).max(saveImportBatchHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const saveImportBatchBodyNameMax = 120;
@@ -2491,7 +2491,7 @@ export const saveImportBatchRevisionHeaderIdempotencyKeyMax = 200;
 
 
 export const SaveImportBatchRevisionHeader = zod.object({
-  "Idempotency-Key": zod.string().min(saveImportBatchRevisionHeaderIdempotencyKeyMin).max(saveImportBatchRevisionHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(saveImportBatchRevisionHeaderIdempotencyKeyMin).max(saveImportBatchRevisionHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const saveImportBatchRevisionBodyNameMax = 120;
@@ -2563,7 +2563,7 @@ export const commitImportBatchHeaderIdempotencyKeyMax = 200;
 
 
 export const CommitImportBatchHeader = zod.object({
-  "Idempotency-Key": zod.string().min(commitImportBatchHeaderIdempotencyKeyMin).max(commitImportBatchHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(commitImportBatchHeaderIdempotencyKeyMin).max(commitImportBatchHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const CommitImportBatchBody = zod.object({
@@ -2664,7 +2664,7 @@ export const coordinateCaseHeaderIdempotencyKeyMax = 200;
 
 
 export const CoordinateCaseHeader = zod.object({
-  "Idempotency-Key": zod.string().min(coordinateCaseHeaderIdempotencyKeyMin).max(coordinateCaseHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(coordinateCaseHeaderIdempotencyKeyMin).max(coordinateCaseHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const coordinateCaseBodyAssigneeMax = 256;
@@ -3071,7 +3071,7 @@ export const prepareCloseReviewHeaderIdempotencyKeyMax = 200;
 
 
 export const PrepareCloseReviewHeader = zod.object({
-  "Idempotency-Key": zod.string().min(prepareCloseReviewHeaderIdempotencyKeyMin).max(prepareCloseReviewHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(prepareCloseReviewHeaderIdempotencyKeyMin).max(prepareCloseReviewHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const prepareCloseReviewBodyCloseIdMax = 100;
@@ -3142,7 +3142,7 @@ export const decideCloseReviewHeaderIdempotencyKeyMax = 200;
 
 
 export const DecideCloseReviewHeader = zod.object({
-  "Idempotency-Key": zod.string().min(decideCloseReviewHeaderIdempotencyKeyMin).max(decideCloseReviewHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(decideCloseReviewHeaderIdempotencyKeyMin).max(decideCloseReviewHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const decideCloseReviewBodyNoteMin = 10;
@@ -3294,7 +3294,7 @@ export const proposeImportCorrectionHeaderIdempotencyKeyMax = 200;
 
 
 export const ProposeImportCorrectionHeader = zod.object({
-  "Idempotency-Key": zod.string().min(proposeImportCorrectionHeaderIdempotencyKeyMin).max(proposeImportCorrectionHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(proposeImportCorrectionHeaderIdempotencyKeyMin).max(proposeImportCorrectionHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const proposeImportCorrectionBodyBatchIdMax = 100;
@@ -3477,7 +3477,7 @@ export const decideImportCorrectionHeaderIdempotencyKeyMax = 200;
 
 
 export const DecideImportCorrectionHeader = zod.object({
-  "Idempotency-Key": zod.string().min(decideImportCorrectionHeaderIdempotencyKeyMin).max(decideImportCorrectionHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(decideImportCorrectionHeaderIdempotencyKeyMin).max(decideImportCorrectionHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const decideImportCorrectionBodyProposalDigestRegExp = new RegExp('^[a-f0-9]{64}$');
@@ -3778,7 +3778,7 @@ export const createSourceProfileHeaderIdempotencyKeyMax = 200;
 
 
 export const CreateSourceProfileHeader = zod.object({
-  "Idempotency-Key": zod.string().min(createSourceProfileHeaderIdempotencyKeyMin).max(createSourceProfileHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(createSourceProfileHeaderIdempotencyKeyMin).max(createSourceProfileHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const createSourceProfileBodyNameMin = 2;
@@ -3860,7 +3860,7 @@ export const saveSourceProfileHeaderIdempotencyKeyMax = 200;
 
 
 export const SaveSourceProfileHeader = zod.object({
-  "Idempotency-Key": zod.string().min(saveSourceProfileHeaderIdempotencyKeyMin).max(saveSourceProfileHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(saveSourceProfileHeaderIdempotencyKeyMin).max(saveSourceProfileHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const saveSourceProfileBodyNameMin = 2;
@@ -3938,7 +3938,7 @@ export const saveSourceManifestHeaderIdempotencyKeyMax = 200;
 
 
 export const SaveSourceManifestHeader = zod.object({
-  "Idempotency-Key": zod.string().min(saveSourceManifestHeaderIdempotencyKeyMin).max(saveSourceManifestHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(saveSourceManifestHeaderIdempotencyKeyMin).max(saveSourceManifestHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const saveSourceManifestBodyBusinessDateRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
@@ -4014,7 +4014,7 @@ export const runPaystackFixtureHeaderIdempotencyKeyMax = 200;
 
 
 export const RunPaystackFixtureHeader = zod.object({
-  "Idempotency-Key": zod.string().min(runPaystackFixtureHeaderIdempotencyKeyMin).max(runPaystackFixtureHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(runPaystackFixtureHeaderIdempotencyKeyMin).max(runPaystackFixtureHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const RunPaystackFixtureBody = zod.object({
@@ -4075,7 +4075,7 @@ export const replayProviderEventHeaderIdempotencyKeyMax = 200;
 
 
 export const ReplayProviderEventHeader = zod.object({
-  "Idempotency-Key": zod.string().min(replayProviderEventHeaderIdempotencyKeyMin).max(replayProviderEventHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(replayProviderEventHeaderIdempotencyKeyMin).max(replayProviderEventHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const replayProviderEventBodyReasonMin = 3;
@@ -4313,7 +4313,7 @@ export const readNotificationHeaderIdempotencyKeyMax = 200;
 
 
 export const ReadNotificationHeader = zod.object({
-  "Idempotency-Key": zod.string().min(readNotificationHeaderIdempotencyKeyMin).max(readNotificationHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(readNotificationHeaderIdempotencyKeyMin).max(readNotificationHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const readNotificationBodySourceIdMax = 300;
@@ -4374,7 +4374,7 @@ export const acknowledgeHandoverHeaderIdempotencyKeyMax = 200;
 
 
 export const AcknowledgeHandoverHeader = zod.object({
-  "Idempotency-Key": zod.string().min(acknowledgeHandoverHeaderIdempotencyKeyMin).max(acknowledgeHandoverHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(acknowledgeHandoverHeaderIdempotencyKeyMin).max(acknowledgeHandoverHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const acknowledgeHandoverBodySourceIdMax = 300;
@@ -4706,7 +4706,7 @@ export const saveRetentionPolicyHeaderIdempotencyKeyMax = 200;
 
 
 export const SaveRetentionPolicyHeader = zod.object({
-  "Idempotency-Key": zod.string().min(saveRetentionPolicyHeaderIdempotencyKeyMin).max(saveRetentionPolicyHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(saveRetentionPolicyHeaderIdempotencyKeyMin).max(saveRetentionPolicyHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const saveRetentionPolicyBodyPolicyRawCsvDaysMax = 3650;
@@ -4914,7 +4914,7 @@ export const setRetentionHoldHeaderIdempotencyKeyMax = 200;
 
 
 export const SetRetentionHoldHeader = zod.object({
-  "Idempotency-Key": zod.string().min(setRetentionHoldHeaderIdempotencyKeyMin).max(setRetentionHoldHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(setRetentionHoldHeaderIdempotencyKeyMin).max(setRetentionHoldHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const setRetentionHoldBodySourceIdMax = 200;
@@ -5115,7 +5115,7 @@ export const previewLifecycleRunHeaderIdempotencyKeyMax = 200;
 
 
 export const PreviewLifecycleRunHeader = zod.object({
-  "Idempotency-Key": zod.string().min(previewLifecycleRunHeaderIdempotencyKeyMin).max(previewLifecycleRunHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(previewLifecycleRunHeaderIdempotencyKeyMin).max(previewLifecycleRunHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const previewLifecycleRunBodyExpectedPolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
@@ -5222,7 +5222,7 @@ export const approveLifecycleRunHeaderIdempotencyKeyMax = 200;
 
 
 export const ApproveLifecycleRunHeader = zod.object({
-  "Idempotency-Key": zod.string().min(approveLifecycleRunHeaderIdempotencyKeyMin).max(approveLifecycleRunHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(approveLifecycleRunHeaderIdempotencyKeyMin).max(approveLifecycleRunHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const approveLifecycleRunBodyPreviewDigestRegExp = new RegExp('^[a-f0-9]{64}$');
@@ -5334,7 +5334,7 @@ export const executeLifecycleRunHeaderIdempotencyKeyMax = 200;
 
 
 export const ExecuteLifecycleRunHeader = zod.object({
-  "Idempotency-Key": zod.string().min(executeLifecycleRunHeaderIdempotencyKeyMin).max(executeLifecycleRunHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410).')
+  "Idempotency-Key": zod.string().min(executeLifecycleRunHeaderIdempotencyKeyMin).max(executeLifecycleRunHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
 export const executeLifecycleRunBodyPreviewDigestRegExp = new RegExp('^[a-f0-9]{64}$');

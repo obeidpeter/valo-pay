@@ -216,7 +216,7 @@ try {
   assert.equal(ok(await call(q(`/v1/operations/${completed.id}/retry`), "POST")).id, record.id);
   const sandboxRequest = () => ({ headers: { cookie }, secure: false, auth: Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true }) }) as any;
   const response = { cookie() {} } as any;
-  const pendingId = await store.inWorkspace(sandboxRequest(), response, (ctx) => store.prepareOperation(ctx, lender, key(), { method: "POST", path: "/v1/records/customers", body: { name: "Never sent" } }));
+  const { id: pendingId } = await store.inWorkspace(sandboxRequest(), response, (ctx) => store.prepareOperation(ctx, lender, key(), { method: "POST", path: "/v1/records/customers", body: { name: "Never sent" } }));
   assert.match(ok(await call(q(`/v1/operations/${pendingId}/cancel`), "POST")).message, /cancelled it/);
 
   // ---- Handover, personal work and receipts ----
@@ -299,7 +299,8 @@ try {
   connected = ok(await call(q("/v1/connected")));
   const replayKey = key(), replayGrant = { action: "consent.grant", reason: "Grant a synthetic permission for the replay check", data: { purpose: "erp_draft", subjectId: "sme", days: 30 }, expectedRevision: connected.revision };
   const grantAnswer = ok(await call(q("/v1/connected/actions"), "POST", replayGrant, { key: replayKey }));
-  const receiptId = store.digest(`connected:${lender}:${replayKey}`);
+  // A journaled request's answer is kept under its journal entry.
+  const receiptId = (await pool.query("SELECT id FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2", [lender, replayKey])).rows[0].id as string;
   const consents = async () => Number((await pool.query("SELECT count(*)::int AS n FROM valopay_records WHERE merchant_id=$1 AND kind='connected-consents'", [lender])).rows[0].n);
   const consentCount = await consents();
   assert.equal((await pool.query(`UPDATE valopay_idempotency SET response=jsonb_set(response,'{record,effectiveStatus}','"active"') WHERE merchant_id=$1 AND id=$2`, [lender, receiptId])).rowCount, 1);
@@ -311,14 +312,14 @@ try {
   await pool.query(`UPDATE valopay_idempotency SET response=response #- '{record,kind}' WHERE merchant_id=$1 AND id=$2`, [lender, receiptId]);
   logged.length = 0;
   const unanswerable = await call(q("/v1/connected/actions"), "POST", replayGrant, { key: replayKey });
-  assert.deepEqual([unanswerable.status, unanswerable.data.error, unanswerable.data.committed], [500, "We could not confirm this action. Check Operations or retry the same request before submitting a new one.", undefined], "a saved request is never answered as saving nothing");
+  assert.deepEqual([unanswerable.status, unanswerable.data.error, unanswerable.data.committed, unanswerable.data.operation], [500, "This request was saved, but the service could not give its answer. Retry the same request, or check Operations, to see its saved result.", undefined, "completed"], "a saved request is never answered as saving nothing: the answer says it was saved");
   assert.deepEqual(events("response.invalid").map((line) => [line.level, line.fields.replayed]), [["error", true]]);
   assert.equal(await consents(), consentCount, "the consent was saved once");
   assert.equal((await pool.query("SELECT status FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2", [lender, replayKey])).rows[0].status, "completed", "and its journal entry stays completed");
   // The same for a write whose route answers from withState, and for a repeated lender set-up.
   const manifestKey = key(), laterManifest = { ...manifest, businessDate: new Date(Date.now() + 10 * 86_400_000).toISOString().slice(0, 10) };
   const declared = ok(await call(q("/v1/sources/manifests"), "POST", laterManifest, { key: manifestKey }));
-  await pool.query(`UPDATE valopay_idempotency SET response=response || '{"legacyField": true}'::jsonb WHERE merchant_id=$1 AND id=$2`, [lender, store.digest(`${lender}:${manifestKey}`)]);
+  await pool.query(`UPDATE valopay_idempotency SET response=response || '{"legacyField": true}'::jsonb WHERE merchant_id=$1 AND id=(SELECT id FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2)`, [lender, manifestKey]);
   assert.deepEqual(ok(await call(q("/v1/sources/manifests"), "POST", laterManifest, { key: manifestKey })), declared, "a replayed record answers without the field the contract no longer lists");
   const setUp = keyedWrites.find((write) => write.path === "/v1/pilot/lenders")!;
   await pool.query(`UPDATE valopay_merchants SET info=info || '{"legacyField": true}'::jsonb WHERE id=$1`, [created.id]);

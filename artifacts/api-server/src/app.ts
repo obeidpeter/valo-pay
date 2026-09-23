@@ -13,17 +13,37 @@ import { createPaystackIngress } from './routes/sources';
 import { paystackIngress } from './lib/paystack-connection';
 import { clientNetwork, createRequestLimits, createWindowCounter } from './lib/request-limits';
 
-/** The path of the first key or string in a parsed body that carries a NUL character, "" for the body itself. */
-export function nulField(value: unknown, path = "", depth = 0): string | undefined {
-  if (typeof value === "string") return value.includes("\u0000") ? path : undefined;
-  if (depth > 32 || value === null || typeof value !== "object") return undefined;
+/** The deepest a request body may nest objects and arrays. */
+export const MAX_BODY_DEPTH = 32;
+/** A UTF-16 surrogate without its pair: PostgreSQL JSON refuses one, and text silently replaces it. */
+const UNPAIRED_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+/**
+ * The first thing in a parsed body that nothing may read: objects and arrays
+ * nested more than MAX_BODY_DEPTH levels deep (the checks and fingerprints that
+ * walk a body are recursive), a NUL character (PostgreSQL text cannot hold it)
+ * or an unpaired surrogate, in a string or a field name. The walk stops at that
+ * depth, so it cannot overflow the stack itself. The field is its dotted path:
+ * "" for the body itself, and the object holding it (or "a field name") for a
+ * field name.
+ */
+export function bodyProblem(value: unknown, path = "", depth = 0): { field: string; problem: "depth" | "nul" | "surrogate" } | undefined {
+  if (typeof value === "string") return value.includes("\u0000") ? { field: path, problem: "nul" } : UNPAIRED_SURROGATE.test(value) ? { field: path, problem: "surrogate" } : undefined;
+  if (value === null || typeof value !== "object") return undefined;
+  if (depth >= MAX_BODY_DEPTH) return { field: path, problem: "depth" };
   for (const [key, item] of Object.entries(value)) {
-    const at = path ? `${path}.${key}` : key;
-    if (key.includes("\u0000")) return path || "a field name";
-    const found = nulField(item, at, depth + 1);
-    if (found !== undefined) return found;
+    if (key.includes("\u0000")) return { field: path || "a field name", problem: "nul" };
+    if (UNPAIRED_SURROGATE.test(key)) return { field: path || "a field name", problem: "surrogate" };
+    const found = bodyProblem(item, path ? `${path}.${key}` : key, depth + 1);
+    if (found) return found;
   }
   return undefined;
+}
+/** What a person reads about a body problem, naming the field (at most 100 characters of it). */
+function bodyRefusal({ field, problem }: { field: string; problem: "depth" | "nul" | "surrogate" }): string {
+  const where = field ? (field.length > 100 ? `${field.slice(0, 100)}…` : field) : "the request";
+  return problem === "depth" ? `The request body is nested more than ${MAX_BODY_DEPTH} levels deep, at ${where}. Send a flatter body.`
+    : problem === "nul" ? `Text cannot contain the NUL character (\\u0000). Remove it from ${where} and try again.`
+    : `Text must be valid Unicode: ${where} holds an unpaired surrogate (\\ud800 to \\udfff). Remove it and try again.`;
 }
 
 const app: Express = express();
@@ -112,12 +132,19 @@ app.use((req,res,next)=>{
 });
 // Each principal's own quota: a signed-in person, a sandbox this process has served, otherwise the network.
 app.use("/api/v1",(req,res,next)=>requestLimits.principal(req,res,next));
-app.use(express.json({limit:"2mb"}));
-app.use(express.urlencoded({ extended: false,limit:"2mb" }));
+// A body is JSON, and only a write's is read: a read's body is ignored (never parsed, checked or fingerprinted), and a
+// write's body in any other format, a form's included, is refused (415).
+const json=express.json({limit:"2mb"});
 app.use((req,res,next)=>{
-  // PostgreSQL text cannot hold NUL, so it is refused here, naming the field, before anything is journaled or saved.
-  const field=nulField(req.body);
-  if(field!==undefined){req.log.info({event:"request.rejected",status:400,reason:"nul_character"},"Request body refused");res.status(400).json({error:`Text cannot contain the NUL character (\\u0000). Remove it from ${field || "the request"} and try again.`,requestId:req.id});return;}
+  if(req.method==="GET"||req.method==="HEAD"){next();return;}
+  const sent=req.headers["transfer-encoding"]!==undefined||Number(req.headers["content-length"]??0)>0;
+  if(sent&&!req.is("application/json")){req.log.info({event:"request.rejected",status:415,reason:"content_type"},"Request body refused");res.status(415).json({error:"Send the request body as JSON, with the Content-Type application/json.",requestId:req.id});return;}
+  json(req,res,next);
+});
+app.use((req,res,next)=>{
+  // Refused here, naming the field, before anything is fingerprinted, journaled or saved.
+  const found=bodyProblem(req.body);
+  if(found){req.log.info({event:"request.rejected",status:400,reason:found.problem==="depth"?"nesting_depth":found.problem==="nul"?"nul_character":"unpaired_surrogate"},"Request body refused");res.status(400).json({error:bodyRefusal(found),requestId:req.id});return;}
   next();
 });
 app.use("/api", router);

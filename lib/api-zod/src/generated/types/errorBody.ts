@@ -6,22 +6,31 @@
  * OpenAPI spec version: 1.1.0
  */
 import type { ErrorBodyCode } from './errorBodyCode';
+import type { ErrorBodyOperation } from './errorBodyOperation';
 import type { ErrorDetail } from './errorDetail';
 
 /**
- * The body of every refusal and failure: what happened in plain words and the request's reference, with the fields validation refused, the staff-access refusal code, whether nothing was saved (committed false) and whether the request's journal entry is cancelled (operation cancelled).
+ * The body of every refusal and failure: what happened in plain words and the request's reference, with the fields validation refused (at most 20, and how many there were), the staff-access refusal code, whether nothing was saved (committed false) and the state of the request's journal entry (operation).
  */
 export interface ErrorBody {
   /** What happened, in plain words: a refusal in its rule's own wording, a failure in general words. */
   error: string;
   /** The request's reference, also sent as X-Request-Id; quoting it finds the request in the log. */
   requestId: string;
-  /** Present when validation failed: each field and what is wrong with it. */
+  /**
+     * Present when validation failed: the first 20 fields at most, each with what is wrong with it.
+     * @maxItems 20
+     */
   details?: ErrorDetail[];
+  /**
+     * Present with details: how many problems validation found, which may be more than details lists.
+     * @minimum 0
+     */
+  detailCount?: number;
   /** Present when staff access was refused: why. */
   code?: ErrorBodyCode;
-  /** Present on a failure that saved nothing: the transaction was rolled back, so the request may be sent again as new. A read's 500 never carries it, nor does the repeat of a request that was saved. */
+  /** Present on a failure that saved nothing: the transaction was rolled back, so the request may be sent again as new. For a request with an Idempotency-Key it is decided for the key: present only when nothing sent with the key was or can be saved (its journal entry is cancelled, or nothing was saved under it before this request failed), never while a request with the key was saved or is still running. A read's 500 never carries it. */
   committed?: false;
-  /** Present when the request's operations-journal entry is cancelled: nothing sent with its Idempotency-Key was or can be saved. */
-  operation?: 'cancelled';
+  /** Present when the request's Idempotency-Key has an operations-journal entry whose state is known: completed (a request with the key was saved), running (another attempt with the key is still running it), pending (its outcome is not confirmed yet) or cancelled (nothing sent with the key was or can be saved). */
+  operation?: ErrorBodyOperation;
 }

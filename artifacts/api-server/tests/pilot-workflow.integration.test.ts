@@ -164,7 +164,21 @@ try {
   const parallel = await Promise.all(
     Array.from({ length: 3 }, () => call(path, "POST", raceBody, raceKey)),
   );
-  assert.equal(new Set(parallel.map((answer) => ok(answer).id)).size, 1);
+  // One attempt runs the request; one arriving while it runs is turned away as still running and leaves it alone.
+  for (const answer of parallel.filter((item) => item.status !== 200)) {
+    assert.deepEqual(
+      [answer.status, answer.data.operation, answer.data.committed],
+      [503, "running", undefined],
+      JSON.stringify(answer.data),
+    );
+  }
+  const raced = ok(await call(path, "POST", raceBody, raceKey));
+  assert.deepEqual(
+    [...new Set(parallel.filter((item) => item.status === 200).map((item) => item.data.id)), raced.id].filter((id, index, all) => all.indexOf(id) === index),
+    [raced.id],
+    "every answer names the one record saved",
+  );
+  assert.equal(ok(await call(`${path}&search=${raceBody.reference}`)).total, 1);
 
   const rejectedKey = randomUUID();
   const refused = await call(
@@ -306,7 +320,7 @@ try {
   // retry's refusal cancelled the entry is refused at completion and saves nothing.
   const racedKey = randomUUID();
   const original = sandboxRequest();
-  const racedId = await store.inWorkspace(original, response, (ctx) =>
+  const { id: racedId } = await store.inWorkspace(original, response, (ctx) =>
     store.prepareOperation(ctx, lender, racedKey, {
       method: "POST",
       path: "/v1/records/customers",
@@ -314,7 +328,7 @@ try {
     }),
   );
   store.bindOperation(original, racedId, lender);
-  let cancelledMeanwhile: boolean | undefined;
+  let cancelledMeanwhile: string | undefined;
   await assert.rejects(
     store.inWorkspace(original, response, async (ctx) => {
       const state = await store.loadState(ctx, lender, "update");
@@ -325,6 +339,7 @@ try {
           status: 409,
           message: "The workspace changed. Refresh and review before trying again.",
         },
+        "refused",
       );
       await store.saveState(ctx, state);
       await store.saveIdempotency(
@@ -336,7 +351,7 @@ try {
     }),
     /cancelled before it completed/,
   );
-  assert.equal(cancelledMeanwhile, true, "The refusal reports the entry it cancelled.");
+  assert.equal(cancelledMeanwhile, "cancelled", "The refusal reports the entry it cancelled.");
   assert.equal(
     (
       await pool.query("SELECT status FROM valopay_operations WHERE id=$1", [
@@ -359,9 +374,10 @@ try {
       sandboxRequest(),
       { id: history.items[0].id, merchantId: lender },
       { status: 409, message: "Late refusal" },
+      "refused",
     ),
-    false,
-    "A refusal after completion leaves the completed entry alone and is not marked.",
+    "completed",
+    "A refusal after completion leaves the completed entry alone and says it was saved.",
   );
   assert.equal(
     (
@@ -383,7 +399,7 @@ try {
     data: { consentProvenance: "Synthetic fixture" },
   };
   const midwayKey = randomUUID();
-  const midwayId = await store.inWorkspace(sandboxRequest(), response, (ctx) =>
+  const { id: midwayId } = await store.inWorkspace(sandboxRequest(), response, (ctx) =>
     store.prepareOperation(ctx, lender, midwayKey, {
       method: "POST",
       path: "/v1/records/customers",
@@ -445,7 +461,7 @@ try {
         { id: "legacy receipt" },
       );
     });
-    const legacyId = await store.inWorkspace(sandboxRequest(), response, (ctx) =>
+    const { id: legacyId } = await store.inWorkspace(sandboxRequest(), response, (ctx) =>
       store.prepareOperation(ctx, lender, legacyKey, {
         method: "POST",
         path: prefix ? "/v1/connected/actions" : "/v1/records/customers",
@@ -457,9 +473,10 @@ try {
         sandboxRequest(),
         { id: legacyId, merchantId: lender },
         { status: 404, message: "Lender not found in your permitted workspace access." },
+        "refused",
       ),
-      false,
-      `A refused retry of a ${prefix || "record "}key with an earlier receipt is not marked.`,
+      "completed",
+      `A refused retry of a ${prefix || "record "}key with an earlier receipt is never marked cancelled: the answer says it was saved.`,
     );
     assert.equal(
       (

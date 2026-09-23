@@ -67,7 +67,7 @@ function add(path, method, id, response, body, params = []) {
 // A key the operations journal records makes its request answer 410 once retention has removed its stored result.
 const journaled = new WeakSet();
 const journal = (parameter) => { journaled.add(parameter); return parameter; };
-const keyRules = "8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender's retention policy has removed that stored result, the repeat is refused (410).";
+const keyRules = "8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender's retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request's journal entry, so a key names one request of the person who sent it, in its lender.";
 const requiredKey = journal({ name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 }, description: `Required: a request without one is refused (400, naming the header). ${keyRules}` });
 const optionalKey = (detail = "") => journal({ name: "Idempotency-Key", in: "header", required: false, schema: { type: "string", minLength: 8, maxLength: 200 }, description: `Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. ${keyRules}${detail ? ` ${detail}` : ""}` });
 /** A new lender's key: it names the lender, and the journal does not record the request. */
@@ -91,7 +91,7 @@ add("/v1/overview","get","getOverview","Overview",null,[merchant]);
 add("/v1/records/{kind}","get","listRecords","RecordList",null,[pathParam("kind"),merchant,search,status,limit,offset,updatedSince,customerId,recordId]);
 add("/v1/records/{kind}","post","createRecord","ValopayRecord","RecordInput",[pathParam("kind"),merchant,optionalKey()]);
 add("/v1/records/{kind}/{id}","patch","updateRecord","ValopayRecord","RecordUpdate",[pathParam("kind"),pathParam("id"),merchant,optionalKey()]);
-add("/v1/actions","post","performAction","ActionResult","ActionInput",[merchant,optionalKey("A set_role change is repeatable with its key but is not recorded in Operations, so a refused one may be sent again and retention never removes its result.")]);
+add("/v1/actions","post","performAction","ActionResult","ActionInput",[merchant,optionalKey("A set_role change is repeatable with its key but is not recorded in Operations, so a refused one may be sent again and retention never removes its result. Its result is kept apart from the journal's, so a journaled write sent with the same key is a separate request.")]);
 add("/v1/imports","post","importRecords","ImportResult","ImportInput",[merchant,optionalKey("Only a commit (commit true) uses it: a preview writes nothing.")]);
 add("/v1/customers/{id}/timeline","get","getCustomerTimeline","Timeline",null,[pathParam("id"),merchant]);
 add("/v1/reports","get","getReports","Report",null,[merchant]);
@@ -467,7 +467,7 @@ const operation = (path, method, id, response, body, params, summary, descriptio
 
 // The error body every refusal and failure carries.
 derived("ErrorDetail", shared.errorDetailSchema, "One field a request got wrong: its dotted path (a query value or header by its name) and what is wrong with it.");
-derived("ErrorBody", shared.errorBodySchema, "The body of every refusal and failure: what happened in plain words and the request's reference, with the fields validation refused, the staff-access refusal code, whether nothing was saved (committed false) and whether the request's journal entry is cancelled (operation cancelled).");
+derived("ErrorBody", shared.errorBodySchema, "The body of every refusal and failure: what happened in plain words and the request's reference, with the fields validation refused (at most 20, and how many there were), the staff-access refusal code, whether nothing was saved (committed false) and the state of the request's journal entry (operation).");
 
 // Connected workspace: the Credit Desk and Cash Desk documents, the workspace and its actions.
 derived("CreditAssessmentResult", shared.creditAssessmentResultSchema, "An illustrative synthetic credit assessment: evidence, features, rule score, affordability and policy recommendation. Never a probability of default or a lending decision; features, score and affordability are null when the evidence or authority does not allow them.");
@@ -647,18 +647,18 @@ operation("/v1/lifecycle/runs/{id}/execute", "post", "executeLifecycleRun", "Lif
 // scope, the journal and the route's own refusals. Every one carries ErrorBody (lib/error-handler.ts
 // and the app's own refusals) except readiness's 503 and the identity provider's re-verification.
 const failures = {
-  400: "Refused: a parameter, header or body field failed validation (details names each one), the body is not valid JSON or holds a NUL character, or a rule refused the request in its own words. Nothing was saved.",
+  400: "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
   401: "Sign-in required: a staff host answers only a signed-in pilot staff session.",
   403: "Refused: another origin, or the caller's role, membership, lender access, recent MFA or a readiness gate does not allow it.",
   404: "Not found in the caller's workspace: the lender, or what the path names.",
   409: "Conflict: what the request names changed since it was read, its Idempotency-Key belongs to another request or its journal entry is cancelled, or the change conflicts with saved records. Nothing was saved.",
   410: "Gone: a request with this Idempotency-Key already completed, and the lender's retention policy has since removed its stored result, so it cannot run again. Its entry in Operations remains.",
   413: "The body is larger than 2 MB.",
-  415: "The body's character set or encoding is not supported; send UTF-8 JSON.",
+  415: "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
   429: "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
-  500: "The service failed. With committed false nothing was saved; otherwise the outcome is unconfirmed: check Operations, or repeat the same request with its Idempotency-Key.",
+  500: "The service failed. With committed false nothing was saved (for a request with an Idempotency-Key, nothing sent with the key); with operation completed a request with the key was saved; otherwise the outcome is unconfirmed: check Operations, or repeat the same request with its Idempotency-Key.",
   502: "Private storage answered with an error; nothing was sent.",
-  503: "Busy or unavailable: a database limit turned the request away (a busy lender or workspace, a lock or statement past its limit, a lost or unavailable connection), or a service it needs, such as the key service or private storage, is unavailable or not configured. committed false says nothing was saved.",
+  503: "Busy or unavailable: a database limit turned the request away (a busy lender or workspace, a lock or statement past its limit, a lost or unavailable connection), the same request is still running (operation running), or a service it needs is unavailable or not configured: the key service, or private storage or the identity provider out of reach. committed false says nothing was saved (for a request with an Idempotency-Key, nothing sent with the key); operation completed says a request with the key was saved.",
   504: "Private storage did not answer in time; nothing was sent.",
 };
 const retryAfter = (description) => ({ "Retry-After": { description, schema: { type: "integer", minimum: 1 } } });
@@ -712,7 +712,7 @@ function listErrorAnswers(path, method, op) {
     if (name === "GET /readyz" && status === 503) continue; // readiness answers its own body
     answer.content = { "application/json": { schema: name === "POST /v1/team/verify" && status === 403 ? { anyOf: [ref("ErrorBody"), ref("ReverificationRequired")] } : ref("ErrorBody") } };
     if (status === 429) answer.headers = retryAfter429(name);
-    if (status === 503) answer.headers = retryAfter("Seconds to wait before trying again: sent when a database limit turned the request away; absent when a service it needs is unavailable or not configured.");
+    if (status === 503) answer.headers = retryAfter("Seconds to wait before trying again: sent when a database limit turned the request away, the same request is still running, or private storage or the identity provider could not be reached or said it is unavailable; absent when a service it needs is not configured, or the key service cannot open protected data.");
   }
   op.responses = Object.fromEntries(Object.entries(op.responses).sort(([a], [b]) => Number(a) - Number(b)));
 }

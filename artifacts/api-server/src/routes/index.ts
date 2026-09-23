@@ -11,9 +11,16 @@ import staffLenderRouter from './staff-lender-access';
 import accessReadinessRouter from './access-readiness';
 import lifecycleRouter from './lifecycle';
 import importCorrectionsRouter from './import-corrections';
+import { routerOptions } from './router-options';
 
-const router: IRouter = Router();
+const router: IRouter = Router(routerOptions);
 
+// A path whose percent-encoding cannot be decoded is refused (400) before anything runs or is journaled: the
+// router refuses such a path parameter the same way (a URIError it marks 400), which the error handler answers.
+router.use((req, _res, next) => {
+  try { decodeURIComponent(req.path); next(); }
+  catch { next(Object.assign(new URIError("The path's percent-encoding cannot be decoded."), { status: 400 })); }
+});
 router.use(healthRouter);
 router.use(recoveryMiddleware);
 router.use(valopayRouter);

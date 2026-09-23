@@ -10,8 +10,9 @@ import { saveSourceManifest } from "../domain/source-completeness";
 import { providerEventView, receivePaystackEvent, replayProviderEvent, runPaystackFixture } from "../providers/paystack-inbox";
 import { parsePaystackTestWebhook, PaystackError, type PaystackWebhook } from "../providers/paystack";
 import type { DomainState, Context } from "../domain/types";
+import { routerOptions } from "./router-options";
 
-const router: IRouter = Router();
+const router: IRouter = Router(routerOptions);
 router.get("/v1/sources", async (req, res) => {
   lenderQuery(req);
   const { businessDate } = z.object({ businessDate: businessDateSchema.optional() }).parse({ businessDate: req.query.businessDate });
@@ -59,7 +60,7 @@ const paystackRefusal = (error: unknown) => error instanceof PaystackError ? Obj
  * decrypted, so a forged delivery costs one HMAC and learns nothing about the connection or its lender.
  */
 export function createPaystackIngress({ secretKey, transact }: PaystackIngress): IRouter {
-  const ingress = Router();
+  const ingress = Router(routerOptions);
   ingress.post("/v1/providers/paystack/:connectionId/events", raw({ type: "application/json", limit: "256kb" }), async (req, res) => {
     const connectionId = z.string().regex(/^[a-f0-9]{64}$/).parse(req.params.connectionId);
     if (!Buffer.isBuffer(req.body)) throw Object.assign(new Error("A signed JSON body is required."), { status: 400 });

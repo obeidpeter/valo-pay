@@ -5,8 +5,9 @@ import { caseAssignees } from "../lib/valopay-store";
 import { requiredKey } from "../lib/contract";
 import { withState } from "./valopay";
 import { closeReviewList, pilotProgress, prepareCloseReview, decideCloseReview } from "../domain/close-review";
+import { routerOptions } from "./router-options";
 
-const router: IRouter = Router();
+const router: IRouter = Router(routerOptions);
 router.get("/v1/pilot/progress", async (req, res) => {
   res.json(await withState(req, res, (state, ctx) => pilotProgress(state, ctx.accessMode), false, pilotProgressSchema));
 });
