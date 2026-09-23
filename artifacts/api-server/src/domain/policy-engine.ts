@@ -6,7 +6,7 @@ import {
 } from "@workspace/valopay-schema";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { makeRecord, recordsOf } from "./records";
-import { holidaySet, isBusinessDay, nonBusinessDaysBetween } from "./calendar";
+import { holidaySet, isBusinessDay, nonBusinessDaysBetween, watDate } from "./calendar";
 import { canonicalDigest } from "../lib/digests";
 
 const HOUR = 60 * 60 * 1000;
@@ -156,9 +156,12 @@ const iso = (ms: number): string => new Date(ms).toISOString();
 /**
  * TRD 6.3 decision table, applied after a failed attempt.  Rows fire in the
  * documented order; ownership and mode are evaluated last so a backtest can
- * show what the policy would have done while the merchant observes.
+ * show what the policy would have done while the merchant observes.  A
+ * backtest is a `simulation`: it tries a version, approved or not, as if it
+ * were approved and applied, so the approval and consented-version rows are
+ * left out.  Its decisions are never recorded.
  */
-export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord<"due-items">, policy: TypedRecord<"policies">): RetryDecision {
+export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord<"due-items">, policy: TypedRecord<"policies">, options: { simulation?: boolean } = {}): RetryDecision {
   const attempts = attemptsFor(state, due.id);
   const counted = countedAttempts(state, due.id);
   const last = counted.at(-1);
@@ -200,10 +203,10 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
     return explain("give_up", "restricted_once", `${code} has already had its one permitted retry. Follow-up requires a final notice, an exception and an update to the loan management system.`, null, finalNotice);
   }
   // RET-01: only an approved version by a reviewer who is not its author may plan a retry.
-  if (policy.status !== "approved" || !policy.data.reviewer || policy.data.reviewer === policy.data.author) return explain("blocked", "unapproved_policy", "Independent compliance approval is required before a retry can be planned.");
+  if (!options.simulation && (policy.status !== "approved" || !policy.data.reviewer || policy.data.reviewer === policy.data.author)) return explain("blocked", "unapproved_policy", "Independent compliance approval is required before a retry can be planned.");
   const mandate = recordsOf(state, "mandates").find((record) => record.id === due.data.mandateId);
   // RET-07: the engine applies the version the consent covers until a notice, and fresh consent where required, moves the mandate to a newer one.
-  if (mandate?.data.consentPolicyId && mandate.data.consentPolicyId !== policy.id) {
+  if (!options.simulation && mandate?.data.consentPolicyId && mandate.data.consentPolicyId !== policy.id) {
     inputs.consentPolicyVersion = mandate.data.consentPolicyVersion;
     return explain("blocked", "policy_version_not_consented", `The customer consent covers version ${mandate.data.consentPolicyVersion}. Before applying version ${policy.data.version ?? "?"}, record the required policy-change notice and any new consent required by the lender's terms.`);
   }
@@ -228,8 +231,10 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
   Object.assign(inputs, { spacingHours, leadHours, window: executionWindowFor(state) });
   if (!Number.isFinite(planned)) return explain("blocked", "window", "There is no available business-day time within the configured collection hours.");
   const calendar = (fromMs: number, toMs: number) => ({ earliestAt: iso(fromMs), rolledForward: toMs > fromMs, ...nonBusinessDaysBetween(state, fromMs, toMs) });
-  // NOT-10: the notice clock runs from provider acceptance, never from submission or simulation.
-  const notice = recordsOf(state, "notifications").find((record) => record.id === last.data.noticeId && ["pre_debit", "failed_debit"].includes(String(record.data.purpose)) && record.data.acceptedAt && record.data.synthetic !== true);
+  // NOT-10: the notice clock runs from provider acceptance, never from submission or simulation.  The notice for a
+  // retry follows the failure it reports: one accepted before the failure announced an earlier debit.
+  const failedAt = Date.parse(attemptTime(last));
+  const notice = recordsOf(state, "notifications").find((record) => record.id === last.data.noticeId && ["pre_debit", "failed_debit"].includes(String(record.data.purpose)) && record.data.acceptedAt && record.data.synthetic !== true && Date.parse(String(record.data.acceptedAt)) > failedAt);
   if (notice) {
     const acceptedAt = Date.parse(String(notice.data.acceptedAt));
     const earliest = Math.max(earliestBySpacing, acceptedAt + leadHours * HOUR);
@@ -340,8 +345,9 @@ export function enrolEligibleFailures(state: DomainState, ctx: Context): void {
     if (!mandate || mandate.status !== "active") continue;
     const failureAt = attemptTime(first);
     if (due.data.amendedAt && String(due.data.amendedAt) > failureAt) continue;
+    // Enrolment closes at the end of its WAT day: a failure counts by its West Africa Time date.
     const experiment = recordsOf(state, "experiments").find((item) =>
-      item.status === "preregistered" && item.data.policyId === policyIdFor(state, due) && failureAt >= String(item.data.preregisteredAt) && failureAt <= `${item.data.enrolmentClose}T23:59:59.999Z`,
+      item.status === "preregistered" && item.data.policyId === policyIdFor(state, due) && failureAt >= String(item.data.preregisteredAt) && watDate(Date.parse(failureAt)) <= String(item.data.enrolmentClose).slice(0, 10),
     );
     if (!experiment) continue;
     due.data.experimentId = experiment.id;

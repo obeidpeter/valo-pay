@@ -394,7 +394,8 @@ export default function ReportsPage() {
                   {experimentRows(reports.experiment).map(row => (
                     <div key={String(row.experimentId)} className="border rounded-lg p-3 text-xs tabular-nums space-y-2">
                       <p className="text-muted-foreground truncate">Experiment {String(row.experimentId)} · {readableLabel(row.status)} · analysis date {String(row.analysisDate || 'not set')}</p>
-                      <p>Enrolled instalments: retry group {count(row.engine?.enrolled)} · comparison group {count(row.holdout?.enrolled)} · minimum per group {count(row.minimumPerArm)}</p>
+                      <p>Enrolled instalments: retry group {count(row.engine?.enrolled)} · comparison group {count(row.holdout?.enrolled)}</p>
+                      <p>Minimum completed outcomes: retry group {count(row.minimumByArm?.engine ?? row.minimumPerArm)} · comparison group {count(row.minimumByArm?.holdout ?? row.minimumPerArm)}</p>
                       <p>Completed 30-day outcomes: retry group {count(row.engine?.mature)} · comparison group {count(row.holdout?.mature)}</p>
                       <p>Amount recovered (primary measure): retry group {percent(row.engine?.recoveryByValue)} · comparison group {percent(row.holdout?.recoveryByValue)} · difference {percentagePoints(row.differenceByValue)}</p>
                       <p>Instalments settled in full: retry group {percent(row.engine?.recoveryByCount)} · comparison group {percent(row.holdout?.recoveryByCount)} · difference {percentagePoints(row.differenceByCount)}</p>

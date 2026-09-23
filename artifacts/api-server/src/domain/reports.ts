@@ -6,6 +6,7 @@ import { buildBillingStatement, monthOf, periodBounds, previousMonth } from "./b
 import { seededSample, wilsonInterval } from "./stats";
 import type { Alert } from "./alerts";
 import { closeSchedule } from "./close";
+import { watDate } from "./calendar";
 export { billableCollection, reversalWindowDays } from "./billing";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -109,6 +110,10 @@ export function upliftReport(state: DomainState, experiment: TypedRecord<"experi
   const engine = armStatistics(state, enrolled.filter((due) => due.data.experimentArm === "engine"), now);
   const holdout = armStatistics(state, enrolled.filter((due) => due.data.experimentArm === "holdout"), now);
   const minimumPerArm = Number(experiment.data.minPerArm || 0);
+  // RET-11: each arm meets its own pre-computed minimum; minPerArm is a floor for both.  With a comparison group
+  // under half, the retry group's minimum is the larger one.
+  const sample = experiment.data.sampleCalculation;
+  const minimumByArm = { engine: Math.max(minimumPerArm, Number(sample?.engineMinimum || 0)), holdout: Math.max(minimumPerArm, Number(sample?.holdoutMinimum || 0)) };
   const differenceByValue = round(engine.recoveryByValue - holdout.recoveryByValue);
   const differenceByCount = round(engine.recoveryByCount - holdout.recoveryByCount);
   const confidenceInterval90 = interval(differenceByValue, engine.varianceByValue, holdout.varianceByValue);
@@ -117,8 +122,9 @@ export function upliftReport(state: DomainState, experiment: TypedRecord<"experi
   const checks = {
     effectAtLeastEightPoints: differenceByValue >= experimentRules.effectPoints,
     intervalExcludesZero: confidenceInterval90 !== null && confidenceInterval90.low > 0,
-    sampleMet: engine.mature >= minimumPerArm && holdout.mature >= minimumPerArm && minimumPerArm > 0,
-    analysisDateReached: Boolean(analysisDate) && now.slice(0, 10) >= analysisDate.slice(0, 10),
+    sampleMet: minimumByArm.engine > 0 && minimumByArm.holdout > 0 && engine.mature >= minimumByArm.engine && holdout.mature >= minimumByArm.holdout,
+    // A WAT date: reached at midnight West Africa Time.
+    analysisDateReached: Boolean(analysisDate) && watDate(Date.parse(now)) >= analysisDate.slice(0, 10),
   };
   const failed = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name);
   const result = failed.length ? "not_proven" : "proven";
@@ -128,7 +134,7 @@ export function upliftReport(state: DomainState, experiment: TypedRecord<"experi
   return {
     experimentId: experiment.id, status: experiment.status, passRule: experiment.data.passRule ?? null, preregisteredAt: experiment.data.preregisteredAt ?? null,
     analysisDate: analysisDate || null, enrolmentClose: experiment.data.enrolmentClose ?? null, holdoutShare: Number(experiment.data.holdoutShare), seed: experiment.data.seed ?? null,
-    outcomeWindowDays: experimentRules.outcomeWindowDays, minimumPerArm,
+    outcomeWindowDays: experimentRules.outcomeWindowDays, minimumPerArm, minimumByArm,
     engine: { ...engine, recoveryByValue: round(engine.recoveryByValue), recoveryByCount: round(engine.recoveryByCount) },
     holdout: { ...holdout, recoveryByValue: round(holdout.recoveryByValue), recoveryByCount: round(holdout.recoveryByCount) },
     differenceByValue, differenceByCount, confidenceInterval90, confidenceInterval90ByCount, confidence: experimentRules.confidence,

@@ -394,8 +394,11 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
   if (input.action === "backtest_policy") {
     assertActionRole(ctx, ["Admin", "Operations", "Finance", "Compliance reviewer"]);
     const policy = findRecord(state, String(input.recordId), "policies");
-    const decisions = recordsOf(state, "due-items").filter((due) => policyIdFor(state, due) === policy.id).map((due) => evaluateRetry(state, ctx, due, policy));
-    return result("This simulation shows whether the policy would allow a retry and when. It does not predict how much money would be recovered.", policy, { decisions, recoveryEstimate: null, notARecoveryClaim: true });
+    // Any version, a draft under review included, is tried on the instalments its policy governs, as if it applied.
+    const lineage = new Set(policyLineage(state, policy).map((item) => item.id));
+    const decisions = recordsOf(state, "due-items").filter((due) => lineage.has(String(policyIdFor(state, due)))).map((due) => evaluateRetry(state, ctx, due, policy, { simulation: true }));
+    const unapproved = policy.status === "approved" ? "" : `Version ${policyVersionOf(policy)} is not approved: this shows what it would do if it were approved and applied. `;
+    return result(`${unapproved}This simulation shows whether the policy would allow a retry and when. It does not predict how much money would be recovered.`, policy, { decisions, recoveryEstimate: null, notARecoveryClaim: true });
   }
   if (input.action === "preregister_experiment") {
     assertActionRole(ctx, ["Admin"]);
