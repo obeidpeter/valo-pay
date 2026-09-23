@@ -9,51 +9,19 @@ import {
   submissionFingerprint,
 } from "./safe-mutations";
 import { useUnsavedChanges } from "./unsaved-changes";
+import { answerProblem, readAnswer, UNREADABLE_ANSWER } from "./answers";
+import { connectedActionResultSchema, connectedViewSchema, type ConnectedView as SharedConnectedView } from "@workspace/valopay-schema";
 
-export interface ConnectedRecord {
-  id: string;
-  name: string;
-  reference: string;
-  status: string;
-  amountKobo: number;
-  customerId: string;
-  createdAt: string;
-  updatedAt: string;
-  data: Record<string, any>;
-  effectiveStatus?: string;
-}
-export interface ConnectedView {
-  mode: "synthetic";
-  revision: string;
-  asOf: string;
-  role: string;
-  entity: { id: string; name: string; workspaceOwner: string };
-  customers: Array<{ id: string; name: string; reference: string }>;
-  consents: ConnectedRecord[];
-  purposes: Array<{ id: string; label: string }>;
-  gates: Array<{
-    id: string;
-    name: string;
-    requires: string;
-    status: string;
-    liveEnabled: false;
-  }>;
-  payments: {
-    intents: ConnectedRecord[];
-    dues: Array<{
-      id: string;
-      name: string;
-      reference: string;
-      customerId: string;
-      customerName: string;
-      outstandingKobo: number;
-      blocked: boolean;
-    }>;
-  };
-  credit: any;
-  cash: any;
-}
-async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
+/** A consent or payment intent as the connected view lists it; its data is read field by field. */
+export type ConnectedRecord = Omit<SharedConnectedView["payments"]["intents"][number], "data"> & { data: Record<string, any>; effectiveStatus?: string };
+/** The connected workspace as the shared schema reads it, its consents and intents with data read field by field. */
+export type ConnectedView = Omit<SharedConnectedView, "consents" | "payments"> & {
+  consents: Array<ConnectedRecord & { effectiveStatus: SharedConnectedView["consents"][number]["effectiveStatus"] }>;
+  payments: Omit<SharedConnectedView["payments"], "intents"> & { intents: ConnectedRecord[] };
+};
+/** Shown for a connected action whose answer does not confirm the expected sample result: the action may have been saved. */
+const UNCONFIRMED_SAMPLE = "The response did not confirm the expected sample result. Retry the original request to recover its outcome.";
+async function request(url: string, options: RequestInit = {}): Promise<unknown> {
   const response = await fetch(url, {
     credentials: "same-origin",
     ...options,
@@ -99,11 +67,18 @@ export function useConnected() {
   const query = useQuery<ConnectedView>({
     queryKey: ["connected", merchantId],
     enabled: !!merchantId,
-    queryFn: ({ signal }) =>
-      request(
-        `/api/v1/connected?merchantId=${encodeURIComponent(merchantId!)}`,
-        { signal },
-      ),
+    queryFn: async ({ signal }) => {
+      // The view the API checked, read through the same schema: a malformed answer is a load problem, never a page.
+      const view = readAnswer(
+        connectedViewSchema,
+        await request(
+          `/api/v1/connected?merchantId=${encodeURIComponent(merchantId!)}`,
+          { signal },
+        ),
+      );
+      if (!view) throw answerProblem(UNREADABLE_ANSWER);
+      return view;
+    },
     staleTime: 10000,
   });
   const mutation = useMutation({
@@ -146,7 +121,7 @@ export function useConnected() {
       const current = attempt.current;
       current.pending = true;
       try {
-        const result = await request<Record<string, unknown> | null>(
+        const result = await request(
           `/api/v1/connected/actions?merchantId=${encodeURIComponent(merchantId)}`,
           {
             method: "POST",
@@ -154,19 +129,8 @@ export function useConnected() {
             body: current.body,
           },
         );
-        if (
-          !result ||
-          typeof result.message !== "string" ||
-          result.mode !== "synthetic" ||
-          result.externalInstructionPerformed !== false ||
-          !result.record ||
-          typeof result.record !== "object" ||
-          Array.isArray(result.record)
-        ) {
-          throw new Error(
-            "The response did not confirm the expected sample result. Retry the original request to recover its outcome.",
-          );
-        }
+        // Only the confirmation the contract describes counts: anything else leaves the outcome unconfirmed.
+        if (!readAnswer(connectedActionResultSchema, result)) throw answerProblem(UNCONFIRMED_SAMPLE);
         if (attempt.current === current) attempt.current = null;
       } catch (error) {
         // A definite request rejection did not commit; a reviewed retry may

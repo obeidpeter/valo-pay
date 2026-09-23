@@ -43,6 +43,7 @@ export type PersonalWorkViewItemsItem = {
   escalationReason: string | null;
   /** @nullable */
   reviewCurrent: boolean | null;
+  /** @pattern ^/ */
   href: string;
   /** @nullable */
   readAt: Date | null;

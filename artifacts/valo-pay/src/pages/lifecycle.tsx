@@ -6,6 +6,7 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { useSafeMutation } from '@/lib/safe-mutations';
 import { useUnsavedChanges } from '@/lib/unsaved-changes';
 import { lenderPath, pilotRequest } from '@/lib/pilot';
+import { INCOMPLETE_CONFIRMATION } from '@/lib/answers';
 import { formatDate } from '@/lib/formatters';
 import { PilotError, PilotHeading, PilotPanel, RecoveryNotice, pilotField } from '@/components/pilot-ui';
 import { Button } from '@/components/ui/button';
@@ -22,13 +23,13 @@ function LifecycleControls() {
   const { merchantId, workspace } = useWorkspace(), cache = useQueryClient();
   const [offset, setOffset] = useState(0), [selected, setSelected] = useState<LifecycleRunView | null>(null), [message, setMessage] = useState('');
   const query = useQuery({ queryKey: ['lifecycle', merchantId, workspace?.actor, offset], enabled: !!merchantId && workspace?.role === 'Admin', queryFn: async ({ signal }) => {
-    const data = lifecycleViewSchema.parse(await pilotRequest(lenderPath('/lifecycle', merchantId, offset), { signal }));
+    const data = await pilotRequest(lenderPath('/lifecycle', merchantId, offset), lifecycleViewSchema, { signal });
     if (data.merchantId !== merchantId || data.actor !== workspace?.actor) throw new Error('The response did not match this lender and administrator. Refresh the page.');
     return data;
   } });
   const mutation = useSafeMutation(async (variables: Variables, options) => {
-    const raw = await pilotRequest(lenderPath(variables.path, merchantId), { ...options, method: 'POST', body: JSON.stringify(variables.data) });
-    const result = variables.response === 'run' ? lifecycleRunViewSchema.parse(raw) : lifecycleViewSchema.parse(raw);
+    const request = { ...options, method: 'POST', body: JSON.stringify(variables.data) };
+    const result: LifecycleRunView | LifecycleView = variables.response === 'run' ? await pilotRequest(lenderPath(variables.path, merchantId), lifecycleRunViewSchema, request, INCOMPLETE_CONFIRMATION) : await pilotRequest(lenderPath(variables.path, merchantId), lifecycleViewSchema, request, INCOMPLETE_CONFIRMATION);
     if (result.merchantId !== merchantId || ('actor' in result && result.actor !== workspace?.actor)) throw new Error('The service did not confirm this retention action. Check the original request before trying another change.');
     const expectedRun = variables.path.match(/\/runs\/([^/]+)\/(approve|execute)$/)?.[1];
     if (expectedRun && (!('id' in result) || result.id !== expectedRun)) throw new Error('The response named a different retention run. Check the original request.');

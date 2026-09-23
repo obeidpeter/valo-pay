@@ -5,13 +5,15 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
+import type { ReadinessCheckId } from './readinessCheckId';
+import type { ReadinessCheckState } from './readinessCheckState';
 
 /**
  * One readiness control (identity, MFA, origins, database isolation, encryption) with its state on this host and what it means.
  */
 export interface ReadinessCheck {
-  id: string;
+  id: ReadinessCheckId;
   name: string;
-  state: string;
+  state: ReadinessCheckState;
   detail: string;
 }

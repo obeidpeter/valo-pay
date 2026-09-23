@@ -160,11 +160,10 @@ function CorrectionEditor({
   });
   const dryRun = useMutation({
     mutationFn: async (input: ImportCorrectionPreviewInput) => {
-      const preview = importCorrectionPreviewSchema.parse(
-        await pilotRequest(
-          lenderPath("/pilot/import-corrections/preview", merchantId),
-          { method: "POST", body: JSON.stringify(input) },
-        ),
+      const preview = await pilotRequest(
+        lenderPath("/pilot/import-corrections/preview", merchantId),
+        importCorrectionPreviewSchema,
+        { method: "POST", body: JSON.stringify(input) },
       );
       if (
         preview.merchantId !== merchantId ||
@@ -535,14 +534,12 @@ function ProposalCard({
   );
 }
 export function ImportCorrections({ batchId }: { batchId: string }) {
-  const query = usePilotQuery<Workbench>(
+  const query = usePilotQuery(
     `/pilot/import-corrections?batchId=${encodeURIComponent(batchId)}`,
+    importCorrectionsResponseSchema,
   );
   const [selected, setSelected] = useState("");
-  const workbench = query.data
-    ? importCorrectionsResponseSchema.safeParse(query.data)
-    : null;
-  const data = workbench?.success ? workbench.data : null,
+  const data: Workbench | null = query.data ?? null,
     target = data?.targets.find((t) => t.id === selected);
   return (
     <section
@@ -559,14 +556,7 @@ export function ImportCorrections({ batchId }: { batchId: string }) {
         </p>
       </div>
       <PilotError
-        error={
-          query.error ||
-          (workbench && !workbench.success
-            ? new Error(
-                "Correction details could not be verified. Refresh this batch.",
-              )
-            : null)
-        }
+        error={query.error}
         retry={() => {
           void query.refetch();
         }}

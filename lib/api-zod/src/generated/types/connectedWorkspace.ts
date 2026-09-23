@@ -5,24 +5,29 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
-import type { ConnectedWorkspaceMode } from './connectedWorkspaceMode';
-import type { RecordData } from './recordData';
-import type { ValopayRecord } from './valopayRecord';
+import type { CashDesk } from './cashDesk';
+import type { ConnectedWorkspaceConsentsItem } from './connectedWorkspaceConsentsItem';
+import type { ConnectedWorkspaceCustomersItem } from './connectedWorkspaceCustomersItem';
+import type { ConnectedWorkspaceEntity } from './connectedWorkspaceEntity';
+import type { ConnectedWorkspaceGatesItem } from './connectedWorkspaceGatesItem';
+import type { ConnectedWorkspacePayments } from './connectedWorkspacePayments';
+import type { ConnectedWorkspacePurposesItem } from './connectedWorkspacePurposesItem';
+import type { CreditDesk } from './creditDesk';
 
 /**
- * Synthetic connected workspace. Credit and Cash views carry evidence, permissions and refusal states. Every gate has liveEnabled false. No read creates sample records.
+ * Synthetic connected workspace: granular consents with their effective state, bound sample payment intents, the Credit and Cash Desks and the live gates, every one closed. No read creates sample records.
  */
 export interface ConnectedWorkspace {
-  mode: ConnectedWorkspaceMode;
+  mode: 'synthetic';
   revision: string;
   asOf: string;
   role: string;
-  entity: RecordData;
-  customers: RecordData[];
-  consents: ValopayRecord[];
-  purposes: RecordData[];
-  gates: RecordData[];
-  payments: RecordData;
-  credit: RecordData;
-  cash: RecordData;
+  entity: ConnectedWorkspaceEntity;
+  customers: ConnectedWorkspaceCustomersItem[];
+  consents: ConnectedWorkspaceConsentsItem[];
+  purposes: ConnectedWorkspacePurposesItem[];
+  gates: ConnectedWorkspaceGatesItem[];
+  payments: ConnectedWorkspacePayments;
+  credit: CreditDesk;
+  cash: CashDesk;
 }

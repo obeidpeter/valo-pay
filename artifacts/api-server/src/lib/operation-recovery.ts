@@ -1,7 +1,7 @@
 import type { RequestHandler } from "express";
-import { z } from "zod";
 import { parse } from "csv-parse/sync";
 import { definitiveRefusalStatuses } from "@workspace/valopay-schema";
+import { lenderQuery, optionalKey } from "./contract";
 import { assertNoRealBankDetails } from "../domain/records";
 import { registerRefusalCloser } from "./refused-operations";
 import {
@@ -42,7 +42,6 @@ export function recoverableRequest(
     /^\/v1\/lifecycle\/(?:policy|holds|runs(?:\/[^/]+\/(?:approve|execute))?)$/.test(path)
   );
 }
-const query = z.object({ merchantId: z.string().min(1).max(100) });
 // Statuses that mean the same request would be refused again (shared with the
 // console, which then drops the key). A rate limit, a timeout or a service
 // failure leaves the entry pending: its outcome is unknown.
@@ -65,12 +64,11 @@ export function closeRejectedOperation(req: Parameters<RequestHandler>[0], statu
     return false;
   });
 }
-const requestKey = z.string().min(8).max(200);
 export const recoveryMiddleware: RequestHandler = async (req, res, next) => {
   try {
     const replay = /^\/v1\/operations\/([a-f0-9]{64})\/retry$/.exec(req.path);
     if (req.method === "POST" && replay) {
-      const { merchantId } = query.parse(req.query);
+      const { merchantId } = lenderQuery(req);
       const stored = await inWorkspace(
         req,
         res,
@@ -95,11 +93,12 @@ export const recoveryMiddleware: RequestHandler = async (req, res, next) => {
       req.headers["idempotency-key"] = stored.request_key;
     }
     if (recoverableRequest(req.method, req.path, req.body)) {
-      const { merchantId } = query.parse(req.query);
+      const { merchantId } = lenderQuery(req);
       // Legacy API callers without keys retain their existing contract. Every
       // console mutation supplies a key; unkeyed writes cannot be recovered.
-      if (req.header("Idempotency-Key")) {
-        const key = requestKey.parse(req.header("Idempotency-Key"));
+      // A key is refused by name when it is not 8 to 200 characters.
+      const key = optionalKey(req);
+      if (key) {
         assertNoRealBankDetails(req.body);
         if (typeof req.body?.csv === "string") {
           if (req.body.syntheticOnly !== true)

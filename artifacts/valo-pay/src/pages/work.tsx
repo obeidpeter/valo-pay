@@ -7,6 +7,7 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { useSafeMutation } from '@/lib/safe-mutations';
 import { useUnsavedChanges } from '@/lib/unsaved-changes';
 import { lenderPath, pilotRequest } from '@/lib/pilot';
+import { INCOMPLETE_CONFIRMATION } from '@/lib/answers';
 import { formatDate } from '@/lib/formatters';
 import { PilotError, PilotHeading, PilotPanel, RecoveryNotice, pilotField } from '@/components/pilot-ui';
 import { Button } from '@/components/ui/button';
@@ -32,14 +33,14 @@ function WorkQueue() {
   const focusPage = useRef(false);
   const query = useQuery({ queryKey: ['personal-work', merchantId, workspace?.actor, workspace?.role, scope, filter, offset], enabled: !!merchantId && !!workspace, refetchInterval: 60000,
     queryFn: async ({ signal }) => {
-      const result = personalWorkViewSchema.parse(await pilotRequest(lenderPath(`/work?scope=${scope}&filter=${filter}&offset=${offset}&limit=25`, merchantId), { signal }));
+      const result = await pilotRequest(lenderPath(`/work?scope=${scope}&filter=${filter}&offset=${offset}&limit=25`, merchantId), personalWorkViewSchema, { signal });
       if (result.merchantId !== merchantId || result.actor !== workspace?.actor || result.scope !== scope) throw new Error('The service returned work for a different context. Refresh the selected lender.');
       return result;
     },
   });
   const mutation = useSafeMutation(async (variables: ReceiptVariables, options) => {
     const path = variables.action === 'read' ? '/work/notifications/read' : '/work/handovers/acknowledge';
-    const result = workReceiptSchema.parse(await pilotRequest(lenderPath(path, merchantId), { ...options, method: 'POST', body: JSON.stringify(variables.data) }));
+    const result = await pilotRequest(lenderPath(path, merchantId), workReceiptSchema, { ...options, method: 'POST', body: JSON.stringify(variables.data) }, INCOMPLETE_CONFIRMATION);
     if (result.merchantId !== merchantId || result.actor !== workspace?.actor || result.sourceId !== variables.data.sourceId || result.eventId !== variables.data.eventId || result.action !== variables.action) throw new Error('The response did not confirm this work item. Check the original request before making another change.');
     return result;
   }, { mutation: { onSuccess: (result) => {

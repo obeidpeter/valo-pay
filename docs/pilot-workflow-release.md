@@ -52,7 +52,7 @@ All paths below are beneath `/api/v1`. Lender paths require `merchantId`; paged 
 | `POST /pilot/batches/:id/commit` | Current version required; all-or-nothing revalidation and import; returns the saved batch record |
 | `GET /pilot/cases/:id` | Exception, eligible assignees, evidence choices and immutable handover events |
 | `POST /pilot/cases/:id` | Claim, handover or update with current version, note, next action, future follow-up and up to 20 evidence links; current assignee or Admin controls an assigned case |
-| `GET /team` | Staff directory; invitations and access history are Admin-only |
+| `GET /team` | Staff directory; the lenders to grant, invitations and access history are Admin-only; in the sandbox every list is empty (`lenders: []`) |
 | `POST /team/invitations` | Staff Admin; verified email and application role; returns the one-time invitation token once |
 | `POST /team/invitations/:id/revoke` | Staff Admin; revoke an unused invitation |
 | `PATCH /team/members/:id` | Staff Admin; role, status, reason and current version; no self-edit or reactivation of revoked membership |

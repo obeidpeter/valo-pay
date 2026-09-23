@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { instantInputSchema } from "./api";
 
 /** The first correction release deliberately accepts only these four fields. */
 export const importCorrectionChangesSchema = z
@@ -40,7 +41,7 @@ export const importCorrectionPreviewInputSchema = z
   .object({
     batchId: z.string().min(1).max(100),
     targetId: z.string().min(1).max(100),
-    expectedUpdatedAt: z.string().datetime(),
+    expectedUpdatedAt: instantInputSchema,
     changes: importCorrectionChangesSchema,
     syntheticOnly: z.literal(true),
   })

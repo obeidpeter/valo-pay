@@ -16,3 +16,7 @@ export * from './staff-lender-access';
 export * from './lifecycle';
 export * from './import-corrections';
 export * from './canonical-json';
+export * from './api';
+export * from './operations';
+export * from './team';
+export * from './connected';

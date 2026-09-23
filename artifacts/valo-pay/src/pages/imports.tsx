@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearch } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import type { BatchInput } from "@workspace/valopay-schema";
+import { importBatchDetailSchema, importBatchListSchema, sourcesViewSchema, type BatchInput } from "@workspace/valopay-schema";
 import { useWorkspace } from "@/lib/workspace-context";
 import {
   lenderPath,
@@ -106,7 +106,7 @@ function LenderImports() {
   const search = new URLSearchParams(useSearch());
   const { merchantId } = useWorkspace(),
     [offset, setOffset] = useState(0),
-    list = usePilotQuery(`/pilot/batches?offset=${offset}`);
+    list = usePilotQuery(`/pilot/batches?offset=${offset}`, importBatchListSchema);
   const [selected, setSelected] = useState<string | null>(() =>
       search.get("batch"),
     ),
@@ -173,7 +173,7 @@ function LenderImports() {
             </button>
           ))}
         </div>
-        {list.data?.total > 25 && (
+        {list.data && list.data.total > 25 && (
           <div className="flex flex-wrap items-center gap-3">
             <Button
               variant="outline"
@@ -229,11 +229,11 @@ function BatchEditor({
   const { merchantId, workspace } = useWorkspace();
   const [selectedProfile, setSelectedProfile] = useState(initialProfile || "");
   const initialProfileApplied = useRef(false);
-  const detail = useQuery<any>({
+  const detail = useQuery({
     queryKey: ["pilot", "batch", merchantId, workspace?.actor, id],
     enabled: !!id,
     queryFn: ({ signal }) =>
-      pilotRequest(lenderPath(`/pilot/batches/${id}`, merchantId), { signal }),
+      pilotRequest(lenderPath(`/pilot/batches/${id}`, merchantId), importBatchDetailSchema, { signal }),
   });
   const [form, setForm] = useState<BatchInput>(() => ({
       ...empty(),
@@ -245,6 +245,7 @@ function BatchEditor({
     [reading, setReading] = useState(false);
   const sources = usePilotQuery(
     `/sources${form.businessDate ? `?businessDate=${encodeURIComponent(form.businessDate)}` : ""}`,
+    sourcesViewSchema,
   );
   const expectationApplied = useRef(false);
   const applyExpectation = (expectation: any) => {
@@ -350,7 +351,8 @@ function BatchEditor({
   const newer =
     !!batch &&
     !mutation.hasUnconfirmedOutcome &&
-    detail.data?.batch?.id === batch.id &&
+    !!detail.data &&
+    detail.data.batch.id === batch.id &&
     Date.parse(detail.data.batch.updatedAt) > Date.parse(batch.updatedAt);
   const loadLatest = async () => {
     if (busy || loadingLatest || !confirmDiscard()) return;
@@ -913,7 +915,7 @@ function BatchEditor({
           )}
         </section>
       )}
-      {detail.data?.revisions?.length > 0 && (
+      {detail.data && detail.data.revisions.length > 0 && (
         <details>
           <summary className="cursor-pointer py-2 text-sm font-medium">
             Mapping and check history

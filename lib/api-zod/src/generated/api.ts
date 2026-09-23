@@ -41,7 +41,7 @@ export const HealthCheckResponse = zod.object({
 
 
 /**
- * Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table, column or index this build needs: checks.schema names each one with the migration that adds it. A connection error is in the log, not the answer. Needs no sandbox or sign-in.
+ * Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table or column this build needs. A missing index leaves the answer ready, with checks.schema.status indexes_missing, since every request still works, only slower. The log names what is missing and the migration that adds it, and any connection error; the answer does not. Needs no sandbox or sign-in.
  * @summary Readiness: one bounded round trip to the database, which also checks its schema
  */
 export const ReadinessCheckResponse = zod.object({
@@ -54,9 +54,9 @@ export const ReadinessCheckResponse = zod.object({
 }).describe('One round trip to the database and how long it took.'),
   "schema": zod.object({
   "status": zod.enum(['ok', 'indexes_missing', 'incomplete', 'unchecked']).describe('ok: every table, column and index this build needs is present. indexes_missing: ready, but an index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table or column is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and the migration that adds it.')
-}).describe('Whether the database holds every table, column and index this build needs: missing names each one that is not there and the migration that adds it; unchecked while the database does not answer.')
+}).describe('Whether the database holds every table, column and index this build needs: ok, indexes_missing (ready, some reads slower), incomplete (not ready) or unchecked while the database does not answer. The server log, not the answer, names what is missing.')
 })
-}).describe('The readiness answer: ok, or degraded while the database does not answer or lacks a table, column or index this build needs.')
+}).describe('The readiness answer: ok, or degraded while the database does not answer or lacks a table or column this build needs.')
 
 
 /**
@@ -93,8 +93,12 @@ export const GetWorkspaceResponse = zod.object({
  * Metrics, queues, recent activity, upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02).
  * @summary The operations overview for one lender
  */
+export const getOverviewQueryMerchantIdMax = 100;
+
+
+
 export const GetOverviewQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(getOverviewQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const GetOverviewResponse = zod.object({
@@ -181,6 +185,8 @@ export const ListRecordsParams = zod.object({
   "kind": zod.coerce.string().describe('Record kind: one of the shared schema\'s recordKinds (customers, mandates, due-items, attempts, observations, payments, ...).')
 })
 
+export const listRecordsQueryMerchantIdMax = 100;
+
 export const listRecordsQueryLimitMax = 500;
 
 export const listRecordsQueryOffsetMin = 0;
@@ -188,14 +194,14 @@ export const listRecordsQueryOffsetMin = 0;
 
 
 export const ListRecordsQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
-  "search": zod.coerce.string().optional().describe('Text matched, ignoring case and accents, against the name, reference, status and data.'),
-  "status": zod.coerce.string().optional().describe('Only records in this status; omitted or "all" for every status.'),
+  "merchantId": zod.string().min(1).max(listRecordsQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.'),
+  "search": zod.string().optional().describe('Text matched, ignoring case and accents, against the name, reference, status and data.'),
+  "status": zod.string().optional().describe('Only records in this status; omitted or "all" for every status.'),
   "limit": zod.coerce.number().int().min(1).max(listRecordsQueryLimitMax).optional().describe('Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views.'),
   "offset": zod.coerce.number().int().min(listRecordsQueryOffsetMin).optional().describe('Rows to skip in the newest-first order.'),
-  "updatedSince": zod.coerce.string().optional().describe('ISO timestamp; only records updated at or after it (incremental sync).'),
-  "customerId": zod.coerce.string().optional().describe('Only records directly linked to this customer, in the selected lender.'),
-  "id": zod.coerce.string().optional().describe('Only this exact record ID, in the selected kind and lender.')
+  "updatedSince": zod.string().optional().describe('ISO timestamp; only records updated at or after it (incremental sync).'),
+  "customerId": zod.string().optional().describe('Only records directly linked to this customer, in the selected lender.'),
+  "id": zod.string().optional().describe('Only this exact record ID, in the selected kind and lender.')
 })
 
 export const ListRecordsResponse = zod.object({
@@ -225,8 +231,21 @@ export const CreateRecordParams = zod.object({
   "kind": zod.coerce.string().describe('Record kind: one of the shared schema\'s recordKinds (customers, mandates, due-items, attempts, observations, payments, ...).')
 })
 
+export const createRecordQueryMerchantIdMax = 100;
+
+
+
 export const CreateRecordQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(createRecordQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
+})
+
+export const createRecordHeaderIdempotencyKeyMin = 8;
+export const createRecordHeaderIdempotencyKeyMax = 200;
+
+
+
+export const CreateRecordHeader = zod.object({
+  "Idempotency-Key": zod.string().min(createRecordHeaderIdempotencyKeyMin).max(createRecordHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const createRecordBodyAmountKoboMin = 0;
@@ -266,8 +285,21 @@ export const UpdateRecordParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const updateRecordQueryMerchantIdMax = 100;
+
+
+
 export const UpdateRecordQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(updateRecordQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
+})
+
+export const updateRecordHeaderIdempotencyKeyMin = 8;
+export const updateRecordHeaderIdempotencyKeyMax = 200;
+
+
+
+export const UpdateRecordHeader = zod.object({
+  "Idempotency-Key": zod.string().min(updateRecordHeaderIdempotencyKeyMin).max(updateRecordHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const updateRecordBodyAmountKoboMin = 0;
@@ -303,8 +335,21 @@ export const UpdateRecordResponse = zod.object({
  * Every action is audited, most require a reason, and the persona's role applies; the catalogue of actions is in docs/frontend-contract.md.
  * @summary Run a domain action on the lender's state
  */
+export const performActionQueryMerchantIdMax = 100;
+
+
+
 export const PerformActionQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(performActionQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
+})
+
+export const performActionHeaderIdempotencyKeyMin = 8;
+export const performActionHeaderIdempotencyKeyMax = 200;
+
+
+
+export const PerformActionHeader = zod.object({
+  "Idempotency-Key": zod.string().min(performActionHeaderIdempotencyKeyMin).max(performActionHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version. A set_role change is repeatable with its key but is not listed in Operations.')
 })
 
 export const PerformActionBody = zod.object({
@@ -338,8 +383,21 @@ export const PerformActionResponse = zod.object({
  * commit=false validates every row and reports each; commit=true persists all rows or none. syntheticOnly must be true: no real lender data.
  * @summary Preview or commit a synthetic CSV import
  */
+export const importRecordsQueryMerchantIdMax = 100;
+
+
+
 export const ImportRecordsQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(importRecordsQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
+})
+
+export const importRecordsHeaderIdempotencyKeyMin = 8;
+export const importRecordsHeaderIdempotencyKeyMax = 200;
+
+
+
+export const ImportRecordsHeader = zod.object({
+  "Idempotency-Key": zod.string().min(importRecordsHeaderIdempotencyKeyMin).max(importRecordsHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version. Only a commit (commit true) uses it: a preview writes nothing.')
 })
 
 export const ImportRecordsBody = zod.object({
@@ -378,8 +436,12 @@ export const GetCustomerTimelineParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const getCustomerTimelineQueryMerchantIdMax = 100;
+
+
+
 export const GetCustomerTimelineQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(getCustomerTimelineQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const GetCustomerTimelineResponse = zod.object({
@@ -456,8 +518,12 @@ export const GetCustomerTimelineResponse = zod.object({
  * Metrics, the billing statement and invoices, the recovery experiment, operational measurement (Test 5) and the daily closes with their REC-07 reports.
  * @summary Reports for one lender
  */
+export const getReportsQueryMerchantIdMax = 100;
+
+
+
 export const GetReportsQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "merchantId": zod.string().min(1).max(getReportsQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.'),
   "includeCloses": zod.enum(['true', 'false']).optional().describe('Default true for compatibility. The console passes false and loads paged close summaries separately.')
 })
 
@@ -492,8 +558,12 @@ export const GetReportsResponse = zod.object({
  * Prerequisites and decisions, always unproven on synthetic data, and the limitations the sandbox cannot remove.
  * @summary Production readiness gates
  */
+export const getGatesQueryMerchantIdMax = 100;
+
+
+
 export const GetGatesQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(getGatesQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const GetGatesResponse = zod.object({
@@ -523,8 +593,12 @@ export const GetGatesResponse = zod.object({
  * Permissions are those of the caller's current persona.
  * @summary A lender's settings, permissions, integrations, members and calendar
  */
+export const getSettingsQueryMerchantIdMax = 100;
+
+
+
 export const GetSettingsQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(getSettingsQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const GetSettingsResponse = zod.object({
@@ -608,8 +682,21 @@ export const GetSettingsResponse = zod.object({
  * Admin only. Send expectedRevision from the settings originally opened; 409 leaves outdated edits unapplied. The revision covers editable preferences and is unaffected by scheduler cursor changes. An identical successful Idempotency-Key replay returns its original result before checking the version.
  * @summary Change a lender's execution settings
  */
+export const updateSettingsQueryMerchantIdMax = 100;
+
+
+
 export const UpdateSettingsQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(updateSettingsQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
+})
+
+export const updateSettingsHeaderIdempotencyKeyMin = 8;
+export const updateSettingsHeaderIdempotencyKeyMax = 200;
+
+
+
+export const UpdateSettingsHeader = zod.object({
+  "Idempotency-Key": zod.string().min(updateSettingsHeaderIdempotencyKeyMin).max(updateSettingsHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const UpdateSettingsBody = zod.object({
@@ -708,8 +795,21 @@ export const UpdateSettingsResponse = zod.object({
  * Durably saves a queued export job and returns immediately. Poll its status before downloading. Rendering and private storage run outside the database transaction; retries use the same immutable object key. A record kind, gate pack, billing statement or customer dispute pack supports JSON, CSV or PDF.
  * @summary Queue a private export
  */
+export const createExportQueryMerchantIdMax = 100;
+
+
+
 export const CreateExportQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(createExportQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
+})
+
+export const createExportHeaderIdempotencyKeyMin = 8;
+export const createExportHeaderIdempotencyKeyMax = 200;
+
+
+
+export const CreateExportHeader = zod.object({
+  "Idempotency-Key": zod.string().min(createExportHeaderIdempotencyKeyMin).max(createExportHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const CreateExportBody = zod.object({
@@ -750,8 +850,12 @@ export const GetExportJobParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const getExportJobQueryMerchantIdMax = 100;
+
+
+
 export const GetExportJobQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(getExportJobQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const GetExportJobResponse = zod.object({
@@ -785,8 +889,21 @@ export const RetryExportJobParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const retryExportJobQueryMerchantIdMax = 100;
+
+
+
 export const RetryExportJobQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(retryExportJobQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
+})
+
+export const retryExportJobHeaderIdempotencyKeyMin = 8;
+export const retryExportJobHeaderIdempotencyKeyMax = 200;
+
+
+
+export const RetryExportJobHeader = zod.object({
+  "Idempotency-Key": zod.string().min(retryExportJobHeaderIdempotencyKeyMin).max(retryExportJobHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const RetryExportJobResponse = zod.object({
@@ -820,8 +937,12 @@ export const DownloadExportParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const downloadExportQueryMerchantIdMax = 100;
+
+
+
 export const DownloadExportQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(downloadExportQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const DownloadExportResponse = zod.unknown()
@@ -853,6 +974,8 @@ export const ListQueueParams = zod.object({
   "queue": zod.enum(['exceptions', 'mandates', 'collections']).describe('Priority queue to read: exceptions, mandates or collections.')
 })
 
+export const listQueueQueryMerchantIdMax = 100;
+
 export const listQueueQueryViewMax = 200;
 
 export const listQueueQueryOwnerMax = 200;
@@ -873,15 +996,15 @@ export const listQueueQueryQMax = 200;
 
 
 export const ListQueueQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The active lender, belonging to the caller’s workspace.'),
-  "view": zod.coerce.string().max(listQueueQueryViewMax).optional().describe('A supported view for the queue. Defaults to open for exceptions and all for mandates and collections.'),
-  "owner": zod.coerce.string().max(listQueueQueryOwnerMax).optional().describe('Exact owner filter. Omit for every owner.'),
-  "type": zod.coerce.string().max(listQueueQueryTypeMax).optional().describe('Exact exception type filter. Omit for every type.'),
-  "record": zod.coerce.string().max(listQueueQueryRecordMax).optional().describe('Select this exact record in the queue instead of applying its view, within the active lender.'),
-  "target": zod.coerce.string().max(listQueueQueryTargetMax).optional().describe('Locate the page containing this record among the filtered results. Does not bypass filters.'),
+  "merchantId": zod.string().min(1).max(listQueueQueryMerchantIdMax).describe('The active lender, belonging to the caller’s workspace. Missing or empty, the request is refused with 400 naming merchantId.'),
+  "view": zod.string().max(listQueueQueryViewMax).optional().describe('A supported view for the queue. Defaults to open for exceptions and all for mandates and collections.'),
+  "owner": zod.string().max(listQueueQueryOwnerMax).optional().describe('Exact owner filter. Omit for every owner.'),
+  "type": zod.string().max(listQueueQueryTypeMax).optional().describe('Exact exception type filter. Omit for every type.'),
+  "record": zod.string().max(listQueueQueryRecordMax).optional().describe('Select this exact record in the queue instead of applying its view, within the active lender.'),
+  "target": zod.string().max(listQueueQueryTargetMax).optional().describe('Locate the page containing this record among the filtered results. Does not bypass filters.'),
   "limit": zod.coerce.number().int().min(1).max(listQueueQueryLimitMax).optional().describe('Page size, default 25 and maximum 100.'),
   "offset": zod.coerce.number().int().min(listQueueQueryOffsetMin).max(listQueueQueryOffsetMax).optional().describe('Rows to skip after filtering and priority ordering. Clamped to the last available page if results shrink.'),
-  "q": zod.coerce.string().max(listQueueQueryQMax).optional().describe('Literal accent-insensitive customer name, customer reference or queue record name/reference search, applied before counting and paging.')
+  "q": zod.string().max(listQueueQueryQMax).optional().describe('Literal accent-insensitive customer name, customer reference or queue record name/reference search, applied before counting and paging.')
 })
 
 export const listQueueResponseTotalMin = 0;
@@ -936,6 +1059,8 @@ export const ListReconciliationParams = zod.object({
   "queue": zod.enum(['proposals', 'duplicates', 'payments', 'observations', 'audit', 'batches']).describe('Reconciliation work queue.')
 })
 
+export const listReconciliationQueryMerchantIdMax = 100;
+
 export const listReconciliationQueryDueItemMax = 200;
 
 export const listReconciliationQueryLimitMax = 100;
@@ -948,11 +1073,11 @@ export const listReconciliationQueryQMax = 200;
 
 
 export const ListReconciliationQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
-  "dueItem": zod.coerce.string().max(listReconciliationQueryDueItemMax).optional().describe('Optional instalment focus; payment queues are restricted to its customer, proposals to its exact instalment.'),
+  "merchantId": zod.string().min(1).max(listReconciliationQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.'),
+  "dueItem": zod.string().max(listReconciliationQueryDueItemMax).optional().describe('Optional instalment focus; payment queues are restricted to its customer, proposals to its exact instalment.'),
   "limit": zod.coerce.number().int().min(1).max(listReconciliationQueryLimitMax).optional().describe('Page size; defaults to 25.'),
   "offset": zod.coerce.number().int().min(listReconciliationQueryOffsetMin).max(listReconciliationQueryOffsetMax).optional().describe('Rows to skip; clamped when the result shrinks.'),
-  "q": zod.coerce.string().max(listReconciliationQueryQMax).optional().describe('Literal case- and accent-insensitive customer, payment or instalment name/reference search before counting and paging. Audit sample metadata remains unfiltered.')
+  "q": zod.string().max(listReconciliationQueryQMax).optional().describe('Literal case- and accent-insensitive customer, payment or instalment name/reference search before counting and paging. Audit sample metadata remains unfiltered.')
 })
 
 export const ListReconciliationResponse = zod.object({
@@ -993,6 +1118,8 @@ export const ListReconciliationResponse = zod.object({
  * Newest first, with complete range counts and whole-range comparison endpoints. Missing historical measures remain absent. Invalid dates or reversed ranges are rejected.
  * @summary Page recorded daily closes
  */
+export const listCloseHistoryQueryMerchantIdMax = 100;
+
 export const listCloseHistoryQueryFromMax = 10;
 
 export const listCloseHistoryQueryToMax = 10;
@@ -1005,9 +1132,9 @@ export const listCloseHistoryQueryOffsetMax = 2147483647;
 
 
 export const ListCloseHistoryQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
-  "from": zod.coerce.string().max(listCloseHistoryQueryFromMax).optional().describe('Inclusive date in YYYY-MM-DD format, in West Africa Time.'),
-  "to": zod.coerce.string().max(listCloseHistoryQueryToMax).optional().describe('Inclusive date in YYYY-MM-DD format, in West Africa Time.'),
+  "merchantId": zod.string().min(1).max(listCloseHistoryQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.'),
+  "from": zod.string().max(listCloseHistoryQueryFromMax).optional().describe('Inclusive date in YYYY-MM-DD format, in West Africa Time.'),
+  "to": zod.string().max(listCloseHistoryQueryToMax).optional().describe('Inclusive date in YYYY-MM-DD format, in West Africa Time.'),
   "limit": zod.coerce.number().int().min(1).max(listCloseHistoryQueryLimitMax).optional().describe('Page size; defaults to 25.'),
   "offset": zod.coerce.number().int().min(listCloseHistoryQueryOffsetMin).max(listCloseHistoryQueryOffsetMax).optional().describe('Rows to skip; clamped when the result shrinks.')
 })
@@ -1066,8 +1193,12 @@ export const GetCloseDetailParams = zod.object({
   "id": zod.coerce.string().describe('Close record in the active lender.')
 })
 
+export const getCloseDetailQueryMerchantIdMax = 100;
+
+
+
 export const GetCloseDetailQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(getCloseDetailQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const GetCloseDetailResponse = zod.object({
@@ -1092,6 +1223,8 @@ export const GetCloseDetailResponse = zod.object({
 export const GetCustomerHistoryParams = zod.object({
   "id": zod.coerce.string().describe('Customer in the active lender.')
 })
+
+export const getCustomerHistoryQueryMerchantIdMax = 100;
 
 export const getCustomerHistoryQueryRecordMax = 200;
 
@@ -1118,8 +1251,8 @@ export const getCustomerHistoryQueryPaymentsOffsetMax = 2147483647;
 
 
 export const GetCustomerHistoryQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
-  "record": zod.coerce.string().max(getCustomerHistoryQueryRecordMax).optional().describe('Optional selected history record; must belong to this customer and lender.'),
+  "merchantId": zod.string().min(1).max(getCustomerHistoryQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.'),
+  "record": zod.string().max(getCustomerHistoryQueryRecordMax).optional().describe('Optional selected history record; must belong to this customer and lender.'),
   "eventsLimit": zod.coerce.number().int().min(1).max(getCustomerHistoryQueryEventsLimitMax).optional().describe('Page size; defaults to 25.'),
   "eventsOffset": zod.coerce.number().int().min(getCustomerHistoryQueryEventsOffsetMin).max(getCustomerHistoryQueryEventsOffsetMax).optional().describe('Rows to skip; clamped when the result shrinks.'),
   "mandatesLimit": zod.coerce.number().int().min(1).max(getCustomerHistoryQueryMandatesLimitMax).optional().describe('Page size; defaults to 25.'),
@@ -1229,17 +1362,53 @@ export const GetCustomerHistoryResponse = zod.object({
  * Same-origin, private and tenant scoped. Returns granular consent state, bound sample payment intents, explained credit assessments, independent SME cash planning and closed live gates.
  * @summary Read the connected workspace
  */
+export const getConnectedWorkspaceQueryMerchantIdMax = 100;
+
+
+
 export const GetConnectedWorkspaceQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(getConnectedWorkspaceQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
+export const getConnectedWorkspaceResponseCreditAssessmentsItemResultEvidenceSourceCountMin = 0;
+
+export const getConnectedWorkspaceResponseCashPositionsItemAccountCountMin = 0;
+
+export const getConnectedWorkspaceResponseCashPayrollPlansItemSummaryItemCountMin = 0;
+
+export const getConnectedWorkspaceResponseCashPayrollPlansItemSummaryCountsPlannedMin = 0;
+
+export const getConnectedWorkspaceResponseCashPayrollPlansItemSummaryCountsExportedMin = 0;
+
+export const getConnectedWorkspaceResponseCashPayrollPlansItemSummaryCountsSubmittedMin = 0;
+
+export const getConnectedWorkspaceResponseCashPayrollPlansItemSummaryCountsSucceededMin = 0;
+
+export const getConnectedWorkspaceResponseCashPayrollPlansItemSummaryCountsFailedMin = 0;
+
+export const getConnectedWorkspaceResponseCashPayrollPlansItemSummaryCountsUnknownMin = 0;
+
+export const getConnectedWorkspaceResponseCashPayrollPlansItemSummaryCountsReversedMin = 0;
+
+export const getConnectedWorkspaceResponseCashPayrollPlansItemManifestItemCountMin = 0;
+
+
+
 export const GetConnectedWorkspaceResponse = zod.object({
-  "mode": zod.enum(['synthetic']),
+  "mode": zod.literal("synthetic"),
   "revision": zod.string(),
   "asOf": zod.string(),
   "role": zod.string(),
-  "entity": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
-  "customers": zod.array(zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')),
+  "entity": zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "workspaceOwner": zod.string()
+}),
+  "customers": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "reference": zod.string()
+})),
   "consents": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -1252,21 +1421,570 @@ export const GetConnectedWorkspaceResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.').and(zod.object({
+  "effectiveStatus": zod.enum(['active', 'revoked', 'expired'])
+}))),
+  "purposes": zod.array(zod.object({
+  "id": zod.enum(['account_read', 'credit_assessment', 'merchant_account_read', 'erp_draft', 'payroll_prepare']),
+  "label": zod.string()
+})),
+  "gates": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "requires": zod.string(),
+  "status": zod.literal("not_enabled"),
+  "liveEnabled": zod.literal(false)
+})),
+  "payments": zod.object({
+  "intents": zod.array(zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
 }).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
-  "purposes": zod.array(zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')),
-  "gates": zod.array(zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')),
-  "payments": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
-  "credit": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
-  "cash": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('Synthetic connected workspace. Credit and Cash views carry evidence, permissions and refusal states. Every gate has liveEnabled false. No read creates sample records.')
+  "dues": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "reference": zod.string(),
+  "customerId": zod.string(),
+  "customerName": zod.string(),
+  "outstandingKobo": zod.number().int(),
+  "blocked": zod.boolean()
+}))
+}),
+  "credit": zod.object({
+  "mode": zod.literal("synthetic"),
+  "liveEnabled": zod.literal(false),
+  "canAssess": zod.boolean(),
+  "canReview": zod.boolean(),
+  "actor": zod.string(),
+  "customers": zod.array(zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "reference": zod.string(),
+  "permissions": zod.object({
+  "accountRead": zod.boolean(),
+  "creditAssessment": zod.boolean()
+})
+})),
+  "assessments": zod.array(zod.object({
+  "id": zod.string(),
+  "customerId": zod.string(),
+  "customerName": zod.string(),
+  "scenario": zod.string(),
+  "createdAt": zod.string(),
+  "createdBy": zod.string(),
+  "permissionRestricted": zod.boolean(),
+  "result": zod.object({
+  "id": zod.string(),
+  "tenantId": zod.string(),
+  "applicantId": zod.string(),
+  "applicationRef": zod.string(),
+  "version": zod.number().int(),
+  "previousResultId": zod.string().nullable(),
+  "mode": zod.literal("synthetic"),
+  "createdAt": zod.string(),
+  "assessedAsOf": zod.string(),
+  "createdBy": zod.string(),
+  "state": zod.enum(['review_pending', 'insufficient_evidence', 'blocked']),
+  "evidence": zod.object({
+  "status": zod.enum(['adequate', 'insufficient', 'blocked']),
+  "issues": zod.array(zod.object({
+  "code": zod.string(),
+  "message": zod.string(),
+  "severity": zod.enum(['blocking', 'warning']),
+  "sourceId": zod.string().optional()
+})),
+  "coverageDays": zod.number().int(),
+  "sourceCount": zod.number().int().min(getConnectedWorkspaceResponseCreditAssessmentsItemResultEvidenceSourceCountMin),
+  "latestSourceAsOf": zod.string().nullable(),
+  "earliestSourceAsOf": zod.string().nullable(),
+  "reviewValidUntil": zod.string().nullable(),
+  "requiredAccountIds": zod.array(zod.string()),
+  "grantVersions": zod.array(zod.object({
+  "id": zod.string(),
+  "version": zod.number().int()
+}))
+}),
+  "features": zod.object({
+  "codeVersion": zod.literal("credit-features-synthetic-v1"),
+  "currency": zod.literal("NGN"),
+  "periodDays": zod.literal(30),
+  "periodCount": zod.number().int(),
+  "monthlyIncomeKobo": zod.array(zod.number().int()),
+  "sustainableMonthlyIncomeKobo": zod.number().int(),
+  "observedEssentialMonthlyKobo": zod.number().int(),
+  "essentialMonthlyKobo": zod.number().int(),
+  "verifiedCommitmentsMonthlyKobo": zod.number().int(),
+  "declaredCommitmentsMonthlyKobo": zod.number().int(),
+  "totalCommitmentsMonthlyKobo": zod.number().int(),
+  "activeIncomePeriods": zod.number().int(),
+  "incomeVolatilityBps": zod.number().int().nullable(),
+  "largestPayerShareBps": zod.number().int().nullable(),
+  "liquidityBufferKobo": zod.number().int().nullable(),
+  "unknownInflowKobo": zod.number().int(),
+  "unknownInflowBps": zod.number().int(),
+  "includedTransactionRefs": zod.array(zod.string()),
+  "excludedTransactions": zod.array(zod.object({
+  "reference": zod.string(),
+  "reason": zod.string()
+})),
+  "duplicatesIgnored": zod.number().int()
+}).nullable(),
+  "score": zod.object({
+  "type": zod.literal("rulecard"),
+  "value": zod.number().int(),
+  "maximum": zod.literal(100),
+  "band": zod.enum(['stronger', 'review', 'weaker']),
+  "rulecardVersion": zod.string(),
+  "factors": zod.array(zod.object({
+  "code": zod.string(),
+  "label": zod.string(),
+  "points": zod.number().int(),
+  "maximum": zod.number().int(),
+  "reason": zod.string()
+})),
+  "disclaimer": zod.string()
+}).nullable(),
+  "affordability": zod.object({
+  "incomeStressBps": zod.number().int(),
+  "stressedMonthlyIncomeKobo": zod.number().int(),
+  "baselineResidualKobo": zod.number().int(),
+  "stressedResidualKobo": zod.number().int(),
+  "monthlyCapacityKobo": zod.number().int(),
+  "peakScheduledMonthlyKobo": zod.number().int(),
+  "scheduledTotalKobo": zod.number().int(),
+  "requestedPrincipalKobo": zod.number().int(),
+  "indicativePrincipalCapacityKobo": zod.number().int(),
+  "termDays": zod.number().int(),
+  "debtServiceBps": zod.number().int().nullable(),
+  "repaymentMonths": zod.array(zod.object({
+  "month": zod.string(),
+  "amountKobo": zod.number().int(),
+  "stressedAfterPaymentKobo": zod.number().int()
+})),
+  "scheduleAffordable": zod.boolean()
+}).nullable(),
+  "policy": zod.object({
+  "id": zod.string(),
+  "version": zod.number().int(),
+  "recommendation": zod.enum(['review_recommended', 'policy_not_met', 'insufficient_evidence']),
+  "reasons": zod.array(zod.string())
+}),
+  "snapshotHash": zod.string(),
+  "requiredReview": zod.literal(true),
+  "billable": zod.literal(false),
+  "restrictions": zod.array(zod.string())
+}).describe('An illustrative synthetic credit assessment: evidence, features, rule score, affordability and policy recommendation. Never a probability of default or a lending decision; features, score and affordability are null when the evidence or authority does not allow them.'),
+  "reviews": zod.array(zod.object({
+  "id": zod.string(),
+  "assessmentId": zod.string(),
+  "assessmentVersion": zod.number().int(),
+  "tenantId": zod.string(),
+  "applicantId": zod.string(),
+  "reviewer": zod.string(),
+  "reviewedAt": zod.string(),
+  "outcome": zod.enum(['approve', 'amend_terms', 'decline', 'request_information']),
+  "rationale": zod.string(),
+  "applicantExplanation": zod.string(),
+  "reasonCodes": zod.array(zod.string()),
+  "override": zod.boolean(),
+  "overrideRationale": zod.string().nullable(),
+  "mode": zod.literal("synthetic"),
+  "actualLendingDecision": zod.literal(false),
+  "fundsMoved": zod.literal(false),
+  "authentication": zod.literal("simulated_sandbox_review")
+}).describe('A recorded sandbox review of one assessment version; never an actual lending decision and never moves funds.'))
+})),
+  "scenarios": zod.array(zod.enum(['ready', 'thin_file', 'stale', 'refused', 'high_commitments'])),
+  "model": zod.object({
+  "name": zod.string(),
+  "version": zod.string(),
+  "status": zod.string(),
+  "validation": zod.string(),
+  "weights": zod.array(zod.object({
+  "label": zod.string(),
+  "maximum": zod.number().int()
+}))
+}),
+  "gate": zod.object({
+  "id": zod.literal("G-CREDIT"),
+  "enabled": zod.literal(false),
+  "requirements": zod.array(zod.string())
+})
+}).describe('The Credit Desk: applicants with their current permissions, assessments with their reviews, the illustrative rulecard and the closed credit gate.'),
+  "cash": zod.object({
+  "initialised": zod.boolean(),
+  "scope": zod.object({
+  "tenantId": zod.string(),
+  "legalEntityId": zod.string(),
+  "currency": zod.string()
+}),
+  "name": zod.string(),
+  "accounts": zod.array(zod.object({
+  "tenantId": zod.string(),
+  "legalEntityId": zod.string(),
+  "currency": zod.string(),
+  "id": zod.string(),
+  "name": zod.string(),
+  "source": zod.string(),
+  "sourceDefinition": zod.string(),
+  "authorised": zod.boolean(),
+  "bookedMinor": zod.number().int(),
+  "availableMinor": zod.number().int().nullable(),
+  "pendingMinor": zod.number().int().nullable(),
+  "balanceAsOf": zod.string(),
+  "fetchedAt": zod.string(),
+  "coverageComplete": zod.boolean()
+})),
+  "positions": zod.array(zod.object({
+  "currency": zod.string(),
+  "bookedMinor": zod.number().int(),
+  "availableMinor": zod.number().int().nullable(),
+  "pendingMinor": zod.number().int().nullable(),
+  "incomeMinor": zod.number().int(),
+  "expenseMinor": zod.number().int(),
+  "accountCount": zod.number().int().min(getConnectedWorkspaceResponseCashPositionsItemAccountCountMin),
+  "omittedAccountIds": zod.array(zod.string()),
+  "oldestBalanceAsOf": zod.string().nullable(),
+  "latestFetchedAt": zod.string().nullable(),
+  "qualified": zod.boolean(),
+  "warnings": zod.array(zod.string())
+})),
+  "commitments": zod.array(zod.object({
+  "tenantId": zod.string(),
+  "legalEntityId": zod.string(),
+  "currency": zod.string(),
+  "id": zod.string(),
+  "label": zod.string(),
+  "direction": zod.enum(['inflow', 'outflow']),
+  "amountMinor": zod.number().int(),
+  "dueAt": zod.string(),
+  "knownAt": zod.string(),
+  "approved": zod.boolean(),
+  "source": zod.enum(['invoice', 'bill', 'payroll', 'recurring_assumption']),
+  "version": zod.string()
+})),
+  "forecast": zod.union([zod.object({
+  "tenantId": zod.string(),
+  "legalEntityId": zod.string(),
+  "currency": zod.string(),
+  "asOf": zod.string(),
+  "version": zod.string(),
+  "inputHash": zod.string(),
+  "status": zod.enum(['planning_estimate', 'unknown_opening_balance']),
+  "openingMinor": zod.number().int(),
+  "persistenceBaselineMinor": zod.number().int(),
+  "planningBufferMinor": zod.number().int(),
+  "scenarios": zod.array(zod.object({
+  "name": zod.enum(['base', 'downside']),
+  "points": zod.array(zod.object({
+  "day": zod.number().int(),
+  "date": zod.string(),
+  "inflowMinor": zod.number().int(),
+  "outflowMinor": zod.number().int(),
+  "closingMinor": zod.number().int(),
+  "afterPlanningBufferMinor": zod.number().int(),
+  "shortfallMinor": zod.number().int()
+}))
+})),
+  "includedCommitmentIds": zod.array(zod.string()),
+  "excludedCommitmentIds": zod.array(zod.string()),
+  "warnings": zod.array(zod.string())
+}).describe('Base and downside cash forecasts from approved commitments: a planning estimate, not an available balance.'),zod.null()]),
+  "erpDrafts": zod.array(zod.object({
+  "id": zod.string(),
+  "status": zod.string(),
+  "name": zod.string(),
+  "createdAt": zod.string(),
+  "draft": zod.object({
+  "kind": zod.literal("erp_receipt_draft"),
+  "input": zod.object({
+  "scope": zod.object({
+  "tenantId": zod.string(),
+  "legalEntityId": zod.string(),
+  "currency": zod.string()
+}),
+  "maker": zod.string(),
+  "postingDate": zod.string(),
+  "canonicalReceiptId": zod.string(),
+  "bankReference": zod.string(),
+  "grossMinor": zod.number().int(),
+  "feeMinor": zod.number().int(),
+  "netMinor": zod.number().int(),
+  "mapping": zod.object({
+  "tenantId": zod.string(),
+  "legalEntityId": zod.string(),
+  "currency": zod.string(),
+  "companyId": zod.string(),
+  "provider": zod.enum(['xero', 'odoo', 'export']),
+  "version": zod.string(),
+  "active": zod.boolean(),
+  "contactId": zod.string(),
+  "bankLedgerCode": zod.string(),
+  "revenueAccountCode": zod.string(),
+  "feeAccountCode": zod.string(),
+  "taxCode": zod.string(),
+  "financeApproved": zod.boolean()
+}),
+  "invoices": zod.array(zod.object({
+  "tenantId": zod.string(),
+  "legalEntityId": zod.string(),
+  "currency": zod.string(),
+  "id": zod.string(),
+  "companyId": zod.string(),
+  "contactId": zod.string(),
+  "version": zod.string(),
+  "outstandingMinor": zod.number().int(),
+  "taxCode": zod.string()
+})),
+  "allocations": zod.array(zod.object({
+  "invoiceId": zod.string(),
+  "invoiceVersion": zod.string(),
+  "amountMinor": zod.number().int()
+})),
+  "creditNotes": zod.array(zod.object({
+  "id": zod.string(),
+  "invoiceId": zod.string(),
+  "amountMinor": zod.number().int(),
+  "approved": zod.boolean(),
+  "version": zod.string()
+})).optional(),
+  "source": zod.enum(['bank_evidence', 'synthetic']),
+  "alreadyRecordedReceiptIds": zod.array(zod.string()).optional(),
+  "closedThrough": zod.string().optional()
+}),
+  "idempotencyKey": zod.string(),
+  "requestHash": zod.string(),
+  "status": zod.enum(['proposed', 'blocked', 'already_recorded', 'reviewed']),
+  "reasons": zod.array(zod.string()),
+  "residuals": zod.array(zod.object({
+  "invoiceId": zod.string(),
+  "beforeMinor": zod.number().int(),
+  "paymentMinor": zod.number().int(),
+  "creditNoteMinor": zod.number().int(),
+  "afterMinor": zod.number().int()
+})),
+  "review": zod.object({
+  "reviewer": zod.string(),
+  "approvedHash": zod.string()
+}).optional(),
+  "liveDispatchAllowed": zod.literal(false)
+}),
+  "manifest": zod.object({
+  "schema": zod.literal("valo.erp.review-export.v1"),
+  "companyId": zod.string(),
+  "invoiceAllocations": zod.array(zod.object({
+  "invoiceId": zod.string(),
+  "invoiceVersion": zod.string(),
+  "amountMinor": zod.number().int()
+})),
+  "creditNotes": zod.array(zod.object({
+  "id": zod.string(),
+  "invoiceId": zod.string(),
+  "amountMinor": zod.number().int(),
+  "approved": zod.boolean(),
+  "version": zod.string()
+})).optional(),
+  "grossMinor": zod.number().int(),
+  "netMinor": zod.number().int(),
+  "feeMinor": zod.number().int(),
+  "mappingVersion": zod.string(),
+  "requestHash": zod.string(),
+  "reviewer": zod.string(),
+  "status": zod.literal("not_posted"),
+  "synthetic": zod.literal(true),
+  "manifestHash": zod.string()
+}).optional().describe('A reviewed accounting export: what an ERP would receive. The service never posts it.')
+})),
+  "vat": zod.union([zod.object({
+  "tenantId": zod.string(),
+  "legalEntityId": zod.string(),
+  "currency": zod.string(),
+  "period": zod.string(),
+  "configurationVersion": zod.string(),
+  "outputVatMinor": zod.number().int(),
+  "eligibleInputVatMinor": zod.number().int(),
+  "blockedInputVatMinor": zod.number().int(),
+  "expectedClosingMinor": zod.number().int(),
+  "ledgerClosingMinor": zod.number().int(),
+  "varianceMinor": zod.number().int(),
+  "status": zod.enum(['review_required', 'reconciled_for_review']),
+  "filingStatus": zod.literal("not_submitted"),
+  "paymentStatus": zod.literal("not_initiated"),
+  "lines": zod.array(zod.object({
+  "invoiceId": zod.string(),
+  "kind": zod.enum(['sales_invoice', 'sales_credit_note', 'purchase_invoice', 'purchase_credit_note']),
+  "netMinor": zod.number().int(),
+  "vatMinor": zod.number().int(),
+  "taxCode": zod.string(),
+  "paidMinor": zod.number().int(),
+  "evidenceComplete": zod.boolean()
+})),
+  "missingEvidence": zod.array(zod.string()),
+  "excludedBankCreditsMinor": zod.number().int(),
+  "evidenceHash": zod.string()
+}).describe('A VAT evidence review schedule reconciled to the ledger control: never a filed return or a payment.'),zod.null()]),
+  "vatExports": zod.array(zod.object({
+  "id": zod.string(),
+  "createdAt": zod.string(),
+  "schedule": zod.object({
+  "tenantId": zod.string(),
+  "legalEntityId": zod.string(),
+  "currency": zod.string(),
+  "period": zod.string(),
+  "configurationVersion": zod.string(),
+  "outputVatMinor": zod.number().int(),
+  "eligibleInputVatMinor": zod.number().int(),
+  "blockedInputVatMinor": zod.number().int(),
+  "expectedClosingMinor": zod.number().int(),
+  "ledgerClosingMinor": zod.number().int(),
+  "varianceMinor": zod.number().int(),
+  "status": zod.enum(['review_required', 'reconciled_for_review']),
+  "filingStatus": zod.literal("not_submitted"),
+  "paymentStatus": zod.literal("not_initiated"),
+  "lines": zod.array(zod.object({
+  "invoiceId": zod.string(),
+  "kind": zod.enum(['sales_invoice', 'sales_credit_note', 'purchase_invoice', 'purchase_credit_note']),
+  "netMinor": zod.number().int(),
+  "vatMinor": zod.number().int(),
+  "taxCode": zod.string(),
+  "paidMinor": zod.number().int(),
+  "evidenceComplete": zod.boolean()
+})),
+  "missingEvidence": zod.array(zod.string()),
+  "excludedBankCreditsMinor": zod.number().int(),
+  "evidenceHash": zod.string()
+}).describe('A VAT evidence review schedule reconciled to the ledger control: never a filed return or a payment.'),
+  "reviewer": zod.string()
+})),
+  "payrollPlans": zod.array(zod.object({
+  "id": zod.string(),
+  "status": zod.string(),
+  "plan": zod.object({
+  "kind": zod.literal("payroll_funding_plan"),
+  "scope": zod.object({
+  "tenantId": zod.string(),
+  "legalEntityId": zod.string(),
+  "currency": zod.string()
+}),
+  "runId": zod.string(),
+  "runVersion": zod.string(),
+  "sourceHash": zod.string(),
+  "maker": zod.string(),
+  "sourceApprover": zod.string(),
+  "sourceAccountId": zod.string(),
+  "paymentDate": zod.string(),
+  "asOf": zod.string(),
+  "balanceAsOf": zod.string(),
+  "reviewVersion": zod.number().int(),
+  "totalNetMinor": zod.number().int(),
+  "requiredMinor": zod.number().int(),
+  "availableMinor": zod.number().int().nullable(),
+  "shortfallMinor": zod.number().int().nullable(),
+  "commitmentsMinor": zod.number().int(),
+  "estimatedFeesMinor": zod.number().int(),
+  "bufferMinor": zod.number().int(),
+  "fundingStatus": zod.enum(['ready_for_review', 'shortfall', 'unknown']),
+  "approvalStatus": zod.enum(['draft', 'approved']),
+  "items": zod.array(zod.object({
+  "id": zod.string(),
+  "employeeReference": zod.string(),
+  "beneficiaryReference": zod.string(),
+  "beneficiaryVersion": zod.string(),
+  "netMinor": zod.number().int(),
+  "status": zod.enum(['planned', 'exported', 'submitted', 'succeeded', 'failed', 'unknown', 'reversed']),
+  "idempotencyKey": zod.string(),
+  "evidenceReference": zod.string().optional()
+})),
+  "frozenHash": zod.string(),
+  "checker": zod.string().optional(),
+  "approvedHash": zod.string().optional(),
+  "evidenceAuthority": zod.object({
+  "maker": zod.string(),
+  "checker": zod.string(),
+  "identityHash": zod.string()
+}).optional(),
+  "liveDispatchAllowed": zod.literal(false)
+}).describe('A funding plan for an approved net-pay run: maker, checker, funding state and each item\'s state. It pays nobody.'),
+  "summary": zod.object({
+  "itemCount": zod.number().int().min(getConnectedWorkspaceResponseCashPayrollPlansItemSummaryItemCountMin),
+  "totalNetMinor": zod.number().int(),
+  "counts": zod.object({
+  "planned": zod.number().int().min(getConnectedWorkspaceResponseCashPayrollPlansItemSummaryCountsPlannedMin),
+  "exported": zod.number().int().min(getConnectedWorkspaceResponseCashPayrollPlansItemSummaryCountsExportedMin),
+  "submitted": zod.number().int().min(getConnectedWorkspaceResponseCashPayrollPlansItemSummaryCountsSubmittedMin),
+  "succeeded": zod.number().int().min(getConnectedWorkspaceResponseCashPayrollPlansItemSummaryCountsSucceededMin),
+  "failed": zod.number().int().min(getConnectedWorkspaceResponseCashPayrollPlansItemSummaryCountsFailedMin),
+  "unknown": zod.number().int().min(getConnectedWorkspaceResponseCashPayrollPlansItemSummaryCountsUnknownMin),
+  "reversed": zod.number().int().min(getConnectedWorkspaceResponseCashPayrollPlansItemSummaryCountsReversedMin)
+}),
+  "status": zod.enum(['completed', 'partially_completed', 'needs_reconciliation', 'submitted', 'exported_unpaid', 'planning']),
+  "liveDispatchAllowed": zod.literal(false)
+}),
+  "manifest": zod.object({
+  "scope": zod.object({
+  "tenantId": zod.string(),
+  "legalEntityId": zod.string(),
+  "currency": zod.string()
+}),
+  "runId": zod.string(),
+  "runVersion": zod.string(),
+  "sourceAccountId": zod.string(),
+  "paymentDate": zod.string(),
+  "checker": zod.string(),
+  "approvedHash": zod.string(),
+  "itemCount": zod.number().int().min(getConnectedWorkspaceResponseCashPayrollPlansItemManifestItemCountMin),
+  "totalMinor": zod.number().int(),
+  "items": zod.array(zod.object({
+  "id": zod.string(),
+  "beneficiaryReference": zod.string(),
+  "beneficiaryVersion": zod.string(),
+  "netMinor": zod.number().int(),
+  "idempotencyKey": zod.string()
+})),
+  "paymentStatus": zod.literal("not_evidenced"),
+  "manifestHash": zod.string(),
+  "warning": zod.string()
+}).optional().describe('An approved payroll bank export: the unsent items and their totals. It does not reserve funds or prove payment.')
+})),
+  "payrollReconciliation": zod.array(zod.object({
+  "id": zod.string(),
+  "runId": zod.string(),
+  "items": zod.array(zod.object({
+  "id": zod.string(),
+  "employeeReference": zod.string(),
+  "netMinor": zod.number().int(),
+  "status": zod.enum(['planned', 'exported', 'submitted', 'succeeded', 'failed', 'unknown', 'reversed'])
+}))
+})),
+  "permissions": zod.object({
+  "read": zod.boolean(),
+  "erp": zod.boolean(),
+  "payroll": zod.boolean()
+}),
+  "limitations": zod.array(zod.string())
+}).describe('The Cash Desk: a separate sample SME\'s accounts, positions, commitments, forecast, accounting drafts, VAT schedules and payroll plans, as its permissions allow.')
+}).describe('Synthetic connected workspace: granular consents with their effective state, bound sample payment intents, the Credit and Cash Desks and the live gates, every one closed. No read creates sample records.')
 
 
 /**
- * Runs inside the existing merchant transaction and audit boundary. Role, purpose, subject, expiry, ownership and version checks apply. Unknown payment outcomes hold retries. No bank, credit bureau, accounting or tax endpoint is called.
+ * Runs inside the existing merchant transaction and audit boundary. Role, purpose, subject, expiry, ownership and version checks apply. Unknown payment outcomes hold retries. A repeat with the same key is answered before the revision is checked. No bank, credit bureau, accounting or tax endpoint is called.
  * @summary Perform a synthetic connected-workspace action
  */
+export const performConnectedActionQueryMerchantIdMax = 100;
+
+
+
 export const PerformConnectedActionQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(performConnectedActionQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const performConnectedActionHeaderIdempotencyKeyMin = 8;
@@ -1275,7 +1993,7 @@ export const performConnectedActionHeaderIdempotencyKeyMax = 200;
 
 
 export const PerformConnectedActionHeader = zod.object({
-  "Idempotency-Key": zod.string().min(performConnectedActionHeaderIdempotencyKeyMin).max(performConnectedActionHeaderIdempotencyKeyMax).describe('One key per unchanged intention. Retain it after response loss; replay happens before revision checking.')
+  "Idempotency-Key": zod.string().min(performConnectedActionHeaderIdempotencyKeyMin).max(performConnectedActionHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const performConnectedActionBodyActionMax = 80;
@@ -1285,39 +2003,161 @@ export const performConnectedActionBodyRecordIdMax = 100;
 export const performConnectedActionBodyReasonMin = 8;
 export const performConnectedActionBodyReasonMax = 500;
 
+export const performConnectedActionBodyDataDefault = {};
 export const performConnectedActionBodyExpectedRevisionMax = 80;
 
 
 
 export const PerformConnectedActionBody = zod.object({
-  "action": zod.string().max(performConnectedActionBodyActionMax),
+  "action": zod.string().min(1).max(performConnectedActionBodyActionMax),
   "recordId": zod.string().max(performConnectedActionBodyRecordIdMax).optional(),
   "reason": zod.string().min(performConnectedActionBodyReasonMin).max(performConnectedActionBodyReasonMax),
-  "data": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
+  "data": zod.record(zod.string(), zod.unknown()).default(performConnectedActionBodyDataDefault),
   "expectedRevision": zod.string().max(performConnectedActionBodyExpectedRevisionMax)
 }).describe('Action-specific data is validated by the server. Names use consent, payment, credit or cash prefixes. Every action requires a current whole-workspace revision and a reason. No input can enable live routes.')
 
+export const performConnectedActionResponseRecordTwoDataManifestThreeItemCountMin = 0;
+
+
+
 export const PerformConnectedActionResponse = zod.object({
   "message": zod.string(),
-  "record": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
-  "mode": zod.enum(['synthetic']),
+  "record": zod.union([zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'),zod.object({
+  "message": zod.string(),
+  "record": zod.object({
+  "id": zod.string(),
+  "merchantId": zod.string(),
+  "kind": zod.string(),
+  "name": zod.string(),
+  "status": zod.string(),
+  "reference": zod.string(),
+  "amountKobo": zod.number().int(),
+  "customerId": zod.string(),
+  "createdAt": zod.string(),
+  "updatedAt": zod.string(),
+  "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
+}).optional().describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'),
+  "data": zod.object({
+  "manifest": zod.union([zod.object({
+  "schema": zod.literal("valo.erp.review-export.v1"),
+  "companyId": zod.string(),
+  "invoiceAllocations": zod.array(zod.object({
+  "invoiceId": zod.string(),
+  "invoiceVersion": zod.string(),
+  "amountMinor": zod.number().int()
+})),
+  "creditNotes": zod.array(zod.object({
+  "id": zod.string(),
+  "invoiceId": zod.string(),
+  "amountMinor": zod.number().int(),
+  "approved": zod.boolean(),
+  "version": zod.string()
+})).optional(),
+  "grossMinor": zod.number().int(),
+  "netMinor": zod.number().int(),
+  "feeMinor": zod.number().int(),
+  "mappingVersion": zod.string(),
+  "requestHash": zod.string(),
+  "reviewer": zod.string(),
+  "status": zod.literal("not_posted"),
+  "synthetic": zod.literal(true),
+  "manifestHash": zod.string()
+}).describe('A reviewed accounting export: what an ERP would receive. The service never posts it.'),zod.object({
+  "tenantId": zod.string(),
+  "legalEntityId": zod.string(),
+  "currency": zod.string(),
+  "period": zod.string(),
+  "configurationVersion": zod.string(),
+  "outputVatMinor": zod.number().int(),
+  "eligibleInputVatMinor": zod.number().int(),
+  "blockedInputVatMinor": zod.number().int(),
+  "expectedClosingMinor": zod.number().int(),
+  "ledgerClosingMinor": zod.number().int(),
+  "varianceMinor": zod.number().int(),
+  "status": zod.enum(['review_required', 'reconciled_for_review']),
+  "filingStatus": zod.literal("not_submitted"),
+  "paymentStatus": zod.literal("not_initiated"),
+  "lines": zod.array(zod.object({
+  "invoiceId": zod.string(),
+  "kind": zod.enum(['sales_invoice', 'sales_credit_note', 'purchase_invoice', 'purchase_credit_note']),
+  "netMinor": zod.number().int(),
+  "vatMinor": zod.number().int(),
+  "taxCode": zod.string(),
+  "paidMinor": zod.number().int(),
+  "evidenceComplete": zod.boolean()
+})),
+  "missingEvidence": zod.array(zod.string()),
+  "excludedBankCreditsMinor": zod.number().int(),
+  "evidenceHash": zod.string()
+}).describe('A VAT evidence review schedule reconciled to the ledger control: never a filed return or a payment.'),zod.object({
+  "scope": zod.object({
+  "tenantId": zod.string(),
+  "legalEntityId": zod.string(),
+  "currency": zod.string()
+}),
+  "runId": zod.string(),
+  "runVersion": zod.string(),
+  "sourceAccountId": zod.string(),
+  "paymentDate": zod.string(),
+  "checker": zod.string(),
+  "approvedHash": zod.string(),
+  "itemCount": zod.number().int().min(performConnectedActionResponseRecordTwoDataManifestThreeItemCountMin),
+  "totalMinor": zod.number().int(),
+  "items": zod.array(zod.object({
+  "id": zod.string(),
+  "beneficiaryReference": zod.string(),
+  "beneficiaryVersion": zod.string(),
+  "netMinor": zod.number().int(),
+  "idempotencyKey": zod.string()
+})),
+  "paymentStatus": zod.literal("not_evidenced"),
+  "manifestHash": zod.string(),
+  "warning": zod.string()
+}).describe('An approved payroll bank export: the unsent items and their totals. It does not reserve funds or prove payment.')]).optional(),
+  "synthetic": zod.literal(true),
+  "externalInstructionPerformed": zod.literal(false).optional()
+})
+}).describe('What a Cash Desk action did: its message, the record it saved or changed, and any export it prepared.')]),
+  "mode": zod.literal("synthetic"),
   "externalInstructionPerformed": zod.literal(false)
-}).describe('Committed sample operation. Cash actions include their record and outcome inside record; use the refreshed workspace view for display. A receipt is evidence from the server simulator only.')
+}).describe('Committed sample operation: the record it produced or changed, or for a Cash Desk action its outcome with the record inside. A receipt is evidence from the server simulator only.')
 
 
 /**
  * Every keyed, recoverable request the caller made in this lender, with its confirmation state. Read-only; private to the person who made the requests.
  * @summary List the caller's recovery journal
  */
+export const listOperationsQueryMerchantIdMax = 100;
+
 export const listOperationsQueryOffsetMin = 0;
 export const listOperationsQueryOffsetMax = 100000;
 
 
 
 export const ListOperationsQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "merchantId": zod.string().min(1).max(listOperationsQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.'),
   "offset": zod.coerce.number().int().min(listOperationsQueryOffsetMin).max(listOperationsQueryOffsetMax).optional().describe('Rows to skip in the newest-first order; pages hold 25 rows.')
 })
+
+export const listOperationsResponseItemsMax = 25;
+
+export const listOperationsResponseTotalMin = 0;
+
+export const listOperationsResponseOffsetMin = 0;
+
+
 
 export const ListOperationsResponse = zod.object({
   "items": zod.array(zod.object({
@@ -1331,37 +2171,45 @@ export const ListOperationsResponse = zod.object({
   "message": zod.string(),
   "recordId": zod.string().nullable(),
   "recordKind": zod.string().nullable()
-}).describe('One journal entry: what was asked, by whom, in which role, and whether the service confirmed it. Original request bodies stay private; a completed entry names the record it produced. A refused entry is cancelled and its message says why.')),
-  "total": zod.number().int(),
-  "offset": zod.number().int()
+}).describe('One journal entry: what was asked, by whom, in which role, and whether the service confirmed it. Original request bodies stay private; a completed entry names the record it produced. A refused entry is cancelled and its message says why.')).max(listOperationsResponseItemsMax),
+  "total": zod.number().int().min(listOperationsResponseTotalMin),
+  "offset": zod.number().int().min(listOperationsResponseOffsetMin)
 }).describe('The caller\'s journal for one lender, newest first, 25 rows a page.')
 
 
 /**
- * Re-enters the original route with the stored request and key under the current rules. A completed entry returns its saved result; a cancelled or refused one is refused (409); a different role cannot repeat it (403).
+ * Re-enters the original route with the stored request and key under the current rules, so it can answer anything that route answers. A completed entry returns its saved result; a cancelled or refused one is refused (409); a different role cannot repeat it (403); a request whose stored payload expired under retention is gone (410).
  * @summary Recover or repeat a journaled request
  */
 export const RetryOperationParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const retryOperationQueryMerchantIdMax = 100;
+
+
+
 export const RetryOperationQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(retryOperationQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const RetryOperationResponse = zod.record(zod.string(), zod.unknown()).describe('The original route\'s answer, recovered or re-run under the current validation and authorisation; its shape is that route\'s response.')
 
 
 /**
- * Confirms with the server that the request never completed and closes it, so its key cannot run again. A completed entry, or one whose receipt already exists, is refused (409).
+ * Confirms with the server that the request never completed and closes it, so its key cannot run again. A completed entry, or one whose receipt already exists, is refused (409); one whose stored payload expired under retention is gone (410).
  * @summary Cancel an unconfirmed request
  */
 export const CancelOperationParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const cancelOperationQueryMerchantIdMax = 100;
+
+
+
 export const CancelOperationQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(cancelOperationQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const CancelOperationResponse = zod.object({
@@ -1373,9 +2221,29 @@ export const CancelOperationResponse = zod.object({
  * Counts of the records each pilot step needs, for the journey page. No record is created by reading.
  * @summary Read the pilot journey counts
  */
+export const getPilotJourneyQueryMerchantIdMax = 100;
+
+
+
 export const GetPilotJourneyQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(getPilotJourneyQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
+
+export const getPilotJourneyResponseCountsCustomersMin = 0;
+
+export const getPilotJourneyResponseCountsBatchesMin = 0;
+
+export const getPilotJourneyResponseCountsReceiptsMin = 0;
+
+export const getPilotJourneyResponseCountsOpenCasesMin = 0;
+
+export const getPilotJourneyResponseCountsUnassignedCasesMin = 0;
+
+export const getPilotJourneyResponseCountsClosesMin = 0;
+
+export const getPilotJourneyResponseCountsExportsMin = 0;
+
+
 
 export const GetPilotJourneyResponse = zod.object({
   "lender": zod.object({
@@ -1395,13 +2263,13 @@ export const GetPilotJourneyResponse = zod.object({
   "actor": zod.string(),
   "syntheticOnly": zod.literal(true),
   "counts": zod.object({
-  "customers": zod.number().int(),
-  "batches": zod.number().int(),
-  "receipts": zod.number().int(),
-  "openCases": zod.number().int(),
-  "unassignedCases": zod.number().int(),
-  "closes": zod.number().int(),
-  "exports": zod.number().int()
+  "customers": zod.number().int().min(getPilotJourneyResponseCountsCustomersMin),
+  "batches": zod.number().int().min(getPilotJourneyResponseCountsBatchesMin),
+  "receipts": zod.number().int().min(getPilotJourneyResponseCountsReceiptsMin),
+  "openCases": zod.number().int().min(getPilotJourneyResponseCountsOpenCasesMin),
+  "unassignedCases": zod.number().int().min(getPilotJourneyResponseCountsUnassignedCasesMin),
+  "closes": zod.number().int().min(getPilotJourneyResponseCountsClosesMin),
+  "exports": zod.number().int().min(getPilotJourneyResponseCountsExportsMin)
 }).describe('Record counts that place the lender on the pilot journey: customers, committed batches, receipts, open and unassigned cases, closes and ready exports.')
 }).describe('The lender, the caller\'s access mode and the counts behind the journey view. Synthetic throughout.')
 
@@ -1416,7 +2284,7 @@ export const createPilotLenderHeaderIdempotencyKeyMax = 200;
 
 
 export const CreatePilotLenderHeader = zod.object({
-  "Idempotency-Key": zod.string().min(createPilotLenderHeaderIdempotencyKeyMin).max(createPilotLenderHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(createPilotLenderHeaderIdempotencyKeyMin).max(createPilotLenderHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const createPilotLenderBodyNameMin = 2;
@@ -1448,15 +2316,25 @@ export const CreatePilotLenderResponse = zod.object({
  * Newest first, 25 a page, without source rows.
  * @summary List import batches
  */
+export const listImportBatchesQueryMerchantIdMax = 100;
+
 export const listImportBatchesQueryOffsetMin = 0;
 export const listImportBatchesQueryOffsetMax = 100000;
 
 
 
 export const ListImportBatchesQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "merchantId": zod.string().min(1).max(listImportBatchesQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.'),
   "offset": zod.coerce.number().int().min(listImportBatchesQueryOffsetMin).max(listImportBatchesQueryOffsetMax).optional().describe('Rows to skip in the newest-first order; pages hold 25 rows.')
 })
+
+export const listImportBatchesResponseItemsMax = 25;
+
+export const listImportBatchesResponseTotalMin = 0;
+
+export const listImportBatchesResponseOffsetMin = 0;
+
+
 
 export const ListImportBatchesResponse = zod.object({
   "items": zod.array(zod.object({
@@ -1471,9 +2349,9 @@ export const ListImportBatchesResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')),
-  "total": zod.number().int(),
-  "offset": zod.number().int()
+}).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.')).max(listImportBatchesResponseItemsMax),
+  "total": zod.number().int().min(listImportBatchesResponseTotalMin),
+  "offset": zod.number().int().min(listImportBatchesResponseOffsetMin)
 }).describe('Import batches newest first, 25 a page, with their source identity, quality totals and check counts but not their rows. A batch saved before check summaries were stored is listed without check counts while the key service cannot open its check.')
 
 
@@ -1481,8 +2359,12 @@ export const ListImportBatchesResponse = zod.object({
  * Parses and checks the rows, screens them for raw bank details, and records the batch as ready or needing correction. A batch with the same source identity is refused (409).
  * @summary Save a source batch
  */
+export const saveImportBatchQueryMerchantIdMax = 100;
+
+
+
 export const SaveImportBatchQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(saveImportBatchQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const saveImportBatchHeaderIdempotencyKeyMin = 8;
@@ -1491,7 +2373,7 @@ export const saveImportBatchHeaderIdempotencyKeyMax = 200;
 
 
 export const SaveImportBatchHeader = zod.object({
-  "Idempotency-Key": zod.string().min(saveImportBatchHeaderIdempotencyKeyMin).max(saveImportBatchHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(saveImportBatchHeaderIdempotencyKeyMin).max(saveImportBatchHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const saveImportBatchBodyNameMax = 120;
@@ -1523,7 +2405,7 @@ export const SaveImportBatchBody = zod.object({
   "amountUnit": zod.enum(['naira', 'kobo']),
   "identityColumn": zod.string().min(1).max(saveImportBatchBodyIdentityColumnMax),
   "syntheticOnly": zod.literal(true),
-  "expectedUpdatedAt": zod.coerce.date().optional()
+  "expectedUpdatedAt": zod.coerce.date().optional().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.')
 }).describe('A synthetic source batch: source, source batch ID, record kind, mapping, identity column, amount unit and up to 500 CSV rows. syntheticOnly must be true; raw bank details are refused.')
 
 export const SaveImportBatchResponse = zod.object({
@@ -1549,8 +2431,12 @@ export const GetImportBatchParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const getImportBatchQueryMerchantIdMax = 100;
+
+
+
 export const GetImportBatchQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(getImportBatchQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const GetImportBatchResponse = zod.object({
@@ -1591,8 +2477,12 @@ export const SaveImportBatchRevisionParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const saveImportBatchRevisionQueryMerchantIdMax = 100;
+
+
+
 export const SaveImportBatchRevisionQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(saveImportBatchRevisionQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const saveImportBatchRevisionHeaderIdempotencyKeyMin = 8;
@@ -1601,7 +2491,7 @@ export const saveImportBatchRevisionHeaderIdempotencyKeyMax = 200;
 
 
 export const SaveImportBatchRevisionHeader = zod.object({
-  "Idempotency-Key": zod.string().min(saveImportBatchRevisionHeaderIdempotencyKeyMin).max(saveImportBatchRevisionHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(saveImportBatchRevisionHeaderIdempotencyKeyMin).max(saveImportBatchRevisionHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const saveImportBatchRevisionBodyNameMax = 120;
@@ -1633,7 +2523,7 @@ export const SaveImportBatchRevisionBody = zod.object({
   "amountUnit": zod.enum(['naira', 'kobo']),
   "identityColumn": zod.string().min(1).max(saveImportBatchRevisionBodyIdentityColumnMax),
   "syntheticOnly": zod.literal(true),
-  "expectedUpdatedAt": zod.coerce.date().optional()
+  "expectedUpdatedAt": zod.coerce.date().optional().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.')
 }).describe('A synthetic source batch: source, source batch ID, record kind, mapping, identity column, amount unit and up to 500 CSV rows. syntheticOnly must be true; raw bank details are refused.')
 
 export const SaveImportBatchRevisionResponse = zod.object({
@@ -1659,8 +2549,12 @@ export const CommitImportBatchParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const commitImportBatchQueryMerchantIdMax = 100;
+
+
+
 export const CommitImportBatchQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(commitImportBatchQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const commitImportBatchHeaderIdempotencyKeyMin = 8;
@@ -1669,11 +2563,11 @@ export const commitImportBatchHeaderIdempotencyKeyMax = 200;
 
 
 export const CommitImportBatchHeader = zod.object({
-  "Idempotency-Key": zod.string().min(commitImportBatchHeaderIdempotencyKeyMin).max(commitImportBatchHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(commitImportBatchHeaderIdempotencyKeyMin).max(commitImportBatchHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const CommitImportBatchBody = zod.object({
-  "expectedUpdatedAt": zod.string()
+  "expectedUpdatedAt": zod.coerce.date().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.')
 }).describe('The batch version being committed; a stale version is refused (409).')
 
 export const CommitImportBatchResponse = zod.object({
@@ -1699,8 +2593,12 @@ export const GetCaseParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const getCaseQueryMerchantIdMax = 100;
+
+
+
 export const GetCaseQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(getCaseQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const GetCaseResponse = zod.object({
@@ -1752,8 +2650,12 @@ export const CoordinateCaseParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const coordinateCaseQueryMerchantIdMax = 100;
+
+
+
 export const CoordinateCaseQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(coordinateCaseQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const coordinateCaseHeaderIdempotencyKeyMin = 8;
@@ -1762,7 +2664,7 @@ export const coordinateCaseHeaderIdempotencyKeyMax = 200;
 
 
 export const CoordinateCaseHeader = zod.object({
-  "Idempotency-Key": zod.string().min(coordinateCaseHeaderIdempotencyKeyMin).max(coordinateCaseHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(coordinateCaseHeaderIdempotencyKeyMin).max(coordinateCaseHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const coordinateCaseBodyAssigneeMax = 256;
@@ -1782,11 +2684,11 @@ export const coordinateCaseBodyEvidenceIdsMax = 20;
 
 export const CoordinateCaseBody = zod.object({
   "action": zod.enum(['claim', 'handover', 'update']),
-  "expectedUpdatedAt": zod.coerce.date(),
+  "expectedUpdatedAt": zod.coerce.date().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.'),
   "assignee": zod.string().max(coordinateCaseBodyAssigneeMax).optional(),
   "note": zod.string().min(coordinateCaseBodyNoteMin).max(coordinateCaseBodyNoteMax),
   "nextAction": zod.string().min(coordinateCaseBodyNextActionMin).max(coordinateCaseBodyNextActionMax),
-  "nextActionAt": zod.coerce.date(),
+  "nextActionAt": zod.coerce.date().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.'),
   "evidenceIds": zod.array(zod.string().min(1).max(coordinateCaseBodyEvidenceIdsItemMax)).max(coordinateCaseBodyEvidenceIdsMax).default(coordinateCaseBodyEvidenceIdsDefault)
 }).describe('A case handover or update: assignee, next action and its time, note and evidence, with the version being changed.')
 
@@ -1806,7 +2708,7 @@ export const CoordinateCaseResponse = zod.object({
 
 
 /**
- * Staff hosts only (403 elsewhere). Requires a signed-in session with an enrolled second factor used recently; otherwise answers with the identity provider's re-verification instruction.
+ * Staff hosts only (403 elsewhere). Requires a signed-in session with an enrolled second factor used recently; otherwise answers 403 with the identity provider's re-verification instruction.
  * @summary Verify staff identity with a fresh second factor
  */
 export const VerifyStaffIdentityResponse = zod.object({
@@ -1815,9 +2717,15 @@ export const VerifyStaffIdentityResponse = zod.object({
 
 
 /**
- * Members, lenders, invitations and access history as the caller's role allows.
+ * Members, lenders, invitations and access history as the caller's role allows. In the sandbox every list is empty.
  * @summary Read the team directory
  */
+export const getTeamResponseInvitationsMax = 100;
+
+export const getTeamResponseEventsMax = 100;
+
+
+
 export const GetTeamResponse = zod.object({
   "mode": zod.enum(['sandbox', 'staff']),
   "actor": zod.string(),
@@ -1825,13 +2733,13 @@ export const GetTeamResponse = zod.object({
   "id": zod.string(),
   "actor": zod.string(),
   "name": zod.string(),
-  "role": zod.string(),
+  "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
   "status": zod.enum(['active', 'suspended', 'revoked']),
   "expiresAt": zod.string(),
   "updatedAt": zod.string(),
-  "lenderIds": zod.array(zod.string()).optional(),
-  "allLenders": zod.boolean().optional()
-}).describe('A staff membership: its role, state and expiry, and (in the directory) the lenders it may open; an administrator sees every lender.')),
+  "lenderIds": zod.array(zod.string()),
+  "allLenders": zod.boolean()
+}).describe('A membership in the team directory, with the lenders it may open; an administrator opens every lender and lists none.')),
   "lenders": zod.array(zod.object({
   "id": zod.string(),
   "name": zod.string(),
@@ -1848,10 +2756,10 @@ export const GetTeamResponse = zod.object({
   "invitations": zod.array(zod.object({
   "id": zod.string(),
   "email": zod.string(),
-  "role": zod.string(),
-  "status": zod.string(),
+  "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
+  "status": zod.enum(['pending', 'accepted', 'revoked']),
   "expiresAt": zod.string()
-}).describe('A pending, accepted or revoked invitation; the token is shown once, at creation.')),
+}).describe('A pending, accepted or revoked invitation; the token is shown once, at creation.')).max(getTeamResponseInvitationsMax),
   "events": zod.array(zod.object({
   "id": zod.string(),
   "actor": zod.string(),
@@ -1859,9 +2767,9 @@ export const GetTeamResponse = zod.object({
   "subject": zod.string(),
   "detail": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
   "createdAt": zod.string()
-}).describe('One entry of the team\'s access history.')),
+}).describe('One entry of the team\'s access history.')).max(getTeamResponseEventsMax),
   "message": zod.string()
-}).describe('The team as the caller may see it: members and lenders for everyone, invitations and history for administrators. In the sandbox the lists are empty and the message says why.')
+}).describe('The team as the caller may see it: members for everyone; lenders, invitations and history for administrators. In the sandbox every list, lenders included, is empty and the message says why.')
 
 
 /**
@@ -1877,15 +2785,18 @@ export const InviteStaffBody = zod.object({
   "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only'])
 }).describe('An invitation: email address and pilot role.')
 
+export const inviteStaffResponseTokenRegExp = new RegExp('^[a-f0-9]{64}$');
+
+
 export const InviteStaffResponse = zod.object({
   "id": zod.string(),
-  "token": zod.string(),
+  "token": zod.string().regex(inviteStaffResponseTokenRegExp),
   "message": zod.string()
 }).describe('The invitation and its one-time acceptance token; no email is sent.')
 
 
 /**
- * Administrator with recent MFA. A revoked token cannot be accepted.
+ * Administrator with recent MFA. A revoked token cannot be accepted; an invitation that is no longer pending is refused (409).
  * @summary Revoke an invitation
  */
 export const RevokeInvitationParams = zod.object({
@@ -1913,7 +2824,7 @@ export const updateStaffMemberBodyReasonMax = 500;
 export const UpdateStaffMemberBody = zod.object({
   "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
   "status": zod.enum(['active', 'suspended', 'revoked']),
-  "expectedUpdatedAt": zod.coerce.date(),
+  "expectedUpdatedAt": zod.coerce.date().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.'),
   "reason": zod.string().min(updateStaffMemberBodyReasonMin).max(updateStaffMemberBodyReasonMax)
 }).describe('A membership change: role, state, the version being changed and the reason.')
 
@@ -1921,13 +2832,11 @@ export const UpdateStaffMemberResponse = zod.object({
   "id": zod.string(),
   "actor": zod.string(),
   "name": zod.string(),
-  "role": zod.string(),
+  "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
   "status": zod.enum(['active', 'suspended', 'revoked']),
   "expiresAt": zod.string(),
-  "updatedAt": zod.string(),
-  "lenderIds": zod.array(zod.string()).optional(),
-  "allLenders": zod.boolean().optional()
-}).describe('A staff membership: its role, state and expiry, and (in the directory) the lenders it may open; an administrator sees every lender.')
+  "updatedAt": zod.string()
+}).describe('A staff membership as a change answers it: its role, state, expiry and version.')
 
 
 /**
@@ -1948,7 +2857,7 @@ export const updateStaffLendersBodyReasonMax = 1000;
 
 
 export const UpdateStaffLendersBody = zod.object({
-  "expectedUpdatedAt": zod.coerce.date(),
+  "expectedUpdatedAt": zod.coerce.date().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.'),
   "lenderIds": zod.array(zod.string().min(1).max(updateStaffLendersBodyLenderIdsItemMax)).max(updateStaffLendersBodyLenderIdsMax),
   "reason": zod.string().min(updateStaffLendersBodyReasonMin).max(updateStaffLendersBodyReasonMax)
 }).describe('The lenders a non-administrator membership may open, with the version being changed and the reason.')
@@ -1957,12 +2866,12 @@ export const UpdateStaffLendersResponse = zod.object({
   "id": zod.string(),
   "actor": zod.string(),
   "name": zod.string(),
-  "role": zod.string(),
+  "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only']),
   "status": zod.enum(['active', 'suspended', 'revoked']),
   "expiresAt": zod.string(),
   "updatedAt": zod.string(),
   "lenderIds": zod.array(zod.string()),
-  "allLenders": zod.boolean(),
+  "allLenders": zod.literal(false),
   "message": zod.string()
 }).describe('The membership with its saved lender access.')
 
@@ -1980,7 +2889,7 @@ export const AcceptInvitationBody = zod.object({
 
 export const AcceptInvitationResponse = zod.object({
   "message": zod.string(),
-  "role": zod.string()
+  "role": zod.enum(['Admin', 'Operations', 'Finance', 'Compliance reviewer', 'Read-only'])
 }).describe('Confirmation of the new membership and its role.')
 
 
@@ -1993,9 +2902,9 @@ export const GetAccessReadinessResponse = zod.object({
   "canCommission": zod.boolean(),
   "checkedAt": zod.string(),
   "checks": zod.array(zod.object({
-  "id": zod.string(),
+  "id": zod.enum(['identity', 'mfa', 'origin', 'database', 'encryption']),
   "name": zod.string(),
-  "state": zod.string(),
+  "state": zod.enum(['verified_this_request', 'configured', 'configured_not_verified', 'not_configured']),
   "detail": zod.string()
 }).describe('One readiness control (identity, MFA, origins, database isolation, encryption) with its state on this host and what it means.'))
 }).describe('The staff-access and encryption controls as this request observed them. Describes configuration; never reveals secrets.')
@@ -2008,17 +2917,21 @@ export const GetAccessReadinessResponse = zod.object({
 export const VerifyEncryptionResponse = zod.object({
   "message": zod.string(),
   "checkedAt": zod.string(),
-  "verified": zod.boolean()
+  "verified": zod.literal(true)
 }).describe('The result of sealing and opening a synthetic payload with the configured managed key.')
 
 
 /**
- * Administrator with recent MFA. Seals one bounded batch of unprotected import rows and recovery payloads; run until none remain.
+ * Administrator with recent MFA. Seals one bounded batch of unprotected import rows and recovery payloads; run until none remain (503 when no key is configured).
  * @summary Protect stored payloads
  */
+export const protectPayloadsResponseProtectedCountMin = 0;
+
+
+
 export const ProtectPayloadsResponse = zod.object({
   "message": zod.string(),
-  "protectedCount": zod.number().int(),
+  "protectedCount": zod.number().int().min(protectPayloadsResponseProtectedCountMin),
   "mayHaveMore": zod.boolean()
 }).describe('How many stored payloads one bounded run protected, and whether another run is needed.')
 
@@ -2027,9 +2940,16 @@ export const ProtectPayloadsResponse = zod.object({
  * Derived from the lender's records on every read; nothing is written.
  * @summary Read the pilot progress steps
  */
+export const getPilotProgressQueryMerchantIdMax = 100;
+
+
+
 export const GetPilotProgressQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(getPilotProgressQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
+
+export const getPilotProgressResponseStepsItemHrefRegExp = new RegExp('^');
+
 
 export const GetPilotProgressResponse = zod.object({
   "lender": zod.object({
@@ -2047,15 +2967,15 @@ export const GetPilotProgressResponse = zod.object({
 }).describe('A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags.'),
   "syntheticOnly": zod.literal(true),
   "access": zod.object({
-  "mode": zod.string(),
-  "state": zod.string(),
+  "mode": zod.enum(['sandbox', 'staff']),
+  "state": zod.enum(['configured', 'not_configured']),
   "message": zod.string()
 }).describe('Whether real staff access is enabled on this host and what demo progress does not establish.'),
   "steps": zod.array(zod.object({
   "id": zod.string(),
   "name": zod.string(),
-  "href": zod.string(),
-  "state": zod.string(),
+  "href": zod.string().regex(getPilotProgressResponseStepsItemHrefRegExp),
+  "state": zod.enum(['not_started', 'in_progress', 'awaiting_review', 'completed', 'blocked']),
   "evidence": zod.array(zod.string()),
   "missing": zod.array(zod.string())
 }).describe('One pilot step with its state, the evidence behind that state and what is still missing.'))
@@ -2066,9 +2986,21 @@ export const GetPilotProgressResponse = zod.object({
  * Newest 25 closes with their discrepancies, review state and the available Finance reviewers.
  * @summary List closes and their reviews
  */
+export const listCloseReviewsQueryMerchantIdMax = 100;
+
+
+
 export const ListCloseReviewsQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(listCloseReviewsQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
+
+export const listCloseReviewsResponseClosesItemPendingFinancialCorrectionsMin = 0;
+
+export const listCloseReviewsResponseClosesMax = 25;
+
+export const listCloseReviewsResponseTotalMin = 0;
+
+
 
 export const ListCloseReviewsResponse = zod.object({
   "closes": zod.array(zod.object({
@@ -2085,9 +3017,14 @@ export const ListCloseReviewsResponse = zod.object({
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
 }).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'),
-  "issues": zod.array(zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')),
+  "issues": zod.array(zod.object({
+  "id": zod.string(),
+  "label": zod.string(),
+  "detail": zod.string(),
+  "unresolved": zod.boolean()
+}).describe('A discrepancy or unresolved item the preparer must answer, and whether it remains open at the close.')),
   "problem": zod.string().nullable(),
-  "pendingFinancialCorrections": zod.number().int(),
+  "pendingFinancialCorrections": zod.number().int().min(listCloseReviewsResponseClosesItemPendingFinancialCorrectionsMin),
   "reviews": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -2103,15 +3040,15 @@ export const ListCloseReviewsResponse = zod.object({
 }).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.').and(zod.object({
   "current": zod.boolean()
 })).describe('A close review record with whether its snapshot still matches the close and its source evidence.'))
-}).describe('One close with the discrepancies a reviewer must answer, why it cannot be reviewed now (if so), pending financial corrections and its reviews.')),
-  "total": zod.number().int(),
+}).describe('One close with the discrepancies a reviewer must answer, why it cannot be reviewed now (if so), pending financial corrections and its reviews.')).max(listCloseReviewsResponseClosesMax),
+  "total": zod.number().int().min(listCloseReviewsResponseTotalMin),
   "actor": zod.string(),
   "reviewers": zod.array(zod.object({
   "actor": zod.string(),
   "name": zod.string(),
   "role": zod.string()
 }).describe('A person who can own a case or review a close: demo roles in the sandbox, active staff with lender access on a staff host.')),
-  "accessMode": zod.string(),
+  "accessMode": zod.enum(['sandbox', 'staff']),
   "ownPrincipal": zod.string()
 }).describe('The 25 newest closes with their reviews, the Finance reviewers available and who the caller is, so the console can enforce separation of duties.')
 
@@ -2120,8 +3057,12 @@ export const ListCloseReviewsResponse = zod.object({
  * Snapshots the close with its source-completeness basis and assigns an independent Finance reviewer. A close with an open review, a stale version or an unanswered discrepancy is refused.
  * @summary Prepare a close for review
  */
+export const prepareCloseReviewQueryMerchantIdMax = 100;
+
+
+
 export const PrepareCloseReviewQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(prepareCloseReviewQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const prepareCloseReviewHeaderIdempotencyKeyMin = 8;
@@ -2130,7 +3071,7 @@ export const prepareCloseReviewHeaderIdempotencyKeyMax = 200;
 
 
 export const PrepareCloseReviewHeader = zod.object({
-  "Idempotency-Key": zod.string().min(prepareCloseReviewHeaderIdempotencyKeyMin).max(prepareCloseReviewHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(prepareCloseReviewHeaderIdempotencyKeyMin).max(prepareCloseReviewHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const prepareCloseReviewBodyCloseIdMax = 100;
@@ -2154,7 +3095,7 @@ export const prepareCloseReviewBodyUnresolvedAcceptanceMax = 3000;
 
 export const PrepareCloseReviewBody = zod.object({
   "closeId": zod.string().min(1).max(prepareCloseReviewBodyCloseIdMax),
-  "expectedUpdatedAt": zod.coerce.date(),
+  "expectedUpdatedAt": zod.coerce.date().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.'),
   "reviewer": zod.string().min(1).max(prepareCloseReviewBodyReviewerMax),
   "preparationNote": zod.string().min(prepareCloseReviewBodyPreparationNoteMin).max(prepareCloseReviewBodyPreparationNoteMax),
   "discrepancyResponses": zod.array(zod.object({
@@ -2180,15 +3121,19 @@ export const PrepareCloseReviewResponse = zod.object({
 
 
 /**
- * Only the named reviewer decides, and only while the snapshot is current; a changed close or source declaration must be prepared again.
+ * Only the named reviewer decides, and only while the snapshot is current; a changed close or source declaration must be prepared again. One browser switching demo roles is one person, so a sandbox cannot decide its own preparation (403).
  * @summary Approve or reject a close review
  */
 export const DecideCloseReviewParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const decideCloseReviewQueryMerchantIdMax = 100;
+
+
+
 export const DecideCloseReviewQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(decideCloseReviewQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const decideCloseReviewHeaderIdempotencyKeyMin = 8;
@@ -2197,7 +3142,7 @@ export const decideCloseReviewHeaderIdempotencyKeyMax = 200;
 
 
 export const DecideCloseReviewHeader = zod.object({
-  "Idempotency-Key": zod.string().min(decideCloseReviewHeaderIdempotencyKeyMin).max(decideCloseReviewHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(decideCloseReviewHeaderIdempotencyKeyMin).max(decideCloseReviewHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const decideCloseReviewBodyNoteMin = 10;
@@ -2217,7 +3162,7 @@ export const decideCloseReviewBodySourceExceptionsMax = 500;
 
 
 export const DecideCloseReviewBody = zod.object({
-  "expectedUpdatedAt": zod.coerce.date(),
+  "expectedUpdatedAt": zod.coerce.date().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.'),
   "action": zod.enum(['approve', 'return']),
   "note": zod.string().min(decideCloseReviewBodyNoteMin).max(decideCloseReviewBodyNoteMax),
   "sourceExceptions": zod.array(zod.object({
@@ -2246,13 +3191,15 @@ export const DecideCloseReviewResponse = zod.object({
  * The batch's imported records and every proposal with its current state.
  * @summary List import corrections for a batch
  */
+export const listImportCorrectionsQueryMerchantIdMax = 100;
+
 export const listImportCorrectionsQueryBatchIdMax = 100;
 
 
 
 export const ListImportCorrectionsQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
-  "batchId": zod.coerce.string().max(listImportCorrectionsQueryBatchIdMax).describe('The committed import batch whose records may be corrected.')
+  "merchantId": zod.string().min(1).max(listImportCorrectionsQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.'),
+  "batchId": zod.string().min(1).max(listImportCorrectionsQueryBatchIdMax).describe('The committed import batch whose records may be corrected.')
 })
 
 export const ListImportCorrectionsResponse = zod.object({
@@ -2310,7 +3257,7 @@ export const ListImportCorrectionsResponse = zod.object({
 })),
   "blockers": zod.array(zod.string()),
   "consequence": zod.string()
-}),
+}).describe('The before/after comparison, the records the change touches, any blockers and the digest a proposal must quote.'),
   "decision": zod.object({
   "id": zod.string(),
   "action": zod.enum(['approve', 'reject', 'withdraw']),
@@ -2319,7 +3266,7 @@ export const ListImportCorrectionsResponse = zod.object({
   "reason": zod.string(),
   "at": zod.string()
 }).nullable()
-})),
+}).describe('A proposal with its preview, its decision if any, and whether the comparison is still current.')),
   "reviewers": zod.array(zod.object({
   "actor": zod.string(),
   "name": zod.string(),
@@ -2333,8 +3280,12 @@ export const ListImportCorrectionsResponse = zod.object({
  * Records the comparison as evidence for an independent Finance reviewer. A changed comparison, a missing reviewer or an open proposal on the same record is refused.
  * @summary Propose an import correction
  */
+export const proposeImportCorrectionQueryMerchantIdMax = 100;
+
+
+
 export const ProposeImportCorrectionQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(proposeImportCorrectionQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const proposeImportCorrectionHeaderIdempotencyKeyMin = 8;
@@ -2343,7 +3294,7 @@ export const proposeImportCorrectionHeaderIdempotencyKeyMax = 200;
 
 
 export const ProposeImportCorrectionHeader = zod.object({
-  "Idempotency-Key": zod.string().min(proposeImportCorrectionHeaderIdempotencyKeyMin).max(proposeImportCorrectionHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(proposeImportCorrectionHeaderIdempotencyKeyMin).max(proposeImportCorrectionHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const proposeImportCorrectionBodyBatchIdMax = 100;
@@ -2373,7 +3324,7 @@ export const proposeImportCorrectionBodyEvidenceMax = 1000;
 export const ProposeImportCorrectionBody = zod.object({
   "batchId": zod.string().min(1).max(proposeImportCorrectionBodyBatchIdMax),
   "targetId": zod.string().min(1).max(proposeImportCorrectionBodyTargetIdMax),
-  "expectedUpdatedAt": zod.coerce.date(),
+  "expectedUpdatedAt": zod.coerce.date().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.'),
   "changes": zod.object({
   "name": zod.string().min(proposeImportCorrectionBodyChangesNameMin).max(proposeImportCorrectionBodyChangesNameMax).optional(),
   "phoneMasked": zod.string().max(proposeImportCorrectionBodyChangesPhoneMaskedMax).optional(),
@@ -2424,7 +3375,7 @@ export const ProposeImportCorrectionResponse = zod.object({
 })),
   "blockers": zod.array(zod.string()),
   "consequence": zod.string()
-}),
+}).describe('The before/after comparison, the records the change touches, any blockers and the digest a proposal must quote.'),
   "decision": zod.object({
   "id": zod.string(),
   "action": zod.enum(['approve', 'reject', 'withdraw']),
@@ -2440,8 +3391,12 @@ export const ProposeImportCorrectionResponse = zod.object({
  * Shows what would change, which closes and financial records it touches, and what blocks it. Nothing is written.
  * @summary Compare a proposed correction
  */
+export const previewImportCorrectionQueryMerchantIdMax = 100;
+
+
+
 export const PreviewImportCorrectionQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(previewImportCorrectionQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const previewImportCorrectionBodyBatchIdMax = 100;
@@ -2462,7 +3417,7 @@ export const previewImportCorrectionBodyChangesDueDateRegExp = new RegExp('^\\d{
 export const PreviewImportCorrectionBody = zod.object({
   "batchId": zod.string().min(1).max(previewImportCorrectionBodyBatchIdMax),
   "targetId": zod.string().min(1).max(previewImportCorrectionBodyTargetIdMax),
-  "expectedUpdatedAt": zod.coerce.date(),
+  "expectedUpdatedAt": zod.coerce.date().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.'),
   "changes": zod.object({
   "name": zod.string().min(previewImportCorrectionBodyChangesNameMin).max(previewImportCorrectionBodyChangesNameMax).optional(),
   "phoneMasked": zod.string().max(previewImportCorrectionBodyChangesPhoneMaskedMax).optional(),
@@ -2508,8 +3463,12 @@ export const DecideImportCorrectionParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const decideImportCorrectionQueryMerchantIdMax = 100;
+
+
+
 export const DecideImportCorrectionQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(decideImportCorrectionQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const decideImportCorrectionHeaderIdempotencyKeyMin = 8;
@@ -2518,7 +3477,7 @@ export const decideImportCorrectionHeaderIdempotencyKeyMax = 200;
 
 
 export const DecideImportCorrectionHeader = zod.object({
-  "Idempotency-Key": zod.string().min(decideImportCorrectionHeaderIdempotencyKeyMin).max(decideImportCorrectionHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(decideImportCorrectionHeaderIdempotencyKeyMin).max(decideImportCorrectionHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const decideImportCorrectionBodyProposalDigestRegExp = new RegExp('^[a-f0-9]{64}$');
@@ -2570,7 +3529,7 @@ export const DecideImportCorrectionResponse = zod.object({
 })),
   "blockers": zod.array(zod.string()),
   "consequence": zod.string()
-}),
+}).describe('The before/after comparison, the records the change touches, any blockers and the digest a proposal must quote.'),
   "decision": zod.object({
   "id": zod.string(),
   "action": zod.enum(['approve', 'reject', 'withdraw']),
@@ -2586,12 +3545,14 @@ export const DecideImportCorrectionResponse = zod.object({
  * Completeness for the business date, profiles with delivery state, batches with quality totals and the Paystack test inbox.
  * @summary Read the sources page
  */
+export const getSourcesQueryMerchantIdMax = 100;
+
 export const getSourcesQueryBusinessDateRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
 
 
 export const GetSourcesQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
-  "businessDate": zod.coerce.string().regex(getSourcesQueryBusinessDateRegExp).optional().describe('The WAT business date to report completeness for; defaults to the current one.')
+  "merchantId": zod.string().min(1).max(getSourcesQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.'),
+  "businessDate": zod.string().regex(getSourcesQueryBusinessDateRegExp).optional().describe('The WAT business date to report completeness for; defaults to the current one.')
 })
 
 export const getSourcesResponseCompletenessBusinessDateRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
@@ -2619,6 +3580,9 @@ export const getSourcesResponseCompletenessExpectedFilesMax = 9007199254740991;
 export const getSourcesResponseCompletenessCompleteFilesMin = 0;
 export const getSourcesResponseCompletenessCompleteFilesMax = 9007199254740991;
 
+export const getSourcesResponseProfilesItemTwoDeliveryMissedDeliveriesMin = 0;
+export const getSourcesResponseProfilesItemTwoDeliveryMissedDeliveriesMax = 9007199254740991;
+
 export const getSourcesResponseBatchesItemQualitySourceRowsMin = 0;
 export const getSourcesResponseBatchesItemQualitySourceRowsMax = 9007199254740991;
 
@@ -2639,6 +3603,38 @@ export const getSourcesResponseBatchesItemQualityConflictRowsMax = 9007199254740
 
 export const getSourcesResponseBatchesItemQualityInvalidRowsMin = 0;
 export const getSourcesResponseBatchesItemQualityInvalidRowsMax = 9007199254740991;
+
+export const getSourcesResponseSummaryLateSourcesMin = 0;
+export const getSourcesResponseSummaryLateSourcesMax = 9007199254740991;
+
+export const getSourcesResponseSummaryDuplicateRowsMin = 0;
+export const getSourcesResponseSummaryDuplicateRowsMax = 9007199254740991;
+
+export const getSourcesResponseSummaryConflictRowsMin = 0;
+export const getSourcesResponseSummaryConflictRowsMax = 9007199254740991;
+
+export const getSourcesResponseSummaryBatchesNeedingReviewMin = 0;
+export const getSourcesResponseSummaryBatchesNeedingReviewMax = 9007199254740991;
+
+export const getSourcesResponsePaystackEventsItemAmountKoboMin = 0;
+export const getSourcesResponsePaystackEventsItemAmountKoboMax = 9007199254740991;
+
+export const getSourcesResponsePaystackEventsItemDeliveryCountMin = 0;
+export const getSourcesResponsePaystackEventsItemDeliveryCountMax = 9007199254740991;
+
+export const getSourcesResponsePaystackEventsItemReplayCountMin = 0;
+export const getSourcesResponsePaystackEventsItemReplayCountMax = 9007199254740991;
+
+export const getSourcesResponsePaystackEventsMax = 50;
+
+export const getSourcesResponsePaystackTotalMin = 0;
+export const getSourcesResponsePaystackTotalMax = 9007199254740991;
+
+export const getSourcesResponsePaystackQuarantinedMin = 0;
+export const getSourcesResponsePaystackQuarantinedMax = 9007199254740991;
+
+export const getSourcesResponsePaystackDuplicatesMin = 0;
+export const getSourcesResponsePaystackDuplicatesMax = 9007199254740991;
 
 
 
@@ -2702,8 +3698,8 @@ export const GetSourcesResponse = zod.object({
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
 }).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.').and(zod.object({
   "delivery": zod.object({
-  "status": zod.string(),
-  "missedDeliveries": zod.number().int(),
+  "status": zod.enum(['paused', 'late', 'on_schedule', 'awaiting_first_delivery']),
+  "missedDeliveries": zod.number().int().min(getSourcesResponseProfilesItemTwoDeliveryMissedDeliveriesMin).max(getSourcesResponseProfilesItemTwoDeliveryMissedDeliveriesMax),
   "nextExpectedAt": zod.string(),
   "lastCommittedAt": zod.string().nullable(),
   "lastBatchId": zod.string().nullable()
@@ -2732,10 +3728,10 @@ export const GetSourcesResponse = zod.object({
 }).describe('The original committed totals and checks of a source batch.')
 }).describe('A batch as the sources page lists it, with its original quality totals.')),
   "summary": zod.object({
-  "lateSources": zod.number().int(),
-  "duplicateRows": zod.number().int(),
-  "conflictRows": zod.number().int(),
-  "batchesNeedingReview": zod.number().int()
+  "lateSources": zod.number().int().min(getSourcesResponseSummaryLateSourcesMin).max(getSourcesResponseSummaryLateSourcesMax),
+  "duplicateRows": zod.number().int().min(getSourcesResponseSummaryDuplicateRowsMin).max(getSourcesResponseSummaryDuplicateRowsMax),
+  "conflictRows": zod.number().int().min(getSourcesResponseSummaryConflictRowsMin).max(getSourcesResponseSummaryConflictRowsMax),
+  "batchesNeedingReview": zod.number().int().min(getSourcesResponseSummaryBatchesNeedingReviewMin).max(getSourcesResponseSummaryBatchesNeedingReviewMax)
 }).describe('Counts that need attention: late sources, duplicate and conflicting rows, batches needing review.'),
   "paystack": zod.object({
   "mode": zod.literal("test_only"),
@@ -2748,18 +3744,18 @@ export const GetSourcesResponse = zod.object({
   "name": zod.string(),
   "status": zod.string(),
   "reference": zod.string(),
-  "amountKobo": zod.number().int(),
+  "amountKobo": zod.number().int().min(getSourcesResponsePaystackEventsItemAmountKoboMin).max(getSourcesResponsePaystackEventsItemAmountKoboMax),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "mode": zod.enum(['fixture', 'test']),
   "message": zod.string(),
-  "deliveryCount": zod.number().int(),
-  "replayCount": zod.number().int(),
+  "deliveryCount": zod.number().int().min(getSourcesResponsePaystackEventsItemDeliveryCountMin).max(getSourcesResponsePaystackEventsItemDeliveryCountMax),
+  "replayCount": zod.number().int().min(getSourcesResponsePaystackEventsItemReplayCountMin).max(getSourcesResponsePaystackEventsItemReplayCountMax),
   "financialRecordsCreated": zod.literal(0)
-}).describe('A stored provider event: fixture or test mode, how often it was delivered and replayed, and the guarantee that it created no financial record.')),
-  "total": zod.number().int(),
-  "quarantined": zod.number().int(),
-  "duplicates": zod.number().int()
+}).describe('A stored provider event: fixture or test mode, how often it was delivered and replayed, and the guarantee that it created no financial record.')).max(getSourcesResponsePaystackEventsMax),
+  "total": zod.number().int().min(getSourcesResponsePaystackTotalMin).max(getSourcesResponsePaystackTotalMax),
+  "quarantined": zod.number().int().min(getSourcesResponsePaystackQuarantinedMin).max(getSourcesResponsePaystackQuarantinedMax),
+  "duplicates": zod.number().int().min(getSourcesResponsePaystackDuplicatesMin).max(getSourcesResponsePaystackDuplicatesMax)
 }).describe('The read-only Paystack test inbox: its fixed test-only state, the stored events and how many were quarantined or duplicated.')
 }).describe('Everything the sources page shows for one lender and business date.')
 
@@ -2768,8 +3764,21 @@ export const GetSourcesResponse = zod.object({
  * One profile per source and record kind (409 otherwise). Import operator roles only.
  * @summary Create a source profile
  */
+export const createSourceProfileQueryMerchantIdMax = 100;
+
+
+
 export const CreateSourceProfileQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(createSourceProfileQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
+})
+
+export const createSourceProfileHeaderIdempotencyKeyMin = 8;
+export const createSourceProfileHeaderIdempotencyKeyMax = 200;
+
+
+
+export const CreateSourceProfileHeader = zod.object({
+  "Idempotency-Key": zod.string().min(createSourceProfileHeaderIdempotencyKeyMin).max(createSourceProfileHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const createSourceProfileBodyNameMin = 2;
@@ -2804,14 +3813,14 @@ export const CreateSourceProfileBody = zod.object({
   "mapping": zod.record(zod.string(), zod.string().max(createSourceProfileBodyMappingMaxOne)).default(createSourceProfileBodyMappingDefault),
   "identityColumn": zod.string().min(1).max(createSourceProfileBodyIdentityColumnMax),
   "amountUnit": zod.enum(['naira', 'kobo']),
-  "firstExpectedAt": zod.coerce.date(),
+  "firstExpectedAt": zod.coerce.date().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.'),
   "cadenceHours": zod.number().int().min(1).max(createSourceProfileBodyCadenceHoursMax),
   "graceMinutes": zod.number().int().min(createSourceProfileBodyGraceMinutesMin).max(createSourceProfileBodyGraceMinutesMax),
   "expectedRows": zod.number().int().min(createSourceProfileBodyExpectedRowsMin).max(createSourceProfileBodyExpectedRowsMax).nullish().default(createSourceProfileBodyExpectedRowsDefault),
   "expectedAmountKobo": zod.number().int().min(createSourceProfileBodyExpectedAmountKoboMin).max(createSourceProfileBodyExpectedAmountKoboMax).nullish().default(createSourceProfileBodyExpectedAmountKoboDefault),
   "status": zod.enum(['active', 'paused']).default(createSourceProfileBodyStatusDefault),
   "syntheticOnly": zod.literal(true),
-  "expectedUpdatedAt": zod.coerce.date().optional()
+  "expectedUpdatedAt": zod.coerce.date().optional().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.')
 }).describe('A reusable synthetic source contract: mapping, identity column, amount unit, first expected delivery, cadence, grace and expected totals.')
 
 export const CreateSourceProfileResponse = zod.object({
@@ -2837,8 +3846,12 @@ export const SaveSourceProfileParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const saveSourceProfileQueryMerchantIdMax = 100;
+
+
+
 export const SaveSourceProfileQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(saveSourceProfileQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const saveSourceProfileHeaderIdempotencyKeyMin = 8;
@@ -2847,7 +3860,7 @@ export const saveSourceProfileHeaderIdempotencyKeyMax = 200;
 
 
 export const SaveSourceProfileHeader = zod.object({
-  "Idempotency-Key": zod.string().min(saveSourceProfileHeaderIdempotencyKeyMin).max(saveSourceProfileHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(saveSourceProfileHeaderIdempotencyKeyMin).max(saveSourceProfileHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const saveSourceProfileBodyNameMin = 2;
@@ -2882,14 +3895,14 @@ export const SaveSourceProfileBody = zod.object({
   "mapping": zod.record(zod.string(), zod.string().max(saveSourceProfileBodyMappingMaxOne)).default(saveSourceProfileBodyMappingDefault),
   "identityColumn": zod.string().min(1).max(saveSourceProfileBodyIdentityColumnMax),
   "amountUnit": zod.enum(['naira', 'kobo']),
-  "firstExpectedAt": zod.coerce.date(),
+  "firstExpectedAt": zod.coerce.date().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.'),
   "cadenceHours": zod.number().int().min(1).max(saveSourceProfileBodyCadenceHoursMax),
   "graceMinutes": zod.number().int().min(saveSourceProfileBodyGraceMinutesMin).max(saveSourceProfileBodyGraceMinutesMax),
   "expectedRows": zod.number().int().min(saveSourceProfileBodyExpectedRowsMin).max(saveSourceProfileBodyExpectedRowsMax).nullish().default(saveSourceProfileBodyExpectedRowsDefault),
   "expectedAmountKobo": zod.number().int().min(saveSourceProfileBodyExpectedAmountKoboMin).max(saveSourceProfileBodyExpectedAmountKoboMax).nullish().default(saveSourceProfileBodyExpectedAmountKoboDefault),
   "status": zod.enum(['active', 'paused']).default(saveSourceProfileBodyStatusDefault),
   "syntheticOnly": zod.literal(true),
-  "expectedUpdatedAt": zod.coerce.date().optional()
+  "expectedUpdatedAt": zod.coerce.date().optional().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.')
 }).describe('A reusable synthetic source contract: mapping, identity column, amount unit, first expected delivery, cadence, grace and expected totals.')
 
 export const SaveSourceProfileResponse = zod.object({
@@ -2911,8 +3924,12 @@ export const SaveSourceProfileResponse = zod.object({
  * Records what must arrive for a business date. A revision must name the current declaration; a source batch declared for another date is refused.
  * @summary Declare the expected source files
  */
+export const saveSourceManifestQueryMerchantIdMax = 100;
+
+
+
 export const SaveSourceManifestQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(saveSourceManifestQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const saveSourceManifestHeaderIdempotencyKeyMin = 8;
@@ -2921,7 +3938,7 @@ export const saveSourceManifestHeaderIdempotencyKeyMax = 200;
 
 
 export const SaveSourceManifestHeader = zod.object({
-  "Idempotency-Key": zod.string().min(saveSourceManifestHeaderIdempotencyKeyMin).max(saveSourceManifestHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(saveSourceManifestHeaderIdempotencyKeyMin).max(saveSourceManifestHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const saveSourceManifestBodyBusinessDateRegExp = new RegExp('^\\d{4}-\\d{2}-\\d{2}$');
@@ -2960,7 +3977,7 @@ export const SaveSourceManifestBody = zod.object({
   "reason": zod.string().min(saveSourceManifestBodyReasonMin).max(saveSourceManifestBodyReasonMax),
   "evidence": zod.string().min(saveSourceManifestBodyEvidenceMin).max(saveSourceManifestBodyEvidenceMax),
   "previousManifestId": zod.string().min(1).max(saveSourceManifestBodyPreviousManifestIdMax).optional(),
-  "expectedUpdatedAt": zod.coerce.date().optional(),
+  "expectedUpdatedAt": zod.coerce.date().optional().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.'),
   "syntheticOnly": zod.literal(true)
 }).describe('The files and control totals expected for one WAT business date, or an explicit no-file declaration, with reason and evidence; a revision names the declaration it replaces.')
 
@@ -2983,8 +4000,12 @@ export const SaveSourceManifestResponse = zod.object({
  * Runs a test-only fixture through the inbox. No external call is made and no financial record is created.
  * @summary Deliver a recorded Paystack scenario
  */
+export const runPaystackFixtureQueryMerchantIdMax = 100;
+
+
+
 export const RunPaystackFixtureQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(runPaystackFixtureQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const runPaystackFixtureHeaderIdempotencyKeyMin = 8;
@@ -2993,13 +4014,24 @@ export const runPaystackFixtureHeaderIdempotencyKeyMax = 200;
 
 
 export const RunPaystackFixtureHeader = zod.object({
-  "Idempotency-Key": zod.string().min(runPaystackFixtureHeaderIdempotencyKeyMin).max(runPaystackFixtureHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(runPaystackFixtureHeaderIdempotencyKeyMin).max(runPaystackFixtureHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const RunPaystackFixtureBody = zod.object({
   "scenario": zod.enum(['payment', 'duplicate', 'amount_mismatch', 'out_of_order', 'tampered']),
   "syntheticOnly": zod.literal(true)
 }).describe('A recorded Paystack test scenario to deliver to the inbox.')
+
+export const runPaystackFixtureResponseEventAmountKoboMin = 0;
+export const runPaystackFixtureResponseEventAmountKoboMax = 9007199254740991;
+
+export const runPaystackFixtureResponseEventDeliveryCountMin = 0;
+export const runPaystackFixtureResponseEventDeliveryCountMax = 9007199254740991;
+
+export const runPaystackFixtureResponseEventReplayCountMin = 0;
+export const runPaystackFixtureResponseEventReplayCountMax = 9007199254740991;
+
+
 
 export const RunPaystackFixtureResponse = zod.object({
   "accepted": zod.boolean(),
@@ -3009,13 +4041,13 @@ export const RunPaystackFixtureResponse = zod.object({
   "name": zod.string(),
   "status": zod.string(),
   "reference": zod.string(),
-  "amountKobo": zod.number().int(),
+  "amountKobo": zod.number().int().min(runPaystackFixtureResponseEventAmountKoboMin).max(runPaystackFixtureResponseEventAmountKoboMax),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "mode": zod.enum(['fixture', 'test']),
   "message": zod.string(),
-  "deliveryCount": zod.number().int(),
-  "replayCount": zod.number().int(),
+  "deliveryCount": zod.number().int().min(runPaystackFixtureResponseEventDeliveryCountMin).max(runPaystackFixtureResponseEventDeliveryCountMax),
+  "replayCount": zod.number().int().min(runPaystackFixtureResponseEventReplayCountMin).max(runPaystackFixtureResponseEventReplayCountMax),
   "financialRecordsCreated": zod.literal(0)
 }).describe('A stored provider event: fixture or test mode, how often it was delivered and replayed, and the guarantee that it created no financial record.')
 }).describe('Whether the fixture was accepted or recognised as a duplicate, and the stored event.')
@@ -3029,8 +4061,12 @@ export const ReplayProviderEventParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const replayProviderEventQueryMerchantIdMax = 100;
+
+
+
 export const ReplayProviderEventQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(replayProviderEventQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const replayProviderEventHeaderIdempotencyKeyMin = 8;
@@ -3039,7 +4075,7 @@ export const replayProviderEventHeaderIdempotencyKeyMax = 200;
 
 
 export const ReplayProviderEventHeader = zod.object({
-  "Idempotency-Key": zod.string().min(replayProviderEventHeaderIdempotencyKeyMin).max(replayProviderEventHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(replayProviderEventHeaderIdempotencyKeyMin).max(replayProviderEventHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const replayProviderEventBodyReasonMin = 3;
@@ -3048,22 +4084,33 @@ export const replayProviderEventBodyReasonMax = 500;
 
 
 export const ReplayProviderEventBody = zod.object({
-  "expectedUpdatedAt": zod.coerce.date(),
+  "expectedUpdatedAt": zod.coerce.date().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.'),
   "reason": zod.string().min(replayProviderEventBodyReasonMin).max(replayProviderEventBodyReasonMax)
 }).describe('A replay of a stored provider event, with its version and the reason.')
+
+export const replayProviderEventResponseAmountKoboMin = 0;
+export const replayProviderEventResponseAmountKoboMax = 9007199254740991;
+
+export const replayProviderEventResponseDeliveryCountMin = 0;
+export const replayProviderEventResponseDeliveryCountMax = 9007199254740991;
+
+export const replayProviderEventResponseReplayCountMin = 0;
+export const replayProviderEventResponseReplayCountMax = 9007199254740991;
+
+
 
 export const ReplayProviderEventResponse = zod.object({
   "id": zod.string(),
   "name": zod.string(),
   "status": zod.string(),
   "reference": zod.string(),
-  "amountKobo": zod.number().int(),
+  "amountKobo": zod.number().int().min(replayProviderEventResponseAmountKoboMin).max(replayProviderEventResponseAmountKoboMax),
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "mode": zod.enum(['fixture', 'test']),
   "message": zod.string(),
-  "deliveryCount": zod.number().int(),
-  "replayCount": zod.number().int(),
+  "deliveryCount": zod.number().int().min(replayProviderEventResponseDeliveryCountMin).max(replayProviderEventResponseDeliveryCountMax),
+  "replayCount": zod.number().int().min(replayProviderEventResponseReplayCountMin).max(replayProviderEventResponseReplayCountMax),
   "financialRecordsCreated": zod.literal(0)
 }).describe('A stored provider event: fixture or test mode, how often it was delivered and replayed, and the guarantee that it created no financial record.')
 
@@ -3101,6 +4148,8 @@ export const ReceivePaystackTestEventResponse = zod.object({
  * Derived from cases, reviews and notifications on every read; bounded and lender scoped.
  * @summary Read personal work
  */
+export const getPersonalWorkQueryMerchantIdMax = 100;
+
 export const getPersonalWorkQueryScopeDefault = `mine`;
 export const getPersonalWorkQueryFilterDefault = `all`;
 export const getPersonalWorkQueryOffsetMin = 0;
@@ -3111,7 +4160,7 @@ export const getPersonalWorkQueryLimitMax = 50;
 
 
 export const GetPersonalWorkQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "merchantId": zod.string().min(1).max(getPersonalWorkQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.'),
   "scope": zod.enum(['mine', 'team']).default(getPersonalWorkQueryScopeDefault).describe('The caller\'s own work, or (administrators) the whole team\'s.'),
   "filter": zod.enum(['all', 'overdue', 'handover', 'review', 'unread']).default(getPersonalWorkQueryFilterDefault).describe('Only overdue items, handovers, reviews or unread notifications.'),
   "offset": zod.coerce.number().int().min(getPersonalWorkQueryOffsetMin).max(getPersonalWorkQueryOffsetMax).optional().describe('Rows to skip.'),
@@ -3132,6 +4181,7 @@ export const getPersonalWorkResponseItemsItemSourceIdMax = 300;
 export const getPersonalWorkResponseItemsItemSourceDigestRegExp = new RegExp('^[a-f0-9]{64}$');
 export const getPersonalWorkResponseItemsItemAssigneeMax = 300;
 
+export const getPersonalWorkResponseItemsItemHrefRegExp = new RegExp('^');
 export const getPersonalWorkResponseItemsItemAssignmentEventIdMax = 300;
 
 export const getPersonalWorkResponseItemsMax = 50;
@@ -3174,6 +4224,7 @@ export const getPersonalWorkResponseHistoryItemIdMax = 300;
 
 export const getPersonalWorkResponseHistoryItemSourceIdMax = 300;
 
+export const getPersonalWorkResponseHistoryItemHrefRegExp = new RegExp('^');
 export const getPersonalWorkResponseHistoryMax = 10;
 
 
@@ -3205,7 +4256,7 @@ export const GetPersonalWorkResponse = zod.object({
   "escalated": zod.boolean(),
   "escalationReason": zod.string().nullable(),
   "reviewCurrent": zod.boolean().nullable(),
-  "href": zod.string(),
+  "href": zod.string().regex(getPersonalWorkResponseItemsItemHrefRegExp),
   "readAt": zod.coerce.date().nullable(),
   "canAcknowledge": zod.boolean(),
   "assignmentEventId": zod.string().min(1).max(getPersonalWorkResponseItemsItemAssignmentEventIdMax).nullable(),
@@ -3238,7 +4289,7 @@ export const GetPersonalWorkResponse = zod.object({
   "sourceId": zod.string().min(1).max(getPersonalWorkResponseHistoryItemSourceIdMax),
   "summary": zod.string(),
   "at": zod.coerce.date(),
-  "href": zod.string()
+  "href": zod.string().regex(getPersonalWorkResponseHistoryItemHrefRegExp)
 })).max(getPersonalWorkResponseHistoryMax),
   "escalationRule": zod.string()
 }).describe('The caller\'s (or, for administrators, the team\'s) cases, handovers, reviews and notifications, paged and counted.')
@@ -3248,8 +4299,12 @@ export const GetPersonalWorkResponse = zod.object({
  * Records who read it and when; the server supplies the recipient.
  * @summary Mark a notification read
  */
+export const readNotificationQueryMerchantIdMax = 100;
+
+
+
 export const ReadNotificationQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(readNotificationQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const readNotificationHeaderIdempotencyKeyMin = 8;
@@ -3258,7 +4313,7 @@ export const readNotificationHeaderIdempotencyKeyMax = 200;
 
 
 export const ReadNotificationHeader = zod.object({
-  "Idempotency-Key": zod.string().min(readNotificationHeaderIdempotencyKeyMin).max(readNotificationHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(readNotificationHeaderIdempotencyKeyMin).max(readNotificationHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const readNotificationBodySourceIdMax = 300;
@@ -3271,7 +4326,7 @@ export const readNotificationBodyExpectedDigestRegExp = new RegExp('^[a-f0-9]{64
 export const ReadNotificationBody = zod.object({
   "sourceId": zod.string().min(1).max(readNotificationBodySourceIdMax),
   "eventId": zod.string().min(1).max(readNotificationBodyEventIdMax),
-  "expectedUpdatedAt": zod.coerce.date(),
+  "expectedUpdatedAt": zod.coerce.date().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.'),
   "expectedDigest": zod.string().regex(readNotificationBodyExpectedDigestRegExp)
 }).describe('The item being acknowledged, with its version.')
 
@@ -3305,8 +4360,12 @@ export const ReadNotificationResponse = zod.object({
  * Records that the assignee took the case over; a stale version is refused.
  * @summary Acknowledge a handover
  */
+export const acknowledgeHandoverQueryMerchantIdMax = 100;
+
+
+
 export const AcknowledgeHandoverQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(acknowledgeHandoverQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const acknowledgeHandoverHeaderIdempotencyKeyMin = 8;
@@ -3315,7 +4374,7 @@ export const acknowledgeHandoverHeaderIdempotencyKeyMax = 200;
 
 
 export const AcknowledgeHandoverHeader = zod.object({
-  "Idempotency-Key": zod.string().min(acknowledgeHandoverHeaderIdempotencyKeyMin).max(acknowledgeHandoverHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(acknowledgeHandoverHeaderIdempotencyKeyMin).max(acknowledgeHandoverHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const acknowledgeHandoverBodySourceIdMax = 300;
@@ -3328,7 +4387,7 @@ export const acknowledgeHandoverBodyExpectedDigestRegExp = new RegExp('^[a-f0-9]
 export const AcknowledgeHandoverBody = zod.object({
   "sourceId": zod.string().min(1).max(acknowledgeHandoverBodySourceIdMax),
   "eventId": zod.string().min(1).max(acknowledgeHandoverBodyEventIdMax),
-  "expectedUpdatedAt": zod.coerce.date(),
+  "expectedUpdatedAt": zod.coerce.date().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.'),
   "expectedDigest": zod.string().regex(acknowledgeHandoverBodyExpectedDigestRegExp)
 }).describe('The item being acknowledged, with its version.')
 
@@ -3362,13 +4421,15 @@ export const AcknowledgeHandoverResponse = zod.object({
  * Administrators only (403). Policy, holds, inventory and runs for the lender.
  * @summary Read retention controls
  */
+export const getLifecycleQueryMerchantIdMax = 100;
+
 export const getLifecycleQueryOffsetMin = 0;
 export const getLifecycleQueryOffsetMax = 100000;
 
 
 
 export const GetLifecycleQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.'),
+  "merchantId": zod.string().min(1).max(getLifecycleQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.'),
   "offset": zod.coerce.number().int().min(getLifecycleQueryOffsetMin).max(getLifecycleQueryOffsetMax).optional().describe('Rows to skip in the newest-first order; pages hold 25 rows.')
 })
 
@@ -3544,8 +4605,12 @@ export const GetLifecycleRunParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const getLifecycleRunQueryMerchantIdMax = 100;
+
+
+
 export const GetLifecycleRunQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(getLifecycleRunQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const getLifecycleRunResponseIdMax = 200;
@@ -3627,8 +4692,12 @@ export const GetLifecycleRunResponse = zod.object({
  * Administrators only. Keeps every previous policy version with its reason.
  * @summary Change the retention policy
  */
+export const saveRetentionPolicyQueryMerchantIdMax = 100;
+
+
+
 export const SaveRetentionPolicyQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(saveRetentionPolicyQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const saveRetentionPolicyHeaderIdempotencyKeyMin = 8;
@@ -3637,7 +4706,7 @@ export const saveRetentionPolicyHeaderIdempotencyKeyMax = 200;
 
 
 export const SaveRetentionPolicyHeader = zod.object({
-  "Idempotency-Key": zod.string().min(saveRetentionPolicyHeaderIdempotencyKeyMin).max(saveRetentionPolicyHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(saveRetentionPolicyHeaderIdempotencyKeyMin).max(saveRetentionPolicyHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const saveRetentionPolicyBodyPolicyRawCsvDaysMax = 3650;
@@ -3831,8 +4900,12 @@ export const SaveRetentionPolicyResponse = zod.object({
  * Administrators only. A held item is never deleted by a run.
  * @summary Place or release a hold
  */
+export const setRetentionHoldQueryMerchantIdMax = 100;
+
+
+
 export const SetRetentionHoldQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(setRetentionHoldQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const setRetentionHoldHeaderIdempotencyKeyMin = 8;
@@ -3841,7 +4914,7 @@ export const setRetentionHoldHeaderIdempotencyKeyMax = 200;
 
 
 export const SetRetentionHoldHeader = zod.object({
-  "Idempotency-Key": zod.string().min(setRetentionHoldHeaderIdempotencyKeyMin).max(setRetentionHoldHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(setRetentionHoldHeaderIdempotencyKeyMin).max(setRetentionHoldHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const setRetentionHoldBodySourceIdMax = 200;
@@ -4025,11 +5098,15 @@ export const SetRetentionHoldResponse = zod.object({
 
 
 /**
- * Administrators only. Records the exact manifest of what would be deleted; nothing is deleted.
+ * Administrators only. Records the exact manifest of what would be deleted; nothing is deleted. With nothing old enough to delete, the preview is refused (400).
  * @summary Preview a retention run
  */
+export const previewLifecycleRunQueryMerchantIdMax = 100;
+
+
+
 export const PreviewLifecycleRunQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(previewLifecycleRunQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const previewLifecycleRunHeaderIdempotencyKeyMin = 8;
@@ -4038,7 +5115,7 @@ export const previewLifecycleRunHeaderIdempotencyKeyMax = 200;
 
 
 export const PreviewLifecycleRunHeader = zod.object({
-  "Idempotency-Key": zod.string().min(previewLifecycleRunHeaderIdempotencyKeyMin).max(previewLifecycleRunHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(previewLifecycleRunHeaderIdempotencyKeyMin).max(previewLifecycleRunHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const previewLifecycleRunBodyExpectedPolicyRevisionRegExp = new RegExp('^[a-f0-9]{64}$');
@@ -4131,8 +5208,12 @@ export const ApproveLifecycleRunParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const approveLifecycleRunQueryMerchantIdMax = 100;
+
+
+
 export const ApproveLifecycleRunQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(approveLifecycleRunQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const approveLifecycleRunHeaderIdempotencyKeyMin = 8;
@@ -4141,7 +5222,7 @@ export const approveLifecycleRunHeaderIdempotencyKeyMax = 200;
 
 
 export const ApproveLifecycleRunHeader = zod.object({
-  "Idempotency-Key": zod.string().min(approveLifecycleRunHeaderIdempotencyKeyMin).max(approveLifecycleRunHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(approveLifecycleRunHeaderIdempotencyKeyMin).max(approveLifecycleRunHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const approveLifecycleRunBodyPreviewDigestRegExp = new RegExp('^[a-f0-9]{64}$');
@@ -4151,7 +5232,7 @@ export const approveLifecycleRunBodyReasonMax = 500;
 
 
 export const ApproveLifecycleRunBody = zod.object({
-  "expectedUpdatedAt": zod.coerce.date(),
+  "expectedUpdatedAt": zod.coerce.date().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant.'),
   "previewDigest": zod.string().regex(approveLifecycleRunBodyPreviewDigestRegExp),
   "reason": zod.string().min(approveLifecycleRunBodyReasonMin).max(approveLifecycleRunBodyReasonMax)
 }).describe('Approval of a previewed run, quoting its manifest digest.')
@@ -4239,8 +5320,12 @@ export const ExecuteLifecycleRunParams = zod.object({
   "id": zod.coerce.string().describe('The record\'s id.')
 })
 
+export const executeLifecycleRunQueryMerchantIdMax = 100;
+
+
+
 export const ExecuteLifecycleRunQueryParams = zod.object({
-  "merchantId": zod.coerce.string().describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants.')
+  "merchantId": zod.string().min(1).max(executeLifecycleRunQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.')
 })
 
 export const executeLifecycleRunHeaderIdempotencyKeyMin = 8;
@@ -4249,7 +5334,7 @@ export const executeLifecycleRunHeaderIdempotencyKeyMax = 200;
 
 
 export const ExecuteLifecycleRunHeader = zod.object({
-  "Idempotency-Key": zod.string().min(executeLifecycleRunHeaderIdempotencyKeyMin).max(executeLifecycleRunHeaderIdempotencyKeyMax).describe('One key per unchanged intention. The same key with different input is refused; a key whose request was refused cannot run again; a key whose outcome was lost recovers the original result.')
+  "Idempotency-Key": zod.string().min(executeLifecycleRunHeaderIdempotencyKeyMin).max(executeLifecycleRunHeaderIdempotencyKeyMax).describe('Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409); a key whose request was refused cannot run again; a repeat after a lost answer returns the original result, checked before the version.')
 })
 
 export const executeLifecycleRunBodyPreviewDigestRegExp = new RegExp('^[a-f0-9]{64}$');

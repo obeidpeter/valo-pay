@@ -1,13 +1,27 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { z, ZodTypeAny } from "zod";
 import { useWorkspace } from "./workspace-context";
 import { useSafeMutation } from "./safe-mutations";
-import { CreateRecordResponse } from "@workspace/api-zod";
-import { workReceiptSchema, lifecycleRunViewSchema, lifecycleViewSchema, importCorrectionViewSchema } from '@workspace/valopay-schema';
-import { z } from 'zod';
-export async function pilotRequest<T = any>(
+import { answerProblem, INCOMPLETE_CONFIRMATION, readAnswer, UNREADABLE_ANSWER } from "./answers";
+import {
+  encryptionVerificationSchema, importCorrectionViewSchema, invitationCreatedSchema, lifecycleRunViewSchema, lifecycleViewSchema, merchantSchema,
+  messageSchema, operationReplaySchema, payloadProtectionSchema, paystackFixtureResultSchema, providerEventViewSchema, staffLenderAccessSchema,
+  staffMemberSchema, valopayRecordSchema, workReceiptSchema,
+} from "@workspace/valopay-schema";
+
+/**
+ * One pilot, team or operations request, its answer read through the shared
+ * schema the API checked it with. A refusal throws with its status and body;
+ * an answer the schema does not describe throws `unreadable` in plain words
+ * (for a read, the page shows the problem; for a write, the outcome is held
+ * as unconfirmed), so a malformed answer is never shown as data.
+ */
+export async function pilotRequest<S extends ZodTypeAny>(
   path: string,
+  schema: S,
   options: RequestInit = {},
-): Promise<T> {
+  unreadable = UNREADABLE_ANSWER,
+): Promise<z.output<S>> {
   const response = await fetch(`/api/v1${path}`, {
     credentials: "same-origin",
     ...options,
@@ -24,11 +38,9 @@ export async function pilotRequest<T = any>(
       new Error(data?.error || "The request could not be completed."),
       { status: response.status, data: data ?? {} },
     );
-  if (!data || typeof data !== "object")
-    throw new Error(
-      "The service returned an incomplete confirmation. Check Operations before submitting again.",
-    );
-  return data as T;
+  const answer = readAnswer(schema, data);
+  if (answer === undefined) throw answerProblem(unreadable);
+  return answer;
 }
 export function lenderPath(
   path: string,
@@ -37,14 +49,48 @@ export function lenderPath(
 ) {
   return `${path}${path.includes("?") ? "&" : "?"}merchantId=${encodeURIComponent(merchantId || "")}${offset ? `&offset=${offset}` : ""}`;
 }
-export function usePilotQuery<T = any>(path: string, lender = true) {
+/** A pilot read through its shared answer schema, scoped to the selected lender unless `lender` is false. */
+export function usePilotQuery<S extends ZodTypeAny>(path: string, schema: S, lender = true) {
   const { merchantId, workspace } = useWorkspace();
-  return useQuery<T>({
+  return useQuery<z.output<S>>({
     queryKey: ["pilot", workspace?.actor, merchantId, path],
     enabled: Boolean(workspace) && (!lender || !!merchantId),
     queryFn: ({ signal }) =>
-      pilotRequest(lender ? lenderPath(path, merchantId) : path, { signal }),
+      pilotRequest(lender ? lenderPath(path, merchantId) : path, schema, { signal }),
   });
+}
+type Receipt = { merchantId?: unknown; kind?: unknown; actor?: unknown; preview?: { batchId?: unknown; targetId?: unknown }; proposalDigest?: unknown; event?: { mode?: unknown } };
+/**
+ * What each pilot write answers: its schema, and what must hold of it for this
+ * request (the lender, the kind of record, the proposal). A write whose path
+ * is not here fails closed, as an incomplete confirmation.
+ */
+const receipts: Array<{ path: RegExp; schema: ZodTypeAny; matches?: (answer: Receipt, input: Record<string, unknown>, merchantId: string | null, actor?: string) => boolean }> = [
+  { path: /^\/pilot\/lenders$/, schema: merchantSchema },
+  { path: /^\/pilot\/batches(?:\/[^/]+\/(?:save|commit))?$/, schema: valopayRecordSchema, matches: (answer, _input, merchantId) => answer.kind === "import-batches" && answer.merchantId === merchantId },
+  { path: /^\/pilot\/cases\/[^/]+$/, schema: valopayRecordSchema, matches: (answer, _input, merchantId) => answer.kind === "exceptions" && answer.merchantId === merchantId },
+  { path: /^\/pilot\/close-reviews\/(?:prepare|[^/]+\/decision)$/, schema: valopayRecordSchema, matches: (answer, _input, merchantId) => answer.kind === "close-reviews" && answer.merchantId === merchantId },
+  { path: /^\/pilot\/import-corrections(?:\/[^/]+\/decision)?$/, schema: importCorrectionViewSchema, matches: (answer, input, merchantId) => answer.merchantId === merchantId && (!input.batchId || answer.preview?.batchId === input.batchId) && (!input.targetId || answer.preview?.targetId === input.targetId) && (!input.proposalDigest || answer.proposalDigest === input.proposalDigest) },
+  { path: /^\/sources\/profiles(?:\/[^/]+\/save)?$/, schema: valopayRecordSchema, matches: (answer, _input, merchantId) => answer.kind === "source-profiles" && answer.merchantId === merchantId },
+  { path: /^\/sources\/manifests$/, schema: valopayRecordSchema, matches: (answer, _input, merchantId) => answer.kind === "source-manifests" && answer.merchantId === merchantId },
+  { path: /^\/sources\/paystack\/fixtures$/, schema: paystackFixtureResultSchema, matches: (answer) => answer.event?.mode === "fixture" },
+  { path: /^\/sources\/events\/[^/]+\/replay$/, schema: providerEventViewSchema },
+  { path: /^\/work\/(?:notifications\/read|handovers\/acknowledge)$/, schema: workReceiptSchema, matches: (answer, _input, merchantId, actor) => answer.merchantId === merchantId && answer.actor === actor },
+  { path: /^\/lifecycle\/runs(?:\/[^/]+\/(?:approve|execute))?$/, schema: lifecycleRunViewSchema, matches: (answer, _input, merchantId) => answer.merchantId === merchantId },
+  { path: /^\/lifecycle\/(?:policy|holds)$/, schema: lifecycleViewSchema, matches: (answer, _input, merchantId) => answer.merchantId === merchantId },
+  { path: /^\/team\/invitations$/, schema: invitationCreatedSchema },
+  { path: /^\/team\/invitations\/[^/]+\/revoke$/, schema: messageSchema },
+  { path: /^\/team\/members\/[^/]+$/, schema: staffMemberSchema },
+  { path: /^\/team\/members\/[^/]+\/lenders$/, schema: staffLenderAccessSchema },
+  { path: /^\/team\/readiness\/encryption$/, schema: encryptionVerificationSchema },
+  { path: /^\/team\/readiness\/protect$/, schema: payloadProtectionSchema },
+  // A recovered request answers what its own route answers.
+  { path: /^\/operations\/[^/]+\/retry$/, schema: operationReplaySchema },
+  { path: /^\/operations\/[^/]+\/cancel$/, schema: messageSchema },
+];
+/** The answer schema and check for a pilot write's path; undefined for a path the console does not write. */
+export function pilotReceipt(path: string) {
+  return receipts.find((receipt) => receipt.path.test(path));
 }
 export function usePilotMutation(onSuccess?: (data: any) => void) {
   const { merchantId, workspace } = useWorkspace(),
@@ -59,36 +105,20 @@ export function usePilotMutation(onSuccess?: (data: any) => void) {
       },
       options,
     ) => {
+      const receipt = pilotReceipt(v.path);
+      if (!receipt) throw answerProblem(INCOMPLETE_CONFIRMATION);
       const result = await pilotRequest(
         v.lender === false ? v.path : lenderPath(v.path, merchantId),
+        receipt.schema,
         {
           ...options,
           method: v.method || "POST",
           body: JSON.stringify(v.data || {}),
         },
+        INCOMPLETE_CONFIRMATION,
       );
-      const expectedKind = /^\/pilot\/close-reviews\//.test(v.path) ? 'close-reviews' : /^\/sources\/profiles(?:\/|$)/.test(v.path) ? 'source-profiles' : v.path === '/sources/manifests' ? 'source-manifests' : undefined;
-      if(expectedKind && (!CreateRecordResponse.safeParse(result).success || result.kind !== expectedKind || result.merchantId !== merchantId || !result.id))throw new Error('The service returned an incomplete confirmation. Check Operations before submitting again.');
-      if(/^\/pilot\/import-corrections(?:\/[^/]+\/decision)?$/.test(v.path)) {
-        const receipt = importCorrectionViewSchema.parse(result), input = v.data as { batchId?: string; targetId?: string; proposalDigest?: string };
-        if(receipt.merchantId !== merchantId || (input?.batchId && receipt.preview.batchId !== input.batchId) || (input?.targetId && receipt.preview.targetId !== input.targetId) || (input?.proposalDigest && receipt.proposalDigest !== input.proposalDigest)) throw new Error('The correction confirmation does not match this lender or request. Check Operations before submitting again.');
-      }
-      if(v.path.startsWith('/work/')) {const receipt=workReceiptSchema.parse(result);if(receipt.merchantId!==merchantId||receipt.actor!==workspace?.actor)throw new Error('The confirmation belongs to another workspace. Refresh Operations.');}
-      if(v.path.startsWith('/lifecycle/')){const receipt=v.path.startsWith('/lifecycle/runs')?lifecycleRunViewSchema.parse(result):lifecycleViewSchema.parse(result);if(receipt.merchantId!==merchantId)throw new Error('The retention confirmation belongs to another lender. Refresh Operations.');}
-      if(v.path==='/sources/paystack/fixtures') z.object({accepted:z.boolean(),duplicate:z.boolean(),event:z.object({id:z.string().min(1),mode:z.literal('fixture'),financialRecordsCreated:z.literal(0)})}).parse(result);
-      if(/^\/sources\/events\//.test(v.path))z.object({id:z.string().min(1),mode:z.enum(['fixture','test']),financialRecordsCreated:z.literal(0)}).parse(result);
-      if (
-        /^\/pilot\/(batches|cases)/.test(v.path) &&
-        (!CreateRecordResponse.safeParse(result).success ||
-          result.merchantId !== merchantId ||
-          !result.id ||
-          (v.path.includes("/batches")
-            ? result.kind !== "import-batches"
-            : result.kind !== "exceptions"))
-      )
-        throw new Error(
-          "The service returned an incomplete confirmation. Check Operations before submitting again.",
-        );
+      if (receipt.matches && !receipt.matches(result as Receipt, (v.data ?? {}) as Record<string, unknown>, merchantId, workspace?.actor))
+        throw answerProblem("The confirmation does not match this lender or request. Check Operations before submitting again.");
       return result;
     },
     {

@@ -10,11 +10,18 @@
  * Record counts that place the lender on the pilot journey: customers, committed batches, receipts, open and unassigned cases, closes and ready exports.
  */
 export interface JourneyCounts {
+  /** @minimum 0 */
   customers: number;
+  /** @minimum 0 */
   batches: number;
+  /** @minimum 0 */
   receipts: number;
+  /** @minimum 0 */
   openCases: number;
+  /** @minimum 0 */
   unassignedCases: number;
+  /** @minimum 0 */
   closes: number;
+  /** @minimum 0 */
   exports: number;
 }

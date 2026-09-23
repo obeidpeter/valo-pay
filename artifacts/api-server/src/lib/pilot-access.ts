@@ -3,6 +3,7 @@
  * never a decoded-but-unverified token, browser role, request body or sandbox persona.
  * Signature, issuer and authorised-party verification still belong to that middleware.
  */
+import type { PilotAccessFailureCode } from '@workspace/valopay-schema';
 export interface VerifiedClerkSession {
   userId?: string | null;
   sessionId?: string | null;
@@ -49,7 +50,8 @@ export interface PilotAccessGrant {
   readonly liveOperationsAllowed: false;
 }
 
-export type PilotAccessFailure = 'pilot_disabled' | 'configuration_invalid' | 'authentication_required' | 'session_invalid' | 'membership_required' | 'membership_inactive' | 'role_not_permitted' | 'mfa_required' | 'reverification_required';
+/** Why staff access was refused; the codes the error body's `code` names (lib/valopay-schema api.ts). */
+export type PilotAccessFailure = PilotAccessFailureCode;
 export class PilotAccessError extends Error {
   readonly status: number;
   constructor(readonly code: PilotAccessFailure, message: string) {

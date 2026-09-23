@@ -1,0 +1,321 @@
+// Database-backed checks of the API contract (audit item 24). Every answer in
+// this suite, success or refusal, is checked against lib/api-spec/openapi.json:
+// its status must be one the contract lists for the operation, and its body
+// must match the schema the contract gives that status. The journey below
+// answers every console-facing operation at least once, in the sandbox and on
+// a staff host, so each described shape is tested against a real answer.
+// It also pins what the item fixed: the sandbox team directory's lenders, one
+// 400 for a missing merchantId, date-times with an offset, the writes that
+// take an optional Idempotency-Key, and an invalid answer that saves nothing.
+import assert from "node:assert/strict";
+import express from "express";
+import { once } from "node:events";
+import { randomBytes, randomUUID } from "node:crypto";
+import { answerErrors, contractOperations, loadContract, operationFor } from "./contract-schema";
+
+if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
+  console.log("Set VALOPAY_RUN_INTEGRATION=1 to check the API contract against a disposable PostgreSQL database.");
+  process.exit(0);
+}
+// Placeholder identity and storage settings: nothing here reaches Clerk or object storage.
+process.env.CLERK_SECRET_KEY = "sk_test_placeholder";
+process.env.PRIVATE_OBJECT_DIR ||= "/contract-test-bucket/private";
+const { pool } = await import("@workspace/db");
+const { default: router } = await import("../src/routes/index");
+const { errorHandler } = await import("../src/lib/error-handler");
+const { withState } = await import("../src/routes/valopay");
+const { CreateRecordResponse } = await import("@workspace/api-zod");
+const store = await import("../src/lib/valopay-store");
+const { makeRecord } = await import("../src/domain/records");
+const { clerkClient } = await import("@clerk/express");
+
+const spec = loadContract();
+const identities = new Map<string, any>();
+const app = express();
+let requests = 0;
+// The service gives every request an id (pino-http) that every error body quotes.
+app.use((req, _res, next) => { (req as any).id = `contract-${++requests}`; next(); });
+app.use(express.json({ limit: "2mb" }));
+app.use((req, _res, next) => {
+  const auth = identities.get(String(req.header("X-Test-Identity"))) || { userId: null };
+  (req as any).auth = Object.assign(() => auth, { [Symbol.for("@clerk/express.auth")]: true });
+  (req as any).log = { info() {}, warn() {}, error() {} };
+  next();
+});
+app.use("/api", router);
+app.use(errorHandler);
+const server = app.listen(0, "127.0.0.1");
+await once(server, "listening");
+const base = `http://127.0.0.1:${(server.address() as any).port}/api`;
+const cookie = `valopay_sandbox=${randomBytes(32).toString("hex")}`;
+
+/** Operation → statuses it answered in this run. */
+const answered = new Map<string, Set<number>>();
+async function call(path: string, method = "GET", body?: unknown, options: { key?: string; identity?: string; cookie?: string } = {}) {
+  const response = await fetch(base + path, {
+    method,
+    headers: { "Content-Type": "application/json", Cookie: options.cookie ?? cookie, ...(options.key ? { "Idempotency-Key": options.key } : {}), ...(options.identity ? { "X-Test-Identity": options.identity } : {}) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const data: any = await response.json();
+  assert.deepEqual(answerErrors(spec, method, path, response.status, data), [], `${method} ${path} answered ${response.status} as the contract documents: ${JSON.stringify(data).slice(0, 600)}`);
+  const entry = operationFor(spec, method, path)!;
+  const name = `${entry.method} ${entry.path}`;
+  answered.set(name, (answered.get(name) ?? new Set()).add(response.status));
+  return { status: response.status, data };
+}
+const ok = (result: { status: number; data: any }) => { assert.equal(result.status, 200, JSON.stringify(result.data).slice(0, 800)); return result.data; };
+const refusedFor = (result: { status: number; data: any }, status: number, field: string) => {
+  assert.equal(result.status, status, JSON.stringify(result.data));
+  assert.ok((result.data.details ?? []).some((detail: { field: string }) => detail.field === field), `the refusal names ${field}: ${JSON.stringify(result.data)}`);
+};
+/** The same instant written with a +01:00 offset, as another client may send it. */
+const withOffset = (iso: string) => new Date(Date.parse(iso) + 3_600_000).toISOString().replace("Z", "+01:00");
+const key = () => randomUUID();
+const cleanupWorkspaces = new Set<string>();
+const workspaceOf = async (merchantId: string) => (await pool.query("SELECT workspace_id FROM valopay_merchants WHERE id=$1", [merchantId])).rows[0].workspace_id as string;
+const savedEnv = { mode: process.env.VALOPAY_STAFF_ACCESS, issuer: process.env.VALOPAY_STAFF_ISSUER, origins: process.env.VALOPAY_STAFF_ORIGINS };
+const oldGetUser = clerkClient.users.getUser;
+
+try {
+  const workspace = ok(await call("/v1/workspace"));
+  const lender = workspace.merchants[0].id as string, other = workspace.merchants[1].id as string;
+  cleanupWorkspaces.add(await workspaceOf(lender));
+  const q = (path: string, merchantId = lender) => `${path}${path.includes("?") ? "&" : "?"}merchantId=${merchantId}`;
+  const act = async (data: Record<string, unknown>, merchantId = lender) => ok(await call(q("/v1/actions", merchantId), "POST", { reason: "Contract check of a synthetic action", ...data }, { key: key() }));
+
+  // ---- The sandbox team directory has the lenders its contract requires ----
+  const team = ok(await call("/v1/team"));
+  assert.equal(team.mode, "sandbox");
+  assert.deepEqual(team.lenders, [], "the sandbox directory lists no lenders, as its message says");
+  assert.deepEqual([team.members, team.invitations, team.events], [[], [], []]);
+
+  // ---- A missing merchantId is the same 400, naming the field, on every lender-scoped read ----
+  for (const entry of contractOperations(spec).filter((item) => item.method === "GET" && (item.operation.parameters ?? []).some((p: any) => p.name === "merchantId" && p.required))) {
+    const path = entry.path.replace(/\{(\w+)\}/g, (_m, name: string) => {
+      const schema = (entry.operation.parameters as any[]).find((p) => p.name === name)?.schema ?? {};
+      return schema.enum ? schema.enum[0] : name === "kind" ? "customers" : randomUUID();
+    });
+    const others = (entry.operation.parameters as any[]).filter((p) => p.in === "query" && p.required && p.name !== "merchantId").map((p) => `${p.name}=a`);
+    refusedFor(await call(others.length ? `${path}?${others.join("&")}` : path), 400, "merchantId");
+  }
+
+  // ---- Reads the item named, each answered with its described shape ----
+  for (const path of ["/v1/pilot/journey", "/v1/pilot/progress", "/v1/pilot/close-reviews", "/v1/pilot/batches", "/v1/operations", "/v1/connected", "/v1/sources", "/v1/work", "/v1/lifecycle", "/v1/overview", "/v1/reports", "/v1/reports?includeCloses=false", "/v1/gates", "/v1/settings", "/v1/records/customers?limit=2", "/v1/queues/exceptions", "/v1/queues/mandates", "/v1/queues/collections", "/v1/reconciliation/proposals", "/v1/reconciliation/audit", "/v1/close-history"]) ok(await call(q(path)));
+  ok(await call("/v1/team/readiness"));
+  ok(await call("/healthz"));
+  ok(await call("/readyz"));
+  const webhook = await call("/v1/webhooks/test", "POST", {});
+  assert.equal(webhook.status, 403);
+
+  // ---- Writes whose key is optional run without one, and accept date-times with an offset ----
+  const batchInput = { name: "Contract customers", kind: "customers", source: `contract-${randomUUID().slice(0, 8)}`, sourceBatchId: "batch-1", csv: "row_id,name,reference,consentProvenance\nr1,Contract customer,CONTRACT-C001,Synthetic consent", mapping: {}, amountUnit: "naira", identityColumn: "row_id", syntheticOnly: true };
+  let batch = ok(await call(q("/v1/pilot/batches"), "POST", batchInput));
+  batch = ok(await call(q(`/v1/pilot/batches/${batch.id}/save`), "POST", { ...batchInput, name: "Contract customers, revised", expectedUpdatedAt: withOffset(batch.updatedAt) }));
+  const detail = ok(await call(q(`/v1/pilot/batches/${batch.id}`)));
+  assert.equal(detail.batch.id, batch.id);
+  batch = ok(await call(q(`/v1/pilot/batches/${batch.id}/commit`), "POST", { expectedUpdatedAt: withOffset(batch.updatedAt) }));
+  assert.equal(batch.status, "committed", "a version sent with an offset matches the stored instant");
+  assert.equal(ok(await call(q("/v1/pilot/batches"))).items[0].id, batch.id);
+
+  const exception = ok(await call(q("/v1/records/exceptions"))).items.find((item: any) => !["resolved", "closed"].includes(item.status));
+  ok(await call(q(`/v1/pilot/cases/${exception.id}`)));
+  const nextActionAt = new Date(Date.now() + 2 * 86_400_000).toISOString();
+  let claimed = ok(await call(q(`/v1/pilot/cases/${exception.id}`), "POST", { action: "claim", expectedUpdatedAt: withOffset(exception.updatedAt), note: "Checking the receipt evidence.", nextAction: "Ask Finance to check the match", nextActionAt: withOffset(nextActionAt), evidenceIds: [] }));
+  assert.equal(claimed.data.case.nextActionAt, nextActionAt, "the next action time is stored as the UTC instant");
+
+  const firstExpectedAt = new Date(Date.now() - 86_400_000).toISOString();
+  let profile = ok(await call(q("/v1/sources/profiles"), "POST", { name: "Contract source", source: batchInput.source, kind: "customers", mapping: {}, identityColumn: "row_id", amountUnit: "naira", firstExpectedAt: withOffset(firstExpectedAt), cadenceHours: 24, graceMinutes: 60, syntheticOnly: true }));
+  assert.equal(profile.data.firstExpectedAt, firstExpectedAt);
+  profile = ok(await call(q(`/v1/sources/profiles/${profile.id}/save`), "POST", { name: "Contract source, revised", source: batchInput.source, kind: "customers", mapping: {}, identityColumn: "row_id", amountUnit: "naira", firstExpectedAt, cadenceHours: 24, graceMinutes: 60, syntheticOnly: true, expectedUpdatedAt: withOffset(profile.updatedAt) }));
+  const fixture = ok(await call(q("/v1/sources/paystack/fixtures"), "POST", { scenario: "payment", syntheticOnly: true }));
+  ok(await call(q(`/v1/sources/events/${fixture.event.id}/replay`), "POST", { expectedUpdatedAt: withOffset(fixture.event.updatedAt), reason: "Contract replay" }));
+
+  // ---- Writes whose key is required refuse a request without one, naming the header ----
+  const businessDate = new Date(Date.now() + 3_600_000).toISOString().slice(0, 10);
+  const manifest = { businessDate, files: [], noFilesExpected: true, reason: "No files are expected for this contract check.", evidence: "Synthetic contract fixture", syntheticOnly: true };
+  refusedFor(await call(q("/v1/sources/manifests"), "POST", manifest), 400, "Idempotency-Key");
+  ok(await call(q("/v1/sources/manifests"), "POST", manifest, { key: key() }));
+  refusedFor(await call("/v1/pilot/lenders", "POST", { name: "Contract lender", segment: "Cooperative" }), 400, "Idempotency-Key");
+  const created = ok(await call("/v1/pilot/lenders", "POST", { name: "Contract lender", segment: "Cooperative" }, { key: key() }));
+  assert.equal(created.status, "onboarding");
+
+  // ---- Import corrections on the committed batch ----
+  const corrections = ok(await call(q(`/v1/pilot/import-corrections?batchId=${batch.id}`)));
+  const target = corrections.targets[0];
+  const previewInput = { batchId: batch.id, targetId: target.id, expectedUpdatedAt: withOffset(target.updatedAt), changes: { name: "Contract customer, corrected" }, syntheticOnly: true };
+  const preview = ok(await call(q("/v1/pilot/import-corrections/preview"), "POST", previewInput));
+  const proposal = { ...previewInput, previewDigest: preview.previewDigest, reviewer: "Sandbox Finance", reason: "Correct the synthetic customer's name.", evidence: "Contract check" };
+  refusedFor(await call(q("/v1/pilot/import-corrections"), "POST", proposal), 400, "Idempotency-Key");
+  const proposed = ok(await call(q("/v1/pilot/import-corrections"), "POST", proposal, { key: key() }));
+  ok(await call(q(`/v1/pilot/import-corrections/${proposed.id}/decision`), "POST", { proposalDigest: proposed.proposalDigest, action: "withdraw", reason: "Withdrawn at the end of the contract check." }, { key: key() }));
+
+  // ---- Connected workspace: a read, an action with its required key, and a cash outcome ----
+  let connected = ok(await call(q("/v1/connected")));
+  const grant = { action: "consent.grant", reason: "Grant a synthetic permission for the contract check", data: { purpose: "merchant_account_read", subjectId: "sme", days: 30 }, expectedRevision: connected.revision };
+  refusedFor(await call(q("/v1/connected/actions"), "POST", grant), 400, "Idempotency-Key");
+  ok(await call(q("/v1/connected/actions"), "POST", grant, { key: key() }));
+  connected = ok(await call(q("/v1/connected")));
+  const initialised = ok(await call(q("/v1/connected/actions"), "POST", { action: "cash.initialize", reason: "Set up the sample Cash Desk", data: {}, expectedRevision: connected.revision }, { key: key() }));
+  assert.equal(initialised.record.record.kind, "connected-cash-workspace", "a cash action answers its outcome inside record");
+  connected = ok(await call(q("/v1/connected")));
+  ok(await call(q("/v1/connected/actions"), "POST", { action: "cash.forecast", reason: "Save a sample forecast", data: {}, expectedRevision: connected.revision }, { key: key() }));
+  connected = ok(await call(q("/v1/connected")));
+  assert.equal(connected.cash.initialised, true);
+  const customer = connected.customers[0].id;
+  for (const purpose of ["account_read", "credit_assessment"]) {
+    connected = ok(await call(q("/v1/connected")));
+    ok(await call(q("/v1/connected/actions"), "POST", { action: "consent.grant", reason: "Grant an applicant permission", data: { purpose, subjectId: customer, days: 30 }, expectedRevision: connected.revision }, { key: key() }));
+  }
+  connected = ok(await call(q("/v1/connected")));
+  ok(await call(q("/v1/connected/actions"), "POST", { action: "credit.assess", reason: "Run a sample assessment", data: { customerId: customer, scenario: "ready" }, expectedRevision: connected.revision }, { key: key() }));
+  assert.equal(ok(await call(q("/v1/connected"))).credit.assessments.length, 1);
+
+  // ---- The legacy writes take an optional key: with one they are journaled, without one they still run ----
+  const customerBody = { name: "Contract customer", reference: `CONTRACT-${randomUUID()}`, data: { consentProvenance: "Synthetic fixture" } };
+  const keyed = key();
+  const record = ok(await call(q("/v1/records/customers"), "POST", customerBody, { key: keyed }));
+  ok(await call(q("/v1/records/customers"), "POST", { ...customerBody, reference: `CONTRACT-${randomUUID()}` }));
+  ok(await call(q(`/v1/records/customers/${record.id}`), "PATCH", { name: "Contract customer, renamed", expectedUpdatedAt: record.updatedAt }, { key: key() }));
+  ok(await call(q(`/v1/customers/${record.id}/timeline`)));
+  ok(await call(q(`/v1/customers/${record.id}/history`)));
+  ok(await call(q("/v1/imports"), "POST", { kind: "customers", csv: "name,reference,consentProvenance\nImported contract customer,CONTRACT-I001,Synthetic consent", syntheticOnly: true, commit: false, amountUnit: "kobo" }));
+  const settings = ok(await call(q("/v1/settings")));
+  ok(await call(q("/v1/settings"), "PATCH", { closeTime: "07:00", expectedRevision: settings.revision }, { key: key() }));
+  const job = ok(await call(q("/v1/exports"), "POST", { kind: "customers", format: "json" }, { key: key() }));
+  ok(await call(q(`/v1/exports/${job.id}`)));
+  ok(await call(q(`/v1/exports/${job.id}/retry`), "POST"));
+  await act({ action: "run_reconciliation" });
+
+  // ---- Operations: the journal, a recovered request and a cancelled one ----
+  const journal = ok(await call(q("/v1/operations")));
+  const completed = journal.items.find((item: any) => item.status === "completed" && item.recordId === record.id);
+  assert.ok(completed, "the keyed record save is in the journal");
+  assert.equal(ok(await call(q(`/v1/operations/${completed.id}/retry`), "POST")).id, record.id);
+  const sandboxRequest = () => ({ headers: { cookie }, secure: false, auth: Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true }) }) as any;
+  const response = { cookie() {} } as any;
+  const pendingId = await store.inWorkspace(sandboxRequest(), response, (ctx) => store.prepareOperation(ctx, lender, key(), { method: "POST", path: "/v1/records/customers", body: { name: "Never sent" } }));
+  assert.match(ok(await call(q(`/v1/operations/${pendingId}/cancel`), "POST")).message, /cancelled it/);
+
+  // ---- Handover, personal work and receipts ----
+  claimed = ok(await call(q(`/v1/pilot/cases/${exception.id}`), "POST", { action: "handover", assignee: "Sandbox Finance", expectedUpdatedAt: claimed.updatedAt, note: "Finance to check the match.", nextAction: "Check the match", nextActionAt, evidenceIds: [] }));
+  await act({ action: "set_role", data: { role: "Finance" } });
+  const work = ok(await call(q("/v1/work")));
+  const handover = work.items.find((item: any) => item.sourceId === exception.id);
+  assert.ok(handover?.canAcknowledge, JSON.stringify(work.items));
+  const receipt = { sourceId: handover.sourceId, eventId: handover.eventId, expectedUpdatedAt: withOffset(handover.sourceVersion), expectedDigest: handover.sourceDigest };
+  refusedFor(await call(q("/v1/work/notifications/read"), "POST", receipt), 400, "Idempotency-Key");
+  ok(await call(q("/v1/work/notifications/read"), "POST", receipt, { key: key() }));
+  ok(await call(q("/v1/work/handovers/acknowledge"), "POST", receipt, { key: key() }));
+  await act({ action: "set_role", data: { role: "Admin" } });
+
+  // ---- A daily close, its review and a returned decision ----
+  await act({ action: "daily_close" });
+  const closes = ok(await call(q("/v1/close-history")));
+  ok(await call(q(`/v1/close-history/${closes.items[0].id}`)));
+  const reviews = ok(await call(q("/v1/pilot/close-reviews")));
+  const entry = reviews.closes[0];
+  if (!entry.problem) {
+    const prepare = { closeId: entry.close.id, expectedUpdatedAt: withOffset(entry.close.updatedAt), reviewer: "Sandbox Finance", preparationNote: "Prepared for the contract check.", discrepancyResponses: entry.issues.map((issue: any) => ({ issueId: issue.id, explanation: "Explained for the contract check." })), unresolvedAcceptance: "Owners and next steps recorded for the contract check." };
+    refusedFor(await call(q("/v1/pilot/close-reviews/prepare"), "POST", prepare), 400, "Idempotency-Key");
+    const review = ok(await call(q("/v1/pilot/close-reviews/prepare"), "POST", prepare, { key: key() }));
+    // One browser switching demo roles is still one person, so the decision is refused here; a staff host decides (source-close-controls).
+    await act({ action: "set_role", data: { role: "Finance" } });
+    const decision = await call(q(`/v1/pilot/close-reviews/${review.id}/decision`), "POST", { expectedUpdatedAt: withOffset(review.updatedAt), action: "return", note: "Returned at the end of the contract check." }, { key: key() });
+    assert.equal(decision.status, 403, JSON.stringify(decision.data));
+    await act({ action: "set_role", data: { role: "Admin" } });
+  } else assert.fail(`The contract check's close cannot be reviewed: ${entry.problem}`);
+
+  // ---- Retention: policy and a hold on the committed batch's source rows ----
+  let lifecycle = ok(await call(q("/v1/lifecycle")));
+  lifecycle = ok(await call(q("/v1/lifecycle/policy"), "POST", { policy: { rawCsvDays: 30, journalPayloadDays: null, exportFileDays: null, auditTrail: "retain" }, expectedRevision: lifecycle.policyRevision, reason: "Keep source rows for thirty days." }, { key: key() }));
+  const source = lifecycle.targets.find((item: any) => item.sourceId === batch.id);
+  lifecycle = ok(await call(q("/v1/lifecycle/holds"), "POST", { kind: "raw_csv", sourceId: source.sourceId, held: true, expectedHoldRevision: lifecycle.holdRevision, reason: "Held for the contract check." }, { key: key() }));
+  const nothingDue = await call(q("/v1/lifecycle/runs"), "POST", { expectedPolicyRevision: lifecycle.policyRevision }, { key: key() });
+  assert.equal(nothingDue.status, 400, "no source is old enough to delete yet");
+
+  // ---- The views again, now that they hold batches, profiles, events, cases, closes, reviews, receipts and holds ----
+  for (const path of ["/v1/sources", "/v1/pilot/journey", "/v1/pilot/progress", "/v1/pilot/close-reviews", "/v1/pilot/batches", `/v1/pilot/batches/${batch.id}`, `/v1/pilot/cases/${exception.id}`, "/v1/operations", "/v1/work", "/v1/connected", "/v1/lifecycle"]) ok(await call(q(path)));
+
+  // ---- An answer that does not match its schema is a failure of the service, and saves nothing ----
+  const before = Number((await pool.query("SELECT count(*)::int AS n FROM valopay_records WHERE merchant_id=$1 AND kind='customers'", [lender])).rows[0].n);
+  const invalid = await withState({ ...sandboxRequest(), header: () => undefined, path: "/v1/records/customers", method: "POST", body: { name: "Invalid answer" }, params: {}, query: { merchantId: lender }, ip: "127.0.0.1" } as any, response, (state, ctx) => {
+    makeRecord(state, "customers", { name: "Never saved", createdAt: ctx.now, data: { consentProvenance: "Synthetic fixture" } });
+    return { name: "Not a record" };
+  }, true, CreateRecordResponse).then(() => undefined, (error: unknown) => error);
+  const answer = await new Promise<{ status: number; body: any }>((resolve) => {
+    let status = 0;
+    const res = { headersSent: false, setHeader() { return this; }, status(code: number) { status = code; return this; }, json(body: unknown) { resolve({ status, body }); return this; } };
+    errorHandler(invalid, { id: "contract-invalid", log: { error() {}, warn() {}, info() {} } } as any, res as any, () => undefined);
+  });
+  assert.equal(answer.status, 500, `an invalid answer is the service's failure, not the request's: ${JSON.stringify(answer.body)}`);
+  assert.equal(answer.body.committed, false, "and it says nothing was saved");
+  assert.equal(Number((await pool.query("SELECT count(*)::int AS n FROM valopay_records WHERE merchant_id=$1 AND kind='customers'", [lender])).rows[0].n), before, "the record written before the invalid answer was rolled back");
+
+  // A stored record the connected view cannot describe fails the read instead of reaching the console.
+  const otherState = await store.inWorkspace(sandboxRequest(), response, async (ctx) => { const state = await store.loadState(ctx, other); makeRecord(state, "connected-cash-forecasts", { name: "Malformed forecast", status: "planning_estimate", createdAt: ctx.now, data: { entityId: `${other}:sme`, forecast: { scenarios: "not a list" } } }); store.appendAudit(state, ctx, "test.contract.malformed", other, "Stored a malformed synthetic forecast."); await store.saveState(ctx, state); return state.merchant.id; });
+  const malformed = await call(q("/v1/connected", otherState));
+  assert.equal(malformed.status, 500, "a malformed stored forecast fails the read");
+
+  // ---- A staff host: the team directory, invitations, memberships, lender access and readiness ----
+  process.env.VALOPAY_STAFF_ACCESS = "staging";
+  process.env.VALOPAY_STAFF_ISSUER = "https://identity.example";
+  process.env.VALOPAY_STAFF_ORIGINS = "https://pilot.example";
+  const organisation = `org_${randomUUID().replaceAll("-", "")}`, admin = `user_${randomUUID().replaceAll("-", "")}`, finance = `user_${randomUUID().replaceAll("-", "")}`;
+  const staffAuth = (userId: string) => {
+    const now = Math.floor(Date.now() / 1000);
+    return { userId, sessionId: `sess_${userId}`, orgId: organisation, tokenType: "session_token", sessionStatus: "active", factorVerificationAge: [0, 0], has: () => true, sessionClaims: { sub: userId, sid: `sess_${userId}`, iss: "https://identity.example", azp: "https://pilot.example", iat: now - 1, exp: now + 3600 } };
+  };
+  identities.set("admin", staffAuth(admin));
+  identities.set("finance", staffAuth(finance));
+  const provisioned = await store.provisionStaffWorkspace(organisation, admin, "Contract staff organisation");
+  cleanupWorkspaces.add(provisioned.workspaceId);
+  const staffLender = ok(await call("/v1/pilot/lenders", "POST", { name: "Staff contract lender", segment: "Consumer lending" }, { key: key(), identity: "admin" }));
+  ok(await call("/v1/team/verify", "POST", undefined, { identity: "admin" }));
+  const invitation = ok(await call("/v1/team/invitations", "POST", { email: "finance@example.test", role: "Finance" }, { identity: "admin" }));
+  const spare = ok(await call("/v1/team/invitations", "POST", { email: "spare@example.test", role: "Operations" }, { identity: "admin" }));
+  ok(await call(`/v1/team/invitations/${spare.id}/revoke`, "POST", undefined, { identity: "admin" }));
+  (clerkClient.users as any).getUser = async () => ({ emailAddresses: [{ emailAddress: "finance@example.test", verification: { status: "verified" } }] });
+  const accepted = ok(await call("/v1/team/accept", "POST", { token: invitation.token }, { identity: "finance" }));
+  assert.equal(accepted.role, "Finance");
+  const directory = ok(await call("/v1/team", "GET", undefined, { identity: "admin" }));
+  assert.deepEqual(directory.lenders.map((item: any) => item.id), [staffLender.id]);
+  assert.ok(directory.invitations.length >= 2 && directory.events.length >= 3, "an administrator sees invitations and access history");
+  const member = directory.members.find((row: any) => row.actor === `Clerk:${finance}`);
+  const granted = ok(await call(`/v1/team/members/${member.id}/lenders`, "PATCH", { expectedUpdatedAt: withOffset(member.updatedAt), lenderIds: [staffLender.id], reason: "Assign Finance to the contract lender." }, { identity: "admin" }));
+  ok(await call(`/v1/team/members/${member.id}`, "PATCH", { role: "Finance", status: "suspended", expectedUpdatedAt: withOffset(granted.updatedAt), reason: "Suspended at the end of the contract check." }, { identity: "admin" }));
+  const financeTeam = ok(await call("/v1/team", "GET", undefined, { identity: "admin" }));
+  assert.ok(financeTeam.members.every((row: any) => Array.isArray(row.lenderIds) && typeof row.allLenders === "boolean"));
+  const readiness = ok(await call("/v1/team/readiness", "GET", undefined, { identity: "admin" }));
+  assert.equal(readiness.canCommission, true);
+  for (const path of ["/v1/team/readiness/encryption", "/v1/team/readiness/protect"]) assert.equal((await call(path, "POST", undefined, { identity: "admin" })).status, 503, `${path} needs a managed key, which this host does not have`);
+
+  // ---- Every operation the console or the item names answered with a success at least once ----
+  const expected = contractOperations(spec).map((item) => `${item.method} ${item.path}`).filter((name) => ![
+    "GET /v1/openapi.json", // served from the build output, not the source tree this suite runs
+    "POST /v1/webhooks/{provider}", // always refused
+    "POST /v1/providers/paystack/{connectionId}/events", // needs a configured Paystack test connection: tests/paystack.test.ts and tests/source-ingress.test.ts
+    "GET /v1/exports/{id}/download", // needs private object storage: tests/export-streams.integration.test.ts
+    "POST /v1/lifecycle/runs", "POST /v1/lifecycle/runs/{id}/approve", "POST /v1/lifecycle/runs/{id}/execute", "GET /v1/lifecycle/runs/{id}", // need a source past its retention age: tests/source-close-controls.integration.test.ts
+    "POST /v1/team/readiness/encryption", "POST /v1/team/readiness/protect", // need a managed key
+    "POST /v1/pilot/close-reviews/{id}/decision", // needs a second person: tests/source-close-controls.integration.test.ts
+  ].includes(name));
+  const missing = expected.filter((name) => !answered.get(name)?.has(200));
+  assert.deepEqual(missing, [], "every console-facing operation answered with its described shape");
+  console.log(`API contract checks passed against PostgreSQL: ${answered.size} operations answered as documented, the sandbox directory's lenders, one 400 for a missing merchantId, offset date-times, optional and required keys, and an invalid answer that saves nothing.`);
+} finally {
+  (clerkClient.users as any).getUser = oldGetUser;
+  for (const [name, value] of Object.entries({ VALOPAY_STAFF_ACCESS: savedEnv.mode, VALOPAY_STAFF_ISSUER: savedEnv.issuer, VALOPAY_STAFF_ORIGINS: savedEnv.origins })) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+  server.close();
+  await once(server, "close");
+  for (const id of cleanupWorkspaces) {
+    for (const table of ["valopay_staff_events", "valopay_staff_invitations", "valopay_staff_memberships", "valopay_teams"]) await pool.query(`DELETE FROM ${table} WHERE workspace_id=$1`, [id]);
+    for (const table of ["valopay_idempotency", "valopay_operations", "valopay_records"]) await pool.query(`DELETE FROM ${table} WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id=$1)`, [id]);
+    await pool.query("DELETE FROM valopay_merchants WHERE workspace_id=$1", [id]);
+    await pool.query("DELETE FROM valopay_workspaces WHERE id=$1", [id]);
+  }
+  await pool.end();
+}

@@ -10,6 +10,7 @@
  * The lenders a non-administrator membership may open, with the version being changed and the reason.
  */
 export interface StaffLenderAccessInput {
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
   expectedUpdatedAt: Date;
   /**
      * @maxItems 250

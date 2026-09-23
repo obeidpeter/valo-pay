@@ -15,12 +15,24 @@ export interface ProviderEvent {
   name: string;
   status: string;
   reference: string;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
   amountKobo: number;
   createdAt: string;
   updatedAt: string;
   mode: ProviderEventMode;
   message: string;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
   deliveryCount: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
   replayCount: number;
   financialRecordsCreated: 0;
 }

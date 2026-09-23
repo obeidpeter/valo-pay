@@ -7,6 +7,7 @@ import {
 import { authEnabled, AuthShow } from "@/lib/auth";
 import { Button } from "./ui/button";
 import { PilotError } from "./pilot-ui";
+import { answerProblem, readAnswer, UNREADABLE_ANSWER } from "@/lib/answers";
 
 export function StaffSession() {
   return authEnabled ? (
@@ -51,11 +52,17 @@ function VerifiedSession() {
             void verify()
               .then(async (response) => {
                 if (!response) return;
-                const result = await response.json();
+                const result = await response.json().catch(() => undefined);
                 if (!response.ok)
                   throw new Error(
-                    result.error || "Verification could not be completed.",
+                    result?.error || "Verification could not be completed.",
                   );
+                // Only the confirmation the contract describes counts as verified. The
+                // schemas load with the pages that use them: this component is also
+                // part of the shell's workspace failure notice, which stays small.
+                const { messageSchema } = await import("@workspace/valopay-schema");
+                if (!readAnswer(messageSchema, result))
+                  throw answerProblem(UNREADABLE_ANSWER);
                 setMessage("Identity verified. Retry your original request.");
               })
               .catch(setError)

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { instantInputSchema } from './api';
 const id = z.string().min(1).max(200), hash = z.string().regex(/^[a-f0-9]{64}$/), at = z.string().datetime();
 /** Source artifact categories that can be retained or deleted; excludes financial records. */
 export const lifecycleKindSchema = z.enum(['raw_csv', 'journal_payload', 'export_file']);
@@ -23,7 +24,7 @@ export type LifecycleEvidence = z.infer<typeof lifecycleEvidenceSchema>;
 /** Policy revision to use when saving a bounded deletion preview. */
 export const lifecyclePreviewInputSchema = z.object({ expectedPolicyRevision: hash }).strict();
 /** Fresh approval of one exact unexpired deletion preview. */
-export const lifecycleApproveInputSchema = z.object({ expectedUpdatedAt: at, previewDigest: hash, reason: z.string().trim().min(10).max(500) }).strict();
+export const lifecycleApproveInputSchema = z.object({ expectedUpdatedAt: instantInputSchema, previewDigest: hash, reason: z.string().trim().min(10).max(500) }).strict();
 /** Immutable preview identity for executing or resuming an approved run. */
 export const lifecycleExecuteInputSchema = z.object({ previewDigest: hash }).strict();
 /** Verified executor result; blocked and failed candidates remain resumable. */

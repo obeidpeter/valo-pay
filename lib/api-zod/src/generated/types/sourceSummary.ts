@@ -10,8 +10,24 @@
  * Counts that need attention: late sources, duplicate and conflicting rows, batches needing review.
  */
 export interface SourceSummary {
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
   lateSources: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
   duplicateRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
   conflictRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
   batchesNeedingReview: number;
 }

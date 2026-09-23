@@ -9,6 +9,7 @@ import {
   importCorrectionsResponseSchema,
 } from "@workspace/valopay-schema";
 import { withState } from "./valopay";
+import { lenderQuery, requiredKey } from "../lib/contract";
 import { caseAssignees } from "../lib/valopay-store";
 import {
   listImportCorrections,
@@ -17,9 +18,9 @@ import {
   decideImportCorrection,
 } from "../domain/import-corrections";
 const router: IRouter = Router();
-const key = (value: unknown) => z.string().min(8).max(200).parse(value);
 router.get("/v1/pilot/import-corrections", async (req, res) => {
-  const batchId = z.string().min(1).max(100).parse(req.query.batchId);
+  lenderQuery(req);
+  const { batchId } = z.object({ batchId: z.string().min(1).max(100) }).parse(req.query);
   res.json(
     await withState(
       req,
@@ -36,6 +37,7 @@ router.get("/v1/pilot/import-corrections", async (req, res) => {
   );
 });
 router.post("/v1/pilot/import-corrections/preview", async (req, res) => {
+  lenderQuery(req);
   const input = importCorrectionPreviewInputSchema.parse(req.body);
   res.json(
     await withState(
@@ -48,7 +50,7 @@ router.post("/v1/pilot/import-corrections/preview", async (req, res) => {
   );
 });
 router.post("/v1/pilot/import-corrections", async (req, res) => {
-  key(req.header("Idempotency-Key"));
+  requiredKey(req);
   const input = importCorrectionProposalInputSchema.parse(req.body);
   res.json(
     await withState(
@@ -62,7 +64,7 @@ router.post("/v1/pilot/import-corrections", async (req, res) => {
   );
 });
 router.post("/v1/pilot/import-corrections/:id/decision", async (req, res) => {
-  key(req.header("Idempotency-Key"));
+  requiredKey(req);
   const id = z.string().min(1).max(100).parse(req.params.id),
     input = importCorrectionDecisionInputSchema.parse(req.body);
   res.json(

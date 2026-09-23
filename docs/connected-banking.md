@@ -79,6 +79,8 @@ Accounting exports are review files with content hashes, not digitally signed in
 
 Mutations use the existing transaction-scoped store: lender lock, current revision, domain checks, audit append, validated persistence and idempotency answer. Same-key/same-input replays return the stored answer. Reusing a key for different input is a conflict. A stale revision prompts a refresh rather than silently applying an old form.
 
+The view and every action's answer are described by the shared schemas in `lib/valopay-schema/src/connected.ts`, from which the contract's `ConnectedWorkspace`, `ConnectedActionResult` and their parts are generated. The API checks each answer against them before it commits, and the console reads the answers with the same schemas (`artifacts/valo-pay/src/lib/connected.ts`), so a malformed answer is shown as incomplete, and an action's as an unconfirmed outcome, never as data.
+
 Source modules are `domain/connected.ts`, `connected-credit.ts`, `connected-credit-service.ts`, `connected-cash.ts` and `connected-cash-service.ts`. UI routes are `/connections`, `/pay-by-bank`, `/credit-desk` and `/cash-desk`.
 
 ## External work required before live use

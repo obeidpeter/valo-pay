@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { legacyCollatedCompare } from "@workspace/valopay-schema";
+import { connectedActionInputSchema, connectedConsentPurposes, legacyCollatedCompare } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord, RecordOf } from "./types";
 import { makeRecord, recordsOf, touch } from "./records";
 import {
@@ -13,27 +13,10 @@ import {
 import { creditView, runCreditAction } from "./connected-credit-service";
 import { cashView, runCashAction } from "./connected-cash-service";
 
-export const connectedActionSchema = z
-  .object({
-    action: z.string().min(1).max(80),
-    recordId: z.string().max(100).optional(),
-    reason: z
-      .string()
-      .trim()
-      .min(8, "Explain the reason in at least eight characters.")
-      .max(500),
-    data: z.record(z.string(), z.unknown()).default({}),
-    expectedRevision: z.string().max(80),
-  })
-  .strict();
+// The action's shape and the consent purposes are the shared definitions the contract and the console read.
+export const connectedActionSchema = connectedActionInputSchema;
 export type ConnectedAction = z.infer<typeof connectedActionSchema>;
-export const consentPurposes = [
-  "account_read",
-  "credit_assessment",
-  "merchant_account_read",
-  "erp_draft",
-  "payroll_prepare",
-] as const;
+export const consentPurposes = connectedConsentPurposes;
 export const purposeLabels: Record<string, string> = {
   account_read: "Read applicant accounts",
   credit_assessment: "Assess an application",

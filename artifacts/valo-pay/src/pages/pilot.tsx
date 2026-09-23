@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { ArrowRight, CheckCircle2, Circle, Building2, AlertCircle, Clock3 } from "lucide-react";
-import type { PilotProgressStep } from "@workspace/valopay-schema";
+import { pilotProgressSchema } from "@workspace/valopay-schema";
 import { useWorkspace } from "@/lib/workspace-context";
 import { usePilotMutation, usePilotQuery } from "@/lib/pilot";
 import {
@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 
 export default function PilotPage() {
   const { merchantId, workspace, setMerchantId } = useWorkspace();
-  const journey = usePilotQuery<{ steps: PilotProgressStep[]; access: { message: string; state: string } }>("/pilot/progress");
+  const journey = usePilotQuery("/pilot/progress", pilotProgressSchema);
   const [name, setName] = useState(""),
     [segment, setSegment] = useState("Consumer lending");
   const create = usePilotMutation((data) => {

@@ -2,20 +2,25 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { useMutation } from "@tanstack/react-query";
 import { pilotRequest } from "@/lib/pilot";
+import { invitationAcceptedSchema } from "@workspace/valopay-schema";
 import { StaffSession } from "@/components/staff-session";
 import { PilotError, PilotHeading, PilotPanel } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
 import { useSessionUser } from "@/lib/auth";
+
+/** Shown when the acceptance's answer is not the confirmation its schema describes: the membership may already be active. */
+const UNCONFIRMED_ACCEPTANCE =
+  "The service returned an incomplete confirmation. Open the pilot workspace to check whether your membership is active before accepting again.";
 
 export default function TeamInvitePage() {
   const [token] = useState(() => window.location.hash.slice(1)),
     { userId } = useSessionUser();
   const accept = useMutation({
     mutationFn: () =>
-      pilotRequest("/team/accept", {
+      pilotRequest("/team/accept", invitationAcceptedSchema, {
         method: "POST",
         body: JSON.stringify({ token }),
-      }),
+      }, UNCONFIRMED_ACCEPTANCE),
     onSuccess: () => {
       window.history.replaceState(null, "", window.location.pathname);
     },

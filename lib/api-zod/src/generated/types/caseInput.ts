@@ -12,6 +12,7 @@ import type { CaseInputAction } from './caseInputAction';
  */
 export interface CaseInput {
   action: CaseInputAction;
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
   expectedUpdatedAt: Date;
   /** @maxLength 256 */
   assignee?: string;
@@ -25,6 +26,7 @@ export interface CaseInput {
      * @maxLength 240
      */
   nextAction: string;
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
   nextActionAt: Date;
   /**
      * @maxItems 20

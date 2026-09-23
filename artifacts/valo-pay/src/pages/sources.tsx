@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "wouter";
 import type { SourceProfileInput } from "@workspace/valopay-schema";
 import { useWorkspace } from "@/lib/workspace-context";
 import { usePilotMutation, usePilotQuery } from "@/lib/pilot";
+import { sourcesViewSchema } from "@workspace/valopay-schema";
 import { useUnsavedChanges, confirmUnsavedChanges } from "@/lib/unsaved-changes";
 import { PilotHeading, PilotPanel, PilotError, RecoveryNotice, pilotField } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
@@ -33,7 +34,7 @@ export default function SourcesPage() { const { merchantId } = useWorkspace(); r
 function Sources() {
   const { workspace } = useWorkspace(), [params] = useSearchParams();
   const [businessDate,setBusinessDate] = useState(params.get("businessDate") || new Date(Date.now()+3600000).toISOString().slice(0,10));
-  const query = usePilotQuery(`/sources?businessDate=${encodeURIComponent(businessDate)}`);
+  const query = usePilotQuery(`/sources?businessDate=${encodeURIComponent(businessDate)}`, sourcesViewSchema);
   const [selected, setSelected] = useState<any>(null), [revision, setRevision] = useState(0), [message, setMessage] = useState("");
   const fixture = usePilotMutation(result => setMessage(result.event.message));
   const canWrite = ["Admin", "Operations", "Finance"].includes(workspace?.role || "");
@@ -67,7 +68,7 @@ function Sources() {
       {canWrite && <div className="flex flex-wrap gap-2">{([ ["payment", "Receive sample payment"], ["duplicate", "Repeat delivery"], ["amount_mismatch", "Rehearse amount conflict"], ["out_of_order", "Rehearse out-of-order events"], ["tampered", "Check tampered signature"] ] as const).map(([scenario,label]) => <Button key={scenario} variant="outline" disabled={fixture.isPending || fixture.hasUnconfirmedOutcome} onClick={() => fixture.mutate({ path: "/sources/paystack/fixtures", data: { scenario, syntheticOnly: true } })}>{label}</Button>)}</div>}
       <RecoveryNotice mutation={fixture} /><p role="status" className="text-sm">{message}</p>
       <div className="space-y-3">{query.data?.paystack.events.map((event: any) => <EventCard key={event.id} event={event} canReplay={canReplay} />)}</div>
-      {query.data?.paystack.total > 50 && <p className="text-sm text-muted-foreground">Showing the latest 50 of {query.data.paystack.total} receipts. Earlier receipts remain saved.</p>}
+      {query.data && query.data.paystack.total > 50 && <p className="text-sm text-muted-foreground">Showing the latest 50 of {query.data.paystack.total} receipts. Earlier receipts remain saved.</p>}
     </PilotPanel>
   </div>;
 }

@@ -5,6 +5,8 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
+import type { StaffInvitationRole } from './staffInvitationRole';
+import type { StaffInvitationStatus } from './staffInvitationStatus';
 
 /**
  * A pending, accepted or revoked invitation; the token is shown once, at creation.
@@ -12,7 +14,7 @@
 export interface StaffInvitation {
   id: string;
   email: string;
-  role: string;
-  status: string;
+  role: StaffInvitationRole;
+  status: StaffInvitationStatus;
   expiresAt: string;
 }

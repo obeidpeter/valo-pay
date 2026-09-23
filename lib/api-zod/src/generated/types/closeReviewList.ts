@@ -7,15 +7,18 @@
  */
 import type { Assignee } from './assignee';
 import type { CloseReviewEntry } from './closeReviewEntry';
+import type { CloseReviewListAccessMode } from './closeReviewListAccessMode';
 
 /**
  * The 25 newest closes with their reviews, the Finance reviewers available and who the caller is, so the console can enforce separation of duties.
  */
 export interface CloseReviewList {
+  /** @maxItems 25 */
   closes: CloseReviewEntry[];
+  /** @minimum 0 */
   total: number;
   actor: string;
   reviewers: Assignee[];
-  accessMode: string;
+  accessMode: CloseReviewListAccessMode;
   ownPrincipal: string;
 }

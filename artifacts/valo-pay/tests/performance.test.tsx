@@ -5,6 +5,7 @@ import { render } from "@testing-library/react";
 import { LazyPage, QUERY_STALE_MS, loadPage, queryClient, queryDefaults } from "@/App";
 import { QUERY_RETRIES, retryQuery } from "@/lib/query-retry";
 import { pilotRequest } from "@/lib/pilot";
+import { pilotJourneySchema } from "@workspace/valopay-schema";
 import { installFakeApi } from "./fake-api";
 import { renderApp, screen } from "./harness";
 import { ErrorBoundary } from "@/components/error-boundary";
@@ -51,7 +52,7 @@ describe("performance", () => {
 
   it("keeps the status of a pilot answer that is not JSON, so a proxy's 502 is repeated", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(gatewayPage());
-    const failure = await pilotRequest("/pilot/journey").catch((error: unknown) => error);
+    const failure = await pilotRequest("/pilot/journey", pilotJourneySchema).catch((error: unknown) => error);
     expect(failure).toMatchObject({ status: 502, data: {}, message: "The request could not be completed." });
     expect(retryQuery(0, failure)).toBe(true);
   });

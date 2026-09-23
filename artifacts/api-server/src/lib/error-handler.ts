@@ -4,6 +4,7 @@ import { PilotAccessError } from './pilot-access';
 import { closeRefusedOperation, operationClosed } from './refused-operations';
 import { wasRolledBack } from './transaction-outcome';
 import { DatabaseLimitError } from './database-limits';
+import { ResponseContractError } from './contract';
 
 /**
  * One place that turns a thrown error into an HTTP answer.
@@ -14,10 +15,12 @@ import { DatabaseLimitError } from './database-limits';
  * raised is answered in its own words with the status it carries: a refusal
  * without one is a 400, whatever its wording, and a service the application
  * found unavailable keeps its 502, 503 or 504. A programming error (a
- * TypeError, a ReferenceError and their kin) or anything that is not an Error
- * at all is answered as a 500 in general words: its message describes the
- * code, not the request, and belongs in the log, not in the response
- * (security review).
+ * TypeError, a ReferenceError and their kin), an answer that does not match
+ * its contract (ResponseContractError, lib/contract.ts) or anything that is
+ * not an Error at all is answered as a 500 in general words: its message
+ * describes the code, not the request, and belongs in the log, not in the
+ * response (security review). An invalid answer is never a validation 400:
+ * the request was not at fault.
  *
  * When the store rolled back the request's transaction before committing, a
  * 5xx answer says `committed: false`: nothing was saved, so the console need
@@ -88,6 +91,11 @@ function describe(error: unknown, req: Parameters<ErrorRequestHandler>[1]): Answ
     return { status: 503, headers: { "Retry-After": String(error.retryAfterSeconds) }, body: { error: error.message, ...(notSaved ? { committed: false } : {}), requestId } };
   }
   const general = (): Answer => ({ status: 500, body: notSaved ? { error: NOT_SAVED, committed: false, requestId } : { error: GENERAL_FAILURE, requestId } });
+  if (error instanceof ResponseContractError) {
+    // The paths that failed locate the fault; the values stay out of the log.
+    req.log.error({ event: "response.invalid", issues: error.issues, err: error }, "An answer did not match its contract");
+    return general();
+  }
   // A failure is logged with its stack, which is what locates it; the answer stays general.
   if (!(error instanceof Error) || programmingErrors.some((kind) => error instanceof kind)) {
     req.log.error({ event: "request.failed", err: error instanceof Error ? error : new Error(String(error)) }, "Valopay operation failed");

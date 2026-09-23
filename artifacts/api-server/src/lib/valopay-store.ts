@@ -10,9 +10,10 @@ import type { StaffLenderAccessInput } from '@workspace/valopay-schema';
 import type { VerifiedClerkSession } from './pilot-access';
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
-import { closeTimeOf, definitiveRefusalStatuses, nextCloseInstant, sameJson } from "@workspace/valopay-schema";
+import { closeTimeOf, definitiveRefusalStatuses, invitationAcceptedSchema, nextCloseInstant, sameJson } from "@workspace/valopay-schema";
 import { sha256Hex, canonicalDigest, requestFingerprint, auditEntryData, verifyAuditChain } from "./digests";
 import { recordChanged, nextRecordVersion } from "./edit-versions";
+import { contractAnswer } from './contract';
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { recordsOf } from "../domain/records";
 import { nextCloseRetry, type CloseRetry } from "../domain/close";
@@ -151,8 +152,10 @@ const operationView = (row: OperationRow) => ({ id: row.id, label: row.label, ac
     : row.status === 'cancelled' ? (row.receipt?.rejected ? `The service refused this request: ${row.receipt.rejected.message} Correct it and submit it again.` : 'Cancelled before completion. This request cannot run again.')
     : 'Completion has not been confirmed. Check the original request.',
   // Only a compact result reference. Original payloads and export locations stay private.
-  recordId: row.receipt?.record?.id || row.receipt?.id || null,
-  recordKind: row.receipt?.record?.kind || row.receipt?.kind || null });
+  recordId: textOrNull(row.receipt?.record?.id) ?? textOrNull(row.receipt?.id),
+  recordKind: textOrNull(row.receipt?.record?.kind) ?? textOrNull(row.receipt?.kind) });
+/** A receipt field as the journal names it: text, or null for anything else (a sealed receipt, a count, nothing). */
+function textOrNull(value: unknown): string | null { return typeof value === 'string' && value ? value : null; }
 
 export async function prepareOperation(ctx: StoreContext, merchantId: string, key: string, request: StoredRequest) {
   const session = sessionFor(ctx); await readMerchant(ctx, merchantId, 'update');
@@ -300,20 +303,22 @@ export async function caseAssignees(ctx: StoreContext) {
   const session = sessionFor(ctx);
   if (ctx.accessMode !== 'staff') return roles.filter(role => role !== 'Read-only').map(role => ({ actor: `Sandbox ${role}`, name: `Demo ${role}`, role }));
   if (!session.lockedMerchantId) fail('Select a lender before looking up available assignees.', 409);
+  // The same three fields as a demo role: who, their name and their role; the membership's other details stay in the team directory.
   return (await session.client.query<StaffRow>(`SELECT member.* FROM valopay_staff_memberships member
     WHERE member.workspace_id=$1 AND member.status='active' AND member.expires_at>$2 AND member.role<>'Read-only'
       AND (member.role='Admin' OR EXISTS (SELECT 1 FROM valopay_staff_lender_access grant_row WHERE grant_row.membership_id=member.id AND grant_row.merchant_id=$3))
-    ORDER BY member.display_name,member.id`, [session.workspace.id, ctx.now, session.lockedMerchantId])).rows.map(staffView);
+    ORDER BY member.display_name,member.id`, [session.workspace.id, ctx.now, session.lockedMerchantId])).rows.map(row => { const { actor, name, role } = staffView(row); return { actor, name, role }; });
 }
 export async function staffDirectory(ctx: StoreContext) {
   const session = sessionFor(ctx);
-  if (ctx.accessMode !== 'staff') return { mode: 'sandbox', actor: ctx.actor, members: [], invitations: [], events: [], message: 'Real staff access is not enabled on this host. Demo roles are for practice only.' };
+  if (ctx.accessMode !== 'staff') return { mode: 'sandbox', actor: ctx.actor, members: [], lenders: [], invitations: [], events: [], message: 'Real staff access is not enabled on this host. Demo roles are for practice only.' };
   const memberRows = (await session.client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 ORDER BY display_name,id', [session.workspace.id])).rows;
   const grants = (await session.client.query<{ membership_id: string; merchant_id: string }>(`SELECT grant_row.membership_id,grant_row.merchant_id FROM valopay_staff_lender_access grant_row JOIN valopay_staff_memberships member ON member.id=grant_row.membership_id JOIN valopay_merchants lender ON lender.id=grant_row.merchant_id WHERE member.workspace_id=$1 AND lender.workspace_id=$1 ORDER BY grant_row.merchant_id`, [session.workspace.id])).rows;
   const members = memberRows.map(row => ({ ...staffView(row), lenderIds: row.role === 'Admin' ? [] : grants.filter(grant => grant.membership_id === row.id).map(grant => grant.merchant_id), allLenders: row.role === 'Admin' }));
   const lenders = ctx.role === 'Admin' ? await listMerchants(ctx) : [];
-  const invitations = ctx.role === 'Admin' ? (await session.client.query('SELECT id,email,role,status,expires_at AS "expiresAt" FROM valopay_staff_invitations WHERE workspace_id=$1 ORDER BY created_at DESC LIMIT 100', [session.workspace.id])).rows : [];
-  const events = ctx.role === 'Admin' ? (await session.client.query('SELECT id,actor,action,subject,detail,created_at AS "createdAt" FROM valopay_staff_events WHERE workspace_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100', [session.workspace.id])).rows : [];
+  // Timestamps as the ISO text the answer carries, as every other view writes them.
+  const invitations = ctx.role === 'Admin' ? (await session.client.query<{ id: string; email: string; role: string; status: string; expiresAt: Date }>('SELECT id,email,role,status,expires_at AS "expiresAt" FROM valopay_staff_invitations WHERE workspace_id=$1 ORDER BY created_at DESC LIMIT 100', [session.workspace.id])).rows.map(row => ({ ...row, expiresAt: row.expiresAt.toISOString() })) : [];
+  const events = ctx.role === 'Admin' ? (await session.client.query<{ id: string; actor: string; action: string; subject: string; detail: unknown; createdAt: Date }>('SELECT id,actor,action,subject,detail,created_at AS "createdAt" FROM valopay_staff_events WHERE workspace_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100', [session.workspace.id])).rows.map(row => ({ ...row, createdAt: row.createdAt.toISOString() })) : [];
   return { mode: 'staff', actor: ctx.actor, members, lenders, invitations, events, message: 'Verified staff access. Membership, lender access and MFA are checked for every request. Financial records remain synthetic.' };
 }
 export function viewerScope(ctx: StoreContext) { const session = sessionFor(ctx); return digest(`viewer:${session.workspace.id}:${session.owner || session.principal}`); }
@@ -416,11 +421,16 @@ async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: strin
       ON CONFLICT(workspace_id,user_id) DO UPDATE SET display_name=EXCLUDED.display_name,role=EXCLUDED.role,status='active',expires_at=EXCLUDED.expires_at,updated_at=greatest(now(),valopay_staff_memberships.updated_at+interval '1 millisecond')`, [randomUUID(), team.workspace_id, auth.userId, invite.email, invite.role]);
     await client.query("UPDATE valopay_staff_invitations SET status='accepted' WHERE id=$1 AND workspace_id=$2", [invite.id, team.workspace_id]);
     await staffEvent(client, team.workspace_id, `Clerk:${auth.userId}`, 'staff.accepted', invite.id, { role: invite.role });
+    // Checked before COMMIT: an answer that does not match its contract saves nothing.
+    const accepted = contractAnswer(invitationAcceptedSchema, { message: 'Invitation accepted. Your pilot membership lasts 90 days.', role: invite.role });
     committing = true;
-    await client.query('COMMIT'); return { message: 'Invitation accepted. Your pilot membership lasts 90 days.', role: invite.role };
+    await client.query('COMMIT'); return accepted;
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch { /* the transaction is already closed */ }
-    throw failedTransaction(error, { committing, lost: guard.lost(), write: true });
+    const failed = failedTransaction(error, { committing, lost: guard.lost(), write: true });
+    // Before COMMIT was sent nothing was saved, and the answer may say so (as inWorkspace's do).
+    if (failed === error && !committing) markRolledBack(error);
+    throw failed;
   } finally { guard.release(); }
 }
 

@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { inWorkspace, verifyWorkspaceEncryption, protectWorkspacePayloads, runtimeIsolationVerified, type StoreContext } from '../lib/valopay-store';
 import { payloadEncryptionKey } from '../lib/protected-payloads';
+import { accessReadinessSchema, encryptionVerificationSchema, payloadProtectionSchema } from '@workspace/valopay-schema';
+import { contractAnswer } from '../lib/contract';
 import { staffMode, staffPolicy } from '../lib/staff-access';
 const router=Router();
 /** The readiness checks for one workspace transaction. The database check is this transaction's own:
@@ -17,7 +19,7 @@ export async function readinessChecks(ctx:StoreContext){
     {id:'encryption',name:'Managed payload encryption',state:encryptionConfigured?'configured_not_verified':'not_configured',detail:encryptionConfigured?'A wrapping key is configured. Verify access, then protect existing imports and recovery payloads.':'Configure a managed wrapping key. No key or credential is stored in this screen.'},
   ]};
 }
-router.get('/v1/team/readiness',async(req,res)=>res.json(await inWorkspace(req,res,readinessChecks,'read')));
-router.post('/v1/team/readiness/encryption',async(req,res)=>res.json(await inWorkspace(req,res,verifyWorkspaceEncryption,'team')));
-router.post('/v1/team/readiness/protect',async(req,res)=>res.json(await inWorkspace(req,res,protectWorkspacePayloads,'team')));
+router.get('/v1/team/readiness',async(req,res)=>res.json(await inWorkspace(req,res,async ctx=>contractAnswer(accessReadinessSchema,await readinessChecks(ctx)),'read')));
+router.post('/v1/team/readiness/encryption',async(req,res)=>res.json(await inWorkspace(req,res,async ctx=>contractAnswer(encryptionVerificationSchema,await verifyWorkspaceEncryption(ctx)),'team')));
+router.post('/v1/team/readiness/protect',async(req,res)=>res.json(await inWorkspace(req,res,async ctx=>contractAnswer(payloadProtectionSchema,await protectWorkspacePayloads(ctx)),'team')));
 export default router;

@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { lenderPath, pilotRequest, usePilotMutation } from "@/lib/pilot";
+import { operationListSchema } from "@workspace/valopay-schema";
 import {
   PilotError,
   PilotHeading,
@@ -19,12 +20,12 @@ export default function OperationsPage() {
     setOffset(0);
     setMessage("");
   }, [merchantId, workspace?.actor]);
-  const list = useQuery<any>({
+  const list = useQuery({
     queryKey: ["pilot", "operations", workspace?.actor, merchantId, offset],
     enabled: !!merchantId,
     refetchInterval: 15000,
     queryFn: ({ signal }) =>
-      pilotRequest(lenderPath("/operations", merchantId, offset), { signal }),
+      pilotRequest(lenderPath("/operations", merchantId, offset), operationListSchema, { signal }),
   });
   const action = usePilotMutation((result) => {
     setMessage(
@@ -134,7 +135,7 @@ export default function OperationsPage() {
           and evidence requests will appear here.
         </p>
       )}
-      {list.data?.total > 25 && (
+      {list.data && list.data.total > 25 && (
         <div className="flex items-center gap-3">
           <Button
             variant="outline"

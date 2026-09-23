@@ -16,8 +16,21 @@ export interface PaystackInbox {
   canRunFixtures: boolean;
   state: 'configuration_required';
   message: string;
+  /** @maxItems 50 */
   events: ProviderEvent[];
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
   total: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
   quarantined: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
   duplicates: number;
 }

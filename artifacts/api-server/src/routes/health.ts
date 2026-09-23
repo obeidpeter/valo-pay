@@ -3,6 +3,7 @@ import { HealthCheckResponse, ReadinessCheckResponse } from "@workspace/api-zod"
 import { BUILD, STARTED_AT } from "../lib/build-info";
 import { schedulerStatus } from "../lib/close-scheduler";
 import { pingDatabase, type DatabaseReadiness } from "../lib/valopay-store";
+import { contractAnswer } from "../lib/contract";
 
 const router: IRouter = Router();
 
@@ -17,7 +18,7 @@ const router: IRouter = Router();
  */
 export function readinessAnswer(database: DatabaseReadiness) {
   const ready = database.status === "ok" && (database.schema.status === "ok" || database.schema.status === "indexes_missing");
-  return { httpStatus: ready ? 200 : 503, body: ReadinessCheckResponse.parse({ status: ready ? "ok" : "degraded", build: BUILD, checks: { database: { status: database.status, latencyMs: database.latencyMs }, schema: { status: database.schema.status } } }) };
+  return { httpStatus: ready ? 200 : 503, body: contractAnswer(ReadinessCheckResponse, { status: ready ? "ok" : "degraded", build: BUILD, checks: { database: { status: database.status, latencyMs: database.latencyMs }, schema: { status: database.schema.status } } }) };
 }
 
 let reportedIndexes = "";
@@ -50,7 +51,7 @@ export function readinessWarning(database: DatabaseReadiness): { fields: Record<
  */
 router.get("/healthz", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
-  res.json(HealthCheckResponse.parse({ status: "ok", build: BUILD, startedAt: STARTED_AT, uptimeSeconds: Math.round(process.uptime()), scheduler: schedulerStatus() }));
+  res.json(contractAnswer(HealthCheckResponse, { status: "ok", build: BUILD, startedAt: STARTED_AT, uptimeSeconds: Math.round(process.uptime()), scheduler: schedulerStatus() }));
 });
 
 router.get("/readyz", async (req, res) => {

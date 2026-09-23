@@ -5,12 +5,17 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
+import type { SourceDeliveryStatus } from './sourceDeliveryStatus';
 
 /**
  * Where a profile stands against its cadence: missed deliveries, the next expected time and the last committed batch.
  */
 export interface SourceDelivery {
-  status: string;
+  status: SourceDeliveryStatus;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
   missedDeliveries: number;
   nextExpectedAt: string;
   /** @nullable */

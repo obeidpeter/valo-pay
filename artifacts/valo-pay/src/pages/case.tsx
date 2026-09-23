@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { useWorkspace } from "@/lib/workspace-context";
 import { usePilotMutation, usePilotQuery } from "@/lib/pilot";
+import { caseDetailSchema } from "@workspace/valopay-schema";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import {
   PilotError,
@@ -39,7 +40,7 @@ function MissingCase({ id }: { id: string }) {
 }
 export default function CasePage({ params }: { params: { id: string } }) {
   const { merchantId } = useWorkspace(),
-    query = usePilotQuery(`/pilot/cases/${params.id}`);
+    query = usePilotQuery(`/pilot/cases/${params.id}`, caseDetailSchema);
   // A confirmed 404 is its own page; any other failure keeps the retry below.
   if ((query.error as { status?: number } | null)?.status === 404)
     return <MissingCase id={params.id} />;
