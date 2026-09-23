@@ -18,7 +18,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Loading } from "@/components/loading";
 import { LoadProblem } from "@/components/load-problem";
 import { useConnected } from "@/lib/connected";
-import { formatDate, formatKobo } from "@/lib/formatters";
+import { formatCount, formatDate, formatKobo, formatNumber } from "@/lib/formatters";
 import { nairaToKobo } from "@/lib/money-input";
 import { useFormDraft, useUnsavedChanges } from "@/lib/unsaved-changes";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -274,11 +274,11 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
       <div className="connected-metrics">
         <div className="connected-metric">
           <span>Sample assessments</span>
-          <strong>{data.assessments.length}</strong>
+          <strong>{formatNumber(data.assessments.length)}</strong>
         </div>
         <div className="connected-metric">
           <span>Awaiting a reviewer</span>
-          <strong>{completeCount}</strong>
+          <strong>{formatNumber(completeCount)}</strong>
         </div>
         <div className="connected-metric">
           <span>Decision model</span>
@@ -443,7 +443,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
               >
                 {[1, 2, 3, 6, 9, 12, 18, 24].map((value) => (
                   <option key={value} value={value}>
-                    {value} repayment{value === 1 ? "" : "s"}
+                    {formatCount(value, "repayment")}
                   </option>
                 ))}
               </select>
@@ -686,11 +686,11 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
                   <dl className="text-sm space-y-3">
                     <div className="flex justify-between gap-3">
                       <dt>Source accounts</dt>
-                      <dd>{result!.evidence.sourceCount}</dd>
+                      <dd>{formatNumber(result!.evidence.sourceCount)}</dd>
                     </div>
                     <div className="flex justify-between gap-3">
                       <dt>Complete history</dt>
-                      <dd>{result!.evidence.coverageDays} days</dd>
+                      <dd>{formatCount(result!.evidence.coverageDays, "day")}</dd>
                     </div>
                     <div>
                       <dt className="text-muted-foreground">
@@ -732,11 +732,20 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
                         />
                       </dl>
                       <p className="text-sm">
-                        {result!.features.includedTransactionRefs.length}{" "}
-                        included observations ·{" "}
-                        {result!.features.excludedTransactions.length} excluded
-                        · {result!.features.duplicatesIgnored} duplicate
-                        observations ignored.
+                        {formatCount(
+                          result!.features.includedTransactionRefs.length,
+                          "included observation",
+                        )}{" "}
+                        ·{" "}
+                        {formatNumber(
+                          result!.features.excludedTransactions.length,
+                        )}{" "}
+                        excluded ·{" "}
+                        {formatCount(
+                          result!.features.duplicatesIgnored,
+                          "duplicate observation",
+                        )}{" "}
+                        ignored.
                       </p>
                       <p className="text-xs text-muted-foreground">
                         Matched own-account transfers, loan proceeds, refunds

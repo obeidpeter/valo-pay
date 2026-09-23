@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { readableLabel } from '@/components/record-label';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetOverview, getGetOverviewQueryKey } from '@workspace/api-client-react';
-import { formatKobo, formatDate, formatCompactDate, formatNumber, formatCount } from '@/lib/formatters';
+import { formatKobo, formatDate, formatCompactDate, formatNumber, formatCount, formatPercent } from '@/lib/formatters';
 import { ArrowDownLeft, ArrowUpRight, ArrowRight, AlertCircle, CheckCheck, Clock, Activity, FileBarChart2, ShieldCheck } from 'lucide-react';
 
 const queueDestinations: Record<string, string> = {
@@ -77,7 +77,7 @@ export default function OverviewPage() {
                   <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${metric.key === 'settled' ? 'bg-success/10 text-success' : metric.key === 'exceptions' ? 'bg-warning text-warning-foreground' : 'bg-secondary/60 text-muted-foreground'}`}><Icon aria-hidden="true" className="h-4 w-4" /></span>
                 </div>
                 <p className="mt-4 break-words text-[1.75rem] font-semibold leading-none tracking-tight tabular-nums">
-                  {metric.unit === 'kobo' ? formatKobo(metric.value) : formatNumber(metric.value)}{metric.unit === 'percent' ? '%' : ''}
+                  {metric.unit === 'kobo' ? formatKobo(metric.value) : metric.unit === 'percent' ? formatPercent(metric.value / 100) : formatNumber(metric.value)}
                   {metric.unit !== 'kobo' && metric.unit !== 'percent' && metric.unit !== 'count' && <span className="ml-1 text-sm font-normal text-muted-foreground">{metric.unit}</span>}
                 </p>
                 {metric.detail && <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{metric.detail}</p>}
@@ -90,7 +90,7 @@ export default function OverviewPage() {
       <section aria-labelledby="overview-alerts-title">
         <div className="mb-3 flex items-center gap-2">
           <h2 id="overview-alerts-title" className="text-sm font-semibold">Alerts</h2>
-          {overview.alerts.length > 0 && <span className="rounded-full bg-warning px-2 py-0.5 text-xs font-medium text-warning-foreground">{overview.alerts.length}</span>}
+          {overview.alerts.length > 0 && <span className="rounded-full bg-warning px-2 py-0.5 text-xs font-medium text-warning-foreground">{formatNumber(overview.alerts.length)}</span>}
         </div>
         {overview.alerts.length === 0 ? (
           <div className="flex items-start gap-3 rounded-xl border border-success/20 bg-success/5 p-4">
@@ -129,7 +129,7 @@ export default function OverviewPage() {
             {overview.queues.map(queue => (
               <Link key={queue.key} href={queueDestinations[queue.key] || '/exceptions'} className="group flex min-h-16 items-center gap-3 px-5 py-3.5 transition-colors hover:bg-secondary/40">
                 <div className="min-w-0 flex-1"><p className="text-sm font-medium">{queue.label}</p><p className="mt-0.5 text-xs text-muted-foreground">{queue.detail}</p></div>
-                <span className={`flex h-7 min-w-7 items-center justify-center rounded-md px-1.5 text-xs font-semibold tabular-nums ${queue.value > 0 ? 'bg-warning text-warning-foreground' : 'bg-secondary/60 text-muted-foreground'}`}>{queue.value}</span>
+                <span className={`flex h-7 min-w-7 items-center justify-center rounded-md px-1.5 text-xs font-semibold tabular-nums ${queue.value > 0 ? 'bg-warning text-warning-foreground' : 'bg-secondary/60 text-muted-foreground'}`}>{formatNumber(queue.value)}</span>
                 <ArrowRight aria-hidden="true" className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 motion-reduce:transform-none" />
               </Link>
             ))}

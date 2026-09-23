@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Loading } from "@/components/loading";
 import { LoadProblem } from "@/components/load-problem";
 import { useConnected } from "@/lib/connected";
-import { formatDate } from "@/lib/formatters";
+import { formatDate, formatNumber } from "@/lib/formatters";
 import { useFormDraft } from "@/lib/unsaved-changes";
 import { useWorkspace } from "@/lib/workspace-context";
 export default function ConnectionsPage() {
@@ -100,7 +100,9 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
         <div className="connected-metric">
           <span>Active sample permissions</span>
           <strong>
-            {data.consents.filter((c) => c.effectiveStatus === "active").length}
+            {formatNumber(
+              data.consents.filter((c) => c.effectiveStatus === "active").length,
+            )}
           </strong>
         </div>
         <div className="connected-metric">

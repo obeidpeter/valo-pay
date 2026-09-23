@@ -35,7 +35,7 @@ import {
 import { useConnected } from "@/lib/connected";
 import { useWorkspace } from "@/lib/workspace-context";
 import { useDialogFocusReturn } from "@/lib/focus";
-import { formatCompactDate, formatDate, formatKobo } from "@/lib/formatters";
+import { formatCompactDate, formatCount, formatDate, formatKobo, formatPercent } from "@/lib/formatters";
 import { nairaToKobo } from "@/lib/money-input";
 import { useFormDraft } from "@/lib/unsaved-changes";
 
@@ -467,7 +467,7 @@ export default function CashDeskPage() {
     ask({
       action: "cash.forecast",
       title: "Save forecast version",
-      detail: `Keep ${downside}% of expected receipts, delayed by ${delay} days, with a ${formatKobo(bufferMinor)} planning buffer. The base case keeps approved amounts. No bank balance or commitment will be changed.`,
+      detail: `Keep ${formatPercent(downsideInflowBps / 10000)} of expected receipts, delayed by ${formatCount(Number(delay), "day")}, with a ${formatKobo(bufferMinor)} planning buffer. The base case keeps approved amounts. No bank balance or commitment will be changed.`,
       data: {
         downsideInflowBps,
         downsideDelayDays: Number(delay),
@@ -584,7 +584,7 @@ export default function CashDeskPage() {
             <Metric
               title="Booked cash"
               value={amount(position?.bookedMinor)}
-              detail={`${position?.accountCount ?? 0} business accounts · own-account transfers excluded from income`}
+              detail={`${formatCount(position?.accountCount ?? 0, "business account")} · own-account transfers excluded from income`}
               accent
             />
             <Metric
@@ -1292,7 +1292,7 @@ export default function CashDeskPage() {
                         Approved sample net-pay run
                       </h3>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {r.summary.itemCount} items · planned for{" "}
+                        {formatCount(r.summary.itemCount, "item")} · planned for{" "}
                         {formatCompactDate(r.plan.paymentDate)} · source balance{" "}
                         {formatDate(r.plan.asOf)}
                       </p>

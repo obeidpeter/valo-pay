@@ -21,7 +21,7 @@ import {
   pilotField,
 } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
-import { formatDate, formatKobo } from "@/lib/formatters";
+import { formatDate, formatKobo, formatNumber } from "@/lib/formatters";
 import { ScrollFrame } from "@/components/scroll-frame";
 import { readableLabel } from "@/components/record-label";
 import { ImportCorrections } from "@/components/import-corrections";
@@ -183,8 +183,9 @@ function LenderImports() {
               Previous batches
             </Button>
             <span className="text-sm">
-              {offset + 1}–{Math.min(offset + 25, list.data.total)} of{" "}
-              {list.data.total}
+              {formatNumber(offset + 1)}–
+              {formatNumber(Math.min(offset + 25, list.data.total))} of{" "}
+              {formatNumber(list.data.total)}
             </span>
             <Button
               variant="outline"
@@ -904,7 +905,7 @@ function BatchEditor({
           )}
           {!!batch.data.recordIds?.length && (
             <p className="text-sm text-muted-foreground">
-              {batch.data.recordIds.length}{" "}
+              {formatNumber(batch.data.recordIds.length)}{" "}
               {batch.data.recordIds.length === 1 ? "record is" : "records are"}{" "}
               linked to this batch. Continue in{" "}
               <Link className="text-primary underline" href="/reconciliation">

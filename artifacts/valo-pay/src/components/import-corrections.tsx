@@ -15,7 +15,7 @@ import {
   usePilotQuery,
 } from "@/lib/pilot";
 import { nairaToKobo, koboToNaira } from "@/lib/money-input";
-import { formatDate, formatKobo } from "@/lib/formatters";
+import { formatDate, formatKobo, formatNumber } from "@/lib/formatters";
 import { readableLabel } from "@/components/record-label";
 import { PilotError, RecoveryNotice, pilotField } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
@@ -105,7 +105,7 @@ function Comparison({ preview }: { preview: Preview }) {
       <details>
         <summary className="cursor-pointer text-sm font-medium">
           Affected payments, collection evidence and closes (
-          {preview.affected.length})
+          {formatNumber(preview.affected.length)})
         </summary>
         <div className="mt-2 max-h-64 space-y-2 overflow-auto">
           {preview.affected.length ? (

@@ -12,7 +12,7 @@ import {
 } from "@/components/pilot-ui";
 import { StaffSession } from "@/components/staff-session";
 import { Button } from "@/components/ui/button";
-import { formatDate } from "@/lib/formatters";
+import { formatCount, formatDate } from "@/lib/formatters";
 import { AccessReadiness } from '@/components/access-readiness';
 
 const roles = [
@@ -227,7 +227,7 @@ function Member({ member, editable, lenders }: { member: any; editable: boolean;
           {formatDate(member.expiresAt)}
         </p>
       </div>
-      <p className="text-sm text-muted-foreground">{member.role === "Admin" ? "All lenders in this workspace" : `${member.lenderIds?.length || 0} permitted lenders`}</p>
+      <p className="text-sm text-muted-foreground">{member.role === "Admin" ? "All lenders in this workspace" : formatCount(member.lenderIds?.length || 0, "permitted lender")}</p>
       {editable && (
         <form
           className="space-y-3"

@@ -10,7 +10,7 @@ import { usePagedQueue } from '@/lib/use-paged-queue';
 import { SavedQueueViews } from '@/components/saved-queue-views';
 import { AlertTriangle, User, Calendar } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
-import { formatKobo, formatDate } from '@/lib/formatters';
+import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { exceptionSeverities, failureCodeList, resolutionCodesFor, resolveExceptionType } from '@workspace/valopay-schema';
 import { readableLabel, RecordLabel, StatusBadge } from '@/components/record-label';
@@ -68,7 +68,7 @@ export default function ExceptionsPage() {
   const filters: Array<{ key: typeof filter; label: string }> = [
     { key: 'open', label: 'All open' }, { key: 'high', label: 'High severity' },
     { key: 'overdue', label: 'Overdue' }, { key: 'due-today', label: 'Due today' }, { key: 'resolved', label: 'Resolved' },
-  ].map(item => ({ ...item, key: item.key as typeof filter, label: item.label + ' (' + (data?.counts[item.key] ?? '…') + ')' }));
+  ].map(item => ({ ...item, key: item.key as typeof filter, label: item.label + ' (' + (typeof data?.counts[item.key] === 'number' ? formatNumber(data.counts[item.key]!) : '…') + ')' }));
 
   if (!merchantId) return null;
 

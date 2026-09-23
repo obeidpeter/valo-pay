@@ -10,7 +10,7 @@ import {
   RecoveryNotice,
 } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
-import { formatDate } from "@/lib/formatters";
+import { formatDate, formatNumber } from "@/lib/formatters";
 
 export default function OperationsPage() {
   const { merchantId, workspace } = useWorkspace(),
@@ -145,8 +145,9 @@ export default function OperationsPage() {
             Previous
           </Button>
           <span className="text-sm">
-            {offset + 1}–{Math.min(offset + 25, list.data.total)} of{" "}
-            {list.data.total}
+            {formatNumber(offset + 1)}–
+            {formatNumber(Math.min(offset + 25, list.data.total))} of{" "}
+            {formatNumber(list.data.total)}
           </span>
           <Button
             variant="outline"

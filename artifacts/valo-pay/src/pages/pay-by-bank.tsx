@@ -19,7 +19,7 @@ import {
 import { Loading } from "@/components/loading";
 import { LoadProblem } from "@/components/load-problem";
 import { useConnected, type ConnectedRecord } from "@/lib/connected";
-import { formatKobo, formatDate } from "@/lib/formatters";
+import { formatKobo, formatDate, formatNumber } from "@/lib/formatters";
 import { nairaToKobo, koboToNaira } from "@/lib/money-input";
 import { useFormDraft } from "@/lib/unsaved-changes";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -172,17 +172,19 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
         <div className="connected-metric">
           <span>Confirmed sample receipts</span>
           <strong>
-            {payments.intents.filter((i) => i.status === "confirmed").length}
+            {formatNumber(
+              payments.intents.filter((i) => i.status === "confirmed").length,
+            )}
           </strong>
         </div>
         <div className="connected-metric">
           <span>Awaiting a verified outcome</span>
           <strong>
-            {
+            {formatNumber(
               payments.intents.filter((i) =>
                 ["authorised", "pending", "unknown"].includes(i.status),
-              ).length
-            }
+              ).length,
+            )}
           </strong>
         </div>
         <div className="connected-metric">

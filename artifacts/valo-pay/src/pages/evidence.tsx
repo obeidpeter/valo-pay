@@ -7,7 +7,7 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { useGetGates, useListRecords, getGetGatesQueryKey, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { ShieldCheck, AlertTriangle, FileCheck, CheckCircle, Search } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
-import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
+import { formatKobo, formatDate, formatNumber, formatPercent } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { readableLabel } from '@/components/record-label';
 import { LoadProblem } from '@/components/load-problem';
@@ -239,7 +239,7 @@ export default function EvidencePage() {
                     <td className="px-6 py-4 font-mono">{formatKobo(Number(comm.data?.averageTicketKobo || 0))}</td>
                     <td className="px-6 py-4 font-mono">{formatKobo(Number(comm.data?.licenceKobo || 0))}</td>
                     <td className="px-6 py-4 font-mono text-xs text-muted-foreground">
-                      {Number(comm.data?.usageBps || 30) / 100}% (up to {formatKobo(Number(comm.data?.usageCapKobo || 15000))} per collection)
+                      {formatPercent(Number(comm.data?.usageBps || 30) / 10000)} (up to {formatKobo(Number(comm.data?.usageCapKobo || 15000))} per collection)
                     </td>
                     <td className="px-6 py-4">
                       {comm.data?.signed ? (

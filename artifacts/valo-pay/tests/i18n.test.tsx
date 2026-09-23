@@ -1,6 +1,7 @@
 // The console in the market's conventions: British English declared on the page,
 // every instant in West Africa Time with the zone named, counts with their nouns,
 // and names with Yoruba and Igbo marks shown as written and found without them.
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -42,6 +43,21 @@ describe("internationalisation", () => {
     const stamps = within(table).getAllByText(/\d{1,2} \w{3,4} \d{4}, \d{2}:\d{2} WAT$/);
     expect(stamps.length).toBeGreaterThan(0);
     expect(within(table).queryByText(/\d{2}:\d{2}$/)).toBeNull();
+  });
+
+  it("groups large counts the market's way wherever they are shown", async () => {
+    api.mutate((state) => {
+      const proposal = state.records.find((record) => record.kind === "allocations" && record.status === "proposed")!;
+      const proposed = state.records.filter((record) => record.kind === "allocations" && record.status === "proposed").length;
+      for (let i = proposed; i < 1234; i++) state.records.push({ ...structuredClone(proposal), id: randomUUID(), reference: `BULK-MATCH-${i}` });
+    });
+    const overview = renderApp("/overview");
+    const queue = await screen.findByRole("link", { name: /Matches to review/ });
+    expect(queue.textContent).toMatch(/1,234$/);
+    overview.unmount();
+    renderApp("/reconciliation?view=review");
+    expect(await screen.findByText("1,234 pending")).toBeTruthy();
+    expect(screen.getByText("1–25 of 1,234 proposed matches")).toBeTruthy();
   });
 
   it("agrees a badge's noun with its number", async () => {

@@ -7,7 +7,7 @@ import { EmptyRow } from '@/components/empty-state';
 import { LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
-import { formatKobo, formatDate, formatCount } from '@/lib/formatters';
+import { formatKobo, formatDate, formatCount, formatNumber, formatPercent } from '@/lib/formatters';
 import { CheckSquare, Info, ShieldAlert, CornerUpLeft, Plus, ClipboardCheck, RefreshCw } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { RecordDialog } from '@/components/record-dialog';
@@ -184,7 +184,7 @@ export default function ReconciliationPage() {
           {[
             ['Evidence resolved', runResult.data?.observationsResolved], ['Awaiting review', runResult.data?.proposed],
             ['Unallocated payments', runResult.data?.unallocated], ['Possible duplicates', runResult.data?.possibleDuplicates],
-          ].map(([label, count]) => <div key={String(label)}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-lg font-semibold tabular-nums">{Number(count || 0)}</dd></div>)}
+          ].map(([label, count]) => <div key={String(label)}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-lg font-semibold tabular-nums">{formatNumber(Number(count || 0))}</dd></div>)}
         </dl>
       </section>}
 
@@ -204,7 +204,7 @@ export default function ReconciliationPage() {
             <CheckSquare className="h-5 w-5 text-warning-strong" />
             <h2 className="font-semibold">Proposed matches</h2>
             <span className="ml-auto bg-warning text-warning-foreground text-xs font-bold px-2 py-1 rounded-full">
-              {proposals?.total || 0} pending
+              {formatNumber(proposals?.total || 0)} pending
             </span>
           </div>
           
@@ -374,7 +374,7 @@ export default function ReconciliationPage() {
             <ClipboardCheck className="h-5 w-5 text-primary" />
             <h2 className="font-semibold">Match accuracy review</h2>
             <p className="w-full text-xs leading-relaxed text-muted-foreground">Finance checks a sample of automatic matches from the last completed month. Marking a match incorrect stops counting that allocation and reopens the payment and instalment.</p>
-            <p className="text-xs font-medium">{precision?.reviewed || 0} of {precision?.sampleSize || 0} sampled matches reviewed{precision?.falseMatchRate !== null && precision?.falseMatchRate !== undefined ? ` · incorrect match rate ${(Number(precision.falseMatchRate) * 100).toFixed(1)}% (95% confidence interval: ${(Number(precision.interval?.low) * 100).toFixed(1)}% to ${(Number(precision.interval?.high) * 100).toFixed(1)}%)` : ''}.</p>
+            <p className="text-xs font-medium">{formatNumber(Number(precision?.reviewed || 0))} of {formatNumber(Number(precision?.sampleSize || 0))} sampled matches reviewed{precision?.falseMatchRate !== null && precision?.falseMatchRate !== undefined ? ` · incorrect match rate ${formatPercent(Number(precision.falseMatchRate), 1)} (95% confidence interval: ${formatPercent(Number(precision.interval?.low), 1)} to ${formatPercent(Number(precision.interval?.high), 1)})` : ''}.</p>
           </div>
           <ScrollFrame label="Match accuracy review table" className="p-0 overflow-x-auto max-h-[400px] [overflow-anchor:none]">
             <table className="min-w-[780px] w-full text-sm text-left">

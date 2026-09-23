@@ -6,7 +6,7 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { useSafeCreateExport, useSafeRetryExportJob } from '@/lib/safe-mutations';
 import { Button } from './ui/button';
 import { DiscardOriginalRequest } from './discard-original-request';
-import { formatDate } from '@/lib/formatters';
+import { formatDate, formatNumber } from '@/lib/formatters';
 import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
 import { GetExportJobResponse } from '@workspace/api-zod';
 import { Link } from 'wouter';
@@ -98,6 +98,6 @@ export function ExportJobControl({ kind, customerId, closeReviewId, savedJobId, 
       {state === 'ready' && <><p className="text-xs text-muted-foreground">Sample data only{job.generatedAt ? ` · ${formatDate(job.generatedAt)}` : ''}</p><Button asChild variant="outline" size="sm"><a href={job.downloadUrl} target="_blank" rel="noopener noreferrer">{openLabel}</a></Button><details className="text-xs"><summary className="min-h-8 cursor-pointer content-center font-medium">File verification and access</summary><p className="mt-2 font-mono break-all">SHA-256: {job.checksum}</p><p className="mt-2 text-muted-foreground">Workspace access is checked on every download. An administrator may remove this file through an approved retention run after the lender’s retention period. Its checksum and deletion receipt are retained. A copy already downloaded cannot be recalled.</p></details></>}
     </div>}
     {!savedJobId && id && <Link href={`/exports?job=${encodeURIComponent(id)}`} className="inline-flex min-h-9 items-center text-xs text-primary underline">View all saved exports</Link>}
-    {previous.length > 1 && <details className="text-xs"><summary className="cursor-pointer font-medium">Recent exports ({previous.length})</summary><ul className="mt-2 space-y-1">{previous.map(record => <li key={record.id}><button type="button" className="min-h-8 text-left underline" onClick={() => setSelected({ scope, job: { id: record.id, downloadUrl: `/api/v1/exports/${record.id}/download?merchantId=${merchantId}`, status: record.status as ExportResult['status'] } })}>{String(record.data.format).toUpperCase()} · {formatDate(record.createdAt)} · {record.status}</button></li>)}</ul></details>}
+    {previous.length > 1 && <details className="text-xs"><summary className="cursor-pointer font-medium">Recent exports ({formatNumber(previous.length)})</summary><ul className="mt-2 space-y-1">{previous.map(record => <li key={record.id}><button type="button" className="min-h-8 text-left underline" onClick={() => setSelected({ scope, job: { id: record.id, downloadUrl: `/api/v1/exports/${record.id}/download?merchantId=${merchantId}`, status: record.status as ExportResult['status'] } })}>{String(record.data.format).toUpperCase()} · {formatDate(record.createdAt)} · {record.status}</button></li>)}</ul></details>}
   </div>;
 }

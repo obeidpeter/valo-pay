@@ -21,6 +21,6 @@ export function RecordPagination({ pagination, total, busy = false, label = 'rec
         <Button variant="outline" size="sm" disabled={busy || offset + pageSize >= total} onClick={() => setPage(page + 1)} aria-label={`Next page of ${label}`}>Next</Button>
       </div>
     </nav>
-    <p className="hidden print:block border-t px-5 py-3 text-xs">{total ? `${formatNumber(Math.min(offset + 1, total))}–${formatNumber(Math.min(offset + pageSize, total))} of ${formatNumber(total)} ${label}` : `0 ${label}`} · Page {page + 1} of {pages}.{pages > 1 ? ' Current page only. Other pages are not included in this printout.' : ''}</p></>
+    <p className="hidden print:block border-t px-5 py-3 text-xs">{total ? `${formatNumber(Math.min(offset + 1, total))}–${formatNumber(Math.min(offset + pageSize, total))} of ${formatNumber(total)} ${label}` : `0 ${label}`} · Page {formatNumber(page + 1)} of {formatNumber(pages)}.{pages > 1 ? ' Current page only. Other pages are not included in this printout.' : ''}</p></>
   );
 }
