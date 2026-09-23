@@ -64,6 +64,8 @@ async function shutdown(signal: string): Promise<void> {
   exportWorker?.stop();
   await new Promise<void>((resolve) => { server.close(() => resolve()); server.closeIdleConnections(); });
   await scheduler?.settle();
+  // settle() waits for the hand-back writes of the cancelled exports, which need the pool: ending the
+  // pool first would leave every stopped export 'interrupted', waiting up to five minutes for its lease.
   await exportWorker?.settle();
   await closeDatabase();
   logger.info({ event: "server.stopped" }, "Shutdown complete");

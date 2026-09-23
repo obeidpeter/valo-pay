@@ -20,7 +20,7 @@ const oldDirectory=process.env.PRIVATE_OBJECT_DIR;
 process.env.PRIVATE_OBJECT_DIR='/private/synthetic-export-tests';
 let server:Server|undefined;
 function gate(){let resolve!:()=>void;const promise=new Promise<void>(done=>{resolve=done;});return {promise,resolve};}
-async function within<T>(promise:Promise<T>){let timer:ReturnType<typeof setTimeout>;try{return await Promise.race([promise,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error('Export held a database lock during storage I/O.')),3000);})]);}finally{clearTimeout(timer!);}}
+async function within<T>(promise:Promise<T>,message='Export held a database lock during storage I/O.',ms=3000){let timer:ReturnType<typeof setTimeout>;try{return await Promise.race([promise,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error(message)),ms);})]);}finally{clearTimeout(timer!);}}
 const objects=new Map<string,{bytes:Buffer;artifact:ExportArtifact}>();
 let uploads=0;
 const storage:ExportJobStorage={existing:async claim=>objects.get(claim.location.objectName)?.artifact||null,put:async(claim,bytes,artifact)=>{assert.equal(objects.has(claim.location.objectName),false);objects.set(claim.location.objectName,{bytes,artifact});uploads++;}};
@@ -153,16 +153,18 @@ try{
 
  // The worker's stop() takes the same path and logs each hand-back. Both jobs
  // belong to one lender, so the two hand-backs may contend for its lock and retry.
- // Claims are serialised here only so that both attempts start; a claim that
- // finds the lender locked is skipped and picked up by a later poll.
+ // Claims are serialised, and a claim that finds the lender locked (by the other
+ // job's progress write) is tried again, only so that both attempts start: the
+ // worker itself skips such a job and a later poll picks it up.
  const {startExportWorker}=await import('../src/lib/export-worker');
  const stoppedIds=[await api('/exports',{method:'POST',body:input,key:'stopped-one'}),await api('/exports',{method:'POST',body:input,key:'stopped-two'})].map(queued=>queued.body.id as string);
  let uploading=0,bothUploading!:()=>void;const bothBlocked=new Promise<void>(resolve=>{bothUploading=resolve;});
  const lines:Array<{event:string;status?:string}>=[];
+ const claimWhenFree=async(merchant:string,id:string)=>{for(let attempt=0;attempt<50;attempt++){const claimed=await repository.claim(merchant,id);if(claimed)return claimed;await delay(20);}return null;};
  let claims:Promise<unknown>=Promise.resolve();
  const worker=startExportWorker({intervalMs:60_000,log:{info:(line:any)=>lines.push(line),error:(line:any)=>lines.push(line)} as any,
-  repository:{...repository,candidates:async()=>stoppedIds.map(id=>({merchantId,id})),claim:(...args)=>{const next=claims.then(()=>repository.claim(...args));claims=next.catch(()=>null);return next;}},storage:blockedUpload(()=>{if(++uploading===2)bothUploading();}),generate:generateExportArtifact});
- await bothBlocked;worker.stop();await worker.settle();
+  repository:{...repository,candidates:async()=>stoppedIds.map(id=>({merchantId,id})),claim:(merchant,id)=>{const next=claims.then(()=>claimWhenFree(merchant,id));claims=next.catch(()=>null);return next;}},storage:blockedUpload(()=>{if(++uploading===2)bothUploading();}),generate:generateExportArtifact});
+ try{await within(bothBlocked,'Both exports in the stop() check must reach their uploads.',10_000);}finally{worker.stop();await worker.settle();}
  assert.deepEqual(lines.map(line=>[line.event,line.status]),[['export.job','released'],['export.job','released']]);
  for(const id of stoppedIds){const view=(await api(`/exports/${id}`)).body;assert.equal(view.status,'queued');assert.equal(view.error,undefined);}
  state=await read();assert.equal(verifyAudit(state).valid,true,'released and interrupted attempts keep one valid audit chain');
