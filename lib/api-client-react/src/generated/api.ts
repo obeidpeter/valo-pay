@@ -275,7 +275,7 @@ export const getReadinessCheckUrl = () => {
 }
 
 /**
- * Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table or column this build needs. A missing index leaves the answer ready, with checks.schema.status indexes_missing, since every request still works, only slower. The log names what is missing and the migration that adds it, and any connection error; the answer does not. Needs no sandbox or sign-in.
+ * Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table, column, unique index or check constraint this build needs. A missing read index leaves the answer ready, with checks.schema.status indexes_missing, since every request still works, only slower. The log names what is missing and where it comes from, and any connection error; the answer does not. Needs no sandbox or sign-in.
  * @summary Readiness: one bounded round trip to the database, which also checks its schema
  */
 export const readinessCheck = async ( options?: Parameters<typeof customFetch>[1]): Promise<ReadinessStatus> => {

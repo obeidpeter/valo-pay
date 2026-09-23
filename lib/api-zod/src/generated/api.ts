@@ -41,7 +41,7 @@ export const HealthCheckResponse = zod.object({
 
 
 /**
- * Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table or column this build needs. A missing index leaves the answer ready, with checks.schema.status indexes_missing, since every request still works, only slower. The log names what is missing and the migration that adds it, and any connection error; the answer does not. Needs no sandbox or sign-in.
+ * Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table, column, unique index or check constraint this build needs. A missing read index leaves the answer ready, with checks.schema.status indexes_missing, since every request still works, only slower. The log names what is missing and where it comes from, and any connection error; the answer does not. Needs no sandbox or sign-in.
  * @summary Readiness: one bounded round trip to the database, which also checks its schema
  */
 export const ReadinessCheckResponse = zod.object({
@@ -53,10 +53,10 @@ export const ReadinessCheckResponse = zod.object({
   "latencyMs": zod.number().int()
 }).describe('One round trip to the database and how long it took.'),
   "schema": zod.object({
-  "status": zod.enum(['ok', 'indexes_missing', 'incomplete', 'unchecked']).describe('ok: every table, column and index this build needs is present. indexes_missing: ready, but an index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table or column is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and the migration that adds it.')
-}).describe('Whether the database holds every table, column and index this build needs: ok, indexes_missing (ready, some reads slower), incomplete (not ready) or unchecked while the database does not answer. The server log, not the answer, names what is missing.')
+  "status": zod.enum(['ok', 'indexes_missing', 'incomplete', 'unchecked']).describe('ok: every table, column, unique index, check constraint and read index this build needs is present. indexes_missing: ready, but a read index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table, column, unique index or check constraint is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and where it comes from.')
+}).describe('Whether the database holds every table, column, unique index, check constraint and read index this build needs: ok, indexes_missing (ready, some reads slower), incomplete (not ready) or unchecked while the database does not answer. The server log, not the answer, names what is missing.')
 })
-}).describe('The readiness answer: ok, or degraded while the database does not answer or lacks a table or column this build needs.')
+}).describe('The readiness answer: ok, or degraded while the database does not answer or lacks a table, column, unique index or check constraint this build needs.')
 
 
 /**

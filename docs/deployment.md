@@ -19,8 +19,8 @@ Credentials (`DATABASE_URL`, the Clerk keys, `PRIVATE_OBJECT_DIR` and any option
 
 The deployment's start-up health check is `GET /api/readyz`, not the liveness answer. Readiness makes one bounded round trip to the database and reads its catalogue, so:
 
-- a database that does not answer, or lacks a table or column this build needs (a migration not yet applied), answers 503, the health check fails and the new build does not go live;
-- a database that lacks only an index a migration adds answers 200 with `checks.schema.status` `indexes_missing`: every request still works, only slower, so the release goes ahead, and a `readiness.indexes_missing` log line names the index and the migration that adds it.
+- a database that does not answer, or lacks a table or column this build needs (a migration not yet applied) or a unique index or check constraint its schema declares, answers 503, the health check fails and the new build does not go live;
+- a database that lacks only a read index a migration adds answers 200 with `checks.schema.status` `indexes_missing`: every request still works, only slower, so the release goes ahead, and a `readiness.indexes_missing` log line names the index and the migration that adds it.
 
 Apply a build's migrations before publishing it (`docs/database-migrations.md`). The process also refuses to start when a setting breaks its rule: it writes one `config.invalid` line naming each setting to correct, never its value, and exits with status 1, so the health check never passes (`docs/observability.md`).
 

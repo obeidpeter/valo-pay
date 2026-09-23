@@ -3,6 +3,9 @@
 -- Every constraint carries the name the Drizzle schema in lib/db gives it, so a
 -- database built by this file and one built by drizzle-kit push are identical;
 -- the pilot workflow migration rehearsal checks that on a throwaway database.
+-- Earlier copies of this file gave two foreign keys names longer than
+-- PostgreSQL's 63 characters, which it cut short;
+-- 008_export_queue_index_and_foreign_key_names.sql renames those.
 -- It is repeatable. Creating a table locks the tables its foreign keys name,
 -- and creating an index locks its table even when the index exists, so an
 -- open write on one of those tables holds it back, and writes that come after
@@ -26,7 +29,7 @@ CREATE TABLE IF NOT EXISTS valopay_teams (
  organization_id text NOT NULL CONSTRAINT valopay_teams_organization_id_unique UNIQUE, name text NOT NULL
 );
 CREATE TABLE IF NOT EXISTS valopay_staff_memberships (
- id text PRIMARY KEY, workspace_id text NOT NULL CONSTRAINT valopay_staff_memberships_workspace_id_valopay_teams_workspace_id_fk REFERENCES valopay_teams(workspace_id), user_id text NOT NULL,
+ id text PRIMARY KEY, workspace_id text NOT NULL CONSTRAINT valopay_staff_memberships_workspace_id_fk REFERENCES valopay_teams(workspace_id), user_id text NOT NULL,
  display_name text NOT NULL, role text NOT NULL,
  status text NOT NULL DEFAULT 'active',
  expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
@@ -35,7 +38,7 @@ CREATE TABLE IF NOT EXISTS valopay_staff_memberships (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS valopay_staff_workspace_user ON valopay_staff_memberships(workspace_id,user_id);
 CREATE TABLE IF NOT EXISTS valopay_staff_invitations (
- id text PRIMARY KEY, workspace_id text NOT NULL CONSTRAINT valopay_staff_invitations_workspace_id_valopay_teams_workspace_id_fk REFERENCES valopay_teams(workspace_id), email text NOT NULL, role text NOT NULL,
+ id text PRIMARY KEY, workspace_id text NOT NULL CONSTRAINT valopay_staff_invitations_workspace_id_fk REFERENCES valopay_teams(workspace_id), email text NOT NULL, role text NOT NULL,
  token_hash text NOT NULL CONSTRAINT valopay_staff_invitations_token_hash_unique UNIQUE, invited_by text NOT NULL,
  status text NOT NULL DEFAULT 'pending',
  expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),

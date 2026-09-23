@@ -2,7 +2,7 @@
 // order, every one of them, and then names the ones that failed.  Opt-in
 // only: each suite creates fresh synthetic fixtures in that database, so it
 // must be a disposable development database with the schema pushed, never
-// production.  The two migration rehearsals also create throwaway databases
+// production.  The three migration rehearsals also create throwaway databases
 // beside it, so they need a loopback PostgreSQL whose login can create
 // databases; elsewhere they skip, saying why.  The export-stream suite (App
 // Storage credentials) and the HTTP suites (Replit development domain and
@@ -24,6 +24,7 @@ export const suites = [
   "artifacts/api-server/tests/connected-workflows.integration.test.ts",
   "artifacts/api-server/tests/record-index-migration.integration.test.ts",
   "artifacts/api-server/tests/pilot-workflow-migration.integration.test.ts",
+  "artifacts/api-server/tests/schema-push.integration.test.ts",
   "artifacts/api-server/tests/valopay-store.integration.test.ts",
   "artifacts/api-server/tests/close-scheduler.integration.test.ts",
   "artifacts/api-server/tests/pilot-administrators.integration.test.ts",

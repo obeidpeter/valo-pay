@@ -9,12 +9,12 @@ const router: IRouter = Router();
 
 /**
  * The readiness answer for one check: 200 when the database answers and holds
- * every table and column this build needs; otherwise 503, degraded. An index a
- * migration adds that is missing leaves the answer ready, marked
- * `indexes_missing`: every request still works, only slower, and taking every
- * instance out of rotation for it would be an outage. The answer says only
- * which state; the names of what is missing, and a connection error, stay in
- * the log.
+ * every table, column, unique index and check constraint this build needs;
+ * otherwise 503, degraded. A read index a migration adds that is missing
+ * leaves the answer ready, marked `indexes_missing`: every request still
+ * works, only slower, and taking every instance out of rotation for it would
+ * be an outage. The answer says only which state; the names of what is
+ * missing, and a connection error, stay in the log.
  */
 export function readinessAnswer(database: DatabaseReadiness) {
   const ready = database.status === "ok" && (database.schema.status === "ok" || database.schema.status === "indexes_missing");
@@ -24,9 +24,10 @@ export function readinessAnswer(database: DatabaseReadiness) {
 let reportedIndexes = "";
 /**
  * The warning line a readiness check writes, if any: every time the database
- * does not answer or lacks a table or column; for missing indexes, once until
- * what is missing changes, so a host polling readiness every few seconds does
- * not write the same warning each time.
+ * does not answer or lacks a table, column, unique index or check constraint;
+ * for missing read indexes, once until what is missing changes, so a host
+ * polling readiness every few seconds does not write the same warning each
+ * time.
  */
 export function readinessWarning(database: DatabaseReadiness): { fields: Record<string, unknown>; message: string } | undefined {
   const indexes = database.status === "ok" && database.schema.status === "indexes_missing" ? database.schema.missing.join("\n") : "";
@@ -35,7 +36,7 @@ export function readinessWarning(database: DatabaseReadiness): { fields: Record<
   // Which schema was read: the isolated runtime schema, or the tables the connection's search path reaches.
   const schema = database.searched ?? "search_path";
   if (database.status !== "ok") return { fields: { event: "readiness.failed", latencyMs: database.latencyMs, reason: database.error }, message: "Readiness check failed: the database did not answer" };
-  if (database.schema.status === "incomplete") return { fields: { event: "readiness.failed", latencyMs: database.latencyMs, reason: "schema incomplete", schema, missing: database.schema.missing }, message: "Readiness check failed: the database lacks a table or column this build needs" };
+  if (database.schema.status === "incomplete") return { fields: { event: "readiness.failed", latencyMs: database.latencyMs, reason: "schema incomplete", schema, missing: database.schema.missing }, message: "Readiness check failed: the database lacks a table, column, unique index or check constraint this build needs" };
   if (indexes && !repeated) return { fields: { event: "readiness.indexes_missing", schema, missing: database.schema.missing }, message: "Ready, but the database lacks an index this build expects: some reads are slower until its migration is applied" };
   return undefined;
 }
