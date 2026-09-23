@@ -1,7 +1,7 @@
 import {
   counted, businessDateSchema,
-  DEFAULT_ACTIVATION_WINDOW_DAYS, PLATFORM_OWNER, activationReminderCaps, closeRules, failureCodeList, isHandBackOwner, isKnownFailureCode,
-  nairaText, nextCloseInstant, normaliseFailureCode, normaliseOwner, passRuleText, paymentUnappliedKobo, resolutionCodesFor, resolveExceptionType, withinQuietHours, templateTextProblems,
+  DEFAULT_ACTIVATION_WINDOW_DAYS, PLATFORM_OWNER, activationReminderCaps, closeRules, failureCodeList, handBackFallbackOwner, isKnownFailureCode,
+  nairaText, nextCloseInstant, normaliseFailureCode, passRuleText, paymentUnappliedKobo, resolutionCodesFor, resolveExceptionType, withinQuietHours, templateTextProblems,
   type CloseTrigger,
 } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
@@ -414,8 +414,7 @@ export function executeAction(state: DomainState, ctx: Context, input: ActionInp
     assertActionRole(ctx, ["Admin", "Operations"]);
     // DEB-12: ownership reverts to the owner named in the cutover contract; every future instruction is cancelled.
     const contract = recordsOf(state, "cutovers").filter((item) => item.status !== "handed_back").at(-1);
-    const contractOwner = normaliseOwner(contract?.data.fallbackOwner);
-    const fallbackOwner = isHandBackOwner(contractOwner) ? contractOwner : "lms";
+    const fallbackOwner = handBackFallbackOwner(contract?.data.fallbackOwner);
     const reverted = recordsOf(state, "due-items").filter((item) => item.data.owner === PLATFORM_OWNER).map((item) => { item.data.owner = fallbackOwner; item.data.handBackAt = now; touch(item, now); return item.id; });
     const cancelled = cancelScheduledAttempts(state, now, "Hand-back: no future instruction is held.", () => true);
     state.merchant.killSwitch = true;

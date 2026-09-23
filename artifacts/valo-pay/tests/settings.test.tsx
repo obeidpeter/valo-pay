@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { nextCloseInstant } from "@workspace/valopay-schema";
+import { makeRecord } from "../../api-server/src/domain";
 import { installFakeApi, type FakeApi } from "./fake-api";
-import { renderApp, screen, userEvent, within } from "./harness";
+import { renderApp, screen, userEvent, waitFor, within } from "./harness";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -85,5 +86,53 @@ describe("settings", () => {
     await user.click(edit);
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     expect(api.calls.some(call => call.path === '/v1/settings' && call.method === 'PATCH')).toBe(false);
+  });
+
+  it("lists what a hand-back will do before it is confirmed, then announces the result and shows the emergency stop on", async () => {
+    const user = userEvent.setup();
+    // Two instalments Valo Pay collects, one scheduled attempt, and a cutover contract naming the lender team as fallback.
+    const [first, second] = api.mutate((state) => {
+      const dues = state.records.filter((record) => record.kind === "due-items").slice(0, 2);
+      for (const due of dues) due.data.owner = "valopay";
+      state.records.find((record) => record.kind === "cutovers")!.data.fallbackOwner = "merchant_manual";
+      makeRecord(state, "attempts", { name: "Scheduled retry", status: "scheduled", customerId: dues[0]!.customerId, amountKobo: dues[0]!.amountKobo, createdAt: api.now, data: { dueItemId: dues[0]!.id, number: 2, source: "valo" } });
+      return dues.map((due) => due.id);
+    });
+    renderApp("/settings");
+    await screen.findByText("07:00 WAT");
+    expect(screen.queryByText(/Emergency stop active/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Return collection ownership" }));
+    const dialog = await screen.findByRole("dialog", { name: "Return collection ownership" });
+    const summary = within(dialog).getByRole("region", { name: "Hand-back summary" });
+    // The consequences and the numbers are on screen before anything is confirmed.
+    const figure = (term: string) => within(summary).getByText(term).nextElementSibling?.textContent;
+    await waitFor(() => expect(figure("Instalments Valo Pay collects now")).toBe("2 instalments"));
+    await waitFor(() => expect(figure("Scheduled attempts to cancel")).toBe("1 attempt"));
+    await waitFor(() => expect(figure("Collection returns to")).toBe("Lender team"));
+    expect(figure("Emergency stop")).toBe("Turns on for this lender");
+    expect(summary.textContent).toContain("Every instalment Valo Pay collects returns to the lender team");
+    expect(summary.textContent).toContain("Turn it off separately, in Emergency controls");
+    expect(api.calls.some((call) => call.method === "POST" && call.path === "/v1/actions")).toBe(false);
+
+    // The service still requires a reason.
+    await user.click(within(dialog).getByRole("button", { name: "Return collection ownership" }));
+    expect(await within(dialog).findByText("Enter a reason for this action. It will be saved in the audit log.")).toBeTruthy();
+    expect(api.calls.some((call) => call.method === "POST" && call.path === "/v1/actions")).toBe(false);
+    await user.type(within(dialog).getByLabelText(/^Reason/), "Lender asked to take collection back");
+    await user.click(within(dialog).getByRole("button", { name: "Return collection ownership" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    // The result is announced with the service's own message and counts (a notice is also announced through a short-lived copy).
+    expect(await screen.findAllByText("Collection ownership returned")).toBeTruthy();
+    const [announced] = screen.getAllByText(/^Collection ownership returned to the configured fallback owner\./);
+    expect(announced!.textContent).toContain("2 instalments returned to the lender team; 1 scheduled attempt cancelled.");
+    expect(announced!.textContent).toContain("The emergency stop is now on for this lender.");
+    // The page shows the stop on, and the service agrees.
+    expect(await screen.findByText(/Emergency stop active/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Turn off emergency stop" })).toBeTruthy();
+    const state = api.state();
+    expect(state.merchant.killSwitch).toBe(true);
+    expect(state.records.filter((record) => [first, second].includes(record.id)).map((record) => record.data.owner)).toEqual(["merchant_manual", "merchant_manual"]);
+    expect(state.records.filter((record) => record.kind === "attempts" && record.status === "scheduled")).toEqual([]);
   });
 });

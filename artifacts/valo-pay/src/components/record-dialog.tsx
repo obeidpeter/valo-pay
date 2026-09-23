@@ -50,9 +50,11 @@ type RecordDialogProps = {
   actionRecordId?: string; // An action can target a related record while the dialog keeps the review context.
   context?: ReactNode | ((values: Record<string, any>) => ReactNode);
   validate?: (values: Record<string, any>) => Record<string, string>;
+  /** The service's answer to a confirmed write, given before the dialog closes so the page can announce the result. */
+  onDone?: (response: any) => void;
 };
 
-export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourceFields, title, defaultValues = {}, actionMutation, actionRecordId, context, validate }: RecordDialogProps) {
+export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourceFields, title, defaultValues = {}, actionMutation, actionRecordId, context, validate, onDone }: RecordDialogProps) {
   const isMoney = (field: FieldDef) => field.type === 'number' && /Kobo$/.test(field.name);
   const fields = sourceFields.map(field => isMoney(field) ? { ...field, label: moneyFieldLabel(field.label) } : field);
   const { merchantId, workspace } = useWorkspace();
@@ -145,6 +147,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
       const response = actionMutation ? await perform.retryUnconfirmed() : record ? await update.retryUnconfirmed() : await create.retryUnconfirmed();
       if (submittedSession !== session.current || currentScope.current !== scope) return;
       if (actionMutation === 'backtest_policy') { setResult(response); setFormErrors([]); return; }
+      onDone?.(response);
       onOpenChange(false);
     } catch (error) {
       if (submittedSession === session.current && currentScope.current === scope) applyServerError(error);
@@ -212,19 +215,20 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
     const submittedRequest = ++request.current;
     const isCurrent = () => session.current === submittedSession && request.current === submittedRequest && currentScope.current === scope;
     try {
+      let response: unknown;
       if (actionMutation) {
-        const response = await perform.mutateAsync({
+        response = await perform.mutateAsync({
           data: { action: actionMutation, recordId: actionRecordId ?? record?.id, data: payload.data, reason: formData.reason, ...(originalRecord.current?.updatedAt && (!actionRecordId || actionRecordId === record?.id) ? { expectedUpdatedAt: originalRecord.current.updatedAt } : {}) },
           params: { merchantId }
         });
         if (!isCurrent()) return;
         if (actionMutation === 'backtest_policy') { setResult(response); return; }
       } else if (record) {
-        await update.mutateAsync({ kind, id: record.id, data: payload, params: { merchantId } });
+        response = await update.mutateAsync({ kind, id: record.id, data: payload, params: { merchantId } });
       } else {
-        await create.mutateAsync({ kind, data: payload, params: { merchantId } });
+        response = await create.mutateAsync({ kind, data: payload, params: { merchantId } });
       }
-      if (isCurrent()) onOpenChange(false);
+      if (isCurrent()) { onDone?.(response); onOpenChange(false); }
     } catch (error) {
       if (isCurrent()) applyServerError(error);
     }

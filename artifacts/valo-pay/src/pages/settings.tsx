@@ -17,6 +17,7 @@ import { koboToNaira, nairaToKobo } from '@/lib/money-input';
 import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { RecordDialog } from '@/components/record-dialog';
+import { HandBackContext, handBackResult } from '@/components/hand-back-context';
 import { LoadProblem } from '@/components/load-problem';
 import { DiscardOriginalRequest, DISCARD_ORIGINAL_WARNING } from '@/components/discard-original-request';
 
@@ -420,6 +421,12 @@ export default function SettingsPage() {
         title="Return collection ownership"
         actionMutation="hand_back"
         fields={[]}
+        context={<HandBackContext merchantId={merchantId} />}
+        onDone={response => {
+          // The service switched the emergency stop on: show it at once, before the refetch the write started returns.
+          queryClient.setQueryData<typeof settings>(getGetSettingsQueryKey({ merchantId }), current => current && { ...current, merchant: { ...current.merchant, killSwitch: true } });
+          notifyDone('Collection ownership returned', handBackResult(response));
+        }}
       />
 
       {/* Appearance: light or dark for this browser. It follows the device unless chosen here, and it is not a
