@@ -8,10 +8,16 @@ import { Button } from './ui/button';
 import { DiscardOriginalRequest } from './discard-original-request';
 import { formatDate, formatNumber } from '@/lib/formatters';
 import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
-import { GetExportJobResponse } from '@workspace/api-zod';
+import { exportResultSchema } from '@workspace/valopay-schema';
+import { readAnswer } from '@/lib/answers';
 import { Link } from 'wouter';
 
 type Format = 'pdf' | 'csv' | 'json';
+/** What a saved export holds, in words: the packs by their names, anything else as `fallback`. */
+export function exportKindTitle(kind: string, fallback = 'Saved export'): string {
+  return kind === 'billing' ? 'Billing CSV' : kind === 'gate-pack' ? 'Evidence pack' : kind === 'reviewed-close' ? 'Reviewed close evidence' : kind === 'closes' ? 'Close evidence' : ['customer-pack','dispute-pack'].includes(kind) ? 'Dispute pack' : fallback;
+}
+
 /** Jobs survive page changes and reloads. Poll only the selected lender/job; downloads always re-authorise on the server. */
 export function ExportJobControl({ kind, customerId, closeReviewId, savedJobId, formats = ['pdf'], label }: { kind: string; customerId?: string; closeReviewId?: string; savedJobId?: string; formats?: Format[]; label: string }) {
   const { merchantId, workspace } = useWorkspace();
@@ -22,7 +28,7 @@ export function ExportJobControl({ kind, customerId, closeReviewId, savedJobId, 
   if (visit.current.scope !== scope) visit.current = { scope };
   const [selected, setSelected] = useState<{ scope: string; job: ExportResult } | null>(null);
   const [problem, setProblem] = useState<{ scope: string; message: string } | null>(null);
-  const title = kind === 'billing' ? 'Billing CSV' : kind === 'gate-pack' ? 'Evidence pack' : kind === 'reviewed-close' ? 'Reviewed close evidence' : kind === 'closes' ? 'Close evidence' : ['customer-pack','dispute-pack'].includes(kind) ? 'Dispute pack' : 'Saved export';
+  const title = exportKindTitle(kind);
   const openLabel = kind === 'billing' ? 'Open billing CSV' : `Open ${title.toLowerCase()}`;
   // Search the saved review identity before paging, then enforce the exact match.
   const params = { merchantId: merchantId!, customerId, search: closeReviewId || kind, limit: 5 };
@@ -31,7 +37,7 @@ export function ExportJobControl({ kind, customerId, closeReviewId, savedJobId, 
   const selectedJob = selected?.scope === scope ? selected.job : undefined;
   const id = savedJobId || selectedJob?.id || previous[0]?.id || '';
   const status = useGetExportJob(id, { merchantId: merchantId! }, { query: { enabled: !!merchantId && !!id, queryKey: getGetExportJobQueryKey(id, { merchantId: merchantId! }), select: value => {
-    if (!GetExportJobResponse.safeParse(value).success || value.id !== id || !['queued','running','ready','failed'].includes(value.status || '') || (value.status === 'ready' && !/^[a-f0-9]{64}$/i.test(value.checksum || ''))) throw new Error('The saved export status could not be verified. Refresh this job.');
+    if (readAnswer(exportResultSchema, value) === undefined || value.id !== id || !['queued','running','ready','failed'].includes(value.status || '') || (value.status === 'ready' && !/^[a-f0-9]{64}$/i.test(value.checksum || ''))) throw new Error('The saved export status could not be verified. Refresh this job.');
     const download = new URL(value.downloadUrl, window.location.origin);
     if (download.origin !== window.location.origin || download.pathname !== `/api/v1/exports/${encodeURIComponent(id)}/download` || download.searchParams.get('merchantId') !== merchantId) throw new Error('The saved export download could not be verified. Refresh this job.');
     return value;

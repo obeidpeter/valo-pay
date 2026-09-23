@@ -83,6 +83,16 @@ export default function SettingsPage() {
     } catch (error) { if (isCurrent()) notifyProblem(outcomeIsUnconfirmed(error) ? 'Instruction-block test outcome unconfirmed' : 'Live instruction refused', saidBy(error, 'Retry the original request to confirm its outcome.')); }
   };
 
+  // Edit, Cancel and Save each remove themselves, so focus goes into the form on Edit and back to Edit when
+  // editing ends by Cancel, a save or a refresh, rather than falling to the page body.
+  const editButton = useRef<HTMLButtonElement>(null);
+  const focusAfterEdit = useRef<'form' | 'edit' | null>(null);
+  useEffect(() => {
+    const target = focusAfterEdit.current;
+    focusAfterEdit.current = null;
+    if (target === 'form') focusField('settings-authorisationMode');
+    else if (target === 'edit') editButton.current?.focus();
+  }, [isEditingExec]);
   const [execErrors, setExecErrors] = useState<Record<string, string>>({});
   const [execAlert, setExecAlert] = useState('');
   const [execConflict, setExecConflict] = useState(false);
@@ -129,10 +139,10 @@ export default function SettingsPage() {
     const isCurrent = () => isCurrentVisit() && submittedSession === execSession.current;
     try {
       await (updateExecSettings.hasUnconfirmedOutcome ? updateExecSettings.retryUnconfirmed() : updateExecSettings.mutateAsync({ data: { ...execSettings, notificationCostAlertKobo, expectedRevision: execRevision.current }, params: { merchantId } }));
-      if (isCurrent()) { setIsEditingExec(false); notifyDone('Settings saved', 'Recorded in the audit log. Automatic closes follow these settings while the close service is running.'); }
+      if (isCurrent()) { focusAfterEdit.current = 'edit'; setIsEditingExec(false); notifyDone('Settings saved', 'Recorded in the audit log. Automatic closes follow these settings while the close service is running.'); }
     } catch (error) { if (isCurrent()) rejectExec(error); }
   };
-  const cancelExec = () => { if (updateExecSettings.isPending || updateExecSettings.hasUnconfirmedOutcome) return; if (confirmExecDiscard()) { execSession.current += 1; setIsEditingExec(false); setExecErrors({}); setExecAlert(''); setExecConflict(false); } };
+  const cancelExec = () => { if (updateExecSettings.isPending || updateExecSettings.hasUnconfirmedOutcome) return; if (confirmExecDiscard()) { execSession.current += 1; focusAfterEdit.current = 'edit'; setIsEditingExec(false); setExecErrors({}); setExecAlert(''); setExecConflict(false); } };
   const refreshLatest = async () => {
     if (updateExecSettings.isPending || refreshingLatest) return;
     // Refreshing discards the draft; while the original save is unconfirmed it also discards that request, after its own warning.
@@ -145,7 +155,7 @@ export default function SettingsPage() {
     setRefreshingLatest(true);
     try {
       const response = await refetch({ throwOnError: true });
-      if (isCurrentVisit() && submittedSession === execSession.current && response.data) { execSession.current += 1; setIsEditingExec(false); setExecErrors({}); setExecAlert(''); setExecConflict(false); }
+      if (isCurrentVisit() && submittedSession === execSession.current && response.data) { execSession.current += 1; focusAfterEdit.current = 'edit'; setIsEditingExec(false); setExecErrors({}); setExecAlert(''); setExecConflict(false); }
     } catch (error) { if (isCurrentVisit() && submittedSession === execSession.current) setExecAlert('Latest settings could not be loaded. Your draft is still here. Try refreshing again.'); }
     finally { if (isCurrentVisit()) setRefreshingLatest(false); }
   };
@@ -156,6 +166,7 @@ export default function SettingsPage() {
     setExecSettings(initial); setExecBaseline(submissionFingerprint(initial));
     execRevision.current = (settings as typeof settings & { revision?: string })?.revision;
     setExecErrors({}); setExecAlert(''); setExecConflict(false);
+    focusAfterEdit.current = 'form';
     setIsEditingExec(true);
   };
 
@@ -239,7 +250,7 @@ export default function SettingsPage() {
               <h2 className="font-semibold text-lg">Collection settings</h2>
             </div>
             {!isEditingExec ? (
-              <Button size="sm" variant="outline" action="update_settings" onClick={startEditExec}>Edit</Button>
+              <Button ref={editButton} size="sm" variant="outline" action="update_settings" onClick={startEditExec}>Edit</Button>
             ) : (
               <div className="flex gap-2">
                 <Button size="sm" variant="ghost" onClick={cancelExec} disabled={updateExecSettings.isPending || updateExecSettings.hasUnconfirmedOutcome}>Cancel</Button>

@@ -6,19 +6,28 @@ import { PublicFrame } from '@/components/public-frame';
 import { AuthShow } from '@/lib/auth';
 import { formatDate } from '@/lib/formatters';
 import { referenceOf } from '@/lib/notify';
+import type { WorkspaceRefreshFailure } from '@/lib/workspace-context';
 import { StaffSession } from './staff-session';
 
 /**
- * Shown in place of the console when the workspace request fails. Nothing
- * in the console works without a workspace, so this replaces the pages
+ * Shown in place of the console when the workspace cannot be loaded at all.
+ * Nothing in the console works without a workspace, so this replaces the pages
  * rather than sitting inside them, in the same frame and card as the other
- * notices. It says what happened in the words the situation calls for,
- * that no lender data has been changed, and offers Try again with its
- * progress visible, the start and, where sign-in exists, sign-in
- * (Nielsen 1 and 9; Dix: recoverability; Shneiderman: informative feedback).
+ * notices. It says what happened in the words the situation calls for, points
+ * to Operations for a change saved just before, and offers Try again with its
+ * progress visible, the start and, where sign-in exists, sign-in (Nielsen 1
+ * and 9; Dix: recoverability; Shneiderman: informative feedback). A workspace
+ * already on the screen whose refresh fails is not this: see
+ * WorkspaceRefreshProblem.
  */
 
 export type WorkspaceExplanation = { title: string; lines: string[]; reportTime?: boolean; reference?: string };
+
+/** What the service said, when it said something written for the person reading it. */
+function serviceWords(error: unknown): string {
+  const said = (error as { data?: { error?: unknown } } | null)?.data?.error;
+  return typeof said === 'string' && said.trim() ? said.trim() : '';
+}
 
 /**
  * The API's own 4xx wording is plain language written for the person
@@ -28,13 +37,15 @@ export type WorkspaceExplanation = { title: string; lines: string[]; reportTime?
  */
 export function explainWorkspaceError(error: unknown): WorkspaceExplanation {
   const status = (error as { status?: unknown } | null)?.status;
-  const said = (error as { data?: { error?: unknown } } | null)?.data?.error;
-  const message = typeof said === 'string' && said.trim() ? said.trim() : '';
+  const message = serviceWords(error);
   if (typeof status !== 'number') return { title: 'Could not connect to Valo Pay', lines: ['Check your connection and try again.'] };
   if (status === 429) return { title: 'Please wait before trying again', lines: [message || 'Too many requests were sent from your connection. Try again shortly.'] };
   if (status >= 500) return { title: 'Your workspace is temporarily unavailable', lines: ['We could not load your workspace. Try again in a moment.'], reportTime: true, reference: referenceOf(error) };
   return { title: 'Could not load your workspace', lines: [message || 'We could not open your workspace. Try again.'] };
 }
+
+/** Where a person checks a change whose answer they did not see: Operations lists every request that reached the service, with its outcome. */
+const CHECK_OPERATIONS = 'If you had just saved a change, check Operations once your workspace opens, before you send it again.';
 
 export function WorkspaceUnavailable({ error, retry, busy }: { error: unknown; retry: () => void; busy: boolean }) {
   const [at] = useState(() => new Date().toISOString());
@@ -56,10 +67,48 @@ export function WorkspaceUnavailable({ error, retry, busy }: { error: unknown; r
           {reportTime && (reference
             ? <p>When reporting the problem, include this time and support reference: <LookedFor>{formatDate(at)}</LookedFor>, <LookedFor>{reference}</LookedFor>.</p>
             : <p>When reporting the problem, include this time: <LookedFor>{formatDate(at)}</LookedFor>.</p>)}
-          <p>No lender data has been changed.</p>
+          <p>{CHECK_OPERATIONS}</p>
           {[401,403].includes(Number((error as { status?: number })?.status)) && <StaffSession />}
         </Notice>
       </main>
     </PublicFrame>
+  );
+}
+
+/** Why a refresh failed, in a sentence: the service's own words for a refusal, general words for a failure, with its support reference. */
+function refreshReason(error: unknown): string {
+  const status = (error as { status?: unknown } | null)?.status;
+  const message = serviceWords(error);
+  if (typeof status !== 'number') return 'The service could not be reached.';
+  if (status >= 500) {
+    const reference = referenceOf(error);
+    return `The service could not answer.${reference ? ` Support reference: ${reference}.` : ''}`;
+  }
+  if (status === 429) return message || 'Too many requests were sent from your connection.';
+  return message || 'The service refused the request.';
+}
+
+/**
+ * A refresh of the workspace on the screen that failed: the pages, their
+ * forms and dialogs, drafts and requests waiting to be confirmed all stay,
+ * and this notice above the page says the workspace could not be refreshed,
+ * why, when what is shown was loaded, and when the next automatic refresh is
+ * if the service asked for a wait. It claims nothing about what changed: a
+ * save whose answer was lost is checked in Operations, which it links to.
+ * Try again refreshes now (Nielsen 1, 3 and 9; Dix: robustness).
+ */
+export function WorkspaceRefreshProblem({ failure, staff = false }: { failure: WorkspaceRefreshFailure; staff?: boolean }) {
+  const updated = failure.updatedAt ? new Date(failure.updatedAt).toISOString() : '';
+  const next = failure.waitUntil ? new Date(failure.waitUntil).toISOString() : '';
+  const status = Number((failure.error as { status?: unknown } | null)?.status);
+  return (
+    <div role="status" className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning-border bg-warning px-4 py-3 text-xs text-warning-foreground print:hidden">
+      <div className="min-w-[min(100%,16rem)] flex-1 space-y-1">
+        <p><span className="font-semibold">Your workspace could not be refreshed.</span> {refreshReason(failure.error)} {updated ? <>Showing the workspace loaded <time dateTime={updated}>{formatDate(updated)}</time>.</> : <>Showing the workspace loaded earlier.</>}{next && <> As the service asked, the next automatic refresh is after <time dateTime={next}>{formatDate(next)}</time>.</>}</p>
+        <p>Open pages and forms are kept. If a save was not confirmed, check it in <Link href="/operations" className="font-medium underline underline-offset-2">Operations</Link> before you send it again.</p>
+        {staff && [401, 403].includes(status) && <StaffSession />}
+      </div>
+      <Button variant="outline" size="sm" busy={failure.busy} busyLabel="Refreshing…" onClick={failure.retry}>Try again</Button>
+    </div>
   );
 }

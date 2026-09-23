@@ -714,7 +714,7 @@ export const getUpdateRecordUrl = (kind: string,
 }
 
 /**
- * Editable kinds only; an approved, preregistered or closed version is immutable. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version.
+ * Editable kinds only; an approved, preregistered or closed version is immutable. data is merged over the stored data as a merge patch: a field left out keeps its value and a field sent as null is removed, which is how an edit clears an optional field. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version.
  * @summary Update a record
  */
 export const updateRecord = async (kind: string,

@@ -15,6 +15,7 @@ import {
   usePilotQuery,
 } from "@/lib/pilot";
 import { nairaToKobo, koboToNaira } from "@/lib/money-input";
+import { answerProblem } from "@/lib/answers";
 import { formatDate, formatKobo, formatNumber } from "@/lib/formatters";
 import { readableLabel } from "@/components/record-label";
 import { PilotError, RecoveryNotice, pilotField } from "@/components/pilot-ui";
@@ -238,10 +239,13 @@ function CorrectionEditor({
             syntheticOnly: true,
           });
         } catch (error) {
+          // The console's own check, shown in its words (saidBy reads data.error).
           setLocalError(
-            error instanceof Error
-              ? error
-              : new Error("Check the proposed values."),
+            answerProblem(
+              error instanceof Error
+                ? error.message
+                : "Check the proposed values.",
+            ),
           );
         }
       }}
@@ -340,7 +344,7 @@ function CorrectionEditor({
       >
         {target.supported ? "Preview correction" : "Inspect affected evidence"}
       </Button>
-      <PilotError error={localError || dryRun.error} />
+      <PilotError error={localError || dryRun.error} fallback="The correction preview could not be prepared. Check your connection and try again." />
       {comparison && (
         <>
           <Comparison preview={comparison.preview} />

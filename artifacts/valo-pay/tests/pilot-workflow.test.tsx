@@ -314,6 +314,10 @@ it("offers to check or discard a lost invitation revocation, and discarding it f
   expect(
     screen.getByRole("button", { name: "Check original request" }),
   ).toBeTruthy();
+  // Team changes are not recorded in Operations, so the notice sends the person to this page, not there.
+  const lost = screen.getByText("Outcome not confirmed").closest('[role="alert"]') as HTMLElement;
+  expect(lost.textContent).toContain("The request could not be completed. Refresh this page to see whether it was saved before you try again.");
+  expect(lost.textContent).not.toMatch(/Operations/);
   const second = () =>
     screen.getAllByRole("button", {
       name: "Revoke invitation",
@@ -463,4 +467,66 @@ it("does not offer a newer version while the save's own outcome is unconfirmed",
   await waitFor(() => expect(screen.queryByText("Outcome not confirmed")).toBeNull());
   expect(screen.queryByText(/A newer version of this batch was saved/)).toBeNull();
   expect(answers.size).toBe(1);
+});
+
+it("says a failed read on a pilot page changed nothing, and sends a lost change to Operations", async () => {
+  const user = userEvent.setup();
+  // A read that got no answer asked the service only to read: no request is waiting anywhere.
+  api.failNext(/^\/v1\/lifecycle$/, "offline");
+  renderApp("/lifecycle");
+  const problem = await screen.findByText("This information could not be loaded. Check your connection and try again.");
+  expect(problem.closest('[role="alert"]')!.textContent).not.toMatch(/Operations/);
+  cleanup();
+  api.failNext(/^\/v1\/pilot\/close-reviews$/, { status: 502, error: "" });
+  renderApp("/close-review");
+  expect(await screen.findByText(/^This information could not be loaded\. Check your connection and try again\. Support reference: fake-\w+\.$/)).toBeTruthy();
+  cleanup();
+  // A batch save is recorded in Operations, so a save whose answer was lost is checked there.
+  renderApp("/imports");
+  await user.click(await screen.findByRole("button", { name: "Use sample" }));
+  api.failNext(/^\/v1\/pilot\/batches$/, "offline", "POST");
+  await user.click(screen.getByRole("button", { name: "Save and check batch" }));
+  const lost = (await screen.findByText("Outcome not confirmed")).closest('[role="alert"]') as HTMLElement;
+  expect(lost.textContent).toContain("The request could not be completed. If it reached the service, Operations lists it with its outcome.");
+});
+
+
+it("asks for confirmation before revoking a staff member, and keeps their access when declined", async () => {
+  const send = globalThis.fetch;
+  const changes: Array<Record<string, unknown>> = [];
+  const member = { id: "member-1", actor: "user_sample_1", name: "Bola Sample", role: "Operations", status: "active", expiresAt: api.now, updatedAt: api.now, lenderIds: [], allLenders: false };
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  globalThis.fetch = async (input, options) => {
+    const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+    const path = new URL(url, "http://localhost").pathname;
+    if (path === "/api/v1/team" && (options?.method ?? "GET") === "GET")
+      return json({ mode: "staff", actor: "Pilot Admin", message: "Staff access is active.", members: [member], lenders: [], invitations: [], events: [] });
+    if (path === `/api/v1/team/members/${member.id}` && options?.method === "PATCH") {
+      const body = JSON.parse(String(options.body));
+      changes.push(body);
+      return json({ ...member, role: body.role, status: body.status, updatedAt: new Date(Date.parse(api.now) + 1000).toISOString() });
+    }
+    return send(input, options);
+  };
+  const user = userEvent.setup();
+  renderApp("/team");
+  await user.selectOptions(await screen.findByLabelText("Access for Bola Sample"), "revoked");
+  await user.type(screen.getByLabelText("Reason for changing Bola Sample"), "Left the collections team");
+  const save = screen.getByRole("button", { name: "Save access change" });
+  await user.click(save);
+  // One more step, which says what revoking does and cannot undo; nothing is sent yet.
+  const confirm = await screen.findByRole("dialog", { name: "Revoke Bola Sample’s access?" });
+  expect(confirm.textContent).toContain("A revoked person regains access only by accepting a new invitation.");
+  expect(confirm.textContent).toContain("Left the collections team");
+  expect(changes).toEqual([]);
+  await user.click(within(confirm).getByRole("button", { name: "Keep access" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(changes).toEqual([]);
+  await waitFor(() => expect(document.activeElement).toBe(save));
+  await user.click(save);
+  await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Revoke access" }));
+  await waitFor(() => expect(changes).toHaveLength(1));
+  expect(changes[0]).toMatchObject({ status: "revoked", reason: "Left the collections team" });
+  // Other access changes need no extra step.
+  expect(screen.queryByRole("dialog")).toBeNull();
 });

@@ -4,7 +4,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { Router } from 'wouter';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { renderApp, screen, userEvent, waitFor, within } from './harness';
-import { presentationSamples } from '@/lib/presentation';
+import { presentationSamples } from '@/lib/presenter-brief';
 import { queryClient } from '@/App';
 import { Layout } from '@/components/layout';
 import { PresentationProvider } from '@/components/presentation-guide';

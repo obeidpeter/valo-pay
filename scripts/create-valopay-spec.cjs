@@ -110,7 +110,7 @@ describe("/v1/workspace","get","The caller's workspace: its lenders, roles and a
 describe("/v1/overview","get","The operations overview for one lender","Metrics, queues, recent activity, upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02).");
 describe("/v1/records/{kind}","get","Records of one kind for one lender, newest first","Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync.");
 describe("/v1/records/{kind}","post","Create a record of an editable kind","Validated against the kind's data schema; a status only a domain action may set is refused.");
-describe("/v1/records/{kind}/{id}","patch","Update a record","Editable kinds only; an approved, preregistered or closed version is immutable. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version.");
+describe("/v1/records/{kind}/{id}","patch","Update a record","Editable kinds only; an approved, preregistered or closed version is immutable. data is merged over the stored data as a merge patch: a field left out keeps its value and a field sent as null is removed, which is how an edit clears an optional field. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version.");
 describe("/v1/actions","post","Run a domain action on the lender's state","Every action is audited, most require a reason, and the persona's role applies; the catalogue of actions is in docs/frontend-contract.md.");
 describe("/v1/imports","post","Preview or commit a synthetic CSV import","commit=false validates every row and reports each; commit=true persists all rows or none. syntheticOnly must be true: no real lender data.");
 describe("/v1/customers/{id}/timeline","get","A customer's position and complete timeline","Every event, mandate, due item and payment, with each retry decision as it was recorded.");
@@ -134,7 +134,7 @@ const schemaDescriptions = {
   RecordData: "A record's data: the fields the kind's schema declares, and anything else a caller stored.",
   ValopayRecord: "A stored record of any kind, with its lender, status, reference, amount in kobo and data.",
   RecordInput: "A new record: only the name is required; the kind's default status applies when none is given.",
-  RecordUpdate: "The fields to change on a record; omitted fields keep their values.",
+  RecordUpdate: "The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed.",
   Merchant: "A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags.",
   Workspace: "The caller's workspace: who is acting, in which role, whether they signed in, and the lenders and roles available.",
   Metric: "A named measurement with its unit and the basis it was derived from.",
@@ -452,6 +452,11 @@ function twin(name, zodSchema) {
     if (Array.isArray(value)) return value.map(plain);
     if (!value || typeof value !== "object") return value;
     if (value.$ref) return plain(schemas[value.$ref.replace("#/components/schemas/", "")]);
+    // A nullable enum is written either way: as a type list with null among its values, or as anyOf the enum and null.
+    if (Array.isArray(value.type) && value.type.includes("null") && Array.isArray(value.enum) && value.enum.includes(null)) {
+      const types = value.type.filter((type) => type !== "null");
+      return plain({ anyOf: [{ ...value, type: types.length === 1 ? types[0] : types, enum: value.enum.filter((item) => item !== null) }, { type: "null" }] });
+    }
     return Object.fromEntries(Object.entries(value).filter(([key]) => key !== "description" && key !== "additionalProperties").map(([key, item]) => [key, plain(item)]));
   };
   const written = plain(schemas[name]), translated = plain(fromZod(zodSchema, zodSchema));
@@ -462,6 +467,13 @@ function twin(name, zodSchema) {
 twin("RecordData", shared.recordDataSchema);
 twin("ValopayRecord", shared.valopayRecordSchema);
 twin("Merchant", shared.merchantSchema);
+// The record API's confirmations, which the console checks with these shared twins rather than the generated contract.
+twin("ActionResult", shared.actionResultSchema);
+twin("ImportRow", shared.importRowSchema);
+twin("ImportResult", shared.importResultSchema);
+twin("EffectiveCloseSchedule", shared.effectiveCloseScheduleSchema);
+twin("Settings", shared.settingsViewSchema);
+twin("ExportResult", shared.exportResultSchema);
 const journalOffset = { name: "offset", in: "query", schema: { type: "integer", minimum: 0, maximum: 100000 }, description: "Rows to skip in the newest-first order; pages hold 25 rows." };
 const operation = (path, method, id, response, body, params, summary, description) => { add(path, method, id, response, body, params); describe(path, method, summary, description); };
 

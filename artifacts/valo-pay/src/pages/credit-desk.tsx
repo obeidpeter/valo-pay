@@ -12,6 +12,7 @@ import {
   ConnectedPanel,
   ConnectedStatus,
   ConnectedRecovery,
+  ConnectedState,
 } from "@/components/connected-frame";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -163,6 +164,9 @@ const outcomeLabels: Record<string, string> = {
   request_information: "More information requested",
 };
 
+const TITLE = "Credit Desk",
+  DESCRIPTION =
+    "Turn authorised evidence into a clear assessment. Keep the lender’s decision separate.";
 export default function CreditDeskPage() {
   const api = useConnected(),
     { merchantId } = useWorkspace();
@@ -184,17 +188,17 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
   const [amountErrors, setAmountErrors] = useState<Record<string, string>>({});
   // An assessment typed but not run is a draft: leaving asks first.
   const draft = useFormDraft({ customerId, scenario, principal, repayment, months, reason });
-  if (api.isLoading) return <Loading what="Credit Desk" />;
+  if (api.isLoading) return <Loading what="Credit Desk" heading />;
   if (!api.data)
     return (
-      <>
+      <ConnectedState title={TITLE} description={DESCRIPTION}>
         <LoadProblem
           what="Credit Desk"
           error={api.error}
           retry={() => void api.refetch()}
         />
         <ConnectedRecovery recovery={api} />
-      </>
+      </ConnectedState>
     );
   const data = api.data.credit as CreditDeskView;
   const customer =
@@ -259,8 +263,8 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
   };
   return (
     <ConnectedFrame
-      title="Credit Desk"
-      description="Turn authorised evidence into a clear assessment. Keep the lender’s decision separate."
+      title={TITLE}
+      description={DESCRIPTION}
       recovery={api}
       onReleased={() => setError("")}
       onRecovered={() => {

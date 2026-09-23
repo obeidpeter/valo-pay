@@ -11,10 +11,12 @@ const clerk = vi.hoisted(() => ({
 
 vi.mock("@/lib/auth", () => ({
   authEnabled: true,
-  clerkPublishableKey: undefined,
   useSessionUser: () => ({ userId: null, isLoaded: true }),
   useSignOut: () => () => {},
   AuthShow: () => null,
+  AuthProvider: ({ children }: { children: unknown }) => children,
+  // Clerk's components render in place, as they do once Clerk's provider has loaded.
+  ClerkSlot: ({ children }: { children: unknown }) => children,
 }));
 
 // Exercise the hand-off to Clerk without contacting an identity provider or
@@ -39,10 +41,11 @@ beforeEach(() => {
 afterEach(() => api.uninstall());
 
 describe("configured account pages", () => {
-  it("keeps Clerk path routing, registration and the console fallback intact", () => {
+  it("keeps Clerk path routing, registration and the console fallback intact", async () => {
     render(<SignInPage />);
+    // Clerk's form is its own chunk, loaded only where sign-in is available.
     expect(
-      screen.getByRole("region", { name: "Account sign-in" }),
+      await screen.findByRole("region", { name: "Account sign-in" }),
     ).toBeTruthy();
     expect(screen.queryByText("Sign-in is unavailable here")).toBeNull();
     expect(clerk.signIn).toMatchObject({
@@ -62,11 +65,11 @@ describe("configured account pages", () => {
     expect(api.calls).toEqual([]);
   });
 
-  it("keeps registration routed back to sign-in and respects a dark appearance", () => {
+  it("keeps registration routed back to sign-in and respects a dark appearance", async () => {
     act(() => setThemeChoice("dark"));
     render(<SignUpPage />);
     expect(
-      screen.getByRole("region", { name: "Account registration" }),
+      await screen.findByRole("region", { name: "Account registration" }),
     ).toBeTruthy();
     expect(clerk.signUp).toMatchObject({
       routing: "path",

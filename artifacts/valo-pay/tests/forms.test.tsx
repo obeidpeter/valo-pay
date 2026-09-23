@@ -84,4 +84,26 @@ describe("forms", () => {
       expect(action?.status).toBe(200);
     });
   });
+
+  it("clears an emptied optional field on an edit instead of keeping the old value", async () => {
+    const user = userEvent.setup();
+    const exception = api.state().records.find((record) => record.kind === "exceptions" && record.data.owner && record.data.severity && !record.data.case && record.status === "open")!;
+    renderApp(`/exceptions?record=${exception.id}`);
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit exception" });
+    const owner = within(dialog).getByLabelText("Assigned owner") as HTMLInputElement;
+    expect(owner.value).toBe(exception.data.owner);
+    await user.clear(owner);
+    await user.selectOptions(within(dialog).getByLabelText("Severity"), "");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // Sent as null, which the service reads as "remove this field"; the other fields are unchanged.
+    const sent = api.calls.find((call) => call.method === "PATCH")!;
+    expect(sent.status).toBe(200);
+    expect((sent.body as { data: Record<string, unknown> }).data).toMatchObject({ owner: null, severity: null, notes: exception.data.notes });
+    const saved = api.state().records.find((record) => record.id === exception.id)!;
+    expect(saved.data.owner).toBeUndefined();
+    expect(saved.data.severity).toBeUndefined();
+    expect(saved.data.notes).toBe(exception.data.notes);
+  });
 });

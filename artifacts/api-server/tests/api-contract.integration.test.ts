@@ -190,7 +190,13 @@ try {
   const keyed = key();
   const record = ok(await call(q("/v1/records/customers"), "POST", customerBody, { key: keyed }));
   ok(await call(q("/v1/records/customers"), "POST", { ...customerBody, reference: `CONTRACT-${randomUUID()}` }));
-  ok(await call(q(`/v1/records/customers/${record.id}`), "PATCH", { name: "Contract customer, renamed", expectedUpdatedAt: record.updatedAt }, { key: key() }));
+  const renamed = ok(await call(q(`/v1/records/customers/${record.id}`), "PATCH", { name: "Contract customer, renamed", data: { phoneMasked: "+234 ••• ••31" }, expectedUpdatedAt: record.updatedAt }, { key: key() }));
+  assert.equal(renamed.data.phoneMasked, "+234 ••• ••31");
+  // An edit clears an optional data field by sending it as null (a merge patch); the fields it leaves out keep their values.
+  const cleared = ok(await call(q(`/v1/records/customers/${record.id}`), "PATCH", { data: { phoneMasked: null }, expectedUpdatedAt: renamed.updatedAt }, { key: key() }));
+  assert.equal("phoneMasked" in cleared.data, false, "a field sent as null is removed");
+  assert.equal(cleared.data.consentProvenance, "Synthetic fixture", "a field left out keeps its value");
+  assert.equal(cleared.name, "Contract customer, renamed");
   ok(await call(q(`/v1/customers/${record.id}/timeline`)));
   ok(await call(q(`/v1/customers/${record.id}/history`)));
   ok(await call(q("/v1/imports"), "POST", { kind: "customers", csv: "name,reference,consentProvenance\nImported contract customer,CONTRACT-I001,Synthetic consent", syntheticOnly: true, commit: false, amountUnit: "kobo" }));

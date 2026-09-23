@@ -277,7 +277,7 @@ export const CreateRecordResponse = zod.object({
 
 
 /**
- * Editable kinds only; an approved, preregistered or closed version is immutable. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version.
+ * Editable kinds only; an approved, preregistered or closed version is immutable. data is merged over the stored data as a merge patch: a field left out keeps its value and a field sent as null is removed, which is how an edit clears an optional field. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version.
  * @summary Update a record
  */
 export const UpdateRecordParams = zod.object({
@@ -314,7 +314,7 @@ export const UpdateRecordBody = zod.object({
   "customerId": zod.string().optional(),
   "data": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
   "expectedUpdatedAt": zod.string().optional()
-}).describe('The fields to change on a record; omitted fields keep their values.')
+}).describe('The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed.')
 
 export const UpdateRecordResponse = zod.object({
   "id": zod.string(),

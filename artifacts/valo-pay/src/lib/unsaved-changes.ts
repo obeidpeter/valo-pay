@@ -40,8 +40,20 @@ export function useFormDraft(values: Record<string, unknown>) {
   };
 }
 
-/** Guard links, keyboard navigation, browser Back/Forward and document unload. */
-export function installUnsavedNavigationGuard() {
+let uninstallGuard: (() => void) | null = null;
+
+/**
+ * Guard links, keyboard navigation, browser Back/Forward and document unload.
+ * Install it once, before the router first subscribes to the browser's
+ * location (App.tsx does so when it loads): listeners on window run in the
+ * order they were added, and Chromium keeps that order even for a capturing
+ * listener, so a guard added after the router's popstate listener would be
+ * asked only once Back had already unmounted the draft. Its own listener does
+ * not capture, so every browser, jsdom included, runs it first for the same
+ * reason. Installing again returns the guard already in place.
+ */
+export function installUnsavedNavigationGuard(): () => void {
+  if (uninstallGuard) return uninstallGuard;
   const push = window.history.pushState;
   const replace = window.history.replaceState;
   const marker = '__valoNavigationIndex';
@@ -72,10 +84,12 @@ export function installUnsavedNavigationGuard() {
   const unload = (event: BeforeUnloadEvent) => {
     if ([...drafts].some(draft => draft.current)) { event.preventDefault(); event.returnValue = ''; }
   };
-  window.addEventListener('popstate', pop, true);
+  window.addEventListener('popstate', pop);
   window.addEventListener('beforeunload', unload);
-  return () => {
+  uninstallGuard = () => {
     window.history.pushState = push; window.history.replaceState = replace;
-    window.removeEventListener('popstate', pop, true); window.removeEventListener('beforeunload', unload);
+    window.removeEventListener('popstate', pop); window.removeEventListener('beforeunload', unload);
+    uninstallGuard = null;
   };
+  return uninstallGuard;
 }
