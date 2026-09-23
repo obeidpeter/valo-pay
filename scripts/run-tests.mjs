@@ -48,6 +48,7 @@ const steps = [
   [tsx, ["artifacts/api-server/tests/api-shell-golden.test.ts"]],
   [tsx, ["artifacts/api-server/tests/close-schedule-golden.test.ts"]],
   [tsx, ["artifacts/api-server/tests/payment-lifecycle-golden.test.ts"]],
+  [tsx, ["artifacts/api-server/tests/payment-evidence-golden.test.ts"]],
   [tsx, ["artifacts/api-server/tests/workflow-performance.test.ts"]],
   // The console pages in jsdom against an in-memory API built on the domain code.
   [vitest, ["run", "--root", "artifacts/valo-pay", "--config", "vitest.config.ts"]],

@@ -86,9 +86,16 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
       if(input.kind==="due-items")record.data.outstandingKobo=record.amountKobo;
       if(input.kind==="attempts"){record.data.source="external";record.data.simulated=true;}
       if(input.kind==="mandates"){record.data.origin="imported";record.data.consentGaps ||= [];}
-      if(record.reference&&working.records.some(r=>r.kind===input.kind&&r.reference===record.reference&&(input.kind!=="observations"||r.data.source===record.data.source))){
+      // Payment evidence is the same when its source event is or, without event IDs, when its source, reference, payer,
+      // amounts, currency, connection and batch are. Evidence that only shares a reference is new: reconciliation
+      // merges it into its payment or holds it as a conflict, and never loses its money.
+      const sameDetails=(saved:{reference:string;customerId:string;amountKobo:number;data:Record<string,any>})=>saved.reference===record.reference&&saved.customerId===(record.customerId||"")&&saved.amountKobo===record.amountKobo
+        &&["grossAmountKobo","feeKobo","batchReference","currency","provider","providerConnection"].every(key=>saved.data[key]===record.data[key]);
+      const savedEvidence=input.kind==="observations"?working.records.find(r=>r.kind==="observations"&&r.data.source===record.data.source&&(r.data.eventId!==undefined||record.data.eventId!==undefined?String(r.data.eventId)===String(record.data.eventId):sameDetails(r))):undefined;
+      if(savedEvidence&&!sameDetails(savedEvidence))throw new Error('This source event is already saved with different details. Review the saved payment evidence; it cannot be replaced by importing again.');
+      if(record.reference&&(input.kind==="observations"?savedEvidence:working.records.some(r=>r.kind===input.kind&&r.reference===record.reference))){
         if (identity) throw new Error('This reference belongs to another saved record. Check its source row identity before importing; a conflicting row will not be silently skipped.');
-        rows.push({row:index+2,status:"duplicate",message:"Skipped: this source already has a record with the same reference."});continue;
+        rows.push({row:index+2,status:"duplicate",message:input.kind==="observations"?"Skipped: the same payment evidence is already saved.":"Skipped: this source already has a record with the same reference."});continue;
       }
       validateRecord(working,ctx,input.kind,record);
       if (identity) record.data.importIdentity = { ...identity, fingerprint: identityFingerprint };

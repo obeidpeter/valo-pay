@@ -1,4 +1,4 @@
-import { closeRules, closeTimeOf, isOpenException, nextCloseInstant, paymentUnappliedKobo, type CloseReport } from "@workspace/valopay-schema";
+import { closeRules, closeTimeOf, isOpenException, nextCloseInstant, paymentAwaitsAllocation, paymentUnappliedKobo, type CloseReport } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { allocationConfirmedAt, paymentObservedAt } from "./reconciliation";
@@ -177,7 +177,7 @@ export function positionSnapshot(state: DomainState): Map<string, CustomerPositi
 }
 
 const sumOf = (items: ValopayRecord[]) => ({ count: items.length, kobo: items.reduce((sum, item) => sum + item.amountKobo, 0) });
-/** Unallocated payments by the money they hold: what a refund of part of one returned is not waiting for Finance. */
+/** Payments waiting for Finance (paymentAwaitsAllocation) by the money they hold: the unapplied rest of one applied in part is waiting, what a refund of part of one returned is not. */
 const heldOf = (items: TypedRecord<"payments">[]) => ({ count: items.length, kobo: items.reduce((sum, item) => sum + paymentUnappliedKobo(item), 0) });
 const inPeriod = (at: string | undefined, from: string | null, to: string) => Boolean(at) && (from === null || String(at) > from) && String(at) <= to;
 
@@ -190,7 +190,7 @@ export interface OpeningSnapshot {
 
 export function openingSnapshot(state: DomainState): OpeningSnapshot {
   const closes = recordsOf(state, "closes").map((close) => String(close.data.closedAt || close.createdAt)).sort();
-  return { since: closes.at(-1) ?? null, unallocated: heldOf(recordsOf(state, "payments").filter((item) => item.status === "unallocated")), positions: positionSnapshot(state) };
+  return { since: closes.at(-1) ?? null, unallocated: heldOf(recordsOf(state, "payments").filter(paymentAwaitsAllocation)), positions: positionSnapshot(state) };
 }
 
 /**
@@ -226,7 +226,7 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
     row.count += 1; row.kobo += allocation.amountKobo; if (allocation.data.automatic === true) row.automatic += 1;
   }
 
-  const unallocated = payments.filter((item) => item.status === "unallocated");
+  const unallocated = payments.filter(paymentAwaitsAllocation);
   const variances = recordsOf(state, "settlement-batches").filter((item) => item.status === "variance").map((batch) => ({
     batchId: batch.id, reference: batch.reference, feeVarianceKobo: Number(batch.data.feeVarianceKobo || 0), netKobo: Number(batch.data.netKobo || 0),
     statementNetKobo: batch.data.statementNetKobo ?? null, explanation: batch.data.explanation ?? null,

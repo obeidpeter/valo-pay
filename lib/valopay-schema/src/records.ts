@@ -203,6 +203,10 @@ export const recordDataSchemas = {
     resolutionKey: z.string().optional(),
     resolvedAt: isoDateOrTimestamp.optional(),
     duplicateSettlementLine: z.boolean().optional(),
+    /** A settlement line for a collection another batch already counts: the batch it is counted in. */
+    countedInBatchId: z.string().optional(),
+    /** A statement credit repeating one already counted for its batch (same reference and amount): it adds nothing. */
+    duplicateStatementCredit: z.boolean().optional(),
     reversalApplied: z.boolean().optional(),
     statementNetKobo: z.number().int().optional(),
     linePaymentIds: z.array(z.string()).optional(),
@@ -238,6 +242,14 @@ export const recordDataSchemas = {
     refundedKobo: kobo.optional(),
     /** Instalments Finance said this payment does not belong to; automatic matching never proposes them again. */
     rejectedDueItemIds: z.array(z.string()).optional(),
+    /** Evidence named no payer, so Finance identified the payer when it applied the payment: who, when, why and through which allocation. */
+    payerIdentification: z.object({ customerId: z.string(), identifiedBy: z.string(), identifiedAt: isoDateOrTimestamp, reason: z.string(), dueItemId: z.string(), allocationId: z.string() }).optional(),
+    /** Finance's resolution of a suspected duplicate held on this payment; "distinct_payments" means it is never held again for the same reason. */
+    duplicateReview: z.object({ exceptionId: z.string(), resolutionCode: z.string(), reviewedBy: z.string(), reviewedAt: isoDateOrTimestamp }).optional(),
+    /** Made from evidence that conflicted with another payment sharing its reference, once Finance resolved that exception. */
+    evidenceConflict: z.object({ paymentId: z.string(), exceptionId: z.string(), resolutionCode: z.string() }).optional(),
+    /** The amount came from a settlement line that stated only what it paid out: the debit's own gross may raise it while nothing is applied. */
+    grossUnstated: z.boolean().optional(),
     duplicateSettlementLine: z.boolean().optional(),
     statementObservationId: z.string().optional(),
     settlementBatchId: z.string().optional(),

@@ -58,7 +58,9 @@ export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response
    // Validate before committing: an invalid response must not leave durable writes.
    const result=contractAnswer(responseSchema,rawResult);
   if(mutating){
-   appendAudit(state,ctx,req.path.includes("/actions")?String(req.body.action):`${req.method.toLowerCase()}.${req.path.split("/").slice(2).join(".")}`,req.body.recordId||String(req.params.id||"workspace"),req.body.reason||"Synthetic workspace operation",changes);
+   // An action may add what it established to the reason, such as the payer Finance identified.
+   const reason=req.body.reason||"Synthetic workspace operation",auditNote=(rawResult as {data?:{auditNote?:unknown}}|undefined)?.data?.auditNote;
+   appendAudit(state,ctx,req.path.includes("/actions")?String(req.body.action):`${req.method.toLowerCase()}.${req.path.split("/").slice(2).join(".")}`,req.body.recordId||String(req.params.id||"workspace"),typeof auditNote==="string"&&auditNote?`${reason}${/[.!?]$/.test(reason)?"":"."} ${auditNote}`:reason,changes);
     await saveState(ctx,state);
     if(idempotencyKey)await saveIdempotency(ctx,idempotencyKey,fingerprint,result);
   }
