@@ -12,7 +12,13 @@ export function DailyCloseStatus({ value, showHistory = false }: { value: unknow
         ? `Automatic daily close paused on ${formatDate(schedule.pausedForInactivityAt)} because nobody changed this sandbox for ${closeRules.idleSandboxDays} days. Switch it on again in Settings, or run closes manually.`
         : 'Automatic daily close is off for this lender. Run closes manually.';
     } else if (schedule.runtimeState === 'off') message = 'Automatic daily close is off on this service. Run closes manually.';
-    else if (schedule.runtimeState === 'stopped' || schedule.runtimeState === 'not_started') {
+    // A separate scheduled job runs the closes: this service cannot see when it runs next, but a close it missed is still missed.
+    else if (schedule.runtimeState === 'external') {
+      if (schedule.missed === true) {
+        message = `Scheduled close at ${schedule.time} WAT missed: ${formatCount(Number(schedule.overdueMinutes), 'minute')} past its time. Daily closes run from a scheduled job, which has not closed this lender. Run a daily close and ask an administrator to check the job.`;
+        warning = true;
+      } else message = 'Daily closes run from a scheduled job.';
+    } else if (schedule.runtimeState === 'stopped' || schedule.runtimeState === 'not_started') {
       message = 'Automatic daily close is unavailable. Run a close manually while the service recovers.';
       warning = true;
     } else if (schedule.serviceIssue === 'failed' || schedule.serviceIssue === 'delayed') {

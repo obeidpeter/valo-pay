@@ -6,6 +6,9 @@
  * OpenAPI spec version: 1.1.0
  */
 
+/**
+ * running: this process schedules the daily closes. off: it schedules none (VALOPAY_CLOSE_SCHEDULER=off). external: it schedules none because a separate scheduled job runs them with the one-shot close pass (VALOPAY_CLOSE_SCHEDULER=external), which this process cannot observe. not_started and stopped: the scheduler has not started yet, or has stopped.
+ */
 export type SchedulerStatusState = typeof SchedulerStatusState[keyof typeof SchedulerStatusState];
 
 
@@ -13,5 +16,6 @@ export const SchedulerStatusState = {
   not_started: 'not_started',
   running: 'running',
   off: 'off',
+  external: 'external',
   stopped: 'stopped',
 } as const;

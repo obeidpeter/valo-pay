@@ -125,3 +125,17 @@ console.log("valopay repository pure guards passed");
   }
   console.log("Export retry guards passed: failed/expired only, unchanged request and object identity, immutable ready evidence.");
 }
+{
+  // The guard query in docs/database-migrations.md, run by the owner before publishing, is built from the catalogue
+  // readiness checks: one row for each guard, in its order, with its kind, name, table and definition as SQL text.
+  // integrity-guards.integration.test.ts runs it against PostgreSQL.
+  const { readFileSync } = await import("node:fs");
+  const { integrityGuards } = await import("../src/lib/valopay-store.js");
+  const literal = (text: string) => `'${text.replaceAll("'", "''")}'`;
+  const rows = integrityGuards.map((guard) => `  (${[guard.type, guard.name, guard.table, guard.definition].map(literal).join(", ")})`).join(",\n");
+  const documented = readFileSync(new URL("../../../docs/database-migrations.md", import.meta.url), "utf8");
+  const query = [...documented.matchAll(/```sql\n([\s\S]*?)```/g)].map((match) => match[1]!);
+  assert.equal(query.length, 1, "docs/database-migrations.md holds one SQL block, the guard query");
+  assert.ok(query[0]!.includes(`FROM (VALUES\n${rows}\n) AS guard`), `The documented guard query must list exactly integrityGuards; its rows should read:\n${rows}`);
+  console.log(`Guard query rows passed: the query in docs/database-migrations.md lists the ${integrityGuards.length} integrity guards readiness checks, in order.`);
+}

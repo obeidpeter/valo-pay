@@ -5,6 +5,9 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
+/**
+ * running: this process schedules the daily closes. off: it schedules none (VALOPAY_CLOSE_SCHEDULER=off). external: it schedules none because a separate scheduled job runs them with the one-shot close pass (VALOPAY_CLOSE_SCHEDULER=external), which this process cannot observe. not_started and stopped: the scheduler has not started yet, or has stopped.
+ */
 export type SchedulerStatusState = typeof SchedulerStatusState[keyof typeof SchedulerStatusState];
 
 
@@ -12,6 +15,7 @@ export const SchedulerStatusState = {
   not_started: 'not_started',
   running: 'running',
   off: 'off',
+  external: 'external',
   stopped: 'stopped',
 } as const;
 
@@ -35,6 +39,7 @@ export interface SchedulerRun {
  * Whether closes are scheduled in this process, how often it looks, when it last looked and its last pass with work.
  */
 export interface SchedulerStatus {
+  /** running: this process schedules the daily closes. off: it schedules none (VALOPAY_CLOSE_SCHEDULER=off). external: it schedules none because a separate scheduled job runs them with the one-shot close pass (VALOPAY_CLOSE_SCHEDULER=external), which this process cannot observe. not_started and stopped: the scheduler has not started yet, or has stopped. */
   state: SchedulerStatusState;
   /** @nullable */
   intervalMs: number | null;
@@ -245,6 +250,9 @@ export interface Alert {
   linkedRecordId?: string;
 }
 
+/**
+ * The close service as this process sees it (the health answer's scheduler state). With external a separate scheduled job runs the closes: nothing is advertised as automatic, but a close that job has not run is still missed.
+ */
 export type EffectiveCloseScheduleRuntimeState = typeof EffectiveCloseScheduleRuntimeState[keyof typeof EffectiveCloseScheduleRuntimeState];
 
 
@@ -252,6 +260,7 @@ export const EffectiveCloseScheduleRuntimeState = {
   not_started: 'not_started',
   running: 'running',
   off: 'off',
+  external: 'external',
   stopped: 'stopped',
 } as const;
 
@@ -276,6 +285,7 @@ export interface EffectiveCloseSchedule {
   automatic: boolean;
   /** @nullable */
   nextAt: string | null;
+  /** The close service as this process sees it (the health answer's scheduler state). With external a separate scheduled job runs the closes: nothing is advertised as automatic, but a close that job has not run is still missed. */
   runtimeState: EffectiveCloseScheduleRuntimeState;
   /** @nullable */
   serviceIssue: EffectiveCloseScheduleServiceIssue;
