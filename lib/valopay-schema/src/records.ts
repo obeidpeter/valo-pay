@@ -57,7 +57,9 @@ export const kobo = z.number({ invalid_type_error: 'Enter an amount as a number.
 const versionNumber = z.coerce.number().int().min(1);
 /** Every record the platform writes is marked synthetic; a provider-accepted notice clears it (NOT-10). */
 const common = { synthetic: z.boolean().optional() };
-const money = z.object({ count: z.number().int().min(0), kobo: z.number().int() });
+/** Money in another currency than naira, by currency code: how many payments, and their amount in that currency's minor unit as each payment stores it. It is never added to a naira total. */
+const otherCurrencies = z.record(z.object({ count: z.number().int().min(0), amount: z.number().int() }));
+const money = z.object({ count: z.number().int().min(0), kobo: z.number().int(), otherCurrencies: otherCurrencies.optional() });
 
 /** A headline metric as the overview and the reports return it, and as each close freezes it. */
 export const metricSchema = z.object({ key: z.string(), label: z.string(), value: z.number(), unit: z.string(), detail: z.string() });
@@ -292,11 +294,13 @@ export const recordDataSchemas = {
     rejectedDueItemIds: z.array(z.string()).optional(),
     /** Evidence named no payer, so Finance identified the payer when it applied the payment: who, when, why and through which allocation. */
     payerIdentification: z.object({ customerId: z.string(), identifiedBy: z.string(), identifiedAt: isoDateOrTimestamp, reason: z.string(), dueItemId: z.string(), allocationId: z.string() }).optional(),
+    /** Identifications withdrawn once a review or rejection took the match that made them out of use, with nothing of the payment applied: each as recorded, and who withdrew it, when and why. */
+    payerIdentificationHistory: z.array(z.object({ customerId: z.string(), identifiedBy: z.string(), identifiedAt: isoDateOrTimestamp, reason: z.string(), dueItemId: z.string(), allocationId: z.string(), withdrawnBy: z.string(), withdrawnAt: isoDateOrTimestamp, withdrawnReason: z.string() })).optional(),
     /** Finance's resolution of a suspected duplicate held on this payment; "distinct_payments" means it is never held again for the same reason. */
     duplicateReview: z.object({ exceptionId: z.string(), resolutionCode: z.string(), reviewedBy: z.string(), reviewedAt: isoDateOrTimestamp }).optional(),
-    /** Made from evidence that conflicted with another payment sharing its reference, once Finance resolved that exception. */
+    /** Made from evidence that conflicted with another payment sharing its reference, or came through another connection than the payment with its reference, once Finance resolved that exception. */
     evidenceConflict: z.object({ paymentId: z.string(), exceptionId: z.string(), resolutionCode: z.string() }).optional(),
-    /** The amount came from a settlement line that stated only what it paid out: the debit's own gross may raise it while nothing is applied. */
+    /** The amount came from a settlement line that stated only what it paid out: the debit's own gross raises it, whatever is applied, until its money goes back. */
     grossUnstated: z.boolean().optional(),
     /** A pay-by-bank receipt Finance confirmed after its outcome stayed unknown: the masked reference of the evidence that it arrived. */
     evidenceReference: z.string().optional(),

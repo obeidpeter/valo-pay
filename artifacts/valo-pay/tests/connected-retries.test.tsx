@@ -10,6 +10,12 @@ beforeEach(() => {
   api = installFakeApi({ now: "2026-09-21T10:00:00.000Z" });
 });
 afterEach(() => api.uninstall());
+/** Another user's change to something the workspace shows (a customer's name), so a form reviewed before it is stale. */
+const changeWorkspace = () =>
+  api.mutate((state) => {
+    const customer = state.records.filter((record) => record.kind === "customers").at(-1)!;
+    customer.name = `${customer.name} (renamed)`;
+  });
 
 it.each(["malformed JSON", "unexpected shape", "timeout"])(
   "retains the original request after a committed action returns %s",
@@ -209,10 +215,7 @@ it("a definite stale-version rejection releases the old revision for an explicit
     });
     if (rejectFirst) {
       rejectFirst = false;
-      api.mutate((state) => {
-        state.settings.minimumTicketKobo =
-          Number(state.settings.minimumTicketKobo ?? 0) + 1;
-      });
+      changeWorkspace();
       return new Response(
         JSON.stringify({
           error:
@@ -314,10 +317,7 @@ it("a refusal the service marks as cancelled releases the held action", async ()
   });
   const user = userEvent.setup();
   await startAssessment(user);
-  api.mutate((state) => {
-    state.settings.minimumTicketKobo =
-      Number(state.settings.minimumTicketKobo ?? 0) + 1;
-  });
+  changeWorkspace();
   await user.click(
     screen.getByRole("button", { name: "Retry original sample request" }),
   );

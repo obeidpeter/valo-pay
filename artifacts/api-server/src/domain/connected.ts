@@ -6,6 +6,7 @@ import { makeRecord, recordsOf, touch } from "./records";
 import {
   allocatePayment,
   clearSettledExceptions,
+  clearedExceptionsNote,
   supersedeAllocation,
   raiseException,
   recordPaymentRefund,
@@ -84,16 +85,22 @@ function payable(r: ValopayRecord) {
     !["paid", "closed", "cancelled", "in_dispute"].includes(r.status)
   );
 }
+/** The lender's settings the workspace and its actions read: only these are part of its revision. */
+const connectedSettings = ["environment"] as const;
 /**
  * The revision an action names: it changes whenever anything the workspace
  * shows or its actions read changes, and nothing else does. It covers the
- * lender and its settings, the customers, every connected record, each
- * pay-by-bank receipt with its allocations, and the instalments the workspace
- * offers, a checkout names or a receipt was applied to, with their attempts,
- * each record whole. The lender's history (closes, the audit trail, exports,
- * settled instalments, other payments) is left out, so the revision costs what
- * the workspace does, and a write, which loads older closes as summaries,
- * computes the revision its view did. It does not change with the clock.
+ * lender, the settings the workspace reads (connectedSettings), the
+ * customers, every connected record, each pay-by-bank receipt with its
+ * allocations, and the instalments the workspace offers, a checkout names or
+ * a receipt was applied to, with their attempts, each record whole. The
+ * lender's history (closes, the audit trail, exports, settled instalments,
+ * other payments) and the other settings (the scheduler's close cursor and
+ * retry, a pause for inactivity, the audit chain's head) are left out, so the
+ * revision costs what the workspace does, a scheduled close or an audited
+ * write elsewhere keeps it, and a write, which loads older closes as
+ * summaries, computes the revision its view did. It does not change with the
+ * clock.
  */
 export function connectedRevision(state: DomainState): string {
   const receipts = new Set<string>(),
@@ -117,8 +124,9 @@ export function connectedRevision(state: DomainState): string {
         (r.kind === "allocations" && receipts.has(r.data.paymentId)),
     )
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const settings = Object.fromEntries(connectedSettings.map((key) => [key, state.settings[key]]));
   return createHash("sha256")
-    .update(JSON.stringify([state.merchant, state.settings, rows]))
+    .update(JSON.stringify([state.merchant, settings, rows]))
     .digest("hex");
 }
 function owned<K extends string>(
@@ -350,10 +358,16 @@ export function resolveUnknownCheckout(
   };
   return confirmed ? "confirmed" : "failed";
 }
+/**
+ * A pay-by-bank step. One that settles what an open exception waited for (a
+ * late outcome, a refund or a reversal) closes each exception whose condition
+ * cleared and adds them to `cleared`, for its audit entry.
+ */
 function paymentAction(
   state: DomainState,
   ctx: Context,
   input: ConnectedAction,
+  cleared: RecordOf<"exceptions">[],
 ) {
   allow(ctx, ["Admin", "Operations", "Finance"]);
   if (input.action === "payment.create") {
@@ -516,7 +530,7 @@ function paymentAction(
           : "Sample provider confirmed that payment failed.",
       );
       // A late answer to an outcome that stayed unknown clears its exception.
-      clearSettledExceptions(state, ctx);
+      cleared.push(...clearSettledExceptions(state, ctx));
       return intent;
     }
     // A late response may arrive after consent expires/revokes: keep recording existing in-flight evidence.
@@ -525,7 +539,7 @@ function paymentAction(
       "confirmed",
       "Sample server receipt confirmed and added to collections reconciliation.",
     );
-    clearSettledExceptions(state, ctx);
+    cleared.push(...clearSettledExceptions(state, ctx));
     return intent;
   }
   if (input.action === "payment.refund_request") {
@@ -578,7 +592,7 @@ function paymentAction(
         input.reason,
         "Finance recorded sample reversal evidence for the pay-by-bank receipt",
       );
-    clearSettledExceptions(state, ctx);
+    cleared.push(...clearSettledExceptions(state, ctx));
     return event(
       refund ? "refunded" : "reversed",
       `${input.reason} (sample evidence only)`,
@@ -590,6 +604,29 @@ export function runConnectedAction(
   state: DomainState,
   ctx: Context,
   input: ConnectedAction,
+) {
+  return runConnectedActionWithNote(state, ctx, input).result;
+}
+/**
+ * A connected action and the note its audit entry adds to the reason: a
+ * pay-by-bank step that closed exceptions whose condition cleared names them
+ * (clearedExceptionsNote), as the actions and the daily close do.
+ */
+export function runConnectedActionWithNote(
+  state: DomainState,
+  ctx: Context,
+  input: ConnectedAction,
+) {
+  const cleared: RecordOf<"exceptions">[] = [];
+  const result = connectedAction(state, ctx, input, cleared);
+  const auditNote = clearedExceptionsNote(cleared);
+  return auditNote ? { result, auditNote } : { result };
+}
+function connectedAction(
+  state: DomainState,
+  ctx: Context,
+  input: ConnectedAction,
+  cleared: RecordOf<"exceptions">[],
 ) {
   if (state.settings.environment !== "sandbox")
     reject(
@@ -635,7 +672,7 @@ export function runConnectedAction(
     return consent;
   }
   if (input.action.startsWith("payment."))
-    return paymentAction(state, ctx, input);
+    return paymentAction(state, ctx, input, cleared);
   if (input.action.startsWith("credit."))
     return runCreditAction(state, ctx, input);
   if (input.action.startsWith("cash.")) return runCashAction(state, ctx, input);

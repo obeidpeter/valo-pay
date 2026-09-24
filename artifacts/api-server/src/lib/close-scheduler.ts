@@ -28,6 +28,7 @@ import { SYSTEM_ACTOR_PREFIX, appendAudit, dueScheduledCloses, inMerchantAsSyste
 import { runDailyClose } from "../domain/actions";
 import { pauseIdleSandboxClose, scheduledCloseDue } from "../domain/close";
 import { enrolEligibleFailures } from "../domain/policy-engine";
+import { withAuditNote } from "../domain/reconciliation";
 import { bindCloseReviewBasis } from '../domain/close-review';
 
 /** The system actor recorded on a scheduled close. */
@@ -162,7 +163,8 @@ export async function runDueCloses(options: CloseRunOptions = {}): Promise<Close
           const result = runDailyClose(state, ctx, "scheduled");
           enrolEligibleFailures(state, ctx);
           if(result.record?.kind==='closes')bindCloseReviewBasis(state,result.record);
-          appendAudit(state, ctx, "daily_close", result.record!.id, result.message, settleChanges(ctx, state));
+          // As for a close run by hand, the audit entry names the exceptions the close closed because their condition cleared.
+          appendAudit(state, ctx, "daily_close", result.record!.id, withAuditNote(result.message, result.data.auditNote), settleChanges(ctx, state));
           await saveState(ctx, state);
           const schedule = result.data.schedule as { late?: boolean; delayMinutes?: number | null } | undefined;
           return { closeId: result.record!.id, late: schedule?.late === true, delayMinutes: schedule?.delayMinutes ?? null };
