@@ -3,7 +3,7 @@ import { listReconciliation, listCloseHistory, getCloseDetail, loadReportsView }
 import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
 import { z } from "zod";
-import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, roles, fail, appendAudit, verifyAudit, listMerchants, findIdempotency, saveIdempotency, receiptOf, changeRole, type StoreContext } from "../lib/valopay-store";
+import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, roles, fail, appendAudit, auditOverview, verifyAuditTrail, listMerchants, findIdempotency, findStoredAnswer, saveIdempotency, receiptOf, changeRole, type StoreContext } from "../lib/valopay-store";
 import { requestFingerprint } from "../lib/digests";
 import { amendDueItem, customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction, type TypedRecord } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
@@ -27,17 +27,20 @@ const router:IRouter=Router(routerOptions);
 const kinds=new Set<string>(recordKinds);
 function safeKind(value:unknown):string { const kind=z.string().parse(value);if(!kinds.has(kind))fail("Unknown resource.",404);return kind; }
 /**
- * One lender's state for a route: read under a share lock, or written under the
- * exclusive lock with an audit entry and, when the request carries an
- * Idempotency-Key, a receipt its repeat is answered from. A fresh answer is
+ * One lender's state for a route: read from the read's snapshot, or written
+ * under the exclusive lock with an audit entry and, when the request carries
+ * an Idempotency-Key, a receipt its repeat is answered from. A fresh answer is
  * checked against the route's response schema before COMMIT, so an answer that
  * does not match its contract is a 500 that saved nothing. A replayed receipt
  * was saved with its request, so it is never answered as saving nothing: it is
  * given without fields the contract no longer lists, or as a 500 that says the
  * request was saved (replayedAnswer, lib/contract.ts). A receipt is kept where
- * receiptOf says, and a read is never fingerprinted.
+ * receiptOf says, and a read is never fingerprinted. A repeat is answered from
+ * its receipt before the lender is loaded, so it neither loads nor waits for
+ * the lender. `wholeCloses` keeps that many of the newest closes whole in the
+ * load (loadState).
  */
-export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>unknown,mutating:boolean,responseSchema:S):Promise<z.output<S>>{
+export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>unknown,mutating:boolean,responseSchema:S,options:{wholeCloses?:number}={}):Promise<z.output<S>>{
  const {merchantId}=lenderQuery(req);
  // A write's key is checked by name before anything runs; a read ignores one, and nothing of a read is fingerprinted.
  const key=mutating?optionalKey(req):undefined;
@@ -45,15 +48,15 @@ export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response
  // Where a keyed write's answer is kept for its repeats; a demo-role switch is never journaled, so it keeps its own (receiptOf).
  const receipt=key?receiptOf(req,merchantId,key,setRole?"persona":"workspace"):undefined;
  return inWorkspace(req,res,async ctx=>{
-  // A read takes a share lock so it never queues behind other reads; a mutation takes the exclusive lock.
-  const state=await loadState(ctx,merchantId,mutating?"update":"share");
   // A demo-role switch changes ctx.actor itself. Its unchanged retry must keep
   // the original request identity; all other actions stay persona-bound.
   const fingerprint=receipt?requestFingerprint({path:req.path,method:req.method,body:req.body,actor:setRole?"Sandbox role switch":ctx.actor}):"";
-  if(receipt){
-    const found=await findIdempotency(ctx,receipt.id,receipt.earlier);
-    if(found){if(found.request_hash!==fingerprint)fail("This idempotency key was used with different input.",409);const saved=replayedAnswer(req,responseSchema,found.response);await completeOperation(ctx,saved);return saved;}
-  }
+  const replay=async(found:{request_hash:string;response:unknown})=>{if(found.request_hash!==fingerprint)fail("This idempotency key was used with different input.",409);const saved=replayedAnswer(req,responseSchema,found.response);await completeOperation(ctx,saved);return saved;};
+  if(receipt){const found=await findStoredAnswer(ctx,merchantId,receipt.id,receipt.earlier);if(found)return replay(found);}
+  // A read loads from its snapshot and takes no lock; a mutation takes the exclusive lock (and holds its journal entry first).
+  const state=await loadState(ctx,merchantId,mutating?"update":"share",options);
+  // Again once the entry is held: an attempt with the key that finished after the first look is visible only now.
+  if(receipt){const found=await findIdempotency(ctx,receipt.id,receipt.earlier);if(found)return replay(found);}
    const rawResult=await operation(state,ctx);
    // Versions advance before the response is built, so it carries them; the audit entry commits to exactly what changed.
    let changes:ReturnType<typeof settleChanges>|undefined;
@@ -77,7 +80,8 @@ router.get("/v1/workspace",async(req,res)=>{
  }),"read"));
 });
 router.get("/v1/overview",async(req,res)=>{
- res.json(await withState(req,res,(state,ctx)=>buildConsoleOverview(state,ctx.now,verifyAudit(state),schedulerStatus()),false,S.GetOverviewResponse));
+ // The audit chain is not in the loaded state: the store checks the entries since the last verified one and reads the eight latest.
+ res.json(await withState(req,res,async(state,ctx)=>{const audit=await auditOverview(ctx,state);return buildConsoleOverview({...state,records:[...state.records,...audit.recent]},ctx.now,audit.verification,schedulerStatus());},false,S.GetOverviewResponse));
 });
 router.get("/v1/records/:kind",async(req,res)=>{
  lenderQuery(req);
@@ -136,7 +140,8 @@ router.post("/v1/actions",async(req,res)=>{
     await changeRole(ctx,role);
    return {message:`Demo role changed to ${role}. This only affects the sample workspace.`,data:{role}};
   }
-  if(body.action==="verify_audit")return {message:"Audit log check complete.",data:verifyAudit(state)};
+  // The whole chain, from its first entry, as the lender's database holds it.
+  if(body.action==="verify_audit")return {message:"Audit log check complete.",data:await verifyAuditTrail(ctx,state)};
   if(body.action==="mark_pack_used")fail("Synthetic packs cannot be recorded as evidence used in a real case.",403);
   return executeAction(state,ctx,body);
   },true,S.PerformActionResponse);

@@ -17,13 +17,12 @@ const {
   saveState,
   changeRole,
   appendAudit,
-  verifyAudit,
   saveIdempotency,
   findIdempotency,
   digest,
   fail,
 } = await import("../src/lib/valopay-store");
-const { requestFingerprint } = await import("../src/lib/digests");
+const { requestFingerprint, verifyAuditChain } = await import("../src/lib/digests");
 const {
   connectedRevision,
   connectedActionSchema,
@@ -57,6 +56,11 @@ const read = <T>(
   );
 const revision = (token: string, merchantId: string) =>
   read(token, merchantId, connectedRevision);
+/** The lender's whole stored audit chain, verified from its first entry: a loaded state does not carry it. */
+const storedChainValid = async (merchantId: string) =>
+  verifyAuditChain(
+    (await pool.query("SELECT data FROM valopay_records WHERE merchant_id=$1 AND kind='audit'", [merchantId])).rows,
+  ).valid;
 type Input = Parameters<typeof runConnectedAction>[2];
 const pendingCommands: Promise<unknown>[] = [];
 
@@ -208,7 +212,7 @@ try {
             (r) => r.data.entityId === `${first}:sme` && r.customerId === "",
           ),
       );
-      assert.equal(verifyAudit(state).valid, true);
+      assert.equal(await storedChainValid(first), true);
     },
     "read",
   );
@@ -235,16 +239,13 @@ try {
       ).length,
       1,
     );
-    assert.equal(
-      state.records.filter(
-        (r) =>
-          r.kind === "audit" &&
-          r.data.action === "payment.create" &&
-          r.data.summary === createInput.reason,
-      ).length,
-      1,
-    );
   });
+  assert.equal(
+    Number(
+      (await pool.query("SELECT count(*) FROM valopay_records WHERE merchant_id=$1 AND kind='audit' AND data->>'action'='payment.create' AND data->>'summary'=$2", [first, createInput.reason])).rows[0].count,
+    ),
+    1,
+  );
   await assert.rejects(
     () =>
       dispatch(
@@ -466,8 +467,8 @@ try {
       resultBefore,
     );
     assert.ok(state.records.find((r) => r.id === reviewId));
-    assert.equal(verifyAudit(state).valid, true);
   });
+  assert.equal(await storedChainValid(first), true);
   console.log(
     "Connected PostgreSQL workflows passed: persistence, 20-way replay, checkout/collection and due-edit races, principal/lender isolation, immutable credit evidence and audit.",
   );

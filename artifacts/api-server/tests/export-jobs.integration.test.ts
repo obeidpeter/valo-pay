@@ -27,7 +27,8 @@ const storage:ExportJobStorage={existing:async claim=>objects.get(claim.location
 try{
  const merchants=await inWorkspace(request(),response(),listMerchants);
  const merchantId=merchants[0]!.id,siblingId=merchants[1]!.id;
- const read=()=>inWorkspace(request(),response(),ctx=>loadState(ctx,merchantId,'share'),'read');
+ // A loaded state no longer carries the audit chain: the lender's stored entries are read beside it, so every check below walks the whole chain.
+ const read=async()=>{const state=await inWorkspace(request(),response(),ctx=>loadState(ctx,merchantId,'share'),'read');const audit=(await pool.query("SELECT id,kind,name,data FROM valopay_records WHERE merchant_id=$1 AND kind='audit'",[merchantId])).rows;return {...state,records:[...state.records,...audit]};};
  const customer=(await read()).records.find(record=>record.kind==='customers')!;
  const app=express();app.use(express.json());app.use((req,_res,next)=>{(req as any).auth=auth();(req as any).log={info(){}};next();});app.use('/api',router);app.use((error:any,_req:any,res:any,_next:any)=>res.status(error.status||500).json({error:error.message}));
  server=await new Promise<Server>(resolve=>{const running=app.listen(0,'127.0.0.1',()=>resolve(running));});

@@ -9,7 +9,7 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
 
 const { pool } = await import("@workspace/db");
 const { getAuth } = await import("@clerk/express");
-const { inWorkspace, listMerchants, loadState, saveState, findIdempotency, saveIdempotency, changeRole, appendAudit, settleChanges, addedRecords, closeDatabase, prepareOperation, digest, inMerchantAsSystem, SYSTEM_ACTOR_PREFIX, pingDatabase, sweepExpiredWorkspaces } = await import("../src/lib/valopay-store.js");
+const { inWorkspace, listMerchants, loadState, loadSettingsView, getCloseDetail, saveState, findIdempotency, saveIdempotency, changeRole, appendAudit, settleChanges, addedRecords, closeDatabase, prepareOperation, digest, inMerchantAsSystem, SYSTEM_ACTOR_PREFIX, pingDatabase, sweepExpiredWorkspaces } = await import("../src/lib/valopay-store.js");
 const { overrideDatabaseLimits } = await import("../src/lib/database-limits.js");
 
 const requestFor = (token: string) => {
@@ -285,9 +285,20 @@ try {
   const stored = (await pool.query("SELECT data FROM valopay_records WHERE id=$1", [`${savesMerchant}-close-old`])).rows[0].data;
   assert.equal(stored.report.customerPositionsChanged.length, 200, "the earlier close keeps its full report in PostgreSQL");
   assert.equal(stored.operational.rows, 1);
+  // A read loads earlier closes as summaries too (audit item 32): a view that shows the newest closes asks for them
+  // whole, settings read only the latest close, and the close history opens any close whole.
   await inWorkspace(requestFor(savesToken), response(), async (context) => {
-    const full = await loadState(context, savesMerchant, "share");
-    assert.equal(full.records.find((record) => record.id === `${savesMerchant}-close-old`)!.data.report.customerPositionsChanged.length, 200, "a read still sees every close whole");
+    const read = await loadState(context, savesMerchant, "share");
+    assert.deepEqual(Object.keys(read.records.find((record) => record.id === `${savesMerchant}-close-old`)!.data).sort(), ["closedAt", "report", "summary", "synthetic"], "a read loads an earlier close as its summary");
+    assert.equal(read.records.find((record) => record.id === `${savesMerchant}-close-recent`)!.data.operational?.rows, 1, "and the latest week's closes whole");
+    assert.equal(read.records.some((record) => record.kind === "audit"), false, "and never the audit chain");
+    assert.equal((await getCloseDetail(context, savesMerchant, `${savesMerchant}-close-old`)).data.report.customerPositionsChanged.length, 200, "the close history opens an earlier close whole");
+    const settings = await loadSettingsView(context, savesMerchant);
+    assert.deepEqual(settings.records.filter((record) => record.kind === "closes").map((record) => [record.id, record.data.operational]), [[`${savesMerchant}-close-latest`, undefined]], "settings read only the latest close, as its summary");
+  }, "read");
+  await inWorkspace(requestFor(savesToken), response(), async (context) => {
+    const newest = await loadState(context, savesMerchant, "share", { wholeCloses: 3 });
+    assert.equal(newest.records.find((record) => record.id === `${savesMerchant}-close-old`)!.data.report.customerPositionsChanged.length, 200, "a view that shows the newest closes loads them whole");
   }, "read");
   await assert.rejects(() => inWorkspace(requestFor(savesToken), response(), async (context) => {
     const state = await loadState(context, savesMerchant);
@@ -295,6 +306,31 @@ try {
     await saveState(context, state);
   }), /Evidence records are immutable/, "a summarised close can never be written back over its full report");
   assert.equal((await pool.query("SELECT data->>'summary' AS summary FROM valopay_records WHERE id=$1", [`${savesMerchant}-close-old`])).rows[0].summary, "close-old");
+  // A save writes a run of changed or added records in one statement, 500 at most (audit of 23 September, item 33):
+  // a month-end close changes thousands of records, each of which used to be a statement of its own.
+  {
+    let writes = 0;
+    const holder = await pool.connect(), clients = Object.getPrototypeOf(holder) as { query: (this: unknown, ...args: unknown[]) => unknown };
+    holder.release();
+    const query = clients.query;
+    clients.query = function (this: unknown, ...args: unknown[]) {
+      if (typeof args[0] === "string" && /^\s*(UPDATE|INSERT INTO) valopay_records\b/.test(args[0])) writes += 1;
+      return query.apply(this, args);
+    };
+    try {
+      await inWorkspace(requestFor(savesToken), response(), async (context) => {
+        const state = await loadState(context, savesMerchant);
+        const customers = state.records.filter((record) => record.kind === "customers");
+        for (const customer of customers) customer.data = { ...customer.data, batchedNote: "Changed with 1,200 others" };
+        for (let index = 0; index < 1_200; index++) state.records.push({ id: randomUUID(), merchantId: savesMerchant, kind: "notifications", name: `Batched notice ${index}`, status: "submitted", reference: "", amountKobo: 0, customerId: "", createdAt: context.now, updatedAt: context.now, data: { synthetic: true } });
+        appendAudit(state, context, "batch.fixture", "workspace", "Many records in one save", settleChanges(context, state));
+        await saveState(context, state);
+        assert.equal(writes, 1 + 3, `${customers.length} changed records in one statement, and 1,201 added ones in three (${writes})`);
+      });
+    } finally { clients.query = query; }
+    assert.equal(Number((await pool.query("SELECT count(*) FROM valopay_records WHERE merchant_id=$1 AND kind='notifications' AND name LIKE 'Batched notice %'", [savesMerchant])).rows[0].count), 1_200, "every added record was written");
+    assert.equal(Number((await pool.query("SELECT count(*) FROM valopay_records WHERE merchant_id=$1 AND kind='customers' AND data->>'batchedNote' IS NOT NULL", [savesMerchant])).rows[0].count) > 0, true, "and every changed one");
+  }
   // The pending-request limit counts a person's pending journal entries, and a workspace's lenders are read by
   // workspace; each has its own index (lib/db/migrations/007_journal_and_lender_indexes.sql). Without them the count
   // read every entry the person had ever made, and the lender lookups every lender. The store's own statements are
@@ -366,13 +402,13 @@ try {
     }
   }
   // Audit item 26: a record whose keys were only reordered holds the value PostgreSQL already stores. A save neither
-  // writes it nor gives it a new version, so evidence (a close, an audit entry) is not refused as changed.
+  // writes it nor gives it a new version, so evidence (a close) is not refused as changed. The audit chain is never loaded.
   const beforeReorder = await stamps();
   await inWorkspace(requestFor(savesToken), response(), async (context) => {
     const state = await loadState(context, savesMerchant);
     const reordered = [
       state.records.find((record) => record.id === `${savesMerchant}-close-recent`)!,
-      state.records.find((record) => record.kind === "audit")!,
+      state.records.find((record) => record.id === `${savesMerchant}-close-latest`)!,
       state.records.find((record) => record.kind === "customers")!,
     ];
     const versions = reordered.map((record) => record.updatedAt);

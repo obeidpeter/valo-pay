@@ -22,7 +22,7 @@ search?: string;
  */
 status?: string;
 /**
- * Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views.
+ * Page size, capped at 500. Omitted, a kind that grows with history (audit, closes, exports, notifications, retry-decisions) returns its newest 500 with nextOffset to page on, and any other kind its whole filtered set.
  * @minimum 1
  * @maximum 500
  */

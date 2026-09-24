@@ -4078,7 +4078,7 @@ search?: string;
  */
 status?: string;
 /**
- * Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views.
+ * Page size, capped at 500. Omitted, a kind that grows with history (audit, closes, exports, notifications, retry-decisions) returns its newest 500 with nextOffset to page on, and any other kind its whole filtered set.
  * @minimum 1
  * @maximum 500
  */
@@ -4155,7 +4155,7 @@ export type GetReportsParams = {
  */
 merchantId: string;
 /**
- * Default true for compatibility. The console passes false and loads paged close summaries separately.
+ * Default true for compatibility: the close array, where closes more than a week before the latest carry their summary (GET /v1/close-history/{id} returns any close whole). The console passes false and loads paged close summaries separately.
  */
 includeCloses?: GetReportsIncludeCloses;
 };
