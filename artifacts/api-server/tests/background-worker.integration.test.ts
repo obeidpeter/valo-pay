@@ -37,8 +37,8 @@ const { default: express } = await import("express");
 const { default: health } = await import("../src/routes/health");
 const { default: valopay } = await import("../src/routes/valopay");
 
-/** Customers in the lender whose first close the probes run beside: about 20,000 records. */
-const CUSTOMERS = 800;
+/** Customers in the lender whose first close the probes run beside: about 40,000 records, so a close lasts long enough for probes a tenth of a second apart. */
+const CUSTOMERS = 1600;
 const token = randomBytes(32).toString("hex");
 const auth = () => Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true });
 const request = () => ({ headers: { cookie: `valopay_sandbox=${token}` }, secure: false, auth: auth() }) as any;
