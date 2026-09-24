@@ -675,14 +675,14 @@ operation("/v1/lifecycle/runs/{id}/execute", "post", "executeLifecycleRun", "Lif
 // scope, the journal and the route's own refusals. Every one carries ErrorBody (lib/error-handler.ts
 // and the app's own refusals) except readiness's 503 and the identity provider's re-verification.
 const failures = {
-  400: "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+  400: "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
   401: "Sign-in required: a staff host answers only a signed-in pilot staff session.",
   403: "Refused: another origin, or the caller's role, membership, lender access, recent MFA or a readiness gate does not allow it.",
   404: "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
   409: "Conflict: what the request names changed since it was read, its Idempotency-Key belongs to another request or its journal entry is cancelled, or the change conflicts with saved records. Nothing was saved.",
   410: "Gone: a request with this Idempotency-Key already completed, and the lender's retention policy has since removed its stored result, so it cannot run again. Its entry in Operations remains.",
-  413: "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
-  415: "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+  413: "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
+  415: "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
   429: "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
   500: "The service failed. With committed false nothing was saved (for a request with an Idempotency-Key, nothing sent with the key); with operation completed a request with the key was saved; otherwise the outcome is unconfirmed: check Operations, or repeat the same request with its Idempotency-Key.",
   502: "Private storage answered with an error; nothing was sent.",
@@ -714,6 +714,7 @@ const ownDescriptions = {
   "POST /v1/operations/{id}/retry": { 410: `${expiredRequest.replace(/\.$/, "")}; or the request it repeats is gone itself, as an export whose file retention deleted is.`, 429: `${failures[429].replace(/\.$/, "")}, or, repeating an export, ${exportQueue}.` },
   "POST /v1/operations/{id}/cancel": { 410: expiredRequest },
   "POST /v1/exports": { 429: `Too many requests: ${exportQueue}, more than 300 requests came from this client or 1,200 from its network in a minute, or too many new sandboxes came from its network or were started on this server (try again in an hour).` },
+  "POST /v1/providers/paystack/{connectionId}/events": { 415: "The body is compressed with a Content-Encoding other than gzip, deflate or br; nothing was read." },
   "GET /healthz": { 429: "More than 120 health checks a minute from this client network; retry after the Retry-After seconds." },
   "GET /readyz": { 429: "More than 120 health checks a minute from this client network; retry after the Retry-After seconds." },
   "GET /v1/exports/{id}/download": { 410: "Gone: the lender's retention policy removed this export's file. Its checksum and deletion receipt are kept; start a new export if current evidence is needed." },
@@ -743,6 +744,8 @@ function listErrorAnswers(path, method, op) {
     if (name === "GET /readyz" && status === 503) continue; // readiness answers its own body
     answer.content = { "application/json": { schema: name === "POST /v1/team/verify" && status === 403 ? { anyOf: [ref("ErrorBody"), ref("ReverificationRequired")] } : ref("ErrorBody") } };
     if (status === 429) answer.headers = retryAfter429(name);
+    // A compressed body is refused unread, naming the one coding the parser reads (RFC 9110); the Paystack test ingress inflates its own.
+    if (status === 415 && name !== "POST /v1/providers/paystack/{connectionId}/events") answer.headers = { "Accept-Encoding": { description: "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.", schema: { type: "string", enum: ["identity"] } } };
     if (status === 503) answer.headers = retryAfter("Seconds to wait before trying again: sent when a database limit turned the request away, the same request is still running, or private storage or the identity provider could not be reached or said it is unavailable; absent when a service it needs is not configured, or the key service cannot open protected data.");
   }
   // A journaled request names its journal entry on every answer; a retry re-enters the entry it names.
