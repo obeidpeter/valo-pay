@@ -248,6 +248,8 @@ export function validateRecord(
     if (isUpdate) throw new Error("Saved payment evidence cannot be edited. Add a new record to correct it.");
     // Evidence of money received; an absent amount would be saved as 0.
     if (!Number.isSafeInteger(input.amountKobo) || Number(input.amountKobo) < 1) throw new Error("Enter the amount received. Payment evidence must be for more than ₦0.");
+    // A gross is what was collected before fees came off, so it is never less than what was received.
+    if (data.grossAmountKobo !== undefined && Number(data.grossAmountKobo) < Number(input.amountKobo)) throw new Error("The gross amount cannot be less than the amount received. Enter the amount collected before fees, or leave the gross amount blank.");
     if (data.paymentId !== undefined || data.resolutionKey !== undefined || input.status === "resolved") {
       throw new Error("Valo Pay determines how payment evidence is matched. Do not set its resolution when creating it.");
     }

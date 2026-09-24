@@ -197,10 +197,16 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   invariant(state);
 }
 {
-  // One payment the ladder cannot apply is left for Finance with the reason; the close still completes.
+  // A payment with nothing to allocate, as an earlier build made from a settlement line whose gross was 0, is left alone
+  // (the review of the audit fixes): the ladder never tries it, so no exception opens and closes at every close.
   const { state, due } = liveFixture({ withFailure: false, merchantId: "isolated-payment" });
-  const odd = makeRecord(state, "payments", { name: "Canonical payment", status: "unallocated", reference: "ZERO-1", customerId: due.customerId, amountKobo: 0, data: { allocatedKobo: 0, observedAt: wat("2027-07-01T09:00:00"), channel: "transfer", virtualAccountCustomerId: due.customerId } });
-  const run = reconcile(state, finance(wat("2027-07-01T09:05:00")));
+  const zero = makeRecord(state, "payments", { name: "Canonical payment", status: "unallocated", reference: "ZERO-1", customerId: due.customerId, amountKobo: 0, data: { allocatedKobo: 0, observedAt: wat("2027-07-01T09:00:00"), channel: "transfer", virtualAccountCustomerId: due.customerId } });
+  const quiet = reconcile(state, finance(wat("2027-07-01T09:05:00")));
+  equal([quiet.data.paymentsSkipped, zero.data.explanation, recordsOf(state, "exceptions").filter((item) => item.data.linkedRecordId === zero.id).length], [0, undefined, 0], "a payment with nothing unapplied is not matched, skipped or raised");
+  // One payment the ladder cannot apply, such as a corrupt row whose amount is not whole kobo, is left for Finance with the reason; the close still completes.
+  const odd = makeRecord(state, "payments", { name: "Canonical payment", status: "unallocated", reference: "ODD-1", customerId: due.customerId, data: { allocatedKobo: 0, observedAt: wat("2027-07-01T09:00:00"), channel: "transfer", virtualAccountCustomerId: due.customerId } });
+  odd.amountKobo = 1.5;
+  const run = reconcile(state, finance(wat("2027-07-01T09:10:00")));
   equal(run.data.paymentsSkipped, 1, "the close completes and counts the skipped payment");
   check(String(odd.data.explanation).startsWith("Automatic matching left this payment for Finance: "), "the payment says why it was left");
   const updatedAt = odd.updatedAt;

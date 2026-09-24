@@ -7,8 +7,8 @@ import {
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import {
   REVIEW_SUPERSESSION, allocatePayment, applyConfirmedAllocation, clearSettledExceptions, clearedExceptionsNote, confirmAttemptOutcome, dueStatusText, forgetRejectedMatch,
-  paymentRefunded, paymentReversed, reconcile, recordPaymentRefund, reinstateAllocation, releaseDispute, releaseDuplicateHold, rememberRejectedMatch, settlePaymentStatus,
-  supersedeAllocation, supersededByReview,
+  paymentRefunded, paymentReversed, reconcile, recordPaymentRefund, reinstateAllocation, releaseDispute, releaseDuplicateHold, rememberRejectedMatch, reportsReversal, settlePaymentStatus,
+  supersedeAllocation, supersededByReview, withdrawPayerIdentification,
 } from "./reconciliation";
 import { resolveUnknownCheckout } from "./connected";
 import { buildReports } from "./reports";
@@ -48,6 +48,19 @@ function payerIdentified(state: DomainState, message: string, record: ValopayRec
   const payer = customer?.reference || payment.customerId;
   return result(`${message} The payer is now recorded as ${customer?.name ? `${customer.name} (${payer})` : payer}.`, record, {
     payerCustomerId: payment.customerId, auditNote: `Payer identified as customer ${payer} for payment ${payment.reference}.`,
+  });
+}
+
+/**
+ * The answer to a review or rejection that withdrew the payer Finance had
+ * identified through the match it took out of use (withdrawPayerIdentification):
+ * the message says so, and data.auditNote names that customer and the payment.
+ */
+function payerWithdrawn(state: DomainState, message: string, record: ValopayRecord, payment: TypedRecord<"payments">, customerId: string): ActionResult {
+  const customer = recordsOf(state, "customers").find((item) => item.id === customerId);
+  const payer = customer?.reference || customerId;
+  return result(`${message} The payer Finance identified through that match, ${customer?.name ? `${customer.name} (${payer})` : payer}, is withdrawn: payment ${payment.reference} has no payer until Finance applies it to its payer's instalment.`, record, {
+    auditNote: `Payer identification of customer ${payer} withdrawn for payment ${payment.reference}: the match that identified the payer is out of use.`,
   });
 }
 
@@ -383,18 +396,21 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput): Action
         throw Object.assign(new Error("This proposed match has changed since you opened it. Refresh the queue and review the current proposal before deciding."), { status: 409 });
       }
     }
+    let withdrawn: string | undefined;
     if (input.action === "reject_allocation") {
       allocation.status = "superseded"; allocation.data.supersededReason = reason(input);
       // The rejection sticks: automatic matching does not propose this instalment for the payment again,
       // and the payment keeps whatever it has already applied elsewhere.
       rememberRejectedMatch(payment, allocation.data.dueItemId);
       settlePaymentStatus(state, ctx, payment);
+      withdrawn = withdrawPayerIdentification(state, ctx, payment, reason(input));
     } else {
       applyConfirmedAllocation(state, ctx, allocation, reason(input));
       allocation.data.confirmedBy = ctx.actor;
     }
     touch(allocation, now); touch(payment, now);
     if (identifying && input.action === "confirm_allocation") return payerIdentified(state, "Allocation confirmed.", allocation, payment);
+    if (withdrawn) return payerWithdrawn(state, "Allocation rejected.", allocation, payment, withdrawn);
     return result(`Allocation ${input.action === "reject_allocation" ? "rejected" : "confirmed"}.`, allocation);
   }
   if (input.action === "review_allocation") {
@@ -404,11 +420,14 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput): Action
     if (allocation.status === "proposed") throw Object.assign(new Error("This match is still a proposal. Confirm or reject it in the proposed matches instead of recording an accuracy review."), { status: 409 });
     const payment = findRecord(state, String(allocation.data.paymentId), "payments");
     const why = reason(input);
-    let message: string;
+    // Applying the match again to a payment with no payer identifies the payer again.
+    const identifying = !payment.customerId;
+    let message: string, withdrawn: string | undefined, reinstated = false;
     if (data.correct) {
       if (supersededByReview(allocation)) {
         // A match this review had marked wrong is applied again, or refused while the records have moved on.
-        reinstateAllocation(state, ctx, allocation);
+        reinstateAllocation(state, ctx, allocation, why);
+        reinstated = true;
         message = "Allocation reviewed as correct and applied again.";
       } else {
         message = allocation.status === "superseded" ? "Allocation reviewed as correct. It stays out of use because it was superseded for another reason." : "Allocation reviewed as correct.";
@@ -424,9 +443,13 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput): Action
         touch(payment, now);
         message = "Allocation marked incorrect. It was already out of use, and automatic matching will not pair this payment and instalment again.";
       }
+      // Decision on a payer identified through a wrong match: with nothing of the payment still applied, the identification goes too.
+      withdrawn = withdrawPayerIdentification(state, ctx, payment, why);
     }
     allocation.data.reviewed = data.correct; allocation.data.reviewReason = why; allocation.data.reviewedBy = ctx.actor; allocation.data.reviewedAt = now;
     touch(allocation, now);
+    if (withdrawn) return payerWithdrawn(state, message, allocation, payment, withdrawn);
+    if (reinstated && identifying) return payerIdentified(state, message, allocation, payment);
     return result(message, allocation);
   }
   if (input.action === "release_dispute") {
@@ -488,12 +511,13 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput): Action
     // An unknown outcome's resolution is what the provider confirmed, so the attempt takes that outcome.
     const outcome = type === "unknown_outcome" ? confirmAttemptOutcome(state, ctx, item) : undefined;
     if (outcome) return result(`Exception resolution recorded. The attempt is now recorded as ${outcome}.`, item, { attemptStatus: outcome });
-    // A suspected duplicate resolved as a separate payment leaves its hold; held evidence becomes a payment of its own at the next reconciliation.
+    // A suspected duplicate resolved as a separate payment leaves its hold; held evidence becomes a payment of its own at the next
+    // reconciliation, except evidence of a reversal, which is set aside rather than made a payment and reversed.
     const released = type === "suspected_duplicate" ? releaseDuplicateHold(state, ctx, item) : undefined;
     if (released) return result(`Exception resolution recorded. Payment ${released.reference} is released from the duplicate hold and is matched like any other payment.`, item, { paymentStatus: released.status });
-    if (type === "suspected_duplicate" && recordsOf(state, "observations").some((record) => record.id === item.data.linkedRecordId && record.status === "unresolved")) {
-      return result(`Exception resolution recorded. The next reconciliation records this payment evidence as a payment of its own${data.resolutionCode === "confirmed_duplicate_refund" ? ", held until its refund is recorded" : ""}.`, item);
-    }
+    const evidence = type === "suspected_duplicate" ? recordsOf(state, "observations").find((record) => record.id === item.data.linkedRecordId && record.status === "unresolved") : undefined;
+    if (evidence && reportsReversal(evidence)) return result("Exception resolution recorded. This reversal evidence is set aside at the next reconciliation: no payment is made from it only to be reversed.", item);
+    if (evidence) return result(`Exception resolution recorded. The next reconciliation records this payment evidence as a payment of its own${data.resolutionCode === "confirmed_duplicate_refund" ? ", held until its refund is recorded" : ""}.`, item);
     return result("Exception resolution recorded.", item);
   }
   if (input.action === "record_refund") {

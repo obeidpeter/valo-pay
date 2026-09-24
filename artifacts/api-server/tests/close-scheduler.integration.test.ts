@@ -24,6 +24,7 @@ const { nextCloseInstant } = await import("@workspace/valopay-schema");
 const { SYSTEM_ACTOR_PREFIX, appendAudit, dueScheduledCloses, inWorkspace, listMerchants, loadState, recordScheduledCloseFailure, saveState } = await import("../src/lib/valopay-store.js");
 const { SCHEDULED_CLOSE_ACTOR, runClosePassOnce, runDueCloses, startCloseScheduler, schedulerStatus } = await import("../src/lib/close-scheduler.js");
 const { followingCloseInstant, scheduledCloseBusinessDate } = await import("../src/domain/close.js");
+const { makeRecord } = await import("../src/domain/records.js");
 
 const requestFor = (token: string) => ({ headers: { cookie: `valopay_sandbox=${token}` }, secure: false, auth: Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true }) }) as any;
 const response = () => ({ cookie() { /* a valid test cookie is already supplied */ } }) as any;
@@ -101,6 +102,15 @@ try {
   // Lender A became due an hour ago (the platform was down): it is closed late; B is left alone.
   const dueAt = new Date(Date.parse(dbNow) - 60 * 60 * 1000).toISOString();
   await setCursor(a, dueAt);
+  // An exception left open on a payment already allocated in full: the close clears it, and its audit entry says so (the review of the audit fixes).
+  let settledException = "";
+  await inWorkspace(requestFor(sandbox), response(), async (context) => {
+    const state = await loadState(context, a, "update");
+    const allocated = state.records.find((record) => record.kind === "payments" && record.reference === "SBX-PAY-1001")!;
+    settledException = makeRecord(state, "exceptions", { name: "Unallocated payment", status: "open", customerId: allocated.customerId, amountKobo: allocated.amountKobo, createdAt: context.now, data: { type: "unallocated_payment", severity: "medium", owner: "Finance", notes: "Raised before the payment was allocated.", linkedRecordId: allocated.id } }).id;
+    appendAudit(state, context, "post.records.exceptions", settledException, "Synthetic workspace operation");
+    await saveState(context, state);
+  });
   const run = await runDueCloses({ batchSize: 100, onlyMerchantIds: only });
   const closedA = run.closed.find((item) => item.merchantId === a);
   assert.ok(closedA, "the due lender is closed");
@@ -120,6 +130,9 @@ try {
     assert.equal(audit.data.actor, SCHEDULED_CLOSE_ACTOR);
     assert.equal(audit.name, "daily_close");
     assert.equal(audit.data.objectId, closedA.closeId);
+    const cleared = state.records.find((record) => record.id === settledException)!;
+    assert.deepEqual([cleared.status, cleared.data.resolutionCode], ["closed", "condition_cleared"], "the scheduled close closed the exception whose condition cleared");
+    assert.match(String(audit.data.summary), /^Scheduled daily close of \d{4}-\d{2}-\d{2} completed.* Closed 1 exception whose condition cleared \(unallocated payment: payment SBX-PAY-1001 is allocated in full\)\.$/, `the scheduled close's audit entry names it: ${audit.data.summary}`);
     assert.equal(state.settings.nextCloseAt, followingCloseInstant(dueAt, "07:00"), "the cursor moved one business date on, to 07:00 WAT the day after the time it covered");
     assert.ok(String(state.settings.nextCloseAt) > dbNow);
   });

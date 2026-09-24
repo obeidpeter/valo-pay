@@ -1531,7 +1531,7 @@ export async function listReconciliation(context: StoreContext, merchantId: stri
     precision = { ...precisionAudit({merchant:merchant.info,settings:merchant.settings,records:sample},context.now), population, requiredSample:Math.min(measurementRules.precisionSampleSize,population) };
     sampledIds = precision.sampledAllocationIds;
   }
-  const conditions = { proposals:"r.kind='allocations' AND r.status='proposed'", duplicates:"r.kind='payments' AND r.status='possible_duplicate'", payments:`r.kind='payments' AND (r.status='unallocated' OR (r.status IN ('partial','overpaid') AND ${paymentUnappliedSql}>0))`, observations:"r.kind='observations' AND r.status='unresolved'", audit:"r.kind='allocations' AND r.id=ANY($5::text[])", batches:"r.kind='settlement-batches'" };
+  const conditions = { proposals:"r.kind='allocations' AND r.status='proposed'", duplicates:"r.kind='payments' AND r.status='possible_duplicate'", payments:`r.kind='payments' AND r.status IN ('unallocated','partial','overpaid') AND ${paymentUnappliedSql}>0`, observations:"r.kind='observations' AND r.status='unresolved'", audit:"r.kind='allocations' AND r.id=ANY($5::text[])", batches:"r.kind='settlement-batches'" };
   const due = query.dueItem ? (await session.client.query<RecordRow>(select("r.kind='due-items' AND r.id=$4"),[...scope,query.dueItem])).rows[0] : undefined;
   const related = new Map<string,ValopayRecord>();
   if (due) related.set(due.id,rowToRecord(due));
@@ -1598,6 +1598,8 @@ const paymentRefundedSql = `(CASE WHEN coalesce(r.data->>'refundStatus','') IN (
 const paymentReturnedSql = `(coalesce(r.data->>'reversalStatus','')='reversed' OR (coalesce(r.data->>'refundStatus','') IN ('refunded','recorded_externally') AND ${paymentRefundedSql}>=r.amount_kobo))`;
 /** paymentUnappliedKobo in SQL: what a payment holds that is neither applied nor returned by a refund. */
 const paymentUnappliedSql = `CASE WHEN ${paymentReturnedSql} THEN 0 ELSE greatest(0,r.amount_kobo-coalesce((r.data->>'allocatedKobo')::numeric,0)-${paymentRefundedSql}) END`;
+/** currencyOf in SQL is naira: the currency a payment names, trimmed and in capitals, is NGN, or it names none. Money in another currency is no naira credit. */
+const paymentInNairaSql = `upper(btrim(coalesce(nullif(r.data->>'currency',''),'NGN'),E' \\t\\n\\r'))='NGN'`;
 
 /** Read-only customer cards and events are paged; balances aggregate every related record. */
 export async function getCustomerHistory(context: StoreContext, merchantId: string, id: string, query: CustomerHistoryQuery) {
@@ -1610,7 +1612,7 @@ export async function getCustomerHistory(context: StoreContext, merchantId: stri
     count(*) FILTER(WHERE r.kind='mandates') AS mandates, count(*) FILTER(WHERE r.kind='due-items') AS "dueItems", count(*) FILTER(WHERE r.kind='payments') AS payments,
     coalesce(sum(r.amount_kobo) FILTER(WHERE r.kind='due-items' AND r.status<>'cancelled'),0) AS obligations,
     coalesce(sum(r.amount_kobo) FILTER(WHERE r.kind='allocations' AND r.status='confirmed'),0) AS allocated,
-    coalesce(sum(${paymentUnappliedSql}) FILTER(WHERE r.kind='payments'),0) AS credit
+    coalesce(sum(${paymentUnappliedSql}) FILTER(WHERE r.kind='payments' AND ${paymentInNairaSql}),0) AS credit
     ${base} AND r.customer_id=$4`,values)).rows[0]!;
   const totals = {} as Record<HistorySection,number>, offsets = {} as Record<HistorySection,number>;
   const pages = {} as Record<HistorySection,ValopayRecord[]>;
@@ -1745,6 +1747,24 @@ function isExportRetry(before: ValopayRecord, after: ValopayRecord, now?: string
 }
 
 /**
+ * The one change of a recorded payer the repository accepts: Finance's
+ * identification withdrawn, back to no payer, while nothing of the payment is
+ * applied and with the identification kept in its history
+ * (withdrawPayerIdentification). A payer the evidence named never changes.
+ */
+function payerWithdrawn(before: ValopayRecord, after: ValopayRecord, final: ReadonlyMap<string, ValopayRecord>): boolean {
+  const identification = before.data.payerIdentification;
+  if (after.customerId !== "" || !identification || identification.customerId !== before.customerId || after.data.payerIdentification !== undefined || Number(after.data.allocatedKobo || 0) !== 0) return false;
+  const history: unknown[] = Array.isArray(after.data.payerIdentificationHistory) ? after.data.payerIdentificationHistory : [];
+  if (!history.some((entry: any) => entry?.customerId === identification.customerId && entry?.allocationId === identification.allocationId)) return false;
+  for (const record of final.values()) if (record.kind === "allocations" && record.status === "confirmed" && record.data.paymentId === after.id) return false;
+  return true;
+}
+/** A match taken out of use keeps the payer it was applied for once the payment's history shows that identification withdrawn. */
+const withdrawnPayerOf = (allocation: ValopayRecord, payment: ValopayRecord): boolean => allocation.status === "superseded"
+  && Array.isArray(payment.data.payerIdentificationHistory) && payment.data.payerIdentificationHistory.some((entry: any) => entry?.customerId === allocation.customerId);
+
+/**
  * The repository's final-state checks. `unchanged` names records whose JSON is
  * identical to the loaded snapshot: they passed these checks when they were
  * written, so only added and changed records are compared field by field.
@@ -1767,8 +1787,8 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
     if (present.id !== before.id || present.merchantId !== before.merchantId || present.kind !== before.kind || present.createdAt !== before.createdAt) {
       conflict("Record identity, lender, kind, and creation time are immutable.");
     }
-    // A payment's payer, once its evidence named one or Finance identified it, is never reassigned.
-    if (before.kind === "payments" && before.customerId && present.customerId !== before.customerId) conflict("A payment's payer cannot change once it is recorded.");
+    // A payment's payer, once its evidence named one or Finance identified it, is never reassigned; Finance's identification may only be withdrawn (payerWithdrawn).
+    if (before.kind === "payments" && before.customerId && present.customerId !== before.customerId && !payerWithdrawn(before, present, final)) conflict("A payment's payer cannot change once it is recorded.");
     const retentionChange=()=>{
       const kind=before.kind==='exports'?'export_file':'raw_csv';
       const receipt=[...final.values()].find(r=>r.kind==='retention-receipts'&&!original.has(r.id)&&r.data.sourceId===before.id&&r.data.kind===kind&&['deleted','already_absent'].includes(r.data.result));
@@ -1885,8 +1905,9 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
       const due = reference(record, record.data.dueItemId, "due-items", "Allocation due item", final);
       // A superseded allocation applies nothing, such as a proposal withdrawn when Finance identified another payer.
       if (record.status !== "superseded" && payment.customerId && due.customerId && payment.customerId !== due.customerId) conflict("Allocation payment and due item must have the same customer.");
-      // A proposal for a payment whose evidence named no payer carries no customer until Finance identifies the payer.
-      if (record.customerId && (record.customerId !== payment.customerId || record.customerId !== due.customerId)) conflict("Allocation customer must match its parents.");
+      // A proposal for a payment whose evidence named no payer carries no customer until Finance identifies the payer, and a
+      // match taken out of use keeps a payer whose identification was withdrawn (withdrawnPayerOf).
+      if (record.customerId && (record.customerId !== due.customerId || (record.customerId !== payment.customerId && !withdrawnPayerOf(record, payment)))) conflict("Allocation customer must match its parents.");
       if (record.status === "confirmed") {
         // Evidence that named no payer is applied only once Finance has identified the payer.
         if (!payment.customerId || record.customerId !== payment.customerId) conflict("A payment is applied to an instalment only once its payer is identified.");

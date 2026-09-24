@@ -19,8 +19,9 @@ import { contractAnswer, lenderQuery, replayedAnswer, requiredKey } from "../lib
 import {
   connectedActionSchema,
   connectedView,
-  runConnectedAction,
+  runConnectedActionWithNote,
 } from "../domain/connected";
+import { withAuditNote } from "../domain/reconciliation";
 import { ConnectedCashError } from "../domain/connected-cash";
 import { CreditDomainError } from "../domain/connected-credit";
 import { routerOptions } from "./router-options";
@@ -67,9 +68,9 @@ router.post("/v1/connected/actions", async (req, res) => {
         const state = await loadState(ctx, merchantId, "update");
         const prior = await findIdempotency(ctx, receipt.id, receipt.earlier);
         if (prior) return replay(prior);
-        let record;
+        let outcome;
         try {
-          record = runConnectedAction(state, ctx, input);
+          outcome = runConnectedActionWithNote(state, ctx, input);
         } catch (error) {
           if (error instanceof CreditDomainError)
             fail(error.message, error.status);
@@ -80,17 +81,18 @@ router.post("/v1/connected/actions", async (req, res) => {
         const changes = settleChanges(ctx, state);
         const result = contractAnswer(answer, {
           message: "Sample workspace updated.",
-          record,
+          record: outcome.result,
           mode: "synthetic",
           externalInstructionPerformed: false,
         });
-        // The object is the record the action changed or answers with, never an unrelated one the body named.
+        // The object is the record the action changed or answers with, never an unrelated one the body named. A
+        // pay-by-bank step that closed exceptions whose condition cleared names them after the reason.
         appendAudit(
           state,
           ctx,
           input.action,
           auditObject(ctx, state, { body: input.recordId, answer: result }, "connected-workspace"),
-          input.reason,
+          withAuditNote(input.reason, outcome.auditNote),
           {
             ...changes,
             mode: "synthetic",

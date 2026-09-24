@@ -12,7 +12,7 @@ import { validateRecord } from "../src/domain/validation.js";
 import { positionMismatches } from "../src/domain/close.js";
 import { buildAlerts } from "../src/domain/alerts.js";
 import { approvedPolicyFor, evaluateRetry } from "../src/domain/policy-engine.js";
-import { connectedRevision, runConnectedAction } from "../src/domain/connected.js";
+import { connectedRevision, runConnectedAction, runConnectedActionWithNote } from "../src/domain/connected.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
 import { isOpenException, paymentRefundedKobo, paymentUnappliedKobo } from "@workspace/valopay-schema";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "../src/domain/types.js";
@@ -81,6 +81,9 @@ const close = (state: DomainState, at: string) => accepted(request(state, () => 
 /** A pay-by-bank step as POST /v1/connected/actions runs it, at the workspace's current revision. */
 const connected = (state: DomainState, ctx: Context, action: string, recordId?: string, data: Record<string, unknown> = {}) =>
   request(state, () => runConnectedAction(state, ctx, { action, recordId, reason: `Sample step: ${action}`, expectedRevision: connectedRevision(state), data } as any) as ValopayRecord);
+/** The same step with the note its audit entry adds to the reason, as the route records it. */
+const connectedWithNote = (state: DomainState, ctx: Context, action: string, recordId?: string, data: Record<string, unknown> = {}) =>
+  request(state, () => runConnectedActionWithNote(state, ctx, { action, recordId, reason: `Sample step: ${action}`, expectedRevision: connectedRevision(state), data } as any) as { result: ValopayRecord; auditNote?: string });
 const intentOf = (state: DomainState, id: string) => recordsOf(state, "connected-intents").find((item) => item.id === id)!;
 /** A checkout for the instalment, authorised and then given the outcome. */
 function checkout(state: DomainState, due: TypedRecord<"due-items">, at: string, outcome: "confirmed" | "unknown" | "failed", amountKobo = outstandingOf(due)) {
@@ -250,9 +253,13 @@ section("pay-by-bank refunds and reversals", () => {
   const lateReceipt = recordsOf(late, "payments").find((item) => item.id === intentOf(late, intent.id).data.paymentId)!;
   const [lateException] = openExceptionsFor(late, lateReceipt.id);
   check(lateException?.data.type === "unallocated_payment", "the late receipt waits for Finance with an exception");
-  accepted(connected(late, finance(wat("2027-07-01T10:00:00")), "payment.reverse", intent.id), "the late receipt's reversal");
+  const reversal = accepted(connectedWithNote(late, finance(wat("2027-07-01T10:00:00")), "payment.reverse", intent.id), "the late receipt's reversal");
   equal([lateDue.status, exceptionsFor(late, lateDue.id, "customer_dispute").length], ["paid", 0], "the paid instalment is not put in dispute by a receipt that never paid it");
   equal([lateException!.status, lateException!.data.resolutionCode], ["closed", "condition_cleared"], "and the late receipt's exception closes because its money went back");
+  // The review of these fixes: the step's audit entry names the exception it closed, and a step that closes none adds nothing.
+  equal(reversal.auditNote, `Closed 1 exception whose condition cleared (unallocated payment: payment ${lateReceipt.reference} was reversed).`, "the reversal's audit entry names it");
+  const open = recordsOf(late, "due-items").find((item) => item.status === "scheduled" && item.id !== lateDue.id)!;
+  equal(accepted(connectedWithNote(late, ctx, "payment.create", undefined, { dueItemId: open.id, amountKobo: open.amountKobo }), "a new checkout").auditNote, undefined, "a checkout that closes no exception adds no note");
 });
 
 // ---------- Item 10: a pay-by-bank outcome that stays unknown ages into an exception Finance resolves ----------
@@ -311,8 +318,10 @@ section("a late sample outcome closes the unknown-outcome exception", () => {
   const intent = checkout(state, due, "2027-07-01T09:00:00", "unknown");
   close(state, "2027-07-02T10:00:00");
   const [unknown] = exceptionsFor(state, intent.id, "unknown_outcome");
-  accepted(connected(state, operations(wat("2027-07-02T11:00:00")), "payment.outcome", intent.id, { outcome: "failed" }), "the provider's late answer");
+  const answer = accepted(connectedWithNote(state, operations(wat("2027-07-02T11:00:00")), "payment.outcome", intent.id, { outcome: "failed" }), "the provider's late answer");
   equal([intent.status, unknown!.status, unknown!.data.resolutionCode], ["failed", "closed", "condition_cleared"], "the exception closes because the outcome is now known");
+  // The review of these fixes: the step's audit entry names the exception it closed.
+  equal([answer.result.id, answer.auditNote], [intent.id, "Closed 1 exception whose condition cleared (unknown outcome: the pay-by-bank payment's outcome is now recorded as failed)."], "and the step's audit entry names it");
   close(state, "2027-07-03T07:00:00");
   equal(exceptionsFor(state, intent.id, "unknown_outcome").length, 1, "and is never raised again");
 });

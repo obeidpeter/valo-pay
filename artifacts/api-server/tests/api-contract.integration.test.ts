@@ -184,6 +184,20 @@ try {
   connected = ok(await call(q("/v1/connected")));
   ok(await call(q("/v1/connected/actions"), "POST", { action: "credit.assess", reason: "Run a sample assessment", data: { customerId: customer, scenario: "ready" }, expectedRevision: connected.revision }, { key: key() }));
   assert.equal(ok(await call(q("/v1/connected"))).credit.assessments.length, 1);
+  // A pay-by-bank step that closes an exception whose condition cleared names it in its audit entry (the review of the audit fixes).
+  {
+    const allocated = ok(await call(q("/v1/records/payments?limit=100"))).items.find((item: any) => item.reference === "SBX-PAY-1001");
+    const stale = ok(await call(q("/v1/records/exceptions"), "POST", { name: "Unallocated payment", customerId: allocated.customerId, amountKobo: allocated.amountKobo, data: { type: "unallocated_payment", notes: "Raised before the payment was allocated.", linkedRecordId: allocated.id } }, { key: key() }));
+    const step = async (action: string, recordId?: string, data: Record<string, unknown> = {}) => ok(await call(q("/v1/connected/actions"), "POST", { action, recordId, reason: `Contract check: ${action}`, data, expectedRevision: ok(await call(q("/v1/connected"))).revision }, { key: key() }));
+    const open = ok(await call(q("/v1/connected"))).payments.dues.find((item: any) => !item.blocked);
+    const intent = (await step("payment.create", undefined, { dueItemId: open.id, amountKobo: open.outstandingKobo })).record;
+    await step("payment.authorise", intent.id);
+    await step("payment.outcome", intent.id, { outcome: "failed" });
+    const cleared = (await pool.query("SELECT status,data FROM valopay_records WHERE id=$1", [stale.id])).rows[0];
+    assert.deepEqual([cleared.status, cleared.data.resolutionCode], ["closed", "condition_cleared"], "the outcome step closed the exception whose condition cleared");
+    const entry = (await pool.query("SELECT data FROM valopay_records WHERE merchant_id=$1 AND kind='audit' AND name='payment.outcome' ORDER BY (data->>'sequence')::int DESC LIMIT 1", [lender])).rows[0];
+    assert.equal(entry.data.summary, "Contract check: payment.outcome. Closed 1 exception whose condition cleared (unallocated payment: payment SBX-PAY-1001 is allocated in full).", "and its audit entry names it after the reason");
+  }
 
   // ---- The legacy writes take an optional key: with one they are journaled, without one they still run ----
   const customerBody = { name: "Contract customer", reference: `CONTRACT-${randomUUID()}`, data: { consentProvenance: "Synthetic fixture" } };

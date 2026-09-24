@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_TOLERANCE_KOBO, WAT_OFFSET_MS, allocationClosedStatuses, conditionClearedCode, counted, exceptionCatalogue, isKobo, isOpenException, nairaText, normaliseFailureCode, normaliseRefundStatus, normaliseReversalStatus, paymentAwaitsAllocation, paymentMoneyReturned, paymentRefundedKobo, paymentUnappliedKobo, providerFeeKobo, resolveExceptionType, type ExceptionType, type ProviderFeeSchedule, type PaymentChannel } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
-import { indexedPass, recordById, recordsWhere } from "./record-index";
+import { indexedPass, recordById, recordsOfKind, recordsWhere } from "./record-index";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { addBusinessDays, watDate } from "./calendar";
 import { validateRecord } from "./validation";
@@ -118,15 +118,22 @@ function closeClearedException(exception: TypedRecord<"exceptions">, ctx: Contex
 /**
  * Why an open exception's condition no longer holds, or undefined while it
  * holds: money on a payment that no longer waits (allocated in full,
- * refunded or reversed), an instalment a payment was waiting for that is now
- * paid, or an outcome that is now known. A dispute's condition clears only
- * when its instalment leaves dispute (releaseDispute), since a lender may
- * record a dispute for an instalment that was never in dispute.
+ * refunded or reversed), payment evidence held for Finance that has since
+ * resolved (a gross that now agrees with its payment), an instalment a
+ * payment was waiting for that is now paid, or an outcome that is now known.
+ * A dispute's condition clears only when its instalment leaves dispute
+ * (releaseDispute), since a lender may record a dispute for an instalment
+ * that was never in dispute.
  */
 function clearedCondition(exception: TypedRecord<"exceptions">, byId: ReadonlyMap<string, ValopayRecord>): string | undefined {
   const type = resolveExceptionType(exception.data.type);
   const linked = byId.get(String(exception.data.linkedRecordId || ""));
   if (!type || !linked) return undefined;
+  if (linked.kind === "observations" && type === "suspected_duplicate") {
+    if (linked.status !== "resolved") return undefined;
+    const payment = byId.get(String(linked.data.paymentId ?? ""));
+    return `payment evidence ${linked.reference} is now resolved${payment ? ` to payment ${payment.reference}` : ""}`;
+  }
   if (linked.kind === "payments" && (type === "unallocated_payment" || type === "overpayment" || type === "suspected_duplicate")) {
     const held = linked as TypedRecord<"payments">;
     if (paymentUnappliedKobo(held) > 0) return undefined;
@@ -160,6 +167,11 @@ export function clearedExceptionsNote(cleared: readonly TypedRecord<"exceptions"
   const reasons = cleared.slice(0, 3).map((item) => `${exceptionCatalogue[resolveExceptionType(item.data.type)!]?.title.toLowerCase() ?? "exception"}: ${item.data.conditionCleared?.reason}`);
   const more = cleared.length > 3 ? `; and ${counted(cleared.length - 3, "more", "more")}` : "";
   return `Closed ${counted(cleared.length, "exception")} whose condition cleared (${reasons.join("; ")}${more}).`;
+}
+
+/** An audit entry's summary: the reason, then what the action established (its answer's auditNote), such as the exceptions it closed. */
+export function withAuditNote(reason: string, note: unknown): string {
+  return typeof note === "string" && note ? `${reason}${/[.!?]$/.test(reason) ? "" : "."} ${note}` : reason;
 }
 
 const confirmedOutcomes: Record<string, "failed" | "succeeded" | "cancelled"> = { resolved_failed: "failed", resolved_succeeded: "succeeded", provider_confirmed_no_debit: "cancelled" };
@@ -306,11 +318,15 @@ export function settlementBatchState(batch: TypedRecord<"settlement-batches">, c
  * never forced; an exception raised for an earlier state stays for Finance,
  * and its notes gain a dated line whenever the batch moves, so the text it was
  * raised with is not read as the batch's current state.
- * Returns the number of batches in variance. `credits` is how many statement
- * credits each batch's linked total sums.
+ * A collection is counted in its first batch (SettlementLines): a later batch
+ * that lists it too, as an earlier build could leave it, counts it twice, and
+ * raises a settlement_variance exception that names both batches, once per
+ * collection counted again. Returns the number of batches in variance.
+ * `credits` is how many statement credits each batch's linked total sums.
  */
 function evaluateSettlementBatches(state: DomainState, ctx: Context, credits: ReadonlyMap<string, number>): number {
   let variances = 0;
+  const countedIn = new Map<string, TypedRecord<"settlement-batches">>();
   for (const batch of recordsOf(state, "settlement-batches")) {
     let changed = false;
     // A batch edited by hand keeps its fee variance in step with its stated and expected fees.
@@ -333,9 +349,20 @@ function evaluateSettlementBatches(state: DomainState, ctx: Context, credits: Re
       open.data.notes = `${open.data.notes ? `${open.data.notes}\n` : ""}Update on ${watDate(Date.parse(ctx.now))} (WAT): ${current}`;
       touch(open, ctx.now);
     }
-    if (next.status !== "variance") continue;
-    raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, notes: next.explanation!, condition: next.condition, settledBy: next.settledBy });
-    variances += 1;
+    if (next.status === "variance") {
+      raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, notes: next.explanation!, condition: next.condition, settledBy: next.settledBy });
+      variances += 1;
+    }
+    for (const paymentId of Array.isArray(batch.data.linePaymentIds) ? batch.data.linePaymentIds.map(String) : []) {
+      const first = countedIn.get(paymentId);
+      if (!first) { countedIn.set(paymentId, batch); continue; }
+      const payment = recordsWhere(state, "payments", "id", paymentId)[0];
+      if (first.id === batch.id || !payment) continue;
+      const notes = `Settlement batch ${batch.reference} counts payment ${payment.reference} (${nairaText(payment.amountKobo)}), which settlement batch ${first.reference} already counts: the same collection is in both batches' totals. Check both payouts with the provider.`;
+      const raised = raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, amountKobo: payment.amountKobo, notes, condition: `settlement_variance:${batch.id}:counted:${paymentId}` });
+      // An exception already open for the batch gains it as a dated line.
+      if (isOpenException(raised.status)) noteUpdate(raised, ctx, notes);
+    }
   }
   return variances;
 }
@@ -468,6 +495,38 @@ function identifyPayer(state: DomainState, ctx: Context, payment: TypedRecord<"p
     touch(proposal, ctx.now);
   }
   touch(payment, ctx.now);
+}
+
+/**
+ * Decision on a payer identified through a wrong match: once a precision
+ * review (or a rejection) has taken the allocation that identified the payer
+ * (payerIdentification.allocationId) out of use and nothing of the payment
+ * stays applied, the identification is withdrawn. The payment has no payer
+ * again, so Finance can apply it to its real payer's instalment, and the
+ * withdrawn identification stays in payerIdentificationHistory with who
+ * withdrew it, when and why. A proposal of the payment for that customer,
+ * which rested on the identification, is withdrawn with it. A payer its
+ * evidence named, or money that went back, keeps its payer. Returns the
+ * customer the identification named, or undefined when it stands.
+ */
+export function withdrawPayerIdentification(state: DomainState, ctx: Context, payment: TypedRecord<"payments">, reason: string): string | undefined {
+  const identification = payment.data.payerIdentification;
+  if (!identification || identification.customerId !== payment.customerId || paymentReturned(payment) || Number(payment.data.allocatedKobo || 0) > 0) return undefined;
+  const allocations = recordsWhere(state, "allocations", "data.paymentId", payment.id);
+  if (allocations.some((item) => item.status === "confirmed") || allocations.find((item) => item.id === identification.allocationId)?.status !== "superseded") return undefined;
+  const history = Array.isArray(payment.data.payerIdentificationHistory) ? payment.data.payerIdentificationHistory : [];
+  payment.data.payerIdentificationHistory = [...history, { ...identification, withdrawnBy: ctx.actor, withdrawnAt: ctx.now, withdrawnReason: reason }];
+  delete payment.data.payerIdentification;
+  payment.customerId = "";
+  touch(payment, ctx.now);
+  const proposals = allocations.filter((item) => item.status === "proposed" && item.customerId === identification.customerId);
+  for (const proposal of proposals) {
+    proposal.status = "superseded";
+    proposal.data.supersededReason = "Superseded: the payer Finance identified was withdrawn.";
+    touch(proposal, ctx.now);
+  }
+  if (proposals.length) settlePaymentStatus(state, ctx, payment);
+  return identification.customerId;
 }
 
 /**
@@ -667,15 +726,19 @@ export function supersededByReview(allocation: TypedRecord<"allocations">): bool
 /**
  * REC-09: a match a review had marked wrong is reviewed as correct, so it is
  * applied again, provided the payment still holds that money and the
- * instalment still owes it. Otherwise the verdict is refused, because a
- * "correct" match that is not applied would misstate the false-match rate.
+ * instalment still owes it, and the payment is not now recorded as another
+ * customer's. Otherwise the verdict is refused, because a "correct" match
+ * that is not applied would misstate the false-match rate. A payment whose
+ * identified payer was withdrawn with the match has its payer identified
+ * again by it, for the reviewer's reason.
  */
-export function reinstateAllocation(state: DomainState, ctx: Context, allocation: TypedRecord<"allocations">): void {
+export function reinstateAllocation(state: DomainState, ctx: Context, allocation: TypedRecord<"allocations">, reason: string): void {
   const payment = findRecord(state, String(allocation.data.paymentId), "payments");
   const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
   const left = paymentUnappliedKobo(payment);
   const blocker = paymentReturned(payment) ? `payment ${payment.reference} was ${paymentReversed(payment) ? "reversed" : "refunded"}`
     : ["cancelled", "closed", "in_dispute"].includes(due.status) ? `instalment ${due.reference} is ${due.status.replace(/_/g, " ")}`
+    : payment.customerId && payment.customerId !== due.customerId ? `payment ${payment.reference} is now recorded as another customer's`
     : allocation.amountKobo > left ? `payment ${payment.reference} no longer has that much left to allocate`
     : allocation.amountKobo > outstanding(due) ? `instalment ${due.reference} no longer has that much outstanding`
     : null;
@@ -684,7 +747,7 @@ export function reinstateAllocation(state: DomainState, ctx: Context, allocation
   delete allocation.data.supersededReason; delete allocation.data.supersededByReview;
   allocation.data.reinstatedAt = ctx.now;
   allocation.status = "proposed"; // applyConfirmedAllocation applies an allocation that is not yet applied
-  applyConfirmedAllocation(state, ctx, allocation);
+  applyConfirmedAllocation(state, ctx, allocation, reason);
 }
 
 /**
@@ -835,8 +898,9 @@ function statedGross(observation: TypedRecord<"observations">): { kobo: number; 
  * the payment is already tied to another payer's instalment), it is in another
  * currency, or it states another gross amount. Undefined when it agrees. A
  * settlement line that states only what it paid out agrees with any gross at
- * least that large, and a gross completes a payment made from such a line
- * while nothing of it is applied.
+ * least that large, and a gross completes a payment made from such a line,
+ * whatever of it is applied, unless its money went back (a refund or a
+ * reversal).
  */
 function evidenceConflict(payment: TypedRecord<"payments">, observation: TypedRecord<"observations">, index: CanonicalPaymentIndex): string | undefined {
   const payer = observation.customerId;
@@ -844,19 +908,51 @@ function evidenceConflict(payment: TypedRecord<"payments">, observation: TypedRe
   if (payer && !payment.customerId && index.tiedPayers(payment).some((customerId) => customerId !== payer)) return "it names another payer than the instalment the payment is tied to";
   if (currencyOf(observation) !== currencyOf(payment)) return `it is in ${currencyOf(observation)} and the payment is in ${currencyOf(payment)}`;
   const { kobo, atLeast } = statedGross(observation);
-  const agrees = atLeast ? kobo <= payment.amountKobo : kobo === payment.amountKobo || (payment.data.grossUnstated === true && kobo > payment.amountKobo && Number(payment.data.allocatedKobo || 0) === 0);
+  const agrees = atLeast ? kobo <= payment.amountKobo : kobo === payment.amountKobo || (payment.data.grossUnstated === true && kobo > payment.amountKobo && !paymentRefunded(payment) && !paymentReversed(payment));
   return agrees ? undefined : `it states ${nairaText(kobo)}${atLeast ? " paid out" : ""} and the payment is ${nairaText(payment.amountKobo)}`;
+}
+
+/** Evidence that reports a reversal of the payment it names. */
+export const reportsReversal = (observation: TypedRecord<"observations">): boolean => observation.data.reversed === true || observation.data.reversalStatus === "reversed";
+
+/**
+ * Decision on evidence Finance must look at before it becomes a payment:
+ * evidence that disagrees with the payment its key names (evidenceConflict),
+ * or evidence through a connection where no payment has its reference while
+ * another connection's payment does (a disputes or settlement report may spell
+ * the connection another way). Neither is merged or dropped: the evidence
+ * stays unresolved with a suspected_duplicate exception that names the
+ * payment, and the connections when they differ. Returns that exception and
+ * the payment, or undefined when no payment has its reference.
+ */
+function holdForReview(state: DomainState, ctx: Context, observation: TypedRecord<"observations">, candidates: TypedRecord<"payments">[], payments: CanonicalPaymentIndex, gross: number): { exception: TypedRecord<"exceptions">; other: TypedRecord<"payments"> } | undefined {
+  const other = candidates[0] ?? payments.withReference(observation)[0];
+  if (!other) return undefined;
+  const ref = observation.reference, source = String(observation.data.source), reversal = reportsReversal(observation);
+  const what = `${reversal ? "Reversal evidence" : "Payment evidence"} ${ref} (${source}, ${nairaText(gross)})`;
+  const lead = candidates.length
+    ? `${what} shares its provider reference with payment ${other.reference}, but ${evidenceConflict(other, observation, payments)}. It was not ${reversal ? "applied to" : "merged into"} that payment.`
+    : `${what} came through ${connectionOf(state, observation)}, where no payment has its reference, but payment ${other.reference} was observed through ${connectionOf(state, other)}. It was not ${reversal ? "applied to" : "merged into"} that payment, and no payment was made for it.`;
+  // A reversal never becomes a payment of its own, which would only be reversed at once.
+  const next = reversal
+    ? `It reports a reversal, so no payment is made from it only to be reversed.${candidates.length ? "" : ` If it reverses payment ${other.reference}, have the reversal reported through ${connectionOf(state, other)}, which reverses that payment.`} Once you have checked it, resolve this exception and the next reconciliation sets it aside.`
+    : `Resolve this exception as distinct payments if it is money of its own${candidates.length ? "" : ` through ${connectionOf(state, observation)}`}: the next reconciliation records it as a separate payment. Resolve it as a confirmed duplicate if it repeats that payment: it is recorded as a separate payment held for its refund.`;
+  const exception = raiseException(state, ctx, "suspected_duplicate", {
+    linkedRecordId: observation.id, customerId: observation.customerId, amountKobo: gross, notes: `${lead} ${next}`,
+    condition: candidates.length ? `suspected_duplicate:${observation.id}:${other.id}` : `suspected_duplicate:${observation.id}:connection:${other.id}`,
+  });
+  return { exception, other };
 }
 
 /**
  * ING-03: every observation resolves to one canonical Payment by its key, the
  * provider connection and reference, so the same reference through another
- * connection is another payment; the batch leg of a statement never becomes a
- * customer Payment. Decision on shared references: evidence that disagrees
- * with the payment its key names (evidenceConflict) is never merged into it
- * and never dropped. It stays unresolved with a suspected_duplicate exception
+ * connection is another payment once Finance says so; the batch leg of a
+ * statement never becomes a customer Payment. Evidence Finance must look at
+ * first (holdForReview) stays unresolved with a suspected_duplicate exception
  * until Finance resolves that: then it becomes a payment of its own, held for
- * its refund when Finance confirmed it a duplicate.
+ * its refund when Finance confirmed it a duplicate, except evidence of a
+ * reversal, which is set aside rather than made a payment and reversed.
  */
 function canonicalPayment(state: DomainState, ctx: Context, observation: TypedRecord<"observations">, payments: CanonicalPaymentIndex, lines: SettlementLines): TypedRecord<"payments"> | undefined {
   const source = String(observation.data.source);
@@ -866,14 +962,17 @@ function canonicalPayment(state: DomainState, ctx: Context, observation: TypedRe
   const prior = candidates.find((item) => !evidenceConflict(item, observation, payments));
   const { kobo: gross, atLeast } = statedGross(observation);
   let separate: { paymentId: string; exceptionId: string; resolutionCode: string } | undefined;
-  if (!prior && candidates.length) {
-    const other = candidates[0]!;
-    const exception = raiseException(state, ctx, "suspected_duplicate", {
-      linkedRecordId: observation.id, customerId: observation.customerId, amountKobo: gross, condition: `suspected_duplicate:${observation.id}:${other.id}`,
-      notes: `Payment evidence ${ref} (${source}, ${nairaText(gross)}) shares its provider reference with payment ${other.reference}, but ${evidenceConflict(other, observation, payments)}. It was not merged into that payment. Resolve this exception as distinct payments if it is money of its own: the next reconciliation records it as a separate payment. Resolve it as a confirmed duplicate if it repeats that payment: it is recorded as a separate payment held for its refund.`,
-    });
-    if (isOpenException(exception.status)) return undefined;
-    separate = { paymentId: other.id, exceptionId: exception.id, resolutionCode: String(exception.data.resolutionCode) };
+  const held = prior ? undefined : holdForReview(state, ctx, observation, candidates, payments, gross);
+  if (held) {
+    if (isOpenException(held.exception.status)) return undefined;
+    if (reportsReversal(observation)) {
+      observation.status = "resolved";
+      observation.data.resolvedTo = `exception:${held.exception.id}`;
+      observation.data.resolutionKey = "reversal_set_aside_after_review";
+      touch(observation, ctx.now);
+      return undefined;
+    }
+    separate = { paymentId: held.other.id, exceptionId: held.exception.id, resolutionCode: String(held.exception.data.resolutionCode) };
   }
   const observedAt = String(observation.data.occurredAt || observation.createdAt);
   const payment = prior || makeRecord(state, "payments", {
@@ -889,11 +988,16 @@ function canonicalPayment(state: DomainState, ctx: Context, observation: TypedRe
   if (!prior) payments.add(payment);
   if (separate?.resolutionCode === "confirmed_duplicate_refund") {
     payment.status = "possible_duplicate";
-    payment.data.explanation = `Finance confirmed this evidence duplicates payment ${candidates[0]!.reference}; it is held until its refund is recorded.`;
+    payment.data.explanation = `Finance confirmed this evidence duplicates payment ${held!.other.reference}; it is held until its refund is recorded.`;
   }
   paymentDimensions(payment);
-  // A settlement line's net made this payment; the debit's own gross completes it.
-  if (prior && !atLeast && payment.data.grossUnstated === true) { payment.amountKobo = Math.max(payment.amountKobo, gross); delete payment.data.grossUnstated; }
+  // A settlement line's net made this payment; the debit's own gross completes it. What the gross adds to money
+  // already applied is unapplied money for Finance, so the payment's status follows it.
+  if (prior && !atLeast && payment.data.grossUnstated === true) {
+    const raised = gross > payment.amountKobo;
+    payment.amountKobo = Math.max(payment.amountKobo, gross); delete payment.data.grossUnstated;
+    if (raised && Number(payment.data.allocatedKobo || 0) > 0) settlePaymentStatus(state, ctx, payment);
+  }
   if (!payment.data.observedAt || Date.parse(observedAt) < Date.parse(String(payment.data.observedAt))) payment.data.observedAt = observedAt;
   if (!payment.customerId && observation.customerId) payment.customerId = observation.customerId;
   // The instalment evidence names is kept only while it is the payer's.
@@ -908,7 +1012,7 @@ function canonicalPayment(state: DomainState, ctx: Context, observation: TypedRe
     if (payment.data.channel === "direct_debit" && payment.data.collectionStatus !== "failed") payment.data.collectionStatus = "succeeded";
     settlementBatch(state, ctx, observation, payment, lines);
   }
-  if (observation.data.reversed === true || observation.data.reversalStatus === "reversed") reversePayment(state, ctx, payment);
+  if (reportsReversal(observation)) reversePayment(state, ctx, payment);
   observation.status = "resolved";
   observation.data.paymentId = payment.id;
   observation.data.resolutionKey = prior ? "canonical_provider_reference" : separate ? "separate_payment_after_review" : "new_canonical_provider_reference";
@@ -922,21 +1026,38 @@ function canonicalPayment(state: DomainState, ctx: Context, observation: TypedRe
  * first-record-wins semantics across colliding keys, including legacy rows. A
  * key holds more than one payment once Finance has said conflicting evidence
  * is money of its own. New payments are registered as they are made, so
- * repeated evidence in one run resolves to one payment.
+ * repeated evidence in one run resolves to one payment. A payment is also
+ * keyed on the connections of the evidence resolved to it: an earlier build
+ * keyed a payment on its evidence's provider (or the lender's), whatever
+ * connection the evidence named, so later evidence through that connection
+ * still finds it.
  */
 class CanonicalPaymentIndex {
   private byKey = new Map<string, TypedRecord<"payments">[]>();
+  private byReference = new Map<string, TypedRecord<"payments">[]>();
   private byId = new Map<string, TypedRecord<"payments">>();
   private order = new Map<string, number>();
   private dues?: Map<string, TypedRecord<"due-items">>;
-  constructor(private state: DomainState) { for (const payment of recordsOf(state, "payments")) this.add(payment); }
+  constructor(private state: DomainState) {
+    const evidenceConnections = new Map<string, Set<string>>();
+    for (const observation of recordsOfKind(state, "observations")) {
+      if (observation.status !== "resolved" || typeof observation.data.paymentId !== "string") continue;
+      const connections = evidenceConnections.get(observation.data.paymentId) ?? new Set<string>();
+      evidenceConnections.set(observation.data.paymentId, connections.add(connectionKey(connectionOf(state, observation))));
+    }
+    for (const payment of recordsOf(state, "payments")) this.add(payment, evidenceConnections.get(payment.id));
+  }
   private key(connection: string, reference: unknown) { return `${connectionKey(connection)}\u0000${String(reference)}`; }
-  add(payment: TypedRecord<"payments">) {
+  add(payment: TypedRecord<"payments">, evidenceConnections: Iterable<string> = []) {
     this.order.set(payment.id, this.order.size);
     this.byId.set(payment.id, payment);
+    const connections = new Set([connectionKey(connectionOf(this.state, payment)), ...evidenceConnections]);
     for (const reference of new Set([payment.reference, payment.data.providerReference].filter(Boolean))) {
-      const key = this.key(connectionOf(this.state, payment), reference);
-      this.byKey.set(key, [...(this.byKey.get(key) ?? []), payment]);
+      for (const connection of connections) {
+        const key = this.key(connection, reference);
+        this.byKey.set(key, [...(this.byKey.get(key) ?? []), payment]);
+      }
+      this.byReference.set(String(reference), [...(this.byReference.get(String(reference)) ?? []), payment]);
     }
   }
   /** The payments an observation's key names, with one it names by id, first made first. */
@@ -944,6 +1065,11 @@ class CanonicalPaymentIndex {
     const named = this.byId.get(String(observation.data.paymentId));
     const group = this.byKey.get(this.key(connectionOf(this.state, observation), observation.reference)) ?? [];
     return [...new Set(named ? [named, ...group] : group)].sort((a, b) => this.order.get(a.id)! - this.order.get(b.id)!);
+  }
+  /** The payments with an observation's reference under any connection, first made first: for evidence its own key finds none of, the ones another connection holds. */
+  withReference(observation: TypedRecord<"observations">): TypedRecord<"payments">[] {
+    if (!observation.reference) return [];
+    return [...new Set(this.byReference.get(observation.reference) ?? [])].sort((a, b) => this.order.get(a.id)! - this.order.get(b.id)!);
   }
   /** The customer of an instalment, by id. */
   dueCustomer(id: unknown): string | undefined {
@@ -1031,9 +1157,9 @@ export function intendedDueItem(state: DomainState, payment: TypedRecord<"paymen
   return { due, key: candidate.key };
 }
 
-/** Section 7.2 rule ladder, applied to canonical Payments, never to observations. */
+/** Section 7.2 rule ladder, applied to canonical Payments, never to observations. A payment with nothing to allocate, such as one an earlier build made from a line whose gross was 0, is left alone. */
 function matchPayment(state: DomainState, ctx: Context, payment: TypedRecord<"payments">, index: MatchIndex): void {
-  if (payment.status !== "unallocated" || paymentReturned(payment)) return;
+  if (payment.status !== "unallocated" || paymentReturned(payment) || paymentUnappliedKobo(payment) === 0) return;
   const connection = connectionOf(state, payment), currency = currencyOf(payment);
   const rejected = rejectedMatches(payment);
   const intended = intendedDueItem(state, payment, index);

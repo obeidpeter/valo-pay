@@ -1,7 +1,7 @@
 import { WAT_OFFSET_MS, closeRules, closeTimeOf, deadlinePassed, isOpenException, nextCloseInstant, paymentAwaitsAllocation, paymentUnappliedKobo, type CloseReport } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
-import { allocationConfirmedAt, paymentObservedAt } from "./reconciliation";
+import { allocationConfirmedAt, currencyOf, paymentObservedAt } from "./reconciliation";
 import { watDate } from "./calendar";
 
 const DAY_MS = 24 * 60 * 60 * 1000, MINUTE_MS = 60 * 1000;
@@ -186,7 +186,8 @@ function positionIndex(state: DomainState) {
       const dueId = record.data.dueItemId;
       if (typeof dueId === "string") appliedByDue.set(dueId, (appliedByDue.get(dueId) ?? 0) + record.amountKobo);
     }
-    if (record.kind === "payments" && position) position.unallocatedKobo += paymentUnappliedKobo(record);
+    // Instalments are owed in naira: money in another currency is held for Finance, never a customer's naira credit.
+    if (record.kind === "payments" && position && currencyOf(record) === "NGN") position.unallocatedKobo += paymentUnappliedKobo(record);
   }
   for (const position of positions.values()) position.outstandingKobo = Math.max(0, position.obligationsKobo - position.allocatedKobo);
   return { positions, appliedByDue };
@@ -196,7 +197,7 @@ export function positionFor(state: DomainState, customerId: string): CustomerPos
   const related = state.records.filter((record) => record.customerId === customerId);
   const obligationsKobo = related.filter((record) => record.kind === "due-items" && record.status !== "cancelled").reduce((sum, record) => sum + record.amountKobo, 0);
   const allocatedKobo = related.filter((record) => record.kind === "allocations" && record.status === "confirmed").reduce((sum, record) => sum + record.amountKobo, 0);
-  const unallocatedKobo = related.filter((record) => record.kind === "payments").reduce((sum, record) => sum + paymentUnappliedKobo(record), 0);
+  const unallocatedKobo = related.filter((record) => record.kind === "payments" && currencyOf(record) === "NGN").reduce((sum, record) => sum + paymentUnappliedKobo(record), 0);
   return { customerId, obligationsKobo, allocatedKobo, outstandingKobo: Math.max(0, obligationsKobo - allocatedKobo), unallocatedKobo };
 }
 
@@ -215,14 +216,33 @@ export function positionSnapshot(state: DomainState): Map<string, CustomerPositi
 }
 
 const sumOf = (items: ValopayRecord[]) => ({ count: items.length, kobo: items.reduce((sum, item) => sum + item.amountKobo, 0) });
+/** Money in another currency than naira, by currency code: how many payments and their amount in that currency's minor unit, as the payment stores it. */
+type OtherCurrencies = Record<string, { count: number; amount: number }>;
+/**
+ * Payments by the money each holds (`amount`): naira in the count and kobo,
+ * and money in any other currency listed by its code instead
+ * (otherCurrencies, only when there is some), never added to a naira total.
+ */
+function inNaira(items: TypedRecord<"payments">[], amount: (item: TypedRecord<"payments">) => number): { count: number; kobo: number; otherCurrencies?: OtherCurrencies } {
+  let count = 0, kobo = 0;
+  const other = new Map<string, { count: number; amount: number }>();
+  for (const item of items) {
+    const currency = currencyOf(item);
+    if (currency === "NGN") { count += 1; kobo += amount(item); continue; }
+    const row = other.get(currency) ?? { count: 0, amount: 0 };
+    row.count += 1; row.amount += amount(item);
+    other.set(currency, row);
+  }
+  return { count, kobo, ...(other.size ? { otherCurrencies: Object.fromEntries([...other].sort(([a], [b]) => (a < b ? -1 : 1))) } : {}) };
+}
 /** Payments waiting for Finance (paymentAwaitsAllocation) by the money they hold: the unapplied rest of one applied in part is waiting, what a refund of part of one returned is not. */
-const heldOf = (items: TypedRecord<"payments">[]) => ({ count: items.length, kobo: items.reduce((sum, item) => sum + paymentUnappliedKobo(item), 0) });
+const heldOf = (items: TypedRecord<"payments">[]) => inNaira(items, paymentUnappliedKobo);
 const inPeriod = (at: string | undefined, from: string | null, to: string) => Boolean(at) && (from === null || String(at) > from) && String(at) <= to;
 
 /** What the close needs to remember from before reconciliation ran. */
 export interface OpeningSnapshot {
   since: string | null;
-  unallocated: { count: number; kobo: number };
+  unallocated: { count: number; kobo: number; otherCurrencies?: OtherCurrencies };
   positions: Map<string, CustomerPosition>;
 }
 
@@ -291,8 +311,8 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
     allocatedByRule,
     allocated: sumOf(confirmed),
     proposed: sumOf(payments.filter((item) => item.status === "proposed")),
-    unallocated: { ...heldOf(unallocated), olderThan24Hours: unallocated.filter((item) => Date.parse(to) - paymentObservedAt(item) >= DAY_MS).length },
-    possibleDuplicates: sumOf(payments.filter((item) => item.status === "possible_duplicate")),
+    unallocated: { ...heldOf(unallocated), olderThan24Hours: unallocated.filter((item) => currencyOf(item) === "NGN" && Date.parse(to) - paymentObservedAt(item) >= DAY_MS).length },
+    possibleDuplicates: inNaira(payments.filter((item) => item.status === "possible_duplicate"), (item) => item.amountKobo),
     variances: { count: variances.length, feeVarianceKobo: variances.reduce((sum, item) => sum + item.feeVarianceKobo, 0), batches: variances },
     exceptions: {
       opened: { count: opened.length, byType: byType(opened) }, closed: { count: closed.length, byType: byType(closed) },
