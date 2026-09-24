@@ -3,11 +3,14 @@
 // audit chain is kept in valopay_records but is not part of a loaded state: a
 // write continues it from the head in the lender's settings, verifying the
 // entries since the last verified one, so an entry another writer appended
-// without moving the head is followed, never forked. The overview checks the
+// without moving the head is followed, never forked, and the export worker's
+// claim reads the head only once it holds the lender. The overview checks the
 // chain from that point and shows the eight latest entries; verify_audit
-// checks it whole and records how far it held. Every load has earlier closes
-// as summaries, settings read only the latest close, and a list of a kind that
-// grows with history is capped when it names no limit.
+// checks it whole and records how far it held, and a break either finds (a
+// fork, a gap, a changed entry) stays reported until the chain is valid again.
+// Every load has earlier closes as summaries, settings read only the latest
+// close, and a list of a kind that grows with history is capped when it names
+// no limit.
 import assert from "node:assert/strict";
 import express from "express";
 import { once } from "node:events";
@@ -52,6 +55,28 @@ const entriesOf = async (lender: string) => (await pool.query<Entry>("SELECT id,
 const chainOf = async (lender: string) => (await pool.query<{ chain: Record<string, any> | null }>("SELECT settings->'auditChain' AS chain FROM valopay_merchants WHERE id=$1", [lender])).rows[0]!.chain;
 const customer = (name: string) => ({ name, reference: `HISTORY-${randomUUID()}`, data: { consentProvenance: "Synthetic fixture" } });
 const brokenAlert = (overview: any) => overview.alerts.some((alert: { key: string }) => alert.key === "audit_chain_broken");
+/** A caller of another sandbox of this run, with a cookie of its own. */
+const sandboxCaller = () => {
+  const own = `valopay_sandbox=${randomBytes(32).toString("hex")}`;
+  return async (path: string, method = "GET", body?: unknown, key?: string) => {
+    const answer = await fetch(base + path, { method, headers: { "Content-Type": "application/json", Cookie: own, ...(key ? { "Idempotency-Key": key } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    return { status: answer.status, data: (await answer.json()) as any };
+  };
+};
+/** Removes the workspace of a lender a section made, with everything in it. */
+const removeWorkspaceOf = async (merchantId: string) => {
+  const row = (await pool.query<{ workspace_id: string }>("SELECT workspace_id FROM valopay_merchants WHERE id=$1", [merchantId])).rows[0];
+  if (!row) return;
+  for (const table of ["valopay_idempotency", "valopay_operations", "valopay_records"]) await pool.query(`DELETE FROM ${table} WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id=$1)`, [row.workspace_id]);
+  await pool.query("DELETE FROM valopay_merchants WHERE workspace_id=$1", [row.workspace_id]);
+  await pool.query("DELETE FROM valopay_workspaces WHERE id=$1", [row.workspace_id]);
+};
+/** Stores an audit entry directly, as another writer (or a tampering one) would have. */
+const insertEntry = async (merchantId: string, data: Record<string, any>) => {
+  const id = randomUUID();
+  await pool.query("INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data) VALUES($1,$2,'audit',$3,'recorded','',0,'',$4)", [id, merchantId, data.action, data]);
+  return id;
+};
 let workspaceId: string | undefined;
 let checks = 0;
 try {
@@ -218,6 +243,101 @@ try {
     }
     checks += 5;
   }
+
+  // ---- 10. An export claim reads the chain's head once it holds the lender, however early its transaction began ----
+  {
+    const claimCall = sandboxCaller(), directory = process.env.PRIVATE_OBJECT_DIR;
+    const [target] = ok(await claimCall("/v1/workspace")).merchants.map((merchant: { id: string }) => merchant.id) as [string];
+    process.env.PRIVATE_OBJECT_DIR = "/private/synthetic-history-tests";
+    // The claim's transaction reads before it takes the lender, as the isolation self-check's catalogue reads do
+    // under runtime isolation. Meanwhile another process's worker appends an entry and lets the lender go without
+    // changing its row, as recording an export ready does.
+    const patched: Array<{ client: any; query: unknown }> = [];
+    let reached!: () => void, release!: () => void;
+    const atLock = new Promise<void>((resolve) => { reached = resolve; }), released = new Promise<void>((resolve) => { release = resolve; });
+    let armed = true;
+    const hold = (client: any) => {
+      const query = client.query;
+      patched.push({ client, query });
+      client.query = async (text: unknown, ...rest: unknown[]) => {
+        if (armed && typeof text === "string" && text.includes("FOR UPDATE OF m SKIP LOCKED")) {
+          armed = false;
+          await query.call(client, "SELECT count(*) FROM pg_roles");
+          reached(); await released;
+        }
+        return query.call(client, text, ...rest);
+      };
+    };
+    try {
+      const job = ok(await claimCall(`/v1/exports?merchantId=${target}`, "POST", { kind: "gate-pack", format: "json" }, randomUUID()));
+      pool.on("acquire", hold);
+      const claiming = exportJobRepository.claim(target, job.id);
+      await Promise.race([atLock, new Promise((_, reject) => setTimeout(() => reject(new Error("the claim never reached the lender's lock")), 10_000))]);
+      pool.off("acquire", hold);
+      const [head] = (await entriesOf(target)).slice(-1);
+      const elsewhere = auditEntryData({ sequence: head!.data.sequence + 1, actor: "System · export worker", action: "export.ready", objectId: "another-process-export", summary: "Another process recorded its export while this claim began.", previousHash: head!.data.hash, timestamp: new Date().toISOString() });
+      const other = await pool.connect();
+      try {
+        await other.query("BEGIN");
+        await other.query("SELECT id FROM valopay_merchants WHERE id=$1 FOR UPDATE", [target]);
+        await other.query("INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data) VALUES($1,$2,'audit',$3,'recorded','',0,'',$4)", [randomUUID(), target, elsewhere.action, elsewhere]);
+        await other.query("COMMIT");
+      } finally { other.release(); }
+      release();
+      assert.ok(await claiming, "the export worker claims the job");
+      const entries = await entriesOf(target), started = entries.at(-1)!;
+      assert.deepEqual([started.data.action, started.data.sequence, started.data.previousHash], ["export.started", elsewhere.sequence + 1, elsewhere.hash], "its entry follows the entry committed before it held the lender, not the head its transaction first saw");
+      assert.equal(verifyAuditChain(entries).valid, true, "one chain, no fork");
+    } finally {
+      pool.off("acquire", hold); release();
+      for (const { client, query } of patched) client.query = query;
+      if (directory === undefined) delete process.env.PRIVATE_OBJECT_DIR; else process.env.PRIVATE_OBJECT_DIR = directory;
+      await removeWorkspaceOf(target);
+    }
+    checks += 3;
+  }
+
+  // ---- 11. A fork (two entries with one sequence) stays in the overview until the chain is valid again ----
+  {
+    const forkCall = sandboxCaller();
+    const [forked, earlier] = ok(await forkCall("/v1/workspace")).merchants.map((merchant: { id: string }) => merchant.id) as [string, string];
+    const at = (path: string, merchantId: string) => `${path}${path.includes("?") ? "&" : "?"}merchantId=${merchantId}`;
+    const overview = async (merchantId: string) => brokenAlert(ok(await forkCall(at("/v1/overview", merchantId))));
+    const write = async (merchantId: string, name: string) => ok(await forkCall(at("/v1/records/customers", merchantId), "POST", customer(name), randomUUID()));
+    const verifyChain = async (merchantId: string) => ok(await forkCall(at("/v1/actions", merchantId), "POST", { action: "verify_audit", reason: "Check the synthetic audit log" }, randomUUID())).data;
+    try {
+      // At the head: a second entry at the head's sequence after the same entry, the shape two writers that each took
+      // the next sequence leave behind.
+      for (let index = 0; index < 4; index++) await write(forked, `Fork customer ${index}`);
+      const before = await entriesOf(forked), head = before.at(-1)!, prior = before.at(-2)!;
+      const forkId = await insertEntry(forked, auditEntryData({ sequence: head.data.sequence, actor: "System · export worker", action: "export.started", objectId: "fork-export", summary: "A second writer took the same sequence.", previousHash: prior.data.hash, timestamp: new Date().toISOString() }));
+      assert.equal(await overview(forked), true, "the overview reports the fork at once");
+      await write(forked, "After the fork");
+      assert.equal(await overview(forked), true, "and still after the next write");
+      assert.ok((await chainOf(forked))!.verified.sequence < head.data.sequence, "the lender's last verified entry stays before the forked sequence");
+      const checked = await verifyChain(forked);
+      assert.deepEqual([checked.valid, checked.headHash], [false, prior.data.hash], "verify_audit stops before the sequence two entries claim");
+      await write(forked, "Written on a forked chain");
+      assert.equal(await overview(forked), true, "and neither verify_audit nor a later write hides it");
+      await pool.query("DELETE FROM valopay_records WHERE id=$1", [forkId]);
+      assert.equal(await overview(forked), false, "once the chain is valid again, the overview says so");
+      await write(forked, "After the repair");
+      assert.equal((await chainOf(forked))!.verified.sequence, (await entriesOf(forked)).at(-2)!.data.sequence, "and the next write verifies on from there");
+      // Before the last verified entry: the overview does not read it again, verify_audit finds it, and from then on
+      // the overview shows it too.
+      for (let index = 0; index < 4; index++) await write(earlier, `Earlier fork customer ${index}`);
+      const [first] = await entriesOf(earlier);
+      await insertEntry(earlier, auditEntryData({ sequence: 2, actor: "System · export worker", action: "export.started", objectId: "earlier-fork-export", summary: "A second writer took an earlier sequence.", previousHash: first!.data.hash, timestamp: new Date().toISOString() }));
+      assert.equal(await overview(earlier), false, "a fork before the last verified entry is not read again by the overview");
+      const found = await verifyChain(earlier);
+      assert.deepEqual([found.valid, found.headHash], [false, first!.data.hash], "verify_audit walks the whole chain and stops before the fork");
+      assert.equal((await chainOf(earlier))!.verified.sequence, 1, "the lender records how far the chain held");
+      assert.equal(await overview(earlier), true, "from then on the overview reports it");
+      await write(earlier, "Written after verify_audit");
+      assert.equal(await overview(earlier), true, "and a later write does not hide it");
+    } finally { await removeWorkspaceOf(forked); }
+    checks += 12;
+  }
 } finally {
   server.close();
   await once(server, "close");
@@ -228,4 +348,4 @@ try {
   }
   await pool.end();
 }
-console.log(`Lender history checks passed (${checks} checks): the audit chain stays out of every load and continues from the head kept on the lender, entries written elsewhere are followed, the overview checks from the last verified entry and verify_audit the whole chain, earlier closes load as summaries, settings read only the latest close, history lists are capped, and the export worker's entries follow the stored head.`);
+console.log(`Lender history checks passed (${checks} checks): the audit chain stays out of every load and continues from the head kept on the lender, entries written elsewhere are followed, the overview checks from the last verified entry and verify_audit the whole chain, earlier closes load as summaries, settings read only the latest close, history lists are capped, the export worker's entries follow the stored head and its claim reads the head once it holds the lender, and a fork stays reported until the chain is valid again.`);

@@ -32,18 +32,23 @@ async function inTurn<T>(merchantId: string, work: () => Promise<T>): Promise<T>
  * The pool's checkout wait bounds the checkout, so a late connection never starts a background transaction, and
  * the worker limits bound what runs.
  *
- * A claim that finds the lender busy skips it, since the job stays queued for a later look, and reads the lender at
- * one snapshot (REPEATABLE READ). A write to a claimed job (progress, completion, the hand-back of a job whose lender
- * stayed busy) waits for the lender up to the worker's lock limit instead, since giving up would leave the job
- * running under its lease; it reads at READ COMMITTED, so after the wait it sees what the holder committed (a
- * snapshot taken before the wait would miss the holder's audit entries and fork the chain). A wait that reaches the
- * limit is 'busy', and retryExportWrite tries the write again. A stopping worker's hand-back skips a busy lender as a
- * claim does: the process's shutdown deadline cannot wait for it, and the lease recovers the job. */
+ * A claim that finds the lender busy skips it, since the job stays queued for a later look. A write to a claimed job
+ * (progress, completion, the hand-back of a job whose lender stayed busy) waits for the lender up to the worker's
+ * lock limit instead, since giving up would leave the job running under its lease. A wait that reaches the limit is
+ * 'busy', and retryExportWrite tries the write again. A stopping worker's hand-back skips a busy lender as a claim
+ * does: the process's shutdown deadline cannot wait for it, and the lease recovers the job.
+ *
+ * Every one reads at READ COMMITTED, so each read after the lender's lock sees what every earlier holder committed,
+ * and the audit head it appends after is the chain's latest. No snapshot may be older than the lock: one taken
+ * before it (REPEATABLE READ takes it at the first statement, which under runtime isolation is the self-check's,
+ * well before the lock) misses an entry another process's worker committed meanwhile without changing the lender's
+ * row, and the entry appended after the stale head forks the chain. The claim reads the lender's records in one
+ * statement, after the lock, so the export still sees one consistent state of the lender. */
 async function transaction<T>(merchantId: string, lock: 'skip' | 'wait', work: (client: PoolClient, scope: Scope) => Promise<T>): Promise<T | null> {
   return inTurn(merchantId, async () => {
     const guard = await checkOut(() => pool.connect()), client = guard.client;
     try {
-      await client.query(beginStatement(databaseLimits().worker, lock === 'skip' ? 'ISOLATION LEVEL REPEATABLE READ' : undefined));
+      await client.query(beginStatement(databaseLimits().worker));
       await bindRuntimeService(client);
       let scope: Scope | undefined;
       try {
@@ -64,20 +69,23 @@ const headRead = (since: boolean) => `SELECT r.* FROM valopay_records r WHERE r.
   ORDER BY (r.data->>'sequence')::bigint DESC LIMIT 1`;
 /**
  * The head of the lender's audit chain, which the next entry follows: the
- * entry with the highest sequence. A claim finds it among the records it loads
- * for the export anyway. A later write to the claimed job reads it from the
- * entries since an hour before the claim (`since`, the job's startedAt), a
- * range the lender-kind index serves: the claim wrote an entry then, and every
- * entry after it comes from a transaction that took the lender after the
- * claim, stamped with its own start, at most a few lock waits earlier. So the
- * read follows the lender's recent work, not its whole history. Without a
- * start to go by, or with no entry in that hour, it reads the whole chain.
+ * entry with the highest sequence, read after the lender's lock (transaction).
+ * A claim finds it among the records it loads for the export anyway. A later
+ * write to the claimed job reads it from the entries since an hour before the
+ * claim (`since`, the job's startedAt), a range the lender-kind index serves:
+ * the claim wrote an entry then, and every entry after it comes from a
+ * transaction that took the lender after the claim, stamped with its own
+ * start, at most a few lock waits earlier. So the read follows the lender's
+ * recent work, not its whole history. Without a start to go by, or with no
+ * entry in that hour, it reads the whole chain.
  *
  * The lender's settings keep the head its requests last appended (auditChain,
  * lib/valopay-store.ts), which this worker's own entries do not move. When
  * that head is further on than any entry, an entry has gone missing: the next
  * entry follows the stored head, as a request's does, so the missing sequence
- * is never issued again and the gap stays visible to every check of the chain.
+ * is never issued again. The gap then stays in the chain, and the overview
+ * reports it until the chain is valid again: every check keeps the lender's
+ * last verified entry before the first entry that breaks the chain.
  */
 async function auditHead(client: PoolClient, scope: Scope, from: { records: ValopayRecord[] } | { since: unknown }): Promise<{ sequence: number; hash: string } | undefined> {
   let head: ValopayRecord | undefined;

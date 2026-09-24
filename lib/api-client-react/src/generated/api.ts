@@ -438,7 +438,7 @@ export const getGetOverviewUrl = (params: GetOverviewParams,) => {
 }
 
 /**
- * Metrics, queues, recent activity (the eight latest audit entries), upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02), whose audit check covers the entries since the last one verified.
+ * Metrics, queues, recent activity (the eight latest audit entries), upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02), whose audit check covers the entries since the last one verified. The last one verified stays before the first entry that breaks the chain, so a break this check or verify_audit found stays in the feed until the chain is valid again.
  * @summary The operations overview for one lender
  */
 export const getOverview = async (params: GetOverviewParams, options?: Parameters<typeof customFetch>[1]): Promise<Overview> => {

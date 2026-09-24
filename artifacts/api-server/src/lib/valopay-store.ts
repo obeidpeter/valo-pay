@@ -1197,19 +1197,27 @@ const CHAIN_MARGIN_MINUTES = 5;
  * and an earlier build append without moving the stored head. A stored head
  * further on than any entry means entries went missing: the chain is broken
  * and that sequence is never issued again.
+ *
+ * The verified entry it returns, which the next entry appended records, is
+ * always before the first entry that breaks the chain: a changed entry, a
+ * missing one, a sequence two entries claim (a fork), or an entry whose
+ * sequence is not a number, which every read after the verified entry takes
+ * in (only a whole number can be the head). So a break found here, or by
+ * verify_audit's walk of the whole chain, is read again and reported by every
+ * later check, the overview's included, until the chain is valid again.
  */
 async function readAuditChain(session: Session, merchantId: string, settings: Record<string, any>, full = false) {
   const stored = storedChain(settings), from: ChainPoint = !full && stored ? stored.verified : AUDIT_GENESIS;
   const rows = (await session.client.query<{ id: string; data: Record<string, any>; created_at: Date }>(
     `SELECT r.id,r.data,r.created_at ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='audit'
        AND ($4::timestamptz IS NULL OR r.created_at >= $4::timestamptz - make_interval(mins => ${CHAIN_MARGIN_MINUTES}))
-       AND ($5::bigint = 0 OR (jsonb_typeof(r.data->'sequence')='number' AND (r.data->>'sequence')::numeric > $5::bigint))
+       AND ($5::bigint = 0 OR CASE WHEN jsonb_typeof(r.data->'sequence')='number' THEN (r.data->>'sequence')::numeric > $5::bigint ELSE true END)
      ORDER BY r.created_at,r.id`,
     [merchantId, session.workspace.id, session.principal, from.sequence ? from.at ?? null : null, from.sequence],
   )).rows;
   const walk = walkAuditChain(rows, from);
   let head: ChainPoint = from, valid = walk.valid;
-  for (const row of rows) if (Number(row.data.sequence) > head.sequence) head = { sequence: Number(row.data.sequence), hash: String(row.data.hash), at: row.created_at.toISOString() };
+  for (const row of rows) if (Number.isSafeInteger(row.data.sequence) && row.data.sequence > head.sequence) head = { sequence: row.data.sequence, hash: String(row.data.hash), at: row.created_at.toISOString() };
   if (stored && stored.sequence > head.sequence) { head = { sequence: stored.sequence, hash: stored.hash, ...(stored.at ? { at: stored.at } : {}) }; valid = false; }
   const verified: ChainPoint = walk.entry ? { ...walk.verified, at: walk.entry.created_at.toISOString() } : from;
   return { chain: { ...head, verified } as AuditChain, verification: { valid, count: walk.count, headHash: walk.headHash } };
@@ -1268,8 +1276,9 @@ export async function auditOverview(context: StoreContext, state: DomainState) {
 
 /**
  * The whole audit chain verified from its first entry (verify_audit): the
- * lender's position records how far it held, so a break found here is also
- * what the overview reports from then on.
+ * lender's position records how far it held (readAuditChain), and the entry
+ * verify_audit appends stores it, so a break found here, however early in the
+ * chain, is also what the overview reports from then on.
  */
 export async function verifyAuditTrail(context: StoreContext, state: DomainState) {
   const session = sessionFor(context), merchantId = lockedMerchant(session);
