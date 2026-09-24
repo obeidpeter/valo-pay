@@ -19,7 +19,7 @@ export const exceptionCatalogue = {
   settlement_variance: { title: "Settlement variance", trigger: "The net settlement amount does not match the gross amount minus fees", owner: "Finance", slaBusinessDays: 2, severity: "medium", resolutionCodes: ["fee_schedule_updated", "provider_corrected", "accepted_variance"] },
   provider_status_mismatch: { title: "Provider status mismatch", trigger: "Provider and platform disagree on mandate or attempt state", owner: "Operations", slaBusinessDays: 1, severity: "medium", resolutionCodes: ["provider_state_adopted", "platform_state_confirmed", "escalated_to_provider"] },
   customer_dispute: { title: "Customer dispute", trigger: "The provider reports a disputed debit, or the lender records a customer dispute", owner: "Operations", slaBusinessDays: 1, severity: "high", resolutionCodes: ["upheld_refund", "not_upheld", "mandate_cancelled"] },
-  unknown_outcome: { title: "Unknown outcome", trigger: "The debit outcome is still unknown after 24 hours", owner: "Operations", slaBusinessDays: 1, severity: "high", resolutionCodes: ["resolved_succeeded", "resolved_failed", "provider_confirmed_no_debit"] },
+  unknown_outcome: { title: "Unknown outcome", trigger: "A debit's outcome, or a pay-by-bank payment's, is still unknown after 24 hours", owner: "Operations", slaBusinessDays: 1, severity: "high", resolutionCodes: ["resolved_succeeded", "resolved_failed", "provider_confirmed_no_debit"] },
   notice_not_evidenced: { title: "Notice acceptance not confirmed", trigger: "There is no evidence that the provider accepted a required notice by its deadline", owner: "Operations", slaBusinessDays: 1, severity: "medium", resolutionCodes: ["number_corrected", "channel_restored", "deferred_executed", "customer_unreachable_cancelled"] },
   ownership_conflict: { title: "Ownership conflict", trigger: "Another system attempted collection for a group assigned to Valo Pay, or the group changed before the required ownership check", owner: "Admin", slaBusinessDays: 1, severity: "high", resolutionCodes: ["incumbent_disabled", "owner_reverted", "duplicate_refund_requested"] },
   imported_consent_gap: { title: "Missing consent evidence", trigger: "An imported mandate with missing consent evidence", owner: "Admin", slaBusinessDays: 2, severity: "high", resolutionCodes: ["gap_accepted_in_writing", "evidence_supplied", "mandate_reissued", "observation_only"] },
@@ -48,6 +48,14 @@ export function resolveExceptionType(raw: unknown): ExceptionType | undefined {
 
 /** Codes accepted for an exception whose type is not in the catalogue (legacy rows). */
 export const genericResolutionCodes = ["no_action_required", "customer_contacted", "evidence_received", "ownership_corrected", "refunded_externally", "allocated", "duplicate_confirmed", "mandate_reissued"] as const;
+
+/**
+ * The code the platform records when it closes an exception whose condition
+ * cleared: its payment was allocated in full, refunded or reversed, its
+ * instalment was paid or left dispute, or its outcome became known. It is
+ * never a person's resolution, so no type offers it.
+ */
+export const conditionClearedCode = "condition_cleared";
 
 /** The controlled resolution codes for an exception's type, or the generic list for a type outside the catalogue. */
 export function resolutionCodesFor(rawType: unknown): readonly string[] {

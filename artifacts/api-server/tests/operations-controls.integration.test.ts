@@ -178,7 +178,7 @@ try{
   await pool.query("UPDATE valopay_operations SET updated_at=$3::timestamptz WHERE merchant_id=$1 AND id=ANY($2::text[])",[lender,[completed.id,cancelled.id,pending.id],at(30)]);
   await pool.query("UPDATE valopay_records SET data=jsonb_set(data,'{committedAt}',to_jsonb($3::text)),updated_at=$3::timestamptz WHERE id=$1 AND merchant_id=$2",[batch.id,lender,at(30)]);
   let lifecycle=ok(await call(`/v1/lifecycle?merchantId=${lender}`));
-  lifecycle=ok(await post(`/v1/lifecycle/policy?merchantId=${lender}`,{policy:{rawCsvDays:1,journalPayloadDays:1,exportFileDays:null,auditTrail:"retain"},expectedRevision:lifecycle.policyRevision,reason:"Synthetic retention integration rehearsal"}));
+  lifecycle=ok(await post(`/v1/lifecycle/policy?merchantId=${lender}`,{policy:{rawCsvDays:30,journalPayloadDays:30,exportFileDays:null,auditTrail:"retain"},expectedRevision:lifecycle.policyRevision,reason:"Synthetic retention integration rehearsal"}));
   lifecycle=ok(await post(`/v1/lifecycle/holds?merchantId=${lender}`,{kind:"raw_csv",sourceId:batch.id,held:true,expectedHoldRevision:lifecycle.holdRevision,reason:"Preserve raw source while journal tests run"}));
   assert.equal(lifecycle.targets.some((target:any)=>target.sourceId===pending.id),false);
   let run=ok(await post(`/v1/lifecycle/runs?merchantId=${lender}`,{expectedPolicyRevision:lifecycle.policyRevision}));
@@ -189,13 +189,16 @@ try{
   lifecycle=ok(await post(`/v1/lifecycle/holds?merchantId=${lender}`,{kind:"journal_payload",sourceId:firstCandidate.sourceId,held:true,expectedHoldRevision:lifecycle.holdRevision,reason:"Hold added after approval must block deletion"}));
   const blocked=ok(await post(`/v1/lifecycle/runs/${run.id}/execute?merchantId=${lender}`,{previewDigest:run.previewDigest}));
   assert.equal(blocked.status,"attention");assert.equal(blocked.receipts[0].status,"blocked");
+  assert.equal(blocked.receipts.length,1,"a blocked source stops the run with its reason; nothing after it is attempted");
+  assert.match(blocked.receipts[0].detail,/is held/);
   lifecycle=ok(await post(`/v1/lifecycle/holds?merchantId=${lender}`,{kind:"journal_payload",sourceId:firstCandidate.sourceId,held:false,expectedHoldRevision:lifecycle.holdRevision,reason:"Release hold for checked synthetic cleanup"}));
   const stale=ok(await post(`/v1/lifecycle/runs?merchantId=${lender}`,{expectedPolicyRevision:lifecycle.policyRevision}));
   await pool.query("UPDATE valopay_operations SET updated_at=$3::timestamptz WHERE merchant_id=$1 AND id=$2",[lender,completed.id,at(31)]);
   assert.equal((await post(`/v1/lifecycle/runs/${stale.id}/approve?merchantId=${lender}`,{expectedUpdatedAt:stale.updatedAt,previewDigest:stale.previewDigest,reason:"A stale inventory must not be approved"})).status,409);
   run=ok(await post(`/v1/lifecycle/runs?merchantId=${lender}`,{expectedPolicyRevision:lifecycle.policyRevision}));
   run=ok(await post(`/v1/lifecycle/runs/${run.id}/approve?merchantId=${lender}`,{expectedUpdatedAt:run.updatedAt,previewDigest:run.previewDigest,reason:"Approve current exact source inventory"}));
-  for(let count=0;count<4&&run.status!=="completed";count++)run=ok(await post(`/v1/lifecycle/runs/${run.id}/execute?merchantId=${lender}`,{previewDigest:run.previewDigest}));
+  // One request executes every source of the run it can within its time budget, each checked and given a receipt.
+  run=ok(await post(`/v1/lifecycle/runs/${run.id}/execute?merchantId=${lender}`,{previewDigest:run.previewDigest}));
   assert.equal(run.status,"completed");assert.equal(run.successful,2);
   const retained=(await pool.query("SELECT id,status,request,receipt FROM valopay_operations WHERE merchant_id=$1 AND id=ANY($2::text[])",[lender,[completed.id,cancelled.id,pending.id]])).rows;
   assert.equal(retained.find((r:any)=>r.id===completed.id).request.purged,true);

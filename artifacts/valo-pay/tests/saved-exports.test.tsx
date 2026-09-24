@@ -7,9 +7,9 @@ import { makeRecord } from '../../api-server/src/domain/records';
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi({ queuedExports: true }); });
 afterEach(() => api.uninstall());
-function running(stage='confirming', expired=false) {
+function running(stage='confirming', expired=false, kind='customers') {
   return api.mutate((state,ctx)=>{
-    const view=queueExport(state,ctx,{kind:'customers',format:'json'},'sample/private');
+    const view=queueExport(state,ctx,{kind,format:'json'},'sample/private');
     const job=state.records.find(record=>record.id===view.id)!;
     job.status='running';Object.assign(job.data,{stage,lastProgressAt:ctx.now,leaseToken:'private-token',leaseExpiresAt:new Date(Date.now()+(expired?-1000:60000)).toISOString()});
     return job.id;
@@ -28,7 +28,8 @@ it('shows saved file confirmation progress and recovers an expired lease using t
   expect(api.state().records.find(record=>record.id===id)!.data.stage).toBe('queued');
 });
 it('waits for the current worker deadline and gives Read-only users status without retry authority',async()=>{
-  const id=running('uploading');api.mutate(state=>{state.records.find(record=>record.id===id)!.data.lastProgressAt=new Date(Date.now()-180000).toISOString();});
+  // A mandate export: Read-only may download it, where the customer register is for Admin, Finance and Compliance reviewer only.
+  const id=running('uploading',false,'mandates');api.mutate(state=>{state.records.find(record=>record.id===id)!.data.lastProgressAt=new Date(Date.now()-180000).toISOString();});
   api.role='Read-only';renderApp(`/exports?job=${id}`);
   await screen.findByText('Saving the private file');
   await screen.findByText(/The current worker can recover until/);

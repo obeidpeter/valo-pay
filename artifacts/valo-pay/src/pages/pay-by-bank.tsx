@@ -6,6 +6,7 @@ import {
   ConnectedPanel,
   ConnectedStatus,
   ConnectedRecovery,
+  ConnectedState,
 } from "@/components/connected-frame";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,13 +24,17 @@ import { formatKobo, formatDate, formatNumber } from "@/lib/formatters";
 import { nairaToKobo, koboToNaira } from "@/lib/money-input";
 import { useFormDraft } from "@/lib/unsaved-changes";
 import { useWorkspace } from "@/lib/workspace-context";
-import { useDialogFocusReturn } from "@/lib/focus";
+import { useDialogFocusReturn, useFocusWhenLost } from "@/lib/focus";
+const TITLE = "Pay-by-bank",
+  DESCRIPTION =
+    "A clear journey from bank authorisation to a verified receipt, tied to the instalment it pays.";
 export default function PayByBank() {
   const api = useConnected(),
     { merchantId } = useWorkspace();
   return <PaymentContent key={merchantId} api={api} />;
 }
 function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
+  const { merchantId } = useWorkspace();
   const [dueId, setDueId] = useState(""),
     [amount, setAmount] = useState<string | null>(null),
     [amountError, setAmountError] = useState(""),
@@ -44,8 +49,13 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
     } | null>(null),
     [reason, setReason] = useState("");
   // A confirmed step usually removes the button that opened its review, so focus then goes to the result.
-  const result = useRef<HTMLParagraphElement>(null);
+  const result = useRef<HTMLParagraphElement>(null),
+    problem = useRef<HTMLParagraphElement>(null);
   const restoreFocus = useDialogFocusReturn(!!review, () => result.current);
+  // A step taken without a review (Simulate browser return, the outcomes) also removes or disables its own
+  // button: when focus has fallen to the page, it goes to what the step did, or to why it was refused.
+  useFocusWhenLost(result, success);
+  useFocusWhenLost(problem, error);
   // A checkout, or a review's reason, typed but not sent is a draft: leaving asks first.
   const draft = useFormDraft({ dueId, amount, reason: review ? reason : "" });
   const act = async (
@@ -74,9 +84,9 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
         "payment.refund_request":
           "Sample refund request recorded. A different Finance reviewer must confirm the evidence; no refund was sent.",
         "payment.refund_confirm":
-          "Sample refund evidence recorded. Review the reopened obligation in reconciliation. No funds were sent.",
+          "Sample refund evidence recorded. An instalment the receipt paid owes that amount again and is open for collection, not in dispute. No funds were sent.",
         "payment.reverse":
-          "Sample reversal evidence recorded. Review the reopened obligation in reconciliation. No money moved.",
+          "Sample reversal evidence recorded. An instalment the receipt paid owes that amount again and is in dispute, with a customer dispute exception for Operations. No money moved.",
       };
       setSuccess(
         action === "payment.outcome"
@@ -94,17 +104,17 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
       return false;
     }
   };
-  if (api.isLoading) return <Loading what="pay-by-bank" />;
+  if (api.isLoading) return <Loading what="pay-by-bank" heading />;
   if (!api.data)
     return (
-      <>
+      <ConnectedState title={TITLE} description={DESCRIPTION}>
         <LoadProblem
           what="pay-by-bank"
           error={api.error}
           retry={() => void api.refetch()}
         />
         <ConnectedRecovery recovery={api} />
-      </>
+      </ConnectedState>
     );
   const { payments } = api.data,
     due = payments.dues.find((d) => d.id === dueId) || payments.dues[0],
@@ -116,6 +126,11 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
     checkoutExpired =
       !!intent &&
       Date.parse(intent.data.expiresAt) <= Date.parse(api.data.asOf);
+  // When the outcome became unknown: after 24 hours the daily close raises an exception for Finance, which the checkout names.
+  const unknownSince = (intent?.data.events as { at: string; status: string }[] | undefined)?.find(
+      (e) => e.status === "unknown",
+    )?.at,
+    outcomeExceptionId = intent?.data.outcomeExceptionId as string | undefined;
   const openReview = (
     action: string,
     title: string,
@@ -157,8 +172,8 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
   };
   return (
     <ConnectedFrame
-      title="Pay-by-bank"
-      description="A clear journey from bank authorisation to a verified receipt, tied to the instalment it pays."
+      title={TITLE}
+      description={DESCRIPTION}
       recovery={api}
       onRecovered={() => {
         setError("");
@@ -199,7 +214,7 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
         counts as proof of payment.
       </p>
       {error && !api.hasUnconfirmedOutcome && (
-        <p role="alert" className="connected-error">
+        <p role="alert" className="connected-error" ref={problem}>
           {error}
         </p>
       )}
@@ -521,9 +536,21 @@ function PaymentContent({ api }: { api: ReturnType<typeof useConnected> }) {
               </div>
               {intent.status === "unknown" && (
                 <p className="connected-note">
-                  The result is unknown. A new collection is blocked until a
-                  status query confirms whether this payment succeeded or
-                  failed.
+                  The result has been unknown
+                  {unknownSince ? ` since ${formatDate(unknownSince)}` : ""}. A
+                  new collection is blocked until the outcome is known. Query
+                  the provider again; once the outcome has been unknown for 24
+                  hours, the daily close raises an unknown-outcome exception
+                  for Finance, who confirms the payment with its evidence or
+                  marks it failed. Either one releases the instalment.{" "}
+                  {outcomeExceptionId && (
+                    <Link
+                      className="font-medium underline underline-offset-4"
+                      href={`/exceptions?${new URLSearchParams({ record: outcomeExceptionId, lender: merchantId || "" })}`}
+                    >
+                      Open the unknown-outcome exception
+                    </Link>
+                  )}
                 </p>
               )}
               {intent.status === "confirmed" && (

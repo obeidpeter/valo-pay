@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearch } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { importBatchDetailSchema, importBatchListSchema, sourcesViewSchema, type BatchInput } from "@workspace/valopay-schema";
+import { importBatchDetailSchema, importBatchListSchema, importFieldsOf, sourcesViewSchema, suggestImportField, type BatchInput } from "@workspace/valopay-schema";
 import { useWorkspace } from "@/lib/workspace-context";
 import {
   lenderPath,
@@ -21,7 +21,9 @@ import {
   pilotField,
 } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
-import { formatDate, formatKobo, formatNumber } from "@/lib/formatters";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useDialogFocusReturn } from "@/lib/focus";
+import { formatCount, formatDate, formatKobo, formatNumber } from "@/lib/formatters";
 import { ScrollFrame } from "@/components/scroll-frame";
 import { readableLabel } from "@/components/record-label";
 import { ImportCorrections } from "@/components/import-corrections";
@@ -82,6 +84,34 @@ const fields = [
   "currency",
   "payerKey",
 ];
+const fieldLabel = (field: string) => (field === "amountKobo" ? "Amount" : readableLabel(field));
+/**
+ * Where a column goes when the mapping leaves it out, as the service reads it:
+ * the row identity column is only the identity unless it is the reference or
+ * event ID, amount is the amount, and any other header names its own field.
+ */
+const defaultTarget = (column: string, identityColumn: string) =>
+  column === identityColumn && !["reference", "eventId"].includes(column) ? "" : column === "amount" ? "amountKobo" : column;
+/**
+ * A field for each column the last check found that no mapping entry covers
+ * and whose header is no field of the kind (a header that is one keeps mapping
+ * to itself): full_name as the name, due_date as the due date. Each field
+ * once, and never one another column already fills.
+ */
+function suggestedMapping(kind: string, columns: string[], mapping: Record<string, string>, identityColumn: string): Record<string, string> {
+  const known = importFieldsOf(kind);
+  const taken = new Set(columns.map((column) => (Object.hasOwn(mapping, column) ? mapping[column] : defaultTarget(column, identityColumn))).filter(Boolean));
+  const suggested: Record<string, string> = {};
+  for (const column of columns) {
+    if (Object.hasOwn(mapping, column) || column === identityColumn || known.includes(defaultTarget(column, identityColumn))) continue;
+    const field = suggestImportField(kind, column);
+    if (field && !taken.has(field)) {
+      suggested[column] = field;
+      taken.add(field);
+    }
+  }
+  return suggested;
+}
 const empty = (): BatchInput => ({
   name: "",
   kind: "customers",
@@ -243,7 +273,10 @@ function BatchEditor({
     [batch, setBatch] = useState<any>(null),
     [saved, setSaved] = useState(""),
     [fileError, setFileError] = useState(""),
-    [reading, setReading] = useState(false);
+    [reading, setReading] = useState(false),
+    [suggested, setSuggested] = useState<Record<string, string>>({}),
+    // Committing a check with warnings takes one more step: the fallbacks are named first.
+    [confirmingCommit, setConfirmingCommit] = useState(false);
   const sources = usePilotQuery(
     `/sources${form.businessDate ? `?businessDate=${encodeURIComponent(form.businessDate)}` : ""}`,
     sourcesViewSchema,
@@ -322,8 +355,14 @@ function BatchEditor({
       ),
       expectedUpdatedAt: record.updatedAt,
     } as BatchInput;
-    setForm(next);
+    // A recognisable column the saved mapping leaves unused is mapped as suggested: a change the person sees, saves or undoes.
+    const suggestions =
+      record.status === "committed" || !record.data.check?.columns
+        ? {}
+        : suggestedMapping(next.kind, record.data.check.columns, next.mapping, next.identityColumn);
+    setForm({ ...next, mapping: { ...next.mapping, ...suggestions } });
     setSaved(JSON.stringify(next));
+    setSuggested(suggestions);
     setBatch(record);
   };
   useEffect(() => {
@@ -385,6 +424,15 @@ function BatchEditor({
       [key]: value,
     }));
   const check = batch?.data.check;
+  // Suggestions come from the checked columns: a changed file takes them back until its own check.
+  const withoutSuggestions = (mapping: Record<string, string>) =>
+    Object.fromEntries(Object.entries(mapping).filter(([column, field]) => suggested[column] !== field));
+  const commit = () =>
+    mutation.mutate({
+      path: `/pilot/batches/${batch.id}/commit`,
+      data: { expectedUpdatedAt: batch.updatedAt },
+    });
+  const restoreFocus = useDialogFocusReturn(confirmingCommit);
   const readFile = async (file?: File) => {
     if (!file || !confirmDiscard()) return;
     if (file.size > 1500000) {
@@ -396,13 +444,15 @@ function BatchEditor({
     setFileError("");
     try {
       const csv = await file.text();
-      if (seq === fileSequence.current)
+      if (seq === fileSequence.current) {
         setForm((current) => ({
           ...current,
           csv,
-          mapping: selectedProfile ? current.mapping : {},
+          mapping: selectedProfile ? withoutSuggestions(current.mapping) : {},
           name: current.name || file.name,
         }));
+        setSuggested({});
+      }
     } catch {
       if (seq === fileSequence.current)
         setFileError(
@@ -677,7 +727,11 @@ function BatchEditor({
             value={form.csv}
             disabled={locked || denied}
             required
-            onChange={(e) => set("csv", e.target.value)}
+            onChange={(e) => {
+              const csv = e.target.value;
+              setForm((current) => ({ ...current, csv, mapping: withoutSuggestions(current.mapping) }));
+              setSuggested({});
+            }}
           />
         </label>
         {fileError && (
@@ -694,43 +748,52 @@ function BatchEditor({
               Column mapping
             </legend>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {check.columns.map((column: string) => (
-                <label className="space-y-1 text-sm" key={column}>
-                  {column}
-                  <select
-                    className={pilotField}
-                    value={
-                      form.mapping[column] ??
-                      (column === form.identityColumn &&
-                      !["reference", "eventId"].includes(column)
-                        ? ""
-                        : column === "amount"
-                          ? "amountKobo"
-                          : column)
-                    }
-                    onChange={(e) =>
-                      set("mapping", {
-                        ...form.mapping,
-                        [column]: e.target.value,
-                      })
-                    }
-                  >
-                    <option value="">
-                      {column === form.identityColumn
-                        ? "Source identity only"
-                        : "Skip column"}
-                    </option>
-                    {fields.map((field) => (
-                      <option key={field} value={field}>
-                        {field === "amountKobo"
-                          ? "Amount"
-                          : readableLabel(field)}
+              {check.columns.map((column: string) => {
+                const value = form.mapping[column] ?? defaultTarget(column, form.identityColumn);
+                // A field of this kind that the common list lacks, such as a suggested batch reference, is offered too.
+                const options =
+                  value && !fields.includes(value) && importFieldsOf(form.kind).includes(value)
+                    ? [...fields, value]
+                    : fields;
+                return (
+                  <label className="space-y-1 text-sm" key={column}>
+                    {column}
+                    <select
+                      className={pilotField}
+                      value={value}
+                      onChange={(e) =>
+                        set("mapping", {
+                          ...form.mapping,
+                          [column]: e.target.value,
+                        })
+                      }
+                    >
+                      <option value="">
+                        {column === form.identityColumn
+                          ? "Source identity only"
+                          : "Skip column"}
                       </option>
-                    ))}
-                  </select>
-                </label>
-              ))}
+                      {options.map((field) => (
+                        <option key={field} value={field}>
+                          {fieldLabel(field)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                );
+              })}
             </div>
+            {Object.keys(suggested).length > 0 && (
+              <p className="mt-3 text-sm">
+                Suggested from the column names:{" "}
+                {Object.entries(suggested)
+                  .map(([column, field]) => `${column} as ${fieldLabel(field)}`)
+                  .join(", ")}
+                . Save and check the batch to use{" "}
+                {Object.keys(suggested).length === 1 ? "it" : "them"}, or
+                choose another option.
+              </p>
+            )}
           </fieldset>
         )}
         {(stale || newer) && (
@@ -779,12 +842,10 @@ function BatchEditor({
                   (batch.data.sourceQuality &&
                     batch.data.sourceQuality.status !== "checked")
                 }
-                onClick={() =>
-                  mutation.mutate({
-                    path: `/pilot/batches/${batch.id}/commit`,
-                    data: { expectedUpdatedAt: batch.updatedAt },
-                  })
-                }
+                onClick={() => {
+                  if (check?.warnings?.length) setConfirmingCommit(true);
+                  else commit();
+                }}
               >
                 Commit checked batch
               </Button>
@@ -839,27 +900,39 @@ function BatchEditor({
                 : "Saved check results"}
           </h3>
           <p role="status" className="text-sm">
-            {check.imported} imported · {check.skipped} already present ·{" "}
-            {check.invalid} to fix · {check.valid} valid
+            {formatNumber(check.imported)} imported ·{" "}
+            {formatNumber(check.skipped)} already present ·{" "}
+            {formatNumber(check.invalid)} to fix ·{" "}
+            {formatNumber(check.valid)} valid
           </p>
+          {!!check.warnings?.length && (
+            <div className="space-y-2 rounded-lg border border-warning-border bg-warning/20 p-3 text-sm">
+              <h4 className="font-medium">
+                {batch.status === "committed"
+                  ? "Saved with fallback values"
+                  : "Check before you commit"}
+              </h4>
+              {check.warnings.map((warning: string) => (
+                <p key={warning}>{warning}</p>
+              ))}
+            </div>
+          )}
           {batch.data.sourceQuality && (
             <div className="rounded-lg border p-3 text-sm space-y-2">
               <h4 className="font-medium">Source quality checks</h4>
+              {/* Customers carry no amounts, so a customer batch has rows to count but no total to show. */}
               <p>
-                {batch.data.sourceQuality.sourceRows} source rows ·{" "}
-                {batch.data.sourceQuality.sourceAmountKobo == null
-                  ? "Source total unavailable"
-                  : formatKobo(batch.data.sourceQuality.sourceAmountKobo)}{" "}
-                source total
+                {formatCount(batch.data.sourceQuality.sourceRows, "source row")}
+                {batch.data.kind !== "customers" &&
+                  ` · ${batch.data.sourceQuality.sourceAmountKobo == null ? "Source total unavailable" : `${formatKobo(batch.data.sourceQuality.sourceAmountKobo)} source total`}`}
               </p>
               <p>
-                {batch.data.sourceQuality.importedRows} newly imported rows ·{" "}
-                {batch.data.sourceQuality.importedAmountKobo == null
-                  ? "Imported total unavailable"
-                  : formatKobo(
-                      batch.data.sourceQuality.importedAmountKobo,
-                    )}{" "}
-                newly imported total
+                {formatCount(
+                  batch.data.sourceQuality.importedRows,
+                  "newly imported row",
+                )}
+                {batch.data.kind !== "customers" &&
+                  ` · ${batch.data.sourceQuality.importedAmountKobo == null ? "Imported total unavailable" : `${formatKobo(batch.data.sourceQuality.importedAmountKobo)} newly imported total`}`}
               </p>
               {batch.data.sourceQuality.issues.map((issue: string) => (
                 <p key={issue} className="text-destructive">
@@ -934,6 +1007,44 @@ function BatchEditor({
       {batch?.status === "committed" && (
         <ImportCorrections batchId={batch.id} />
       )}
+      <Dialog
+        open={confirmingCommit}
+        onOpenChange={(open) => {
+          if (!open) setConfirmingCommit(false);
+        }}
+      >
+        <DialogContent onCloseAutoFocus={restoreFocus}>
+          <DialogHeader>
+            <DialogTitle>Commit with fallback values?</DialogTitle>
+            <DialogDescription>
+              The check found values that would be saved from a fallback
+              rather than from the file.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 text-sm">
+            {check?.warnings?.map((warning: string) => (
+              <p key={warning}>{warning}</p>
+            ))}
+            <p>
+              Committed records keep these values until a reviewed correction
+              changes them.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmingCommit(false)}>
+              Review the mapping
+            </Button>
+            <Button
+              onClick={() => {
+                setConfirmingCommit(false);
+                commit();
+              }}
+            >
+              Commit anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </PilotPanel>
   );
 }

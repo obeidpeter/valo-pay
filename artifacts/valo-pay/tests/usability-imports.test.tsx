@@ -200,7 +200,6 @@ describe('UX-I02 shared form recovery and UX-I03 review correction', () => {
     const user = userEvent.setup(); renderApp('/evidence');
     await user.click(await screen.findByRole('button', { name: 'Log review' }));
     const dialog = await screen.findByRole('dialog');
-    await user.type(within(dialog).getByLabelText('Review date'), '2026-09-01');
     await user.click(within(dialog).getByRole('checkbox', { name: 'Payment matching' }));
     await user.type(within(dialog).getByLabelText('Review notes'), 'Sample matching reviewed; other tasks remain.');
     api.failNext(/^\/v1\/records\/reviews$/, 'offline', 'POST');
@@ -259,7 +258,6 @@ describe('UX-I02 shared form recovery and UX-I03 review correction', () => {
     const user = userEvent.setup(); renderApp('/evidence');
     await user.click(await screen.findByRole('button', { name: 'Log review' }));
     const dialog = await screen.findByRole('dialog');
-    await user.type(within(dialog).getByLabelText('Review date'), '2026-09-01');
     await user.click(within(dialog).getByRole('checkbox', { name: 'Payment matching' }));
     await user.type(within(dialog).getByLabelText('Review notes'), 'Matching reviewed; remaining tasks pending.');
     const originalFetch = globalThis.fetch;

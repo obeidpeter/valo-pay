@@ -54,17 +54,15 @@ beforeEach(() => {
     run: vi.fn().mockResolvedValue(undefined),
     refetch: vi.fn(),
     data: {
+      customers: [
+        { id: "customer-a", name: "Sample Applicant", reference: "SYN-CUSTOMER" },
+      ],
       credit: {
         canAssess: true,
         canReview: false,
         actor: "Sandbox Operations",
-        customers: [
-          {
-            id: "customer-a",
-            name: "Sample Applicant",
-            reference: "SYN-CUSTOMER",
-            permissions: { accountRead: true, creditAssessment: true },
-          },
+        permissions: [
+          { customerId: "customer-a", accountRead: true, creditAssessment: true },
         ],
         assessments: [],
         model: {
@@ -84,7 +82,7 @@ beforeEach(() => {
 });
 describe("Credit Desk synthetic journeys", () => {
   it("shows missing separate permissions and a working setup destination", () => {
-    mocks.api.data.credit.customers[0].permissions.creditAssessment = false;
+    mocks.api.data.credit.permissions[0].creditAssessment = false;
     render(<CreditDeskPage />);
     expect(
       screen.getByRole("heading", { level: 1, name: "Credit Desk" }),

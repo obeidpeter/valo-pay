@@ -8,14 +8,18 @@
 import type { RecordData } from './recordData';
 
 /**
- * A new record: only the name is required; the kind's default status applies when none is given.
+ * A new record: only the name is required, and it cannot be empty; the kind's default status applies when none is given. A status is at most 100 characters, a reference 200 and a customerId 100.
  */
 export interface RecordInput {
+  /** @minLength 1 */
   name: string;
+  /** @maxLength 100 */
   status?: string;
+  /** @maxLength 200 */
   reference?: string;
   /** @minimum 0 */
   amountKobo?: number;
+  /** @maxLength 100 */
   customerId?: string;
   data?: RecordData;
 }

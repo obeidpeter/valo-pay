@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import type { Server } from "node:http";
 import type { DomainState } from "../src/domain/types.js";
 import { pageRecords, type ListQuery } from "../src/lib/valopay-list.js";
+import { canTakeAllocation } from "@workspace/valopay-schema";
 
 if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
   console.log("Set VALOPAY_RUN_INTEGRATION=1 to run record list and stale-edit integration tests.");
@@ -59,6 +60,25 @@ try {
     const actual = await inWorkspace(request(), response(), context => listRecords(context, merchantId, "customers", query));
     assert.deepEqual(actual, pageRecords(customers, query), `DB page preserves search/filter/total contract: ${JSON.stringify(query)}`);
   }
+  // The allocation picker's list: PostgreSQL keeps just the instalments a manual allocation accepts, as pageRecords
+  // does, whatever their status, balance, a balance that is not a whole number, is not a number or is missing.
+  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at)
+    SELECT $1 || '-due-' || i, $2, 'due-items', 'Picker instalment ' || i,
+      (ARRAY['scheduled','in_collection','partially_paid','paid','unpaid_final','in_dispute','cancelled','closed'])[1 + i % 8], 'PICK-' || i, 1000000, '',
+      CASE WHEN i % 5 = 0 THEN jsonb_build_object('synthetic',true) WHEN i % 7 = 0 THEN jsonb_build_object('synthetic',true,'outstandingKobo',1.5)
+        WHEN i % 11 = 0 THEN jsonb_build_object('synthetic',true,'outstandingKobo','not a number')
+        ELSE jsonb_build_object('synthetic',true,'outstandingKobo',CASE WHEN i % 3 = 0 THEN 0 ELSE 600000 END) END,
+      '2027-03-01'::timestamptz + i*interval '1 second', '2027-03-01'::timestamptz + i*interval '1 second'
+    FROM generate_series(1,60) i`, [prefix, merchantId]);
+  const dues = (await inWorkspace(request(), response(), context => loadState(context, merchantId, "share"))).records.filter(row => row.kind === "due-items");
+  const choices = dues.filter(canTakeAllocation);
+  assert.ok(choices.length > 10 && choices.length < dues.length, "the fixture has instalments on both sides");
+  for (const query of [{ allocatable: "true", limit: 25 }, { allocatable: "true", limit: 25, offset: 25 }, { allocatable: "true", search: "picker instalment 1", limit: 5 }, { allocatable: "true", customerId: dues[0]!.customerId }, { allocatable: "false", limit: 25 }] as ListQuery[]) {
+    const actual = await inWorkspace(request(), response(), context => listRecords(context, merchantId, "due-items", query));
+    assert.deepEqual(actual, pageRecords(dues, query), `DB page keeps the allocation rule: ${JSON.stringify(query)}`);
+  }
+  assert.equal((await inWorkspace(request(), response(), context => listRecords(context, merchantId, "due-items", { allocatable: "true", limit: 1 }))).total, choices.length, "total counts the choices");
+  await assert.rejects(() => inWorkspace(request(), response(), context => listRecords(context, merchantId, "payments", { allocatable: "true" })), (error: any) => error.status === 400 && /instalments only/.test(error.message), "allocatable is refused for another kind");
   const timing: number[] = [];
   for (let i = 0; i < 5; i++) {
     const start = performance.now();
@@ -159,7 +179,8 @@ try {
   const jobs = await inWorkspace(request(editingToken), response(), async context => {
     const state = await loadState(context, editingMerchant);
     const result = ["failed", "running"].map(status => {
-      const job = queueExport(state, context, { kind: "customers", format: "csv" }, "/private/synthetic-tests");
+      // The persona is Operations now: it exports mandates, since the customer register is for Admin, Finance and Compliance reviewer (export_sensitive).
+      const job = queueExport(state, context, { kind: "mandates", format: "csv" }, "/private/synthetic-tests");
       const record = state.records.find(row => row.id === job.id)!;
       record.status = status; Object.assign(record.data, { lastError: "Synthetic failure", leaseToken: "expired-claim", leaseExpiresAt: new Date(Date.parse(context.now) - 1).toISOString() });
       return { id: job.id, objectName: record.data.objectName, updatedAt: record.updatedAt };

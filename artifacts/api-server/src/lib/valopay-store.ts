@@ -10,7 +10,7 @@ import type { StaffLenderAccessInput } from '@workspace/valopay-schema';
 import type { VerifiedClerkSession } from './pilot-access';
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
-import { closeTimeOf, definitiveRefusalStatuses, invitationAcceptedSchema, nextCloseInstant, sameJson } from "@workspace/valopay-schema";
+import { approvalRoles, closeTimeOf, definitiveRefusalStatuses, grantNeedsApproval, invitationAcceptedSchema, nextCloseInstant, sameJson } from "@workspace/valopay-schema";
 import { sha256Hex, canonicalDigest, requestFingerprint, auditEntryData, verifyAuditChain, walkAuditChain, AUDIT_GENESIS, type AuditPoint } from "./digests";
 import { recordChanged, nextRecordVersion } from "./edit-versions";
 import { contractAnswer } from './contract';
@@ -21,12 +21,13 @@ import { seedMerchant } from "./valopay-seed";
 import { createSandboxCreationLimits, creationRefusalMessage, WORKSPACE_CREATION_RETRY_AFTER_SECONDS } from "./creation-limit";
 import { readSandboxCookie, sandboxPrincipal, secureRequest, writeSandboxCookie } from "./sandbox-cookie";
 import { rememberSandbox } from "./request-limits";
-import { foldForSearch, listLimit, LIST_PAGE_CEILING, type ListQuery } from "./valopay-list";
+import { allocatableOnly, foldForSearch, listLimit, LIST_PAGE_CEILING, matchesSearch, updatedSinceInstant, type ListQuery } from "./valopay-list";
+import { publicExportRecord } from "./export-jobs";
 import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
 import { validateCloseRange, pageOffset, type ReadPageQuery, type ReconciliationQueue } from './console-read-models';
 import { precisionAudit } from '../domain/reports';
 import { periodBounds, previousMonth } from '../domain/billing';
-import { measurementRules } from '@workspace/valopay-schema';
+import { allocationClosedStatuses, measurementRules } from '@workspace/valopay-schema';
 import { protectStored, revealStored, protectRecordData, revealRecordsData, payloadEncryptionKey, isProtectedPayload, PROTECTED_IMPORT_FIELDS, type ProtectedImportField } from './protected-payloads';
 import { markRolledBack } from './transaction-outcome';
 import { markOperationClosed, markOperationState, type OperationState } from './refused-operations';
@@ -34,7 +35,8 @@ import { beginStatement, checkOut, databaseLimits, failedTransaction, DatabaseLi
 import { createLenderGate } from './lender-gate';
 import { assertImportedCorrectionChange } from '../domain/import-corrections';
 import type { LifecycleExternalCandidate, LifecycleCandidate } from '@workspace/valopay-schema';
-import { lifecycleCandidateCheck, eraseLifecycleRawCsv, recordLifecycleReceipt, lifecycleRunView } from '../domain/lifecycle';
+import { lifecycleRunView } from '../domain/lifecycle';
+import { executeApprovedRun } from '../domain/lifecycle-run';
 import { deleteRetainedExport } from './export-download';
 import { objectStorageClient } from './objectStorage';
 import { assertProviderEventChange } from '../providers/paystack-inbox';
@@ -403,7 +405,8 @@ const staffProvision = (row: StaffRow, organizationId: string) => ({ id: row.id,
 const staffView = (row: StaffRow) => ({ id: row.id, actor: `Clerk:${row.user_id}`, name: row.display_name, role: row.role, status: row.status, expiresAt: row.expires_at.toISOString(), updatedAt: row.updated_at.toISOString() });
 export async function caseAssignees(ctx: StoreContext) {
   const session = sessionFor(ctx);
-  if (ctx.accessMode !== 'staff') return roles.filter(role => role !== 'Read-only').map(role => ({ actor: `Sandbox ${role}`, name: `Demo ${role}`, role }));
+  // A demo persona is named as its changes are recorded (the context's actor), so the lists and the history agree.
+  if (ctx.accessMode !== 'staff') return roles.filter(role => role !== 'Read-only').map(role => ({ actor: `Sandbox ${role}`, name: `Sandbox ${role}`, role }));
   if (!session.lockedMerchantId) fail('Select a lender before looking up available assignees.', 409);
   // The same three fields as a demo role: who, their name and their role; the membership's other details stay in the team directory.
   return (await session.client.query<StaffRow>(`SELECT member.* FROM valopay_staff_memberships member
@@ -411,17 +414,48 @@ export async function caseAssignees(ctx: StoreContext) {
       AND (member.role='Admin' OR EXISTS (SELECT 1 FROM valopay_staff_lender_access grant_row WHERE grant_row.membership_id=member.id AND grant_row.merchant_id=$3))
     ORDER BY member.display_name,member.id`, [session.workspace.id, ctx.now, session.lockedMerchantId])).rows.map(row => { const { actor, name, role } = staffView(row); return { actor, name, role }; });
 }
+/** A membership change that grants one of `approvalRoles`, waiting for a second administrator: its request in the access history. */
+type ChangeRequestRow = { id: string; actor: string; subject: string; detail: { before: { role: string; status: string }; after: { role: string; status: string }; reason: string; version: string }; created_at: Date; name: string; member_version: Date };
+const changeView = (row: ChangeRequestRow) => ({ id: row.id, memberId: row.subject, name: row.name, from: row.detail.before, to: row.detail.after, reason: row.detail.reason, requestedBy: row.actor, requestedAt: row.created_at.toISOString() });
+/** Change requests nobody has approved or declined, with the membership they change as it stands now, newest first. */
+const changeRequestsSql = `SELECT request.id,request.actor,request.subject,request.detail,request.created_at,member.display_name AS name,member.updated_at AS member_version
+  FROM valopay_staff_events request JOIN valopay_staff_memberships member ON member.id=request.subject AND member.workspace_id=request.workspace_id
+  WHERE request.workspace_id=$1 AND request.action='staff.change_requested' AND ($2::text IS NULL OR request.id=$2) AND ($3::text IS NULL OR request.subject=$3)
+    AND NOT EXISTS (SELECT 1 FROM valopay_staff_events decision WHERE decision.workspace_id=request.workspace_id AND decision.action IN ('staff.change_approved','staff.change_declined') AND decision.detail->>'requestId'=request.id)
+  ORDER BY request.created_at DESC,request.id DESC LIMIT 200`;
+/** A request is current while the membership is still the version it was made against; any later change leaves it out of date. */
+const currentRequest = (row: ChangeRequestRow) => row.member_version.toISOString() === row.detail.version;
+/** The administrator who approved a pending invitation, never the one who sent it; undefined while it waits. */
+async function invitationApprover(client: PoolClient, workspaceId: string, invitation: { id: string; invited_by: string }): Promise<string | undefined> {
+  return (await client.query<{ actor: string }>("SELECT actor FROM valopay_staff_events WHERE workspace_id=$1 AND subject=$2 AND action='staff.invitation_approved' AND actor<>$3 ORDER BY created_at,id LIMIT 1", [workspaceId, invitation.id, invitation.invited_by])).rows[0]?.actor;
+}
+const needsApproval = (role: string) => (approvalRoles as readonly string[]).includes(role);
+/** What a person refused as their own approver is told: the rule, and how a pilot with one administrator gets a second. */
+const secondAdministrator = (what: string, who: string) => `A different administrator must approve this ${what}: the administrator who ${who} cannot approve it. A pilot with one administrator asks the operator to add a second with the provisioning command's --add-administrator mode.`;
 export async function staffDirectory(ctx: StoreContext) {
   const session = sessionFor(ctx);
-  if (ctx.accessMode !== 'staff') return { mode: 'sandbox', actor: ctx.actor, members: [], lenders: [], invitations: [], events: [], message: 'Real staff access is not enabled on this host. Demo roles are for practice only.' };
+  if (ctx.accessMode !== 'staff') return { mode: 'sandbox', actor: ctx.actor, members: [], lenders: [], invitations: [], changes: [], events: [], message: 'Real staff access is not enabled on this host. Demo roles are for practice only.' };
   const memberRows = (await session.client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 ORDER BY display_name,id', [session.workspace.id])).rows;
   const grants = (await session.client.query<{ membership_id: string; merchant_id: string }>(`SELECT grant_row.membership_id,grant_row.merchant_id FROM valopay_staff_lender_access grant_row JOIN valopay_staff_memberships member ON member.id=grant_row.membership_id JOIN valopay_merchants lender ON lender.id=grant_row.merchant_id WHERE member.workspace_id=$1 AND lender.workspace_id=$1 ORDER BY grant_row.merchant_id`, [session.workspace.id])).rows;
-  const members = memberRows.map(row => ({ ...staffView(row), lenderIds: row.role === 'Admin' ? [] : grants.filter(grant => grant.membership_id === row.id).map(grant => grant.merchant_id), allLenders: row.role === 'Admin' }));
-  const lenders = ctx.role === 'Admin' ? await listMerchants(ctx) : [];
+  const lendersOf = (id: string) => grants.filter(grant => grant.membership_id === id).map(grant => grant.merchant_id);
+  const admin = ctx.role === 'Admin', own = memberRows.find(row => row.user_id === session.userId), shared = new Set(own ? lendersOf(own.id) : []);
+  // An administrator sees everyone. Anyone else sees the colleagues who can open one of their lenders (an administrator opens
+  // every lender), only the lenders they share, and no one's expiry but their own.
+  const colleague = (row: StaffRow) => row.status === 'active' && row.expires_at.getTime() > Date.parse(ctx.now) && (row.role === 'Admin' ? shared.size > 0 : lendersOf(row.id).some(id => shared.has(id)));
+  const members = memberRows.filter(row => admin || row.id === own?.id || colleague(row)).map(row => {
+    const whole = admin || row.id === own?.id;
+    return { ...staffView(row), expiresAt: whole ? row.expires_at.toISOString() : null, lenderIds: row.role === 'Admin' ? [] : lendersOf(row.id).filter(id => whole || shared.has(id)), allLenders: row.role === 'Admin' };
+  });
+  if (!admin) return { mode: 'staff', actor: ctx.actor, members, lenders: [], invitations: [], changes: [], events: [], message: 'Verified staff access. Membership, lender access and MFA are checked for every request. You see the colleagues who work on your lenders. Financial records remain synthetic.' };
+  const lenders = await listMerchants(ctx);
   // Timestamps as the ISO text the answer carries, as every other view writes them.
-  const invitations = ctx.role === 'Admin' ? (await session.client.query<{ id: string; email: string; role: string; status: string; expiresAt: Date }>('SELECT id,email,role,status,expires_at AS "expiresAt" FROM valopay_staff_invitations WHERE workspace_id=$1 ORDER BY created_at DESC LIMIT 100', [session.workspace.id])).rows.map(row => ({ ...row, expiresAt: row.expiresAt.toISOString() })) : [];
-  const events = ctx.role === 'Admin' ? (await session.client.query<{ id: string; actor: string; action: string; subject: string; detail: unknown; createdAt: Date }>('SELECT id,actor,action,subject,detail,created_at AS "createdAt" FROM valopay_staff_events WHERE workspace_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100', [session.workspace.id])).rows.map(row => ({ ...row, createdAt: row.createdAt.toISOString() })) : [];
-  return { mode: 'staff', actor: ctx.actor, members, lenders, invitations, events, message: 'Verified staff access. Membership, lender access and MFA are checked for every request. Financial records remain synthetic.' };
+  const invitations = (await session.client.query<{ id: string; email: string; role: string; status: string; expiresAt: Date; invitedBy: string; approvedBy: string | null }>(`SELECT invitation.id,invitation.email,invitation.role,invitation.status,invitation.expires_at AS "expiresAt",invitation.invited_by AS "invitedBy",
+    (SELECT approval.actor FROM valopay_staff_events approval WHERE approval.workspace_id=invitation.workspace_id AND approval.subject=invitation.id AND approval.action='staff.invitation_approved' AND approval.actor<>invitation.invited_by ORDER BY approval.created_at,approval.id LIMIT 1) AS "approvedBy"
+    FROM valopay_staff_invitations invitation WHERE invitation.workspace_id=$1 ORDER BY invitation.created_at DESC LIMIT 100`, [session.workspace.id])).rows
+    .map(row => ({ ...row, expiresAt: row.expiresAt.toISOString(), approval: !needsApproval(row.role) ? 'not_required' : row.approvedBy ? 'approved' : 'awaiting' }));
+  const changes = (await session.client.query<ChangeRequestRow>(changeRequestsSql, [session.workspace.id, null, null])).rows.filter(currentRequest).slice(0, 100).map(changeView);
+  const events = (await session.client.query<{ id: string; actor: string; action: string; subject: string; detail: unknown; createdAt: Date }>('SELECT id,actor,action,subject,detail,created_at AS "createdAt" FROM valopay_staff_events WHERE workspace_id=$1 ORDER BY created_at DESC,id DESC LIMIT 100', [session.workspace.id])).rows.map(row => ({ ...row, createdAt: row.createdAt.toISOString() }));
+  return { mode: 'staff', actor: ctx.actor, members, lenders, invitations, changes, events, message: 'Verified staff access. Membership, lender access and MFA are checked for every request. Financial records remain synthetic.' };
 }
 export function viewerScope(ctx: StoreContext) { const session = sessionFor(ctx); return digest(`viewer:${session.workspace.id}:${session.owner || session.principal}`); }
 function teamAdmin(ctx: StoreContext) {
@@ -429,16 +463,40 @@ function teamAdmin(ctx: StoreContext) {
   if (ctx.accessMode !== 'staff' || ctx.role !== 'Admin' || session.access !== 'team') fail('A verified pilot administrator with recent MFA is required.', 403);
   return session;
 }
-async function staffEvent(client: PoolClient, workspaceId: string, actor: string, action: string, subject: string, detail: unknown) {
-  await client.query('INSERT INTO valopay_staff_events(id,workspace_id,actor,action,subject,detail) VALUES($1,$2,$3,$4,$5,$6)', [randomUUID(), workspaceId, actor, action, subject, detail]);
+async function staffEvent(client: PoolClient, workspaceId: string, actor: string, action: string, subject: string, detail: unknown): Promise<{ id: string; createdAt: Date }> {
+  return (await client.query<{ id: string; createdAt: Date }>('INSERT INTO valopay_staff_events(id,workspace_id,actor,action,subject,detail) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,created_at AS "createdAt"', [randomUUID(), workspaceId, actor, action, subject, detail])).rows[0]!;
 }
 export async function inviteStaff(ctx: StoreContext, email: string, role: string) {
   const session = teamAdmin(ctx);
-  const token = randomBytes(32).toString('hex'), id = randomUUID();
+  const token = randomBytes(32).toString('hex'), id = randomUUID(), approval = needsApproval(role) ? 'awaiting' as const : 'not_required' as const;
   await session.client.query("UPDATE valopay_staff_invitations SET status='revoked' WHERE workspace_id=$1 AND email=$2 AND status='pending'", [session.workspace.id, email]);
   await session.client.query(`INSERT INTO valopay_staff_invitations(id,workspace_id,email,role,token_hash,invited_by,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, [id, session.workspace.id, email, role, digest(token), ctx.actor, new Date(Date.parse(ctx.now) + 7 * 86400000)]);
-  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.invited', id, { email, role });
-  return { id, token, message: 'Invitation created. Share the link directly with this person; no email has been sent. It expires in seven days.' };
+  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.invited', id, { email, role, ...(approval === 'awaiting' ? { approval } : {}) });
+  if (approval === 'not_required') return { id, token, approval, message: 'Invitation created. Share the link directly with this person; no email has been sent. It expires in seven days.' };
+  const administrators = Number((await session.client.query<{ count: string }>("SELECT count(*) FROM valopay_staff_memberships WHERE workspace_id=$1 AND role='Admin' AND status='active' AND expires_at>$2", [session.workspace.id, ctx.now])).rows[0]!.count);
+  return { id, token, approval, message: `Invitation created. It waits for a second administrator's approval before it can be accepted: an Admin, Finance or Compliance reviewer grant needs two administrators, and the one who sent it cannot approve it.${administrators < 2 ? " This pilot has one active administrator: ask the operator to add a second with the provisioning command's --add-administrator mode." : ''} Share the link directly; no email has been sent. It expires in seven days.` };
+}
+/** A second administrator's approval of an invitation to Admin, Finance or Compliance reviewer, recorded in the access history; the invitee can accept it afterwards. */
+export async function approveInvitation(ctx: StoreContext, id: string) {
+  const session = teamAdmin(ctx);
+  const invitation = (await session.client.query<{ id: string; email: string; role: string; invited_by: string; status: string; expires_at: Date }>('SELECT id,email,role,invited_by,status,expires_at FROM valopay_staff_invitations WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [session.workspace.id, id])).rows[0];
+  if (!invitation) fail('Invitation not found.', 404);
+  if (invitation.status !== 'pending' || invitation.expires_at.getTime() <= Date.parse(ctx.now)) fail('This invitation is no longer pending.', 409);
+  if (!needsApproval(invitation.role)) fail('This invitation needs no approval: only Admin, Finance and Compliance reviewer invitations do.', 409);
+  if (invitation.invited_by === ctx.actor) fail(secondAdministrator('invitation', 'sent it'), 403);
+  if (await invitationApprover(session.client, session.workspace.id, invitation)) fail('This invitation is already approved.', 409);
+  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.invitation_approved', id, { email: invitation.email, role: invitation.role, invitedBy: invitation.invited_by });
+  return { message: `Invitation approved: ${invitation.email} can now accept it as ${invitation.role}.` };
+}
+/** Applies a membership change, clearing lender grants on a role change or revocation and pending invitations on a suspension or revocation, with its event. */
+async function applyStaffChange(session: Session, ctx: StoreContext, row: StaffRow, after: { role: string; status: string }, action: string, detail: Record<string, unknown>) {
+  const result = await session.client.query<StaffRow>(`UPDATE valopay_staff_memberships SET role=$3,status=$4,updated_at=greatest(now(),updated_at+interval '1 millisecond') WHERE workspace_id=$1 AND id=$2 RETURNING *`, [session.workspace.id, row.id, after.role, after.status]);
+  if (after.status === 'revoked' || after.role !== row.role) await session.client.query('DELETE FROM valopay_staff_lender_access WHERE membership_id=$1', [row.id]);
+  // Suspension and revocation withdraw the person's pending invitations: an
+  // invitation sent earlier must not hand the access straight back.
+  const invitationsRevoked = after.status === 'active' ? 0 : (await session.client.query("UPDATE valopay_staff_invitations SET status='revoked' WHERE workspace_id=$1 AND lower(email)=lower($2) AND status='pending'", [session.workspace.id, row.display_name])).rowCount || 0;
+  await staffEvent(session.client, session.workspace.id, ctx.actor, action, row.id, { before: { role: row.role, status: row.status }, after, ...detail, ...(invitationsRevoked ? { invitationsRevoked } : {}) });
+  return result.rows[0]!;
 }
 export async function updateStaff(ctx: StoreContext, id: string, input: { role: string; status: string; expectedUpdatedAt: string; reason: string }) {
   const session = teamAdmin(ctx);
@@ -447,13 +505,46 @@ export async function updateStaff(ctx: StoreContext, id: string, input: { role: 
   if (row.user_id === session.userId) fail('Ask another administrator to change your membership.', 403);
   if (row.updated_at.toISOString() !== input.expectedUpdatedAt) fail('This membership changed. Refresh the team and review it again.', 409);
   if (row.status === 'revoked' && input.status !== 'revoked') fail('A revoked person must accept a new invitation before access is restored.', 409);
-  const result = await session.client.query<StaffRow>(`UPDATE valopay_staff_memberships SET role=$3,status=$4,updated_at=greatest(now(),updated_at+interval '1 millisecond') WHERE workspace_id=$1 AND id=$2 RETURNING *`, [session.workspace.id, id, input.role, input.status]);
-  if (input.status === 'revoked' || input.role !== row.role) await session.client.query('DELETE FROM valopay_staff_lender_access WHERE membership_id=$1', [id]);
-  // Suspension and revocation withdraw the person's pending invitations: an
-  // invitation sent earlier must not hand the access straight back.
-  const invitationsRevoked = input.status === 'active' ? 0 : (await session.client.query("UPDATE valopay_staff_invitations SET status='revoked' WHERE workspace_id=$1 AND lower(email)=lower($2) AND status='pending'", [session.workspace.id, row.display_name])).rowCount || 0;
-  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.changed', id, { before: { role: row.role, status: row.status }, after: { role: input.role, status: input.status }, reason: input.reason, ...(invitationsRevoked ? { invitationsRevoked } : {}) });
-  return staffView(result.rows[0]!);
+  const after = { role: input.role, status: input.status };
+  if (grantNeedsApproval(row, after)) {
+    // The grant waits for a second administrator: the request is recorded, and the membership stays as it is until one approves it.
+    const waiting = (await session.client.query<ChangeRequestRow>(changeRequestsSql, [session.workspace.id, null, id])).rows.find(request => currentRequest(request) && sameJson(request.detail.after, after));
+    const pending = waiting ? changeView(waiting) : await (async () => {
+      const request = await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.change_requested', id, { before: { role: row.role, status: row.status }, after, reason: input.reason, version: row.updated_at.toISOString() });
+      return changeView({ id: request.id, actor: ctx.actor, subject: id, detail: { before: { role: row.role, status: row.status }, after, reason: input.reason, version: row.updated_at.toISOString() }, created_at: request.createdAt, name: row.display_name, member_version: row.updated_at });
+    })();
+    return { ...staffView(row), message: `This change waits for a second administrator: an Admin, Finance or Compliance reviewer grant takes effect only when a different administrator approves it in Team & access. ${row.display_name} keeps their current access until then.`, pendingChange: pending };
+  }
+  const updated = await applyStaffChange(session, ctx, row, after, 'staff.changed', { reason: input.reason });
+  return { ...staffView(updated), message: 'Access change saved. Existing sessions must pass it on their next request.', pendingChange: null };
+}
+/** The request a second administrator approves or declines: current, not decided, in this workspace. */
+async function changeRequest(session: Session, requestId: string): Promise<ChangeRequestRow> {
+  const found = (await session.client.query<ChangeRequestRow>(`SELECT request.id,request.actor,request.subject,request.detail,request.created_at,member.display_name AS name,member.updated_at AS member_version
+    FROM valopay_staff_events request JOIN valopay_staff_memberships member ON member.id=request.subject AND member.workspace_id=request.workspace_id
+    WHERE request.workspace_id=$1 AND request.id=$2 AND request.action='staff.change_requested'`, [session.workspace.id, requestId])).rows[0];
+  if (!found) fail('Change request not found.', 404);
+  if (!(await session.client.query(changeRequestsSql, [session.workspace.id, requestId, null])).rows.length) fail('This change was already approved or declined.', 409);
+  return found;
+}
+/** A second administrator's approval of a waiting change: the exact change requested, applied now and recorded with who asked and who approved. */
+export async function approveStaffChange(ctx: StoreContext, requestId: string) {
+  const session = teamAdmin(ctx);
+  const request = await changeRequest(session, requestId);
+  const row = (await session.client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND id=$2 FOR UPDATE', [session.workspace.id, request.subject])).rows[0];
+  if (!row) fail('Staff membership not found.', 404);
+  if (row.updated_at.toISOString() !== request.detail.version) fail('This membership changed after the change was requested. Review the membership and ask for the change again.', 409);
+  if (request.actor === ctx.actor) fail(secondAdministrator('change', 'asked for it'), 403);
+  if (row.user_id === session.userId) fail('Ask another administrator to approve a change to your own membership.', 403);
+  const updated = await applyStaffChange(session, ctx, row, request.detail.after, 'staff.change_approved', { reason: request.detail.reason, requestId, requestedBy: request.actor });
+  return { ...staffView(updated), message: `Change approved: ${row.display_name} is now ${updated.role} (${updated.status}). Existing sessions must pass it on their next request.`, pendingChange: null };
+}
+/** Declines a waiting change (or withdraws it, for the administrator who asked), recorded in the access history; the membership is unchanged. */
+export async function declineStaffChange(ctx: StoreContext, requestId: string) {
+  const session = teamAdmin(ctx);
+  const request = await changeRequest(session, requestId);
+  await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.change_declined', request.subject, { requestId, before: request.detail.before, after: request.detail.after, requestedBy: request.actor });
+  return { message: request.actor === ctx.actor ? 'Change request withdrawn. The membership is unchanged.' : 'Change request declined. The membership is unchanged.' };
 }
 /** The workspace's exclusive team lock serialises grant changes with every
  * read/write transaction, so removing a grant blocks later requests using an
@@ -504,7 +595,7 @@ async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: strin
     if (!team) fail('Select the organisation named in your invitation.', 403);
     const checkedAt = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();
     verifyStaff(auth, { id: 'invitation-check', userId: auth.userId || '', organizationId: auth.orgId || '', tenantId: 'invitation-check', role: 'Read-only', status: 'active', validFrom: '2020-01-01T00:00:00.000Z', expiresAt: '2100-01-01T00:00:00.000Z' }, true, checkedAt);
-    const invite = (await client.query<{ id: string; email: string; role: string; created_at: Date }>(`SELECT id,email,role,created_at FROM valopay_staff_invitations WHERE workspace_id=$1 AND token_hash=$2 AND status='pending' AND expires_at>clock_timestamp() FOR UPDATE`, [team.workspace_id, digest(token)])).rows[0];
+    const invite = (await client.query<{ id: string; email: string; role: string; invited_by: string; created_at: Date }>(`SELECT id,email,role,invited_by,created_at FROM valopay_staff_invitations WHERE workspace_id=$1 AND token_hash=$2 AND status='pending' AND expires_at>clock_timestamp() FOR UPDATE`, [team.workspace_id, digest(token)])).rows[0];
     if (!invite || !verifiedEmails.includes(invite.email)) fail('This invitation is expired, used, revoked or belongs to another verified email address.', 403);
     const existing = (await client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND user_id=$2 FOR UPDATE', [team.workspace_id, auth.userId])).rows[0];
     if (existing?.status === 'active' && existing.expires_at > new Date(checkedAt)) fail('You already have an active membership. Ask an administrator to change its role.', 409);
@@ -515,6 +606,9 @@ async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: strin
       const withdrawnAt = (await client.query<{ at: Date | null }>(`SELECT max(created_at) AS at FROM valopay_staff_events WHERE workspace_id=$1 AND subject=$2 AND action='staff.changed' AND detail->'after'->>'status' IN ('suspended','revoked')`, [team.workspace_id, existing.id])).rows[0]?.at ?? existing.updated_at;
       if (invite.created_at <= withdrawnAt) fail('This invitation was sent before your access was suspended or revoked, so it cannot restore it. Ask an administrator for a new invitation.', 403);
     }
+    // An Admin, Finance or Compliance reviewer grant takes effect only once a second administrator approved the invitation.
+    const approvedBy = needsApproval(invite.role) ? await invitationApprover(client, team.workspace_id, invite) : undefined;
+    if (needsApproval(invite.role) && !approvedBy) fail("This invitation is waiting for a second administrator's approval. Ask the administrator who sent it to have another administrator approve it in Team & access, then accept it again.", 403);
     if(existing) {
       if (runtimeIsolationEnabled()) await clearRuntimeInviteeGrants(client);
       else await client.query('DELETE FROM valopay_staff_lender_access WHERE membership_id=$1',[existing.id]);
@@ -522,7 +616,7 @@ async function acceptVerifiedInvitation(auth: VerifiedClerkSession, token: strin
     await client.query(`INSERT INTO valopay_staff_memberships(id,workspace_id,user_id,display_name,role,status,expires_at) VALUES($1,$2,$3,$4,$5,'active',now()+interval '90 days')
       ON CONFLICT(workspace_id,user_id) DO UPDATE SET display_name=EXCLUDED.display_name,role=EXCLUDED.role,status='active',expires_at=EXCLUDED.expires_at,updated_at=greatest(now(),valopay_staff_memberships.updated_at+interval '1 millisecond')`, [randomUUID(), team.workspace_id, auth.userId, invite.email, invite.role]);
     await client.query("UPDATE valopay_staff_invitations SET status='accepted' WHERE id=$1 AND workspace_id=$2", [invite.id, team.workspace_id]);
-    await staffEvent(client, team.workspace_id, `Clerk:${auth.userId}`, 'staff.accepted', invite.id, { role: invite.role });
+    await staffEvent(client, team.workspace_id, `Clerk:${auth.userId}`, 'staff.accepted', invite.id, { role: invite.role, ...(approvedBy ? { approvedBy } : {}) });
     // Checked before COMMIT: an answer that does not match its contract saves nothing.
     const accepted = contractAnswer(invitationAcceptedSchema, { message: 'Invitation accepted. Your pilot membership lasts 90 days.', role: invite.role });
     committing = true;
@@ -703,6 +797,70 @@ export async function protectWorkspacePayloads(context:StoreContext) {
   for(const row of receipts){if(protectedCount)break;await session.client.query('UPDATE valopay_idempotency SET response=$3 WHERE id=$1 AND merchant_id=$2',[row.id,row.merchant_id,await protectStored(row.response,{lender:row.merchant_id,record:row.id,field:'response'})]);protectedCount++;}
   await staffEvent(session.client,session.workspace.id,context.actor,'encryption.protected','workspace',{protectedCount,at:context.now});
   return {message:protectedCount?'Protected another batch of stored payloads. Run again until no payloads remain.':'No unprotected import or recovery payloads remain in this workspace.',protectedCount,mayHaveMore:protectedCount>0};
+}
+/** What one run of the operator's re-wrap step did (scripts/rewrap-payloads.ts). */
+export type PayloadRewrap = { key: string; rewrapped: number; changed: number; remaining: number; remainingByKey: Array<{ key: string; payloads: number }>; message: string };
+/**
+ * Every protected payload and the scope it was sealed in, with the table it
+ * lives in: an import batch's source rows and check, a journal entry's request
+ * and receipt, and a replay copy's answer. The fields are fixed here, never
+ * input. $1 is the current key; $2, when not null, limits it to those
+ * workspaces (tests).
+ */
+const sealedPayloadsSql = `WITH sealed AS (
+    SELECT 'records' AS source, r.id, r.merchant_id, f.field, f.value FROM valopay_records r CROSS JOIN LATERAL (VALUES ('csv', r.data->'csv'), ('check', r.data->'check')) AS f(field, value) WHERE r.kind='import-batches'
+    UNION ALL SELECT 'operations', o.id, o.merchant_id, f.field, f.value FROM valopay_operations o CROSS JOIN LATERAL (VALUES ('request', o.request), ('receipt', o.receipt)) AS f(field, value)
+    UNION ALL SELECT 'idempotency', i.id, i.merchant_id, 'response', i.response FROM valopay_idempotency i)
+  SELECT sealed.source, sealed.id, sealed.merchant_id, sealed.field, sealed.value FROM sealed JOIN valopay_merchants m ON m.id=sealed.merchant_id
+  WHERE jsonb_typeof(sealed.value)='object' AND sealed.value ? 'protectedPayload' AND sealed.value->>'key' IS DISTINCT FROM $1 AND ($2::text[] IS NULL OR m.workspace_id=ANY($2::text[]))`;
+/** Writes a re-sealed payload back only while it is still the envelope that was read, so a request that changed it meanwhile wins. */
+const rewrapWrites: Record<string, string> = {
+  'records:csv': "UPDATE valopay_records SET data=jsonb_set(data,'{csv}',$3::jsonb) WHERE id=$1 AND merchant_id=$2 AND kind='import-batches' AND data->'csv'=$4::jsonb",
+  'records:check': "UPDATE valopay_records SET data=jsonb_set(data,'{check}',$3::jsonb) WHERE id=$1 AND merchant_id=$2 AND kind='import-batches' AND data->'check'=$4::jsonb",
+  'operations:request': 'UPDATE valopay_operations SET request=$3::jsonb WHERE id=$1 AND merchant_id=$2 AND request=$4::jsonb',
+  'operations:receipt': 'UPDATE valopay_operations SET receipt=$3::jsonb WHERE id=$1 AND merchant_id=$2 AND receipt=$4::jsonb',
+  'idempotency:response': 'UPDATE valopay_idempotency SET response=$3::jsonb WHERE id=$1 AND merchant_id=$2 AND response=$4::jsonb',
+};
+/**
+ * Operator-only (scripts/rewrap-payloads.ts); never called by an HTTP route.
+ * After the payload wrapping key changes name (VALOPAY_KMS_KEY), re-seals at
+ * most `limit` protected payloads that still name an earlier key: each is
+ * opened with the key it names, which must still be listed in
+ * VALOPAY_KMS_PREVIOUS_KEYS, and sealed again under the current key with a
+ * fresh data key, in the scope it was sealed in. Nothing is locked while the
+ * key service works: a payload is read, re-sealed, then written back in a
+ * short transaction of its own only if it is still the envelope that was read,
+ * so a run can stop at any point and be run again, and a payload a request
+ * rewrote meanwhile is left to it (counted as changed). Returns how many it
+ * re-sealed and how many still name each earlier key: the earlier key may be
+ * retired once none remain (docs/pilot-security.md, "Key rotation").
+ */
+export async function rewrapProtectedPayloads(options: { limit?: number; workspaces?: readonly string[] } = {}): Promise<PayloadRewrap> {
+  if (runtimeIsolationEnabled()) fail("Re-wrap payloads with the database owner's connection and VALOPAY_RUNTIME_ISOLATION unset: the restricted runtime login cannot read every workspace's payloads.", 503);
+  const key = payloadEncryptionKey();
+  if (!key) fail('Set VALOPAY_PAYLOAD_ENCRYPTION=kms and VALOPAY_KMS_KEY to the key payloads should be sealed under.', 503);
+  const limit = options.limit ?? 100, workspaces = options.workspaces ? [...options.workspaces] : null;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) fail('Re-wrap between 1 and 1000 payloads at a time.');
+  type Sealed = { source: string; id: string; merchant_id: string; field: string; value: { key?: string } };
+  const batch = await operatorTransaction(async client => (await client.query<Sealed>(`${sealedPayloadsSql} ORDER BY sealed.source,sealed.merchant_id,sealed.id,sealed.field LIMIT $3`, [key, workspaces, limit])).rows);
+  let rewrapped = 0, changed = 0;
+  for (const payload of batch) {
+    const scope = { lender: payload.merchant_id, record: payload.id, field: payload.field };
+    let sealed: unknown;
+    try { sealed = await protectStored(await revealStored(payload.value, scope), scope); }
+    catch (error) {
+      if ((error as { status?: unknown }).status !== 503) throw error;
+      fail(`A payload sealed under ${String(payload.value.key)} could not be opened, so the run stopped after re-sealing ${rewrapped}. Keep that key in VALOPAY_KMS_PREVIOUS_KEYS and check this service may decrypt with it, then run the command again.`, 503);
+    }
+    const written = await operatorTransaction(client => client.query(rewrapWrites[`${payload.source}:${payload.field}`]!, [payload.id, payload.merchant_id, JSON.stringify(sealed), JSON.stringify(payload.value)]));
+    if (rowsAffected(written)) rewrapped++; else changed++;
+  }
+  const remainingByKey = (await operatorTransaction(async client => (await client.query<{ key: string; payloads: string }>(`SELECT payload.value->>'key' AS key, count(*) AS payloads FROM (${sealedPayloadsSql}) payload GROUP BY 1 ORDER BY 1`, [key, workspaces])).rows)).map(row => ({ key: row.key, payloads: Number(row.payloads) }));
+  const remaining = remainingByKey.reduce((sum, row) => sum + row.payloads, 0);
+  const moved = `Re-sealed ${rewrapped} protected payload${rewrapped === 1 ? '' : 's'} under ${key}${changed ? `; ${changed} changed while this run worked and will be checked again` : ''}.`;
+  return { key, rewrapped, changed, remaining, remainingByKey, message: remaining
+    ? `${moved} ${remaining} still name an earlier key: run the command again until none remain, and keep the earlier keys in VALOPAY_KMS_PREVIOUS_KEYS until then.`
+    : `${moved} No protected payload names an earlier key: an earlier key may be retired once no backup you may restore still needs it.` };
 }
 function rowsAffected(result: { rowCount: number | null }): boolean { return (result.rowCount || 0) === 1; }
 function rowToRecord(row: RecordRow): ValopayRecord {
@@ -1128,6 +1286,27 @@ export function addedRecords(context: StoreContext, state: DomainState): Valopay
   return state.records.filter((record) => !session.snapshot!.records.has(record.id));
 }
 
+/**
+ * The record a write's audit entry is about, of those its route can vouch for:
+ * the one its path names; else the one its parsed body names, when the write
+ * added or changed it or answers with it; else the one its answer names
+ * (`record.id`, or `id`), when the lender has it; else `fallback`. An id a
+ * client wrote that the write did not act on is never the object.
+ */
+export function auditObject(context: StoreContext, state: DomainState, names: { path?: unknown; body?: string; answer?: unknown }, fallback: string): string {
+  const session = sessionFor(context);
+  lockedMerchant(session);
+  if (typeof names.path === "string" && names.path) return names.path;
+  const shown = names.answer as { id?: unknown; record?: { id?: unknown } } | null | undefined;
+  const answered = typeof shown?.record?.id === "string" ? shown.record.id : typeof shown?.id === "string" ? shown.id : undefined;
+  const byId = (id: string) => state.records.find((record) => record.id === id);
+  if (names.body) {
+    const named = byId(names.body), loaded = session.snapshot!.records.get(names.body);
+    if (named && (names.body === answered || loaded === undefined || recordChanged(loaded, named))) return names.body;
+  }
+  return answered && byId(answered) ? answered : fallback;
+}
+
 const recordColumns = "r.id,r.merchant_id,r.kind,r.name,r.status,r.reference,r.amount_kobo,r.customer_id,r.data,r.created_at,r.updated_at";
 const scopedRecordsFrom = `FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id
   JOIN valopay_workspaces w ON w.id=m.workspace_id`;
@@ -1135,10 +1314,10 @@ const scopedRecordsWhere = "r.merchant_id=$1 AND m.workspace_id=$2 AND w.id=$2 A
 
 /** A list never loads unrelated kinds or constructs a writable DomainState.
  * No search: PostgreSQL calculates the count and returns only the page.
- * Search: preserve the exact JavaScript Unicode/JSON search contract by
- * scanning bounded batches of this kind; only the requested page is retained.
- * This path deliberately does not pretend jsonb::text is JSON.stringify: its
- * whitespace and number spelling differ. Search indexing is a separate change.
+ * Search: the JavaScript fold (matchesSearch) over each record's name,
+ * reference and data values as the list shows them (an export without its
+ * private storage fields), scanning bounded batches of this kind; only the
+ * requested page is retained. Search indexing is a separate change.
  */
 export async function listRecords(context: StoreContext, merchantId: string, kind: string, query: ListQuery) {
   const session = sessionFor(context);
@@ -1149,10 +1328,14 @@ export async function listRecords(context: StoreContext, merchantId: string, kin
   if (query.status && query.status !== "all") filter("r.status", query.status);
   if (query.customerId) filter("r.customer_id", query.customerId);
   if (query.id) filter("r.id", query.id);
+  // canTakeAllocation in SQL: something still owed (the outstanding balance when it is a whole number, else the amount) and a status that takes one.
+  // CASE tries its conditions in order, so a balance is read as a number only once it is known to be one.
+  if (allocatableOnly(kind, query)) {
+    params.push([...allocationClosedStatuses]);
+    where += ` AND r.status <> ALL($${params.length}::text[]) AND (CASE WHEN jsonb_typeof(r.data->'outstandingKobo') IS DISTINCT FROM 'number' THEN r.amount_kobo WHEN (r.data->>'outstandingKobo')::numeric % 1 <> 0 THEN r.amount_kobo ELSE (r.data->>'outstandingKobo')::numeric END) > 0`;
+  }
   if (query.updatedSince) {
-    const since = Date.parse(query.updatedSince);
-    if (!Number.isFinite(since)) fail("updatedSince must be an ISO timestamp.");
-    params.push(new Date(since).toISOString()); where += ` AND r.updated_at >= $${params.length}::timestamptz`;
+    params.push(new Date(updatedSinceInstant(query.updatedSince)).toISOString()); where += ` AND r.updated_at >= $${params.length}::timestamptz`;
   }
   const offset = Number.isInteger(query.offset) && Number(query.offset) > 0 ? Number(query.offset) : 0;
   // A kind that grows with history is capped even without a limit (listLimit).
@@ -1175,8 +1358,9 @@ export async function listRecords(context: StoreContext, merchantId: string, kin
       if (cursor) { values.push(cursor.at, cursor.id); after = ` AND (r.created_at,r.id) < ($${values.length - 1}::timestamptz,$${values.length}::text)`; }
       const batch = (await session.client.query<RecordRow & { cursor_at: string }>(`SELECT ${recordColumns},r.created_at::text AS cursor_at ${scopedRecordsFrom} WHERE ${where}${after} ORDER BY r.created_at DESC,r.id DESC LIMIT ${LIST_PAGE_CEILING}`, values)).rows;
       for (const row of batch) {
-        if (!foldForSearch(`${row.name} ${row.reference} ${row.status} ${JSON.stringify(row.data)}`).includes(search)) continue;
-        if (total >= offset && (limit === undefined || items.length < limit)) items.push(rowToRecord(row));
+        const record = rowToRecord(row);
+        if (!matchesSearch(record.kind === "exports" ? publicExportRecord(record) : record, search)) continue;
+        if (total >= offset && (limit === undefined || items.length < limit)) items.push(record);
         total++;
       }
       if (batch.length < LIST_PAGE_CEILING) break;
@@ -1196,12 +1380,16 @@ export async function listQueue(context: StoreContext, merchantId: string, queue
   const values: unknown[] = [merchantId, session.workspace.id, session.principal, context.now, query.owner || '', query.type || '', query.record || '', foldForSearch(query.q || '')];
   // PostgreSQL 16's input check also handles malformed legacy dates without failing a queue.
   const timestamp = (text: string) => `CASE WHEN pg_input_is_valid(${text},'timestamp with time zone') THEN (CASE WHEN length(${text})=10 THEN ${text} || 'T00:00:00Z' ELSE ${text} END)::timestamptz END`;
+  // When a deadline passes (deadlineEnds in the shared schema): a date-only one at the end of its WAT day, so it is
+  // due all day and overdue after it; an impossible date (2026-02-30) is no deadline.
+  const deadlineAt = (text: string) => `CASE WHEN (${text}) ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (CASE WHEN pg_input_is_valid(${text},'date') THEN ((${text}) || 'T23:59:59.999+01:00')::timestamptz END)
+    WHEN pg_input_is_valid(${text},'timestamp with time zone') THEN (${text})::timestamptz END`;
   const dueData = `CASE WHEN r.kind='attempts' THEN d.data ELSE r.data END`;
   const deadline = queue === 'exceptions' ? "r.data->>'dueBy'" : queue === 'mandates' ? "r.data->>'activationDeadline'" : `(${dueData})->>'dueDate'`;
   const owner = queue === 'collections' ? `coalesce(nullif((${dueData})->>'owner',''),'unassigned')` : "coalesce(nullif(r.data->>'owner',''),'Unassigned')";
   const kind = queue === 'collections' ? "(r.kind='due-items' OR r.kind='attempts' AND r.status='failed')" : `r.kind='${queue}'`;
   const unpaid = `coalesce((CASE WHEN r.kind='attempts' THEN d.status ELSE r.status END) NOT IN ('paid','closed','cancelled'),false)`;
-  const overdue = queue === 'collections' ? `(CASE WHEN length(deadline)=10 THEN deadline < to_char($4::timestamptz AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD') ELSE deadline_at < $4::timestamptz END)` : 'deadline_at < $4::timestamptz';
+
   // Count/order only this queue's kinds. A failed attempt's instalment is read
   // by primary key from the same lender, one index probe per attempt: joining
   // the scoped set to itself made PostgreSQL compare every attempt with every
@@ -1211,21 +1399,31 @@ export async function listQueue(context: StoreContext, merchantId: string, queue
   // one row and each attempt scanned all its instalments (22 s for a
   // 25,000-record lender, past the statement limit). The lender and kind are
   // checked on the row the probe found.
+  // A search term is matched once per queue row, in a lateral column (OFFSET 0 keeps it from being written back into
+  // every filter) that the counts, the total, the page and its target all read, and against a customer only by a probe
+  // of the row's own customer (OFFSET 0 keeps it a probe, which PostgreSQL caches per customer), so a customer the
+  // queue holds many times is folded once and one it does not hold is never read. Written into each filter, the search
+  // was folded again for every count, with a customer lookup and fold per row each time: about 300 ms for a searched
+  // pilot-scale collections queue. Without a search term none of it is in the statement.
+  const searching = values[7] !== '';
+  const searchText = (expression: string) => `lower(regexp_replace(normalize(${expression},NFD), U&'[\\0300-\\036f]', '', 'g'))`;
+  const matched = searching ? `
+        LEFT JOIN LATERAL (SELECT true AS hit FROM valopay_records c WHERE c.id=r.customer_id AND c.merchant_id=$1 AND c.kind='customers' AND position($8 in ${searchText("concat_ws(' ',c.name,c.reference)")})>0 OFFSET 0) customer ON true
+        CROSS JOIN LATERAL (SELECT (customer.hit IS NOT NULL OR position($8 in ${searchText("concat_ws(' ',r.name,r.reference)")})>0) AS matched OFFSET 0) m` : '';
   const cte = `WITH scoped AS (SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND ${kind}),
-    b AS (SELECT r.*, ${deadline} AS deadline, ${timestamp(deadline)} AS deadline_at, ${owner} AS queue_owner,
+    b AS (SELECT r.*,${searching ? ' m.matched,' : ''} ${deadlineAt(deadline)} AS deadline_at, ${owner} AS queue_owner,
       ${unpaid} AS unpaid, ${timestamp("r.data->>'occurredAt'")} AS attempt_at
       FROM scoped r LEFT JOIN LATERAL (SELECT d.merchant_id,d.kind,d.status,d.data FROM valopay_records d WHERE r.kind='attempts' AND d.id=r.data->>'dueItemId' OFFSET 0) d
-        ON d.merchant_id=r.merchant_id AND d.kind='due-items' WHERE ${kind}),
-    q AS (SELECT b.*,coalesce(${overdue},false) AS overdue,
-      coalesce(CASE WHEN length(deadline)=10 THEN deadline ELSE to_char(deadline_at AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD') END = to_char($4::timestamptz AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD'),false) AS today FROM b)`;
+        ON d.merchant_id=r.merchant_id AND d.kind='due-items'${matched} WHERE ${kind}),
+    q AS (SELECT b.*,coalesce(deadline_at < $4::timestamptz,false) AS overdue,
+      coalesce(to_char(deadline_at AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD') = to_char($4::timestamptz AT TIME ZONE 'Africa/Lagos','YYYY-MM-DD'),false) AS today FROM b)`;
   const conditions: Record<string, string> = queue === 'exceptions' ? {
     open: "status NOT IN ('closed','resolved')", high: "status NOT IN ('closed','resolved') AND data->>'severity'='high'",
     overdue: "status NOT IN ('closed','resolved') AND overdue", 'due-today': "status NOT IN ('closed','resolved') AND today", resolved: "status IN ('closed','resolved')",
   } : queue === 'mandates' ? { all: 'true', 'awaiting-activation': "status='pending_activation'", overdue: "status='pending_activation' AND overdue", 'due-today': "status='pending_activation' AND today" }
     : { all: "kind='due-items'", overdue: "kind='due-items' AND unpaid AND overdue", 'due-today': "kind='due-items' AND unpaid AND today", failed: "kind='attempts'" };
-  const searchText = (expression: string) => `lower(regexp_replace(normalize(${expression},NFD), U&'[\\0300-\\036f]', '', 'g'))`;
-  const searchFilter = `($8='' OR position($8 in ${searchText("concat_ws(' ',name,reference)")})>0 OR EXISTS(SELECT 1 FROM valopay_records c WHERE c.merchant_id=$1 AND c.kind='customers' AND c.id=q.customer_id AND position($8 in ${searchText("concat_ws(' ',c.name,c.reference)")})>0))`;
-  const ownerFilter = searchFilter + " AND ($5='' OR queue_owner=$5) AND ($6='' OR data->>'type'=$6)";
+  // Without a search term the statement still names $8, so PostgreSQL knows its type.
+  const ownerFilter = `${searching ? 'matched' : "$8=''"} AND ($5='' OR queue_owner=$5) AND ($6='' OR data->>'type'=$6)`;
   const selected = `${ownerFilter} AND (CASE WHEN $7<>'' THEN id=$7 ELSE (${conditions[view]}) END)`;
   const order = (queue === 'exceptions' ? "overdue DESC,CASE data->>'severity' WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,"
     : queue === 'mandates' ? "(status='pending_activation') DESC," : '(unpaid AND overdue) DESC,unpaid DESC,') + `deadline_at ASC NULLS LAST,${queue === 'collections' ? 'attempt_at ASC NULLS LAST,' : ''}id COLLATE "C"`;
@@ -1734,45 +1932,35 @@ export async function lifecycleInventory(context:StoreContext,state:DomainState)
   ...state.records.filter(r=>r.kind==='exports'&&['ready','failed'].includes(r.status)&&!r.data.fileDeletedAt&&r.data.bucket&&r.data.objectName).map(r=>({kind:'export_file' as const,merchantId,sourceId:r.id,version:r.updatedAt,createdAt:String(r.data.generatedAt||r.updatedAt),label:'Private export file',digest:canonicalDigest({id:r.id,status:r.status,data:r.data},"legacy-en-us-null"),status:r.status as 'ready'|'failed'})),
  ];
 }
-/** One candidate per request bounds external work and makes progress resumable.
- * The lender lock prevents a hold or retry being introduced during deletion. */
+/**
+ * Executes an approved retention run under the lender lock: as many of its
+ * sources as fit in the step budget, each checked again and given a receipt,
+ * stopping at a blocked source or a deletion that cannot be confirmed
+ * (executeApprovedRun). The console repeats the request until the run is done.
+ */
 export async function executeLifecycleRun(context:StoreContext,state:DomainState,id:string) {
  const session=sessionFor(context),merchantId=lockedMerchant(session);
  if(context.role!=='Admin'||session.access!=='write'||state.merchant.id!==merchantId)fail('An administrator in this lender is required.',403);
  const run=state.records.find(r=>r.id===id&&r.kind==='retention-runs');if(!run)fail('Retention run not found.',404);
  if(run.status==='completed')return lifecycleRunView(state,run);
  const external=await lifecycleInventory(context,state);
- const attempted=new Set(state.records.filter(r=>r.kind==='retention-receipts'&&r.data.runId===id).map(r=>`${r.data.kind}:${r.data.sourceId}`));
- const candidates=[...run.data.candidates as LifecycleCandidate[]].sort((a,b)=>Number(attempted.has(`${a.kind}:${a.sourceId}`))-Number(attempted.has(`${b.kind}:${b.sourceId}`)));
- // Prepared once: nothing changes the state until the one candidate this request handles, so skipping the run's
- // finished sources costs a lookup each rather than another pass over the lender.
- const check=lifecycleCandidateCheck(state,context,id,external);
- for(const candidate of candidates){
-  try{
-   if(!check(candidate))continue;
-  }catch{return recordLifecycleReceipt(state,context,id,candidate,'blocked','This source changed, is held or no longer meets the approved policy. Review the source and prepare a fresh preview.');}
-  try{
-   let result:'deleted'|'already_absent'='deleted';
-   if(candidate.kind==='raw_csv')eraseLifecycleRawCsv(state,context,id,candidate);
-   else if(candidate.kind==='journal_payload'){
-    const row=(await session.client.query<OperationRow>('SELECT * FROM valopay_operations WHERE merchant_id=$1 AND id=$2 FOR UPDATE',[merchantId,candidate.sourceId])).rows[0];
-    if(!row||!['completed','cancelled'].includes(row.status))fail('The terminal request is no longer eligible.',409);
-    const tombstone={purged:true,at:context.now,retentionRunId:id};
-    await session.client.query("UPDATE valopay_operations SET request=$3,receipt=$3 WHERE merchant_id=$1 AND id=$2 AND status IN ('completed','cancelled')",[merchantId,row.id,tombstone]);
-    await session.client.query('UPDATE valopay_idempotency SET response=$3 WHERE merchant_id=$1 AND id=ANY($2::text[])',[merchantId,receiptIds(merchantId,row.request_key,row.id),tombstone]);
-   }else{
-    const record=state.records.find(r=>r.id===candidate.sourceId&&r.kind==='exports')!;
-    result=await deleteRetainedExport(objectStorageClient.bucket(record.data.bucket).file(record.data.objectName),{id:record.id,merchantId,checksum:record.data.checksum});
-    record.data.fileDeletedAt=context.now;record.data.fileRetentionRunId=id;
-   }
-   return recordLifecycleReceipt(state,context,id,candidate,result,'Retention action completed. Financial records, provenance, request identities and audit history were retained.');
-  }catch(error){
-   // A SQL error aborts the whole transaction; never mask it as a receipt.
-   if(typeof (error as any)?.code==='string'&&/^[A-Z0-9]{5}$/.test((error as any).code))throw error;
-   return recordLifecycleReceipt(state,context,id,candidate,'failed','Deletion could not be confirmed. Resume this saved run to check the same source; do not create a replacement export.');
+ // A completed request's payload is purged in this transaction; an export file is deleted from private storage.
+ const remove=async(candidate:LifecycleCandidate):Promise<'deleted'|'already_absent'>=>{
+  if(candidate.kind==='journal_payload'){
+   const row=(await session.client.query<OperationRow>('SELECT * FROM valopay_operations WHERE merchant_id=$1 AND id=$2 FOR UPDATE',[merchantId,candidate.sourceId])).rows[0];
+   if(!row||!['completed','cancelled'].includes(row.status))fail('The terminal request is no longer eligible.',409);
+   const tombstone={purged:true,at:context.now,retentionRunId:id};
+   await session.client.query("UPDATE valopay_operations SET request=$3,receipt=$3 WHERE merchant_id=$1 AND id=$2 AND status IN ('completed','cancelled')",[merchantId,row.id,tombstone]);
+   await session.client.query('UPDATE valopay_idempotency SET response=$3 WHERE merchant_id=$1 AND id=ANY($2::text[])',[merchantId,receiptIds(merchantId,row.request_key,row.id),tombstone]);
+   return 'deleted';
   }
- }
- return lifecycleRunView(state,run);
+  const record=state.records.find(r=>r.id===candidate.sourceId&&r.kind==='exports')!;
+  const result=await deleteRetainedExport(objectStorageClient.bucket(record.data.bucket).file(record.data.objectName),{id:record.id,merchantId,checksum:record.data.checksum});
+  record.data.fileDeletedAt=context.now;record.data.fileRetentionRunId=id;
+  return result;
+ };
+ // A SQL error aborts the whole transaction; never mask it as a receipt.
+ return executeApprovedRun(state,context,id,external,remove,{fatal:error=>typeof (error as any)?.code==='string'&&/^[A-Z0-9]{5}$/.test((error as any).code)});
 }
 
 /**
@@ -2012,10 +2200,46 @@ const schemaSource = (table: string) => tableMigrations[table] ? `apply lib/db/m
 const requiredTables = [tables.workspaces, tables.merchants, tables.records, tables.idempotency, tables.operations, tables.teams, tables.staffMemberships, tables.staffInvitations, tables.staffEvents, tables.staffLenderAccess]
   .map((table) => { const config = getTableConfig(table); return { name: config.name, columns: config.columns.map((column) => column.name) }; });
 /**
- * The indexes later migrations add, as PostgreSQL 16 writes their definitions
- * after the name and table. They are compared by definition, not by name: an
- * isolated runtime schema holds copies of the tables whose indexes carry
- * generated names.
+ * The integrity guards the Drizzle schema in lib/db declares: every unique
+ * index (those behind primary keys and unique constraints included) and every
+ * check constraint, as PostgreSQL 16 writes their definitions. Without one the
+ * database accepts what the application relies on it to refuse: a second
+ * workspace for one principal, two attempts in flight for one instalment, a
+ * provider event recorded twice, money outside the safe range. So a missing
+ * guard makes the schema incomplete, not slower. Compared by definition, not
+ * by name, like the indexes below.
+ */
+export const integrityGuards = [
+  { type: "unique index", name: "valopay_workspaces_pkey", table: "valopay_workspaces", definition: "USING btree (id)" },
+  { type: "unique index", name: "valopay_workspaces_principal_hash_unique", table: "valopay_workspaces", definition: "USING btree (principal_hash)" },
+  { type: "unique index", name: "valopay_merchants_pkey", table: "valopay_merchants", definition: "USING btree (id)" },
+  { type: "unique index", name: "valopay_records_pkey", table: "valopay_records", definition: "USING btree (id)" },
+  { type: "unique index", name: "valopay_unique_due_reference", table: "valopay_records", definition: "USING btree (merchant_id, reference) WHERE ((kind = 'due-items'::text) AND (reference <> ''::text))" },
+  { type: "unique index", name: "valopay_unique_observation", table: "valopay_records", definition: "USING btree (merchant_id, ((data ->> 'source'::text)), ((data ->> 'eventId'::text))) WHERE ((kind = 'observations'::text) AND ((data ->> 'eventId'::text) IS NOT NULL))" },
+  { type: "unique index", name: "valopay_one_inflight", table: "valopay_records", definition: "USING btree (merchant_id, ((data ->> 'dueItemId'::text))) WHERE ((kind = 'attempts'::text) AND (status = ANY (ARRAY['scheduled'::text, 'sent'::text, 'unknown'::text])))" },
+  { type: "check", name: "valopay_money_integer", table: "valopay_records", definition: "CHECK (((amount_kobo >= 0) AND (amount_kobo <= '9007199254740991'::bigint)))" },
+  { type: "check", name: "valopay_ticket_floor", table: "valopay_records", definition: "CHECK (((kind <> 'due-items'::text) OR (amount_kobo >= 500000)))" },
+  { type: "unique index", name: "valopay_idempotency_pkey", table: "valopay_idempotency", definition: "USING btree (id)" },
+  { type: "unique index", name: "valopay_idempotency_tenant_key", table: "valopay_idempotency", definition: "USING btree (merchant_id, id)" },
+  { type: "unique index", name: "valopay_operations_pkey", table: "valopay_operations", definition: "USING btree (id)" },
+  { type: "check", name: "valopay_operation_status", table: "valopay_operations", definition: "CHECK ((status = ANY (ARRAY['pending'::text, 'completed'::text, 'cancelled'::text])))" },
+  { type: "unique index", name: "valopay_teams_pkey", table: "valopay_teams", definition: "USING btree (workspace_id)" },
+  { type: "unique index", name: "valopay_teams_organization_id_unique", table: "valopay_teams", definition: "USING btree (organization_id)" },
+  { type: "unique index", name: "valopay_staff_memberships_pkey", table: "valopay_staff_memberships", definition: "USING btree (id)" },
+  { type: "unique index", name: "valopay_staff_workspace_user", table: "valopay_staff_memberships", definition: "USING btree (workspace_id, user_id)" },
+  { type: "check", name: "valopay_staff_status", table: "valopay_staff_memberships", definition: "CHECK ((status = ANY (ARRAY['active'::text, 'suspended'::text, 'revoked'::text])))" },
+  { type: "check", name: "valopay_staff_role", table: "valopay_staff_memberships", definition: "CHECK ((role = ANY (ARRAY['Admin'::text, 'Operations'::text, 'Finance'::text, 'Compliance reviewer'::text, 'Read-only'::text])))" },
+  { type: "unique index", name: "valopay_staff_invitations_pkey", table: "valopay_staff_invitations", definition: "USING btree (id)" },
+  { type: "unique index", name: "valopay_staff_invitations_token_hash_unique", table: "valopay_staff_invitations", definition: "USING btree (token_hash)" },
+  { type: "check", name: "valopay_invitation_status", table: "valopay_staff_invitations", definition: "CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'revoked'::text])))" },
+  { type: "unique index", name: "valopay_staff_events_pkey", table: "valopay_staff_events", definition: "USING btree (id)" },
+  { type: "unique index", name: "valopay_staff_lender_access_membership_id_merchant_id_pk", table: "valopay_staff_lender_access", definition: "USING btree (membership_id, merchant_id)" },
+] as const;
+/**
+ * The read indexes later migrations add, as PostgreSQL 16 writes their
+ * definitions after the name and table. They are compared by definition, not
+ * by name: an isolated runtime schema holds copies of the tables whose indexes
+ * carry generated names.
  */
 const requiredIndexes = [
   { name: "valopay_records_lender_kind_page", table: "valopay_records", definition: "USING btree (merchant_id, kind, created_at, id)", migration: "002_record_list_indexes.sql" },
@@ -2025,26 +2249,36 @@ const requiredIndexes = [
   { name: "valopay_staff_lender_access_lender", table: "valopay_staff_lender_access", definition: "USING btree (merchant_id, membership_id)", migration: "004_staff_lender_access.sql" },
   { name: "valopay_operations_pending", table: "valopay_operations", definition: "USING btree (merchant_id, owner) WHERE (status = 'pending'::text)", migration: "007_journal_and_lender_indexes.sql" },
   { name: "valopay_merchants_workspace", table: "valopay_merchants", definition: "USING btree (workspace_id, id)", migration: "007_journal_and_lender_indexes.sql" },
+  { name: "valopay_records_export_queue", table: "valopay_records", definition: "USING btree (created_at, id) WHERE ((kind = 'exports'::text) AND (status = ANY (ARRAY['queued'::text, 'running'::text])))", migration: "008_export_queue_index_and_foreign_key_names.sql" },
 ] as const;
+type SchemaCatalogue = {
+  columns: Array<{ table: string; column: string }>;
+  indexes: Array<{ table: string; unique: boolean; definition: string }>;
+  checks: Array<{ table: string; definition: string }>;
+};
 /**
- * The columns and valid indexes of the application's tables, in one catalogue
- * read: in the schema named, or else the tables the connection's unqualified
- * queries reach along its search path (pg_table_is_visible), which is not
- * always the first schema on it.
+ * The columns, valid indexes and validated check constraints of the
+ * application's tables, in one catalogue read: in the schema named, or else the
+ * tables the connection's unqualified queries reach along its search path
+ * (pg_table_is_visible), which is not always the first schema on it. A check
+ * added NOT VALID is left out: it has not checked the rows already stored.
  */
 const schemaCatalogue = `SELECT
   (SELECT coalesce(json_agg(json_build_object('table',c.relname,'column',a.attname)),'[]') FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
     JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
     WHERE CASE WHEN $1::text IS NULL THEN pg_table_is_visible(c.oid) ELSE n.nspname=$1::text END AND c.relname=ANY($2::text[]) AND c.relkind IN ('r','p')) AS columns,
-  (SELECT coalesce(json_agg(json_build_object('table',t.relname,'definition',regexp_replace(pg_get_indexdef(i.indexrelid),'^CREATE (UNIQUE )?INDEX \\S+ ON (ONLY )?\\S+ ',''))),'[]')
+  (SELECT coalesce(json_agg(json_build_object('table',t.relname,'unique',i.indisunique,'definition',regexp_replace(pg_get_indexdef(i.indexrelid),'^CREATE (UNIQUE )?INDEX \\S+ ON (ONLY )?\\S+ ',''))),'[]')
     FROM pg_index i JOIN pg_class t ON t.oid=i.indrelid JOIN pg_namespace n ON n.oid=t.relnamespace
-    WHERE CASE WHEN $1::text IS NULL THEN pg_table_is_visible(t.oid) ELSE n.nspname=$1::text END AND t.relname=ANY($2::text[]) AND i.indisvalid AND i.indisready) AS indexes`;
+    WHERE CASE WHEN $1::text IS NULL THEN pg_table_is_visible(t.oid) ELSE n.nspname=$1::text END AND t.relname=ANY($2::text[]) AND i.indisvalid AND i.indisready) AS indexes,
+  (SELECT coalesce(json_agg(json_build_object('table',t.relname,'definition',pg_get_constraintdef(k.oid))),'[]')
+    FROM pg_constraint k JOIN pg_class t ON t.oid=k.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace
+    WHERE CASE WHEN $1::text IS NULL THEN pg_table_is_visible(t.oid) ELSE n.nspname=$1::text END AND t.relname=ANY($2::text[]) AND k.contype='c' AND k.convalidated) AS checks`;
 /**
  * What the catalogue lacks of what this build needs, each with where it comes
- * from: the tables and columns the queries use, then the indexes; at most 20
- * of each, then a count.
+ * from: the tables and columns the queries use and the integrity guards, then
+ * the read indexes; at most 20 of each, then a count.
  */
-function schemaGaps(catalogue: { columns: Array<{ table: string; column: string }>; indexes: Array<{ table: string; definition: string }> }): { required: string[]; indexes: string[] } {
+function schemaGaps(catalogue: SchemaCatalogue): { required: string[]; indexes: string[] } {
   const present = new Map<string, Set<string>>(), required: string[] = [], indexes: string[] = [];
   for (const { table, column } of catalogue.columns) present.set(table, (present.get(table) ?? new Set<string>()).add(column));
   for (const table of requiredTables) {
@@ -2053,7 +2287,9 @@ function schemaGaps(catalogue: { columns: Array<{ table: string; column: string 
     for (const column of table.columns) if (!columns.has(column)) required.push(`column ${table.name}.${column}: ${schemaSource(table.name)}`);
   }
   const defined = new Set(catalogue.indexes.map((index) => `${index.table} ${index.definition}`));
-  // A missing table is named above; its indexes are not listed again.
+  const guarded = new Set([...catalogue.indexes.filter((index) => index.unique).map((index) => `${index.table} unique index ${index.definition}`), ...catalogue.checks.map((check) => `${check.table} check ${check.definition}`)]);
+  // A missing table is named above; its guards and indexes are not listed again.
+  for (const guard of integrityGuards) if (present.has(guard.table) && !guarded.has(`${guard.table} ${guard.type} ${guard.definition}`)) required.push(`${guard.type} ${guard.name}: restore it from the Drizzle schema in lib/db`);
   for (const index of requiredIndexes) if (present.has(index.table) && !defined.has(`${index.table} ${index.definition}`)) indexes.push(`index ${index.name}: apply lib/db/migrations/${index.migration}`);
   const capped = (list: string[]) => list.length > 20 ? [...list.slice(0, 20), `and ${list.length - 20} more`] : list;
   return { required: capped(required), indexes: capped(indexes) };
@@ -2061,9 +2297,11 @@ function schemaGaps(catalogue: { columns: Array<{ table: string; column: string 
 /**
  * The readiness check's findings: whether the database answered, and whether
  * it holds everything this build needs. `incomplete` means a table or column
- * the queries use is missing, so requests would fail; `indexes_missing` means
- * only an index a migration adds is missing, so some reads are slower but
- * every request still works. `missing` names each, for the log.
+ * the queries use is missing, so requests would fail, or an integrity guard
+ * is, so the database would accept what the application relies on it to
+ * refuse; `indexes_missing` means only a read index a migration adds is
+ * missing, so some reads are slower but every request still works. `missing`
+ * names each, for the log.
  */
 export interface DatabaseReadiness {
   status: "ok" | "failed"; latencyMs: number; error?: string;
@@ -2076,11 +2314,12 @@ let readiness: InstanceType<typeof Pool> | undefined;
  * Readiness: one bounded round trip to the database, on its own connection,
  * so a request pool that is busy does not read as a database that cannot be
  * reached. The round trip reads the catalogue, so a database that answers but
- * lacks a table or a column this build needs (a migration not yet applied) is
- * not ready either; a missing index is reported without failing, since every
- * request still works, only slower. A SELECT 1 could not tell. It checks the
- * application's schema: the isolated runtime schema when runtime isolation is
- * on, otherwise the connection's own (`schema` names another, for tests).
+ * lacks a table or a column this build needs (a migration not yet applied), or
+ * a unique index or check constraint it relies on (a push stopped part way),
+ * is not ready either; a missing read index is reported without failing, since
+ * every request still works, only slower. A SELECT 1 could not tell. It checks
+ * the application's schema: the isolated runtime schema when runtime isolation
+ * is on, otherwise the connection's own (`schema` names another, for tests).
  * Never throws; a connection error stays in the caller's log, not in an
  * answer.
  */
@@ -2095,7 +2334,7 @@ export async function pingDatabase(options: { timeoutMs?: number; schema?: strin
     }
     const schema = options.schema ?? runtimeIsolationConfiguration()?.schema ?? null;
     const catalogue = (await Promise.race([
-      readiness.query<{ columns: Array<{ table: string; column: string }>; indexes: Array<{ table: string; definition: string }> }>(schemaCatalogue, [schema, requiredTables.map((table) => table.name)]),
+      readiness.query<SchemaCatalogue>(schemaCatalogue, [schema, requiredTables.map((table) => table.name)]),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer within ${timeoutMs} ms`)), timeoutMs); }),
     ])).rows[0]!;
     const gaps = schemaGaps(catalogue);

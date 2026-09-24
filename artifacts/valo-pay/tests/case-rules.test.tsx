@@ -23,13 +23,13 @@ const writes = () => api.calls.filter((call) => call.method !== "GET");
 
 it("explains that only the assignee or an Admin can change a case someone else holds", async () => {
   const item = exception();
-  assign(item.id, "Sandbox Finance", "Demo Finance");
+  assign(item.id, "Sandbox Finance", "Sandbox Finance");
   api.role = "Operations";
   renderApp(`/cases/${item.id}`);
   const save = await screen.findByRole("button", { name: "Save next step" });
   expect((save as HTMLButtonElement).disabled).toBe(true);
   const reason = document.getElementById(save.getAttribute("aria-describedby")!)!;
-  expect(reason.textContent).toBe("This case is assigned to Demo Finance. Only Demo Finance or an Admin can record its next step or hand it over.");
+  expect(reason.textContent).toBe("This case is assigned to Sandbox Finance. Only Sandbox Finance or an Admin can record its next step or hand it over.");
   expect((screen.getByLabelText("Next action") as HTMLInputElement).closest("fieldset")?.disabled).toBe(true);
   expect(writes()).toEqual([]);
 });
@@ -37,7 +37,7 @@ it("explains that only the assignee or an Admin can change a case someone else h
 it("lets an Admin hand over a case someone else holds, to a person on the lender's case list only", async () => {
   const user = userEvent.setup();
   const item = exception();
-  assign(item.id, "Sandbox Finance", "Demo Finance");
+  assign(item.id, "Sandbox Finance", "Sandbox Finance");
   renderApp(`/cases/${item.id}`);
   const select = (await screen.findByLabelText("Assigned to")) as HTMLSelectElement;
   expect(select.disabled).toBe(false);
@@ -47,7 +47,7 @@ it("lets an Admin hand over a case someone else holds, to a person on the lender
   await user.type(screen.getByLabelText("Handover or progress note"), "Operations should call the payer.");
   await user.click(screen.getByRole("button", { name: "Save handover" }));
   await screen.findByText("Case update saved with its handover history.");
-  expect(api.state().records.find((r) => r.id === item.id)?.data.case).toMatchObject({ assignee: "Sandbox Operations", assigneeName: "Demo Operations" });
+  expect(api.state().records.find((r) => r.id === item.id)?.data.case).toMatchObject({ assignee: "Sandbox Operations", assigneeName: "Sandbox Operations" });
 });
 
 it("asks for a new assignee when the person holding the case can no longer work on cases", async () => {

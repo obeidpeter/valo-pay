@@ -58,7 +58,7 @@ describe('safe mutation intentions', () => {
   it('allows a corrected request after a structured rejection or a new form session', async () => {
     const user = userEvent.setup();
     const keys: string[] = [];
-    globalThis.fetch = async (_input, options) => { keys.push(new Headers(options?.headers).get('Idempotency-Key')!); return new Response(JSON.stringify({error:'Reason is required'}),{status:422,headers:{'content-type':'application/json'}}); };
+    globalThis.fetch = async (_input, options) => { keys.push(new Headers(options?.headers).get('Idempotency-Key')!); return new Response(JSON.stringify({error:'Reason is required'}),{status:400,headers:{'content-type':'application/json'}}); };
     render(<QueryClientProvider client={new QueryClient()}><Action action="new_policy_version" recordId="sample-policy" merchantId={api.merchantIds[0]!} /></QueryClientProvider>);
     await user.click(screen.getByRole('button', { name: 'Submit' })); await screen.findByRole('alert');
     await user.type(screen.getByLabelText('Reason'), ' changed');
@@ -208,7 +208,7 @@ describe('safe mutation intentions', () => {
     expect(keys[2]).not.toBe(keys[0]);
   });
 
-  it.each([403,409,422])('gives an identical resubmission a new key after a definitive %s refusal',async status=>{
+  it.each([403,404,409])('gives an identical resubmission a new key after a definitive %s refusal',async status=>{
     const keys:string[]=[];
     globalThis.fetch=async(_input,options)=>{keys.push(new Headers(options?.headers).get('Idempotency-Key')!);return jsonAnswer(status,{error:'Refused',requestId:'r'});};
     const {result}=hookFor();

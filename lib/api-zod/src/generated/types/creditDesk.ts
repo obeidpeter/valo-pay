@@ -6,13 +6,13 @@
  * OpenAPI spec version: 1.1.0
  */
 import type { CreditDeskAssessmentsItem } from './creditDeskAssessmentsItem';
-import type { CreditDeskCustomersItem } from './creditDeskCustomersItem';
 import type { CreditDeskGate } from './creditDeskGate';
 import type { CreditDeskModel } from './creditDeskModel';
+import type { CreditDeskPermissionsItem } from './creditDeskPermissionsItem';
 import type { CreditDeskScenariosItem } from './creditDeskScenariosItem';
 
 /**
- * The Credit Desk: applicants with their current permissions, assessments with their reviews, the illustrative rulecard and the closed credit gate.
+ * The Credit Desk: the current permissions of each applicant holding any (the applicants are the workspace's customers, listed once; one not listed here holds neither), assessments with their reviews, the illustrative rulecard and the closed credit gate.
  */
 export interface CreditDesk {
   mode: 'synthetic';
@@ -20,7 +20,7 @@ export interface CreditDesk {
   canAssess: boolean;
   canReview: boolean;
   actor: string;
-  customers: CreditDeskCustomersItem[];
+  permissions: CreditDeskPermissionsItem[];
   assessments: CreditDeskAssessmentsItem[];
   scenarios: CreditDeskScenariosItem[];
   model: CreditDeskModel;

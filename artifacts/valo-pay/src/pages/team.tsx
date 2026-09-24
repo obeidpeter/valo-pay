@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { useWorkspace } from "@/lib/workspace-context";
 import { usePilotMutation, usePilotQuery } from "@/lib/pilot";
-import { staffDirectorySchema } from "@workspace/valopay-schema";
+import { staffDirectorySchema, type StaffDirectory } from "@workspace/valopay-schema";
 import {
   PilotError,
   PilotHeading,
@@ -12,6 +12,8 @@ import {
 } from "@/components/pilot-ui";
 import { StaffSession } from "@/components/staff-session";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useDialogFocusReturn } from "@/lib/focus";
 import { formatCount, formatDate } from "@/lib/formatters";
 import { AccessReadiness } from '@/components/access-readiness';
 
@@ -37,6 +39,8 @@ export default function TeamPage() {
     setEmail("");
   });
   const revoke = usePilotMutation((result) => setMessage(result.message));
+  const [decision, setDecision] = useState("");
+  const decide = usePilotMutation((result) => setDecision(result.message));
   // The directory as the shared schema read it: every list present, lenders included.
   const directory = query.data;
   const admin = directory?.mode === "staff" && workspace?.role === "Admin";
@@ -83,6 +87,9 @@ export default function TeamPage() {
             </div>
           </PilotPanel>
           {admin && (
+            <Approvals directory={directory} actor={workspace?.actor} decide={decide} message={decision} />
+          )}
+          {admin && (
             <PilotPanel title="Invite a team member">
               <p className="text-sm text-muted-foreground">
                 First add the person to this organisation in your identity
@@ -90,6 +97,8 @@ export default function TeamPage() {
                 email and both authentication factors. Invitations last seven
                 days; accepted pilot membership lasts 90 days.
                 After acceptance, assign the lenders a non-administrator may access.
+                An Admin, Finance or Compliance reviewer invitation can be accepted
+                only after another administrator approves it.
               </p>
               <form
                 className="grid items-end gap-3 sm:grid-cols-[1fr_1fr_auto]"
@@ -160,7 +169,7 @@ export default function TeamPage() {
                     <span>
                       {item.email} · {item.role}
                       <small className="mt-1 block text-muted-foreground">
-                        {item.status} · expires {formatDate(item.expiresAt)}
+                        {item.status}{item.status === "pending" && item.approval === "awaiting" ? " · waiting for a second administrator" : item.approval === "approved" ? ` · approved by ${item.approvedBy}` : ""} · expires {formatDate(item.expiresAt)}
                       </small>
                     </span>
                     {item.status === "pending" && (
@@ -216,15 +225,30 @@ export default function TeamPage() {
 function Member({ member, editable, lenders }: { member: any; editable: boolean; lenders: any[] }) {
   const [role, setRole] = useState(member.role),
     [status, setStatus] = useState(member.status),
-    [reason, setReason] = useState("");
+    [reason, setReason] = useState(""),
+    // Revoking cannot be undone here, so it takes one more step after its reason; other changes save at once.
+    [confirming, setConfirming] = useState(false);
   const mutation = usePilotMutation();
+  const restoreFocus = useDialogFocusReturn(confirming);
+  const save = () =>
+    mutation.mutate({
+      path: `/team/members/${member.id}`,
+      method: "PATCH",
+      lender: false,
+      data: {
+        role,
+        status,
+        reason,
+        expectedUpdatedAt: member.updatedAt,
+      },
+    });
   return (
     <article className="space-y-3 rounded-lg border p-4">
       <div>
         <h3 className="text-sm font-semibold">{member.name}</h3>
         <p className="text-xs text-muted-foreground">
-          {member.role} · {member.status} · expires{" "}
-          {formatDate(member.expiresAt)}
+          {member.role} · {member.status}
+          {member.expiresAt ? ` · expires ${formatDate(member.expiresAt)}` : ""}
         </p>
       </div>
       <p className="text-sm text-muted-foreground">{member.role === "Admin" ? "All lenders in this workspace" : formatCount(member.lenderIds?.length || 0, "permitted lender")}</p>
@@ -233,17 +257,8 @@ function Member({ member, editable, lenders }: { member: any; editable: boolean;
           className="space-y-3"
           onSubmit={(e) => {
             e.preventDefault();
-            mutation.mutate({
-              path: `/team/members/${member.id}`,
-              method: "PATCH",
-              lender: false,
-              data: {
-                role,
-                status,
-                reason,
-                expectedUpdatedAt: member.updatedAt,
-              },
-            });
+            if (status === "revoked" && member.status !== "revoked") setConfirming(true);
+            else save();
           }}
         >
           <div className="grid gap-3 sm:grid-cols-2">
@@ -295,10 +310,73 @@ function Member({ member, editable, lenders }: { member: any; editable: boolean;
             Save access change
           </Button>
           <RecoveryNotice mutation={mutation} persistent={false} />
+          {mutation.data?.message && <p role="status" className="text-sm">{mutation.data.message}</p>}
         </form>
       )}
+      <Dialog open={confirming} onOpenChange={(open) => { if (!open) setConfirming(false); }}>
+        <DialogContent onCloseAutoFocus={restoreFocus}>
+          <DialogHeader>
+            <DialogTitle>Revoke {member.name}’s access?</DialogTitle>
+            <DialogDescription>
+              {member.name} loses access to this workspace and to every lender in it at their next request. Their lender access and any invitation still waiting for them are removed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 text-sm">
+            <p>A revoked person regains access only by accepting a new invitation.</p>
+            <p>Reason recorded in the access history: {reason}</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirming(false)}>Keep access</Button>
+            <Button variant="destructive" onClick={() => { setConfirming(false); save(); }}>Revoke access</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {editable && member.role !== "Admin" && member.status === "active" && <LenderGrants key={member.updatedAt} member={member} lenders={lenders} />}
     </article>
+  );
+}
+
+/**
+ * What waits for a second administrator: Admin, Finance and Compliance reviewer invitations and role changes. The
+ * administrator who asked cannot approve (the service refuses it too), but may withdraw a change.
+ */
+function Approvals({ directory, actor, decide, message }: { directory: StaffDirectory; actor?: string; decide: ReturnType<typeof usePilotMutation>; message: string }) {
+  const invitations = directory.invitations.filter((item) => item.status === "pending" && item.approval === "awaiting");
+  const busy = decide.isPending || decide.hasUnconfirmedOutcome;
+  return (
+    <PilotPanel title="Waiting for a second administrator">
+      <p className="text-sm text-muted-foreground">
+        An invitation or role change that grants Admin, Finance or Compliance reviewer takes effect only when an
+        administrator other than the one who asked approves it. A pilot with one administrator asks the operator to
+        add a second with the provisioning command.
+      </p>
+      {!invitations.length && !directory.changes.length ? <p className="text-sm">Nothing is waiting for approval.</p> : (
+        <ul className="space-y-3">
+          {invitations.map((item) => (
+            <li key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 text-sm">
+              <span>Invitation: {item.email} as {item.role}<small className="mt-1 block text-muted-foreground">Sent by {item.invitedBy} · expires {formatDate(item.expiresAt)}</small></span>
+              {item.invitedBy === actor ? <span className="text-xs text-muted-foreground">You sent it: another administrator approves it.</span> : (
+                <Button variant="outline" disabled={busy} onClick={() => decide.mutate({ path: `/team/invitations/${item.id}/approve`, lender: false })}>Approve invitation</Button>
+              )}
+            </li>
+          ))}
+          {directory.changes.map((change) => (
+            <li key={change.id} className="space-y-2 rounded-lg border p-3 text-sm">
+              <p>{change.name}: {change.from.role} ({change.from.status}) to {change.to.role} ({change.to.status})</p>
+              <p className="text-xs text-muted-foreground">Asked by {change.requestedBy} · {formatDate(change.requestedAt)} · {change.reason}</p>
+              <div className="flex flex-wrap gap-2">
+                {change.requestedBy === actor ? <span className="self-center text-xs text-muted-foreground">You asked for it: another administrator approves it.</span> : (
+                  <Button variant="outline" disabled={busy} onClick={() => decide.mutate({ path: `/team/changes/${change.id}/approve`, lender: false })}>Approve change</Button>
+                )}
+                <Button variant="ghost" disabled={busy} onClick={() => decide.mutate({ path: `/team/changes/${change.id}/decline`, lender: false })}>{change.requestedBy === actor ? "Withdraw request" : "Decline change"}</Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <RecoveryNotice mutation={decide} persistent={false} />
+      {message && <p role="status" className="text-sm">{message}</p>}
+    </PilotPanel>
   );
 }
 

@@ -7,7 +7,7 @@
  */
 
 /**
- * ok: every table, column and index this build needs is present. indexes_missing: ready, but an index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table or column is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and the migration that adds it.
+ * ok: every table, column, unique index, check constraint and read index this build needs is present. indexes_missing: ready, but a read index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table, column, unique index or check constraint is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and where it comes from.
  */
 export type SchemaCheckStatus = typeof SchemaCheckStatus[keyof typeof SchemaCheckStatus];
 

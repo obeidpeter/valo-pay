@@ -1,7 +1,7 @@
 import {
   ABSOLUTE_TICKET_FLOOR_KOBO, PLATFORM_OWNER, activationWorkflows, defaultStatus, describeIssues,
   editableKinds, exceptionCatalogue, exceptionTransitions, experimentRules, isActionOnlyStatus, mandateTransitions, normaliseFailureCode,
-  normaliseOwner, policyGuardrails, recordDataSchemas, recordStatuses, resolveExceptionType, roles, isKnownFailureCode, templateTextProblems,
+  normaliseOwner, policyGuardrails, recordDataSchemas, recordStatuses, recordTextLimits, resolveExceptionType, roles, isKnownFailureCode, isRealDate, templateTextProblems,
 } from "@workspace/valopay-schema";
 import { isDeepStrictEqual } from "node:util";
 import { assertNoRealBankDetails, findRecord, masked, recordsOf } from "./records";
@@ -24,9 +24,10 @@ function positiveInteger(value: unknown, label: string, allowZero = false): void
   }
 }
 
+/** A real calendar date as written: 2026-02-30 is refused, not read as 2 March (isRealDate). */
 function isoDate(value: unknown, label: string): void {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/.test(value) || Number.isNaN(Date.parse(value))) {
-    throw new Error(`${label} must use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z.`);
+  if (typeof value !== "string" || !isRealDate(value)) {
+    throw new Error(`${label} must use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z, and name a real date.`);
   }
 }
 
@@ -111,6 +112,13 @@ export function validateRecord(
   // object: JSON can carry such a key, and code that copies fields would otherwise inherit from it.
   for (const key of Object.keys(input.data ?? {})) {
     if (key === "__proto__" || key === "constructor" || key === "prototype") throw new Error(`data.${key} is not an allowed field.`);
+  }
+  // A record is named: an empty name used to be saved as the kind's name ("customers").
+  if (typeof input.name === "string" && !input.name.trim()) throw new Error("name cannot be empty. Enter a name for this record.");
+  // Indexed text is bounded, so an over-long value is refused here, naming its field, and never fails at the index.
+  for (const field of ["status", "reference", "customerId"] as const) {
+    const value = input[field];
+    if (typeof value === "string" && value.length > recordTextLimits[field]) throw new Error(`${field} is at most ${recordTextLimits[field]} characters.`);
   }
   assertNoRealBankDetails(input);
   validateDates(input);
@@ -295,7 +303,7 @@ export function validateRecord(
   }
   if (kind === "exceptions" && data.linkedRecordId) {
     const linked = state.records.find((item) => item.id === data.linkedRecordId);
-    if (!linked || linked.merchantId !== state.merchant.id) throw new Error("Link the exception to a record in this lender workspace.");
+    if (!linked || linked.merchantId !== state.merchant.id) throw Object.assign(new Error("Link the exception to a record in this lender workspace."), { status: 404 });
   }
   if (kind === "commercial" && data.designPartner && !data.signedFullPriceTerms) {
     // A discounted design-partner entry is allowed, but it cannot be treated as proof of a real Test 3 sale.
@@ -315,6 +323,15 @@ export function validateRecord(
   }
   if (["evidence", "experiments"].includes(kind)) requireRole(ctx, ["Admin"]);
   if (["commercial", "costs", "settlement-batches"].includes(kind)) requireRole(ctx, ["Admin", "Finance"]);
+  // SCH-04: the business calendar decides when collections run, so only the roles that run them maintain it.
+  if (kind === "calendar") requireRole(ctx, ["Admin", "Operations"]);
+  // MEA-05: a fortnightly review is recorded by its reviewer at the service's time; neither is typed in.
+  if (kind === "reviews" && !isUpdate) {
+    if (data.reviewer !== undefined && data.reviewer !== ctx.actor) throw new Error("The reviewer is the person recording the review. Sign in as the reviewer to record it, and leave the reviewer out.");
+    if (data.reviewedAt !== undefined) throw new Error("The review time is recorded by the service when the review is saved. Leave the review date out.");
+    data.reviewer = ctx.actor;
+    data.reviewedAt = ctx.now;
+  }
   if (kind === "settlement-batches") {
     for (const key of ["grossKobo", "feeKobo", "netKobo"]) positiveInteger(data[key], key, true);
     if (data.grossKobo - data.feeKobo !== data.netKobo) throw new Error("The net settlement amount must equal the gross amount minus fees.");

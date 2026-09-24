@@ -9,7 +9,7 @@ import type { StaffDirectoryMemberRole } from './staffDirectoryMemberRole';
 import type { StaffDirectoryMemberStatus } from './staffDirectoryMemberStatus';
 
 /**
- * A membership in the team directory, with the lenders it may open; an administrator opens every lender and lists none.
+ * A membership in the team directory, with the lenders it may open; an administrator opens every lender and lists none. A viewer who is not an administrator sees only the colleagues who share a lender with them, only the lenders they share, and no one's expiry but their own (expiresAt null).
  */
 export interface StaffDirectoryMember {
   id: string;
@@ -17,7 +17,8 @@ export interface StaffDirectoryMember {
   name: string;
   role: StaffDirectoryMemberRole;
   status: StaffDirectoryMemberStatus;
-  expiresAt: string;
+  /** @nullable */
+  expiresAt: string | null;
   updatedAt: string;
   lenderIds: string[];
   allLenders: boolean;

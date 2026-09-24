@@ -76,7 +76,7 @@ export interface DatabaseCheck {
 }
 
 /**
- * ok: every table, column and index this build needs is present. indexes_missing: ready, but an index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table or column is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and the migration that adds it.
+ * ok: every table, column, unique index, check constraint and read index this build needs is present. indexes_missing: ready, but a read index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table, column, unique index or check constraint is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and where it comes from.
  */
 export type SchemaCheckStatus = typeof SchemaCheckStatus[keyof typeof SchemaCheckStatus];
 
@@ -89,10 +89,10 @@ export const SchemaCheckStatus = {
 } as const;
 
 /**
- * Whether the database holds every table, column and index this build needs: ok, indexes_missing (ready, some reads slower), incomplete (not ready) or unchecked while the database does not answer. The server log, not the answer, names what is missing.
+ * Whether the database holds every table, column, unique index, check constraint and read index this build needs: ok, indexes_missing (ready, some reads slower), incomplete (not ready) or unchecked while the database does not answer. The server log, not the answer, names what is missing.
  */
 export interface SchemaCheck {
-  /** ok: every table, column and index this build needs is present. indexes_missing: ready, but an index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table or column is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and the migration that adds it. */
+  /** ok: every table, column, unique index, check constraint and read index this build needs is present. indexes_missing: ready, but a read index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table, column, unique index or check constraint is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and where it comes from. */
   status: SchemaCheckStatus;
 }
 
@@ -110,7 +110,7 @@ export type ReadinessStatusChecks = {
 };
 
 /**
- * The readiness answer: ok, or degraded while the database does not answer or lacks a table or column this build needs.
+ * The readiness answer: ok, or degraded while the database does not answer or lacks a table, column, unique index or check constraint this build needs.
  */
 export interface ReadinessStatus {
   status: ReadinessStatusStatus;
@@ -141,27 +141,35 @@ export interface ValopayRecord {
 }
 
 /**
- * A new record: only the name is required; the kind's default status applies when none is given.
+ * A new record: only the name is required, and it cannot be empty; the kind's default status applies when none is given. A status is at most 100 characters, a reference 200 and a customerId 100.
  */
 export interface RecordInput {
+  /** @minLength 1 */
   name: string;
+  /** @maxLength 100 */
   status?: string;
+  /** @maxLength 200 */
   reference?: string;
   /** @minimum 0 */
   amountKobo?: number;
+  /** @maxLength 100 */
   customerId?: string;
   data?: RecordData;
 }
 
 /**
- * The fields to change on a record; omitted fields keep their values.
+ * The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed. A name cannot be empty, and a status, reference or customerId is bounded as a new record's is.
  */
 export interface RecordUpdate {
+  /** @minLength 1 */
   name?: string;
+  /** @maxLength 100 */
   status?: string;
+  /** @maxLength 200 */
   reference?: string;
   /** @minimum 0 */
   amountKobo?: number;
+  /** @maxLength 100 */
   customerId?: string;
   data?: RecordData;
   expectedUpdatedAt?: string;
@@ -375,7 +383,7 @@ export type ImportResultPreviewItem = {
 };
 
 /**
- * How many rows were valid, invalid and imported, and each row's outcome.
+ * How many rows were valid, invalid and imported, and each row's outcome. warnings, when present, says which name or reference came from a fallback (the reference, a row number or a generated reference) while a column was left unused, and the check and the commit are not refused for it.
  */
 export interface ImportResult {
   valid: number;
@@ -385,6 +393,7 @@ export interface ImportResult {
   columns?: string[];
   preview?: ImportResultPreviewItem[];
   skipped?: number;
+  warnings?: string[];
 }
 
 /**
@@ -535,7 +544,7 @@ export interface ExportResult {
 export type QueuePageCounts = {[key: string]: number};
 
 /**
- * A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states.
+ * A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states: a deadline written as a day alone (YYYY-MM-DD) is due all that West Africa Time day and overdue once it ends, one with a time passes at that instant, and one that is not a real date is no deadline.
  */
 export interface QueuePage {
   items: ValopayRecord[];
@@ -889,16 +898,10 @@ export interface CreditReview {
   authentication: 'simulated_sandbox_review';
 }
 
-export type CreditDeskCustomersItemPermissions = {
+export type CreditDeskPermissionsItem = {
+  customerId: string;
   accountRead: boolean;
   creditAssessment: boolean;
-};
-
-export type CreditDeskCustomersItem = {
-  id: string;
-  name: string;
-  reference: string;
-  permissions: CreditDeskCustomersItemPermissions;
 };
 
 export type CreditDeskAssessmentsItem = {
@@ -944,7 +947,7 @@ export type CreditDeskGate = {
 };
 
 /**
- * The Credit Desk: applicants with their current permissions, assessments with their reviews, the illustrative rulecard and the closed credit gate.
+ * The Credit Desk: the current permissions of each applicant holding any (the applicants are the workspace's customers, listed once; one not listed here holds neither), assessments with their reviews, the illustrative rulecard and the closed credit gate.
  */
 export interface CreditDesk {
   mode: 'synthetic';
@@ -952,7 +955,7 @@ export interface CreditDesk {
   canAssess: boolean;
   canReview: boolean;
   actor: string;
-  customers: CreditDeskCustomersItem[];
+  permissions: CreditDeskPermissionsItem[];
   assessments: CreditDeskAssessmentsItem[];
   scenarios: CreditDeskScenariosItem[];
   model: CreditDeskModel;
@@ -1612,7 +1615,7 @@ export interface ConnectedWorkspace {
 export type ConnectedActionInputData = {[key: string]: unknown};
 
 /**
- * Action-specific data is validated by the server. Names use consent, payment, credit or cash prefixes. Every action requires a current whole-workspace revision and a reason. No input can enable live routes.
+ * Action-specific data is validated by the server. Names use consent, payment, credit or cash prefixes. Every action requires the workspace's current revision and a reason: the revision changes with anything the workspace shows or its actions read (the lender and its settings, customers, the instalments it offers, a checkout names or a receipt was applied to and their attempts, connected records, and pay-by-bank receipts with their allocations), not with the lender's history (closes, the audit trail, exports, settled instalments or other payments). No input can enable live routes.
  */
 export interface ConnectedActionInput {
   /**
@@ -1947,7 +1950,7 @@ export const StaffMemberStatus = {
 } as const;
 
 /**
- * A staff membership as a change answers it: its role, state, expiry and version.
+ * A staff membership: its role, state, expiry and version.
  */
 export interface StaffMember {
   id: string;
@@ -1957,6 +1960,83 @@ export interface StaffMember {
   status: StaffMemberStatus;
   expiresAt: string;
   updatedAt: string;
+}
+
+export type StaffAccessRole = typeof StaffAccessRole[keyof typeof StaffAccessRole];
+
+
+export const StaffAccessRole = {
+  Admin: 'Admin',
+  Operations: 'Operations',
+  Finance: 'Finance',
+  Compliance_reviewer: 'Compliance reviewer',
+  'Read-only': 'Read-only',
+} as const;
+
+export type StaffAccessStatus = typeof StaffAccessStatus[keyof typeof StaffAccessStatus];
+
+
+export const StaffAccessStatus = {
+  active: 'active',
+  suspended: 'suspended',
+  revoked: 'revoked',
+} as const;
+
+/**
+ * A membership's role and state, before or after a change.
+ */
+export interface StaffAccess {
+  role: StaffAccessRole;
+  status: StaffAccessStatus;
+}
+
+/**
+ * A membership change that grants Admin, Finance or Compliance reviewer and waits for a second administrator: who asked, when and why. Approving it applies exactly this change; a later change to the membership leaves it out of date, and it is no longer listed.
+ */
+export interface StaffChangeRequest {
+  id: string;
+  memberId: string;
+  name: string;
+  from: StaffAccess;
+  to: StaffAccess;
+  reason: string;
+  requestedBy: string;
+  requestedAt: string;
+}
+
+export type StaffMemberChangeRole = typeof StaffMemberChangeRole[keyof typeof StaffMemberChangeRole];
+
+
+export const StaffMemberChangeRole = {
+  Admin: 'Admin',
+  Operations: 'Operations',
+  Finance: 'Finance',
+  Compliance_reviewer: 'Compliance reviewer',
+  'Read-only': 'Read-only',
+} as const;
+
+export type StaffMemberChangeStatus = typeof StaffMemberChangeStatus[keyof typeof StaffMemberChangeStatus];
+
+
+export const StaffMemberChangeStatus = {
+  active: 'active',
+  suspended: 'suspended',
+  revoked: 'revoked',
+} as const;
+
+/**
+ * A membership change's answer: the membership as it now stands, what happened in plain words, and the waiting request when the change needs a second administrator (the membership is then unchanged).
+ */
+export interface StaffMemberChange {
+  id: string;
+  actor: string;
+  name: string;
+  role: StaffMemberChangeRole;
+  status: StaffMemberChangeStatus;
+  expiresAt: string;
+  updatedAt: string;
+  message: string;
+  pendingChange: StaffChangeRequest | null;
 }
 
 export type StaffDirectoryMemberRole = typeof StaffDirectoryMemberRole[keyof typeof StaffDirectoryMemberRole];
@@ -1980,7 +2060,7 @@ export const StaffDirectoryMemberStatus = {
 } as const;
 
 /**
- * A membership in the team directory, with the lenders it may open; an administrator opens every lender and lists none.
+ * A membership in the team directory, with the lenders it may open; an administrator opens every lender and lists none. A viewer who is not an administrator sees only the colleagues who share a lender with them, only the lenders they share, and no one's expiry but their own (expiresAt null).
  */
 export interface StaffDirectoryMember {
   id: string;
@@ -1988,7 +2068,8 @@ export interface StaffDirectoryMember {
   name: string;
   role: StaffDirectoryMemberRole;
   status: StaffDirectoryMemberStatus;
-  expiresAt: string;
+  /** @nullable */
+  expiresAt: string | null;
   updatedAt: string;
   lenderIds: string[];
   allLenders: boolean;
@@ -2014,8 +2095,17 @@ export const StaffInvitationStatus = {
   revoked: 'revoked',
 } as const;
 
+export type StaffInvitationApproval = typeof StaffInvitationApproval[keyof typeof StaffInvitationApproval];
+
+
+export const StaffInvitationApproval = {
+  not_required: 'not_required',
+  awaiting: 'awaiting',
+  approved: 'approved',
+} as const;
+
 /**
- * A pending, accepted or revoked invitation; the token is shown once, at creation.
+ * A pending, accepted or revoked invitation, who sent it and whether it waits for, or has, the second administrator's approval an Admin, Finance or Compliance reviewer invitation needs; the token is shown once, at creation.
  */
 export interface StaffInvitation {
   id: string;
@@ -2023,6 +2113,10 @@ export interface StaffInvitation {
   role: StaffInvitationRole;
   status: StaffInvitationStatus;
   expiresAt: string;
+  invitedBy: string;
+  approval: StaffInvitationApproval;
+  /** @nullable */
+  approvedBy: string | null;
 }
 
 /**
@@ -2046,7 +2140,7 @@ export const StaffDirectoryMode = {
 } as const;
 
 /**
- * The team as the caller may see it: members for everyone; lenders, invitations and history for administrators. In the sandbox every list, lenders included, is empty and the message says why.
+ * The team as the caller may see it: members as StaffDirectoryMember describes; lenders, invitations, changes awaiting a second administrator and history for administrators. In the sandbox every list, lenders included, is empty and the message says why.
  */
 export interface StaffDirectory {
   mode: StaffDirectoryMode;
@@ -2055,6 +2149,8 @@ export interface StaffDirectory {
   lenders: Merchant[];
   /** @maxItems 100 */
   invitations: StaffInvitation[];
+  /** @maxItems 100 */
+  changes: StaffChangeRequest[];
   /** @maxItems 100 */
   events: StaffEvent[];
   message: string;
@@ -2080,13 +2176,22 @@ export interface InvitationInput {
   role: InvitationInputRole;
 }
 
+export type InvitationCreatedApproval = typeof InvitationCreatedApproval[keyof typeof InvitationCreatedApproval];
+
+
+export const InvitationCreatedApproval = {
+  not_required: 'not_required',
+  awaiting: 'awaiting',
+} as const;
+
 /**
- * The invitation and its one-time acceptance token; no email is sent.
+ * The invitation, its one-time acceptance token and whether it waits for a second administrator's approval; no email is sent.
  */
 export interface InvitationCreated {
   id: string;
   /** @pattern ^[a-f0-9]{64}$ */
   token: string;
+  approval: InvitationCreatedApproval;
   message: string;
 }
 
@@ -3539,6 +3644,15 @@ export type LifecycleViewPolicy = {
   auditTrail: 'retain';
 };
 
+export type LifecycleViewMinimumDays = {
+  /** @minimum 1 */
+  rawCsvDays: number;
+  /** @minimum 1 */
+  journalPayloadDays: number;
+  /** @minimum 1 */
+  exportFileDays: number;
+};
+
 export type LifecycleViewTargetsItemKind = typeof LifecycleViewTargetsItemKind[keyof typeof LifecycleViewTargetsItemKind];
 
 
@@ -3758,6 +3872,8 @@ export type LifecycleViewRunsItem = {
   /** @minimum 0 */
   moreEligible: number;
   /** @nullable */
+  preparedBy?: string | null;
+  /** @nullable */
   approvedBy: string | null;
   /** @nullable */
   approvedAt: string | null;
@@ -3773,7 +3889,7 @@ export type LifecycleViewRunsItem = {
 };
 
 /**
- * The lender's retention policy, holds, bounded inventory of what the policy would touch, and saved retention runs.
+ * The lender's retention policy, the shortest periods it may set (minimumDays) and whether a second administrator approves runs (secondApprover), holds, bounded inventory of what the policy would touch, and saved retention runs.
  */
 export interface LifecycleView {
   /**
@@ -3789,6 +3905,8 @@ export interface LifecycleView {
   actor: string;
   asOf: string;
   policy: LifecycleViewPolicy;
+  minimumDays?: LifecycleViewMinimumDays;
+  secondApprover?: boolean;
   /** @pattern ^[a-f0-9]{64}$ */
   policyRevision: string;
   /** @pattern ^[a-f0-9]{64}$ */
@@ -3915,7 +4033,7 @@ export type LifecycleRunViewReceiptsItem = {
 };
 
 /**
- * One retention run: its reviewed manifest, approval state and per-item receipts.
+ * One retention run: its reviewed manifest, who prepared it, approval state and per-item receipts.
  */
 export interface LifecycleRunView {
   /**
@@ -3942,6 +4060,8 @@ export interface LifecycleRunView {
   candidateCount: number;
   /** @minimum 0 */
   moreEligible: number;
+  /** @nullable */
+  preparedBy?: string | null;
   /** @nullable */
   approvedBy: string | null;
   /** @nullable */
@@ -4070,7 +4190,7 @@ export type ListRecordsParams = {
  */
 merchantId: string;
 /**
- * Text matched, ignoring case and accents, against the name, reference, status and data.
+ * Text matched, ignoring case and accents, against the record's name, its reference and the text and number values in its data, nested ones included; never a field's name, true, false or null.
  */
 search?: string;
 /**
@@ -4078,7 +4198,7 @@ search?: string;
  */
 status?: string;
 /**
- * Page size, capped at 500. Omitted, a kind that grows with history (audit, closes, exports, notifications, retry-decisions) returns its newest 500 with nextOffset to page on, and any other kind its whole filtered set.
+ * Page size, from 1 to 500; a value outside that range is refused (400). Omitted, a kind that grows with history (audit, closes, exports, notifications, retry-decisions) returns its newest 500 with nextOffset to page on, and any other kind its whole filtered set, for existing relationship and balance views.
  * @minimum 1
  * @maximum 500
  */
@@ -4089,7 +4209,7 @@ limit?: number;
  */
 offset?: number;
 /**
- * ISO timestamp; only records updated at or after it (incremental sync).
+ * An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00; only records updated at or after that instant (incremental sync). A number, a date without a time, a time without Z or an offset, or a year outside 0001 to 9999 is refused (400, naming updatedSince).
  */
 updatedSince?: string;
 /**
@@ -4100,7 +4220,19 @@ customerId?: string;
  * Only this exact record ID, in the selected kind and lender.
  */
 id?: string;
+/**
+ * Instalments (due-items) only. true lists just the instalments that can take an allocation now: those that still owe an amount and are not cancelled, closed or in dispute, the ones a manual allocation accepts, so total counts the choices. Omitted or false lists every instalment. Refused (400) for any other kind.
+ */
+allocatable?: ListRecordsAllocatable;
 };
+
+export type ListRecordsAllocatable = typeof ListRecordsAllocatable[keyof typeof ListRecordsAllocatable];
+
+
+export const ListRecordsAllocatable = {
+  true: 'true',
+  false: 'false',
+} as const;
 
 export type CreateRecordParams = {
 /**

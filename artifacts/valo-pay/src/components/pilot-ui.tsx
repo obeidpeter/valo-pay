@@ -37,24 +37,38 @@ export function PilotPanel({
     </section>
   );
 }
+/** Said when a page's information could not be read and the service gave no words of its own: nothing was asked of it but to read. */
+export const READ_PROBLEM =
+  "This information could not be loaded. Check your connection and try again.";
+/** Said when a change the operations journal records got no answer: if it reached the service, Operations has it with its outcome. */
+export const JOURNALED_WRITE_PROBLEM =
+  "The request could not be completed. If it reached the service, Operations lists it with its outcome.";
+/** Said when a change Operations does not record (team, access and new lender changes) got no answer: the page itself shows whether it was saved. */
+export const UNJOURNALED_WRITE_PROBLEM =
+  "The request could not be completed. Refresh this page to see whether it was saved before you try again.";
+
+/**
+ * A request's problem in the service's words, or in the fallback's when it
+ * gave none (no answer, or a proxy's error page). A read and a change need
+ * different fallbacks: a failed read changed nothing and is simply tried
+ * again, while a change may have been saved and is checked where it is
+ * recorded (`READ_PROBLEM` by default).
+ */
 export function PilotError({
   error,
   retry,
+  fallback = READ_PROBLEM,
 }: {
   error: unknown;
   retry?: () => void;
+  fallback?: string;
 }) {
   return error ? (
     <div
       role="alert"
       className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm"
     >
-      <p>
-        {saidBy(
-          error,
-          "The request could not be completed. Your original request is available in Operations if it reached the server.",
-        )}
-      </p>
+      <p>{saidBy(error, fallback)}</p>
       {retry && (
         <Button className="mt-3" variant="outline" onClick={retry}>
           Try again
@@ -87,7 +101,7 @@ export function RecoveryNotice({
           ? "Check the original request before making a different change. Requests received by the server remain in Operations after you leave or reload. If it cannot be recovered, check Operations, then discard it to start again."
           : "Check the original request, or refresh this page to inspect the saved result before making another change. If it cannot be recovered, check the saved result, then discard it to start again."}
       </p>
-      <PilotError error={mutation.error} />
+      <PilotError error={mutation.error} fallback={persistent ? JOURNALED_WRITE_PROBLEM : UNJOURNALED_WRITE_PROBLEM} />
       <div className="flex flex-wrap gap-3">
         <Button
           variant="outline"
@@ -113,6 +127,6 @@ export function RecoveryNotice({
       </div>
     </div>
   ) : (
-    <PilotError error={mutation.error} />
+    <PilotError error={mutation.error} fallback={persistent ? JOURNALED_WRITE_PROBLEM : UNJOURNALED_WRITE_PROBLEM} />
   );
 }

@@ -16,7 +16,7 @@ const strings = z.array(z.string());
 /** Purposes a synthetic connected-banking permission can be granted for. */
 export const connectedConsentPurposes = ["account_read", "credit_assessment", "merchant_account_read", "erp_draft", "payroll_prepare"] as const;
 
-/** A connected-workspace action: consent, payment, credit or cash, with its reason, action data and the whole-workspace revision it was reviewed at. */
+/** A connected-workspace action: consent, payment, credit or cash, with its reason, action data and the revision of the workspace it was reviewed at. */
 export const connectedActionInputSchema = z
   .object({
     action: z.string().min(1).max(80),
@@ -67,10 +67,15 @@ export const creditReviewViewSchema = z.object({
   override: z.boolean(), overrideRationale: z.string().nullable(), mode: z.literal("synthetic"), actualLendingDecision: z.literal(false), fundsMoved: z.literal(false),
   authentication: z.literal("simulated_sandbox_review"),
 }).strict();
-/** The Credit Desk: applicants with their permissions, assessments with their reviews, the illustrative rulecard and the closed credit gate. */
+/**
+ * The Credit Desk: the current permissions of each applicant holding any (the
+ * applicants are the workspace's customers, listed once in the connected view;
+ * one not listed here holds neither), assessments with their reviews, the
+ * illustrative rulecard and the closed credit gate.
+ */
 export const creditViewSchema = z.object({
   mode: z.literal("synthetic"), liveEnabled: z.literal(false), canAssess: z.boolean(), canReview: z.boolean(), actor: z.string(),
-  customers: z.array(z.object({ id: z.string(), name: z.string(), reference: z.string(), permissions: z.object({ accountRead: z.boolean(), creditAssessment: z.boolean() }).strict() }).strict()),
+  permissions: z.array(z.object({ customerId: z.string(), accountRead: z.boolean(), creditAssessment: z.boolean() }).strict()),
   assessments: z.array(z.object({
     id: z.string(), customerId: z.string(), customerName: z.string(), scenario: z.string(), createdAt: z.string(), createdBy: z.string(),
     permissionRestricted: z.boolean(), result: creditAssessmentResultSchema, reviews: z.array(creditReviewViewSchema),

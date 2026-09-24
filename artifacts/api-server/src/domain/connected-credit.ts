@@ -1,4 +1,5 @@
 import {
+  counted,
   legacyCollatedCompare,
   sameJson,
   WAT_OFFSET_MS,
@@ -1121,7 +1122,7 @@ export function assessCredit(
         label: "Income regularity",
         maximum: 25,
         points: mulDiv(features.activeIncomePeriods, 25, periodCount),
-        reason: `Confirmed recurring income appears in ${features.activeIncomePeriods} of ${periodCount} observed 30-day periods.`,
+        reason: `Confirmed recurring income appears in ${features.activeIncomePeriods} of ${counted(periodCount, "observed 30-day period")}.`,
       },
       {
         code: "residual_capacity",
@@ -1149,7 +1150,7 @@ export function assessCredit(
               : liquidityRatio >= 5_000
                 ? 5
                 : 0,
-        reason: `${consolidatedBalances.length} aligned booked closing balances support the observed buffer.`,
+        reason: `${counted(consolidatedBalances.length, "aligned booked closing balance supports", "aligned booked closing balances support")} the observed buffer.`,
       },
       {
         code: "commitment_behaviour",
@@ -1161,7 +1162,7 @@ export function assessCredit(
             : input.repaymentHistory.missedPayments === 1
               ? 10
               : 0,
-        reason: `${input.repaymentHistory.missedPayments} missed repayment(s) in the supplied verified history. This does not establish complete bureau coverage.`,
+        reason: `${counted(input.repaymentHistory.missedPayments, "missed repayment")} in the supplied verified history. This does not establish complete bureau coverage.`,
       },
       {
         code: "income_variability",

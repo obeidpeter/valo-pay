@@ -627,6 +627,9 @@ try {
   );
   assert.equal(caseDetail.events.length, 1);
   assert.equal(caseDetail.record.data.case.assignee, "Sandbox Admin");
+  // A demo persona has one name: the actor its changes are recorded under, in the case roster and on the case alike.
+  assert.equal(caseDetail.record.data.case.assigneeName, "Sandbox Admin");
+  assert.ok(caseDetail.assignees.length > 0 && caseDetail.assignees.every((person: { actor: string; name: string }) => person.name === person.actor), JSON.stringify(caseDetail.assignees));
 
   // Complete the empty lender journey using actual routes and persisted state.
   const ingest = async (kind: string, csv: string) => {
@@ -844,6 +847,12 @@ try {
       "admin",
     ),
   );
+  // A Finance grant waits for a second administrator: the operator adds one, and that administrator approves it.
+  assert.equal(invitation.approval, "awaiting");
+  const secondAdmin = `user_${randomUUID().replaceAll("-", "")}`;
+  identities.set("second-admin", staffAuth(secondAdmin));
+  await store.addStaffAdministrator(organisation, secondAdmin, "Second administrator");
+  ok(await call(`/v1/team/invitations/${invitation.id}/approve`, "POST", undefined, undefined, "second-admin"));
   (clerkClient.users as any).getUser = async () => ({
     emailAddresses: [
       {

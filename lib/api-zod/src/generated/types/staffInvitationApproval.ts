@@ -5,11 +5,12 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
-import type { CreditDeskCustomersItemPermissions } from './creditDeskCustomersItemPermissions';
 
-export type CreditDeskCustomersItem = {
-  id: string;
-  name: string;
-  reference: string;
-  permissions: CreditDeskCustomersItemPermissions;
-};
+export type StaffInvitationApproval = typeof StaffInvitationApproval[keyof typeof StaffInvitationApproval];
+
+
+export const StaffInvitationApproval = {
+  not_required: 'not_required',
+  awaiting: 'awaiting',
+  approved: 'approved',
+} as const;

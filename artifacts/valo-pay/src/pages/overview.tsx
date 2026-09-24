@@ -18,6 +18,7 @@ const queueDestinations: Record<string, string> = {
 };
 
 function alertDestination(key: string): { href: string; label: string } {
+  if (key.includes('pay_by_bank')) return { href: '/pay-by-bank', label: 'Review pay-by-bank checkouts' };
   if (key.includes('export')) return { href: '/exports', label: 'Check saved exports' };
   if (key.includes('close')) return { href: '/reports', label: 'View daily closes' };
   if (key.includes('audit')) return { href: '/audit', label: 'Review audit log' };
@@ -29,6 +30,20 @@ function alertDestination(key: string): { href: string; label: string } {
 
 const metricIcons = [ArrowDownLeft, ArrowUpRight, CheckCheck, AlertCircle];
 
+/** The overview's heading, the same while its figures load, when they are shown and when they could not be loaded. */
+function OverviewHeader() {
+  return (
+    <header className="flex flex-wrap items-end justify-between gap-4">
+      <div>
+        <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Your workspace at a glance</p>
+        <h1 className="text-3xl font-bold tracking-tight">Operations overview</h1>
+        <p className="mt-2 text-sm text-muted-foreground">Track collections, unpaid instalments and work that needs your attention.</p>
+      </div>
+      <Button asChild variant="outline" className="gap-2"><Link href="/reports"><FileBarChart2 aria-hidden="true" className="h-4 w-4" /> View reports</Link></Button>
+    </header>
+  );
+}
+
 export default function OverviewPage() {
   const { merchantId } = useWorkspace();
   const overviewQuery = useGetOverview(
@@ -38,23 +53,16 @@ export default function OverviewPage() {
   const { data: overview, isLoading, error, refetch } = overviewQuery;
 
   if (!merchantId) return null;
-  if (isLoading) return <Loading what="the overview" />;
-  // A failed refresh keeps the figures on the page, with a notice; only a first load that failed shows this card.
-  if (error && !overview) return <div role="alert" className="rounded-xl border bg-card p-6"><p className="font-semibold">Unable to load the overview</p><p className="mt-1 text-sm text-muted-foreground">Your records are unchanged. Try loading this page again.</p><Button variant="outline" className="mt-4" onClick={() => refetch()}>Try again</Button></div>;
+  if (isLoading) return <Loading what="the overview" heading />;
+  // A failed refresh keeps the figures on the page, with a notice; only a first load that failed shows this card, under the page's heading.
+  if (error && !overview) return <div className="space-y-6"><OverviewHeader /><div role="alert" className="rounded-xl border bg-card p-6"><p className="font-semibold">Unable to load the overview</p><p className="mt-1 text-sm text-muted-foreground">Your records are unchanged. Try loading this page again.</p><Button variant="outline" className="mt-4" onClick={() => refetch()}>Try again</Button></div></div>;
   if (!overview) return null;
 
   const upcoming = [...overview.upcoming].sort((a, b) => String(a.data.dueDate || '').localeCompare(String(b.data.dueDate || '')));
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500 motion-reduce:animate-none">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Your workspace at a glance</p>
-          <h1 className="text-3xl font-bold tracking-tight">Operations overview</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Track collections, unpaid instalments and work that needs your attention.</p>
-        </div>
-        <Button asChild variant="outline" className="gap-2"><Link href="/reports"><FileBarChart2 aria-hidden="true" className="h-4 w-4" /> View reports</Link></Button>
-      </header>
+      <OverviewHeader />
 
       <RefreshProblem what="The overview" query={overviewQuery} />
 

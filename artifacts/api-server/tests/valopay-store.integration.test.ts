@@ -9,7 +9,8 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
 
 const { pool } = await import("@workspace/db");
 const { getAuth } = await import("@clerk/express");
-const { inWorkspace, listMerchants, loadState, loadSettingsView, getCloseDetail, saveState, findIdempotency, saveIdempotency, changeRole, appendAudit, settleChanges, addedRecords, closeDatabase, prepareOperation, digest, inMerchantAsSystem, SYSTEM_ACTOR_PREFIX, pingDatabase, sweepExpiredWorkspaces } = await import("../src/lib/valopay-store.js");
+const { inWorkspace, listMerchants, loadState, loadSettingsView, getCloseDetail, saveState, findIdempotency, saveIdempotency, changeRole, appendAudit, settleChanges, addedRecords, closeDatabase, prepareOperation, digest, inMerchantAsSystem, SYSTEM_ACTOR_PREFIX, pingDatabase, integrityGuards, sweepExpiredWorkspaces } = await import("../src/lib/valopay-store.js");
+const { exportJobRepository } = await import("../src/lib/export-job-store.js");
 const { overrideDatabaseLimits } = await import("../src/lib/database-limits.js");
 
 const requestFor = (token: string) => {
@@ -41,6 +42,13 @@ async function indexesRead(statement: { text: string; values: unknown[] }) {
   const names = new Set<string>(), walk = (node: any) => { if (node["Index Name"]) names.add(node["Index Name"]); for (const child of node.Plans ?? []) walk(child); };
   walk(plan);
   return names;
+}
+/** The kinds of step (Index Scan, Sort, ...) PostgreSQL would take to run a statement with its own values. */
+async function nodesRun(statement: { text: string; values: unknown[] }) {
+  const plan = (await pool.query(`EXPLAIN (FORMAT JSON) ${statement.text}`, statement.values)).rows[0]["QUERY PLAN"][0].Plan;
+  const kinds = new Set<string>(), walk = (node: any) => { kinds.add(node["Node Type"]); for (const child of node.Plans ?? []) walk(child); };
+  walk(plan);
+  return kinds;
 }
 
 try {
@@ -349,7 +357,18 @@ try {
       assert.deepEqual([...await indexesRead(pending)], ["valopay_operations_pending"], "the pending-request limit reads only pending entries");
       const lenders = await statementOf(/^SELECT m\.info FROM valopay_merchants m/, () => inWorkspace(requestFor(indexToken), response(), listMerchants, "read"));
       assert.ok((await indexesRead(lenders)).has("valopay_merchants_workspace"), "a workspace's lenders are read through the workspace index");
+      // The export worker looks for queued exports, and running ones whose lease has run out, across every lender, oldest
+      // first, every few seconds. Its partial index (lib/db/migrations/008_export_queue_index_and_foreign_key_names.sql)
+      // holds only those jobs, in that order, so the look-up reads a few entries, with no sort, instead of every record.
+      await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,data)
+        SELECT $2||'-record-'||i,$1,CASE WHEN i%50=0 THEN 'exports' ELSE 'notifications' END,'Index filler',CASE WHEN i%50=0 THEN 'ready' ELSE 'sent' END,'{}' FROM generate_series(1,20000) i`, [indexLender, filler]);
+      await pool.query("ANALYZE valopay_records");
+      const queue = await statementOf(/^SELECT merchant_id AS "merchantId",id FROM valopay_records/, () => exportJobRepository.candidates(2));
+      assert.deepEqual([...await indexesRead(queue)], ["valopay_records_export_queue"], "the export worker's look-up reads only its queue index");
+      assert.ok(!(await nodesRun(queue)).has("Sort"), "which gives the jobs in the order the worker takes them, with no sort");
     } finally {
+      await pool.query("DELETE FROM valopay_records WHERE merchant_id=$1 AND id LIKE $2", [indexLender, `${filler}-record-%`]);
+      await pool.query("ANALYZE valopay_records");
       await pool.query("DELETE FROM valopay_operations WHERE merchant_id=$1 AND (id LIKE $2 OR label='Save records customers')", [indexLender, `${filler}-%`]);
       await pool.query("DELETE FROM valopay_merchants WHERE id LIKE $1", [`${filler}-lender-%`]);
       await pool.query("DELETE FROM valopay_workspaces WHERE id LIKE $1", [`${filler}-%`]);
@@ -357,22 +376,54 @@ try {
     }
   }
   // Readiness asks the database for what this build needs, not only for an answer: every table the Drizzle schema
-  // declares with every column it declares, and the indexes later migrations add, compared by definition (the copied
-  // tables of an isolated schema carry generated index names). A database missing a migration used to answer SELECT 1
-  // and read as ready. A missing table or column fails the check; a missing index is only reported.
+  // declares with every column it declares, its integrity guards (every unique index and check constraint) and the
+  // indexes later migrations add, the last two compared by definition (the copied tables of an isolated schema carry
+  // generated index names). A database missing a migration used to answer SELECT 1 and read as ready, and one missing a
+  // guard, as an interrupted push left it, read as ready too. A missing table, column or guard fails the check; a
+  // missing read index is only reported.
   {
     const ready = await pingDatabase();
     assert.deepEqual([ready.status, ready.schema], ["ok", { status: "ok", missing: [] }], "the pushed schema is complete");
-    const scratch = `valopay_readiness_test_${randomBytes(6).toString("hex")}`;
     const tables = ["valopay_workspaces", "valopay_merchants", "valopay_records", "valopay_idempotency", "valopay_operations", "valopay_teams", "valopay_staff_memberships", "valopay_staff_invitations", "valopay_staff_events", "valopay_staff_lender_access"];
+    // The guards readiness requires are exactly the unique indexes and check constraints the pushed schema holds, so
+    // one the Drizzle schema gains or loses fails here until the catalogue follows.
+    const held = (await pool.query<{ table: string; type: string; definition: string }>(`SELECT t.relname AS table,'unique index' AS type,regexp_replace(pg_get_indexdef(i.indexrelid),'^CREATE UNIQUE INDEX \\S+ ON \\S+ ','') AS definition
+        FROM pg_index i JOIN pg_class t ON t.oid=i.indrelid JOIN pg_namespace n ON n.oid=t.relnamespace WHERE n.nspname='public' AND t.relname=ANY($1::text[]) AND i.indisunique
+      UNION ALL SELECT t.relname,'check',pg_get_constraintdef(k.oid)
+        FROM pg_constraint k JOIN pg_class t ON t.oid=k.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace WHERE n.nspname='public' AND t.relname=ANY($1::text[]) AND k.contype='c'`, [tables])).rows;
+    const described = (guards: Array<{ table: string; type: string; definition: string }>) => guards.map(({ table, type, definition }) => `${table} ${type} ${definition}`).sort();
+    assert.deepEqual(described([...integrityGuards]), described(held), "readiness requires every unique index and check constraint the pushed schema holds, and nothing else");
+    const scratch = `valopay_readiness_test_${randomBytes(6).toString("hex")}`;
+    const guardSource = "restore it from the Drizzle schema in lib/db";
     try {
       await pool.query(`CREATE SCHEMA "${scratch}"`);
       for (const table of tables) await pool.query(`CREATE TABLE "${scratch}".${table} (LIKE public.${table} INCLUDING ALL)`);
       assert.deepEqual((await pingDatabase({ schema: scratch })).schema, { status: "ok", missing: [] }, "copied tables whose indexes carry generated names are complete");
-      const copiedPending = (await pool.query<{ indexname: string }>("SELECT indexname FROM pg_indexes WHERE schemaname=$1 AND tablename='valopay_operations' AND indexdef LIKE '%WHERE (status%'", [scratch])).rows[0]!.indexname;
-      await pool.query(`DROP INDEX "${scratch}"."${copiedPending}"`);
-      // Without an index every request still works, only slower: reported, not a reason to leave rotation.
-      assert.deepEqual((await pingDatabase({ schema: scratch })).schema, { status: "indexes_missing", missing: ["index valopay_operations_pending: apply lib/db/migrations/007_journal_and_lender_indexes.sql"] }, "a missing index alone is named, with its migration, without failing");
+      const copied = async (table: string, like: string) => (await pool.query<{ indexname: string }>("SELECT indexname FROM pg_indexes WHERE schemaname=$1 AND tablename=$2 AND indexdef LIKE $3", [scratch, table, like])).rows[0]!.indexname;
+      await pool.query(`DROP INDEX "${scratch}"."${await copied("valopay_operations", "%WHERE (status%")}"`);
+      await pool.query(`DROP INDEX "${scratch}"."${await copied("valopay_records", "%exports%")}"`);
+      // Without a read index every request still works, only slower: reported, not a reason to leave rotation.
+      assert.deepEqual((await pingDatabase({ schema: scratch })).schema, { status: "indexes_missing", missing: [
+        "index valopay_operations_pending: apply lib/db/migrations/007_journal_and_lender_indexes.sql",
+        "index valopay_records_export_queue: apply lib/db/migrations/008_export_queue_index_and_foreign_key_names.sql",
+      ] }, "a missing read index alone is named, with its migration, without failing");
+      // Without an integrity guard the database accepts what the application relies on it to refuse (here a second
+      // attempt in flight for one instalment, and an instalment below the ticket floor): not ready. An index of the
+      // same columns that is not unique, or a check added NOT VALID, which leaves the rows already stored unchecked, is
+      // not the guard.
+      const inflight = await copied("valopay_records", "%dueItemId%"), inflightColumns = (await pool.query<{ indexdef: string }>("SELECT indexdef FROM pg_indexes WHERE schemaname=$1 AND indexname=$2", [scratch, inflight])).rows[0]!.indexdef.replace(/^CREATE UNIQUE INDEX \S+ ON \S+ /, "");
+      await pool.query(`DROP INDEX "${scratch}"."${inflight}"`);
+      await pool.query(`CREATE INDEX valopay_one_inflight_lookalike ON "${scratch}".valopay_records ${inflightColumns}`);
+      await pool.query(`ALTER TABLE "${scratch}".valopay_records DROP CONSTRAINT valopay_ticket_floor`);
+      await pool.query(`ALTER TABLE "${scratch}".valopay_records ADD CONSTRAINT valopay_ticket_floor CHECK (kind <> 'due-items' OR amount_kobo >= 500000) NOT VALID`);
+      const unguarded = await pingDatabase({ schema: scratch });
+      assert.deepEqual([unguarded.status, unguarded.schema.status], ["ok", "incomplete"], "a database that answers but lacks a guard the build relies on is not ready");
+      assert.deepEqual(unguarded.schema.missing, [
+        `unique index valopay_one_inflight: ${guardSource}`,
+        `check valopay_ticket_floor: ${guardSource}`,
+        "index valopay_operations_pending: apply lib/db/migrations/007_journal_and_lender_indexes.sql",
+        "index valopay_records_export_queue: apply lib/db/migrations/008_export_queue_index_and_foreign_key_names.sql",
+      ], "and names each missing guard and index");
       await pool.query(`DROP TABLE "${scratch}".valopay_staff_events`);
       await pool.query(`ALTER TABLE "${scratch}".valopay_operations DROP COLUMN receipt`);
       const incomplete = await pingDatabase({ schema: scratch });
@@ -380,15 +431,18 @@ try {
       assert.deepEqual(incomplete.schema.missing, [
         "column valopay_operations.receipt: apply lib/db/migrations/003_pilot_workflow.sql",
         "table valopay_staff_events: apply lib/db/migrations/003_pilot_workflow.sql",
+        `unique index valopay_one_inflight: ${guardSource}`,
+        `check valopay_ticket_floor: ${guardSource}`,
         "index valopay_operations_pending: apply lib/db/migrations/007_journal_and_lender_indexes.sql",
-      ], "and names each missing table, column and index with the migration that adds it");
+        "index valopay_records_export_queue: apply lib/db/migrations/008_export_queue_index_and_foreign_key_names.sql",
+      ], "and names each missing table, column, guard and index, with where it comes from");
     } finally {
       await pool.query(`DROP SCHEMA IF EXISTS "${scratch}" CASCADE`);
     }
     // Unqualified queries reach the tables along the search path, which is not always its first schema: by default a
     // schema named after the login comes first, and it may exist without the tables. Readiness reads the tables the
-    // queries reach, and migration 007 checks its indexes on those tables, so such a schema does not make a working
-    // database read as incomplete or stop the migration.
+    // queries reach, and migrations 007 and 008 check their indexes and names on those tables, so such a schema does
+    // not make a working database read as incomplete or stop a migration.
     const login = (await pool.query<{ login: string }>("SELECT current_user AS login")).rows[0]!.login, quoted = `"${login.replaceAll('"', '""')}"`;
     if (!(await pool.query("SELECT 1 FROM pg_namespace WHERE nspname=$1", [login])).rowCount) {
       await pool.query(`CREATE SCHEMA ${quoted}`);
@@ -396,6 +450,7 @@ try {
         assert.equal((await pool.query<{ schema: string }>("SELECT current_schema() AS schema")).rows[0]!.schema, login, "the login's own empty schema now comes first");
         assert.deepEqual((await pingDatabase()).schema, { status: "ok", missing: [] }, "readiness reads the tables the queries reach");
         await pool.query(await readFile(new URL("../../../lib/db/migrations/007_journal_and_lender_indexes.sql", import.meta.url), "utf8"));
+        await pool.query(await readFile(new URL("../../../lib/db/migrations/008_export_queue_index_and_foreign_key_names.sql", import.meta.url), "utf8"));
       } finally {
         await pool.query(`DROP SCHEMA IF EXISTS ${quoted}`);
       }

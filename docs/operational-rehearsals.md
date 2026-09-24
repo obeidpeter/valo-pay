@@ -4,7 +4,7 @@ The shipped sandbox remains synthetic. These checks exercise recovery, alert del
 
 ## Incident and recovery delivery
 
-`scripts/monitor-valopay.mjs` checks liveness and database readiness, with bounded requests and no redirects. If automatic closes are explicitly expected, it also checks the scheduler state and fresh successful heartbeat. An intentionally disabled scheduler is healthy unless the operator configures that expectation.
+`scripts/monitor-valopay.mjs` checks liveness and database readiness, with bounded requests and no redirects. If automatic closes are explicitly expected, it also checks the scheduler state and fresh successful heartbeat, which the API's background worker thread reports to the health answer; a thread that crashed reads as a failed check (`scheduler_failed`) until the restarted thread's first pass succeeds. An intentionally disabled scheduler is healthy unless the operator configures that expectation.
 
 Run `pnpm run check:operations` with `VALOPAY_MONITOR_ORIGIN` set to the HTTPS service origin. The default is a dry run: it prints only the service origin, check time and fixed failure codes. It reads no customer records and sends no alerts. The one option is `--deliver`; a `--` before it is skipped, since pnpm passes one on to the script where npm would not. A mistyped option is named in the error with the usage; a word that is not an option is only counted, in case it is a credential. Without `VALOPAY_MONITOR_ORIGIN` it says that setting is missing. Any other failure prints one general message, so no credential or response body reaches the terminal.
 

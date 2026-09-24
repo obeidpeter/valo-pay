@@ -1,15 +1,19 @@
-import { DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_TOLERANCE_KOBO, exceptionCatalogue, isKobo, isOpenException, nairaText, normaliseFailureCode, normaliseRefundStatus, normaliseReversalStatus, paymentAwaitsAllocation, paymentMoneyReturned, paymentRefundedKobo, paymentUnappliedKobo, providerFeeKobo, resolveExceptionType, type ExceptionType, type ProviderFeeSchedule, type PaymentChannel } from "@workspace/valopay-schema";
+import { isDeepStrictEqual } from "node:util";
+import { DEFAULT_PROVIDER_FEE, SETTLEMENT_BATCH_TOLERANCE_KOBO, SETTLEMENT_ITEM_TOLERANCE_KOBO, WAT_OFFSET_MS, allocationClosedStatuses, conditionClearedCode, counted, exceptionCatalogue, isKobo, isOpenException, nairaText, normaliseFailureCode, normaliseRefundStatus, normaliseReversalStatus, paymentAwaitsAllocation, paymentMoneyReturned, paymentRefundedKobo, paymentUnappliedKobo, providerFeeKobo, resolveExceptionType, type ExceptionType, type ProviderFeeSchedule, type PaymentChannel } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
+import { indexedPass, recordById, recordsWhere } from "./record-index";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { addBusinessDays, watDate } from "./calendar";
 import { validateRecord } from "./validation";
-import { approvedPolicyFor, attemptTime, attemptsFor, enrolEligibleFailures, evaluateRetry, recordRetryDecision } from "./policy-engine";
+import { approvedPolicyFor, attemptTime, attemptsFor, countedAttempts, enrolEligibleFailures, evaluateRetry, recordRetryDecision } from "./policy-engine";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** ING-05: a second Payment for the same payer and amount inside this window is held as a possible duplicate. */
 export const DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
 /** REC-04: unallocated Payments older than this become exceptions. */
 export const UNALLOCATED_AGE_MS = DAY_MS;
+/** Appendix A, unknown_outcome: a debit attempt's or a pay-by-bank checkout's outcome still unknown this long after it became unknown is an exception. */
+export const UNKNOWN_OUTCOME_AGE_MS = DAY_MS;
 
 export const paymentReversed = (payment: TypedRecord<"payments">): boolean => normaliseReversalStatus(payment.data.reversalStatus) === "reversed";
 export const paymentRefunded = (payment: TypedRecord<"payments">): boolean => normaliseRefundStatus(payment.data.refundStatus) === "refunded";
@@ -61,24 +65,101 @@ const identityCondition = (type: ExceptionType, linkedRecordId: string): string 
  * new work and raises a new exception. Event-driven raises pass no condition
  * and keep the one-open-exception rule only. `settledBy` names other
  * conditions that describe the same state, such as the spelling an earlier
- * check recorded, so their resolution also holds.
+ * check recorded, so their resolution also holds. An exception the platform
+ * closed because its condition cleared settles nothing: the condition coming
+ * back later is new work. `owner` replaces the catalogue's owner and
+ * `linkedKind` names the linked record's kind where the type does not.
  */
-export function raiseException(state: DomainState, ctx: Context, type: ExceptionType, options: { linkedRecordId?: string; customerId?: string; amountKobo?: number; notes: string; condition?: string; settledBy?: readonly string[] }): TypedRecord<"exceptions"> {
+export function raiseException(state: DomainState, ctx: Context, type: ExceptionType, options: { linkedRecordId?: string; customerId?: string; amountKobo?: number; notes: string; condition?: string; settledBy?: readonly string[]; owner?: string; linkedKind?: string }): TypedRecord<"exceptions"> {
   const definition = exceptionCatalogue[type];
   const linkedRecordId = options.linkedRecordId || "";
-  const sameRecord = (item: TypedRecord<"exceptions">) => item.data.linkedRecordId === linkedRecordId && resolveExceptionType(item.data.type) === type;
-  const existing = recordsOf(state, "exceptions").find((item) => isOpenException(item.status) && sameRecord(item));
+  const linked = recordsWhere(state, "exceptions", "data.linkedRecordId", linkedRecordId);
+  const sameType = (item: TypedRecord<"exceptions">) => resolveExceptionType(item.data.type) === type;
+  const existing = linked.find((item) => isOpenException(item.status) && sameType(item));
   if (existing) return existing;
   if (options.condition !== undefined) {
     // A resolution with no stored condition (an event-driven raise, or one recorded before conditions were stored) settles the record.
     const settles = (condition: unknown) => condition === undefined || condition === options.condition || (options.settledBy ?? []).includes(String(condition));
-    const settled = recordsOf(state, "exceptions").find((item) => sameRecord(item) && settles(item.data.condition));
+    const settled = linked.find((item) => sameType(item) && item.data.resolutionCode !== conditionClearedCode && settles(item.data.condition));
     if (settled) return settled;
   }
   return makeRecord(state, "exceptions", {
     name: definition.title, status: "open", customerId: options.customerId || "", amountKobo: options.amountKobo || 0, createdAt: ctx.now,
-    data: { type, severity: definition.severity, owner: definition.owner, slaBusinessDays: definition.slaBusinessDays, dueBy: addBusinessDays(state, ctx.now, definition.slaBusinessDays), notes: options.notes, linkedRecordId, ...(options.condition !== undefined ? { condition: options.condition } : {}) },
+    data: {
+      type, severity: definition.severity, owner: options.owner ?? definition.owner, slaBusinessDays: definition.slaBusinessDays, dueBy: addBusinessDays(state, ctx.now, definition.slaBusinessDays), notes: options.notes, linkedRecordId,
+      ...(options.condition !== undefined ? { condition: options.condition } : {}), ...(options.linkedKind ? { linkedKind: options.linkedKind } : {}),
+    },
   });
+}
+
+/** Adds a dated line to an exception's notes, once, so what it was raised for is not read as the current state. */
+function noteUpdate(exception: TypedRecord<"exceptions">, ctx: Context, text: string): void {
+  if (String(exception.data.notes ?? "").includes(text)) return;
+  exception.data.notes = `${exception.data.notes ? `${exception.data.notes}\n` : ""}Update on ${watDate(Date.parse(ctx.now))} (WAT): ${text}`;
+  touch(exception, ctx.now);
+}
+
+/**
+ * Console decision on exceptions whose condition clears: the platform closes
+ * the exception in the action that cleared it, with the reason, who acted
+ * and when. The request's audit entry commits to the change, and a closed
+ * exception is never reopened.
+ */
+function closeClearedException(exception: TypedRecord<"exceptions">, ctx: Context, reason: string): void {
+  exception.status = "closed";
+  exception.data.resolutionCode = conditionClearedCode;
+  exception.data.resolvedBy = ctx.actor;
+  exception.data.resolvedAt = ctx.now;
+  exception.data.conditionCleared = { at: ctx.now, by: ctx.actor, reason };
+  exception.data.notes = `${exception.data.notes ? `${exception.data.notes}\n` : ""}Condition cleared on ${watDate(Date.parse(ctx.now))} (WAT): ${reason}, so this exception was closed.`;
+  touch(exception, ctx.now);
+}
+
+/**
+ * Why an open exception's condition no longer holds, or undefined while it
+ * holds: money on a payment that no longer waits (allocated in full,
+ * refunded or reversed), an instalment a payment was waiting for that is now
+ * paid, or an outcome that is now known. A dispute's condition clears only
+ * when its instalment leaves dispute (releaseDispute), since a lender may
+ * record a dispute for an instalment that was never in dispute.
+ */
+function clearedCondition(exception: TypedRecord<"exceptions">, byId: ReadonlyMap<string, ValopayRecord>): string | undefined {
+  const type = resolveExceptionType(exception.data.type);
+  const linked = byId.get(String(exception.data.linkedRecordId || ""));
+  if (!type || !linked) return undefined;
+  if (linked.kind === "payments" && (type === "unallocated_payment" || type === "overpayment" || type === "suspected_duplicate")) {
+    const held = linked as TypedRecord<"payments">;
+    if (paymentUnappliedKobo(held) > 0) return undefined;
+    if (paymentReversed(held)) return `payment ${held.reference} was reversed`;
+    if (paymentRefundedKobo(held) > 0) return Number(held.data.allocatedKobo || 0) > 0 ? `payment ${held.reference} is allocated and the rest was refunded` : `payment ${held.reference} was refunded`;
+    return `payment ${held.reference} is allocated in full`;
+  }
+  if (linked.kind === "due-items" && type === "unallocated_payment") return outstanding(linked as TypedRecord<"due-items">) === 0 ? `instalment ${linked.reference} is paid` : undefined;
+  if (type === "unknown_outcome" && (linked.kind === "attempts" || linked.kind === "connected-intents") && linked.status !== "unknown") return `the ${linked.kind === "attempts" ? "debit's" : "pay-by-bank payment's"} outcome is now recorded as ${linked.status}`;
+  return undefined;
+}
+
+/** Closes every open exception whose condition cleared (clearedCondition) and returns them. */
+export function clearSettledExceptions(state: DomainState, ctx: Context): TypedRecord<"exceptions">[] {
+  const open = recordsOf(state, "exceptions").filter((item) => isOpenException(item.status));
+  if (!open.length) return [];
+  const byId = new Map(state.records.map((record) => [record.id, record]));
+  const cleared: TypedRecord<"exceptions">[] = [];
+  for (const exception of open) {
+    const reason = clearedCondition(exception, byId);
+    if (!reason) continue;
+    closeClearedException(exception, ctx, reason);
+    cleared.push(exception);
+  }
+  return cleared;
+}
+
+/** What an audit entry adds for exceptions closed because their condition cleared: how many, of which types, for the first few reasons. */
+export function clearedExceptionsNote(cleared: readonly TypedRecord<"exceptions">[]): string | undefined {
+  if (!cleared.length) return undefined;
+  const reasons = cleared.slice(0, 3).map((item) => `${exceptionCatalogue[resolveExceptionType(item.data.type)!]?.title.toLowerCase() ?? "exception"}: ${item.data.conditionCleared?.reason}`);
+  const more = cleared.length > 3 ? `; and ${counted(cleared.length - 3, "more", "more")}` : "";
+  return `Closed ${counted(cleared.length, "exception")} whose condition cleared (${reasons.join("; ")}${more}).`;
 }
 
 const confirmedOutcomes: Record<string, "failed" | "succeeded" | "cancelled"> = { resolved_failed: "failed", resolved_succeeded: "succeeded", provider_confirmed_no_debit: "cancelled" };
@@ -131,7 +212,7 @@ function channelFor(source: unknown): PaymentChannel {
 }
 
 function cancelUnsentAttempts(state: DomainState, dueItemId: string, now: string): void {
-  recordsOf(state, "attempts").filter((item) => item.data.dueItemId === dueItemId && item.status === "scheduled").forEach((item) => {
+  recordsWhere(state, "attempts", "data.dueItemId", dueItemId).filter((item) => item.status === "scheduled").forEach((item) => {
     item.status = "cancelled";
     item.data.cancellationReason = "Due item settled by another channel; no instruction was sent.";
     touch(item, now);
@@ -143,7 +224,7 @@ function settlementBatch(state: DomainState, ctx: Context, observation: TypedRec
   if (!batchReference) return;
   const provider = String(observation.data.provider || payment.data.providerConnection || state.merchant.provider);
   const schedule = feeScheduleFor(state, provider);
-  let batch = recordsOf(state, "settlement-batches").find((item) => item.reference === batchReference);
+  let batch = recordsWhere(state, "settlement-batches", "reference", batchReference)[0];
   if (!batch) {
     batch = makeRecord(state, "settlement-batches", {
       name: `Settlement batch ${batchReference}`, status: "pending", reference: batchReference, createdAt: ctx.now,
@@ -410,7 +491,7 @@ function assertPaymentAllocatable(payment: TypedRecord<"payments">, amount: numb
 }
 
 function assertAllocationEligible(due: TypedRecord<'due-items'>): void {
-  if (['cancelled', 'closed', 'in_dispute'].includes(due.status)) throw Object.assign(new Error('This instalment is cancelled, closed or in dispute. Refresh the queue and review its status before allocating a payment.'), { status: 409 });
+  if ((allocationClosedStatuses as readonly string[]).includes(due.status)) throw Object.assign(new Error('This instalment is cancelled, closed or in dispute. Refresh the queue and review its status before allocating a payment.'), { status: 409 });
 }
 
 /**
@@ -418,8 +499,8 @@ function assertAllocationEligible(due: TypedRecord<'due-items'>): void {
  * `payerReason` is Finance's reason, and applying it identifies the payer.
  */
 export function applyConfirmedAllocation(state: DomainState, ctx: Context, allocation: TypedRecord<"allocations">, payerReason?: string): void {
-  const payment = findRecord(state, String(allocation.data.paymentId), "payments");
-  const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
+  const payment = recordById(state, String(allocation.data.paymentId), "payments");
+  const due = recordById(state, String(allocation.data.dueItemId), "due-items");
   assertAllocationEligible(due);
   assertPaymentAllocatable(payment, allocation.amountKobo);
   assertSamePayer(state, payment, due, { automatic: allocation.data.automatic === true, reason: payerReason });
@@ -476,6 +557,15 @@ export function supersedeAllocation(state: DomainState, ctx: Context, allocation
 /** Statuses a workflow sets rather than the balance: an edit, a repair or a returned allocation keeps them. */
 const heldDueStatuses: readonly string[] = ["in_dispute", "cancelled", "closed"];
 
+/** The status the balance alone gives an instalment: paid, part-paid, or else scheduled or in collection by its attempts. */
+function balanceStatus(state: DomainState, due: TypedRecord<"due-items">): TypedRecord<"due-items">["status"] {
+  const left = outstanding(due);
+  if (left === 0) return "paid";
+  if (left < due.amountKobo) return "partially_paid";
+  if (due.status === "scheduled" || due.status === "in_collection") return due.status;
+  return attemptsFor(state, due.id).length ? "in_collection" : "scheduled";
+}
+
 /**
  * The status an instalment's balance implies: paid with nothing outstanding,
  * part-paid while some but not all of it is paid, and otherwise scheduled or
@@ -485,12 +575,52 @@ const heldDueStatuses: readonly string[] = ["in_dispute", "cancelled", "closed"]
  */
 export function derivedDueStatus(state: DomainState, due: TypedRecord<"due-items">, reopenFinal = false): TypedRecord<"due-items">["status"] {
   if (heldDueStatuses.includes(due.status)) return due.status;
-  const left = outstanding(due);
-  if (left === 0) return "paid";
-  if (due.status === "unpaid_final" && !reopenFinal) return "unpaid_final";
-  if (left < due.amountKobo) return "partially_paid";
-  if (due.status === "scheduled" || due.status === "in_collection") return due.status;
-  return attemptsFor(state, due.id).length ? "in_collection" : "scheduled";
+  if (due.status === "unpaid_final" && outstanding(due) > 0 && !reopenFinal) return "unpaid_final";
+  return balanceStatus(state, due);
+}
+
+/**
+ * Decision on leaving a dispute: a customer dispute resolved as not upheld,
+ * or Finance's release with a reason, takes the instalment out of dispute.
+ * Its status then follows its balance, as after any other change (paid,
+ * part-paid, or scheduled or in collection by its attempts; the collections
+ * queue reads overdue from the due date), and a paid one has its unsent
+ * attempts cancelled. The release is recorded on the instalment with the
+ * last counted attempt, whose disputed debit then does not freeze it again,
+ * and each open dispute exception for it is closed as its condition cleared.
+ * Returns those exceptions.
+ */
+export function releaseDispute(state: DomainState, ctx: Context, due: TypedRecord<"due-items">, release: { via: "not_upheld" | "finance_release"; reason: string; exceptionId?: string }): TypedRecord<"exceptions">[] {
+  if (due.status !== "in_dispute") throw Object.assign(new Error(`Instalment ${due.reference} is not in dispute, so there is nothing to release. Refresh it to see its current status.`), { status: 409 });
+  const status = balanceStatus(state, due);
+  due.status = status;
+  if (status === "paid") cancelUnsentAttempts(state, due.id, ctx.now);
+  due.data.disputeRelease = {
+    via: release.via, releasedAt: ctx.now, releasedBy: ctx.actor, reason: release.reason, ...(release.exceptionId ? { exceptionId: release.exceptionId } : {}),
+    attemptId: countedAttempts(state, due.id).at(-1)?.id ?? null, status, outstandingKobo: outstanding(due),
+  };
+  touch(due, ctx.now);
+  const disputes = recordsOf(state, "exceptions").filter((item) => isOpenException(item.status) && item.data.linkedRecordId === due.id && resolveExceptionType(item.data.type) === "customer_dispute");
+  disputes.forEach((item) => closeClearedException(item, ctx, `instalment ${due.reference} left dispute`));
+  return disputes;
+}
+
+/** An instalment's status in words, for messages. */
+export const dueStatusText = (status: string): string => ({ in_collection: "in collection", partially_paid: "part-paid", unpaid_final: "unpaid after its final attempt", in_dispute: "in dispute" } as Record<string, string>)[status] ?? status;
+
+/**
+ * Decision on reversals: money that went back after it was applied leaves its
+ * instalment owing that amount again, in dispute, and a customer_dispute
+ * exception names the reversal so someone owns the instalment. One already
+ * open for it gains the reversal as a dated line and the amount now owed.
+ */
+function disputeReversal(state: DomainState, ctx: Context, due: TypedRecord<"due-items">, payment: TypedRecord<"payments">, appliedKobo: number, how: string): void {
+  if (due.status !== "in_dispute") { due.status = "in_dispute"; touch(due, ctx.now); }
+  const notes = `Payment ${payment.reference} (${nairaText(appliedKobo)} applied to instalment ${due.reference}) was reversed: ${how}. The instalment owes ${nairaText(outstanding(due))} again and is in dispute, so collection and allocation are paused. Find out why the money went back, then resolve this exception as not upheld to collect the instalment again, or ask Finance to release it from dispute with a reason.`;
+  const exception = raiseException(state, ctx, "customer_dispute", { linkedRecordId: due.id, customerId: due.customerId, amountKobo: outstanding(due), notes });
+  if (exception.data.notes === notes) return;
+  exception.amountKobo = outstanding(due);
+  noteUpdate(exception, ctx, notes);
 }
 
 /** Moves an instalment to the status its balance implies; a settled one has its unsent attempts cancelled. True when the status changed. */
@@ -515,6 +645,8 @@ export function amendDueItem(state: DomainState, ctx: Context, due: TypedRecord<
   for (const key of ["experimentId", "experimentArm", "firstFailureAt"] as const) {
     if (JSON.stringify(input.data[key]) !== JSON.stringify(due.data[key])) throw new Error("Experiment assignment is immutable.");
   }
+  // The engine reads the release to leave a released disputed debit alone; compared by value, as jsonb reorders keys.
+  if (!isDeepStrictEqual(input.data.disputeRelease, due.data.disputeRelease)) throw new Error("A release from dispute is recorded by its action and cannot be changed here.");
   input.data.outstandingKobo = input.amountKobo - allocated;
   // RET-10: an obligation amended after its first failure leaves the experiment's eligible set.
   if (input.amountKobo !== due.amountKobo || String(input.data.dueDate) !== String(due.data.dueDate)) input.data.amendedAt = ctx.now;
@@ -568,7 +700,7 @@ export function settlePaymentStatus(state: DomainState, ctx: Context, payment: T
   // What it still holds: a refund of part of it, such as an overpayment's excess, is not left to allocate.
   const left = paymentUnappliedKobo(payment);
   const returned = paymentReturned(payment);
-  const proposals = recordsOf(state, "allocations").filter((item) => item.data.paymentId === payment.id && item.status === "proposed");
+  const proposals = recordsWhere(state, "allocations", "data.paymentId", payment.id).filter((item) => item.status === "proposed");
   for (const proposal of proposals) {
     if (!returned && proposal.amountKobo <= left) continue;
     proposal.status = "superseded";
@@ -666,7 +798,14 @@ function paymentsToSettle(state: DomainState): TypedRecord<"payments">[] {
   });
 }
 
-function reversePayment(state: DomainState, ctx: Context, payment: TypedRecord<"payments">): void {
+/**
+ * A payment's money went back through a reversal, once: its confirmed
+ * allocations are taken off their instalments, each of which owes that
+ * amount again and is put in dispute with an exception (disputeReversal),
+ * and the payment leaves every allocation queue. `reason` supersedes the
+ * allocations and proposals; `how` says who reported the reversal.
+ */
+export function reversePayment(state: DomainState, ctx: Context, payment: TypedRecord<"payments">, reason = "Payment reversed by the provider.", how = "the provider reported it"): void {
   if (payment.data.reversalApplied) return;
   payment.data.reversalStatus = "reversed";
   payment.data.reversedAt = ctx.now;
@@ -674,14 +813,14 @@ function reversePayment(state: DomainState, ctx: Context, payment: TypedRecord<"
   recordsOf(state, "allocations").filter((item) => item.data.paymentId === payment.id && item.status === "confirmed").forEach((allocation) => {
     const due = findRecord(state, String(allocation.data.dueItemId), "due-items");
     due.data.outstandingKobo = Math.min(due.amountKobo, outstanding(due) + allocation.amountKobo);
-    due.status = "in_dispute";
     allocation.status = "superseded";
-    allocation.data.supersededReason = "Payment reversed by the provider.";
+    allocation.data.supersededReason = reason;
     touch(allocation, ctx.now); touch(due, ctx.now);
+    disputeReversal(state, ctx, due, payment, allocation.amountKobo, how);
   });
   payment.data.allocatedKobo = 0;
   // Proposals on reversed money are superseded and the payment leaves every unallocated queue.
-  settlePaymentStatus(state, ctx, payment, "Payment reversed by the provider.");
+  settlePaymentStatus(state, ctx, payment, reason);
 }
 
 /** The gross evidence states: its stated gross, else its amount. A settlement line that states only what it paid out gives the least the gross can be. */
@@ -1019,6 +1158,7 @@ function applyDecisions(state: DomainState, ctx: Context): { finalFailures: numb
       raiseException(state, ctx, type, { linkedRecordId: due.id, customerId: due.customerId, amountKobo: outstanding(due), notes: `${due.reference}: ${decision.reason}` });
       finalFailures += 1;
     } else if (decision.decision === "stop" && decision.rule === "customer_disputed") {
+      // A debit whose dispute was not upheld, or that Finance released, is dispute_released instead and does not freeze it again.
       due.status = "in_dispute"; touch(due, ctx.now);
       raiseException(state, ctx, "customer_dispute", { linkedRecordId: due.id, customerId: due.customerId, amountKobo: outstanding(due), notes: `${due.reference}: the customer disputed the debit.` });
       disputes += 1;
@@ -1031,7 +1171,17 @@ function applyDecisions(state: DomainState, ctx: Context): { finalFailures: numb
   return { finalFailures, disputes, decisionsRecorded, deferred };
 }
 
+/**
+ * One reconciliation pass over the lender's records, run with its lookups
+ * indexed (indexedPass): a close that confirms many matches, or evaluates many
+ * instalments, costs what its records do rather than their number times the
+ * items it handles.
+ */
 export function reconcile(state: DomainState, ctx: Context): { message: string; data: Record<string, any> } {
+  return indexedPass(state, () => reconcileRecords(state, ctx));
+}
+
+function reconcileRecords(state: DomainState, ctx: Context): { message: string; data: Record<string, any> } {
   const observations = recordsOf(state, "observations").filter((item) => item.status === "unresolved");
   const exceptionsBefore = recordsOf(state, "exceptions").length;
   const canonicalPayments = new CanonicalPaymentIndex(state), settlementLines = new SettlementLines(state);
@@ -1085,10 +1235,13 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
     .sort((a, b) => resolvedAt(b).localeCompare(resolvedAt(a)))
     .filter((item) => confirmAttemptOutcome(state, ctx, item)).length;
   const giveUps = applyDecisions(state, ctx);
-  const unknownOutcomes = recordsOf(state, "attempts").filter((attempt) => attempt.status === "unknown" && now - Date.parse(attemptTime(attempt)) >= DAY_MS);
+  const unknownOutcomes = recordsOf(state, "attempts").filter((attempt) => attempt.status === "unknown" && now - Date.parse(attemptTime(attempt)) >= UNKNOWN_OUTCOME_AGE_MS);
   unknownOutcomes.forEach((attempt) => raiseException(state, ctx, "unknown_outcome", { linkedRecordId: attempt.id, customerId: attempt.customerId, amountKobo: attempt.amountKobo, notes: "TIMEOUT_UNKNOWN unresolved for 24 hours; the provider must confirm the outcome by reference.", condition: identityCondition("unknown_outcome", attempt.id) }));
+  const checkoutsUnknown = ageUnknownCheckouts(state, ctx, now);
   const mappingNeeded = recordsOf(state, "attempts").filter((attempt) => attempt.status === "failed" && normaliseFailureCode(attempt.data.failureCode) === "UNKNOWN" && attempt.data.rawFailureCode);
   mappingNeeded.forEach((attempt) => raiseException(state, ctx, "mapping_needed", { linkedRecordId: attempt.id, customerId: attempt.customerId, amountKobo: attempt.amountKobo, notes: `Provider code "${attempt.data.rawFailureCode}" is not in the failure-code mapping.`, condition: `mapping_needed:${attempt.id}:${attempt.data.rawFailureCode}` }));
+  // Last, so nothing raised above is left open once its condition cleared.
+  const cleared = clearSettledExceptions(state, ctx);
   const newAllocations = recordsOf(state, "allocations").filter((item) => !allocationsBefore.has(item.id));
   const allocationsByRule: Record<string, number> = {};
   for (const allocation of newAllocations) allocationsByRule[String(allocation.data.rule)] = (allocationsByRule[String(allocation.data.rule)] || 0) + 1;
@@ -1103,7 +1256,37 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
       unallocated: recordsOf(state, "payments").filter((item) => paymentAwaitsAllocation(item)).length,
       possibleDuplicates: recordsOf(state, "payments").filter((item) => item.status === "possible_duplicate").length,
       agedUnallocated: aged.length, finalAttemptExceptions: giveUps.finalFailures, disputesFrozen: giveUps.disputes, noticesNotEvidenced: giveUps.deferred, retryDecisionsRecorded: giveUps.decisionsRecorded, unknownOutcomes: unknownOutcomes.length,
-      exceptionsOpened: recordsOf(state, "exceptions").length - exceptionsBefore,
+      checkoutOutcomesUnknown: checkoutsUnknown, exceptionsOpened: recordsOf(state, "exceptions").length - exceptionsBefore, exceptionsCleared: cleared.length,
+      ...(cleared.length ? { auditNote: clearedExceptionsNote(cleared) } : {}),
     },
   };
+}
+
+/** When a pay-by-bank checkout's outcome became unknown: its first unknown event, else its last change. */
+export function checkoutUnknownSince(intent: TypedRecord<"connected-intents">): string {
+  const events = Array.isArray(intent.data.events) ? intent.data.events : [];
+  return String(events.find((event) => event.status === "unknown")?.at ?? intent.updatedAt);
+}
+
+/**
+ * Item 10: a pay-by-bank checkout whose outcome stays unknown holds its
+ * instalment, with no new checkout and no retry. Once it has been unknown for
+ * UNKNOWN_OUTCOME_AGE_MS it is an unknown_outcome exception for Finance,
+ * linked to the checkout, which names it. Finance records the outcome by
+ * resolving it (resolveUnknownCheckout), and a late outcome from the
+ * provider clears it. Returns how many checkouts wait that long.
+ */
+function ageUnknownCheckouts(state: DomainState, ctx: Context, now: number): number {
+  const waiting = recordsOf(state, "connected-intents").filter((intent) => intent.status === "unknown" && now - Date.parse(checkoutUnknownSince(intent)) >= UNKNOWN_OUTCOME_AGE_MS);
+  if (!waiting.length) return 0;
+  const dues = new Map(recordsOf(state, "due-items").map((due) => [due.id, due]));
+  for (const intent of waiting) {
+    const since = new Date(Date.parse(checkoutUnknownSince(intent)) + WAT_OFFSET_MS).toISOString().slice(0, 16).replace("T", " ");
+    const exception = raiseException(state, ctx, "unknown_outcome", {
+      linkedRecordId: intent.id, customerId: intent.customerId, amountKobo: intent.amountKobo, owner: "Finance", linkedKind: "connected-intents", condition: identityCondition("unknown_outcome", intent.id),
+      notes: `The outcome of the pay-by-bank payment of ${nairaText(intent.amountKobo)} for instalment ${dues.get(String(intent.data.dueItemId))?.reference ?? intent.data.dueItemId} has been unknown since ${since} WAT, for more than 24 hours. Until it is known the instalment is held: no new checkout and no retry is planned. Check with the bank, then resolve this exception as confirmed successful, with the masked reference of the evidence that the money arrived, or as confirmed failed.`,
+    });
+    if (isOpenException(exception.status) && intent.data.outcomeExceptionId !== exception.id) { intent.data.outcomeExceptionId = exception.id; touch(intent, ctx.now); }
+  }
+  return waiting.length;
 }

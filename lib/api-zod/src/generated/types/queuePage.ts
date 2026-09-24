@@ -9,7 +9,7 @@ import type { QueuePageCounts } from './queuePageCounts';
 import type { ValopayRecord } from './valopayRecord';
 
 /**
- * A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states.
+ * A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states: a deadline written as a day alone (YYYY-MM-DD) is due all that West Africa Time day and overdue once it ends, one with a time passes at that instant, and one that is not a real date is no deadline.
  */
 export interface QueuePage {
   items: ValopayRecord[];

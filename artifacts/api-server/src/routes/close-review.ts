@@ -1,6 +1,5 @@
 import { Router, type IRouter } from "express";
-import { z } from "zod";
-import { prepareCloseReviewSchema, decideCloseReviewSchema, closeReviewListSchema, pilotProgressSchema, valopayRecordSchema } from "@workspace/valopay-schema";
+import { prepareCloseReviewSchema, decideCloseReviewSchema, closeReviewListSchema, pilotProgressSchema, valopayRecordSchema, pathId } from "@workspace/valopay-schema";
 import { caseAssignees } from "../lib/valopay-store";
 import { requiredKey } from "../lib/contract";
 import { withState } from "./valopay";
@@ -19,7 +18,7 @@ router.get("/v1/pilot/close-reviews", async (req, res) => {
     reviewers: (await caseAssignees(ctx)).filter(person => person.role === "Finance"),
     accessMode: ctx.accessMode,
     ownPrincipal: ctx.principalId,
-  }), false, closeReviewListSchema, { wholeCloses: 25 }));
+  }), false, closeReviewListSchema, {}, { wholeCloses: 25 }));
 });
 router.post("/v1/pilot/close-reviews/prepare", async (req, res) => {
   requiredKey(req);
@@ -28,7 +27,7 @@ router.post("/v1/pilot/close-reviews/prepare", async (req, res) => {
 });
 router.post("/v1/pilot/close-reviews/:id/decision", async (req, res) => {
   requiredKey(req);
-  const id = z.string().min(1).max(100).parse(req.params.id), input = decideCloseReviewSchema.parse(req.body);
+  const id = pathId(req.params.id), input = decideCloseReviewSchema.parse(req.body);
   res.json(await withState(req, res, (state, ctx) => decideCloseReview(state, ctx, id, input), true, valopayRecordSchema));
 });
 export default router;

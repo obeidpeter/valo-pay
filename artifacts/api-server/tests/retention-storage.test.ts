@@ -22,7 +22,7 @@ try{
 }finally{globalThis.fetch=originalFetch;}
 const state=seedMerchant('retention-lender'),ctx={actor:'Sandbox Admin',role:'Admin',now:'2030-02-02T00:00:00.000Z'};
 const batch=makeRecord(state,'import-batches',{status:'committed',createdAt:'2029-01-01T00:00:00.000Z',data:{csv:'SYNTHETIC ONLY',committedAt:'2029-01-01T00:00:00.000Z',check:{preview:[{synthetic:true}]}}});
-saveLifecyclePolicy(state,ctx,{policy:{rawCsvDays:1,journalPayloadDays:null,exportFileDays:null,auditTrail:'retain'},expectedRevision:lifecyclePolicy(state).revision,reason:'Synthetic retention rehearsal policy.'});
+saveLifecyclePolicy(state,ctx,{policy:{rawCsvDays:30,journalPayloadDays:null,exportFileDays:null,auditTrail:'retain'},expectedRevision:lifecyclePolicy(state).revision,reason:'Synthetic retention rehearsal policy.'});
 const preview=lifecyclePreview(state,ctx,{expectedPolicyRevision:lifecyclePolicy(state).revision});
 approveLifecycleRun(state,ctx,preview.id,{expectedUpdatedAt:preview.updatedAt,previewDigest:preview.previewDigest,reason:'Reviewed the one exact synthetic source.'});
 const snapshot=structuredClone(state),candidate=preview.candidates[0];

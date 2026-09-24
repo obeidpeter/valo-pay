@@ -9,7 +9,7 @@ Status: **adapter and durable test inbox tested offline; external account connec
 - Connection check: authenticated `GET /transaction?perPage=1&page=1`; returns no transaction details.
 - Transaction verification: requires an expected reference, positive integer kobo amount and NGN currency. A caller checking Direct Debit must additionally request the `direct_debit` channel. A successful HTTP request alone is not a successful payment.
 - Mandate verification: checks an existing test mandate reference and returns only its state and an authorisation fingerprint. Raw authorisation codes never leave the adapter.
-- Webhook parsing: verifies HMAC-SHA512 over the original bytes, with constant-time digest comparison, before parsing JSON. Payment events must explicitly say `domain: test`; any declared non-test domain is refused. Mandate events may omit domain as in Paystack's documented payload and must still carry a signature made with the configured test key.
+- Webhook parsing: verifies HMAC-SHA512 over the body's bytes (for a body sent with `Content-Encoding` gzip, deflate or br, the JSON bytes after decompression, not the compressed bytes), with constant-time digest comparison, before parsing JSON. Payment events must explicitly say `domain: test`; any declared non-test domain is refused. Mandate events may omit domain as in Paystack's documented payload and must still carry a signature made with the configured test key.
 - Unknown-outcome recovery: verifies the original reference once. Timeouts, unavailable responses, rate limits and references not yet found remain unknown. It never issues a debit, changes the reference or automatically reissues an instruction.
 
 The read endpoints and response fields follow Paystack's [Transaction API](https://paystack.com/docs/api/transaction/). Signature handling follows its [webhook documentation](https://paystack.com/docs/payments/webhooks/).
@@ -54,7 +54,7 @@ The API can save Paystack test events for a synthetic lender. The address is `PO
 
 The mapped lender must be in sandbox or observation mode with its kill switch on. In the Paystack dashboard, under Settings, API Keys & Webhooks, register `https://<API host>/api/v1/providers/paystack/<connection ID>/events` as the test-mode webhook URL.
 
-The signature authenticates a delivery, not the connection ID. The API checks the `x-paystack-signature` header, an HMAC-SHA512 of the exact request bytes under the test key, before it looks up the connection or locks, reads or decrypts anything. A forged or tampered delivery gets 401 and nothing else, whichever connection ID it names; only a verified event reaches the lender. Browser state, query strings and event fields never choose the lender.
+The signature authenticates a delivery, not the connection ID. The API checks the `x-paystack-signature` header, an HMAC-SHA512 under the test key of the body's exact bytes (the JSON as sent or, for a body sent with `Content-Encoding` gzip, deflate or br, the JSON bytes after decompression; another encoding is refused with 415), before it looks up the connection or locks, reads or decrypts anything. A forged or tampered delivery gets 401 and nothing else, whichever connection ID it names; only a verified event reaches the lender. Browser state, query strings and event fields never choose the lender.
 
 The answers, in the order they are checked:
 
@@ -64,7 +64,7 @@ The answers, in the order they are checked:
 | 413 | The body is larger than 256 KiB. |
 | 400 | The connection ID is malformed, or the body is not `application/json`. |
 | 503 | The ingress is off, or the test key is missing or not an `sk_test_` key. |
-| 401 | The signature is missing or does not match the exact bytes. Nothing was locked, read or saved. |
+| 401 | The signature is missing or does not match the body's bytes (decompressed first, when the body is compressed). Nothing was locked, read or saved. |
 | 400 | The signed event is not JSON, is inconsistent, or comes from live mode. |
 | 503 | The connection map is not valid. |
 | 404 | No lender is mapped to the connection ID. |

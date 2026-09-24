@@ -14,6 +14,7 @@ import { SandboxGuide } from './sandbox-guide';
 import { PresentationGuide, usePresentation } from './presentation-guide';
 import { AdministratorExpiry } from './administrator-expiry';
 import { useQueuePosition } from '@/lib/queue-position';
+import { WorkspaceRefreshProblem } from './workspace-unavailable';
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
 /**
@@ -133,7 +134,7 @@ export function Layout({ children }: { children: ReactNode }) {
   useDialogActivationTracking();
   const search = useSearch();
   const embedded = new URLSearchParams(search).get('embedded') === '1';
-  const { workspace, merchantId, setMerchantId, isLoading } = useWorkspace();
+  const { workspace, merchantId, setMerchantId, isLoading, refreshFailure } = useWorkspace();
   const [location] = useLocation();
   const signOut = useSignOut();
   const { theme, setChoice } = useTheme();
@@ -276,10 +277,12 @@ export function Layout({ children }: { children: ReactNode }) {
               </div>
               <p className="mt-1 text-xs text-muted-foreground">Sample data only. We never hold money. This is not a live payment record or a statement of account.</p>
             </div>
-            {/* Until the workspace arrives the pages have no lender to show, so the page area says what is happening instead.
-                A page that stops working keeps the sidebar and the lender selector as the way out. */}
+            {/* A refresh that failed keeps the pages, their forms and dialogs, and says so above them. */}
+            {refreshFailure && <WorkspaceRefreshProblem failure={refreshFailure} staff={workspace?.accessMode === 'staff'} />}
+            {/* Until the workspace arrives the pages have no lender to show, so the page area says what is happening instead,
+                as its heading. A page that stops working keeps the sidebar and the lender selector as the way out. */}
             {isLoading && !workspace
-              ? <p role="status" className="text-sm text-muted-foreground">Loading your workspace…</p>
+              ? <h1 className="text-sm font-normal text-muted-foreground"><span role="status">Loading your workspace…</span></h1>
               : <>{/* The presentation toolbar sits above the page's boundary, so a page that stops working keeps it and its End presentation. */}{!embedded && <PresentationGuide />}{!embedded && <AdministratorExpiry />}<ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{!embedded && !presentation.state.active && !location.startsWith('/cases/') && !['/presentation','/pilot','/imports','/operations','/team','/pay-by-bank','/credit-desk','/cash-desk','/connections'].includes(location) && <SandboxGuide />}{children}</ErrorBoundary></>}
             <p className="hidden print:block mt-8 border-t pt-3 text-xs text-muted-foreground">Printed {printedAt} from the Valo Pay sandbox · {pageTitle}{lenderName ? ` · ${lenderName}` : ''}.</p>
           </div>

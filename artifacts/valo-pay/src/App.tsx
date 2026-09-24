@@ -15,8 +15,7 @@ import {
   useRouter,
   Router as WouterRouter
 } from 'wouter';
-import { ClerkProvider } from '@clerk/react';
-import { authEnabled, clerkPublishableKey } from '@/lib/auth';
+import { AuthProvider } from '@/lib/auth';
 
 import { WorkspaceProvider } from '@/lib/workspace-context';
 import { Layout } from '@/components/layout';
@@ -27,6 +26,10 @@ import { PresentationProvider } from '@/components/presentation-guide';
 import LandingPage from '@/pages/landing';
 const SignInPage: PageLoader = () => import('@/pages/sign-in').then((m) => ({ default: m.SignInPage }));
 const SignUpPage: PageLoader = () => import('@/pages/sign-in').then((m) => ({ default: m.SignUpPage }));
+
+// When the app loads, before the router first subscribes to the browser's location, so the
+// unsaved-changes guard hears Back and Forward before the router changes the page.
+installUnsavedNavigationGuard();
 
 // Console pages load on first visit, each in its own chunk, so the landing page does not carry the
 // console and the console does not carry every page at once (design rationale, Performance).
@@ -83,7 +86,7 @@ export function LazyPage({ load, ...props }: { load: PageLoader; [prop: string]:
     return () => { current = false; };
   }, [load]);
   if (failure) throw failure;
-  if (!Component) return <Loading what="the page" />;
+  if (!Component) return <Loading what="the page" heading />;
   return <Component {...props} />;
 }
 
@@ -119,14 +122,7 @@ export const QUERY_STALE_MS = 30_000;
 export const queryDefaults = { queries: { staleTime: QUERY_STALE_MS, retry: retryQuery } } satisfies DefaultOptions;
 export const queryClient = new QueryClient({ defaultOptions: queryDefaults });
 
-const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
-
-function stripBase(path: string): string {
-  return basePath && path.startsWith(basePath)
-    ? path.slice(basePath.length) || "/"
-    : path;
-}
 
 /** Every address the console has a page for. Anything else is not found, and gets no workspace. */
 const consoleRoutes: Array<{ path: string; load: PageLoader }> = [
@@ -208,11 +204,12 @@ function RoutedErrorBoundary({ children }: { children: ReactNode }) {
   return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>;
 }
 
-function ClerkProviderWithRoutes() {
-  const [, setLocation] = useLocation();
-
-  const routes = (
-      <QueryClientProvider client={queryClient}>
+function App() {
+  // Sign-in, where it is wanted, loads beside the routes and never remounts them (lib/auth.tsx).
+  return (
+    <WouterRouter base={basePath}>
+      <AuthProvider>
+        <QueryClientProvider client={queryClient}>
           <RoutedErrorBoundary>
             <Switch>
               {/* The public pages sit outside the workspace provider: reading about the product or
@@ -228,30 +225,8 @@ function ClerkProviderWithRoutes() {
           </RoutedErrorBoundary>
           <RouteFocus />
           <Toaster />
-      </QueryClientProvider>
-  );
-
-  // Without a reachable Clerk the anonymous sandbox still runs; see lib/auth.tsx.
-  if (!authEnabled || !clerkPublishableKey) return routes;
-  return (
-    <ClerkProvider
-      publishableKey={clerkPublishableKey}
-      proxyUrl={clerkProxyUrl}
-      signInUrl={`${basePath}/sign-in`}
-      signUpUrl={`${basePath}/sign-up`}
-      routerPush={(to) => setLocation(stripBase(to))}
-      routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
-    >
-      {routes}
-    </ClerkProvider>
-  );
-}
-
-function App() {
-  useEffect(installUnsavedNavigationGuard, []);
-  return (
-    <WouterRouter base={basePath}>
-      <ClerkProviderWithRoutes />
+        </QueryClientProvider>
+      </AuthProvider>
     </WouterRouter>
   );
 }

@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { connectedActionInputSchema, connectedConsentPurposes, legacyCollatedCompare } from "@workspace/valopay-schema";
+import { connectedActionInputSchema, connectedConsentPurposes } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord, RecordOf } from "./types";
 import { makeRecord, recordsOf, touch } from "./records";
 import {
   allocatePayment,
+  clearSettledExceptions,
   supersedeAllocation,
   raiseException,
   recordPaymentRefund,
-  settlePaymentStatus,
+  reversePayment,
 } from "./reconciliation";
 import { creditView, runCreditAction } from "./connected-credit-service";
 import { cashView, runCashAction } from "./connected-cash-service";
@@ -76,18 +77,46 @@ const gates = [
 function reject(message: string, status = 400): never {
   throw Object.assign(new Error(message), { status });
 }
+/** An instalment Pay-by-bank offers: money is owed and nothing holds it. */
+function payable(r: ValopayRecord) {
+  return (
+    Number(r.data.outstandingKobo ?? r.amountKobo) > 0 &&
+    !["paid", "closed", "cancelled", "in_dispute"].includes(r.status)
+  );
+}
+/**
+ * The revision an action names: it changes whenever anything the workspace
+ * shows or its actions read changes, and nothing else does. It covers the
+ * lender and its settings, the customers, every connected record, each
+ * pay-by-bank receipt with its allocations, and the instalments the workspace
+ * offers, a checkout names or a receipt was applied to, with their attempts,
+ * each record whole. The lender's history (closes, the audit trail, exports,
+ * settled instalments, other payments) is left out, so the revision costs what
+ * the workspace does, and a write, which loads older closes as summaries,
+ * computes the revision its view did. It does not change with the clock.
+ */
 export function connectedRevision(state: DomainState): string {
-  // Stable over clock changes; also catches a collection or lender setting changed in another tab.
+  const receipts = new Set<string>(),
+    dues = new Set<unknown>();
+  for (const r of state.records) {
+    if (r.kind === "payments" && r.data.connectedIntentId) receipts.add(r.id);
+    else if (r.kind === "due-items" && payable(r)) dues.add(r.id);
+    else if (r.kind === "connected-intents") dues.add(r.data.dueItemId);
+  }
+  for (const r of state.records)
+    if (r.kind === "allocations" && receipts.has(r.data.paymentId))
+      dues.add(r.data.dueItemId);
   const rows = state.records
-    .map((r) => [
-      r.id,
-      r.updatedAt,
-      r.status,
-      r.amountKobo,
-      r.customerId,
-      r.data,
-    ])
-    .sort((a, b) => legacyCollatedCompare(String(a[0]), String(b[0])));
+    .filter(
+      (r) =>
+        r.kind === "customers" ||
+        r.kind.startsWith("connected-") ||
+        (r.kind === "due-items" && dues.has(r.id)) ||
+        (r.kind === "attempts" && dues.has(r.data.dueItemId)) ||
+        (r.kind === "payments" && receipts.has(r.id)) ||
+        (r.kind === "allocations" && receipts.has(r.data.paymentId)),
+    )
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return createHash("sha256")
     .update(JSON.stringify([state.merchant, state.settings, rows]))
     .digest("hex");
@@ -176,6 +205,151 @@ function addConsent(
     },
   });
 }
+/** A step in a checkout's journey: its new status and what happened, in its event history. */
+function recordEvent(
+  intent: RecordOf<"connected-intents">,
+  ctx: Context,
+  status: string,
+  detail: string,
+) {
+  intent.status = status;
+  intent.data.events!.push({ at: ctx.now, status, detail });
+  touch(intent, ctx.now);
+  return intent;
+}
+/**
+ * The receipt of a checkout confirmed as paid: the payment and its evidence,
+ * applied to the bound instalment while it is open. Money it cannot apply,
+ * such as a late payment for an instalment paid another way, waits for
+ * Finance with an exception. The server simulator is the only receipt
+ * producer, unless Finance confirmed an outcome that stayed unknown with the
+ * reference of its evidence: request data never supplies the beneficiary,
+ * amount or reference.
+ */
+function recordCheckoutReceipt(
+  state: DomainState,
+  ctx: Context,
+  intent: RecordOf<"connected-intents">,
+  due: RecordOf<"due-items">,
+  evidenceReference?: string,
+) {
+  const reference = `SYN-A2A-${intent.id}`;
+  const payment = makeRecord(state, "payments", {
+    name: "Confirmed sample pay-by-bank receipt",
+    status: "unallocated",
+    reference,
+    customerId: intent.customerId,
+    amountKobo: intent.amountKobo,
+    createdAt: ctx.now,
+    data: {
+      channel: "transfer",
+      providerConnection: "synthetic_a2a",
+      providerReference: reference,
+      currency: "NGN",
+      collectionStatus: "received",
+      settlementStatus: "settled",
+      reversalStatus: "none",
+      refundStatus: "none",
+      allocatedKobo: 0,
+      observedAt: ctx.now,
+      connectedIntentId: intent.id,
+      paymentMethod: "pay_by_bank",
+      ...(evidenceReference ? { evidenceReference } : {}),
+    },
+  });
+  const observation = makeRecord(state, "observations", {
+    name: "Sample bank confirmation",
+    status: "resolved",
+    reference,
+    amountKobo: intent.amountKobo,
+    customerId: intent.customerId,
+    createdAt: ctx.now,
+    data: {
+      source: "transfer",
+      eventId: reference,
+      providerReference: reference,
+      paymentId: payment.id,
+      dueItemId: due.id,
+      provider: "synthetic_a2a",
+      currency: "NGN",
+      receiptAuthority: evidenceReference ? "finance_evidence" : "server_simulator",
+    },
+  });
+  const available = Number(due.data.outstandingKobo ?? due.amountKobo);
+  if (
+    available > 0 &&
+    !["in_dispute", "cancelled", "closed"].includes(due.status)
+  )
+    allocatePayment(
+      state,
+      ctx,
+      payment,
+      due,
+      Math.min(available, payment.amountKobo),
+      "A2A-bound-intent",
+      "certain",
+      true,
+      evidenceReference
+        ? `Finance confirmed the payment with evidence ${evidenceReference} after its outcome stayed unknown; the amount, beneficiary and instalment are bound to the checkout.`
+        : "Server simulator confirmed the amount, beneficiary and bound instalment.",
+    );
+  if (Number(payment.data.allocatedKobo || 0) < payment.amountKobo)
+    raiseException(state, ctx, "unallocated_payment", {
+      linkedRecordId: payment.id,
+      customerId: payment.customerId,
+      amountKobo:
+        payment.amountKobo - Number(payment.data.allocatedKobo || 0),
+      notes:
+        "A late sample payment needs Finance review. Never collect the same instalment again.",
+    });
+  intent.data.paymentId = payment.id;
+  intent.data.observationId = observation.id;
+  intent.data.receiptReference = reference;
+  intent.data.confirmedAt = ctx.now;
+  return payment;
+}
+/**
+ * Item 10: Finance's resolution of a checkout whose outcome stayed unknown
+ * (its unknown_outcome exception). Confirmed successful records the receipt
+ * with the evidence reference and applies it; confirmed failed, or no debit,
+ * records the checkout as failed. Either way the instalment is no longer
+ * held. Returns the checkout's new status, or undefined when its outcome was
+ * already recorded.
+ */
+export function resolveUnknownCheckout(
+  state: DomainState,
+  ctx: Context,
+  exception: RecordOf<"exceptions">,
+  intent: RecordOf<"connected-intents">,
+  resolution: { reason: string; evidenceReference?: string },
+): "confirmed" | "failed" | undefined {
+  const { evidenceReference } = resolution;
+  if (intent.status !== "unknown") return undefined;
+  const due = owned(state, String(intent.data.dueItemId), "due-items");
+  const resolutionCode = String(exception.data.resolutionCode);
+  const confirmed = resolutionCode === "resolved_succeeded";
+  if (confirmed) recordCheckoutReceipt(state, ctx, intent, due, evidenceReference);
+  recordEvent(
+    intent,
+    ctx,
+    confirmed ? "confirmed" : "failed",
+    confirmed
+      ? `Finance confirmed the payment was received, with evidence ${evidenceReference}, after its outcome stayed unknown.`
+      : resolutionCode === "provider_confirmed_no_debit"
+        ? "Finance recorded that the provider confirmed no payment was taken, after the outcome stayed unknown."
+        : "Finance confirmed the payment failed after its outcome stayed unknown.",
+  );
+  intent.data.outcomeResolution = {
+    exceptionId: exception.id,
+    resolutionCode,
+    outcome: confirmed ? "confirmed" : "failed",
+    ...(confirmed ? { evidenceReference } : {}),
+    resolvedBy: ctx.actor,
+    resolvedAt: ctx.now,
+    reason: resolution.reason,
+  };
+  return confirmed ? "confirmed" : "failed";
+}
 function paymentAction(
   state: DomainState,
   ctx: Context,
@@ -243,12 +417,7 @@ function paymentAction(
   }
   const intent = owned(state, input.recordId, "connected-intents");
   const due = owned(state, String(intent.data.dueItemId), "due-items");
-  const event = (status: string, detail: string) => {
-    intent.status = status;
-    intent.data.events!.push({ at: ctx.now, status, detail });
-    touch(intent, ctx.now);
-    return intent;
-  };
+  const event = (status: string, detail: string) => recordEvent(intent, ctx, status, detail);
   if (input.action === "payment.authorise") {
     if (intent.status !== "created")
       reject("Only a new checkout can be authorised.", 409);
@@ -339,89 +508,25 @@ function paymentAction(
     if (intent.status === "confirmed" && outcome === "confirmed") return intent;
     if (!["authorised", "pending", "unknown"].includes(intent.status))
       reject("This checkout is not waiting for a provider outcome.", 409);
-    if (outcome !== "confirmed")
-      return event(
+    if (outcome !== "confirmed") {
+      event(
         outcome,
         outcome === "unknown"
           ? "Sample provider did not establish the outcome. Query again; do not retry payment."
           : "Sample provider confirmed that payment failed.",
       );
-    // This simulator is the ONLY receipt producer; request data cannot supply beneficiary, amount or reference.
+      // A late answer to an outcome that stayed unknown clears its exception.
+      clearSettledExceptions(state, ctx);
+      return intent;
+    }
     // A late response may arrive after consent expires/revokes: keep recording existing in-flight evidence.
-    const reference = `SYN-A2A-${intent.id}`;
-    const payment = makeRecord(state, "payments", {
-      name: "Confirmed sample pay-by-bank receipt",
-      status: "unallocated",
-      reference,
-      customerId: intent.customerId,
-      amountKobo: intent.amountKobo,
-      createdAt: ctx.now,
-      data: {
-        channel: "transfer",
-        providerConnection: "synthetic_a2a",
-        providerReference: reference,
-        currency: "NGN",
-        collectionStatus: "received",
-        settlementStatus: "settled",
-        reversalStatus: "none",
-        refundStatus: "none",
-        allocatedKobo: 0,
-        observedAt: ctx.now,
-        connectedIntentId: intent.id,
-        paymentMethod: "pay_by_bank",
-      },
-    });
-    const observation = makeRecord(state, "observations", {
-      name: "Sample bank confirmation",
-      status: "resolved",
-      reference,
-      amountKobo: intent.amountKobo,
-      customerId: intent.customerId,
-      createdAt: ctx.now,
-      data: {
-        source: "transfer",
-        eventId: reference,
-        providerReference: reference,
-        paymentId: payment.id,
-        dueItemId: due.id,
-        provider: "synthetic_a2a",
-        currency: "NGN",
-        receiptAuthority: "server_simulator",
-      },
-    });
-    const available = Number(due.data.outstandingKobo ?? due.amountKobo);
-    if (
-      available > 0 &&
-      !["in_dispute", "cancelled", "closed"].includes(due.status)
-    )
-      allocatePayment(
-        state,
-        ctx,
-        payment,
-        due,
-        Math.min(available, payment.amountKobo),
-        "A2A-bound-intent",
-        "certain",
-        true,
-        "Server simulator confirmed the amount, beneficiary and bound instalment.",
-      );
-    if (Number(payment.data.allocatedKobo || 0) < payment.amountKobo)
-      raiseException(state, ctx, "unallocated_payment", {
-        linkedRecordId: payment.id,
-        customerId: payment.customerId,
-        amountKobo:
-          payment.amountKobo - Number(payment.data.allocatedKobo || 0),
-        notes:
-          "A late sample payment needs Finance review. Never collect the same instalment again.",
-      });
-    intent.data.paymentId = payment.id;
-    intent.data.observationId = observation.id;
-    intent.data.receiptReference = reference;
-    intent.data.confirmedAt = ctx.now;
-    return event(
+    recordCheckoutReceipt(state, ctx, intent, due);
+    event(
       "confirmed",
       "Sample server receipt confirmed and added to collections reconciliation.",
     );
+    clearSettledExceptions(state, ctx);
+    return intent;
   }
   if (input.action === "payment.refund_request") {
     allow(ctx, ["Admin", "Operations"]);
@@ -454,35 +559,26 @@ function paymentAction(
       recordsOf(state, "payments").find(
         (r) => r.id === intent.data.paymentId,
       ) ?? reject("Receipt not found.", 404);
-    for (const allocation of recordsOf(state, "allocations").filter(
-      (r) => r.data.paymentId === payment.id && r.status === "confirmed",
-    )) {
-      supersedeAllocation(state, ctx, allocation, input.reason);
-      const affectedDue = owned(
-        state,
-        String(allocation.data.dueItemId),
-        "due-items",
-      );
-      affectedDue.status = "in_dispute";
-      touch(affectedDue, ctx.now);
-    }
     const refund = input.action === "payment.refund_confirm";
     // The money went back: the payment leaves the allocation queues and is no longer customer credit.
-    // With its allocations taken off above, a refund records the whole receipt as returned.
-    if (refund) recordPaymentRefund(state, ctx, payment, input.reason);
-    else {
-      payment.data.reversalStatus = "reversed";
-      settlePaymentStatus(state, ctx, payment, input.reason);
-    }
-    due.status = "in_dispute";
-    touch(due, ctx.now);
-    raiseException(state, ctx, "unallocated_payment", {
-      linkedRecordId: payment.id,
-      customerId: payment.customerId,
-      amountKobo: payment.amountKobo,
-      notes:
-        "Sample refund or reversal recorded. Finance must review the reopened obligation before collection.",
-    });
+    if (refund) {
+      // Decision on leaving a dispute: a refund Finance confirmed reopens each instalment it paid by its balance, not in
+      // dispute. With its allocations taken off first, the refund records the whole receipt as returned.
+      for (const allocation of recordsOf(state, "allocations").filter(
+        (r) => r.data.paymentId === payment.id && r.status === "confirmed",
+      ))
+        supersedeAllocation(state, ctx, allocation, input.reason);
+      recordPaymentRefund(state, ctx, payment, input.reason);
+    } else
+      // A reversal puts each instalment it paid in dispute, with an exception so someone owns it.
+      reversePayment(
+        state,
+        ctx,
+        payment,
+        input.reason,
+        "Finance recorded sample reversal evidence for the pay-by-bank receipt",
+      );
+    clearSettledExceptions(state, ctx);
     return event(
       refund ? "refunded" : "reversed",
       `${input.reason} (sample evidence only)`,
@@ -551,6 +647,19 @@ export function connectedView(state: DomainState, ctx: Context) {
     name: r.name,
     reference: r.reference,
   }));
+  // Built once for the whole view: each customer's name, and the instalments an
+  // open checkout or an attempt scheduled elsewhere or in flight holds.
+  const customerNames = new Map<string, string>();
+  for (const c of customers)
+    if (!customerNames.has(c.id)) customerNames.set(c.id, c.name);
+  const held = new Set<unknown>();
+  for (const a of state.records)
+    if (
+      intentOpen(a) ||
+      externalScheduled(a) ||
+      (a.kind === "attempts" && ["sent", "unknown"].includes(a.status))
+    )
+      held.add(a.data.dueItemId);
   return {
     mode: "synthetic" as const,
     revision: connectedRevision(state),
@@ -585,27 +694,15 @@ export function connectedView(state: DomainState, ctx: Context) {
         .filter((r) => r.kind === "connected-intents")
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
       dues: recordsOf(state, "due-items")
-        .filter(
-          (r) =>
-            Number(r.data.outstandingKobo ?? r.amountKobo) > 0 &&
-            !["paid", "closed", "cancelled", "in_dispute"].includes(r.status),
-        )
+        .filter(payable)
         .map((r) => ({
           id: r.id,
           name: r.name,
           reference: r.reference,
           customerId: r.customerId,
-          customerName:
-            customers.find((c) => c.id === r.customerId)?.name ?? r.name,
+          customerName: customerNames.get(r.customerId) ?? r.name,
           outstandingKobo: Number(r.data.outstandingKobo ?? r.amountKobo),
-          blocked: state.records.some(
-            (a) =>
-              a.data.dueItemId === r.id &&
-              (intentOpen(a) ||
-                externalScheduled(a) ||
-                (a.kind === "attempts" &&
-                  ["sent", "unknown"].includes(a.status))),
-          ),
+          blocked: held.has(r.id),
         })),
     },
     credit: creditView(state, ctx),

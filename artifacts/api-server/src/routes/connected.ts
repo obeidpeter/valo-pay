@@ -6,6 +6,7 @@ import {
   saveState,
   settleChanges,
   appendAudit,
+  auditObject,
   findIdempotency,
   findStoredAnswer,
   saveIdempotency,
@@ -83,11 +84,12 @@ router.post("/v1/connected/actions", async (req, res) => {
           mode: "synthetic",
           externalInstructionPerformed: false,
         });
+        // The object is the record the action changed or answers with, never an unrelated one the body named.
         appendAudit(
           state,
           ctx,
           input.action,
-          input.recordId || "connected-workspace",
+          auditObject(ctx, state, { body: input.recordId, answer: result }, "connected-workspace"),
           input.reason,
           {
             ...changes,

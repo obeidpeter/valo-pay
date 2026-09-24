@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { seedMerchant } from "../src/lib/valopay-seed";
 import { makeRecord } from "../src/domain/records";
 import { advanceRecordVersions } from "../src/lib/edit-versions";
-import { bindCloseReviewBasis, closeReviewBasis, closeReviewIssues, closeReviewCurrentProblem, decideCloseReview, pilotProgress, prepareCloseReview, reviewIsCurrent } from "../src/domain/close-review";
+import { bindCloseReviewBasis, closeReviewBasis, closeReviewIssues, closeReviewCurrentProblem, closeReviewList, decideCloseReview, pilotProgress, prepareCloseReview, reviewIsCurrent } from "../src/domain/close-review";
+import { personalWorkItems } from "../src/domain/personal-work";
 import type { Context, DomainState } from "../src/domain/types";
 
 const ops = { actor: "Clerk:operator", principalId: "person-1", role: "Operations", now: "2026-09-22T10:00:00.000Z" };
@@ -108,4 +109,30 @@ function ofKind(state: DomainState, kind: string) { return state.records.filter(
   review.data.snapshot!.data.summary = "tampered";
   assert.equal(reviewIsCurrent(state, review), false);
 }
-console.log("Close review: independent approval, exact snapshots, discrepancies, stale edits and evidence-led progress passed.");
+{
+  // A read computes the input digest once, however many closes and reviews it checks (the 23 September audit): each
+  // computation reads every basis record, so reads of one customer's name count them.
+  const state = empty(), customer = makeRecord(state, "customers", { status: "active", name: "Counted customer" });
+  let reads = 0;
+  Object.defineProperty(customer, "name", { enumerable: true, configurable: true, get: () => { reads += 1; return "Counted customer"; } });
+  // Four business dates' closes, each current and awaiting Finance; the latest was also returned once.
+  const closes = ["2026-09-19T10:00:00.000Z", "2026-09-20T10:00:00.000Z", "2026-09-21T10:00:00.000Z", ops.now].map(at => close(state, at));
+  const latest = closes.at(-1)!, returned = prepareCloseReview(state, ops, prepareInput(latest), reviewers);
+  decideCloseReview(state, finance, returned.id, { action: "return", expectedUpdatedAt: returned.updatedAt, note: "Add the owner of the open items." });
+  for (const record of closes) prepareCloseReview(state, ops, prepareInput(record), reviewers);
+  reads = 0;
+  assert.equal(pilotProgress(state).steps.find(s => s.id === "close")!.state, "awaiting_review");
+  assert.equal(reads, 1, "pilot progress computes the input digest once");
+  reads = 0;
+  const list = closeReviewList(state);
+  assert.deepEqual(list.closes.map(item => [item.problem, item.reviews.map(review => review.current)]), [[null, [true, true]], [null, [true]], [null, [true]], [null, [true]]]);
+  assert.equal(reads, 1, "the close reviews list computes it once");
+  reads = 0;
+  const work = personalWorkItems(state, finance, [{ actor: finance.actor, name: "Finance", role: "Finance" }]);
+  assert.deepEqual(work.map(item => item.reviewCurrent), [true, true, true, true]);
+  assert.equal(reads, 1, "the work queue computes it once");
+  // Nothing is kept between reads: a change is seen by the next one.
+  customer.data.note = "Changed after the closes";
+  assert.equal(closeReviewList(state).closes.every(item => item.problem?.startsWith("Records changed after this close")), true);
+}
+console.log("Close review: independent approval, exact snapshots, discrepancies, stale edits, evidence-led progress and one input digest a read passed.");

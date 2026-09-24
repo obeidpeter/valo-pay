@@ -155,6 +155,22 @@ export function paymentAppliedKobo(payment: { amountKobo?: unknown; data?: { all
   if (!payment || normaliseReversalStatus(payment.data?.reversalStatus) === "reversed") return 0;
   return Math.max(0, Math.min(Number(payment.data?.allocatedKobo || 0), Number(payment.amountKobo || 0) - paymentRefundedKobo(payment)));
 }
+/** Instalment statuses that take no allocation, whatever is still owed. */
+export const allocationClosedStatuses = ["cancelled", "closed", "in_dispute"] as const;
+/** What an instalment still owes: its outstanding balance, or its whole amount before it has one. */
+export function instalmentOutstandingKobo(due: { amountKobo: number; data?: { outstandingKobo?: unknown } | null }): number {
+  const outstanding = due.data?.outstandingKobo;
+  return Number.isInteger(outstanding) ? Number(outstanding) : due.amountKobo;
+}
+/**
+ * An instalment that can take an allocation now: it still owes something and
+ * is not cancelled, closed or in dispute. A manual allocation is refused for
+ * any other, and the allocation picker lists only these (the record list's
+ * `allocatable`), so its count is the count of choices.
+ */
+export function canTakeAllocation(due: { status: string; amountKobo: number; data?: { outstandingKobo?: unknown } | null }): boolean {
+  return instalmentOutstandingKobo(due) > 0 && !(allocationClosedStatuses as readonly string[]).includes(due.status);
+}
 
 /** Why a customer message was sent. */
 export const notificationPurposes = ["activation_reminder", "pre_debit", "failed_debit", "confirmation", "final_attempt", "policy_change"] as const;

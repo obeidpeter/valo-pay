@@ -1,7 +1,7 @@
 import { personalWorkQuerySchema, personalWorkViewSchema, workReceiptInputSchema, workReceiptSchema, type PersonalWorkItem, type PersonalWorkQuery, type WorkReceiptInput } from '@workspace/valopay-schema';
 import type { Context, DomainState, ValopayRecord } from './types';
 import { makeRecord } from './records';
-import { reviewIsCurrent } from './close-review';
+import { closeReviewBasisOnce, reviewIsCurrent } from './close-review';
 import { canonicalDigest } from '../lib/digests';
 import { contractAnswer } from '../lib/contract';
 
@@ -34,6 +34,8 @@ function receiptView(record: ValopayRecord, duplicate: boolean) {
 /** Pure read model: saved assignment/review records are the source of truth, never notification delivery state. */
 export function personalWorkItems(state: DomainState, ctx: Context, people: WorkAssignee[]): PersonalWorkItem[] {
   const records = localRecords(state), now = Date.parse(ctx.now), events = records.filter(record => record.kind === 'work-events');
+  // The reviews are checked against one input digest, computed at most once for this read.
+  const reviewState = { ...state, records }, basis = closeReviewBasisOnce(reviewState);
   const name = (actor: string, fallback?: string) => people.find(person => person.actor === actor)?.name || fallback || 'Former or unavailable staff member';
   const result: PersonalWorkItem[] = [];
   for (const record of records) {
@@ -58,7 +60,7 @@ export function personalWorkItems(state: DomainState, ctx: Context, people: Work
       });
     }
     if (record.kind === 'close-reviews' && record.status === 'awaiting_review' && typeof record.data.reviewer === 'string' && record.data.reviewer) {
-      const current = reviewIsCurrent({ ...state, records }, record), dueAt = instant(record.data.preparedAt) || record.createdAt;
+      const current = reviewIsCurrent(reviewState, record, basis), dueAt = instant(record.data.preparedAt) || record.createdAt;
       const principal = (ctx as Context & { principalId?: string }).principalId || (ctx.actor.startsWith('Sandbox ') ? 'unidentified-demo-person' : ctx.actor);
       const samePerson = record.data.reviewer === ctx.actor && (record.data.preparedBy === ctx.actor || record.data.preparedPrincipal === principal);
       const escalated = now - Date.parse(dueAt) >= DAY;
