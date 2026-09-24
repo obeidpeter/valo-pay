@@ -99,6 +99,8 @@ describe('recorded closing positions', () => {
     const result = closeHistory(rows, '2026-09-19', '2026-09-19');
     expect(result.items.map(row => row.id)).toEqual(['3', '2']);
     expect(result.metrics.map(metric => metric.change)).toEqual([-3000, -2]);
+    // The close list carries naira only, and the label says so: money in another currency is in each close's details.
+    expect(result.metrics[0]!.label).toBe('Unmatched value in naira at close');
   });
   it('does not invent missing measurements or compare a single snapshot', () => {
     const first = close('1', '2026-09-18T12:00:00Z');

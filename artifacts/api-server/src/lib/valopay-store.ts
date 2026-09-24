@@ -21,7 +21,8 @@ import { seedMerchant } from "./valopay-seed";
 import { createSandboxCreationLimits, creationRefusalMessage, WORKSPACE_CREATION_RETRY_AFTER_SECONDS } from "./creation-limit";
 import { readSandboxCookie, sandboxPrincipal, secureRequest, writeSandboxCookie } from "./sandbox-cookie";
 import { rememberSandbox } from "./request-limits";
-import { allocatableOnly, foldForSearch, listLimit, LIST_PAGE_CEILING, matchesSearch, updatedSinceInstant, type ListQuery } from "./valopay-list";
+import { allocatableOnly, allocationChoices, foldForSearch, listLimit, LIST_PAGE_CEILING, matchesSearch, updatedSinceInstant, type ListQuery } from "./valopay-list";
+import { allocationPayer } from "../domain/reconciliation";
 import { publicExportRecord } from "./export-jobs";
 import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
 import { validateCloseRange, pageOffset, type ReadPageQuery, type ReconciliationQueue } from './console-read-models';
@@ -1197,19 +1198,27 @@ const CHAIN_MARGIN_MINUTES = 5;
  * and an earlier build append without moving the stored head. A stored head
  * further on than any entry means entries went missing: the chain is broken
  * and that sequence is never issued again.
+ *
+ * The verified entry it returns, which the next entry appended records, is
+ * always before the first entry that breaks the chain: a changed entry, a
+ * missing one, a sequence two entries claim (a fork), or an entry whose
+ * sequence is not a number, which every read after the verified entry takes
+ * in (only a whole number can be the head). So a break found here, or by
+ * verify_audit's walk of the whole chain, is read again and reported by every
+ * later check, the overview's included, until the chain is valid again.
  */
 async function readAuditChain(session: Session, merchantId: string, settings: Record<string, any>, full = false) {
   const stored = storedChain(settings), from: ChainPoint = !full && stored ? stored.verified : AUDIT_GENESIS;
   const rows = (await session.client.query<{ id: string; data: Record<string, any>; created_at: Date }>(
     `SELECT r.id,r.data,r.created_at ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='audit'
        AND ($4::timestamptz IS NULL OR r.created_at >= $4::timestamptz - make_interval(mins => ${CHAIN_MARGIN_MINUTES}))
-       AND ($5::bigint = 0 OR (jsonb_typeof(r.data->'sequence')='number' AND (r.data->>'sequence')::numeric > $5::bigint))
+       AND ($5::bigint = 0 OR CASE WHEN jsonb_typeof(r.data->'sequence')='number' THEN (r.data->>'sequence')::numeric > $5::bigint ELSE true END)
      ORDER BY r.created_at,r.id`,
     [merchantId, session.workspace.id, session.principal, from.sequence ? from.at ?? null : null, from.sequence],
   )).rows;
   const walk = walkAuditChain(rows, from);
   let head: ChainPoint = from, valid = walk.valid;
-  for (const row of rows) if (Number(row.data.sequence) > head.sequence) head = { sequence: Number(row.data.sequence), hash: String(row.data.hash), at: row.created_at.toISOString() };
+  for (const row of rows) if (Number.isSafeInteger(row.data.sequence) && row.data.sequence > head.sequence) head = { sequence: row.data.sequence, hash: String(row.data.hash), at: row.created_at.toISOString() };
   if (stored && stored.sequence > head.sequence) { head = { sequence: stored.sequence, hash: stored.hash, ...(stored.at ? { at: stored.at } : {}) }; valid = false; }
   const verified: ChainPoint = walk.entry ? { ...walk.verified, at: walk.entry.created_at.toISOString() } : from;
   return { chain: { ...head, verified } as AuditChain, verification: { valid, count: walk.count, headHash: walk.headHash } };
@@ -1260,16 +1269,18 @@ export async function loadState(context: StoreContext, merchantId: string, lock:
 export async function auditOverview(context: StoreContext, state: DomainState) {
   const session = sessionFor(context), merchantId = state.merchant.id;
   if (session.lockedMerchantId !== merchantId) conflict("Load this lender before reading its audit log.");
-  const { verification } = await readAuditChain(session, merchantId, state.settings);
+  const { chain, verification } = await readAuditChain(session, merchantId, state.settings);
   const recent = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='audit' ORDER BY r.created_at DESC,r.id LIMIT 8`,
     [merchantId, session.workspace.id, session.principal])).rows.map(rowToRecord);
-  return { verification, recent };
+  // The alert names the entry after the last verified one, the first that breaks the chain.
+  return { verification: { ...verification, verifiedSequence: chain.verified.sequence }, recent };
 }
 
 /**
  * The whole audit chain verified from its first entry (verify_audit): the
- * lender's position records how far it held, so a break found here is also
- * what the overview reports from then on.
+ * lender's position records how far it held (readAuditChain), and the entry
+ * verify_audit appends stores it, so a break found here, however early in the
+ * chain, is also what the overview reports from then on.
  */
 export async function verifyAuditTrail(context: StoreContext, state: DomainState) {
   const session = sessionFor(context), merchantId = lockedMerchant(session);
@@ -1368,11 +1379,15 @@ const scopedRecordsWhere = "r.merchant_id=$1 AND m.workspace_id=$2 AND w.id=$2 A
  * Search: the JavaScript fold (matchesSearch) over each record's name,
  * reference and data values as the list shows them (an export without its
  * private storage fields), scanning bounded batches of this kind; only the
- * requested page is retained. Search indexing is a separate change.
+ * requested page is retained. Search indexing is a separate change. Closes are
+ * listed, and searched, as their summaries, as the reports view reads them: a
+ * whole close carries its full report (about 100 KB), which the close history
+ * opens one at a time (getCloseDetail).
  */
 export async function listRecords(context: StoreContext, merchantId: string, kind: string, query: ListQuery) {
   const session = sessionFor(context);
   await readMerchant(context, merchantId);
+  const columns = kind === "closes" ? recordColumns.replace("r.data", `${closeSummarySql} AS data`) : recordColumns;
   const params: unknown[] = [merchantId, session.workspace.id, session.principal, kind];
   let where = `${scopedRecordsWhere} AND r.kind=$4`;
   const filter = (column: string, value: unknown) => { params.push(value); where += ` AND ${column}=$${params.length}`; };
@@ -1384,6 +1399,17 @@ export async function listRecords(context: StoreContext, merchantId: string, kin
   if (allocatableOnly(kind, query)) {
     params.push([...allocationClosedStatuses]);
     where += ` AND r.status <> ALL($${params.length}::text[]) AND (CASE WHEN jsonb_typeof(r.data->'outstandingKobo') IS DISTINCT FROM 'number' THEN r.amount_kobo WHEN (r.data->>'outstandingKobo')::numeric % 1 <> 0 THEN r.amount_kobo ELSE (r.data->>'outstandingKobo')::numeric END) > 0`;
+    // One payment's choices: the payer rule of its manual allocation (allocationPayer) becomes a customer filter.
+    if (query.paymentId !== undefined) {
+      const scope = [merchantId, session.workspace.id, session.principal];
+      const row = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='payments' AND r.id=$4`, [...scope, query.paymentId])).rows[0];
+      const payment = row ? rowToRecord(row) : fail("Payment not found in this lender. Refresh the payments and choose one again.", 404);
+      const named = !payment.customerId && typeof payment.data.dueItemId === "string" && payment.data.dueItemId
+        ? (await session.client.query<{ customer_id: string }>(`SELECT r.customer_id ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='due-items' AND r.id=$4`, [...scope, payment.data.dueItemId])).rows[0]?.customer_id : undefined;
+      const choices = allocationChoices(query, allocationPayer(payment, named));
+      if (!choices) return { items: [], total: 0 };
+      if (choices.customerId !== query.customerId) filter("r.customer_id", choices.customerId);
+    }
   }
   if (query.updatedSince) {
     params.push(new Date(updatedSinceInstant(query.updatedSince)).toISOString()); where += ` AND r.updated_at >= $${params.length}::timestamptz`;
@@ -1398,7 +1424,7 @@ export async function listRecords(context: StoreContext, merchantId: string, kin
     const values = [...params, offset];
     let paging = ` OFFSET $${values.length}`;
     if (limit !== undefined) { values.push(limit); paging += ` LIMIT $${values.length}`; }
-    if (offset < total) items = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${where} ORDER BY r.created_at DESC,r.id DESC${paging}`, values)).rows.map(rowToRecord);
+    if (offset < total) items = (await session.client.query<RecordRow>(`SELECT ${columns} ${scopedRecordsFrom} WHERE ${where} ORDER BY r.created_at DESC,r.id DESC${paging}`, values)).rows.map(rowToRecord);
   } else {
     const search = foldForSearch(query.search);
     total = 0;
@@ -1407,7 +1433,7 @@ export async function listRecords(context: StoreContext, merchantId: string, kin
       const values = [...params];
       let after = "";
       if (cursor) { values.push(cursor.at, cursor.id); after = ` AND (r.created_at,r.id) < ($${values.length - 1}::timestamptz,$${values.length}::text)`; }
-      const batch = (await session.client.query<RecordRow & { cursor_at: string }>(`SELECT ${recordColumns},r.created_at::text AS cursor_at ${scopedRecordsFrom} WHERE ${where}${after} ORDER BY r.created_at DESC,r.id DESC LIMIT ${LIST_PAGE_CEILING}`, values)).rows;
+      const batch = (await session.client.query<RecordRow & { cursor_at: string }>(`SELECT ${columns},r.created_at::text AS cursor_at ${scopedRecordsFrom} WHERE ${where}${after} ORDER BY r.created_at DESC,r.id DESC LIMIT ${LIST_PAGE_CEILING}`, values)).rows;
       for (const row of batch) {
         const record = rowToRecord(row);
         if (!matchesSearch(record.kind === "exports" ? publicExportRecord(record) : record, search)) continue;

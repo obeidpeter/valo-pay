@@ -188,24 +188,25 @@ function assertOnePayment(state: DomainState, due: ValopayRecord, label: string)
   assert.equal(batch.status, "reconciled", "the completed batch reconciles to the statement credit");
   assert.equal(batch.data.explanation, "Statement credit matched the settlement batch net total; it was not allocated to a customer.", "and says so, not what the first half showed");
   assert.equal(close.data.report.variances.count, 0, "the close lists no settlement difference");
-  assert.deepEqual(linked(batch.id).map((item) => item.status), ["open"], "the earlier exception waits for Finance; nothing new is raised");
+  // Second review decision 3: a batch's variance exception closes when its condition clears, as other exceptions do.
+  assert.deepEqual(linked(batch.id).map((item) => [item.status, item.data.resolutionCode, item.data.conditionCleared?.reason]), [["closed", "condition_cleared", "settlement batch B-SPLIT is now reconciled"]], "the earlier exception closes as its condition cleared; nothing new is raised");
   const [earlier] = linked(batch.id);
-  assert.equal(earlier!.data.notes, "Statement credit differs from gross settlement lines less recorded fees.\nUpdate on 2027-07-02 (WAT): the batch is now reconciled. Statement credit matched the settlement batch net total; it was not allocated to a customer.", "its notes say where the batch now stands, after what the first half showed");
-  // The API and the scheduler bind the review basis: the review asks for no explanation of a settlement difference, and lists the open exception until Finance resolves it.
+  assert.equal(earlier!.data.notes, "Statement credit differs from gross settlement lines less recorded fees.\nUpdate on 2027-07-02 (WAT): the batch is now reconciled. Statement credit matched the settlement batch net total; it was not allocated to a customer.\nCondition cleared on 2027-07-02 (WAT): settlement batch B-SPLIT is now reconciled, so this exception was closed.", "its notes say where the batch now stands and why it closed, after what the first half showed");
+  assert.match(String(close.data.summary), / opened and 1 closed,/, "the close counts it as closed");
+  // The API and the scheduler bind the review basis: the review asks for no explanation of a settlement difference, and has no open exception left for it.
   const issues = closeReviewIssues(bindCloseReviewBasis(state, close));
   assert.ok(!issues.some((issue) => issue.id === `variance:${batch.id}`), "the review asks for no explanation of a settlement difference");
-  assert.deepEqual(issues.filter((issue) => issue.id === `item:${earlier!.id}`).map((issue) => [issue.label, issue.unresolved]), [["Open exception · Settlement variance", true]], "the open exception still asks for an owner and a next step");
+  assert.deepEqual(issues.filter((issue) => issue.id === `item:${earlier!.id}` && issue.unresolved), [], "and no open exception asks for an owner");
   // A later close with nothing new leaves the batch and its exception exactly as they were.
   const settled = JSON.stringify([batch, earlier]);
   reconcile(state, finance(wat("2027-07-03T09:00:00")));
   assert.equal(JSON.stringify([batch, earlier]), settled, "an unchanged batch is not rewritten");
-  // Finance closes the earlier exception; a late line after the batch reconciled is a new difference.
-  executeAction(state, finance(wat("2027-07-03T10:00:00")), { action: "resolve_exception", recordId: linked(batch.id)[0]!.id, reason: "The provider sent the file in two parts.", data: { resolutionCode: "provider_corrected" } });
+  // A late line after the batch reconciled is a new difference: the exception its condition cleared settles nothing.
   addObservation(state, { reference: "SPLIT-L3", amountKobo: 1_500_000 - 7_500, grossAmountKobo: 1_500_000, feeKobo: 7_500, batchReference: "B-SPLIT", source: "settlement", customerId: small.customerId, dueItemId: small.id, eventId: "split-l3", occurredAt: wat("2027-07-04T07:00:00") });
   reconcile(state, finance(wat("2027-07-04T09:00:00")));
   assert.equal(batch.status, "variance", "a reconciled batch that gains a line no longer matches its credit");
   assert.equal(batch.data.explanation, "Statement credit differs from gross settlement lines less recorded fees.");
-  assert.deepEqual(linked(batch.id).map((item) => item.status), ["resolved", "open"], "and that is new work");
+  assert.deepEqual(linked(batch.id).map((item) => item.status), ["closed", "open"], "and that is new work");
   // A fee variance that a later line cancels out leaves the batch waiting for its statement credit.
   addObservation(state, { reference: "FEE-L1", amountKobo: GROSS - (FEE + 20_000), grossAmountKobo: GROSS, feeKobo: FEE + 20_000, batchReference: "B-FEES", source: "settlement", eventId: "fee-l1", occurredAt: wat("2027-07-05T07:00:00") });
   reconcile(state, finance(wat("2027-07-05T09:00:00")));
@@ -214,9 +215,10 @@ function assertOnePayment(state: DomainState, due: ValopayRecord, label: string)
   addObservation(state, { reference: "FEE-L2", amountKobo: 6_000_000 - (BIG_FEE - 20_000), grossAmountKobo: 6_000_000, feeKobo: BIG_FEE - 20_000, batchReference: "B-FEES", source: "settlement", eventId: "fee-l2", occurredAt: wat("2027-07-06T07:00:00") });
   reconcile(state, finance(wat("2027-07-06T09:00:00")));
   assert.deepEqual([fees.data.feeVarianceKobo, fees.status, fees.data.explanation], [0, "pending", undefined], "fees that now match the schedule are no longer a variance");
-  assert.match(String(linked(fees.id)[0]!.data.notes), /\nUpdate on 2027-07-06 \(WAT\): the batch is now pending\. Its fees are within the schedule and it waits for its statement credit\.$/, "and its open exception says so");
+  assert.match(String(linked(fees.id)[0]!.data.notes), /\nUpdate on 2027-07-06 \(WAT\): the batch is now pending\. Its fees are within the schedule and it waits for its statement credit\.\nCondition cleared on 2027-07-06 \(WAT\): the fees of settlement batch B-FEES are now within the schedule, so this exception was closed\.$/, "and its exception says so and closes, as its condition cleared");
+  assert.deepEqual([linked(fees.id)[0]!.status, linked(fees.id)[0]!.data.resolutionCode], ["closed", "condition_cleared"]);
   invariant(state);
-  checks += 17;
+  checks += 19;
 }
 
 // ---------- A settlement batch Finance added by hand takes the provider's lines when they arrive (ING-03) ----------

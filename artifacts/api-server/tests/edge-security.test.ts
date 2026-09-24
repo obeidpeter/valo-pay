@@ -1,11 +1,12 @@
 // Offline checks of the API's edge (the 23 September 2026 audit, security items 1, 2, 6, 8 and 9 and
-// operations item 4, and the review of its fixes, items 1, 5 and 6; see docs/security-review.md): the
-// request and sandbox limits by principal and network (an IPv6 client by its /64), with a network's
-// first sandbox never refused because of others, bounded limiter maps, health that answers without
-// Clerk and a readiness check a burst cannot multiply, request ids only from a configured edge, Clerk
-// sessions checked only under /api/v1 and accepted only for the configured origins, a Clerk proxy that
-// tells Clerk nothing a client wrote and never sends it the sandbox cookie, a staff host that does not
-// start without Clerk, and the __Host- sandbox cookie.
+// operations item 4, the review of its fixes, items 1, 5 and 6, and the second review, finding 2; see
+// docs/security-review.md): the request and sandbox limits by principal and network (an IPv6 client by
+// its /64), with a network's first sandbox never refused because of others, bounded limiter maps, health
+// that answers without Clerk and a readiness check a burst cannot multiply, request ids only from a
+// configured edge, Clerk sessions checked only under /api/v1 and accepted only for the configured origins,
+// a Clerk proxy that tells Clerk nothing a client wrote and never sends it the sandbox cookie, a staff host
+// that does not start without Clerk's secret key and a JWT key Clerk can read, and the __Host- sandbox
+// cookie.
 // No Clerk service and no database: a local socket that closes every connection stands in for
 // PostgreSQL, so readiness fails fast and counts its connections; Clerk checks tokens this test signs,
 // and a local stand-in for its Backend API counts the key fetches a forged token causes.
@@ -49,6 +50,10 @@ const drain = async (response: Response) => { await response.arrayBuffer(); retu
 const tally = (statuses: number[]) => statuses.reduce<Record<number, number>>((all, status) => ({ ...all, [status]: (all[status] ?? 0) + 1 }), {});
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const token = (fill: string) => fill.repeat(64);
+// What the start-up check says of a staff host's Clerk settings.
+const secretKeyRequired = "CLERK_SECRET_KEY is required when VALOPAY_STAFF_ACCESS is staging: without it no one can sign in.";
+const jwtKeyRequired = "CLERK_JWT_KEY is required when VALOPAY_STAFF_ACCESS is staging: the Clerk instance's JWT public key, with which staff sessions are verified without a call to Clerk's Backend API.";
+const jwtKeyEscaped = "CLERK_JWT_KEY holds \\n in place of its line breaks, which Clerk cannot read: give the PEM public key with real line breaks, as Clerk shows it, from -----BEGIN PUBLIC KEY----- to -----END PUBLIC KEY-----.";
 
 try {
   // ---- Operations item 4: health, readiness and the sandbox need no Clerk ----
@@ -278,8 +283,17 @@ try {
     Object.assign(process.env, { VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ORIGINS: "https://staff.example" });
     assert.deepEqual(clerkOptions({ headers: {} }).authorizedParties, ["https://staff.example"], "in staff mode the staff policy's origins");
     delete process.env["CLERK_SECRET_KEY"];
-    assert.deepEqual(refused({ VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://clerk.pilot.example", VALOPAY_STAFF_ORIGINS: "https://staff.example" }), ["CLERK_SECRET_KEY is required when VALOPAY_STAFF_ACCESS is staging: without it no one can sign in."], "a staff host without Clerk must not start");
-    assert.deepEqual(refused({ VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://clerk.pilot.example", VALOPAY_STAFF_ORIGINS: "https://staff.example", CLERK_SECRET_KEY: "sk_test_placeholder" }), [], "and with Clerk it starts");
+    // A staff host needs Clerk's secret key and its JWT public key, a value Clerk can read (the review of 4edd897,
+    // finding 2): without the key, forged tokens make Clerk fetch the instance's keys, and with one Clerk cannot read,
+    // every staff request would be answered 401 while the host read as ready.
+    const staffHost = { VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://clerk.pilot.example", VALOPAY_STAFF_ORIGINS: "https://staff.example" };
+    const jwtKey = publicKey.export({ type: "spki", format: "pem" }).toString();
+    assert.deepEqual(refused(staffHost), [secretKeyRequired, jwtKeyRequired], "a staff host without Clerk must not start");
+    assert.deepEqual(refused({ ...staffHost, CLERK_SECRET_KEY: "sk_test_placeholder" }), [jwtKeyRequired], "nor with the secret key alone");
+    assert.deepEqual(refused({ ...staffHost, CLERK_SECRET_KEY: "sk_test_placeholder", CLERK_JWT_KEY: jwtKey.trim().replaceAll("\n", "\\n") }), [jwtKeyEscaped], "nor with the JWT key pasted on one line with \\n escapes");
+    assert.deepEqual(refused({ ...staffHost, CLERK_SECRET_KEY: "sk_test_placeholder", CLERK_JWT_KEY: jwtKey }), [], "and with both it starts");
+    assert.deepEqual(refused({ CLERK_SECRET_KEY: "sk_test_placeholder", VALOPAY_APP_ORIGINS: "https://pilot.example" }), [], "outside staff mode the JWT key may be left unset");
+    assert.deepEqual(refused({ CLERK_SECRET_KEY: "sk_test_placeholder", VALOPAY_APP_ORIGINS: "https://pilot.example", CLERK_JWT_KEY: jwtKey.trim().replaceAll("\n", "\\n") }), [jwtKeyEscaped], "but one given must be one Clerk can read");
     delete process.env["VALOPAY_STAFF_ACCESS"]; delete process.env["VALOPAY_STAFF_ORIGINS"];
     assert.deepEqual([signInConfiguration(), signInEnabled()], [{}, false], "without Clerk the sandbox runs anonymously, which is fine");
     process.env["CLERK_SECRET_KEY"] = "sk_test_placeholder";
@@ -292,19 +306,20 @@ try {
     process.env["REPLIT_DOMAINS"] = "valopay.replit.app,Valopay.example";
     assert.deepEqual([appOrigins(), signInEnabled(), signInConfiguration()], [["https://valopay.replit.app", "https://valopay.example"], true, {}], "on Replit the deployment's domains serve when nothing else is configured");
     delete process.env["REPLIT_DOMAINS"];
-    checks += 13;
+    checks += 17;
   });
 
-  // ---- Operations item 4: in staff mode a missing CLERK_SECRET_KEY stops startup with one fatal line ----
+  // ---- Operations item 4: in staff mode a missing CLERK_SECRET_KEY, or a JWT key Clerk cannot read, stops startup with one fatal line ----
   await section("a staff host without Clerk does not start", () => {
     const env: Record<string, string | undefined> = { ...process.env, NODE_ENV: "test", LOG_LEVEL: "info", PORT: "39217", VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://clerk.pilot.example", VALOPAY_STAFF_ORIGINS: "https://pilot.example", VALOPAY_CLOSE_SCHEDULER: "off", LOG_FILE: undefined, LOG_FORMAT: undefined };
     delete env["CLERK_SECRET_KEY"];
+    env["CLERK_JWT_KEY"] = publicKey.export({ type: "spki", format: "pem" }).toString().trim().replaceAll("\n", "\\n");
     const tsx = join(import.meta.dirname, "..", "..", "..", "scripts", "node_modules", "tsx", "dist", "cli.mjs");
     const run = spawnSync(process.execPath, [tsx, join(import.meta.dirname, "..", "src", "index.ts")], { env, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL" });
     assert.equal(run.status, 1, `the process exits (status ${run.status}, signal ${run.signal})`);
     const lines = run.stdout.split("\n").filter((line) => line.startsWith("{")).map((line) => JSON.parse(line) as Record<string, unknown>);
     assert.deepEqual(lines.map((line) => [line["level"], line["event"]]), [[60, "config.invalid"]], "with one fatal line and nothing else logged");
-    assert.deepEqual(lines[0]!["problems"], ["CLERK_SECRET_KEY is required when VALOPAY_STAFF_ACCESS is staging: without it no one can sign in."]);
+    assert.deepEqual(lines[0]!["problems"], [secretKeyRequired, jwtKeyEscaped], "naming both settings, never the key");
     checks += 3;
   });
 } finally {
@@ -437,5 +452,5 @@ if (failures.length) {
   console.error(`Edge security checks failed: ${failures.length} group(s).`);
   process.exit(1);
 }
-console.log(`Edge security checks passed (${checks} checks): limits by principal and network with IPv6 counted by /64, new sandboxes per network, /48 and process with a network's first never refused because of others, bounded limiter maps, health without Clerk and coalesced readiness with its own limit, request ids only from a configured edge, Clerk sessions checked only under /api/v1 (with no Backend API call given CLERK_JWT_KEY) and only for configured origins, a Clerk proxy that forwards the trusted address and configured origin and never the sandbox cookie, a staff host that does not start without Clerk, and the __Host- sandbox cookie.`);
+console.log(`Edge security checks passed (${checks} checks): limits by principal and network with IPv6 counted by /64, new sandboxes per network, /48 and process with a network's first never refused because of others, bounded limiter maps, health without Clerk and coalesced readiness with its own limit, request ids only from a configured edge, Clerk sessions checked only under /api/v1 (with no Backend API call given CLERK_JWT_KEY) and only for configured origins, a Clerk proxy that forwards the trusted address and configured origin and never the sandbox cookie, a staff host that does not start without Clerk's secret key and a JWT key Clerk can read, and the __Host- sandbox cookie.`);
 process.exit(0);

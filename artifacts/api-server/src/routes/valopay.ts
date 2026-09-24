@@ -5,7 +5,7 @@ import * as S from "@workspace/api-zod";
 import { z } from "zod";
 import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, auditObject, roles, fail, appendAudit, auditOverview, verifyAuditTrail, listMerchants, findIdempotency, findStoredAnswer, saveIdempotency, receiptOf, changeRole, type StoreContext } from "../lib/valopay-store";
 import { requestFingerprint } from "../lib/digests";
-import { amendDueItem, customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction, type TypedRecord } from "../domain";
+import { amendDueItem, customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction, withAuditNote, type TypedRecord } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
 import { bindCloseReviewBasis } from '../domain/close-review';
 import { assertNoDirectImportedCorrection } from '../domain/import-corrections';
@@ -79,7 +79,7 @@ export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response
   if(mutating){
    // A domain action may add what it established to the reason, such as the payer Finance identified: server-built text in its answer.
    const reason=audit.reason?.trim()||"Synthetic workspace operation",auditNote=audit.action===undefined?undefined:(rawResult as {data?:{auditNote?:unknown}}|undefined)?.data?.auditNote;
-   appendAudit(state,ctx,audit.action??`${req.method.toLowerCase()}.${req.path.split("/").slice(2).join(".")}`,auditObject(ctx,state,{path:req.params.id,body:audit.recordId,answer:rawResult},"workspace"),typeof auditNote==="string"&&auditNote?`${reason}${/[.!?]$/.test(reason)?"":"."} ${auditNote}`:reason,changes);
+   appendAudit(state,ctx,audit.action??`${req.method.toLowerCase()}.${req.path.split("/").slice(2).join(".")}`,auditObject(ctx,state,{path:req.params.id,body:audit.recordId,answer:rawResult},"workspace"),withAuditNote(reason,auditNote),changes);
     await saveState(ctx,state);
     if(receipt)await saveIdempotency(ctx,receipt.id,fingerprint,result);
   }

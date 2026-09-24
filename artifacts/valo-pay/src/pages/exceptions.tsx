@@ -12,7 +12,7 @@ import { AlertTriangle, User, Calendar } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
-import { exceptionSeverities, failureCodeList, resolutionCodesFor, resolveExceptionType } from '@workspace/valopay-schema';
+import { exceptionSeverities, failureCodeList, resolutionCodesForException, resolveExceptionType } from '@workspace/valopay-schema';
 import { readableLabel, RecordLabel, StatusBadge } from '@/components/record-label';
 import { isDueToday, isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { RecordPagination } from '@/components/record-pagination';
@@ -50,7 +50,7 @@ export default function ExceptionsPage() {
   };
 
   const exceptionsQuery = usePagedQueue('exceptions', { view: filter, owner, type, record: targetId ? wrongLender ? 'unavailable' : targetId : undefined });
-  const { data, isLoading, error, refetch, pagination } = exceptionsQuery;
+  const { data, isLoading, isPlaceholderData, error, refetch, pagination } = exceptionsQuery;
   useHashTarget(`record-${targetId || ''}`, !!targetId && !isLoading && !error && !wrongLender);
   const customerById = new Map(data?.related.filter(row => row.kind === 'customers').map(row => [row.id, row]));
 
@@ -200,7 +200,7 @@ export default function ExceptionsPage() {
             </table>
           </ScrollFrame>
         )}
-        {!isLoading && !error && !targetId && (data?.total || 0) > 25 && <RecordPagination pagination={pagination} total={data?.total || 0} label="exceptions" />}
+        {!isLoading && !error && !targetId && (data?.total || 0) > 25 && <RecordPagination pagination={pagination} total={data?.total || 0} busy={isPlaceholderData} label="exceptions" />}
         </div>
       </div>
 
@@ -218,7 +218,7 @@ export default function ExceptionsPage() {
           : values.confirmedFailureCode && values.resolutionCode !== 'resolved_failed' ? { confirmedFailureCode: 'Choose a failure code only when the provider confirmed that the debit failed.' } : {} : undefined}
         fields={
           actionKind === 'resolve' ? [
-            { name: 'resolutionCode', label: `How was this resolved? (${readableLabel(selectedEx?.data?.type || 'exception').toLowerCase()})`, type: 'select', isData: true, required: true, options: resolutionCodesFor(selectedEx?.data?.type).map(code => ({ label: readableLabel(code), value: code })) },
+            { name: 'resolutionCode', label: `How was this resolved? (${readableLabel(selectedEx?.data?.type || 'exception').toLowerCase()})`, type: 'select', isData: true, required: true, options: resolutionCodesForException(selectedEx).map(code => ({ label: readableLabel(code), value: code })) },
             ...(checkoutOutcome ? [{
               name: 'evidenceReference', label: 'Evidence reference', type: 'text' as const, isData: true,
               help: 'Only when the payment is confirmed as received: the masked reference of the evidence that the money arrived, such as a bank statement line (STMT-***4411).',

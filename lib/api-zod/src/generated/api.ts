@@ -90,7 +90,7 @@ export const GetWorkspaceResponse = zod.object({
 
 
 /**
- * Metrics, queues, recent activity (the eight latest audit entries), upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02), whose audit check covers the entries since the last one verified.
+ * Metrics, queues, recent activity (the eight latest audit entries), upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02), whose audit check covers the entries since the last one verified. The last one verified stays before the first entry that breaks the chain, so a break this check or verify_audit found stays in the feed until the chain is valid again.
  * @summary The operations overview for one lender
  */
 export const getOverviewQueryMerchantIdMax = 100;
@@ -178,7 +178,7 @@ export const GetOverviewResponse = zod.object({
 
 
 /**
- * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync; allocatable for the instalments a manual allocation accepts.
+ * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync; allocatable for the instalments that can take an allocation, and with paymentId the ones a manual allocation of that payment accepts. Closes are listed, and searched, as their summaries, as the reports have earlier closes: without operational and metrics, and with the report reduced to its unallocated and exceptions totals; GET /v1/close-history/{id} returns a close whole.
  * @summary Records of one kind for one lender, newest first
  */
 export const ListRecordsParams = zod.object({
@@ -191,6 +191,8 @@ export const listRecordsQueryLimitMax = 500;
 
 export const listRecordsQueryOffsetMin = 0;
 
+export const listRecordsQueryPaymentIdMax = 100;
+
 
 
 export const ListRecordsQueryParams = zod.object({
@@ -202,7 +204,8 @@ export const ListRecordsQueryParams = zod.object({
   "updatedSince": zod.string().optional().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00; only records updated at or after that instant (incremental sync). A number, a date without a time, a time without Z or an offset, or a year outside 0001 to 9999 is refused (400, naming updatedSince).'),
   "customerId": zod.string().optional().describe('Only records directly linked to this customer, in the selected lender.'),
   "id": zod.string().optional().describe('Only this exact record ID, in the selected kind and lender.'),
-  "allocatable": zod.enum(['true', 'false']).optional().describe('Instalments (due-items) only. true lists just the instalments that can take an allocation now: those that still owe an amount and are not cancelled, closed or in dispute, the ones a manual allocation accepts, so total counts the choices. Omitted or false lists every instalment. Refused (400) for any other kind.')
+  "allocatable": zod.enum(['true', 'false']).optional().describe('Instalments (due-items) only. true lists just the instalments that can take an allocation now: those that still owe an amount and are not cancelled, closed or in dispute, and with paymentId only those a manual allocation of that payment accepts, so total counts the choices. Omitted or false lists every instalment. Refused (400) for any other kind.'),
+  "paymentId": zod.string().min(1).max(listRecordsQueryPaymentIdMax).optional().describe('With allocatable=true, the payment whose choices are listed: the instalments a manual allocation of it accepts, by the payer rule that allocation applies. A payment with a recorded payer takes only its payer\'s instalments; one whose evidence named no payer but names an instalment takes only that instalment\'s customer\'s; one that names neither takes any customer\'s. A payment in another currency than naira, whose money went back or with nothing left to allocate takes none, so the list is empty. A payment the lender does not have is a 404; without allocatable=true, paymentId is refused (400).')
 })
 
 export const ListRecordsResponse = zod.object({

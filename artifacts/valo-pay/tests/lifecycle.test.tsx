@@ -155,6 +155,47 @@ it('stops the run at a blocked source and says why', async () => {
   expect(screen.getByRole('button', { name: 'Resume approved run' })).toBeTruthy();
 });
 
+// Second review of the audit fixes, console finding 2: a run that stops on a failed or lost request says so, and focus goes there.
+/** Answers the run's second execute request as `how` says; the others reach the service. */
+function secondExecute(how: '502' | 'lost' | 'refused') {
+  const baseFetch = globalThis.fetch;
+  let sent = 0;
+  globalThis.fetch = async (input, options) => {
+    if (!String(input).includes('/execute') || ++sent !== 2) return baseFetch(input, options);
+    // A proxy's error page: nothing says whether the service did anything.
+    if (how === '502') return new Response('<html><body>502 Bad Gateway</body></html>', { status: 502, headers: { 'content-type': 'text/html' } });
+    if (how === 'refused') return new Response(JSON.stringify({ error: 'The approved preview does not match.' }), { status: 409, headers: { 'content-type': 'application/json' } });
+    // The service removes the second source, and its answer never arrives.
+    await baseFetch(input, options);
+    throw new TypeError('Failed to fetch');
+  };
+}
+async function runByKeyboard(user: ReturnType<typeof userEvent.setup>) {
+  (await screen.findByRole('button', { name: 'Execute approved run' })).focus();
+  await user.keyboard('{Enter}');
+}
+for (const [how, said, removed] of [
+  ['502', 'The run stopped because its last request was not confirmed: it failed or its answer was lost, and it may have removed more sources. Use Check original request above to find out. Removed so far: 1 of 3 sources.', 1],
+  ['lost', 'The run stopped because its last request was not confirmed: it failed or its answer was lost, and it may have removed more sources. Use Check original request above to find out. Removed so far: 1 of 3 sources.', 2],
+  ['refused', 'The run stopped because its last request was refused: The approved preview does not match. Removed so far: 1 of 3 sources.', 1],
+] as const) it(`says where a run stopped when its request is ${how === '502' ? 'answered 502' : how === 'lost' ? 'lost' : 'refused'}, and reading continues from there`, async () => {
+  const ids = [batchId, ...moreBatches()];
+  enable(); const user = userEvent.setup(); renderApp('/lifecycle');
+  await prepare(user); await approve(user);
+  secondExecute(how);
+  await runByKeyboard(user);
+  const outcome = await screen.findByText(said);
+  // Stop went with the run: focus is on what happened, never on the page body.
+  await waitFor(() => expect(document.activeElement).toBe(outcome));
+  expect(csvLeft(ids)).toBe(3 - removed);
+  if (how === 'refused') expect(screen.queryByText('Outcome not confirmed')).toBeNull();
+  else {
+    expect(screen.getByText('Outcome not confirmed')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Check original request' }));
+    await waitFor(() => expect(screen.queryByText('Outcome not confirmed')).toBeNull());
+  }
+});
+
 it('keeps retention details and controls unavailable to non-administrators', async () => {
   api.role = 'Finance'; renderApp('/lifecycle');
   await screen.findByText(/Only a currently authorised administrator can inspect or change retention controls/);

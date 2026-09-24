@@ -7,6 +7,7 @@ import {
 } from "@workspace/api-client-react";
 import { useWorkspace } from "./workspace-context";
 import { useUrlPagination } from "./use-url-pagination";
+import { keepRowsWhilePaging } from "./use-record-pagination";
 export function useReconciliationPage(
   queue: Parameters<typeof listReconciliation>[0],
   dueItem?: string,
@@ -21,16 +22,14 @@ export function useReconciliationPage(
     limit: pagination.pageSize,
     offset: pagination.offset,
   };
+  const queryKey = getListReconciliationQueryKey(queue, params);
   const query = useListReconciliation(queue, params, {
     query: {
       enabled: !!merchantId,
-      queryKey: getListReconciliationQueryKey(queue, params),
+      queryKey,
       // Paging keeps the current rows until the next page arrives, so the table, its pager
       // and the pressed button stay in place. Another lender, search or instalment never does.
-      placeholderData: (previous, previousQuery) => {
-        const before = previousQuery?.queryKey[1] as Partial<typeof params> | undefined;
-        return before?.merchantId === params.merchantId && before.q === params.q && before.dueItem === params.dueItem ? previous : undefined;
-      },
+      placeholderData: keepRowsWhilePaging(queryKey),
     },
   });
   useEffect(() => {

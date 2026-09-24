@@ -6,7 +6,7 @@ import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { LoadProblem } from '@/components/load-problem';
 import { RecordPagination } from '@/components/record-pagination';
-import { useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
+import { keepRowsWhilePaging, useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { Search, ShieldCheck } from 'lucide-react';
@@ -27,10 +27,11 @@ export default function AuditPage() {
   currentMerchant.current = merchantId;
   const verificationRequest = useRef(0);
 
+  const auditKey = getListRecordsQueryKey('audit', listParams);
   const { data, isLoading, error, refetch, isFetching } = useListRecords(
     'audit',
     listParams,
-    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('audit', listParams) } }
+    { query: { enabled: !!merchantId, queryKey: auditKey, placeholderData: keepRowsWhilePaging(auditKey) } }
   );
 
   const verify = usePerformAction(undefined, merchantId);

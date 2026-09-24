@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { z, ZodTypeAny } from "zod";
 import { useWorkspace } from "./workspace-context";
+import { keepRowsWhilePaging } from "./use-record-pagination";
 import { useSafeMutation } from "./safe-mutations";
 import { answerProblem, INCOMPLETE_CONFIRMATION, readAnswer, UNREADABLE_ANSWER } from "./answers";
 import {
@@ -49,12 +50,17 @@ export function lenderPath(
 ) {
   return `${path}${path.includes("?") ? "&" : "?"}merchantId=${encodeURIComponent(merchantId || "")}${offset ? `&offset=${offset}` : ""}`;
 }
-/** A pilot read through its shared answer schema, scoped to the selected lender unless `lender` is false. */
+/**
+ * A pilot read through its shared answer schema, scoped to the selected lender unless `lender` is false. Another page
+ * of the same list (its path's `offset` or `limit`) keeps the rows shown until it arrives.
+ */
 export function usePilotQuery<S extends ZodTypeAny>(path: string, schema: S, lender = true) {
   const { merchantId, workspace } = useWorkspace();
+  const queryKey = ["pilot", workspace?.actor, merchantId, path];
   return useQuery<z.output<S>>({
-    queryKey: ["pilot", workspace?.actor, merchantId, path],
+    queryKey,
     enabled: Boolean(workspace) && (!lender || !!merchantId),
+    placeholderData: keepRowsWhilePaging(queryKey),
     queryFn: ({ signal }) =>
       pilotRequest(lender ? lenderPath(path, merchantId) : path, schema, { signal }),
   });

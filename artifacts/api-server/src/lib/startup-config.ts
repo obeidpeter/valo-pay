@@ -7,8 +7,10 @@
  * first request, a safety switch that fails open or a worker that logs the
  * same error at every poll. The modules that use these settings still read
  * the environment themselves; this check accepts exactly what they accept, so
- * nothing it passes is read differently there.
+ * nothing it passes is read differently there (Clerk's JWT key excepted: the
+ * check accepts less than Clerk might read by accident, never more).
  */
+import { createPublicKey, type JsonWebKey } from "node:crypto";
 import { appendFileSync, mkdirSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname } from "node:path";
@@ -50,6 +52,26 @@ const RUNTIME_ROLE = /^[a-z][a-z0-9_]{2,62}$/;
 const KMS_KEY = /^projects\/[a-zA-Z0-9_-]+\/locations\/[a-zA-Z0-9_-]+\/keyRings\/[a-zA-Z0-9_-]+\/cryptoKeys\/[a-zA-Z0-9_-]+$/;
 const httpsOrigin = (value: string) => { try { const url = new URL(value); return url.protocol === "https:" && url.origin === value; } catch { return false; } };
 const words = (values: readonly string[]) => values.length === 1 ? values[0]! : `${values.slice(0, -1).join(", ")} or ${values.at(-1)}`;
+/**
+ * What Clerk drops from CLERK_JWT_KEY, in order, once it has removed the line breaks (@clerk/backend,
+ * loadClerkJwkFromPem): the PEM armour and the fixed opening and closing bytes of a 2048-bit RSA public key with the
+ * exponent 65537. It takes what is left, in base64url, as the key's modulus.
+ */
+const CLERK_DROPS = ["-----BEGIN PUBLIC KEY-----", "-----END PUBLIC KEY-----", "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA", "IDAQAB"];
+/**
+ * Why Clerk could not verify sessions with this CLERK_JWT_KEY, or undefined when it can: the value must parse with
+ * node:crypto as an RSA public key, and the modulus Clerk reads from it must be that key's. So a key pasted with \n
+ * escapes or joined lines, a PKCS#1 or private key, and a key of another size or exponent are refused. Clerk might
+ * read a joined PEM by accident; the check never passes what Clerk would read as another key.
+ */
+function jwtKeyProblem(value: string): string | undefined {
+  if (value.includes("\\n")) return "CLERK_JWT_KEY holds \\n in place of its line breaks, which Clerk cannot read: give the PEM public key with real line breaks, as Clerk shows it, from -----BEGIN PUBLIC KEY----- to -----END PUBLIC KEY-----.";
+  let jwk: JsonWebKey | undefined;
+  try { const key = createPublicKey(value); if (key.asymmetricKeyType === "rsa") jwk = key.export({ format: "jwk" }); } catch { /* named below, without the value */ }
+  const modulus = CLERK_DROPS.reduce((read, dropped) => read.replace(dropped, ""), value.replace(/\r\n|\n|\r/g, "")).replace(/\+/g, "-").replace(/\//g, "_").replace(/\s/g, "");
+  if (jwk?.e === "AQAB" && jwk.n === modulus) return undefined;
+  return "CLERK_JWT_KEY must be the Clerk instance's JWT public key as Clerk shows it with the instance's API keys: a 2048-bit RSA public key in PEM form, from -----BEGIN PUBLIC KEY----- to -----END PUBLIC KEY----- on lines of their own.";
+}
 
 /**
  * Reads and checks the settings; throws InvalidConfiguration naming every
@@ -105,6 +127,15 @@ export function readStartupConfig(env: Record<string, string | undefined>, purpo
     if (!origins.length || !origins.every(httpsOrigin)) problems.push("VALOPAY_STAFF_ORIGINS must list one or more HTTPS origins, separated by commas, when VALOPAY_STAFF_ACCESS is staging.");
     // Staff sign in through Clerk: without its secret key no one could, so the server does not start (the close pass signs no one in).
     if (purpose === "server" && given("CLERK_SECRET_KEY") === undefined) problems.push("CLERK_SECRET_KEY is required when VALOPAY_STAFF_ACCESS is staging: without it no one can sign in.");
+  }
+  // With CLERK_JWT_KEY, Clerk verifies a session here with no call to its Backend API (staff-access.ts clerkOptions).
+  // A value it cannot use would refuse every session while the process reads as ready, so the server does not start
+  // with one. A staff host needs the key: without it a forged token makes Clerk fetch the instance's keys with the
+  // secret key, bounded only by the per-network request limit. The close pass signs no one in.
+  if (purpose === "server") {
+    const jwtKey = given("CLERK_JWT_KEY");
+    const problem = jwtKey === undefined ? (staffAccess === "staging" ? "CLERK_JWT_KEY is required when VALOPAY_STAFF_ACCESS is staging: the Clerk instance's JWT public key, with which staff sessions are verified without a call to Clerk's Backend API." : undefined) : jwtKeyProblem(jwtKey);
+    if (problem) problems.push(problem);
   }
   // The origins the console is served at outside staff mode (staff-access.ts appOrigins), when they are given.
   if (!(given("VALOPAY_APP_ORIGINS") ?? "").split(",").map((value) => value.trim()).filter(Boolean).every(httpsOrigin)) {

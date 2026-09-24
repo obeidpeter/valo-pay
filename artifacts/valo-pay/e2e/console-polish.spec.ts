@@ -220,3 +220,170 @@ test("the landing page and the anonymous sandbox carry no shared schemas, zod or
   for (const url of scripts) if (signatures["administrator warning"].test(await (await request.get(url)).text())) withWarning.push(url);
   expect(withWarning).toEqual([]);
 });
+
+// Second review of the audit fixes, the older focus patterns, by keyboard in a real browser: paging, Discard original
+// request and Revoke access.
+/** A moment for each list answer, as a pilot's takes, so there is a page load to wait through. */
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** From here on, notes whether keyboard focus ever rests on the page body: after every change to the page and on every frame. */
+const watchFocus = (page: Page) => page.evaluate(() => {
+  const seen = window as unknown as { focusFell?: boolean };
+  seen.focusFell = false;
+  const check = () => { if (!document.activeElement || document.activeElement === document.body) seen.focusFell = true; };
+  new MutationObserver(check).observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+  const frame = () => { check(); requestAnimationFrame(frame); };
+  requestAnimationFrame(frame);
+});
+const focusFell = (page: Page) => page.evaluate(() => (window as unknown as { focusFell?: boolean }).focusFell);
+
+/**
+ * Pages a list to its last page by keyboard while the route holds each answer back: as each page loads the rows and the
+ * pager stay and the pressed button keeps the focus, Previous takes it on the last page, and it never rests on the body.
+ */
+async function pageToTheEnd(page: Page, path: string, label: string) {
+  await page.goto(path);
+  const pager = page.getByRole("navigation", { name: `${label} pagination` });
+  const next = pager.getByRole("button", { name: `Next page of ${label}` });
+  const pages = Number((await pager.getByText(/^Page 1 of [\d,]+$/).innerText()).replace(/^Page 1 of |,/g, ""));
+  expect(pages, path).toBeGreaterThan(2);
+  await next.focus();
+  await watchFocus(page);
+  await page.keyboard.press("Enter");
+  // While the next page loads the rows and the pager stay, and the pressed button keeps the focus.
+  await expect(next).toHaveAttribute("aria-disabled", "true");
+  expect(await focused(page), path).toMatchObject({ tag: "button", text: `Next page of ${label}` });
+  for (let at = 2; at <= pages; at++) {
+    if (at > 2) await page.keyboard.press("Enter");
+    await expect(pager.getByText(`Page ${at} of ${pages}`, { exact: true })).toBeVisible();
+    await expect(next).not.toHaveAttribute("aria-disabled", "true");
+    if (at < pages) expect(await focused(page), path).toMatchObject({ tag: "button", text: `Next page of ${label}` });
+  }
+  // On the last page Next has nowhere to go: Previous takes the focus.
+  await expect.poll(() => focused(page)).toMatchObject({ tag: "button", text: `Previous page of ${label}` });
+  expect(await focusFell(page), path).toBe(false);
+}
+
+test("paging Customers and the Audit log by keyboard keeps focus on the pager control pressed, never on the page", async ({ page, request }) => {
+  const lender = (await (await request.get("/api/v1/workspace")).json()).merchants[0].id;
+  const rows = Array.from({ length: 60 }, (_, i) => `Pager customer ${String(i).padStart(2, "0")},E2E-PAGER-${i},Synthetic consent,Sandbox Bank,•••• 0001`);
+  expect((await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "customers", csv: "name,reference,consentProvenance,bankName,accountMasked\n" + rows.join("\n"), mapping: {}, syntheticOnly: true, commit: true } })).ok()).toBeTruthy();
+  // Every audited write adds an entry: enough for three pages of the log.
+  for (let i = 0; i < 60; i++) expect((await request.post(`/api/v1/actions?merchantId=${lender}`, { data: { action: "run_reconciliation" } })).ok()).toBeTruthy();
+  await page.route(/\/api\/v1\/records\/(customers|audit)\?/, async (route) => { await pause(1000); await route.fallback(); });
+  for (const [path, label] of [["/customers", "customers"], ["/audit", "audit entries"]] as const) await pageToTheEnd(page, path, label);
+});
+
+test("paging the Exceptions, Mandates and Collections queues and the close history by keyboard keeps focus on the pager control pressed", async ({ page, request }) => {
+  test.setTimeout(90_000);
+  const lender = (await (await request.get("/api/v1/workspace")).json()).merchants[0].id;
+  // Sixty open exceptions give the queue three pages; the browser workspace already has 55 more mandates, instalments and closes.
+  for (let i = 0; i < 60; i++) expect((await request.post(`/api/v1/records/exceptions?merchantId=${lender}`, { data: { name: `Pager exception ${i}`, reference: `E2E-PAGER-EXCEPTION-${i}`, data: { type: "mapping_needed", notes: "Synthetic paging check." } } })).ok()).toBeTruthy();
+  await page.route(/\/api\/v1\/(queues\/(exceptions|mandates|collections)|close-history)\?/, async (route) => { await pause(700); await route.fallback(); });
+  for (const [path, label] of [["/exceptions", "exceptions"], ["/mandates", "mandates"], ["/collections", "instalments"], ["/reports", "recorded closes"]] as const) await pageToTheEnd(page, path, label);
+});
+
+test("paging a pilot page's list by keyboard keeps focus on the page button pressed while the next page loads", async ({ page, request }) => {
+  // Sixty more import batches give the list at least three pages.
+  expect((await request.post("/__test/aged-batches?count=60")).ok()).toBeTruthy();
+  await page.route(/\/api\/v1\/pilot\/batches\?/, async (route) => { await pause(700); await route.fallback(); });
+  await page.goto("/imports");
+  const next = page.getByRole("button", { name: "Next batches" }), range = page.getByText(/^1–25 of [\d,]+$/);
+  const total = Number((await range.innerText()).replace(/^1–25 of |,/g, ""));
+  expect(total).toBeGreaterThan(50);
+  await next.focus();
+  await watchFocus(page);
+  await page.keyboard.press("Enter");
+  await expect(next).toHaveAttribute("aria-disabled", "true");
+  expect(await focused(page)).toMatchObject({ tag: "button", text: "Next batches" });
+  for (let offset = 25; offset < total; offset += 25) {
+    if (offset > 25) await page.keyboard.press("Enter");
+    await expect(page.getByText(`${offset + 1}–${Math.min(offset + 25, total)} of ${total}`, { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Previous batches" })).not.toHaveAttribute("aria-disabled", "true");
+    if (offset + 25 < total) expect(await focused(page)).toMatchObject({ tag: "button", text: "Next batches" });
+  }
+  // On the last page Next has nowhere to go: Previous batches takes the focus.
+  await expect.poll(() => focused(page)).toMatchObject({ tag: "button", text: "Previous batches" });
+  expect(await focusFell(page)).toBe(false);
+});
+
+test("paging either picker by keyboard keeps the focus on the pager control pressed while the page loads", async ({ page, request }) => {
+  const lender = (await (await request.get("/api/v1/workspace")).json()).merchants[0].id;
+  const rows = Array.from({ length: 60 }, (_, i) => `Picker customer ${String(i).padStart(2, "0")},E2E-PICKER-${i},Synthetic consent,Sandbox Bank,•••• 0001`);
+  expect((await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "customers", csv: "name,reference,consentProvenance,bankName,accountMasked\n" + rows.join("\n"), mapping: {}, syntheticOnly: true, commit: true } })).ok()).toBeTruthy();
+  await page.route(/\/api\/v1\/records\/(customers|due-items)\?/, async (route) => { await pause(700); await route.fallback(); });
+  for (const { path, open, dialog: name, label } of [
+    { path: "/mandates", open: () => page.getByRole("button", { name: "Create synthetic mandate" }).first().click(), dialog: "Create synthetic mandate", label: "customer choices" },
+    { path: "/reconciliation", open: () => page.getByRole("row").filter({ hasText: "SBX-UNIDENTIFIED-001" }).getByRole("button", { name: "Allocate", exact: true }).click(), dialog: "Allocate payment", label: "instalment choices" },
+  ]) {
+    await page.goto(path);
+    await open();
+    const dialog = page.getByRole("dialog", { name });
+    await expect(dialog.getByText(new RegExp(`^1–25 of [\\d,]+ ${label}$`))).toBeVisible();
+    const next = dialog.getByRole("button", { name: `Next page of ${label}` });
+    await next.focus();
+    await page.keyboard.press("Enter");
+    // While the next page loads the choices and the pager stay, a loading line beside them, and the pressed button keeps the focus.
+    await expect(next).toHaveAttribute("aria-disabled", "true");
+    await expect(dialog.getByText(/^Loading (customer|instalment) choices…$/)).toBeVisible();
+    expect(await focused(page), path).toMatchObject({ tag: "button", text: `Next page of ${label}` });
+    await expect(dialog.getByText(new RegExp(`^26–50 of [\\d,]+ ${label}$`))).toBeVisible();
+    await expect(next).not.toHaveAttribute("aria-disabled", "true");
+    expect(await focused(page), path).toMatchObject({ tag: "button", text: `Next page of ${label}` });
+  }
+});
+
+test("Discard original request moves focus back to the control that sent the request", async ({ page }) => {
+  await staffAdministrator(page);
+  // Another administrator asked to lift the stop; the approval never reaches the service, so the request still waits.
+  await page.route(/\/api\/v1\/settings\?/, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch(), body = await response.json();
+    await route.fulfill({ response, json: { ...body, merchant: { ...body.merchant, killSwitch: true }, settings: { ...body.settings, emergencyStopReleases: { lender: { requestedBy: "Clerk:user_admin_b", requestedAt: inDays(-0.02), reason: "Provider incident resolved", policyId: null } } } } });
+  });
+  await page.route(/\/api\/v1\/actions\?/, async (route) => {
+    if (route.request().postDataJSON().action !== "approve_kill_switch_off") return route.fallback();
+    await slowly();
+    await route.abort("connectionreset");
+  });
+  page.on("dialog", (dialog) => { void dialog.accept(); });
+  await page.goto("/settings");
+  await page.getByLabel("Reason for changing the emergency stop").fill("Second administrator's decision on the request");
+  const approve = page.getByRole("button", { name: "Approve turning it off" });
+  await approve.focus();
+  await page.keyboard.press("Enter");
+  const discard = page.getByRole("button", { name: "Discard original request" });
+  await expect(discard).toBeVisible();
+  await discard.focus();
+  await page.keyboard.press("Enter");
+  await expect(discard).toHaveCount(0);
+  await expect.poll(() => focused(page)).toMatchObject({ tag: "button", text: "Approve turning it off" });
+});
+
+test("confirming Revoke access moves focus to what the revocation did once it is answered", async ({ page }) => {
+  await staffAdministrator(page);
+  const person = (id: string, name: string, role: string) => ({ id, actor: `Clerk:user_${id}`, name, role, status: "active", expiresAt: inDays(60), updatedAt: inDays(-1), lenderIds: [] as string[], allLenders: role === "Admin" });
+  let chidi = person("ops", "Chidi Ops", "Operations");
+  const admins = [person("admin_a", "Ada Admin", "Admin"), person("admin_b", "Bola Admin", "Admin")];
+  await page.route("**/api/v1/team", (route) => route.request().method() === "GET" ? route.fulfill({ json: { mode: "staff", actor: "Clerk:user_admin_a", members: [...admins, chidi], lenders: [], invitations: [], changes: [], events: [], message: "Verified staff access." } }) : route.fallback());
+  await page.route(/\/api\/v1\/team\/members\/ops$/, async (route) => {
+    await pause(1500);
+    chidi = { ...chidi, status: "revoked", updatedAt: new Date().toISOString() };
+    const { lenderIds: _lenders, allLenders: _all, ...answer } = chidi;
+    await route.fulfill({ json: { ...answer, message: "Chidi Ops’s access is revoked. Their lender access and pending invitations are removed.", pendingChange: null } });
+  });
+  await page.goto("/team");
+  const card = page.locator("article").filter({ has: page.getByRole("heading", { name: "Chidi Ops" }) });
+  await card.getByLabel("Access for Chidi Ops").selectOption("revoked");
+  await card.getByLabel("Reason for changing Chidi Ops").fill("Left the pilot team this week");
+  await card.getByRole("button", { name: "Save access change" }).focus();
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Revoke Chidi Ops’s access?" });
+  await dialog.getByRole("button", { name: "Revoke access" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(dialog).toHaveCount(0);
+  // While the answer is on its way (1.5 s), focus waits on the page's main region, never on the body.
+  await expect.poll(() => focused(page), { timeout: 1000 }).toMatchObject({ tag: "main", id: "main" });
+  await expect.poll(() => focused(page)).toMatchObject({ tag: "p", text: expect.stringMatching(/^Chidi Ops’s access is revoked\./) });
+  await expect(card.getByText(/^Operations · revoked/)).toBeVisible();
+  await expect.poll(() => focused(page)).toMatchObject({ tag: "p", text: expect.stringMatching(/^Chidi Ops’s access is revoked\./) });
+});

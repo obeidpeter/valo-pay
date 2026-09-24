@@ -62,6 +62,8 @@ export default function SettingsPage() {
   // with its retry, takes it the same way.
   const [stopResult, setStopResult] = useState('');
   const stopResultMessage = useRef<HTMLParagraphElement>(null), stopNotice = useRef<HTMLDivElement>(null), approvalNotice = useRef<HTMLDivElement>(null);
+  // The controls that send the stop and the approval: a discarded request's notice gives the focus back to the one that sent it.
+  const stopButton = useRef<HTMLButtonElement>(null), keepButton = useRef<HTMLButtonElement>(null), approveButton = useRef<HTMLButtonElement>(null);
   useFocusWhenLost(stopResultMessage, stopResult);
   useFocusWhenLost(stopNotice, killSwitch.hasUnconfirmedOutcome);
   useFocusWhenLost(approvalNotice, approveStop.hasUnconfirmedOutcome);
@@ -429,6 +431,7 @@ export default function SettingsPage() {
                 <div className="flex flex-col gap-2 sm:flex-row">
                 {/* While a request to lift the stop waits, its box offers the answers to it; a stop request whose answer was lost is retried here all the same. */}
                 {(!release || killSwitch.hasUnconfirmedOutcome) && <Button 
+                  ref={stopButton}
                   variant="destructive"
                   action="kill_switch" onClick={() => { void changeStop(); }}
                   disabled={(!killReason && !killSwitch.hasUnconfirmedOutcome) || approveStop.isPending || approveStop.hasUnconfirmedOutcome}
@@ -446,7 +449,7 @@ export default function SettingsPage() {
                 </Button>
                 </div>
               </div>
-              {killSwitch.hasUnconfirmedOutcome && <div ref={stopNotice} role="alert" className="text-sm mt-3"><p>The emergency-stop response is unconfirmed. The stop may already have changed. Retry the original request to recover its result; do not submit the opposite action.</p><DiscardOriginalRequest disabled={killSwitch.isPending} onDiscard={killSwitch.abandonUnconfirmed} /></div>}
+              {killSwitch.hasUnconfirmedOutcome && <div ref={stopNotice} role="alert" className="text-sm mt-3"><p>The emergency-stop response is unconfirmed. The stop may already have changed. Retry the original request to recover its result; do not submit the opposite action.</p><DiscardOriginalRequest disabled={killSwitch.isPending} onDiscard={killSwitch.abandonUnconfirmed} next={() => keepButton.current ?? stopButton.current} /></div>}
               {settings.merchant.killSwitch && (
                 <p className="text-xs text-destructive mt-2 flex items-center gap-1 font-bold">
                   <AlertTriangle className="h-3 w-3" /> Emergency stop active. No instructions can be sent to a provider or bank.
@@ -457,16 +460,16 @@ export default function SettingsPage() {
                   <p>{release.requestedBy} asked to turn the emergency stop off on {formatDate(release.requestedAt)}: “{release.reason}”. The stop stays on until another administrator approves it, with a reason above.</p>
                   <div className="flex flex-wrap gap-2">
                     {release.requestedBy === workspace?.actor ? <p className="self-center text-xs text-muted-foreground">You asked for this, so another administrator must approve it.</p> : (
-                      <Button variant="destructive" size="sm" action="approve_kill_switch_off" onClick={() => { void approveRelease(); }} disabled={!killReason || approveStop.hasUnconfirmedOutcome || killSwitch.isPending || killSwitch.hasUnconfirmedOutcome} busy={approveStop.isPending} busyLabel="Approving…">Approve turning it off</Button>
+                      <Button ref={approveButton} variant="destructive" size="sm" action="approve_kill_switch_off" onClick={() => { void approveRelease(); }} disabled={!killReason || approveStop.hasUnconfirmedOutcome || killSwitch.isPending || killSwitch.hasUnconfirmedOutcome} busy={approveStop.isPending} busyLabel="Approving…">Approve turning it off</Button>
                     )}
-                    <Button variant="outline" size="sm" action="kill_switch" onClick={() => { void changeStop(true); }} disabled={!killReason || killSwitch.hasUnconfirmedOutcome || approveStop.isPending || approveStop.hasUnconfirmedOutcome} busy={killSwitch.isPending} busyLabel="Keeping it on…">Keep the stop on</Button>
+                    <Button ref={keepButton} variant="outline" size="sm" action="kill_switch" onClick={() => { void changeStop(true); }} disabled={!killReason || killSwitch.hasUnconfirmedOutcome || approveStop.isPending || approveStop.hasUnconfirmedOutcome} busy={killSwitch.isPending} busyLabel="Keeping it on…">Keep the stop on</Button>
                   </div>
                 </div>
               ) : settings.merchant.killSwitch && (
                 <p className="mt-2 text-xs text-muted-foreground">{staffPilot ? 'Turning the stop off needs two administrators: your request waits until another administrator approves it.' : 'In a pilot, turning the stop off needs a second administrator’s approval. In this sandbox one person plays every role, so it takes effect at once.'}</p>
               )}
               {/* Outside the box: a refetch that shows the request settled, as a lost approval may have settled it, takes the box away. */}
-              {approveStop.hasUnconfirmedOutcome && <div ref={approvalNotice} role="alert" className="mt-3 space-y-2 text-sm"><p>The approval's response is unconfirmed. The stop may already be off. Retry the original approval to recover its result.</p><div className="flex flex-wrap items-center gap-2"><Button variant="outline" size="sm" action="approve_kill_switch_off" onClick={() => { void approveRelease(); }} busy={approveStop.isPending} busyLabel="Checking original request…">Retry original approval</Button><DiscardOriginalRequest disabled={approveStop.isPending} onDiscard={approveStop.abandonUnconfirmed} /></div></div>}
+              {approveStop.hasUnconfirmedOutcome && <div ref={approvalNotice} role="alert" className="mt-3 space-y-2 text-sm"><p>The approval's response is unconfirmed. The stop may already be off. Retry the original approval to recover its result.</p><div className="flex flex-wrap items-center gap-2"><Button variant="outline" size="sm" action="approve_kill_switch_off" onClick={() => { void approveRelease(); }} busy={approveStop.isPending} busyLabel="Checking original request…">Retry original approval</Button><DiscardOriginalRequest disabled={approveStop.isPending} onDiscard={approveStop.abandonUnconfirmed} next={() => approveButton.current ?? stopButton.current} /></div></div>}
               {stopResult && <p ref={stopResultMessage} role="status" className="mt-3 text-sm">{stopResult}</p>}
             </div>
           </div>

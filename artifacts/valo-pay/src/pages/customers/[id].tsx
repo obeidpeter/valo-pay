@@ -14,6 +14,7 @@ import { NotFoundNotice } from '@/pages/not-found';
 import { LoadProblem } from '@/components/load-problem';
 import { RecordPagination } from '@/components/record-pagination';
 import { useUrlPagination } from '@/lib/use-url-pagination';
+import { keepRowsWhilePaging } from '@/lib/use-record-pagination';
 import { safeCustomerReturnTo } from '@/lib/record-navigation';
 import { useHashTarget } from '@/lib/use-hash-target';
 
@@ -67,17 +68,20 @@ export default function CustomerTimelinePage() {
     mandatesLimit:mandatePage.pageSize, mandatesOffset:mandatePage.offset,
     dueItemsLimit:duePage.pageSize, dueItemsOffset:duePage.offset,
     paymentsLimit:paymentPage.pageSize, paymentsOffset:paymentPage.offset};
-  const { data: timeline, isLoading, isFetching, error, refetch } = useGetCustomerHistory(id!,queryParams,
-    {query:{enabled:!!merchantId && !!id && sameLender,queryKey:getGetCustomerHistoryQueryKey(id!,queryParams)}});
+  const historyKey = getGetCustomerHistoryQueryKey(id!,queryParams);
+  // Paging a section keeps this customer's history shown until the next page arrives, so its pager and the control pressed stay.
+  const { data: timeline, isLoading, isFetching, isPlaceholderData, error, refetch } = useGetCustomerHistory(id!,queryParams,
+    {query:{enabled:!!merchantId && !!id && sameLender,queryKey:historyKey,placeholderData:keepRowsWhilePaging(historyKey)}});
   const focusedRecord = timeline?.focusedRecord;
   // Correct every out-of-range section together so one URL update cannot undo another.
   const [, setSearch] = useSearchParams();
   useEffect(() => {
-    if (!timeline) return;
+    // The previous page's history, shown while this one loads, says nothing of where this page is.
+    if (!timeline || isPlaceholderData) return;
     const sections = [['events','history-',historyPage],['mandates','mandate-',mandatePage],['dueItems','due-',duePage],['payments','payment-',paymentPage]] as const;
     if (!sections.some(([key,,page])=>timeline.offsets[key]!==page.offset)) return;
     setSearch(current=>{const next=new URLSearchParams(current);for(const [key,prefix,page] of sections) if(timeline.offsets[key]!==page.offset) next.set(prefix+'page',String(Math.floor(timeline.offsets[key]/page.pageSize)+1));return next;},{replace:true});
-  },[timeline,historyPage.offset,mandatePage.offset,duePage.offset,paymentPage.offset]);
+  },[timeline,isPlaceholderData,historyPage.offset,mandatePage.offset,duePage.offset,paymentPage.offset]);
   useHashTarget(`record-${requestedRecord}`, !!focusedRecord && !error);
 
 
@@ -177,7 +181,7 @@ export default function CustomerTimelinePage() {
                 ))
               )}
             </div>
-            {timeline.totals.mandates > 25 && <RecordPagination pagination={mandatePage} total={timeline.totals.mandates} label="customer mandates" />}
+            {timeline.totals.mandates > 25 && <RecordPagination pagination={mandatePage} total={timeline.totals.mandates} busy={isPlaceholderData} label="customer mandates" />}
           </section>
 
           {/* Due Items & Payments */}
@@ -205,7 +209,7 @@ export default function CustomerTimelinePage() {
                   ))
                 )}
               </div>
-              {timeline.totals.dueItems > 25 && <RecordPagination pagination={duePage} total={timeline.totals.dueItems} label="customer instalments" />}
+              {timeline.totals.dueItems > 25 && <RecordPagination pagination={duePage} total={timeline.totals.dueItems} busy={isPlaceholderData} label="customer instalments" />}
             </section>
 
             <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
@@ -231,7 +235,7 @@ export default function CustomerTimelinePage() {
                   ))
                 )}
               </div>
-              {timeline.totals.payments > 25 && <RecordPagination pagination={paymentPage} total={timeline.totals.payments} label="customer payments" />}
+              {timeline.totals.payments > 25 && <RecordPagination pagination={paymentPage} total={timeline.totals.payments} busy={isPlaceholderData} label="customer payments" />}
             </section>
           </div>
         </div>
@@ -272,7 +276,7 @@ export default function CustomerTimelinePage() {
               </ol>
             )}
           </ScrollFrame>
-          {timeline.totals.events > 25 && <RecordPagination pagination={historyPage} total={timeline.totals.events} label="history events" />}
+          {timeline.totals.events > 25 && <RecordPagination pagination={historyPage} total={timeline.totals.events} busy={isPlaceholderData} label="history events" />}
         </div>
       </div>
     </div>

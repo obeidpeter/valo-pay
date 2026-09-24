@@ -137,6 +137,23 @@ test("close range uses native date fields, pages summaries and loads evidence on
     page.getByRole("button", { name: "New experiment" }),
   ).toBeVisible();
 });
+test("a close's money in another currency is listed in that currency beside its naira", async ({ page, request }) => {
+  // Second review of the audit fixes, console finding 1: a USD card payment held for Finance.
+  const lender = (await (await request.get("/api/v1/workspace")).json()).merchants[0].id;
+  const customer = (await (await request.get(`/api/v1/records/customers?merchantId=${lender}&limit=1`)).json()).items[0];
+  const imported = await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "observations", csv: `name,reference,customerId,amount,source,currency,channel\nUSD card payment,E2E-USD-1,${customer.reference},1000.00,card,USD,card`, mapping: {}, amountUnit: "naira", syntheticOnly: true, commit: true } });
+  expect(imported.ok(), await imported.text()).toBeTruthy();
+  expect((await request.post(`/api/v1/actions?merchantId=${lender}`, { data: { action: "run_reconciliation" } })).ok()).toBeTruthy();
+  await page.goto("/reports");
+  await page.getByRole("button", { name: "Run daily close" }).click();
+  await expect(page.getByText("Daily close completed").first()).toBeVisible();
+  // The sample closes are dated around the fixed clock; this close is the one they do not name.
+  const latest = page.getByRole("list", { name: "Recorded daily closes" }).locator("li").filter({ hasNotText: "Recorded sample close" }).first();
+  await latest.getByText("View close details").click();
+  for (const label of ["Unmatched at start", "Unmatched at close"]) {
+    await expect(latest.locator("dt", { hasText: label }).locator("xpath=following-sibling::dd")).toContainText(/and USD\u00a01,000\.00 \(1 payment\)/);
+  }
+});
 test("arriving at the accuracy review scrolls there once; paging a table keeps the view on that table", async ({
   page,
 }) => {

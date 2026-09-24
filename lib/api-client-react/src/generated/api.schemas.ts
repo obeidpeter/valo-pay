@@ -4231,9 +4231,15 @@ customerId?: string;
  */
 id?: string;
 /**
- * Instalments (due-items) only. true lists just the instalments that can take an allocation now: those that still owe an amount and are not cancelled, closed or in dispute, the ones a manual allocation accepts, so total counts the choices. Omitted or false lists every instalment. Refused (400) for any other kind.
+ * Instalments (due-items) only. true lists just the instalments that can take an allocation now: those that still owe an amount and are not cancelled, closed or in dispute, and with paymentId only those a manual allocation of that payment accepts, so total counts the choices. Omitted or false lists every instalment. Refused (400) for any other kind.
  */
 allocatable?: ListRecordsAllocatable;
+/**
+ * With allocatable=true, the payment whose choices are listed: the instalments a manual allocation of it accepts, by the payer rule that allocation applies. A payment with a recorded payer takes only its payer's instalments; one whose evidence named no payer but names an instalment takes only that instalment's customer's; one that names neither takes any customer's. A payment in another currency than naira, whose money went back or with nothing left to allocate takes none, so the list is empty. A payment the lender does not have is a 404; without allocatable=true, paymentId is refused (400).
+ * @minLength 1
+ * @maxLength 100
+ */
+paymentId?: string;
 };
 
 export type ListRecordsAllocatable = typeof ListRecordsAllocatable[keyof typeof ListRecordsAllocatable];

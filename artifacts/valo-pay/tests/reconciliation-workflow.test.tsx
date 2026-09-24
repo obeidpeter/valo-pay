@@ -8,6 +8,7 @@ import { permissionReason } from '@/lib/permissions';
 import { executeAction } from '../../api-server/src/domain/actions';
 import { makeRecord } from '../../api-server/src/domain/records';
 import { reconcile } from '../../api-server/src/domain/reconciliation';
+import { canTakeAllocation } from '@workspace/valopay-schema';
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -334,10 +335,63 @@ describe('payer confirmation', () => {
     await user.click(within(row).getByRole('button', { name: 'Allocate' }));
     const dialog = await screen.findByRole('dialog', { name: 'Allocate payment' });
     expect(within(dialog).getByRole('region', { name: 'Allocation preview' }).textContent).toContain("Only this payer's instalments are offered.");
-    await waitFor(() => expect(api.calls.some(call => call.path === '/v1/records/due-items' && call.query.customerId === due.customerId)).toBe(true));
+    const payment = api.state().records.find(record => record.kind === 'payments' && record.reference === 'TRF-PART-PAID')!;
+    await waitFor(() => expect(api.calls.some(call => call.path === '/v1/records/due-items' && call.query.paymentId === payment.id && call.query.allocatable === 'true')).toBe(true));
     await waitFor(() => expect(within(dialog).queryByText('Loading instalment choices…')).toBeNull());
     const options = within(within(dialog).getByLabelText(/^Instalment/)).getAllByRole('option').filter(option => (option as HTMLOptionElement).value);
     expect(options.length).toBeGreaterThan(0);
     expect(options.every(option => api.state().records.find(record => record.id === (option as HTMLOptionElement).value)?.customerId === due.customerId)).toBe(true);
+  });
+
+  it("offers a payment whose evidence names an instalment but no payer only that instalment's customer's instalments, each one it can take", async () => {
+    const user = userEvent.setup();
+    const due = api.state().records.find(record => record.kind === 'due-items' && record.reference === 'DEMO-LOAN-1005')!;
+    api.mutate(state => {
+      makeRecord(state, 'observations', { name: 'Transfer', status: 'unresolved', reference: 'TRF-NAMED-1', amountKobo: 1_000_000, customerId: '', data: { source: 'transfer', eventId: 'named-1', provider: 'Sandbox Rail', dueItemId: due.id } });
+      reconcile(state, finance());
+    });
+    renderApp('/reconciliation');
+    const payments = (await screen.findByRole('heading', { name: 'Unallocated payments' })).parentElement!.parentElement!;
+    const row = (await within(payments).findByText('TRF-NAMED-1')).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: 'Allocate' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Allocate payment' });
+    expect(within(dialog).getByRole('region', { name: 'Allocation preview' }).textContent).toContain("Its evidence names an instalment, so only the instalments of that instalment's customer are offered.");
+    await waitFor(() => expect(within(dialog).queryByText('Loading instalment choices…')).toBeNull());
+    const options = within(within(dialog).getByLabelText(/^Instalment/)).getAllByRole('option').filter(option => (option as HTMLOptionElement).value);
+    const open = api.state().records.filter(record => record.kind === 'due-items' && record.customerId === due.customerId && canTakeAllocation(record as any));
+    expect(options.map(option => (option as HTMLOptionElement).value).sort()).toEqual(open.map(record => record.id).sort());
+  });
+});
+
+describe('settlement batch edits', () => {
+  it('sends the fields the dialog shows, never the lines the batch recorded', async () => {
+    // Every edit sent the batch's stored data back whole: with about 5,000 lines or more its line lists pass the API's
+    // 10,000-value body cap, so the batch could no longer be edited (413). An edit merges data, so it sends only its fields.
+    const user = userEvent.setup();
+    const lines = Array.from({ length: 6000 }, (_, index) => `line-${index}`);
+    const batch = api.mutate(state => makeRecord(state, 'settlement-batches', {
+      name: 'Large settlement batch', status: 'reconciled', reference: 'LARGE-BATCH-1',
+      data: { provider: state.merchant.provider, batchReference: 'LARGE-BATCH-1', grossKobo: 1_000_000, feeKobo: 10_000, netKobo: 990_000, lineObservationIds: lines, linePaymentIds: lines.map(id => `payment-${id}`) },
+    }));
+    renderApp('/reconciliation');
+    await user.click(await screen.findByRole('button', { name: 'Edit settlement batch LARGE-BATCH-1' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit settlement batch' });
+    const name = within(dialog).getByLabelText(/^Name/);
+    await user.clear(name);
+    await user.type(name, 'Large settlement batch, checked');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit settlement batch' })).toBeNull());
+    const sent = api.calls.find(call => call.method === 'PATCH' && call.path === `/v1/records/settlement-batches/${batch.id}`)!;
+    expect(sent.status).toBe(200);
+    const data = (sent.body as { data: Record<string, unknown> }).data;
+    expect(data).not.toHaveProperty('lineObservationIds');
+    expect(data).not.toHaveProperty('linePaymentIds');
+    expect(Object.keys(data).sort()).toEqual(['feeKobo', 'grossKobo', 'netKobo', 'provider']);
+    // What an edit leaves out, the service keeps.
+    const saved = api.state().records.find(record => record.id === batch.id)!;
+    expect(saved.name).toBe('Large settlement batch, checked');
+    expect(saved.data.lineObservationIds).toHaveLength(6000);
+    expect(saved.data.linePaymentIds).toHaveLength(6000);
+    expect(saved.data.batchReference).toBe('LARGE-BATCH-1');
   });
 });

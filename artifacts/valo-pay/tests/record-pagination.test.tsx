@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { renderApp, screen, userEvent, waitFor, within } from './harness';
+import { makeRecord } from '../../api-server/src/domain/records';
+import { queueExport } from '../../api-server/src/lib/export-jobs';
+import { saveImportBatch } from '../../api-server/src/domain/pilot-workflow';
+import { lifecyclePolicy, saveLifecyclePolicy } from '../../api-server/src/domain/lifecycle';
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -30,7 +34,11 @@ describe('large customer directory', () => {
     const calls = () => api.calls.filter(call => call.path === '/v1/records/customers');
     expect(calls().map(call => [call.query.limit, call.query.offset])).toEqual([['25', '0'], ['25', '25']]);
     const beforeSearch = calls().length;
-    await user.type(screen.getByRole('textbox', { name: 'Search customers' }), 'Scale customer 00001');
+    // The keys go in without yielding to timers, so however busy the machine, the search's pause cannot end
+    // between two of them and the whole text goes out as one search. The pause itself is pinned, on a fake
+    // clock, in search-pause.test.ts.
+    const typist = userEvent.setup({ delay: null });
+    await typist.type(screen.getByRole('textbox', { name: 'Search customers' }), 'Scale customer 00001');
     await screen.findByText('Scale customer 00001');
     expect(calls().length - beforeSearch).toBe(1);
     expect(calls().at(-1)?.query).toMatchObject({ limit: '25', offset: '0', search: 'Scale customer 00001' });
@@ -52,4 +60,269 @@ describe('large customer directory', () => {
     await user.click(within(alert).getByRole('button', { name: 'Try again' }));
     await screen.findByText('Ada Okonkwo');
   });
+});
+
+// Second review of the audit fixes, the older focus patterns: paging by keyboard keeps focus on the pager control
+// pressed (or on the one still usable at the first or last page), never on the page body or the top of a dialog.
+describe('paging by keyboard', () => {
+  const press = async (user: ReturnType<typeof userEvent.setup>, control: HTMLElement) => { control.focus(); await user.keyboard('{Enter}'); };
+  /** Sixty customers, the newest first: Pager customer 59 heads the first page and Pager customer 00 ends the last. */
+  const sixtyCustomers = () => api.mutate(state => {
+    const sample = state.records.find(record => record.kind === 'customers')!;
+    state.records = state.records.filter(record => record.kind !== 'customers');
+    state.records.push(...Array.from({ length: 60 }, (_, index) => ({
+      ...sample, id: randomUUID(), name: `Pager customer ${String(index).padStart(2, '0')}`, reference: `PAGER-${index}`,
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+    })));
+  });
+
+  it('keeps focus on Next while the next page of customers loads, and moves it to Previous on the last page', async () => {
+    const user = userEvent.setup();
+    sixtyCustomers();
+    renderApp('/customers');
+    await screen.findByText('Pager customer 59');
+    const pages = screen.getByRole('navigation', { name: 'customers pagination' });
+    const next = within(pages).getByRole('button', { name: 'Next page of customers' });
+    const release = api.hold(/^\/v1\/records\/customers$/);
+    await press(user, next);
+    // The rows and the pager stay while the page loads; the pressed button keeps the focus and waits.
+    await waitFor(() => expect(next.getAttribute('aria-disabled')).toBe('true'));
+    expect(document.activeElement).toBe(next);
+    expect(screen.getByText('Pager customer 59')).toBeTruthy();
+    release();
+    await screen.findByText('Pager customer 34');
+    expect(document.activeElement).toBe(next);
+    await press(user, next);
+    await screen.findByText('Pager customer 00');
+    expect(document.activeElement).toBe(within(pages).getByRole('button', { name: 'Previous page of customers' }));
+    const size = within(pages).getByRole('combobox', { name: 'customers per page' });
+    size.focus();
+    await user.selectOptions(size, '50');
+    await screen.findByText('Pager customer 59');
+    expect(document.activeElement).toBe(size);
+  });
+
+  it('keeps focus on Next while the next page of audit entries loads', async () => {
+    api.mutate(state => {
+      const source = state.records.find(record => record.kind === 'audit')!;
+      for (let index = 0; index < 60; index++) state.records.push({ ...structuredClone(source), id: `extra-audit-${index}`, name: `Sample event ${index}`, data: { ...source.data, summary: `Sample event ${index}` } });
+    });
+    const user = userEvent.setup();
+    renderApp('/audit');
+    await screen.findByRole('table');
+    const total = api.state().records.filter(record => record.kind === 'audit').length;
+    expect(total).toBeGreaterThan(50);
+    expect(total).toBeLessThanOrEqual(75);
+    const next = screen.getByRole('button', { name: 'Next page of audit entries' });
+    const release = api.hold(/^\/v1\/records\/audit$/);
+    await press(user, next);
+    await waitFor(() => expect(next.getAttribute('aria-disabled')).toBe('true'));
+    expect(document.activeElement).toBe(next);
+    release();
+    await waitFor(() => expect(next.getAttribute('aria-disabled')).toBeNull());
+    expect(api.calls.some(call => call.path === '/v1/records/audit' && call.query.offset === '25')).toBe(true);
+    expect(document.activeElement).toBe(next);
+    await press(user, next);
+    await waitFor(() => expect(api.calls.some(call => call.path === '/v1/records/audit' && call.query.offset === '50')).toBe(true));
+    // The last page: Next has nowhere to go, so Previous takes the focus.
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Previous page of audit entries' })));
+  });
+
+  it('keeps focus on the picker pager control pressed while the next page of customer choices loads', async () => {
+    const user = userEvent.setup();
+    sixtyCustomers();
+    renderApp('/mandates');
+    await user.click(await screen.findByRole('button', { name: 'Create synthetic mandate' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Create synthetic mandate' });
+    await within(dialog).findByText('1–25 of 60 customer choices');
+    const next = within(dialog).getByRole('button', { name: 'Next page of customer choices' });
+    const release = api.hold(/^\/v1\/records\/customers$/);
+    await press(user, next);
+    // While the page loads the pager stays and the pressed button keeps the focus, never the top of the dialog.
+    await waitFor(() => expect(next.getAttribute('aria-disabled')).toBe('true'));
+    expect(document.activeElement).toBe(next);
+    release();
+    await within(dialog).findByText('26–50 of 60 customer choices');
+    await waitFor(() => expect(next.getAttribute('aria-disabled')).toBeNull());
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Next page of customer choices' }));
+    await press(user, within(dialog).getByRole('button', { name: 'Next page of customer choices' }));
+    await within(dialog).findByText('51–60 of 60 customer choices');
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Previous page of customer choices' }));
+  });
+
+  it('keeps focus on the allocation picker pager control pressed while the next page of instalment choices loads', async () => {
+    const user = userEvent.setup();
+    api.mutate(state => {
+      const due = state.records.find(record => record.kind === 'due-items' && record.status === 'scheduled')!;
+      state.records.push(...Array.from({ length: 60 }, (_, index) => ({ ...structuredClone(due), id: randomUUID(), reference: `PAGER-DUE-${index}` })));
+    });
+    renderApp('/reconciliation');
+    const payments = (await screen.findByRole('heading', { name: 'Unallocated payments' })).parentElement!.parentElement!;
+    const row = (await within(payments).findByText('SBX-UNIDENTIFIED-001')).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: 'Allocate' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Allocate payment' });
+    const pager = await within(dialog).findByRole('navigation', { name: 'instalment choices pagination' });
+    const total = Number(within(pager).getByText(/^1–25 of \d+ instalment choices$/).textContent!.match(/of (\d+)/)![1]);
+    expect(total).toBeGreaterThan(50);
+    const next = within(pager).getByRole('button', { name: 'Next page of instalment choices' });
+    const release = api.hold(/^\/v1\/records\/due-items$/);
+    await press(user, next);
+    await waitFor(() => expect(next.getAttribute('aria-disabled')).toBe('true'));
+    expect(document.activeElement).toBe(next);
+    release();
+    await within(dialog).findByText(`26–50 of ${total} instalment choices`);
+    await waitFor(() => expect(next.getAttribute('aria-disabled')).toBeNull());
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Next page of instalment choices' }));
+  });
+
+  /**
+   * Pages a list by keyboard to its last page: while the second page loads, the rows shown and the pager stay and
+   * Next keeps the focus, waiting; once the page arrives Next still has it; and on the last page, where Next has
+   * nowhere to go, Previous takes it. At no moment is focus on the page body.
+   */
+  async function pageThrough(user: ReturnType<typeof userEvent.setup>, label: string, request: RegExp, rows: () => number) {
+    // A page of several tables (Reconciliation's six) can take a few seconds to render under load.
+    const pager = await screen.findByRole('navigation', { name: `${label} pagination` }, { timeout: 10_000 });
+    const next = within(pager).getByRole('button', { name: `Next page of ${label}` });
+    const release = api.hold(request);
+    await press(user, next);
+    await waitFor(() => expect(next.getAttribute('aria-disabled')).toBe('true'));
+    expect(document.activeElement).toBe(next);
+    expect(rows()).toBeGreaterThan(0);
+    release();
+    await waitFor(() => expect(next.getAttribute('aria-disabled')).toBeNull());
+    expect(document.activeElement).toBe(next);
+    while (!(next as HTMLButtonElement).disabled) {
+      await press(user, next);
+      await waitFor(() => expect(next.getAttribute('aria-disabled')).toBeNull());
+      expect(document.activeElement).not.toBe(document.body);
+    }
+    await waitFor(() => expect(document.activeElement).toBe(within(pager).getByRole('button', { name: `Previous page of ${label}` })));
+  }
+  /** Sixty more records of `kind`, copied from one of its sample records `pick` chooses. */
+  const sixtyMore = (kind: string, pick: (record: { status: string; customerId: string; reference: string }) => boolean, changes: (index: number) => Record<string, unknown> = () => ({})) => api.mutate(state => {
+    const sample = state.records.find(record => record.kind === kind && pick(record))!;
+    state.records.push(...Array.from({ length: 60 }, (_, index) => ({ ...structuredClone(sample), id: randomUUID(), reference: `PAGER-${kind}-${index}`, ...changes(index) })));
+  });
+  const tableRows = () => document.querySelectorAll('main tbody tr').length;
+
+  it('keeps focus on the pager control pressed while the next page of the Exceptions queue loads', async () => {
+    const user = userEvent.setup();
+    sixtyMore('exceptions', record => record.status === 'open');
+    renderApp('/exceptions');
+    await pageThrough(user, 'exceptions', /^\/v1\/queues\/exceptions$/, () => document.querySelectorAll('main [id^="record-"]').length);
+  });
+
+  it('keeps focus on the pager control pressed while the next page of the Mandates queue loads', async () => {
+    const user = userEvent.setup();
+    sixtyMore('mandates', record => record.status === 'active');
+    renderApp('/mandates');
+    await pageThrough(user, 'mandates', /^\/v1\/queues\/mandates$/, tableRows);
+  });
+
+  it('keeps focus on the pager control pressed while the next page of the Collections queue loads', async () => {
+    const user = userEvent.setup();
+    sixtyMore('due-items', record => record.status === 'scheduled');
+    renderApp('/collections');
+    await pageThrough(user, 'instalments', /^\/v1\/queues\/collections$/, tableRows);
+  });
+
+  it('keeps focus on the pager control pressed while the next page of recorded closes loads', async () => {
+    const user = userEvent.setup();
+    api.mutate(state => {
+      state.records.push(...Array.from({ length: 60 }, (_, index) => ({
+        id: randomUUID(), merchantId: state.merchant.id, kind: 'closes', name: `Daily close ${index}`, status: 'completed', reference: `PAGER-CLOSE-${index}`, amountKobo: 0, customerId: '',
+        createdAt: new Date(Date.UTC(2026, 6, 1 + index, 6)).toISOString(), updatedAt: new Date(Date.UTC(2026, 6, 1 + index, 6)).toISOString(),
+        data: { synthetic: true, summary: `Recorded sample close ${index}`, report: { unallocated: { kobo: index * 100, count: index }, exceptions: { openAtClose: index } } },
+      })));
+    });
+    renderApp('/reports');
+    await pageThrough(user, 'recorded closes', /^\/v1\/close-history$/, () => document.querySelectorAll('ol[aria-label="Recorded daily closes"] > li').length);
+  });
+
+  it('keeps focus on the pager control pressed while the next page of a customer section loads', async () => {
+    const user = userEvent.setup();
+    const customer = api.state().records.find(record => record.kind === 'payments' && record.customerId)!.customerId;
+    sixtyMore('payments', record => record.customerId === customer);
+    renderApp(`/customers/${customer}`);
+    await pageThrough(user, 'customer payments', /^\/v1\/customers\/[^/]+\/history$/, () => screen.getAllByText(/^PAGER-payments-\d+$/).length);
+  });
+
+  it('keeps focus on the pager control pressed while the next page of a reconciliation table loads', async () => {
+    const user = userEvent.setup();
+    sixtyMore('payments', record => record.reference === 'SBX-UNIDENTIFIED-001');
+    renderApp('/reconciliation');
+    await pageThrough(user, 'unallocated payments', /^\/v1\/reconciliation\/payments$/, tableRows);
+  });
+});
+
+// The pilot pages' lists that page by a fixed step keep the same rules: the pressed button keeps the focus while the
+// next page loads, and one the first or last page disables passes it to the other.
+describe('paging a fixed-step list by keyboard', () => {
+  const press = async (user: ReturnType<typeof userEvent.setup>, control: HTMLElement) => { control.focus(); await user.keyboard('{Enter}'); };
+  /** Presses Next with the list's answer held: until it arrives, the button stays, waits and keeps the focus. */
+  async function nextWhileHeld(user: ReturnType<typeof userEvent.setup>, name: string, hold: () => () => void, focusedWhileLoading = name) {
+    // These pages fetch and render a long list first; under load that can take a few seconds.
+    const next = await screen.findByRole('button', { name }, { timeout: 10_000 });
+    const release = hold();
+    await press(user, next);
+    await waitFor(() => expect(screen.getByRole('button', { name: focusedWhileLoading }).getAttribute('aria-disabled')).toBe('true'));
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: focusedWhileLoading }));
+    expect(next.isConnected).toBe(true);
+    release();
+    await waitFor(() => expect(next.getAttribute('aria-disabled')).toBeNull());
+    return next;
+  }
+
+  it('keeps focus on Next exports while the next page of saved exports loads', async () => {
+    // Saved jobs that have finished (here, failed), since the service queues at most ten at once.
+    api.mutate((state, ctx) => { for (let index = 0; index < 60; index++) { const { id } = queueExport(state, ctx, { kind: 'customers', format: 'csv' }, 'sample/private'); const job = state.records.find(record => record.id === id)!; job.status = 'failed'; job.data.error = 'Sample failure.'; } });
+    const user = userEvent.setup();
+    renderApp('/exports');
+    const next = await nextWhileHeld(user, 'Next exports', () => api.hold(/^\/v1\/records\/exports$/));
+    expect(document.activeElement).toBe(next);
+    await screen.findByText(/^26–50 of \d+$/);
+  }, 30_000);
+
+  it('keeps focus on Next batches while the next page of import batches loads', async () => {
+    api.mutate((state, ctx) => { for (let index = 0; index < 60; index++) saveImportBatch(state, ctx, { name: `Paged batch ${index}`, kind: 'customers', source: 'Pilot sample', sourceBatchId: `paged-${index}`, csv: `source_row_id,name,reference\nrow-${index},Paged customer ${index},PAGED-${index}`, mapping: {}, amountUnit: 'naira', identityColumn: 'source_row_id', syntheticOnly: true }); });
+    const user = userEvent.setup();
+    renderApp('/imports');
+    const next = await nextWhileHeld(user, 'Next batches', () => api.hold(/^\/v1\/pilot\/batches$/));
+    expect(document.activeElement).toBe(next);
+  }, 30_000);
+
+  it('keeps focus on Next sources while the next page of retained sources loads, and on Previous sources at the last page', async () => {
+    api.mutate((state, ctx) => {
+      for (let index = 0; index < 205; index++) makeRecord(state, 'import-batches', { name: `Aged import ${index}`, status: 'committed', createdAt: '2026-01-01T10:00:00.000Z', updatedAt: '2026-01-01T10:00:00.000Z', data: { csv: `reference,name\nAGED-${index},Sample customer`, committedAt: '2026-01-01T10:00:00.000Z', rowIds: [`aged-${index}`], recordIds: [], check: { valid: 1, invalid: 0, imported: 1, rows: [], preview: [] } } });
+      saveLifecyclePolicy(state, ctx, { policy: { rawCsvDays: 30, journalPayloadDays: null, exportFileDays: null, auditTrail: 'retain' }, expectedRevision: lifecyclePolicy(state).revision, reason: 'The aged sample sources have passed their retention review.' });
+    });
+    const user = userEvent.setup();
+    renderApp('/lifecycle');
+    const next = await nextWhileHeld(user, 'Next sources', () => api.hold(/^\/v1\/lifecycle$/));
+    expect(document.activeElement).toBe(next);
+    await nextWhileHeld(user, 'Next sources', () => api.hold(/^\/v1\/lifecycle$/), 'Previous sources');
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Previous sources' }));
+  }, 30_000);
+
+  it('keeps focus on Next while the next page of Operations loads', async () => {
+    // The offline API keeps no journal: sixty saved requests are answered here, and each answer can be held.
+    const send = globalThis.fetch;
+    let gate: Promise<void> | null = null;
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input instanceof Request ? input.url : input), 'http://localhost');
+      if (url.pathname !== '/api/v1/operations') return send(input, init);
+      await gate;
+      const offset = Number(url.searchParams.get('offset') || 0);
+      const items = Array.from({ length: Math.min(25, 60 - offset) }, (_, index) => ({ id: `operation-${offset + index}`, label: `Saved request ${offset + index}`, actor: 'Sandbox Admin', role: 'Admin', status: 'completed', createdAt: api.now, updatedAt: api.now, message: 'The request completed.', recordId: null, recordKind: null }));
+      return new Response(JSON.stringify({ items, total: 60, offset }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const hold = () => { let open!: () => void; gate = new Promise<void>(resolve => { open = resolve; }); return () => { gate = null; open(); }; };
+    const user = userEvent.setup();
+    renderApp('/operations');
+    await screen.findByText('Saved request 0');
+    const next = await nextWhileHeld(user, 'Next', hold);
+    expect(document.activeElement).toBe(next);
+    await screen.findByText('Saved request 25');
+  }, 30_000);
 });
