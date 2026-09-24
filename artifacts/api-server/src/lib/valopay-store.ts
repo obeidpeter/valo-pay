@@ -11,7 +11,7 @@ import type { VerifiedClerkSession } from './pilot-access';
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
 import { approvalRoles, closeTimeOf, definitiveRefusalStatuses, grantNeedsApproval, invitationAcceptedSchema, nextCloseInstant, sameJson } from "@workspace/valopay-schema";
-import { sha256Hex, canonicalDigest, requestFingerprint, auditEntryData, verifyAuditChain } from "./digests";
+import { sha256Hex, canonicalDigest, requestFingerprint, auditEntryData, verifyAuditChain, walkAuditChain, AUDIT_GENESIS, type AuditPoint } from "./digests";
 import { recordChanged, nextRecordVersion } from "./edit-versions";
 import { contractAnswer } from './contract';
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
@@ -21,7 +21,7 @@ import { seedMerchant } from "./valopay-seed";
 import { createSandboxCreationLimits, creationRefusalMessage, WORKSPACE_CREATION_RETRY_AFTER_SECONDS } from "./creation-limit";
 import { readSandboxCookie, sandboxPrincipal, secureRequest, writeSandboxCookie } from "./sandbox-cookie";
 import { rememberSandbox } from "./request-limits";
-import { allocatableOnly, foldForSearch, LIST_PAGE_CEILING, matchesSearch, updatedSinceInstant, type ListQuery } from "./valopay-list";
+import { allocatableOnly, foldForSearch, listLimit, LIST_PAGE_CEILING, matchesSearch, updatedSinceInstant, type ListQuery } from "./valopay-list";
 import { publicExportRecord } from "./export-jobs";
 import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
 import { validateCloseRange, pageOffset, type ReadPageQuery, type ReconciliationQueue } from './console-read-models';
@@ -92,6 +92,10 @@ type Session = {
   owner?: string; operationId?: string; userId?: string; organizationId?: string;
   /** This transaction passed the restricted-database self-check (runtime isolation). */
   isolationVerified?: boolean;
+  /** A read on one REPEATABLE READ snapshot, read only once its identity checks passed: it takes no lender lock (inWorkspace). */
+  snapshotRead?: boolean;
+  /** Where the loaded lender's audit chain stands, as its write found it (loadState); appendAudit continues from it. */
+  auditChain?: AuditChain;
 };
 
 /**
@@ -110,20 +114,39 @@ export function bindOperation(req: Request, id: string, merchantId: string, crea
 /** The journal entry the recovery middleware bound to this request, if any. */
 export function boundOperation(req: Request) { return requestOperations.get(req); }
 const databaseConflictCodes = new Set(["23503", "23505", "23514", "P0001"]);
-/** One workspace's requests for one lender hold at most half this process's connections; a request past that waits, without one, for up to the lock limit. */
-const lenderGate = createLenderGate({ capacity: Math.max(1, Math.floor(poolSize / 2)), waitMs: () => databaseLimits().request.lockMs });
 /**
- * The gate lane of the lender a request names: every lender-scoped route
+ * Connection fairness, per tenant and per lender: one tenant's requests for
+ * its lenders hold at most a third of this process's connections, and those
+ * for one of its lenders at most half of that (at least one each), so neither
+ * a busy lender nor a busy sandbox with its own lenders can take the pool from
+ * everyone else. A request past either share waits, without a connection, for
+ * up to the lock limit in all.
+ */
+export const tenantConnections = Math.max(1, Math.floor(poolSize / 3));
+export const lenderConnections = Math.max(1, Math.ceil(tenantConnections / 2));
+const tenantGate = createLenderGate({ capacity: tenantConnections, waitMs: () => databaseLimits().request.lockMs });
+const lenderGate = createLenderGate({ capacity: lenderConnections, waitMs: () => databaseLimits().request.lockMs });
+/**
+ * The gate lanes of the lender a request names: every lender-scoped route
  * carries it as the merchantId query value. The value is read before anything
- * is authorised, so the lane is the caller's own (the staff organisation, or
- * the sandbox principal) as well as the lender's: a caller that names another
+ * is authorised, so the lanes are the caller's own (the staff organisation, or
+ * the sandbox principal) and its lender's: a caller that names another
  * tenant's lender only queues behind its own requests, never that tenant's.
  */
-function gatedLender(req: Request, principal: string): string | undefined {
+function gatedLanes(req: Request, principal: string): { tenant: string; lender: string } | undefined {
   const lender = (req.query as Record<string, unknown> | undefined)?.merchantId;
   if (typeof lender !== "string" || lender.length < 1 || lender.length > 100) return undefined;
   const caller = staffMode() ? `org:${getAuth(req).orgId || ""}` : `principal:${principal}`;
-  return `${caller}\u0000${lender}`;
+  return { tenant: caller, lender: `${caller}\u0000${lender}` };
+}
+/** Enters a request's lender lane, then its tenant's, within one wait: a request waiting for its tenant holds no other lender's place. */
+async function enterGate(lanes: { tenant: string; lender: string }, write: boolean): Promise<() => void> {
+  const deadline = Date.now() + databaseLimits().request.lockMs;
+  const leaveLender = await lenderGate.enter(lanes.lender, write);
+  try {
+    const leaveTenant = await tenantGate.enter(lanes.tenant, write, Math.max(1, deadline - Date.now()));
+    return () => { leaveTenant(); leaveLender(); };
+  } catch (error) { leaveLender(); throw error; }
 }
 
 /** Throws an error carrying the HTTP status the error handler answers with (400 unless given). */
@@ -368,7 +391,7 @@ export function journalReceipt(response: unknown): { id?: string; kind?: string;
 export async function completeOperation(ctx: StoreContext, receipt: unknown) {
   const session = sessionFor(ctx);
   if (!session.operationId) return;
-  const merchantId = lockedMerchant(session), owner = session.owner || session.principal;
+  const merchantId = boundMerchant(session), owner = session.owner || session.principal;
   const result = await session.client.query(`UPDATE valopay_operations SET status='completed',receipt=$5,updated_at=$6
     WHERE id=$1 AND merchant_id=$2 AND owner=$3 AND actor=$4 AND status<>'cancelled'`, [session.operationId, merchantId, owner, ctx.actor, journalReceipt(receipt), ctx.now]);
   if (rowsAffected(result)) return;
@@ -884,25 +907,26 @@ async function lockWorkspace(client: PoolClient, workspaceId: string, mode: "sha
  * after it (shared or exclusive), so the expiry sweep skips busy workspaces.
  * Only first-visit bootstrap needs the principal advisory lock. Every
  * transaction is bounded (database-limits.ts): a lock wait, a statement and
- * idle time each have a limit, and one lender holds at most half the pool, so
- * one busy lender turns its own requests away with a 503 instead of taking
- * every connection (two busy at once can still fill it). */
+ * idle time each have a limit, and a tenant holds at most a third of the pool
+ * (one of its lenders half of that), so a busy lender or a busy sandbox turns
+ * its own requests away with a 503 instead of taking every connection.
+ *
+ * A read answers from one snapshot (REPEATABLE READ): it takes no lender lock,
+ * so it never waits for a lender's writes and sees the state before any write
+ * still running, and all its statements see the same state. Its identity
+ * checks are those of a write (the workspace lock and row, the membership
+ * locked for share, which refuses a request whose access changed while it
+ * waited), after which the transaction is read only. A first visit creates its
+ * sandbox in a read-committed transaction instead, as a write does. */
 export async function inWorkspace<T>(req: Request, res: Response, fn: (context: StoreContext) => Promise<T>, access: WorkspaceAccess = "write"): Promise<T> {
   const identity = principalFor(req, res);
-  const write = access !== "read", lender = gatedLender(req, identity.principal);
-  const leave = lender ? await lenderGate.enter(lender, write) : undefined;
+  const write = access !== "read", lanes = gatedLanes(req, identity.principal);
+  const leave = lanes ? await enterGate(lanes, write) : undefined;
   let guard: Checkout<PoolClient> | undefined;
-  let context: StoreContext | undefined, committing = false, isolationVerified = false;
+  let context: StoreContext | undefined, committing = false, isolationVerified = false, snapshotRead = access === "read";
   try {
     guard = await checkOut(() => pool.connect(), write);
     const client = guard.client;
-    await client.query(beginStatement(databaseLimits().request, runtimeIsolationEnabled() && access === 'read' ? 'ISOLATION LEVEL REPEATABLE READ' : undefined));
-    if (runtimeIsolationEnabled()) {
-      const verified = getAuth(req) as unknown as VerifiedClerkSession;
-      isolationVerified = await bindRuntimeIdentity(client, { organizationId: verified.orgId || '', userId: verified.userId || '' });
-    }
-    // Single source of time: the database clock, read once per transaction.
-    let now = (await client.query<{ now: Date }>("SELECT now() AS now")).rows[0]!.now.toISOString();
     const exclusive = access === "persona" || access === 'team', lockMode = exclusive ? "exclusive" : "shared";
     const workspaceQuery = `SELECT id,principal_hash,role FROM valopay_workspaces WHERE principal_hash=$1 AND id=$2 FOR ${exclusive ? "UPDATE" : "SHARE"}`;
     /** The principal's sandbox, found without a lock and then locked; one removed meanwhile (the expiry sweep) is created afresh. */
@@ -912,30 +936,54 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       await lockWorkspace(client, found.id, lockMode, write);
       return (await client.query<WorkspaceRow>(workspaceQuery, [identity.principal, found.id])).rows[0];
     };
+    let now = "";
     let workspace: WorkspaceRow | undefined;
     let staff: StaffRow | undefined;
     let auth: VerifiedClerkSession | undefined;
-    if (staffMode()) {
-      auth = getAuth(req) as unknown as VerifiedClerkSession;
-      if (access === 'persona') fail('Staff roles are assigned by an administrator. Demo role switching is unavailable.', 403);
-      // Lock the organisation before its membership, consistently with team
-      // changes. A revocation waits for in-flight work and blocks later work.
-      const found = (await client.query<{ id: string }>('SELECT w.id FROM valopay_workspaces w JOIN valopay_teams t ON t.workspace_id=w.id WHERE t.organization_id=$1', [auth.orgId || ''])).rows[0];
-      if (!found) fail('This organisation has not been provisioned for the pilot.', 403);
-      await lockWorkspace(client, found.id, lockMode, write);
-      workspace = (await client.query<WorkspaceRow>(`SELECT w.id,w.principal_hash,w.role FROM valopay_workspaces w JOIN valopay_teams t ON t.workspace_id=w.id WHERE t.organization_id=$1 AND w.id=$2 FOR ${access === 'team' ? 'UPDATE' : 'SHARE'} OF w`, [auth.orgId || '', found.id])).rows[0];
-      if (!workspace) fail('This organisation has not been provisioned for the pilot.', 403);
-      try {
-        staff = (await client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE', [workspace.id, auth.userId])).rows[0];
-      } catch (error) {
-        // A repeatable-read request (runtime isolation) whose membership a team change altered while it waited behind it.
-        if ((error as { code?: unknown }).code === '40001') fail('Your access changed while this request was waiting. Refresh and try again.', 409);
-        throw error;
+    for (let attempt = 1; ; attempt += 1) {
+      await client.query(beginStatement(databaseLimits().request, snapshotRead ? 'ISOLATION LEVEL REPEATABLE READ' : undefined));
+      if (runtimeIsolationEnabled()) {
+        const verified = getAuth(req) as unknown as VerifiedClerkSession;
+        isolationVerified = await bindRuntimeIdentity(client, { organizationId: verified.orgId || '', userId: verified.userId || '' });
       }
-      if (!staff) fail('An active staff membership is required. Accept an invitation or contact your administrator.', 403);
-      now = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();
-      verifyStaff(auth, staffProvision(staff, auth.orgId!), access !== 'read', now);
-    } else workspace = await lockedSandbox();
+      // Single source of time: the database clock, read once per transaction.
+      now = (await client.query<{ now: Date }>("SELECT now() AS now")).rows[0]!.now.toISOString();
+      if (staffMode()) {
+        auth = getAuth(req) as unknown as VerifiedClerkSession;
+        if (access === 'persona') fail('Staff roles are assigned by an administrator. Demo role switching is unavailable.', 403);
+        // Lock the organisation before its membership, consistently with team
+        // changes. A revocation waits for in-flight work and blocks later work.
+        const found = (await client.query<{ id: string }>('SELECT w.id FROM valopay_workspaces w JOIN valopay_teams t ON t.workspace_id=w.id WHERE t.organization_id=$1', [auth.orgId || ''])).rows[0];
+        if (!found) fail('This organisation has not been provisioned for the pilot.', 403);
+        await lockWorkspace(client, found.id, lockMode, write);
+        workspace = (await client.query<WorkspaceRow>(`SELECT w.id,w.principal_hash,w.role FROM valopay_workspaces w JOIN valopay_teams t ON t.workspace_id=w.id WHERE t.organization_id=$1 AND w.id=$2 FOR ${access === 'team' ? 'UPDATE' : 'SHARE'} OF w`, [auth.orgId || '', found.id])).rows[0];
+        if (!workspace) fail('This organisation has not been provisioned for the pilot.', 403);
+        try {
+          staff = (await client.query<StaffRow>('SELECT * FROM valopay_staff_memberships WHERE workspace_id=$1 AND user_id=$2 FOR SHARE', [workspace.id, auth.userId])).rows[0];
+        } catch (error) {
+          if ((error as { code?: unknown }).code !== '40001') throw error;
+          // A read whose membership a team change altered while it waited behind it. Under runtime isolation it is
+          // refused, as it always was; otherwise it starts again, once, on a fresh snapshot, and so meets the change
+          // as a read-committed read did.
+          if (snapshotRead && attempt === 1 && !runtimeIsolationEnabled()) { await client.query("ROLLBACK"); continue; }
+          fail('Your access changed while this request was waiting. Refresh and try again.', 409);
+        }
+        if (!staff) fail('An active staff membership is required. Accept an invitation or contact your administrator.', 403);
+        now = (await client.query<{ now: Date }>('SELECT clock_timestamp() AS now')).rows[0]!.now.toISOString();
+        verifyStaff(auth, staffProvision(staff, auth.orgId!), access !== 'read', now);
+        break;
+      }
+      try { workspace = await lockedSandbox(); }
+      catch (error) {
+        // A read that waited behind a persona change finds its sandbox's row changed since its snapshot: it starts again, once, on a fresh one.
+        if (!(snapshotRead && attempt === 1 && (error as { code?: unknown }).code === '40001')) throw error;
+        await client.query("ROLLBACK");
+        continue;
+      }
+      // A snapshot taken before another first visit committed the same sandbox could not see it.
+      if (!workspace && snapshotRead) { await client.query("ROLLBACK"); snapshotRead = false; continue; }
+      break;
+    }
     if (!workspace && !staffMode()) {
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [identity.principal]);
       // Another first visit may have finished seeding while we waited.
@@ -976,7 +1024,9 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
       actor: staff ? `Clerk:${staff.user_id}` : `Sandbox ${workspace.role}`, now, accessMode: staff ? 'staff' : 'sandbox',
     });
     sessions.set(context, { client, workspace, principal: workspace.principal_hash, owner: identity.principal, active: true, access,
-      operationId: requestOperations.get(req)?.id, userId: staff?.user_id, organizationId: auth?.orgId || undefined, isolationVerified });
+      operationId: requestOperations.get(req)?.id, userId: staff?.user_id, organizationId: auth?.orgId || undefined, isolationVerified, snapshotRead });
+    // Every identity check has passed: from here a read cannot write.
+    if (snapshotRead) await client.query("SET TRANSACTION READ ONLY");
     const result = await fn(context);
     committing = true;
     const committed = await client.query("COMMIT");
@@ -1000,7 +1050,7 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
   } finally {
     if (context) {
       const session = sessions.get(context);
-      if (session) { session.active = false; session.snapshot = undefined; session.summarised = undefined; session.lockedMerchantId = undefined; }
+      if (session) { session.active = false; session.snapshot = undefined; session.summarised = undefined; session.auditChain = undefined; session.lockedMerchantId = undefined; }
     }
     guard?.release();
     leave?.();
@@ -1022,10 +1072,11 @@ export async function listMerchants(context: StoreContext) {
  * Lock membership before loading records.  A context becomes bound to one
  * merchant, preventing a confused caller from switching tenant mid-operation.
  * A mutation takes the exclusive row lock that serializes validation, allocations,
- * idempotency and audit sequencing; a read takes a share lock, so it sees one
- * consistent state, waits for an in-flight mutation to commit, and never queues
- * behind other reads. The journal's own reads take none. A journaled write holds
- * its entry before it waits for the lender (holdOperation).
+ * idempotency and audit sequencing. A read takes none: its snapshot is one
+ * consistent state, so it never waits for a mutation (inWorkspace); a share
+ * lock remains for a read in a read-committed transaction (a first visit's).
+ * The journal's own reads take none. A journaled write holds its entry before
+ * it waits for the lender (holdOperation).
  */
 async function readMerchant(context: StoreContext, merchantId: string, lock: MerchantLock = "share"): Promise<MerchantRow> {
   const session = sessionFor(context);
@@ -1033,7 +1084,7 @@ async function readMerchant(context: StoreContext, merchantId: string, lock: Mer
   if (session.lockedMerchantId && session.lockedMerchantId !== merchantId) conflict("A transaction may operate on only one lender.");
   if (session.operationId && lock === 'update') await holdOperation(session);
   const merchant = (await session.client.query<MerchantRow>(
-    scopedMerchantQuery(runtimeIsolationEnabled() && context.role === 'Read-only' && lock === 'share' ? 'none' : lock),
+    scopedMerchantQuery(lock === 'share' && (session.snapshotRead || (runtimeIsolationEnabled() && context.role === 'Read-only')) ? 'none' : lock),
     [merchantId, session.workspace.id, session.principal],
   )).rows[0];
   if (!merchant) fail("Lender not found in this workspace.", 404);
@@ -1050,36 +1101,131 @@ async function readMerchant(context: StoreContext, merchantId: string, lock: Mer
   return merchant;
 }
 
-/** A daily close as the domain reads earlier closes: its summary and the unallocated and exception totals, without the full REC-07 arrays. */
-const closeSummarySql = "(r.data - 'report' - 'operational' - 'metrics') || CASE WHEN r.data ? 'report' THEN jsonb_build_object('report',jsonb_build_object('unallocated',r.data#>'{report,unallocated}','exceptions',r.data#>'{report,exceptions}')) ELSE '{}'::jsonb END";
-/** Closes this recent stay whole in a write load; the latest close, which a Finance review hashes, is always among them. */
+/**
+ * A daily close as the domain reads earlier closes: its summary and the
+ * unallocated and exception totals, without the full REC-07 arrays. The stored
+ * close is decompressed once (`|| '{}'` makes an in-memory copy of a close's
+ * data object), not once for each part taken from it: for a year of closes
+ * that is about a quarter of the time.
+ */
+const closeSummarySql = "(SELECT (s.d - 'report' - 'operational' - 'metrics') || CASE WHEN s.d ? 'report' THEN jsonb_build_object('report',jsonb_build_object('unallocated',s.d#>'{report,unallocated}','exceptions',s.d#>'{report,exceptions}')) ELSE '{}'::jsonb END FROM (SELECT r.data || '{}'::jsonb AS d OFFSET 0) s)";
+/** Closes this recent stay whole in a load; the latest close, which a Finance review hashes, is always among them. */
 const FULL_CLOSE_DAYS = 7;
 
-export async function loadState(context: StoreContext, merchantId: string, lock: Exclude<MerchantLock, "none"> = "update"): Promise<DomainState> {
+/**
+ * Where a lender's audit chain stands, kept in its settings (`auditChain`) as
+ * the close cursor is: the head, which the next entry follows, and `verified`,
+ * the last entry read back from the database and verified. `at` is an entry's
+ * creation time. The entries stay in valopay_records (kind `audit`) and are
+ * not part of a loaded state: appendAudit needs only the head.
+ */
+type ChainPoint = AuditPoint & { at?: string };
+type AuditChain = ChainPoint & { verified: ChainPoint };
+function chainPoint(value: unknown): ChainPoint | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const { sequence, hash, at } = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(sequence) || (sequence as number) < 0 || typeof hash !== "string" || !hash) return undefined;
+  if (at !== undefined && (typeof at !== "string" || !Number.isFinite(Date.parse(at)))) return undefined;
+  return { sequence: sequence as number, hash, ...(at === undefined ? {} : { at }) };
+}
+/** The stored chain position, or undefined for a lender that has none yet (created before it was kept) or a state built in memory. */
+function storedChain(settings: Record<string, any>): AuditChain | undefined {
+  const head = chainPoint(settings.auditChain), verified = chainPoint(settings.auditChain?.verified);
+  return head && verified && verified.sequence <= head.sequence ? { ...head, verified } : undefined;
+}
+/**
+ * How much earlier than the verified entry a later entry may be stamped. An
+ * entry carries its transaction's start time, and a transaction appends only
+ * once it holds the lender, after waits each bounded by the lock limit.
+ */
+const CHAIN_MARGIN_MINUTES = 5;
+/**
+ * Reads the lender's audit entries after the verified entry (all of them with
+ * `full`, or for a lender with no stored position) and walks them from it.
+ * The head is the last entry by sequence, whoever wrote it: the export worker
+ * and an earlier build append without moving the stored head. A stored head
+ * further on than any entry means entries went missing: the chain is broken
+ * and that sequence is never issued again.
+ */
+async function readAuditChain(session: Session, merchantId: string, settings: Record<string, any>, full = false) {
+  const stored = storedChain(settings), from: ChainPoint = !full && stored ? stored.verified : AUDIT_GENESIS;
+  const rows = (await session.client.query<{ id: string; data: Record<string, any>; created_at: Date }>(
+    `SELECT r.id,r.data,r.created_at ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='audit'
+       AND ($4::timestamptz IS NULL OR r.created_at >= $4::timestamptz - make_interval(mins => ${CHAIN_MARGIN_MINUTES}))
+       AND ($5::bigint = 0 OR (jsonb_typeof(r.data->'sequence')='number' AND (r.data->>'sequence')::numeric > $5::bigint))
+     ORDER BY r.created_at,r.id`,
+    [merchantId, session.workspace.id, session.principal, from.sequence ? from.at ?? null : null, from.sequence],
+  )).rows;
+  const walk = walkAuditChain(rows, from);
+  let head: ChainPoint = from, valid = walk.valid;
+  for (const row of rows) if (Number(row.data.sequence) > head.sequence) head = { sequence: Number(row.data.sequence), hash: String(row.data.hash), at: row.created_at.toISOString() };
+  if (stored && stored.sequence > head.sequence) { head = { sequence: stored.sequence, hash: stored.hash, ...(stored.at ? { at: stored.at } : {}) }; valid = false; }
+  const verified: ChainPoint = walk.entry ? { ...walk.verified, at: walk.entry.created_at.toISOString() } : from;
+  return { chain: { ...head, verified } as AuditChain, verification: { valid, count: walk.count, headHash: walk.headHash } };
+}
+
+export async function loadState(context: StoreContext, merchantId: string, lock: Exclude<MerchantLock, "none"> = "update", options: { wholeCloses?: number } = {}): Promise<DomainState> {
   const session = sessionFor(context);
   const merchant = await readMerchant(context, merchantId, lock);
-  // A write loads earlier closes as summaries: each stored report is about
-  // 100 KB, and a year of them used to be reloaded and hashed by every save.
-  // The full reports stay in PostgreSQL; saveState refuses to change them.
+  // Every load has earlier closes as summaries: each stored report is about
+  // 100 KB, and a year of them used to be reloaded with every request. The
+  // latest week's stay whole, and `wholeCloses` more of the newest for a view
+  // that shows them. The full reports stay in PostgreSQL (the close history
+  // opens one); saveState refuses to change them. The audit chain is never
+  // loaded: a write continues it from the head in the lender's settings.
+  const whole = Math.max(0, Math.floor(options.wholeCloses ?? 0));
   const rows = (await session.client.query<RecordRow & { summarised: boolean }>(
-    `WITH recent AS (SELECT max(created_at) - make_interval(days => $5) AS cutoff FROM valopay_records WHERE merchant_id=$1 AND kind='closes'),
-     loaded AS (SELECT r.*, ($4 AND r.kind='closes' AND r.created_at < recent.cutoff) AS summarised
+    `WITH recent AS (SELECT least(max(created_at) - make_interval(days => $4), CASE WHEN $5::int > 0 THEN
+         (SELECT created_at FROM valopay_records WHERE merchant_id=$1 AND kind='closes' ORDER BY created_at DESC OFFSET $5::int - 1 LIMIT 1) END) AS cutoff
+       FROM valopay_records WHERE merchant_id=$1 AND kind='closes'),
+     loaded AS (SELECT r.*, (r.kind='closes' AND r.created_at < recent.cutoff) AS summarised
        FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id
        JOIN valopay_workspaces w ON w.id=m.workspace_id CROSS JOIN recent
-       WHERE r.merchant_id=$1 AND m.workspace_id=$2 AND w.id=$2 AND w.principal_hash=$3)
+       WHERE r.merchant_id=$1 AND m.workspace_id=$2 AND w.id=$2 AND w.principal_hash=$3 AND r.kind<>'audit')
      SELECT r.id,r.merchant_id,r.kind,r.name,r.status,r.reference,r.amount_kobo,r.customer_id,
        CASE WHEN r.summarised THEN ${closeSummarySql} ELSE r.data END AS data,r.created_at,r.updated_at,r.summarised
      FROM loaded r ORDER BY r.created_at,r.id`,
-    [merchantId, session.workspace.id, session.principal, lock === "update", FULL_CLOSE_DAYS],
+    [merchantId, session.workspace.id, session.principal, FULL_CLOSE_DAYS, whole],
   )).rows;
   // Protected source rows stay sealed: only the views that show or use them open them (revealImportPayloads).
   const state: DomainState = { merchant: merchant.info, settings: merchant.settings, records: rows.map(rowToRecord) };
   if (state.merchant.id !== merchantId) conflict("Lender identity does not match its stored scope.");
+  // A write verifies the entries appended since the last verified one (usually the previous write's) and takes the
+  // head from them, so an entry written without moving the stored head is followed, never forked. The position is
+  // kept aside until an entry is appended: the lender's settings stay as a read sees them.
+  session.auditChain = lock === "update" ? (await readAuditChain(session, merchantId, state.settings)).chain : undefined;
   // A shared load is read-only, even in an otherwise write-capable context.
   // Avoid serialising the entire history just to serve a dashboard or export lookup.
   session.snapshot = lock === "update" ? snapshotOf(state) : undefined;
   session.summarised = lock === "update" ? new Set(rows.filter((row) => row.summarised).map((row) => row.id)) : undefined;
   return state;
+}
+
+/**
+ * The overview's view of the audit chain, from the same snapshot as its load:
+ * the entries after the last verified one checked (incrementally, as each
+ * write checks them), and the eight most recent entries, newest first.
+ */
+export async function auditOverview(context: StoreContext, state: DomainState) {
+  const session = sessionFor(context), merchantId = state.merchant.id;
+  if (session.lockedMerchantId !== merchantId) conflict("Load this lender before reading its audit log.");
+  const { verification } = await readAuditChain(session, merchantId, state.settings);
+  const recent = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='audit' ORDER BY r.created_at DESC,r.id LIMIT 8`,
+    [merchantId, session.workspace.id, session.principal])).rows.map(rowToRecord);
+  return { verification, recent };
+}
+
+/**
+ * The whole audit chain verified from its first entry (verify_audit): the
+ * lender's position records how far it held, so a break found here is also
+ * what the overview reports from then on.
+ */
+export async function verifyAuditTrail(context: StoreContext, state: DomainState) {
+  const session = sessionFor(context), merchantId = lockedMerchant(session);
+  if (state.merchant.id !== merchantId) conflict("Load this lender before checking its audit log.");
+  const { chain, verification } = await readAuditChain(session, merchantId, state.settings, true);
+  session.auditChain = chain;
+  return verification;
 }
 
 /**
@@ -1192,10 +1338,11 @@ export async function listRecords(context: StoreContext, merchantId: string, kin
     params.push(new Date(updatedSinceInstant(query.updatedSince)).toISOString()); where += ` AND r.updated_at >= $${params.length}::timestamptz`;
   }
   const offset = Number.isInteger(query.offset) && Number(query.offset) > 0 ? Number(query.offset) : 0;
-  const limit = Number.isInteger(query.limit) && Number(query.limit) > 0 ? Math.min(Number(query.limit), LIST_PAGE_CEILING) : undefined;
+  // A kind that grows with history is capped even without a limit (listLimit).
+  const limit = listLimit(kind, query.limit);
   let items: ValopayRecord[] = [], total: number;
   if (!query.search) {
-    // Merchant share lock keeps the separate total and page coherent with writes.
+    // The read's snapshot keeps the separate total and page coherent with writes.
     total = Number((await session.client.query<{ total: string }>(`SELECT count(*) AS total ${scopedRecordsFrom} WHERE ${where}`, params)).rows[0]!.total);
     const values = [...params, offset];
     let paging = ` OFFSET $${values.length}`;
@@ -1314,7 +1461,7 @@ export async function listQueue(context: StoreContext, merchantId: string, queue
   return { items, related: [...related.values()], total, offset, counts: summary.counts, owners: summary.owners.sort(), types: summary.types.sort(), asOf: context.now };
 }
 
-/** All queue predicates execute inside the same lender-locked read transaction. */
+/** All queue predicates execute on the same snapshot of the read transaction. */
 export async function listReconciliation(context: StoreContext, merchantId: string, queue: ReconciliationQueue, query: ReadPageQuery) {
   const session = sessionFor(context), merchant = await readMerchant(context, merchantId);
   const scope = [merchantId, session.workspace.id, session.principal];
@@ -1440,11 +1587,18 @@ export async function loadCustomerView(context: StoreContext, merchantId: string
   return { merchant: merchant.info, settings: merchant.settings, records };
 }
 
-/** Settings only need integrations, the calendar and close history. */
+/**
+ * Settings only need integrations, the calendar and the latest close,
+ * summarised: the page shows when it ran and how, never a report. The latest
+ * is the newest by creation, read through the paging index; a close's
+ * closedAt is the time it was created (runDailyClose), so it is the one the
+ * close schedule picks, and no other close's report is read.
+ */
 export async function loadSettingsView(context: StoreContext, merchantId: string): Promise<DomainState> {
   const session = sessionFor(context), merchant = await readMerchant(context, merchantId);
-  const records = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom}
-    WHERE ${scopedRecordsWhere} AND r.kind IN ('integrations','calendar','closes') ORDER BY r.created_at,r.id`,
+  const records = (await session.client.query<RecordRow>(`(SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind IN ('integrations','calendar'))
+    UNION ALL (SELECT ${recordColumns.replace('r.data', `${closeSummarySql} AS data`)} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='closes' ORDER BY r.created_at DESC,r.id DESC LIMIT 1)
+    ORDER BY created_at,id`,
     [merchantId, session.workspace.id, session.principal])).rows.map(rowToRecord);
   return { merchant: merchant.info, settings: merchant.settings, records };
 }
@@ -1453,7 +1607,7 @@ export async function loadSettingsView(context: StoreContext, merchantId: string
  * under `earlier`, where an earlier build kept it. */
 export async function findIdempotency(context: StoreContext, id: string, earlier?: string) {
   const session = sessionFor(context);
-  const merchantId = lockedMerchant(session);
+  const merchantId = boundMerchant(session);
   const found = (await session.client.query<{ id: string; request_hash: string; response: any }>(
     `SELECT i.id,i.request_hash,i.response FROM valopay_idempotency i JOIN valopay_merchants m ON m.id=i.merchant_id
      JOIN valopay_workspaces w ON w.id=m.workspace_id
@@ -1463,6 +1617,18 @@ export async function findIdempotency(context: StoreContext, id: string, earlier
   )).rows[0];
   if(found?.response?.purged)fail('This request already completed and its retained payload has expired. It cannot run again.',410);
   return found ? { request_hash: found.request_hash, response: await revealStored(found.response,{lender:merchantId,record:found.id,field:'response'}) } : undefined;
+}
+/**
+ * A keyed write's stored answer before its lender is loaded: the transaction
+ * is bound to the lender without its lock (the workspace and, for staff, the
+ * person's lender access are checked as for any load), so a repeat of a saved
+ * request is answered without loading the lender or waiting for it. A caller
+ * that finds nothing loads the lender and looks again: an attempt that
+ * finished meanwhile is visible once the journal entry is held.
+ */
+export async function findStoredAnswer(context: StoreContext, merchantId: string, id: string, earlier?: string) {
+  await readMerchant(context, merchantId, "none");
+  return findIdempotency(context, id, earlier);
 }
 /** Stores the answer where receiptOf keeps it (`id`), with the request's fingerprint, so a replay with different input is refused. */
 export async function saveIdempotency(context: StoreContext, id: string, requestHash: string, response: unknown) {
@@ -1502,6 +1668,12 @@ export async function changeRole(context: StoreContext, role: string) {
 function lockedMerchant(session: Session): string {
   if (session.access === "read") fail("A read transaction cannot write lender data.", 409);
   if (!session.lockedMerchantId || !session.snapshot) fail("Load a lender before using this repository operation.", 409);
+  return session.lockedMerchantId;
+}
+/** The lender a write transaction is bound to, loaded or not: the journal's own reads and writes need no lender lock. */
+function boundMerchant(session: Session): string {
+  if (session.access === "read") fail("A read transaction cannot write lender data.", 409);
+  if (!session.lockedMerchantId) fail("Load a lender before using this repository operation.", 409);
   return session.lockedMerchantId;
 }
 function reference(record: ValopayRecord, id: unknown, kind: string, label: string, all: Map<string, ValopayRecord>): ValopayRecord {
@@ -1705,6 +1877,9 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
   for (const [id, amount] of allocatedDues) if (amount > final.get(id)!.amountKobo) conflict("Allocations exceed the due-item amount.");
 }
 
+/** How many records one of saveState's write statements carries. */
+const WRITE_BATCH = 500;
+const recordsetColumns = "id text,kind text,name text,status text,reference text,amount_kobo bigint,customer_id text,data jsonb,created_at timestamptz,updated_at timestamptz";
 /** Persist only a checked diff against the repository-owned snapshot. */
 export async function saveState(context: StoreContext, state: DomainState): Promise<void> {
   const session = sessionFor(context);
@@ -1727,27 +1902,33 @@ export async function saveState(context: StoreContext, state: DomainState): Prom
     const priority = (record: ValopayRecord) => record.kind === "allocations" ? (record.status === "confirmed" ? 3 : 0) : record.kind === "audit" ? 4 : 1;
     return priority(a) - priority(b);
   });
-  for (const record of sorted) {
-    const values = [record.id, merchantId, record.kind, record.name, record.status, record.reference, record.amountKobo, record.customerId, await protectRecordData(record), record.createdAt, record.updatedAt];
-    if (snapshot.records.has(record.id)) {
-      const result = await session.client.query(
-        `UPDATE valopay_records SET name=$4,status=$5,reference=$6,amount_kobo=$7,customer_id=$8,data=$9,updated_at=$11
-         WHERE id=$1 AND merchant_id=$2 AND kind=$3 AND created_at=$10 AND EXISTS (
+  const rows: Array<Record<string, unknown> & { existing: boolean }> = [];
+  for (const record of sorted) rows.push({ existing: snapshot.records.has(record.id), id: record.id, kind: record.kind, name: record.name, status: record.status, reference: record.reference, amount_kobo: record.amountKobo, customer_id: record.customerId, data: await protectRecordData(record), created_at: record.createdAt, updated_at: record.updatedAt });
+  // A run of updates, or of inserts, in the order above is one statement (up to WRITE_BATCH records): a month-end
+  // close changes thousands of records, each once its own statement. The order still puts an update that frees a
+  // unique value before the insert that takes it.
+  for (let start = 0; start < rows.length;) {
+    const existing = rows[start]!.existing;
+    let end = start + 1;
+    while (end < rows.length && end - start < WRITE_BATCH && rows[end]!.existing === existing) end += 1;
+    const batch = rows.slice(start, end).map(({ existing: _existing, ...row }) => row);
+    const result = await session.client.query(existing
+      ? `UPDATE valopay_records r SET name=v.name,status=v.status,reference=v.reference,amount_kobo=v.amount_kobo,customer_id=v.customer_id,data=v.data,updated_at=v.updated_at
+         FROM jsonb_to_recordset($1::jsonb) AS v(${recordsetColumns})
+         WHERE r.id=v.id AND r.merchant_id=$2 AND r.kind=v.kind AND r.created_at=v.created_at AND EXISTS (
            SELECT 1 FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id
-           WHERE m.id=$2 AND m.workspace_id=$12 AND w.id=$12 AND w.principal_hash=$13)`,
-        [...values, session.workspace.id, session.principal],
-      );
-      if (!rowsAffected(result)) conflict("Record was changed concurrently; reload before retrying.");
-    } else {
-      const result = await session.client.query(
-        `INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at)
-         SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11 WHERE EXISTS (
+           WHERE m.id=$2 AND m.workspace_id=$3 AND w.id=$3 AND w.principal_hash=$4)`
+      : `INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at)
+         SELECT v.id,$2,v.kind,v.name,v.status,v.reference,v.amount_kobo,v.customer_id,v.data,v.created_at,v.updated_at
+         FROM jsonb_to_recordset($1::jsonb) AS v(${recordsetColumns}) WHERE EXISTS (
            SELECT 1 FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id
-           WHERE m.id=$2 AND m.workspace_id=$12 AND w.id=$12 AND w.principal_hash=$13)`,
-        [...values, session.workspace.id, session.principal],
-      );
-      if (!rowsAffected(result)) fail("Lender not found in this workspace.", 404);
+           WHERE m.id=$2 AND m.workspace_id=$3 AND w.id=$3 AND w.principal_hash=$4)`,
+      [JSON.stringify(batch), merchantId, session.workspace.id, session.principal]);
+    if ((result.rowCount || 0) !== batch.length) {
+      if (existing) conflict("Record was changed concurrently; reload before retrying.");
+      fail("Lender not found in this workspace.", 404);
     }
+    start = end;
   }
   const merchantUpdate = await session.client.query(
     `UPDATE valopay_merchants m SET info=$4,settings=$5 WHERE m.id=$1 AND m.workspace_id=$2 AND EXISTS
@@ -1856,13 +2037,14 @@ async function seedWorkspace(client: PoolClient, workspace: WorkspaceRow, princi
     state.settings.anonymousWorkspace = anonymous;
     // REC-01: the first scheduled close is the next configured time after creation, from the database clock.
     state.settings.nextCloseAt = nextCloseInstant(now, closeTimeOf(state.settings));
+    // Before the lender row is written, so its settings carry the audit chain's head.
+    appendAudit(state, { actor: `${SYSTEM_ACTOR_PREFIX}sandbox seed`, role: "Admin", now }, "sandbox.created", "workspace", "Created an isolated synthetic lender. Not live evidence.");
     const merchant = await client.query(
       `INSERT INTO valopay_merchants(id,workspace_id,info,settings)
        SELECT $1,$2,$3,$4 WHERE EXISTS (SELECT 1 FROM valopay_workspaces WHERE id=$2 AND principal_hash=$5)`,
       [state.merchant.id, workspace.id, state.merchant, state.settings, principal],
     );
     if (!rowsAffected(merchant)) throw new Error("Workspace seed ownership check failed.");
-    appendAudit(state, { actor: `${SYSTEM_ACTOR_PREFIX}sandbox seed`, role: "Admin", now }, "sandbox.created", "workspace", "Created an isolated synthetic lender. Not live evidence.");
     assertFinalState({ merchant: structuredClone(state.merchant), settings: {}, records: [] }, state, state.merchant.id);
     for (const record of state.records) {
       const inserted = await client.query(
@@ -1914,7 +2096,7 @@ export async function inMerchantAsSystem<T>(merchantId: string, actor: string, f
   } finally {
     if (context) {
       const session = sessions.get(context);
-      if (session) { session.active = false; session.snapshot = undefined; session.summarised = undefined; session.lockedMerchantId = undefined; }
+      if (session) { session.active = false; session.snapshot = undefined; session.summarised = undefined; session.auditChain = undefined; session.lockedMerchantId = undefined; }
     }
     guard.release();
   }
@@ -2198,21 +2380,34 @@ export async function closeDatabase(): Promise<void> {
   await Promise.all([pool.end(), ending?.end()]);
 }
 
-/** Appends a hash-chained audit entry for an action to the lender's state. */
+/**
+ * Appends a hash-chained audit entry for an action to the lender's state and
+ * moves the chain's head in its settings. A lender loaded for a write
+ * continues from where its load found the chain (loadState); a state built in
+ * memory (a new lender's seed, a test) from its stored head or its own entries.
+ */
 export function appendAudit(state: DomainState, ctx: Context, action: string, objectId: string, summary: string, changes?: unknown): ValopayRecord {
-  // One pass for the chain's length and head; the chain grows with every save, so it is not sorted here.
-  let length = 0, previous: ValopayRecord | undefined;
-  for (const record of state.records) {
-    if (record.kind !== "audit") continue;
-    length += 1;
-    if (!previous || Number(record.data.sequence || 0) >= Number(previous.data.sequence || 0)) previous = record;
+  const session = sessions.get(ctx as StoreContext), loaded = session?.active && session.lockedMerchantId === state.merchant.id ? session.auditChain : undefined;
+  let head = loaded ?? storedChain(state.settings);
+  if (!head) {
+    // One pass for the chain's length and head; it is not sorted here.
+    let length = 0, previous: ValopayRecord | undefined;
+    for (const record of state.records) {
+      if (record.kind !== "audit") continue;
+      length += 1;
+      if (!previous || Number(record.data.sequence || 0) >= Number(previous.data.sequence || 0)) previous = record;
+    }
+    head = { sequence: length, hash: previous?.data.hash ?? AUDIT_GENESIS.hash, verified: AUDIT_GENESIS };
   }
-  const data = auditEntryData({ sequence: length + 1, actor: ctx.actor, action, objectId, summary, changes, previousHash: previous?.data.hash, timestamp: ctx.now });
+  const data = auditEntryData({ sequence: head.sequence + 1, actor: ctx.actor, action, objectId, summary, changes, previousHash: head.hash, timestamp: ctx.now });
   const record: ValopayRecord = { id: randomUUID(), merchantId: state.merchant.id, kind: "audit", name: action, status: "recorded", reference: "", amountKobo: 0, customerId: state.records.find((item) => item.id === objectId)?.customerId || "", createdAt: ctx.now, updatedAt: ctx.now, data };
   state.records.push(record);
+  const chain: AuditChain = { sequence: data.sequence, hash: data.hash, at: ctx.now, verified: head.verified };
+  state.settings.auditChain = chain;
+  if (loaded) session!.auditChain = chain;
   return record;
 }
-/** Walks the chain: valid when every entry's sequence, previous hash and digest agree; returns the count and the head hash. */
+/** Walks the chain of the entries in a state that holds them all (an export's): valid when every entry's sequence, previous hash and digest agree; returns the count and the head hash. */
 export function verifyAudit(state: DomainState) {
   return verifyAuditChain(recordsOf(state, "audit"));
 }

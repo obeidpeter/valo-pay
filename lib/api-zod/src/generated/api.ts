@@ -90,7 +90,7 @@ export const GetWorkspaceResponse = zod.object({
 
 
 /**
- * Metrics, queues, recent activity, upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02).
+ * Metrics, queues, recent activity (the eight latest audit entries), upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02), whose audit check covers the entries since the last one verified.
  * @summary The operations overview for one lender
  */
 export const getOverviewQueryMerchantIdMax = 100;
@@ -197,7 +197,7 @@ export const ListRecordsQueryParams = zod.object({
   "merchantId": zod.string().min(1).max(listRecordsQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.'),
   "search": zod.string().optional().describe('Text matched, ignoring case and accents, against the record\'s name, its reference and the text and number values in its data, nested ones included; never a field\'s name, true, false or null.'),
   "status": zod.string().optional().describe('Only records in this status; omitted or "all" for every status.'),
-  "limit": zod.coerce.number().int().min(1).max(listRecordsQueryLimitMax).optional().describe('Page size, from 1 to 500; a value outside that range is refused (400). Omitted returns the complete filtered kind for existing relationship and balance views.'),
+  "limit": zod.coerce.number().int().min(1).max(listRecordsQueryLimitMax).optional().describe('Page size, from 1 to 500; a value outside that range is refused (400). Omitted, a kind that grows with history (audit, closes, exports, notifications, retry-decisions) returns its newest 500 with nextOffset to page on, and any other kind its whole filtered set, for existing relationship and balance views.'),
   "offset": zod.coerce.number().int().min(listRecordsQueryOffsetMin).optional().describe('Rows to skip in the newest-first order.'),
   "updatedSince": zod.string().optional().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00; only records updated at or after that instant (incremental sync). A number, a date without a time, a time without Z or an offset, or a year outside 0001 to 9999 is refused (400, naming updatedSince).'),
   "customerId": zod.string().optional().describe('Only records directly linked to this customer, in the selected lender.'),
@@ -548,7 +548,7 @@ export const getReportsQueryMerchantIdMax = 100;
 
 export const GetReportsQueryParams = zod.object({
   "merchantId": zod.string().min(1).max(getReportsQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.'),
-  "includeCloses": zod.enum(['true', 'false']).optional().describe('Default true for compatibility. The console passes false and loads paged close summaries separately.')
+  "includeCloses": zod.enum(['true', 'false']).optional().describe('Default true for compatibility: the close array, where closes more than a week before the latest carry their summary (GET /v1/close-history/{id} returns any close whole). The console passes false and loads paged close summaries separately.')
 })
 
 export const GetReportsResponse = zod.object({

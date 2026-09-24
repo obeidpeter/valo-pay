@@ -23,7 +23,7 @@ search?: string;
  */
 status?: string;
 /**
- * Page size, from 1 to 500; a value outside that range is refused (400). Omitted returns the complete filtered kind for existing relationship and balance views.
+ * Page size, from 1 to 500; a value outside that range is refused (400). Omitted, a kind that grows with history (audit, closes, exports, notifications, retry-decisions) returns its newest 500 with nextOffset to page on, and any other kind its whole filtered set, for existing relationship and balance views.
  * @minimum 1
  * @maximum 500
  */

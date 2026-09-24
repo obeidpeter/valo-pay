@@ -1,8 +1,22 @@
 import { canTakeAllocation, instantInputSchema } from "@workspace/valopay-schema";
 import type { ValopayRecord } from "../domain/types";
 
-/** Hard ceiling on one page so a list can never return more than this; the default is the whole filtered set for the console. */
+/** Hard ceiling on one page so a list can never return more than this. */
 export const LIST_PAGE_CEILING = 500;
+/**
+ * Kinds that grow with a lender's history, with every action or day, rather
+ * than with its book: the audit chain, the daily closes and the logs of
+ * exports, messages and retry decisions. A list of one of them without
+ * `limit` returns at most LIST_PAGE_CEILING records, newest first, with
+ * `nextOffset` to page on; a list of any other kind without `limit` returns
+ * its whole filtered set.
+ */
+export const HISTORY_KINDS: ReadonlySet<string> = new Set(["audit", "closes", "exports", "notifications", "retry-decisions"]);
+/** A list's page size: the `limit` asked for, at most the ceiling; without one, the ceiling for a history kind and no limit for the rest. */
+export function listLimit(kind: string | undefined, limit: unknown): number | undefined {
+  if (Number.isInteger(limit) && Number(limit) > 0) return Math.min(Number(limit), LIST_PAGE_CEILING);
+  return kind !== undefined && HISTORY_KINDS.has(kind) ? LIST_PAGE_CEILING : undefined;
+}
 
 /** Search form of a text: marks stripped and case folded, so "Ọkọnkwọ", "Okonkwo" and "OKONKWO" all match one another however a name was typed. */
 export function foldForSearch(value: string): string {
@@ -54,10 +68,10 @@ export function updatedSinceInstant(value: string): number {
  * whether an instalment can take an allocation (`allocatable`; the caller
  * checks the kind with allocatableOnly), an `updatedSince` watermark for
  * incremental sync (Appendix B updated_since), newest first, then `offset` and
- * `limit`.  `total` counts the filtered set so a client can page; `nextOffset`
- * is present when more rows remain.
+ * `limit` (listLimit, for `kind` when given).  `total` counts the filtered set
+ * so a client can page; `nextOffset` is present when more rows remain.
  */
-export function pageRecords(records: ValopayRecord[], query: ListQuery): { items: ValopayRecord[]; total: number; nextOffset?: number } {
+export function pageRecords(records: ValopayRecord[], query: ListQuery, kind?: string): { items: ValopayRecord[]; total: number; nextOffset?: number } {
   let items = records;
   if (query.status && query.status !== "all") items = items.filter((record) => record.status === query.status);
   if (query.customerId) items = items.filter((record) => record.customerId === query.customerId);
@@ -71,7 +85,7 @@ export function pageRecords(records: ValopayRecord[], query: ListQuery): { items
   items = [...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
   const total = items.length;
   const offset = Number.isInteger(query.offset) && Number(query.offset) > 0 ? Number(query.offset) : 0;
-  const limit = Number.isInteger(query.limit) && Number(query.limit) > 0 ? Math.min(Number(query.limit), LIST_PAGE_CEILING) : undefined;
+  const limit = listLimit(kind, query.limit);
   const page = limit === undefined ? items.slice(offset) : items.slice(offset, offset + limit);
   const nextOffset = offset + page.length < total ? offset + page.length : undefined;
   return nextOffset === undefined ? { items: page, total } : { items: page, total, nextOffset };

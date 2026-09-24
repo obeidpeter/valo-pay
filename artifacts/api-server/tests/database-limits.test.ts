@@ -5,8 +5,8 @@ import { createLenderGate } from "../src/lib/lender-gate.js";
 import { markRolledBack, wasRolledBack } from "../src/lib/transaction-outcome.js";
 import { errorHandler } from "../src/lib/error-handler.js";
 
-// What bounds every database transaction, without a database: the per-lender
-// gate, the transaction-local limits each BEGIN sets, how PostgreSQL and pool
+// What bounds every database transaction, without a database: the connection
+// gate's lanes, the transaction-local limits each BEGIN sets, how PostgreSQL and pool
 // failures become a 503 that says nothing was saved, and the error listener
 // that keeps a lost connection from ending the process. The limits against a
 // real database are in workspace-concurrency.integration.test.ts.
@@ -56,6 +56,15 @@ const state = <T>(promise: Promise<T>) => { const seen: { value?: T; error?: unk
   eq(gate.load("lender-a"), { active: 1, waiting: 0 }, "a waiter that gave up leaves the queue");
   holder();
   eq(gate.load("lender-a"), { active: 0, waiting: 0 }, "and the last release empties the lane");
+}
+{
+  // A request that already waited in its lender's lane waits in its tenant's only for what is left of its limit (enterGate).
+  const gate = createLenderGate({ capacity: 1, waitMs: () => 5_000 });
+  const holder = await gate.enter("tenant-a", true);
+  const started = Date.now();
+  const error = await gate.enter("tenant-a", false, 30).then(() => undefined, (refusal: unknown) => refusal);
+  ok(error instanceof DatabaseLimitError && error.limit === "lender_busy" && Date.now() - started < 1_000, "a wait given to one request bounds that request's wait");
+  holder();
 }
 // ---- The workspace lock's own words ----
 {
@@ -155,4 +164,4 @@ const state = <T>(promise: Promise<T>) => { const seen: { value?: T; error?: unk
   eq(failedTransaction(Object.assign(new Error("duplicate key"), { code: "23505" }), { committing: false, write: true }) instanceof DatabaseLimitError, false, "and so is a constraint");
 }
 
-console.log(`Database limit tests passed (${checks} checks): the per-lender gate, the limits every transaction sets, PostgreSQL and pool failures as a 503 that says nothing was saved, and lost connections heard instead of ending the process.`);
+console.log(`Database limit tests passed (${checks} checks): the connection gate's lanes, the limits every transaction sets, PostgreSQL and pool failures as a 503 that says nothing was saved, and lost connections heard instead of ending the process.`);

@@ -9,7 +9,8 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
   process.exit(0);
 }
 const { pool } = await import("@workspace/db");
-const { inWorkspace, listMerchants, loadState, verifyAudit, assertFinalState, digest } = await import("../src/lib/valopay-store");
+const { inWorkspace, listMerchants, loadState, assertFinalState, digest } = await import("../src/lib/valopay-store");
+const { verifyAuditChain } = await import("../src/lib/digests");
 const { buildExportBytes } = await import("../src/lib/valopay-exports");
 const { default: express } = await import("express");
 const { default: router } = await import("../src/routes/valopay");
@@ -61,7 +62,8 @@ try {
     const readStarted = performance.now();
     const output = await inWorkspace(req(), res(), async context => ({ state: await loadState(context, merchant.id, "share"), context: { now: context.now, role: context.role, actor: context.actor } }), "read");
     const fullStateReadMs = performance.now() - readStarted;
-    assert.equal(verifyAudit(output.state).valid, true);
+    // The audit chain is not part of a loaded state: the whole stored chain is verified from its first entry.
+    assert.equal(verifyAuditChain((await pool.query("SELECT data FROM valopay_records WHERE merchant_id=$1 AND kind='audit'", [merchant.id])).rows).valid, true);
     if (index === 0) assert.ok(output.state.records.some(record => record.kind === "closes" && record.id === result.data.closeId));
     const replayStarted = performance.now(), replay = await invoke();
     assert.equal(replay.status, 200); assert.deepEqual(await replay.json(), result);

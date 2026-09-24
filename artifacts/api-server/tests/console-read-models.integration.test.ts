@@ -188,7 +188,8 @@ try {
     request(),
     response(),
     async (ctx) => {
-      const full = await loadState(ctx, merchantId, "share");
+      // The reference for every paged read model is the whole stored lender: a load has earlier closes as summaries and no audit chain.
+      const full = { ...(await loadState(ctx, merchantId, "share")), records: (await pool.query("SELECT * FROM valopay_records WHERE merchant_id=$1 ORDER BY created_at,id", [merchantId])).rows.map((row): ValopayRecord => ({ id: row.id, merchantId: row.merchant_id, kind: row.kind, name: row.name, status: row.status, reference: row.reference, amountKobo: Number(row.amount_kobo), customerId: row.customer_id, data: row.data, createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString() })) };
       for (const queue of reconciliationQueues)
         for (const filters of [
           { limit: 25 },

@@ -125,7 +125,8 @@ try {
     assert.equal(closes[0]!.data.schedule.trigger, "scheduled");
     assert.equal(closes[0]!.data.schedule.scheduledFor, dueAt);
     assert.equal(closes[0]!.data.schedule.late, true);
-    const audit = state.records.filter((record) => record.kind === "audit").sort((x, y) => Number(x.data.sequence) - Number(y.data.sequence)).at(-1)!;
+    // The audit chain is not part of a loaded state: its head is read from the lender's records.
+    const audit = (await pool.query<{ name: string; data: Record<string, any> }>("SELECT name,data FROM valopay_records WHERE merchant_id=$1 AND kind='audit' ORDER BY (data->>'sequence')::int DESC LIMIT 1", [a])).rows[0]!;
     assert.equal(audit.data.actor, SCHEDULED_CLOSE_ACTOR);
     assert.equal(audit.name, "daily_close");
     assert.equal(audit.data.objectId, closedA.closeId);

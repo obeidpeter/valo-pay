@@ -74,23 +74,30 @@ try {
   // A short lock limit keeps the waits below brief; the answers are those of the default limit.
   restoreLimits = overrideDatabaseLimits({ request: { lockMs: 400 } });
 
-  // ---- 1. A repeat of a saved request while the lender is busy: saved, never "nothing was saved" ----
+  // ---- 1. A repeat of a saved request while the lender is busy: its saved result, never "nothing was saved" ----
   {
     const key = randomUUID(), body = customer("Saved before the lender was busy");
     const first = ok(await call(q("/v1/records/customers"), "POST", body, key));
-    const release = await holdLender();
+    let release = await holdLender();
+    // The lender stays held until the answer arrives: a repeat that waited for it would be turned away at the lock limit.
     const repeat = await call(q("/v1/records/customers"), "POST", body, key).finally(release);
-    assert.equal(repeat.status, 503, JSON.stringify(repeat.data));
-    assert.equal(repeat.headers.get("retry-after"), "2", "it says when to try again");
-    assert.equal(repeat.data.committed, undefined, "a repeat of a saved request never says nothing was saved");
-    assert.deepEqual([repeat.data.operation, repeat.data.error], ["completed", "This lender is busy with another change. This request was saved. Try again in a moment."], "it names the entry's state: the request was saved");
+    assert.deepEqual([repeat.status, repeat.data], [200, first], "the repeat is answered from its stored result, without loading or waiting for the busy lender");
     assert.deepEqual((await entryOf(key)).map((entry) => entry.status), ["completed"]);
     assert.deepEqual(ok(await call(q("/v1/records/customers"), "POST", body, key)), first, "once the lender is free the same key answers the saved result");
     assert.equal(await saved(body.reference), 1, "and it was saved once");
     // The answer is kept under the request's own journal entry, which names its route: never under the key alone.
     const [entry] = await entryOf(key);
     assert.deepEqual([(await pool.query("SELECT 1 FROM valopay_idempotency WHERE merchant_id=$1 AND id=$2", [lender, entry!.id])).rowCount, (await pool.query("SELECT 1 FROM valopay_idempotency WHERE merchant_id=$1 AND id=$2", [lender, store.digest(`${lender}:${key}`)])).rowCount], [1, 0], "the stored answer belongs to the entry");
-    checks += 9;
+    // A completed request whose stored answer is not found waits for the lender like a first attempt; turned away, it is still saved.
+    await pool.query("DELETE FROM valopay_idempotency WHERE merchant_id=$1 AND id=$2", [lender, entry!.id]);
+    release = await holdLender();
+    const unanswered = await call(q("/v1/records/customers"), "POST", body, key).finally(release);
+    assert.equal(unanswered.status, 503, JSON.stringify(unanswered.data));
+    assert.equal(unanswered.headers.get("retry-after"), "2", "it says when to try again");
+    assert.equal(unanswered.data.committed, undefined, "a repeat of a saved request never says nothing was saved");
+    assert.deepEqual([unanswered.data.operation, unanswered.data.error], ["completed", "This lender is busy with another change. This request was saved. Try again in a moment."], "it names the entry's state: the request was saved");
+    assert.deepEqual([(await entryOf(key))[0]!.status, await saved(body.reference)], ["completed", 1]);
+    checks += 12;
   }
 
   // ---- 2. A repeat of a saved request whose stored answer the key service cannot open ----

@@ -26,6 +26,8 @@ import { usePagedQueue } from '@/lib/use-paged-queue';
 import { SavedQueueViews } from '@/components/saved-queue-views';
 import { RecordPagination } from '@/components/record-pagination';
 import { DiscardOriginalRequest } from '@/components/discard-original-request';
+import { useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
+import { LoadProblem } from '@/components/load-problem';
 
 const mandateViews = ['all', 'awaiting-activation', 'overdue', 'due-today'] as const;
 const emptyMandate = { name: '', customerId: '', amountKobo: '', reference: '', workflow: 'hosted_consent', consentEvidence: '', consentGaps: '', policyId: '', frequency: 'monthly' };
@@ -65,20 +67,29 @@ export default function MandatesPage() {
   const createSession = useRef({ scope: draftScope });
   if (createSession.current.scope !== draftScope) createSession.current = { scope: draftScope };
   const { confirmDiscard } = useUnsavedChanges(isCreateOpen && JSON.stringify(draft) !== JSON.stringify(emptyMandate));
-  const changeCreateOpen = (open: boolean) => { if (!open && (createMandate.isPending || createMandate.hasUnconfirmedOutcome)) return; if (open || confirmDiscard()) { if (!open) setDraft(emptyMandate); setIsCreateOpen(open); } };
+  const changeCreateOpen = (open: boolean) => { if (!open && (createMandate.isPending || createMandate.hasUnconfirmedOutcome)) return; if (open || confirmDiscard()) { if (!open) { setDraft(emptyMandate); setCustomerSearch(''); setChosenCustomer(null); } setIsCreateOpen(open); } };
   useEffect(() => () => { createSession.current = { scope: 'unmounted' }; }, []);
   useEffect(() => {
     setSelectedMandate(null); setIsDialogOpen(false); setIsCreateOpen(false);
-    setFieldErrors({}); setFormErrors([]); setDraft(emptyMandate);
+    setFieldErrors({}); setFormErrors([]); setDraft(emptyMandate); setCustomerSearch(''); setChosenCustomer(null);
   }, [merchantId]);
   const queryClient = useQueryClient();
 
   const { data, isLoading, error, refetch, pagination } = usePagedQueue('mandates', { view, record: targetId ? wrongLender ? 'unavailable' : targetId : undefined });
-  const { data: customers } = useListRecords(
+  // The customer picker asks for one searchable page of customers, never the whole book (a pilot lender's was about 400 KB).
+  const [customerSearch, setCustomerSearch] = useState('');
+  const { search: customerTerm, searchPending: customerSearchPending } = useDebouncedSearch(customerSearch, draftScope);
+  const customerPage = useRecordPagination(`${draftScope}:${customerTerm}`);
+  const customerParams = { merchantId: merchantId!, search: customerTerm, limit: customerPage.pageSize, offset: customerPage.offset };
+  const { data: customers, error: customersError, isFetching: fetchingCustomers, refetch: retryCustomers } = useListRecords(
     'customers',
-    { merchantId: merchantId! },
-    { query: { enabled: !!merchantId && isCreateOpen, queryKey: getListRecordsQueryKey('customers', { merchantId: merchantId! }) } }
+    customerParams,
+    { query: { enabled: !!merchantId && isCreateOpen && !customerSearchPending, queryKey: getListRecordsQueryKey('customers', customerParams) } }
   );
+  // The chosen customer stays in the list while the person searches or pages on.
+  const [chosenCustomer, setChosenCustomer] = useState<{ value: string; label: string } | null>(null);
+  const customerOptions = (customers?.items || []).map(customer => ({ value: customer.id, label: `${customer.name} · ${customer.reference}` }));
+  if (chosenCustomer && chosenCustomer.value === draft.customerId && !customerOptions.some(option => option.value === chosenCustomer.value)) customerOptions.unshift(chosenCustomer);
   useHashTarget(`record-${targetId || ''}`, !!targetId && !isLoading && !error && !wrongLender);
   const { data: policies } = useListRecords(
     'policies',
@@ -293,7 +304,11 @@ export default function MandatesPage() {
                 <FormAlert title={formErrors[0] ?? attentionTitle(Object.keys(fieldErrors).length)}>{formErrors.slice(1).map(message => <p key={message}>{message}</p>)}</FormAlert>
               )}
               <MandateField label="Mandate name" value={draft.name} id="mandate-name" error={fieldErrors.name} onChange={value => change('name', value)} required />
-              <MandateSelect label="Customer" value={draft.customerId} id="mandate-customerId" error={fieldErrors.customerId} onChange={value => change('customerId', value)} required options={(customers?.items || []).map(customer => ({ value: customer.id, label: `${customer.name} · ${customer.reference}` }))} />
+              <div className="space-y-2">
+                <label className="grid gap-1 text-sm font-medium">Search customers<input type="search" value={customerSearch} onChange={event => { setCustomerSearch(event.target.value); customerPage.setPage(0); }} placeholder="Name or reference" className={controlClass} /></label>
+                <MandateSelect label="Customer" value={draft.customerId} id="mandate-customerId" error={fieldErrors.customerId} onChange={value => { change('customerId', value); setChosenCustomer(customerOptions.find(option => option.value === value) ?? null); }} required options={customerOptions} />
+                {customersError ? <LoadProblem what="customer choices" error={customersError} retry={() => { void retryCustomers(); }} busy={fetchingCustomers} /> : fetchingCustomers || customerSearchPending ? <p role="status" className="text-xs text-muted-foreground">Loading customer choices…</p> : <RecordPagination pagination={customerPage} total={customers?.total || 0} busy={fetchingCustomers} label="customer choices" />}
+              </div>
               <MandateField label="Debit limit (₦)" inputMode="decimal" value={draft.amountKobo} id="mandate-amountKobo" error={fieldErrors.amountKobo} onChange={value => change('amountKobo', value)} required />
               <MandateField label="Provider reference" value={draft.reference} id="mandate-reference" error={fieldErrors.reference} onChange={value => change('reference', value)} required />
               <MandateSelect label="Activation method" value={draft.workflow} id="mandate-workflow" error={fieldErrors.workflow} onChange={value => change('workflow', value)} required options={activationWorkflows.map(workflow => ({ value: workflow, label: readableLabel(workflow) }))} />

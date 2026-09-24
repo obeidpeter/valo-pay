@@ -8,6 +8,7 @@ import {
   appendAudit,
   auditObject,
   findIdempotency,
+  findStoredAnswer,
   saveIdempotency,
   receiptOf,
   fail,
@@ -49,20 +50,24 @@ router.post("/v1/connected/actions", async (req, res) => {
       req,
       res,
       async (ctx) => {
-        const state = await loadState(ctx, merchantId, "update");
         const receipt = receiptOf(req, merchantId, key, "connected"),
           fingerprint = requestFingerprint({ input, actor: ctx.actor });
         // The one shape this action answers with, of this lender: an outcome never passes for a record.
         const answer = connectedActionResultFor(input.action, merchantId);
-        const prior = await findIdempotency(ctx, receipt.id, receipt.earlier);
-        if (prior) {
+        const replay = async (prior: { request_hash: string; response: unknown }) => {
           if (prior.request_hash !== fingerprint)
             fail("This request key was already used for different input.", 409);
           // The action was saved with this receipt: never answered as saving nothing, even when it no longer matches.
           const saved = replayedAnswer(req, answer, prior.response);
           await completeOperation(ctx, saved);
           return saved;
-        }
+        };
+        // A repeat is answered from its receipt without loading the lender; the lookup is made again once the journal entry is held.
+        const stored = await findStoredAnswer(ctx, merchantId, receipt.id, receipt.earlier);
+        if (stored) return replay(stored);
+        const state = await loadState(ctx, merchantId, "update");
+        const prior = await findIdempotency(ctx, receipt.id, receipt.earlier);
+        if (prior) return replay(prior);
         let outcome;
         try {
           outcome = runConnectedActionWithNote(state, ctx, input);
