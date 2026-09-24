@@ -338,7 +338,8 @@ function Member({ member, editable, lenders }: { member: any; editable: boolean;
 
 /**
  * What waits for a second administrator: Admin, Finance and Compliance reviewer invitations and role changes. The
- * administrator who asked cannot approve (the service refuses it too), but may withdraw a change.
+ * administrator who asked cannot approve (the service refuses it too), but may withdraw a change; the person a change
+ * is for neither approves nor declines it (refused too).
  */
 function Approvals({ directory, actor, decide, message }: { directory: StaffDirectory; actor?: string; decide: ReturnType<typeof usePilotMutation>; message: string }) {
   const invitations = directory.invitations.filter((item) => item.status === "pending" && item.approval === "awaiting");
@@ -365,10 +366,12 @@ function Approvals({ directory, actor, decide, message }: { directory: StaffDire
               <p>{change.name}: {change.from.role} ({change.from.status}) to {change.to.role} ({change.to.status})</p>
               <p className="text-xs text-muted-foreground">Asked by {change.requestedBy} · {formatDate(change.requestedAt)} · {change.reason}</p>
               <div className="flex flex-wrap gap-2">
-                {change.requestedBy === actor ? <span className="self-center text-xs text-muted-foreground">You asked for it: another administrator approves it.</span> : (
-                  <Button variant="outline" disabled={busy} onClick={() => decide.mutate({ path: `/team/changes/${change.id}/approve`, lender: false })}>Approve change</Button>
-                )}
-                <Button variant="ghost" disabled={busy} onClick={() => decide.mutate({ path: `/team/changes/${change.id}/decline`, lender: false })}>{change.requestedBy === actor ? "Withdraw request" : "Decline change"}</Button>
+                {directory.members.some((member) => member.id === change.memberId && member.actor === actor) ? <span className="self-center text-xs text-muted-foreground">A change to your own membership: another administrator approves or declines it.</span> : <>
+                  {change.requestedBy === actor ? <span className="self-center text-xs text-muted-foreground">You asked for it: another administrator approves it.</span> : (
+                    <Button variant="outline" disabled={busy} onClick={() => decide.mutate({ path: `/team/changes/${change.id}/approve`, lender: false })}>Approve change</Button>
+                  )}
+                  <Button variant="ghost" disabled={busy} onClick={() => decide.mutate({ path: `/team/changes/${change.id}/decline`, lender: false })}>{change.requestedBy === actor ? "Withdraw request" : "Decline change"}</Button>
+                </>}
               </div>
             </li>
           ))}

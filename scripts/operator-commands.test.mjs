@@ -127,10 +127,11 @@ for (const [args, env] of [[[], {}], [["--", "--limit", "5"], { VALOPAY_PAYLOAD_
   assert.equal(result.status, 1, args.join(" "));
   assert.match(result.stderr, /^Set VALOPAY_PAYLOAD_ENCRYPTION=kms and VALOPAY_KMS_KEY to the key payloads move to/);
 }
-// With the key settings the store loads, and refuses the restricted runtime login before it opens a connection, in its own words.
-result = await run(rewrap, ["--limit", "5"], { VALOPAY_PAYLOAD_ENCRYPTION: "kms", VALOPAY_KMS_KEY: "projects/p/locations/l/keyRings/r/cryptoKeys/k", VALOPAY_RUNTIME_ISOLATION: "staging", DATABASE_URL: unusableDatabase });
+// With the key settings the store loads, and refuses a schema that is not a restricted runtime's before it opens a
+// connection, in its own words. The connection itself is checked on PostgreSQL (tests/payload-rewrap.integration.test.ts).
+result = await run(rewrap, ["--limit", "5"], { VALOPAY_PAYLOAD_ENCRYPTION: "kms", VALOPAY_KMS_KEY: "projects/p/locations/l/keyRings/r/cryptoKeys/k", VALOPAY_RUNTIME_SCHEMA: "public", DATABASE_URL: unusableDatabase });
 assert.equal(result.status, 1);
-assert.equal(result.stderr.split("\n").filter((line) => line && !/DEP0040|trace-deprecation/.test(line)).join("\n"), "Re-wrap payloads with the database owner's connection and VALOPAY_RUNTIME_ISOLATION unset: the restricted runtime login cannot read every workspace's payloads.");
+assert.equal(result.stderr.split("\n").filter((line) => line && !/DEP0040|trace-deprecation/.test(line)).join("\n"), "VALOPAY_RUNTIME_SCHEMA must name a restricted runtime's schema (valopay_runtime_staging_<suffix>), or be unset for the tables the connection's search path reaches.");
 assert.doesNotMatch(result.output, /ERR_MODULE_NOT_FOUND|ECONNREFUSED|\n\s+at /);
 
 // ---- pnpm run test:smoke and test:security-api ----
@@ -151,4 +152,4 @@ try {
   assert.equal(connections, 0, "nothing was sent to a host that is not a Replit development domain");
 } finally { listener.close(); }
 
-console.log("Operator commands passed offline: options after pnpm's --, a named mistyped option, uncopied values, the monitor's dry run, its missing origin named and its careful failure, the Paystack check's refusals before any request, provision-pilot's three modes with their usage, staff-access check and store refusal before any connection, rewrap-payloads' usage, key settings and restricted-runtime refusal before any connection, and the smoke and security scripts' refusal of any host but a Replit development domain.");
+console.log("Operator commands passed offline: options after pnpm's --, a named mistyped option, uncopied values, the monitor's dry run, its missing origin named and its careful failure, the Paystack check's refusals before any request, provision-pilot's three modes with their usage, staff-access check and store refusal before any connection, rewrap-payloads' usage, key settings and runtime schema refusal before any connection, and the smoke and security scripts' refusal of any host but a Replit development domain.");

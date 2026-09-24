@@ -105,10 +105,15 @@ export function originFor(req: { headers: IncomingHttpHeaders }, origins = signI
   const configured = origins.flatMap((origin) => { try { return [new URL(origin)]; } catch { return []; } });
   return named.map((host) => configured.find((origin) => origin.host === host)).find(Boolean) ?? configured[0];
 }
-/** Clerk's options for a request: sessions accepted only from the configured origins, and the publishable key derived only for a configured host. */
-export function clerkOptions(req: { headers: IncomingHttpHeaders }): { publishableKey: string; authorizedParties: string[] } {
-  const origins = signInOrigins(), origin = originFor(req, origins), configured = process.env.CLERK_PUBLISHABLE_KEY;
-  return { publishableKey: origin ? publishableKeyFromHost(origin.host, configured) : configured ?? "", authorizedParties: origins };
+/**
+ * Clerk's options for a request: sessions accepted only from the configured
+ * origins, the publishable key derived only for a configured host and, with
+ * CLERK_JWT_KEY, the instance's public key, so a session is verified here
+ * without a call to Clerk's Backend API, whatever key a token names.
+ */
+export function clerkOptions(req: { headers: IncomingHttpHeaders }): { publishableKey: string; authorizedParties: string[]; jwtKey?: string } {
+  const origins = signInOrigins(), origin = originFor(req, origins), configured = process.env.CLERK_PUBLISHABLE_KEY, jwtKey = process.env.CLERK_JWT_KEY;
+  return { publishableKey: origin ? publishableKeyFromHost(origin.host, configured) : configured ?? "", authorizedParties: origins, ...(jwtKey ? { jwtKey } : {}) };
 }
 /**
  * What the process says about sign-in before it listens: `warning` when it

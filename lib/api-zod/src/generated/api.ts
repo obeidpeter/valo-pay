@@ -60,7 +60,7 @@ export const ReadinessCheckResponse = zod.object({
 
 
 /**
- * On a first visit an anonymous caller gets a new synthetic sandbox with two lenders, and the sandbox cookie that names it on every later request (components.securitySchemes.sandboxCookie); a signed-in person gets their own workspace. New sandboxes are limited per client network (20 an hour; an IPv6 client's network is its /64, and a /48 starts at most 60) and per server (300 an hour). A browser that sends two different sandbox cookies is refused (400) rather than guessed between.
+ * On a first visit an anonymous caller gets a new synthetic sandbox with two lenders, and the sandbox cookie that names it on every later request (components.securitySchemes.sandboxCookie); a signed-in person gets their own workspace. New sandboxes are limited per client network (20 an hour; an IPv6 client's network is its /64, and a /48 starts at most 60) and per server (300 an hour, which hold back only a network that has already started one in its hour: a network's first is never refused because of others). A browser that sends two different sandbox cookies is refused (400) rather than guessed between.
  * @summary The caller's workspace: its lenders, roles and actor
  */
 export const GetWorkspaceResponse = zod.object({
@@ -3012,7 +3012,7 @@ export const ApproveStaffChangeResponse = zod.object({
 
 
 /**
- * Administrator with recent MFA; the administrator who asked withdraws it the same way. Recorded in the access history; the membership is unchanged. A request already approved or declined is refused (409).
+ * Administrator with recent MFA, other than the person changed (403); the administrator who asked withdraws it the same way. Recorded in the access history; the membership is unchanged. A request already approved or declined is refused (409).
  * @summary Decline or withdraw a membership change
  */
 export const declineStaffChangePathIdMax = 100;

@@ -1,15 +1,19 @@
 // Offline checks of the API's edge (the 23 September 2026 audit, security items 1, 2, 6, 8 and 9 and
-// operations item 4; see docs/security-review.md): the request and sandbox limits by principal and
-// network (an IPv6 client by its /64), bounded limiter maps, health that answers without Clerk and a
-// readiness check a burst cannot multiply, request ids only from a configured edge, Clerk sessions
-// accepted only for the configured origins, a Clerk proxy that tells Clerk nothing a client wrote,
-// a staff host that does not start without Clerk, and the __Host- sandbox cookie.
+// operations item 4, and the review of its fixes, items 1, 5 and 6; see docs/security-review.md): the
+// request and sandbox limits by principal and network (an IPv6 client by its /64), with a network's
+// first sandbox never refused because of others, bounded limiter maps, health that answers without
+// Clerk and a readiness check a burst cannot multiply, request ids only from a configured edge, Clerk
+// sessions checked only under /api/v1 and accepted only for the configured origins, a Clerk proxy that
+// tells Clerk nothing a client wrote and never sends it the sandbox cookie, a staff host that does not
+// start without Clerk, and the __Host- sandbox cookie.
 // No Clerk service and no database: a local socket that closes every connection stands in for
-// PostgreSQL, so readiness fails fast and counts its connections; Clerk checks tokens this test signs.
+// PostgreSQL, so readiness fails fast and counts its connections; Clerk checks tokens this test signs,
+// and a local stand-in for its Backend API counts the key fetches a forged token causes.
 import assert from "node:assert/strict";
 import { createServer, type Socket } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import { spawnSync } from "node:child_process";
-import { createSign, generateKeyPairSync } from "node:crypto";
+import { createSign, generateKeyPairSync, randomBytes } from "node:crypto";
 import https from "node:https";
 import { once } from "node:events";
 import { join } from "node:path";
@@ -102,6 +106,42 @@ try {
     assert.deepEqual(tally(statuses), { 404: 300, 429: 1 }, "300 requests a minute for a client with no principal, counted by its /64");
     assert.equal((await drain(await get("/api/v1/no-such-resource", "2001:db8:1:3::1"))).status, 404, "another /64 has its own quota");
     checks += 2;
+  });
+
+  // ---- The review of b9b10ef, finding 1: Clerk checks a session under /api/v1 only, within its limits ----
+  // A session token whose key Clerk has not cached makes it fetch the instance's keys from its Backend API with the
+  // secret key; a local stand-in for that API counts the fetches. Clerk's client keeps the Backend API address it is
+  // first created with, so this section checks a session before any other in this process.
+  await section("sign-in only under /api/v1", async () => {
+    const { publicKey: instanceKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    let fetched = 0;
+    const backend = createHttpServer((req, res) => {
+      if (req.url?.includes("/jwks")) { fetched++; res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ keys: [{ ...instanceKey.export({ format: "jwk" }), kid: "ins_instance", alg: "RS256", use: "sig" }] })); return; }
+      res.writeHead(404, { "Content-Type": "application/json" }); res.end(JSON.stringify({ errors: [] }));
+    });
+    backend.listen(0, "127.0.0.1");
+    await once(backend, "listening");
+    Object.assign(process.env, { CLERK_SECRET_KEY: "sk_test_placeholder", CLERK_PUBLISHABLE_KEY: `pk_test_${Buffer.from("clerk.example.test$").toString("base64")}`, CLERK_API_URL: `http://127.0.0.1:${(backend.address() as { port: number }).port}`, VALOPAY_APP_ORIGINS: "https://pilot.example" });
+    const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const now = Math.floor(Date.now() / 1000);
+    const forged = () => ({ Authorization: `Bearer ${encode({ alg: "RS256", typ: "JWT", kid: `ins_${randomBytes(8).toString("hex")}` })}.${encode({ sub: "user_forged", sid: "sess_forged", azp: "https://pilot.example", iat: now - 5, nbf: now - 5, exp: now + 600 })}.${randomBytes(256).toString("base64url")}` });
+    try {
+      for (const path of ["/api/nowhere", "/api/healthz/", "/api/V1x/anything", "/nowhere"]) {
+        assert.equal((await drain(await get(path, "192.0.2.50", forged()))).status, 404, `${path} is unknown`);
+        const posted = await fetch(`${base}${path}`, { method: "POST", headers: { "X-Forwarded-For": "192.0.2.50", "Content-Type": "application/json", ...forged() }, body: '{"broken' });
+        assert.equal((await drain(posted)).status, 404, `${path} is unknown whatever its body: the body is never read`);
+      }
+      assert.equal(fetched, 0, "no address outside /api/v1 checks a session");
+      assert.equal((await drain(await get("/api/v1/nowhere", "192.0.2.50", forged()))).status, 404);
+      assert.equal(fetched, 1, "under /api/v1 a forged session's unknown key is looked up, within the request limits");
+      process.env["CLERK_JWT_KEY"] = instanceKey.export({ type: "spki", format: "pem" }).toString();
+      assert.equal((await drain(await get("/api/v1/nowhere", "192.0.2.50", forged()))).status, 404);
+      assert.equal(fetched, 1, "with CLERK_JWT_KEY a session is verified here, with no call to the Backend API");
+    } finally {
+      delete process.env["CLERK_API_URL"]; delete process.env["CLERK_JWT_KEY"]; delete process.env["VALOPAY_APP_ORIGINS"];
+      backend.close();
+    }
+    checks += 13;
   });
 
   // ---- The staff decision: Clerk's sessions are accepted only from configured origins, and each person has their own quota ----
@@ -205,6 +245,11 @@ try {
       assert.ok(sent[0]!["clerk-secret-key"], "with the secret key, as before");
       const unknown = await send({ "X-Forwarded-For": "198.51.100.21", "X-Forwarded-Host": "attacker.example" });
       assert.equal(unknown.sent[0]!["clerk-proxy-url"], "https://pilot.example/api/__clerk", "a host that is not configured gets the first configured origin");
+      // The sandbox cookie is this API's bearer token: Clerk gets its own cookies and none of the sandbox's (the review of b9b10ef, finding 5).
+      const cookies = await send({ "X-Forwarded-For": "198.51.100.23", Cookie: `__client_uat=0; __Host-valopay_sandbox=${token("a")}; valopay_sandbox=${token("b")}; valo_sandbox=${token("c")}; __session=clerk-session` });
+      assert.equal(cookies.sent[0]!["cookie"], "__client_uat=0; __session=clerk-session", "the sandbox cookies are not forwarded, Clerk's are");
+      const sandboxOnly = await send({ "X-Forwarded-For": "198.51.100.24", Cookie: `__Host-valopay_sandbox=${token("a")}` });
+      assert.deepEqual([sandboxOnly.sent.length, sandboxOnly.sent[0]!["cookie"]], [1, undefined], "a request with only a sandbox cookie reaches Clerk with no Cookie header");
       delete process.env["VALOPAY_APP_ORIGINS"];
       const off = await send({ "X-Forwarded-For": "198.51.100.22" });
       assert.deepEqual([off.response?.status, off.sent.length], [503, 0], "with no origin configured nothing is proxied");
@@ -212,7 +257,7 @@ try {
       (https as { request: unknown }).request = original;
       proxyServer.close();
     }
-    checks += 9;
+    checks += 11;
   });
 
   await section("Clerk options and the sign-in configuration", async () => {
@@ -312,15 +357,25 @@ await section("new sandboxes per network, per /48 and per process", async () => 
   const site = createSandboxCreationLimits();
   const fourSixtyFours = Array.from({ length: 4 }, (_, n) => Array.from({ length: 20 }, (_, i) => site.take(`2001:db8:9:${n}::${i + 1}`, 0))).flat();
   assert.deepEqual([fourSixtyFours.filter((r) => r === undefined).length, fourSixtyFours.at(-1)], [60, "network"], "a /48 starts at most 60 an hour, whichever /64s they come from");
+  // The process's 300 an hour hold back only a network that has already started a sandbox this hour, so a handful of
+  // networks cannot turn every first-time visitor away (the review of b9b10ef, finding 6).
   const everyone = createSandboxCreationLimits();
-  const many = Array.from({ length: 301 }, (_, i) => everyone.take(`2001:db8:${(i + 16).toString(16)}::1`, 0));
-  assert.deepEqual([many.filter((r) => r === undefined).length, many.at(-1)], [300, "instance"], "one process starts at most 300 an hour");
-  assert.equal(everyone.take("2001:db8:ffff::1", 3_600_000), undefined, "the next hour starts afresh");
+  const flood = Array.from({ length: 15 }, (_, a) => Array.from({ length: 20 }, () => everyone.take(`203.0.113.${a + 1}`, 0))).flat();
+  assert.equal(flood.filter((r) => r === undefined).length, 300, "15 addresses start 20 each, the process's 300");
+  assert.equal(everyone.take("198.51.100.77", 60_000), undefined, "a network's first sandbox of the hour is never refused because of others");
+  assert.equal(everyone.take("198.51.100.77", 60_001), "instance", "its second waits for the process's hour");
+  const sites = createSandboxCreationLimits();
+  const fiveSites = Array.from({ length: 5 }, (_, s) => Array.from({ length: 3 }, (_, n) => Array.from({ length: 20 }, () => sites.take(`2001:db8:${s + 1}:${n}::1`, 0)))).flat(2);
+  assert.deepEqual([fiveSites.filter((r) => r === undefined).length, sites.take("2001:db8:77:1::1", 1), sites.take("2001:db8:77:1::2", 2)], [300, undefined, "instance"], "so for five IPv6 /48s: a new /64's first starts, and its second waits");
+  const firsts = createSandboxCreationLimits();
+  const many = Array.from({ length: 301 }, (_, i) => firsts.take(`2001:db8:${(i + 16).toString(16)}::1`, 0));
+  assert.deepEqual([many.filter((r) => r === undefined).length, firsts.take("2001:db8:10::1", 1)], [301, "instance"], "301 networks' first sandboxes all start, and with 300 counted a network's second is refused");
+  assert.equal(firsts.take("2001:db8:10::1", 3_600_000), undefined, "the next hour starts afresh");
   assert.match(creationRefusalMessage("network"), /your network/);
   assert.match(creationRefusalMessage("instance"), /this server/);
   const ipv4 = createSandboxCreationLimits();
   assert.equal(Array.from({ length: 21 }, () => ipv4.take("198.51.100.7", 0)).filter((r) => r === undefined).length, 20, "an IPv4 address keeps its 20");
-  checks += 7;
+  checks += 11;
 });
 
 await section("request limits per principal and per network", async () => {
@@ -382,5 +437,5 @@ if (failures.length) {
   console.error(`Edge security checks failed: ${failures.length} group(s).`);
   process.exit(1);
 }
-console.log(`Edge security checks passed (${checks} checks): limits by principal and network with IPv6 counted by /64, new sandboxes per network, /48 and process, bounded limiter maps, health without Clerk and coalesced readiness with its own limit, request ids only from a configured edge, Clerk sessions only for configured origins, a Clerk proxy that forwards the trusted address and configured origin, a staff host that does not start without Clerk, and the __Host- sandbox cookie.`);
+console.log(`Edge security checks passed (${checks} checks): limits by principal and network with IPv6 counted by /64, new sandboxes per network, /48 and process with a network's first never refused because of others, bounded limiter maps, health without Clerk and coalesced readiness with its own limit, request ids only from a configured edge, Clerk sessions checked only under /api/v1 (with no Backend API call given CLERK_JWT_KEY) and only for configured origins, a Clerk proxy that forwards the trusted address and configured origin and never the sandbox cookie, a staff host that does not start without Clerk, and the __Host- sandbox cookie.`);
 process.exit(0);
