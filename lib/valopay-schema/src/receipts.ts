@@ -33,7 +33,7 @@ export const importResultSchema = z.object({
 /** The lender's close schedule as it runs: when, whether automatic, and what the close service is doing (EffectiveCloseSchedule). */
 export const effectiveCloseScheduleSchema = z.object({
   time: z.string(), enabled: z.boolean(), automatic: z.boolean(), nextAt: z.string().nullable(),
-  runtimeState: z.enum(["not_started", "running", "off", "stopped"]),
+  runtimeState: z.enum(["not_started", "running", "off", "external", "stopped"]),
   serviceIssue: z.enum(["starting", "delayed", "failed"]).nullable(),
   missed: z.boolean(), overdueMinutes: count, lateAfterMinutes: count,
   lastAt: z.string().nullable(), lastTrigger: z.string().nullable(), lastCheckedAt: z.string().nullable(), lastErrorAt: z.string().nullable(),

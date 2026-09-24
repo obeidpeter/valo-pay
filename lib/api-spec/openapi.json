@@ -14025,8 +14025,10 @@
               "not_started",
               "running",
               "off",
+              "external",
               "stopped"
-            ]
+            ],
+            "description": "running: this process schedules the daily closes. off: it schedules none (VALOPAY_CLOSE_SCHEDULER=off). external: it schedules none because a separate scheduled job runs them with the one-shot close pass (VALOPAY_CLOSE_SCHEDULER=external), which this process cannot observe. not_started and stopped: the scheduler has not started yet, or has stopped."
           },
           "intervalMs": {
             "type": [
@@ -15062,8 +15064,10 @@
               "not_started",
               "running",
               "off",
+              "external",
               "stopped"
-            ]
+            ],
+            "description": "The close service as this process sees it (the health answer's scheduler state). With external a separate scheduled job runs the closes: nothing is advertised as automatic, but a close that job has not run is still missed."
           },
           "serviceIssue": {
             "type": [

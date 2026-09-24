@@ -6,7 +6,7 @@ const obj = (properties, required = Object.keys(properties)) => ({ type: "object
 const schemas = {
   HealthStatus: obj({ status: str, build: str, startedAt: str, uptimeSeconds: num, scheduler: ref("SchedulerStatus") }),
   SchedulerRun: obj({ runId: str, at: str, durationMs: num, initialised: num, examined: num, closed: num, skipped: num, failed: num }),
-  SchedulerStatus: obj({ state: { type: "string", enum: ["not_started", "running", "off", "stopped"] }, intervalMs: { type: ["integer", "null"] }, ticks: num, lastTickAt: { type: ["string", "null"] }, lastRun: { oneOf: [ref("SchedulerRun"), { type: "null" }] } }),
+  SchedulerStatus: obj({ state: { type: "string", enum: ["not_started", "running", "off", "external", "stopped"], description: "running: this process schedules the daily closes. off: it schedules none (VALOPAY_CLOSE_SCHEDULER=off). external: it schedules none because a separate scheduled job runs them with the one-shot close pass (VALOPAY_CLOSE_SCHEDULER=external), which this process cannot observe. not_started and stopped: the scheduler has not started yet, or has stopped." }, intervalMs: { type: ["integer", "null"] }, ticks: num, lastTickAt: { type: ["string", "null"] }, lastRun: { oneOf: [ref("SchedulerRun"), { type: "null" }] } }),
   DatabaseCheck: obj({ status: { type: "string", enum: ["ok", "failed"] }, latencyMs: num }),
   SchemaCheck: obj({ status: { type: "string", enum: ["ok", "indexes_missing", "incomplete", "unchecked"], description: "ok: every table, column, unique index, check constraint and read index this build needs is present. indexes_missing: ready, but a read index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table, column, unique index or check constraint is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and where it comes from." } }),
   ReadinessStatus: obj({ status: { type: "string", enum: ["ok", "degraded"] }, build: str, checks: obj({ database: ref("DatabaseCheck"), schema: ref("SchemaCheck") }) }),
@@ -35,7 +35,7 @@ const schemas = {
   ExportResult: obj({ id:str, downloadUrl: str, status:{type:'string',enum:['queued','running','ready','failed']}, stage:{type:'string',enum:['queued','checking','rendering','uploading','confirming','ready','failed']}, lastProgressAt:str, stalled:bool, retryAllowed:bool, recoveryAt:str, expiredAt:str, kind:str, format:str, customerId:str, requestedAt:str, attempts:num, checksum:str, generatedAt:str, byteLength:num, generationMs:num, error:str }, ['id','downloadUrl']),
   EffectiveCloseSchedule: obj({
     time: str, enabled: bool, automatic: bool, nextAt: { type: ["string", "null"] },
-    runtimeState: { type: "string", enum: ["not_started", "running", "off", "stopped"] },
+    runtimeState: { type: "string", enum: ["not_started", "running", "off", "external", "stopped"], description: "The close service as this process sees it (the health answer's scheduler state). With external a separate scheduled job runs the closes: nothing is advertised as automatic, but a close that job has not run is still missed." },
     serviceIssue: { type: ["string", "null"], enum: ["starting", "delayed", "failed", null] },
     missed: bool, overdueMinutes: num, lateAfterMinutes: num,
     lastAt: { type: ["string", "null"] }, lastTrigger: { type: ["string", "null"] },

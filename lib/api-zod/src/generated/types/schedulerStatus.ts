@@ -12,6 +12,7 @@ import type { SchedulerStatusState } from './schedulerStatusState';
  * Whether closes are scheduled in this process, how often it looks, when it last looked and its last pass with work.
  */
 export interface SchedulerStatus {
+  /** running: this process schedules the daily closes. off: it schedules none (VALOPAY_CLOSE_SCHEDULER=off). external: it schedules none because a separate scheduled job runs them with the one-shot close pass (VALOPAY_CLOSE_SCHEDULER=external), which this process cannot observe. not_started and stopped: the scheduler has not started yet, or has stopped. */
   state: SchedulerStatusState;
   /** @nullable */
   intervalMs: number | null;

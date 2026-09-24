@@ -217,6 +217,20 @@ try {
   const verified = await databaseReadiness();
   assert.equal(verified.state, "verified_this_request"); assert.match(verified.detail, /reviewed/, "Readiness says what this request verified.");
   const bindFinance = async () => { const probe = await pool.connect(); try { await probe.query("BEGIN"); await isolation.bindRuntimeIdentity(probe, { organizationId: "org_runtimeA", userId: "user_financeA" }); } finally { await probe.query("ROLLBACK"); probe.release(); } };
+  // Behind a transaction-mode pooler a client's next transaction may run on another server connection, which holds
+  // none of the statements the client prepared on the last one; DEALLOCATE ALL stands in for that move. The self-check
+  // prepares no named statement, so every transaction's check still runs.
+  const pooled = await pool.connect();
+  try {
+    for (let transaction = 1; transaction <= 3; transaction++) {
+      await pooled.query("BEGIN");
+      try {
+        await isolation.bindRuntimeIdentity(pooled, { organizationId: "org_runtimeA", userId: "user_financeA" });
+        assert.equal((await pooled.query("SELECT count(*)::int AS count FROM pg_prepared_statements")).rows[0].count, 0, "The self-check leaves no prepared statement for a pooler to lose.");
+      } finally { await pooled.query("ROLLBACK"); }
+      await pooled.query("DEALLOCATE ALL");
+    }
+  } finally { pooled.release(); }
   const dba = await admin.connect();
   try {
     await dba.query(`SET search_path TO pg_catalog, "${schema}", pg_temp`);

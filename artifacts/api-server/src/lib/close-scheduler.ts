@@ -37,9 +37,13 @@ export const SCHEDULED_CLOSE_ACTOR = `${SYSTEM_ACTOR_PREFIX}scheduled close`;
 /** One lender closed by a pass. */
 export interface ClosedMerchant { merchantId: string; closeId: string; late: boolean; delayMinutes: number | null }
 
-/** What the scheduler is doing, for /api/healthz: whether it ticks, when it last looked, and what its last pass that found work did. */
+/**
+ * What the scheduler is doing, for /api/healthz: whether it ticks, when it last looked, and what its last pass that
+ * found work did. `off` and `external` both mean this process schedules no closes; `external` says a separate
+ * scheduled job runs them (the one-shot close pass), so a close it misses still counts as missed.
+ */
 export interface SchedulerStatus {
-  state: "not_started" | "running" | "off" | "stopped";
+  state: "not_started" | "running" | "off" | "external" | "stopped";
   intervalMs: number | null;
   ticks: number;
   lastTickAt: string | null;
@@ -61,7 +65,7 @@ export type SchedulerEvent =
   | { type: "succeeded"; at: string; run: SchedulerStatus["lastRun"] }
   | { type: "failed"; at: string }
   | { type: "stopped" }
-  | { type: "off" };
+  | { type: "off" | "external" };
 const observers = new Set<(event: SchedulerEvent) => void>();
 /**
  * Applies a change to this thread's scheduler state and passes it to the
@@ -76,7 +80,7 @@ export function applySchedulerEvent(event: SchedulerEvent): void {
   else if (event.type === "succeeded") { status.lastSuccessAt = event.at; status.lastErrorAt = null; if (event.run) status.lastRun = event.run; }
   else if (event.type === "failed") status.lastErrorAt = event.at;
   else if (event.type === "stopped") status.state = "stopped";
-  else status.state = "off";
+  else status.state = event.type;
   for (const observer of observers) observer(event);
 }
 /** Calls `observer` with every later change to this thread's scheduler state; returns what ends that. */
@@ -84,8 +88,8 @@ export function observeScheduler(observer: (event: SchedulerEvent) => void): () 
   observers.add(observer);
   return () => { observers.delete(observer); };
 }
-/** Recorded when the process is told not to schedule closes (VALOPAY_CLOSE_SCHEDULER=off), so the health answer says so. */
-export function markSchedulerOff(): void { applySchedulerEvent({ type: "off" }); }
+/** Recorded when the process is told not to schedule closes (VALOPAY_CLOSE_SCHEDULER=off, or external where a scheduled job runs them), so the health answer says so. */
+export function markSchedulerOff(state: "off" | "external" = "off"): void { applySchedulerEvent({ type: state }); }
 /** What one scheduler pass did. */
 export interface CloseRun {
   runId: string;
@@ -102,6 +106,8 @@ export interface CloseRun {
   paused: string[];
   /** Failed closes; once recorded, `failures` counts the failed attempts at this close time and `retryAt` is the next. */
   failed: Array<{ merchantId: string; error: string; failures?: number; retryAt?: string }>;
+  /** Whether the time budget ended the pass before it had taken up every lender due, so some may still be due; false for a pass told to stop. */
+  budgetSpent: boolean;
 }
 
 /** How a pass runs.  `onlyMerchantIds` limits it to the lenders named, for tests and operator tooling. */
@@ -127,16 +133,19 @@ type Outcome = Omit<ClosedMerchant, "merchantId"> | { paused: true };
  * stays due, and gets one catch-up close per pass, the oldest date first.
  */
 export async function runDueCloses(options: CloseRunOptions = {}): Promise<CloseRun> {
-  const run: CloseRun = { runId: randomUUID(), initialised: 0, batches: 0, examined: 0, closed: [], skipped: [], paused: [], failed: [] };
+  const run: CloseRun = { runId: randomUUID(), initialised: 0, batches: 0, examined: 0, closed: [], skipped: [], paused: [], failed: [], budgetSpent: false };
   const started = Date.now();
   const batchSize = options.batchSize ?? closeRules.batchSize, budgetMs = options.budgetMs ?? closeRules.passBudgetSeconds * 1000;
   const log = options.log?.child({ job: "scheduled_close", runId: run.runId });
   const spent = () => options.signal?.aborted === true || Date.now() - started >= budgetMs;
   run.initialised = await initialiseCloseCursors();
   const exclude = new Set<string>();
+  // Whether the pass saw the end of what was due: a batch shorter than batchSize, every lender of it taken up.
+  let drained = false;
   while (!spent()) {
     const due = await dueScheduledCloses(batchSize, { exclude: [...exclude], only: options.onlyMerchantIds });
     run.batches += 1;
+    const takenBefore = run.examined;
     for (const merchantId of due) {
       if (spent()) break;
       run.examined += 1;
@@ -181,8 +190,10 @@ export async function runDueCloses(options: CloseRunOptions = {}): Promise<Close
         log?.error({ merchantId, err: error, failures: retry?.failures, retryAt: retry?.retryAt }, "scheduled daily close failed");
       }
     }
-    if (due.length < batchSize) break;
+    if (due.length < batchSize) { drained = run.examined - takenBefore === due.length; break; }
   }
+  // Ended by its budget rather than by a stop or the end of what was due: the lenders it did not take up are still due.
+  run.budgetSpent = !drained && options.signal?.aborted !== true;
   if (run.initialised) log?.info({ initialised: run.initialised }, "close cursors initialised for merchants that had none");
   // One line per pass that found work, with its duration; a quiet pass is a debug line so the log is not a metronome.
   const summary = { event: "close.run", durationMs: Date.now() - started, initialised: run.initialised, batches: run.batches, examined: run.examined, closed: run.closed.length, skipped: run.skipped.length, paused: run.paused.length, failed: run.failed.length };
@@ -199,14 +210,18 @@ export async function runDueCloses(options: CloseRunOptions = {}): Promise<Close
 export const ONE_SHOT_PASS_BUDGET_MS = 10 * 60_000;
 /** What a one-shot pass did, and the exit status that says so. */
 export interface OneShotCloseRun {
-  /** 0: every due lender was closed, paused or left to another process; 2: the pass finished but at least one close failed (recorded and retried by a later pass); 1: the pass could not run, or was stopped before it finished. */
+  /**
+   * 0: the pass took up every lender due, and each was closed, paused or left to another process; 2: the pass ran,
+   * but at least one close failed (recorded and retried by a later pass) or its budget ran out before it had taken
+   * up every lender due (still due for the next run); 1: the pass could not run, or was stopped before it finished.
+   */
   exitCode: 0 | 1 | 2;
   run: CloseRun | null;
 }
 
 /**
  * The scheduled daily close run once, for a host that runs no in-process
- * scheduler (VALOPAY_CLOSE_SCHEDULER=off), such as a Replit Scheduled
+ * scheduler (VALOPAY_CLOSE_SCHEDULER=external), such as a Replit Scheduled
  * Deployment next to an Autoscale deployment: the same pass the tick loop
  * runs (runDueCloses), through the same repository, locks and audit, with a
  * longer budget, ending with one close.one_shot line that carries its exit
@@ -218,10 +233,12 @@ export async function runClosePassOnce(options: CloseRunOptions = {}, pass: (opt
   try {
     const run = await pass({ ...options, budgetMs: options.budgetMs ?? ONE_SHOT_PASS_BUDGET_MS });
     const stopped = options.signal?.aborted === true;
-    const exitCode = stopped ? 1 : run.failed.length ? 2 : 0;
-    const fields = { event: "close.one_shot", exitCode, runId: run.runId, durationMs: Date.now() - started, stopped, examined: run.examined, closed: run.closed.length, skipped: run.skipped.length, paused: run.paused.length, failed: run.failed.length };
+    const exitCode = stopped ? 1 : run.failed.length || run.budgetSpent ? 2 : 0;
+    const fields = { event: "close.one_shot", exitCode, runId: run.runId, durationMs: Date.now() - started, stopped, budgetSpent: run.budgetSpent, examined: run.examined, closed: run.closed.length, skipped: run.skipped.length, paused: run.paused.length, failed: run.failed.length };
     if (exitCode === 0) options.log?.info(fields, "One-shot close pass finished");
-    else options.log?.error(fields, stopped ? "One-shot close pass stopped before it finished; the lenders it did not reach are still due" : "One-shot close pass finished, but some closes failed; each is retried by a later pass");
+    else options.log?.error(fields, stopped ? "One-shot close pass stopped before it finished; the lenders it did not reach are still due"
+      : run.budgetSpent ? `One-shot close pass ran out of time with lenders still due${run.failed.length ? ", and some closes failed" : ""}; the next run takes them up`
+      : "One-shot close pass finished, but some closes failed; each is retried by a later pass");
     return { exitCode, run };
   } catch (error) {
     options.log?.error({ event: "close.one_shot", exitCode: 1, durationMs: Date.now() - started, err: error }, "One-shot close pass could not read what was due");

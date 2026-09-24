@@ -56,6 +56,14 @@ result = await run(monitor, ["https://alerts.example/synthetic-receiver-token"],
 assert.equal(result.status, 1);
 assert.match(result.stderr, /^Argument 1 is not an option/);
 assert.ok(!result.output.includes("synthetic-receiver-token"));
+// A scheduler expectation the monitor does not know stops it, named without its value, rather than checking nothing.
+result = await run(monitor, [], { VALOPAY_MONITOR_ORIGIN: "https://127.0.0.1:1", VALOPAY_MONITOR_EXPECT_SCHEDULER: "synthetic-typo" });
+assert.equal(result.status, 1);
+assert.equal(result.stderr.trim(), "VALOPAY_MONITOR_EXPECT_SCHEDULER must be on or external when it is set (docs/operational-rehearsals.md).");
+assert.ok(!result.output.includes("synthetic-typo"));
+result = await run(monitor, ["--"], { VALOPAY_MONITOR_ORIGIN: "https://127.0.0.1:1", VALOPAY_MONITOR_EXPECT_SCHEDULER: "External" });
+assert.equal(result.status, 0, result.output);
+assert.deepEqual(JSON.parse(result.stdout).codes, ["database_unready", "service_unavailable"], "external, in any case, is taken");
 
 // ---- pnpm run check:paystack ----
 const paystack = "scripts/src/check-paystack.ts";
