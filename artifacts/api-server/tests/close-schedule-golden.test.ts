@@ -26,7 +26,7 @@ let checks = 0;
   state.settings.nextCloseAt = wat('2027-06-28T07:00:00');
   const runtime: CloseRuntime = { state: 'off', intervalMs: null, lastTickAt: null, lastSuccessAt: null, lastErrorAt: null };
   const audit = { valid: true, count: 0, headHash: 'GENESIS' };
-  for (const status of ['off', 'not_started', 'stopped'] as const) {
+  for (const status of ['off', 'external', 'not_started', 'stopped'] as const) {
     runtime.state = status;
     const overview = S.GetOverviewResponse.parse(buildConsoleOverview(state, now, audit, runtime));
     const reports = S.GetReportsResponse.parse(buildConsoleReports(state, now, runtime));
@@ -37,6 +37,20 @@ let checks = 0;
     assert.equal((reports.operational.closeSchedule as any).nextAt, null);
     assert.equal(settings.closeSchedule?.nextAt, null);
     checks += 5;
+  }
+  // external: a separate scheduled job runs the closes (VALOPAY_CLOSE_SCHEDULER=external). This process promises no
+  // automatic run it cannot see, but a close that job has not run is still missed: the overview raises close_missed
+  // and names the date still owed, where scheduling deliberately off does neither.
+  {
+    const overview = S.GetOverviewResponse.parse(buildConsoleOverview(state, now, audit, { ...runtime, state: 'external' }));
+    assert.deepEqual([overview.closeSchedule?.runtimeState, overview.closeSchedule?.serviceIssue, overview.closeSchedule?.missed, overview.closeSchedule?.overdueMinutes], ['external', null, true, 60]);
+    assert.match(overview.alerts.find((alert) => alert.key === 'close_missed')?.detail ?? '', /Business date still to close: 2027-06-27\./, 'the missed-close alert names the date owed');
+    assert.equal((S.GetReportsResponse.parse(buildConsoleReports(state, now, { ...runtime, state: 'external' })).operational.closeSchedule as any).missed, true);
+    assert.equal(S.GetSettingsResponse.parse(buildConsoleSettings(state, 'Admin', now, { ...runtime, state: 'external' })).closeSchedule?.missed, true);
+    const off = S.GetOverviewResponse.parse(buildConsoleOverview(state, now, audit, { ...runtime, state: 'off' }));
+    assert.equal(off.closeSchedule?.missed, false);
+    assert.equal(off.alerts.some((alert) => alert.key === 'close_missed'), false, 'with scheduling off nobody runs automatic closes, so none is missed');
+    checks += 6;
   }
   runtime.state = 'running';
   assert.equal(effectiveCloseSchedule(state, now, runtime).serviceIssue, 'starting'); checks++;

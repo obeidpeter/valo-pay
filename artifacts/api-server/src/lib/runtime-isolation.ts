@@ -65,7 +65,7 @@ export function runtimeIsolationConfiguration() {
 export async function bindRuntimeIdentity(client: PoolClient, identity: { organizationId: string; userId: string }, invitation?: { token: string; verifiedEmails: string[] }): Promise<boolean> {
   const config = runtimeIsolationConfiguration(); if (!config) return false;
   if (!/^org_[A-Za-z0-9]+$/.test(identity.organizationId) || !/^user_[A-Za-z0-9]+$/.test(identity.userId)) unavailable("A verified organisation and user are required for the isolated database.");
-  const connection = (await client.query<RuntimeRoleRow>({ name: "valopay-runtime-connection", text: connectionCheck, values: [config.schema] })).rows[0];
+  const connection = (await client.query<RuntimeRoleRow>(connectionCheck, [config.schema])).rows[0];
   const roleDifferences = connection ? runtimeRoleDifferences(connection, config) : ["the connection could not read its own role"];
   if (roleDifferences.length) unavailable("Runtime isolation refused an elevated or unexpected database connection.", roleDifferences);
   // Identifier comes from a strict allowlist-shaped configuration, never input.
@@ -73,8 +73,9 @@ export async function bindRuntimeIdentity(client: PoolClient, identity: { organi
   // can stand in for a catalogue view, and a function there that shadows a
   // built-in is written qualified in a policy, so it differs from the reviewed text.
   await client.query(`SET LOCAL search_path TO pg_catalog, "${config.schema}", pg_temp`);
-  // Both checks are named statements, so each pooled connection plans them once rather than in every transaction.
-  const catalogue = (await client.query<IsolationCatalogue>({ name: "valopay-runtime-catalogue", text: isolationCatalogue, values: [config.schema, runtimeIsolationTables, Object.keys(reviewedRuntimeHelpers), `search_path=pg_catalog, ${config.schema}, pg_temp`] })).rows[0]!;
+  // Neither check is a named statement: behind a transaction-mode pooler the next transaction may run on another
+  // server connection, where a statement prepared on this one does not exist. Each is planned in every transaction.
+  const catalogue = (await client.query<IsolationCatalogue>(isolationCatalogue, [config.schema, runtimeIsolationTables, Object.keys(reviewedRuntimeHelpers), `search_path=pg_catalog, ${config.schema}, pg_temp`])).rows[0]!;
   if (catalogue.tables.length !== runtimeIsolationTables.length || catalogue.tables.some(table => !table.safe)) unavailable("Every runtime table must have forced row security and a separate owner before staff access is enabled.");
   // 006 adds the helper that lets lender policies run once per statement; without it every read checks each row and a pilot-scale lender takes seconds.
   if (!catalogue.helpers.some(helper => helper.proname === "valopay_runtime_lenders")) unavailable("The isolated database still checks lender access row by row. Apply lib/db/migrations/006_runtime_isolation_scope.sql before enabling staff access.");

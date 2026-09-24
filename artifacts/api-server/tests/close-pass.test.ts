@@ -2,10 +2,11 @@
 // schedule (a Replit Scheduled Deployment next to an Autoscale deployment):
 // the scheduler's own pass run once, with a longer budget, ending with one
 // close.one_shot line and an exit status that says how it went: 0 done, 2
-// some closes failed (each recorded and retried by a later pass), 1 it could
-// not run or was stopped. Offline: the pass is a stand-in here, and the
-// process is started against an unusable loopback database. The pass against
-// PostgreSQL is in close-scheduler.integration.test.ts.
+// some closes failed (each recorded and retried by a later pass) or the budget
+// ran out with lenders still due, 1 it could not run or was stopped. Offline:
+// the pass is a stand-in here, and the process is started against an unusable
+// loopback database. The pass against PostgreSQL is in
+// close-scheduler.integration.test.ts.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -17,8 +18,8 @@ type Run = Awaited<ReturnType<Pass>>;
 
 let checks = 0;
 const lines: Array<Record<string, any>> = [];
-const log = { info: (fields: object) => lines.push({ level: "info", ...fields }), error: (fields: object) => lines.push({ level: "error", ...fields }) } as any;
-const run = (change: Partial<Run> = {}): Run => ({ runId: "run-1", initialised: 0, batches: 1, examined: 2, closed: [{ merchantId: "a", closeId: "c", late: false, delayMinutes: 0 }], skipped: ["b"], paused: [], failed: [], ...change });
+const log = { info: (fields: object, msg: string) => lines.push({ level: "info", ...fields, msg }), error: (fields: object, msg: string) => lines.push({ level: "error", ...fields, msg }) } as any;
+const run = (change: Partial<Run> = {}): Run => ({ runId: "run-1", initialised: 0, batches: 1, examined: 2, closed: [{ merchantId: "a", closeId: "c", late: false, delayMinutes: 0 }], skipped: ["b"], paused: [], failed: [], budgetSpent: false, ...change });
 let given: Parameters<Pass>[0] | undefined;
 
 // Everything due closed, paused or left to another process: 0, with the counts, and the longer budget.
@@ -26,7 +27,7 @@ let result = await runClosePassOnce({ log }, async (options) => { given = option
 assert.equal(result.exitCode, 0);
 assert.equal(given?.budgetMs, ONE_SHOT_PASS_BUDGET_MS, "a one-shot pass may drain a longer backlog than an in-process tick");
 assert.equal(ONE_SHOT_PASS_BUDGET_MS, 600_000);
-assert.deepEqual([lines[0]!.level, lines[0]!.event, lines[0]!.exitCode, lines[0]!.examined, lines[0]!.closed, lines[0]!.skipped, lines[0]!.failed], ["info", "close.one_shot", 0, 2, 1, 1, 0]);
+assert.deepEqual([lines[0]!.level, lines[0]!.event, lines[0]!.exitCode, lines[0]!.examined, lines[0]!.closed, lines[0]!.skipped, lines[0]!.failed, lines[0]!.budgetSpent], ["info", "close.one_shot", 0, 2, 1, 1, 0, false]);
 checks += 4;
 
 // A close that failed: 2, at error level, so the scheduled run shows as failed while the retry is recorded.
@@ -34,6 +35,17 @@ lines.length = 0;
 result = await runClosePassOnce({ log }, async () => run({ failed: [{ merchantId: "a", error: "synthetic", failures: 1, retryAt: "2026-09-23T07:02:00.000Z" }] }));
 assert.deepEqual([result.exitCode, lines[0]!.level, lines[0]!.failed], [2, "error", 1]);
 checks += 1;
+
+// The budget ran out before the pass had taken up every due lender: 2 as well, never 0, and the line says so; the
+// lenders it did not reach are still due for the next run.
+lines.length = 0;
+result = await runClosePassOnce({ log }, async () => run({ examined: 0, closed: [], skipped: [], budgetSpent: true }));
+assert.deepEqual([result.exitCode, lines[0]!.level, lines[0]!.budgetSpent, lines[0]!.failed], [2, "error", true, 0]);
+assert.match(lines[0]!.msg, /ran out of time/);
+lines.length = 0;
+result = await runClosePassOnce({ log }, async () => run({ budgetSpent: true, failed: [{ merchantId: "a", error: "synthetic" }] }));
+assert.deepEqual([result.exitCode, lines[0]!.budgetSpent, lines[0]!.failed], [2, true, 1]);
+checks += 3;
 
 // Stopped before it finished: 1, whatever it managed; the lenders it did not reach are still due.
 lines.length = 0;
@@ -65,4 +77,4 @@ assert.deepEqual([summary?.level, summary?.exitCode], [50, 1], stdout);
 assert.doesNotMatch(stderr, /\n\s+at /, "no bare stack");
 checks += 3;
 
-console.log(`One-shot close pass checks passed (${checks}): exit 0 when every due close ran, 2 when a close failed and was left for its retry, 1 when the pass was stopped or could not read what was due, one close.one_shot line each time, and the command's own exit against an unreachable database.`);
+console.log(`One-shot close pass checks passed (${checks}): exit 0 when every due close ran, 2 when a close failed and was left for its retry or the budget ran out with lenders still due, 1 when the pass was stopped or could not read what was due, one close.one_shot line each time, and the command's own exit against an unreachable database.`);

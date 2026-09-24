@@ -22,7 +22,7 @@ The deployment's start-up health check is `GET /api/readyz`, not the liveness an
 - a database that does not answer, or lacks a table or column this build needs (a migration not yet applied) or a unique index or check constraint its schema declares, answers 503, the health check fails and the new build does not go live;
 - a database that lacks only a read index a migration adds answers 200 with `checks.schema.status` `indexes_missing`: every request still works, only slower, so the release goes ahead, and a `readiness.indexes_missing` log line names the index and the migration that adds it.
 
-Apply a build's migrations before publishing it (`docs/database-migrations.md`). The process also refuses to start when a setting breaks its rule: it writes one `config.invalid` line naming each setting to correct, never its value, and exits with status 1, so the health check never passes (`docs/observability.md`).
+Apply a build's migrations before publishing it (`docs/database-migrations.md`). The build serving now may not check unique indexes and check constraints (builds from before the 23 September 2026 audit fixes do not), so its readiness cannot show a guard the new build requires: run the guard query in `docs/database-migrations.md` before publishing, or the first publish may be held back. The process also refuses to start when a setting breaks its rule: it writes one `config.invalid` line naming each setting to correct, never its value, and exits with status 1, so the health check never passes (`docs/observability.md`).
 
 ## Autoscale and the work the API process does on its own
 
@@ -48,21 +48,21 @@ Close times are not staggered. Every lender on the default 07:00 closes then, on
 Choose one of these for any host whose lenders rely on the automatic close.
 
 1. **A Reserved VM.** Change the deployment type from Autoscale to Reserved VM in Replit's publishing settings. The instance stays up, the API's scheduler ticks every minute on its background worker thread and closes run on time. Leave `VALOPAY_CLOSE_SCHEDULER` unset (or `on`). A Reserved VM is billed while it runs: this is the owner's billing decision.
-2. **Autoscale with a Scheduled Deployment.** Keep the Autoscale deployment and set `VALOPAY_CLOSE_SCHEDULER=off` in its environment, so its instances never run the scheduler. Then create a Replit Scheduled Deployment of this repository that runs the one-shot close pass:
+2. **Autoscale with a Scheduled Deployment.** Keep the Autoscale deployment and set `VALOPAY_CLOSE_SCHEDULER=external` in its environment, so its instances never run the scheduler but still report a close the job has missed (below). Then create a Replit Scheduled Deployment of this repository that runs the one-shot close pass:
    - build command: `pnpm --filter @workspace/api-server run build`;
    - run command: `node --enable-source-maps artifacts/api-server/dist/close-pass.mjs`;
    - schedule: every 15 minutes (cron `*/15 * * * *`), so a close starts well within the 30 minutes after which it is recorded as late;
    - environment: the same `DATABASE_URL` secret as the web deployment and the same database settings (`VALOPAY_DATABASE_POOL_SIZE`, and `VALOPAY_RUNTIME_ISOLATION` with its companions where the restricted runtime is on), with `NODE_ENV=production`. It needs no port, no Clerk key and no storage.
 
-The one-shot close pass (`artifacts/api-server/src/close-pass.ts`, run locally with `pnpm --filter @workspace/api-server run close-pass` after a build) is the scheduler's own pass run once: the same due-lender reads, the same fair order, one lender per system transaction through the scoped repository, the same failure backoff and audit, with a budget of ten minutes instead of 45 seconds. It ignores `VALOPAY_CLOSE_SCHEDULER`. Another process closing at the same time never closes the same lender twice. A stop signal ends it after the lender close in progress. It ends with one `close.one_shot` line and its exit status:
+The one-shot close pass (`artifacts/api-server/src/close-pass.ts`, run locally with `pnpm --filter @workspace/api-server run close-pass` after a build) is the scheduler's own pass run once: the same due-lender reads, the same fair order, one lender per system transaction through the scoped repository, the same failure backoff and audit, with a budget of ten minutes instead of 45 seconds: after ten minutes it starts no further close and finishes the one in progress. It does not act on `VALOPAY_CLOSE_SCHEDULER`, which is the web server's switch, but checks it at start-up as the server does: a value the server would refuse stops the pass with a `config.invalid` line and exit status 1 before it closes anything, so give it the web deployment's value or leave it unset. Another process closing at the same time never closes the same lender twice. A stop signal ends it after the lender close in progress. It ends with one `close.one_shot` line and its exit status:
 
 | Exit status | Meaning |
 | --- | --- |
-| 0 | The pass ran and every due lender was closed, paused (an idle sandbox) or left to another process. |
-| 2 | The pass ran, but at least one lender's close failed. Each failure is recorded with its next attempt (2, 4, 8, 16, 32 minutes, then hourly) and a later run retries it; the lender's log line has the error. |
-| 1 | The pass could not run (a setting refused at start-up, the database unavailable) or was stopped before it finished. The lenders it did not reach are still due for the next run. |
+| 0 | The pass took up every lender that was due and none of their closes failed: each was closed, paused (an idle sandbox) or left to another process that held it or had just closed it. A lender owed several missed business dates gets one close a run, for the oldest, so it can still be due after a 0. |
+| 2 | The pass ran, but at least one lender's close failed, or its ten-minute budget ran out before it had taken up every lender that was due. A failure is recorded with its next attempt (2, 4, 8, 16, 32 minutes, then hourly) and a later run retries it; the lender's log line has the error. The lenders the budget left are still due, and the next run takes them up. The `close.one_shot` line says which: `failed` above 0, `budgetSpent` true, or both. |
+| 1 | The pass could not run (a setting refused at start-up, the database unavailable) or was stopped before it finished, whatever else it did. The lenders it did not reach are still due for the next run. |
 
-A failed run shows as failed in the Scheduled Deployment's history. On a host run this way the web instances report the scheduler as `off` on `/api/healthz`, so the console says the automatic daily close is off on this service and does not advertise the next run; the closes the pass records are scheduled closes, shown as such in Reports. Do not set `VALOPAY_MONITOR_EXPECT_SCHEDULER=on` for such a host (`docs/operational-rehearsals.md`); watch the Scheduled Deployment's runs and its `close.one_shot` lines instead.
+A failed run shows as failed in the Scheduled Deployment's history. On a host run this way the web instances report the scheduler as `external` on `/api/healthz` and the console says "Daily closes run from a scheduled job.", without advertising a next run, since the web instances cannot see the job's. They still judge each lender's schedule as a running service would: a close the job has not run 30 minutes after its time is missed, so the overview raises the `close_missed` alert naming the business dates still owed and the console asks for a daily close and a check of the job. So if the Scheduled Deployment stops, or fails at every run (a rotated secret, a refused setting), the lenders' consoles say so. `VALOPAY_CLOSE_SCHEDULER=off` would hide all of this, which suits only a host where nobody runs automatic closes. The closes the pass records are scheduled closes, shown as such in Reports. Set `VALOPAY_MONITOR_EXPECT_SCHEDULER=external` for such a host (`docs/operational-rehearsals.md`): the monitor then checks that the web instances report `external`, since it cannot see the job's runs; watch those in the Scheduled Deployment's history and its `close.one_shot` lines.
 
 Exports need no schedule of their own: the export worker runs whenever an instance does, so a queued export waits at most until the next request.
 
@@ -76,7 +76,7 @@ With development-instance keys (`pk_test_`, `sk_test_`), the Clerk SDK collects 
 
 ## What the owner does by hand
 
-- Choose the deployment type (Autoscale or Reserved VM) and, for Autoscale, create the Scheduled Deployment above and set `VALOPAY_CLOSE_SCHEDULER=off` on the Autoscale deployment.
+- Choose the deployment type (Autoscale or Reserved VM) and, for Autoscale, create the Scheduled Deployment above and set `VALOPAY_CLOSE_SCHEDULER=external` on the Autoscale deployment.
 - Provide the secrets through Replit's secret manager, for the web deployment and for the Scheduled Deployment.
 - Apply each release's migrations before publishing it (`docs/database-migrations.md`).
 - Provision and renew pilot administrators with the operator command (`docs/pilot-workflow-release.md`).
