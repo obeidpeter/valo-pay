@@ -92,16 +92,19 @@ export const AUDIT_GENESIS: Readonly<AuditPoint> = Object.freeze({ sequence: 0, 
 /**
  * Walks audit entries in sequence order from `from` (the chain's start unless
  * given): valid when every entry's sequence follows the one before, its
- * previous hash is that entry's hash and its own hash is its body's. Returns
- * the count, the entries before `from` included, the hash where the walk
- * ended, and the last place it verified with its entry.
+ * previous hash is that entry's hash and its own hash is its body's. A
+ * sequence two entries claim (a fork, as two writers that each took the next
+ * sequence leave) breaks the chain before it: neither entry is verified.
+ * Returns the count, the entries before `from` included, the hash where the
+ * walk ended, and the last place it verified with its entry, which is always
+ * before the first entry that breaks the chain.
  */
 export function walkAuditChain<E extends { data: Record<string, any> }>(entries: ReadonlyArray<E>, from: AuditPoint = AUDIT_GENESIS): { valid: boolean; count: number; headHash: string; verified: AuditPoint; entry?: E } {
   const chain = [...entries].sort((a, b) => Number(a.data.sequence) - Number(b.data.sequence));
   let hash = from.hash, valid = true, sequence = from.sequence, entry: E | undefined;
-  for (const next of chain) {
+  for (const [index, next] of chain.entries()) {
     const { hash: recorded, ...body } = next.data;
-    if (body.sequence !== sequence + 1 || body.previousHash !== hash || auditEntryHash(body) !== recorded) { valid = false; break; }
+    if (body.sequence !== sequence + 1 || Number(chain[index + 1]?.data.sequence) === body.sequence || body.previousHash !== hash || auditEntryHash(body) !== recorded) { valid = false; break; }
     sequence += 1; hash = String(recorded); entry = next;
   }
   return { valid, count: from.sequence + chain.length, headHash: hash, verified: { sequence, hash }, ...(entry ? { entry } : {}) };

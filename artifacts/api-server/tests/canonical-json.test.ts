@@ -24,7 +24,7 @@ if (!REPORT && new Intl.Collator().resolvedOptions().locale !== "en-US") {
 }
 
 const { canonicalJson, canonicalJsonForms, legacyCollatedCompare, codeUnitCompare, sameJson, LEGACY_COLLATION_LOCALE } = await import("@workspace/valopay-schema");
-const { requestFingerprint, auditEntryData, verifyAuditChain, canonicalDigest, sha256Hex } = await import("../src/lib/digests.js");
+const { requestFingerprint, auditEntryData, verifyAuditChain, walkAuditChain, canonicalDigest, sha256Hex } = await import("../src/lib/digests.js");
 const { cashEvidenceHash } = await import("../src/domain/connected-cash.js");
 const { appendAudit, verifyAudit } = await import("../src/lib/valopay-store.js");
 const { lifecyclePolicy, lifecycleHolds, lifecycleCandidates } = await import("../src/domain/lifecycle.js");
@@ -226,6 +226,11 @@ if (!REPORT) {
   const second = auditEntryData({ sequence: 2, actor: "System", action: "next", objectId: "rec-2", summary: "Next", previousHash: entry.hash, timestamp: "2026-01-01T00:00:01.000Z" });
   assert.deepEqual(verifyAuditChain([{ data: readBack(second) as Record<string, unknown> }, { data: readBack(entry) as Record<string, unknown> }]), { valid: true, count: 2, headHash: second.hash });
   assert.equal(verifyAuditChain([{ data: { ...entry, summary: "Tampered" } }]).valid, false);
+  // A sequence two entries claim (a fork: two writers each took the next one) breaks the chain before it: neither
+  // entry is verified, so a check that goes on from the last verified place reads both again.
+  const fork = auditEntryData({ sequence: 2, actor: "System", action: "fork", objectId: "rec-3", summary: "Fork", previousHash: entry.hash, timestamp: "2026-01-01T00:00:02.000Z" });
+  for (const order of [[entry, second, fork], [fork, entry, second]]) assert.deepEqual(verifyAuditChain(order.map((data) => ({ data }))), { valid: false, count: 3, headHash: entry.hash }, "a fork breaks the chain before its sequence");
+  assert.deepEqual(walkAuditChain([{ data: second }, { data: fork }], { sequence: 1, hash: entry.hash }).verified, { sequence: 1, hash: entry.hash }, "a walk from a verified place stays before the fork");
   {
     // A chain written before this change verifies: a store-built entry, its keys in JSONB order.
     const state = seedMerchant("canonical-json");
