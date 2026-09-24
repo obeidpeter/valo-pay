@@ -26,7 +26,7 @@ A push is repeatable: run again on an unchanged schema it finds nothing to do, o
 ## Before and after
 
 1. Back up the database and note the time.
-2. Read `/api/readyz` and the `readiness.failed` or `readiness.indexes_missing` log lines of the running build: they name each missing table, column or read index and where it comes from. They name a missing unique index or check constraint only when the running build checks them, and the build this release replaces does not, so the guard query below is how to see those.
+2. Read `/api/readyz` and the `readiness.failed` or `readiness.indexes_missing` log lines of the running build: they name each missing table, column or read index and where it comes from. They name a missing unique index or check constraint only when the running build checks them, which builds from before the 23 September 2026 audit fixes ("Repeatable schema push and readiness guards" in `docs/BUILD_STATUS.md`) do not, so the guard query below is how to see those.
 3. Apply the files the release needs, in order, with the commands above.
 4. Run the guard query below, from the copy of this document in the build you are about to publish. If it lists anything, do not publish yet: that build's readiness would answer 503, its start-up health check would hold the release back and the build before it would keep serving. Restore each guard it lists as "A missing unique index or check constraint" below says, and run the query again until it lists nothing.
 5. Check `/api/readyz` again, and record in the operator's change log which files were applied to which database, when and by whom. The database keeps no record of its own; readiness and the verification queries above are how to tell afterwards.
