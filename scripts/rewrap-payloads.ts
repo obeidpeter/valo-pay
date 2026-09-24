@@ -2,8 +2,10 @@
 // Needs that database's DATABASE_URL, VALOPAY_PAYLOAD_ENCRYPTION=kms, VALOPAY_KMS_KEY naming the key payloads
 // move to and VALOPAY_KMS_PREVIOUS_KEYS listing every earlier key they may still name. The arguments and the key
 // settings are checked before the store, and with it the database pool, is loaded, so a mistake here never opens a
-// connection. Each run re-seals at most --limit payloads and reports how many still name an earlier key; run it
-// again until none remain (docs/pilot-security.md, "Key rotation").
+// connection. Each run reads one schema, VALOPAY_RUNTIME_SCHEMA's when it names a restricted runtime's and otherwise
+// the one the connection's search path reaches, refuses a connection that could miss a payload there, re-seals at
+// most --limit payloads and reports how many still name an earlier key and which other schemas hold the tables;
+// run it again until none remain in every schema (docs/pilot-security.md, "Key rotation").
 const usage = "Usage: pnpm --filter @workspace/scripts exec tsx ./rewrap-payloads.ts [--limit N]  (N from 1 to 1000; 100 when left out)";
 const given = process.argv.slice(2);
 // A leading `--` is skipped, as the other operator commands skip it.
