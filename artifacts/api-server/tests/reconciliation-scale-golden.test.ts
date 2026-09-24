@@ -124,11 +124,12 @@ const outcome = {
 if (process.env.VALOPAY_GOLDEN_PRINT === "1") console.log(JSON.stringify({ outcome, records, visits: [first.visits, second.visits] }, null, 2));
 /**
  * Computed for this scenario by the code before its lookups were indexed: first at c22c229, then again by the dispute
- * fixes' code without the index, since a reversal of applied money now raises an exception (VALOPAY_GOLDEN_PRINT=1
+ * fixes' code without the index, since a reversal of applied money now raises an exception, and again with the index
+ * switched off once counted text ("1 obligation", "2 obligations") changed the records' wording (VALOPAY_GOLDEN_PRINT=1
  * prints the current values).
  */
 const golden = {
-  records: "57b8061f5ef3ee0374e40289efc5d910071c517ee1c76530098050d05193a3e4",
+  records: "56feaf086a3601c5cf654f6870914bf6b49117f018af188c9d7f1cfb71582c57",
   monthEnd: "dff97eb6d50336fb650cf48652975f842fd2b85f14df835eb535a7dbb4a35a7d",
   nextDay: "1a88e829ce6bd3940c6a5248e5bbdfddc0a7786480202fc138aca0a834c4a798",
 };
