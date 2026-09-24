@@ -5,8 +5,10 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import http from "node:http";
+import { gzipSync } from "node:zlib";
 import { ZodError } from "zod";
 import { errorHandler } from "../src/lib/error-handler.js";
+import { requestFingerprint } from "../src/lib/digests.js";
 import { validateRecord } from "../src/domain/validation.js";
 import { markRolledBack } from "../src/lib/transaction-outcome.js";
 import { storageFailure } from "../src/lib/export-download.js";
@@ -254,7 +256,7 @@ process.env["DATABASE_URL"] ??= "postgres://postgres@127.0.0.1:1/valopay-unused"
 process.env["LOG_LEVEL"] ??= "silent";
 process.env["CLERK_SECRET_KEY"] ??= "sk_test_placeholder";
 process.env["CLERK_PUBLISHABLE_KEY"] ??= `pk_test_${Buffer.from("clerk.example.test$").toString("base64")}`;
-const { default: app, bodyProblem } = await import("../src/app.js");
+const { default: app, bodyProblem, rawBodyProblem, MAX_BODY_VALUES } = await import("../src/app.js");
 const errorOf = async (response: Response) => ((await response.json()) as { error: string }).error;
 const server = app.listen(0);
 try {
@@ -306,8 +308,21 @@ try {
   assert.deepEqual([undecodable.status, await errorOf(undecodable)], [400, "The address is not valid: it holds a malformed percent-encoded character. Check the link and try again."], "a path that cannot be decoded is a 400");
   const keyedUndecodable = await fetch(`${base}/api/v1/records/customers/%25%?merchantId=offline-lender`, { method: "PATCH", headers: { "Content-Type": "application/json", "Idempotency-Key": "edge-inputs-0001" }, body: JSON.stringify({ name: "x" }) });
   assert.equal(keyedUndecodable.status, 400, "a keyed write to such a path is refused before its journal entry is made");
-  const gzip = await post("not gzip", { "Content-Encoding": "gzip" });
-  assert.deepEqual([gzip.status, await errorOf(gzip)], [400, "The request body could not be decompressed. Check its Content-Encoding and try again."], "a body that cannot be decompressed is a 400");
+  // A compressed body is refused before it is read, 415 with Accept-Encoding: identity (RFC 9110): the parser never
+  // inflates one, so two kilobytes on the wire can no longer become two megabytes to parse (the review of 4edd897,
+  // finding 1).
+  const compressed = (text: string, coding = "gzip") => fetch(`${base}/api/v1/webhooks/test`, { method: "POST", headers: { "Content-Type": "application/json", "Content-Encoding": coding }, body: coding === "gzip" ? gzipSync(text) : text });
+  const gzipped = await compressed(JSON.stringify({ name: "Compressed" }));
+  assert.deepEqual([gzipped.status, gzipped.headers.get("accept-encoding"), await errorOf(gzipped)], [415, "identity", "Send the request body uncompressed, without a Content-Encoding."], "a compressed body is refused, saying how to send it");
+  assert.equal(gzipped.headers.get("x-content-type-options"), "nosniff", "with the security headers");
+  assert.equal((await compressed(`${"[".repeat(1_048_000)}${"]".repeat(1_048_000)}`)).status, 415, "as is the review's 2 KB of gzip that inflates to 2 MB of brackets");
+  assert.equal((await compressed("not gzip")).status, 415, "whatever it holds");
+  assert.equal((await compressed('{"name":"Plain"}', "identity")).status, 403, "identity is no encoding at all");
+  // Only UTF-8 is read: the bytes are checked before they are decoded, so a body in another character set is refused.
+  const wide = await raw("POST", "/api/v1/webhooks/test", Buffer.from('{"name":"Wide"}', "utf16le"), { "Content-Type": "application/json; charset=utf-16le" });
+  assert.deepEqual([wide.status, JSON.parse(wide.body).error], [415, "The request body's character set is not supported. Send UTF-8 JSON."], "a UTF-16 body is refused");
+  assert.equal((await post('{"name":"Named"}', { "Content-Type": "application/json; charset=UTF-8" })).status, 403, "UTF-8, named or not, is read");
+  checks += 8;
   const nested = (levels: number) => `{"name":"Deep","junk":${"[".repeat(levels - 1)}${"]".repeat(levels - 1)}}`;
   assert.equal((await post(nested(32))).status, 403, "32 levels of nesting reach the route");
   const tooDeep = await post(nested(33));
@@ -321,18 +336,89 @@ try {
   assert.deepEqual([surrogateKey.status, await errorOf(surrogateKey)], [400, "Text must be valid Unicode: data holds an unpaired surrogate (\\ud800 to \\udfff). Remove it and try again."], "also in a field name, naming the object that holds it");
   assert.equal((await post('{"name":"Ada \\ud83d\\ude00"}')).status, 403, "a surrogate pair is ordinary text");
   // The walk visits a list by its index and an object by its fields, and builds a dotted path only for the value it
-  // refuses; a body holding more than 100,000 values, far more than any request needs, is refused (413) before the
-  // rest is walked, fingerprinted or journaled (the review of b9b10ef, finding 2).
+  // refuses; a body holding more than 10,000 values, far more than any request needs, is refused (413) before the
+  // rest is walked, fingerprinted or journaled (the reviews of b9b10ef, finding 2, and 4edd897, finding 1).
   const values = (count: number) => `{"name":"Many","junk":[${Array(count).fill(0).join(",")}]}`;
-  assert.equal((await post(values(99_997))).status, 403, "100,000 values, the body and its list among them, reach the route");
-  const tooMany = await post(values(99_998));
-  assert.deepEqual([tooMany.status, await errorOf(tooMany)], [413, "The request body holds more than 100,000 values. Send a smaller request."], "one more is refused, naming the limit");
-  assert.equal((await post(values(1_000_000))).status, 413, "as are the review's two megabytes of a million zeros");
-  assert.deepEqual(bodyProblem({ rows: [...Array<number>(50_000).fill(0), { note: "x\u0000" }] }), { field: "rows.50000.note", problem: "nul" }, "the refused value is named by its path, a list's item by its index");
-  const counted = values(99_997), parsed = JSON.parse(counted) as unknown;
-  const fastest = (run: () => unknown) => Math.min(...Array.from({ length: 5 }, () => { const started = performance.now(); run(); return performance.now() - started; }));
-  const walked = fastest(() => bodyProblem(parsed)), parsing = fastest(() => JSON.parse(counted));
-  assert.ok(walked < 3 * parsing, `walking a body costs about what parsing it does (${walked.toFixed(1)} ms to walk, ${parsing.toFixed(1)} ms to parse)`);
+  const keys = (count: number, key = (index: number) => `k${index}`) => `{"name":"Keys","junk":{${Array.from({ length: count }, (_, index) => `"${key(index)}":0`).join(",")}}}`;
+  assert.equal(MAX_BODY_VALUES, 10_000);
+  assert.equal((await post(values(9_997))).status, 403, "10,000 values, the body and its list among them, reach the route");
+  const tooMany = await post(values(9_998));
+  assert.deepEqual([tooMany.status, await errorOf(tooMany)], [413, "The request body holds more than 10,000 values. Send a smaller request."], "one more is refused, naming the limit");
+  assert.deepEqual([(await post(keys(9_997))).status, (await post(keys(9_998))).status], [403, 413], "an object's fields count as a list's items do");
+  assert.deepEqual(bodyProblem({ rows: [...Array<number>(5_000).fill(0), { note: "x\u0000" }] }), { field: "rows.5000.note", problem: "nul" }, "the refused value is named by its path, a list's item by its index");
+  checks += 5;
+  // Nesting deeper than 32 levels, and more than 10,000 values, are refused from the body's bytes before JSON.parse
+  // reads them: parsing takes about 300 ms for 2 MB of nested brackets and about 100 ms for 2 MB of field names, and
+  // the walk could refuse them only afterwards. The scan skips text, so a bracket, comma or escaped quote in a string
+  // is text, and names the path the walk would.
+  const parse = JSON.parse;
+  let parsedLarge = 0;
+  JSON.parse = ((text: string, reviver?: Parameters<typeof JSON.parse>[1]) => { if (typeof text === "string" && text.length > 100_000) parsedLarge++; return parse(text, reviver); }) as typeof JSON.parse;
+  try {
+    const unparsed: Array<[string, number, RegExp]> = [
+      [`${"[".repeat(1_048_000)}${"]".repeat(1_048_000)}`, 400, /^The request body is nested more than 32 levels deep, at 0(\.0){31}\. Send a flatter body\.$/],
+      [`${'{"a":'.repeat(349_000)}0${"}".repeat(349_000)}`, 400, /, at a(\.a){31}\. Send a flatter body\.$/],
+      [`{"name":"Deep","junk":${"[".repeat(1_048_000)}${"]".repeat(1_048_000)}}`, 400, /, at junk(\.0){31}\. Send a flatter body\.$/],
+      [`{"na\\u006De":${"[".repeat(40)}${"]".repeat(40)},"pad":"${"x".repeat(200_000)}"}`, 400, /, at name(\.0){31}\. Send a flatter body\.$/],
+      [`{${Array.from({ length: 150_000 }, (_, index) => `"${index.toString(36)}":0`).join(",")}}`, 413, /^The request body holds more than 10,000 values\. Send a smaller request\.$/],
+      [values(1_000_000), 413, /^The request body holds more than 10,000 values\./],
+    ];
+    for (const [body, status, answer] of unparsed) {
+      const refused = await post(body);
+      assert.equal(refused.status, status, `${body.slice(0, 40)}… is refused`);
+      assert.match(await errorOf(refused), answer);
+    }
+    assert.equal(parsedLarge, 0, "and none of them is parsed");
+    assert.equal((await post(JSON.stringify({ name: `${"[".repeat(40)}\\"${"{".repeat(40)},`, note: "x".repeat(200_000) }))).status, 403, "brackets, an escaped quote and a comma in text are text: the body reaches the route");
+    assert.equal(parsedLarge, 1, "parsed, as the spy counts");
+  } finally {
+    JSON.parse = parse;
+  }
+  checks += 15;
+  // The bytes' count is the walk's: at the cap both pass, and one value more both refuse.
+  const shapes: Array<[string, (items: number) => string, number]> = [
+    ["a list", (items) => values(items), 3],
+    ["an object's fields", (items) => keys(items), 3],
+    ["empty lists and objects", (items) => `[${Array.from({ length: items }, (_, index) => (index % 2 ? "{}" : "[ ]")).join(",")}]`, 1],
+    ["text holding commas, brackets and escaped quotes", (items) => `[${Array(items).fill('"a,[{\\"},\\\\"').join(",")}]`, 1],
+    ["whitespace between values", (items) => JSON.stringify({ name: "Many", junk: Array(items).fill({}) }, null, 2), 3],
+  ];
+  for (const [label, body, around] of shapes) {
+    for (const [items, found] of [[MAX_BODY_VALUES - around, undefined], [MAX_BODY_VALUES - around + 1, { field: "", problem: "values" }]] as const) {
+      const text = body(items);
+      assert.deepEqual([rawBodyProblem(Buffer.from(text)), bodyProblem(JSON.parse(text))], [found, found], `${label}: ${items + around} values`);
+      checks += 1;
+    }
+  }
+  // What a body costs the API's one thread, whatever its shape (the review of 4edd897, finding 1): refusing nesting
+  // costs a small part of parsing it; the checks of a list, an object's keys or a long text cost about what reading or
+  // writing the body as JSON does (an object of sparse integer keys costs any reader about four times its parse); and at
+  // the value cap, fingerprinting a keyed write's body costs less than parsing the largest ordinary body the 2 MB limit
+  // accepts.
+  const fastest = (run: () => unknown, runs = 5) => Math.min(...Array.from({ length: runs }, () => { const started = performance.now(); run(); return performance.now() - started; }));
+  const deep = `${"[".repeat(200_000)}${"]".repeat(200_000)}`, deepBytes = Buffer.from(deep);
+  const scanned = fastest(() => rawBodyProblem(deepBytes)), parsedDeep = fastest(() => JSON.parse(deep), 2);
+  assert.ok(scanned * 20 < parsedDeep, `refusing nesting from the bytes costs a small part of parsing it (${scanned.toFixed(2)} ms to scan, ${parsedDeep.toFixed(1)} ms to parse)`);
+  const largest = values(1_000_000), reference = fastest(() => JSON.parse(largest));
+  const costed: Array<[string, string, boolean]> = [
+    ["a list at the cap", values(MAX_BODY_VALUES - 3), true],
+    ["an object's keys at the cap", keys(MAX_BODY_VALUES - 3), true],
+    ["an object's integer keys at the cap", keys(MAX_BODY_VALUES - 3, (index) => String(index * 7)), true],
+    ["an object's sparse integer keys at the cap", keys(MAX_BODY_VALUES - 3, (index) => String(4_000_000_000 - index * 37)), true],
+    ["2 MB of long text", JSON.stringify({ name: "Text", note: "é😀".repeat(330_000) }), false],
+  ];
+  for (const [shape, text, capped] of costed) {
+    const bytes = Buffer.from(text), parsed = JSON.parse(text) as unknown;
+    const checked = fastest(() => { rawBodyProblem(bytes); bodyProblem(parsed); });
+    const handled = Math.max(fastest(() => JSON.parse(text)), fastest(() => JSON.stringify(parsed)));
+    assert.ok(checked < 3 * handled + 1, `${shape}: the checks cost about what reading or writing the body does (${checked.toFixed(1)} ms to check, ${handled.toFixed(1)} ms)`);
+    checks += 1;
+    if (!capped) continue;
+    const fingerprinted = fastest(() => requestFingerprint({ method: "POST", path: "/v1/records/customers", body: parsed }));
+    assert.ok(fingerprinted < reference, `${shape}: fingerprinting costs less than parsing 2 MB (${fingerprinted.toFixed(1)} ms, ${reference.toFixed(1)} ms)`);
+    checks += 1;
+  }
+  checks += 1;
   // Outside /api/v1 no body is read and no session checked: any other address under /api is unknown, answered before the
   // parser runs, whatever the body holds (the review of b9b10ef, finding 1).
   for (const path of ["/api/nowhere", "/api/healthz/", "/api/V1x/anything"]) {
@@ -402,4 +488,4 @@ try {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-console.log(`API security tests passed (${checks} checks): error answers and statuses, body-parser and NUL refusals, unavailable services and storage failures, prototype keys, response headers, origin rule before the body, the staff pilot origin for changes, body limits of size and values with a walk no dearer than parsing, no body read outside /api/v1, webhook ingress, Paystack signature before any lender work.`);
+console.log(`API security tests passed (${checks} checks): error answers and statuses, body-parser and NUL refusals, unavailable services and storage failures, prototype keys, response headers, origin rule before the body, the staff pilot origin for changes, compressed and non-UTF-8 bodies refused unread, nesting and values refused from the bytes before parsing, body limits of size and values with checks and fingerprints bounded for lists, object keys and long text, no body read outside /api/v1, webhook ingress, Paystack signature before any lender work.`);

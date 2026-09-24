@@ -18,30 +18,107 @@ export const MAX_BODY_DEPTH = 32;
 /**
  * The most values a request body may hold, counting every object, list, text,
  * number, true, false and null in it, the body itself included. The largest
- * body the console sends (a close review's 500 responses) holds a few thousand;
- * an import's CSV travels as one text.
+ * body the console sends, a Finance decision on a close review with its 500
+ * source exceptions, holds about 2,000; editing a settlement batch sends its
+ * lines back, two values a line. An import's CSV travels as one text.
  */
-export const MAX_BODY_VALUES = 100_000;
-/** A UTF-16 surrogate without its pair: PostgreSQL JSON refuses one, and text silently replaces it. */
-const UNPAIRED_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+export const MAX_BODY_VALUES = 10_000;
+/** Whether text holds a UTF-16 surrogate without its pair, which PostgreSQL JSON refuses and text silently replaces (a native check; es2022's types do not name it). */
+const unpairedSurrogate = (text: string) => !(text as string & { isWellFormed(): boolean }).isWellFormed();
 type BodyProblem = { field: string; problem: "depth" | "nul" | "surrogate" | "values" };
+const QUOTE = 0x22, BACKSLASH = 0x5c, COMMA = 0x2c, OPEN_LIST = 0x5b, CLOSE_LIST = 0x5d, OPEN_OBJECT = 0x7b, CLOSE_OBJECT = 0x7d;
+/**
+ * Where the text whose opening quote is at `start` ends: its closing quote, or
+ * the end of the bytes. Text without a backslash ends at the next quote, found
+ * natively (a long text is searched for a backslash natively too, a short one
+ * byte by byte); otherwise each backslash escapes the byte after it.
+ */
+function closingQuote(raw: Uint8Array, start: number): number {
+  const quote = raw.indexOf(QUOTE, start + 1);
+  if (quote === -1) return raw.length;
+  let escaped = false;
+  if (quote - start > 64) escaped = raw.subarray(start + 1, quote).indexOf(BACKSLASH) !== -1;
+  else for (let at = start + 1; at < quote && !escaped; at++) escaped = raw[at] === BACKSLASH;
+  if (!escaped) return quote;
+  for (let at = start + 1; at < raw.length; at++) {
+    const byte = raw[at];
+    if (byte === BACKSLASH) at++;
+    else if (byte === QUOTE) return at;
+  }
+  return raw.length;
+}
+/**
+ * What a body's bytes show before JSON.parse reads them: objects and arrays
+ * nested more than MAX_BODY_DEPTH levels deep, or more than MAX_BODY_VALUES
+ * values. Parsing 2 MB of nested brackets takes about 300 ms, and 2 MB of field
+ * names about 100 ms, before the walk (bodyProblem) could refuse them (the
+ * review of 4edd897, finding 1), so the parser refuses both from the UTF-8
+ * bytes first: one pass that skips text and stops at the first byte past either
+ * limit. In UTF-8 no byte of a longer character is a quote, bracket or comma.
+ * For valid JSON the count is the walk's: the body, and one value for each
+ * comma and for each list or object that holds anything. The path of a body
+ * nested too deep is the walk's too, from the index or key each open list or
+ * object is at; those keys are decoded only then.
+ */
+export function rawBodyProblem(raw: Uint8Array): BodyProblem | undefined {
+  // For each open list or object: whether it is a list, the index it is at, and where the key it is at starts and ends.
+  const lists: boolean[] = [], indexes: number[] = [], keys: Array<[number, number] | undefined> = [];
+  let depth = 0, values = 1, opened = false, keyNext = false;
+  for (let at = 0; at < raw.length; at++) {
+    const byte = raw[at]!;
+    if (byte === 0x20 || byte === 0x0a || byte === 0x0d || byte === 0x09) continue;
+    // A list or object that holds anything holds one value more than its commas.
+    if (opened) {
+      opened = false;
+      if (byte !== CLOSE_LIST && byte !== CLOSE_OBJECT && ++values > MAX_BODY_VALUES) return { field: "", problem: "values" };
+    }
+    if (byte === QUOTE) {
+      const end = closingQuote(raw, at);
+      if (keyNext) { keys[depth - 1] = [at, end]; keyNext = false; }
+      at = end;
+    } else if (byte === OPEN_LIST || byte === OPEN_OBJECT) {
+      if (depth === MAX_BODY_DEPTH) return { field: nestingPath(raw, lists, indexes, keys), problem: "depth" };
+      lists[depth] = byte === OPEN_LIST; indexes[depth] = 0; keys[depth] = undefined;
+      depth++; opened = true; keyNext = byte === OPEN_OBJECT;
+    } else if (byte === CLOSE_LIST || byte === CLOSE_OBJECT) {
+      if (depth > 0) depth--;
+      keyNext = false;
+    } else if (byte === COMMA) {
+      if (++values > MAX_BODY_VALUES) return { field: "", problem: "values" };
+      if (depth > 0) { if (lists[depth - 1]) indexes[depth - 1]!++; else keyNext = true; }
+    }
+  }
+  return undefined;
+}
+/** The dotted path of the list or object nested too deep: the index or key each open list or object is at, a key decoded as JSON.parse decodes it. */
+function nestingPath(raw: Uint8Array, lists: boolean[], indexes: number[], keys: Array<[number, number] | undefined>): string {
+  const text = new TextDecoder();
+  return lists.slice(0, MAX_BODY_DEPTH).map((list, level) => {
+    const span = keys[level];
+    if (list || !span) return list ? String(indexes[level]) : "";
+    const quoted = text.decode(raw.subarray(span[0], span[1] + 1));
+    try { return String(JSON.parse(quoted)); } catch { return quoted.slice(1, -1); }
+  }).join(".");
+}
 /**
  * The first thing in a parsed body that nothing may read: more than
  * MAX_BODY_VALUES values, objects and arrays nested more than MAX_BODY_DEPTH
  * levels deep (the checks and fingerprints that walk a body are recursive), a
  * NUL character (PostgreSQL text cannot hold it) or an unpaired surrogate, in a
- * string or a field name. The walk stops at that depth and that count, so it
- * can neither overflow the stack nor run long itself: it reads a list by index
- * and an object by its fields, and gathers the keys of the value it refuses on
- * the way back, so only that value's path is ever built. The field is its
- * dotted path: "" for the body itself or too many values, and the object
- * holding it (or "a field name") for a field name.
+ * string or a field name. A body's bytes were refused for the first two before
+ * it was parsed (rawBodyProblem); the walk holds whatever reaches it to both
+ * rules too. It stops at that depth and that count, so it can neither overflow
+ * the stack nor run long itself: it reads a list by index and an object by its
+ * own keys, and gathers the keys of the value it refuses on the way back, so
+ * only that value's path is ever built. The field is its dotted path: "" for
+ * the body itself or too many values, and the object holding it (or "a field
+ * name") for a field name.
  */
 export function bodyProblem(body: unknown): BodyProblem | undefined {
   let values = 0;
   const walk = (value: unknown, depth: number): { keys: string[]; problem: BodyProblem["problem"]; name?: true } | undefined => {
     if (++values > MAX_BODY_VALUES) return { keys: [], problem: "values" };
-    if (typeof value === "string") return value.includes("\u0000") ? { keys: [], problem: "nul" } : UNPAIRED_SURROGATE.test(value) ? { keys: [], problem: "surrogate" } : undefined;
+    if (typeof value === "string") return value.includes("\u0000") ? { keys: [], problem: "nul" } : unpairedSurrogate(value) ? { keys: [], problem: "surrogate" } : undefined;
     if (value === null || typeof value !== "object") return undefined;
     if (depth >= MAX_BODY_DEPTH) return { keys: [], problem: "depth" };
     if (Array.isArray(value)) {
@@ -51,9 +128,11 @@ export function bodyProblem(body: unknown): BodyProblem | undefined {
       }
       return undefined;
     }
-    for (const key in value) {
+    const keys = Object.keys(value);
+    for (let index = 0; index < keys.length; index++) {
+      const key = keys[index]!;
       if (key.includes("\u0000")) return { keys: [], problem: "nul", name: true };
-      if (UNPAIRED_SURROGATE.test(key)) return { keys: [], problem: "surrogate", name: true };
+      if (unpairedSurrogate(key)) return { keys: [], problem: "surrogate", name: true };
       const found = walk((value as Record<string, unknown>)[key], depth + 1);
       if (found) { found.keys.push(key); return found; }
     }
@@ -165,19 +244,34 @@ app.use("/api/v1",(req,res,next)=>{
 });
 // Each principal's own quota: a signed-in person, a sandbox this process has served, otherwise the network.
 app.use("/api/v1",(req,res,next)=>requestLimits.principal(req,res,next));
-// A body is JSON, and only a write's is read: a read's body is ignored (never parsed, checked or fingerprinted), and a
-// write's body in any other format, a form's included, is refused (415).
-const json=express.json({limit:"2mb"});
+// A body is JSON in UTF-8, sent uncompressed, and only a write's is read: a read's body is ignored (never parsed,
+// checked or fingerprinted), and a write's body in any other format, a form's included, or compressed, is refused
+// (415). The parser never inflates a body, and it refuses one nested too deep or holding too many values from its
+// bytes, before it parses them (rawBodyProblem); a charset other than UTF-8 is refused, since the bytes are read as
+// UTF-8.
+const json=express.json({limit:"2mb",inflate:false,verify:(_req,_res,raw,charset)=>{
+  if(charset!=="utf-8")throw Object.assign(new Error("The request body's character set is not supported."),{status:415,type:"charset.unsupported"});
+  const found=rawBodyProblem(raw);
+  if(found)throw Object.assign(new Error(bodyRefusal(found)),{status:found.problem==="values"?413:400,bodyProblem:found});
+}});
+/** Refuses a body problem, naming the field, before anything is fingerprinted, journaled or saved; too many values is a 413. */
+function refuseBody(req:Request,res:Response,found:BodyProblem):void{
+  const status=found.problem==="values"?413:400;
+  req.log.info({event:"request.rejected",status,reason:found.problem==="values"?"too_many_values":found.problem==="depth"?"nesting_depth":found.problem==="nul"?"nul_character":"unpaired_surrogate"},"Request body refused");
+  res.status(status).json({error:bodyRefusal(found),requestId:req.id});
+}
 app.use("/api/v1",(req,res,next)=>{
   if(req.method==="GET"||req.method==="HEAD"){next();return;}
   const sent=req.headers["transfer-encoding"]!==undefined||Number(req.headers["content-length"]??0)>0;
   if(sent&&!req.is("application/json")){req.log.info({event:"request.rejected",status:415,reason:"content_type"},"Request body refused");res.status(415).json({error:"Send the request body as JSON, with the Content-Type application/json.",requestId:req.id});return;}
-  json(req,res,next);
+  // A few kilobytes of gzip can hold megabytes to parse: a compressed body is refused before it is read, naming the
+  // one coding accepted (RFC 9110, Accept-Encoding).
+  if((req.headers["content-encoding"]||"identity").toLowerCase()!=="identity"){res.setHeader("Accept-Encoding","identity");req.log.info({event:"request.rejected",status:415,reason:"content_encoding"},"Request body refused");res.status(415).json({error:"Send the request body uncompressed, without a Content-Encoding.",requestId:req.id});return;}
+  json(req,res,(error?:unknown)=>{const found=(error as {bodyProblem?:BodyProblem}|undefined)?.bodyProblem;if(found)refuseBody(req,res,found);else next(error);});
 });
 app.use("/api/v1",(req,res,next)=>{
-  // Refused here, naming the field, before anything is fingerprinted, journaled or saved; too many values is a 413.
   const found=bodyProblem(req.body);
-  if(found){const status=found.problem==="values"?413:400;req.log.info({event:"request.rejected",status,reason:found.problem==="values"?"too_many_values":found.problem==="depth"?"nesting_depth":found.problem==="nul"?"nul_character":"unpaired_surrogate"},"Request body refused");res.status(status).json({error:bodyRefusal(found),requestId:req.id});return;}
+  if(found){refuseBody(req,res,found);return;}
   next();
 });
 app.use("/api", router);
