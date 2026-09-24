@@ -221,6 +221,10 @@ try{
  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at)
   SELECT x.id,x."merchantId",x.kind,x.name,x.status,x.reference,x."amountKobo",x."customerId",x.data,x."createdAt",x."updatedAt"
   FROM jsonb_to_recordset($1::jsonb) AS x(id text,"merchantId" text,kind text,name text,status text,reference text,"amountKobo" bigint,"customerId" text,data jsonb,"createdAt" timestamptz,"updatedAt" timestamptz)`,[JSON.stringify(history)]);
+ // The requests that wrote such a history would have moved the head the lender keeps, which the next request's write
+ // continues from (settings.auditChain; a write reads only the entries since the last one it verified): so does this one.
+ const historyEnd={sequence,hash:previousHash,at:(history.at(-1) as {createdAt:string}).createdAt};
+ await pool.query("UPDATE valopay_merchants SET settings=jsonb_set(settings,'{auditChain}',$2::jsonb) WHERE id=$1",[merchantId,JSON.stringify({...historyEnd,verified:historyEnd})]);
  await pool.query('ANALYZE valopay_records');
  const bounded=await api('/exports',{method:'POST',body:input,key:'bounded-head'});
  const headReads:Array<{text:string;values:unknown[]}>=[];
