@@ -28,7 +28,7 @@ async function pdfBytes(title:string,data:unknown,signal?:AbortSignal):Promise<B
   document.fontSize(24).fillColor("#102E2A").text("VALO PAY").moveDown(0.4);
   document.fontSize(15).text(title).moveDown();
   document.fillColor("#9B6524").fontSize(10).text("SYNTHETIC SANDBOX - NOT LIVE EVIDENCE").moveDown();
-  document.fillColor("#333333").fontSize(9).text("We never hold money. All amounts below are integer kobo (NGN). Times are UTC unless stated. This export cannot satisfy a production gate.").moveDown();
+  document.fillColor("#333333").fontSize(9).text("We never hold money. All amounts below are integer kobo (NGN), except money in another currency: a record that names its currency holds its minor unit, and otherCurrencies lists such money by currency beside a naira total, never in it. Times are UTC unless stated. This export cannot satisfy a production gate.").moveDown();
   document.font("Sans").fontSize(7);
   const text=JSON.stringify(data,null,2);
   for(let start=0;start<text.length;){

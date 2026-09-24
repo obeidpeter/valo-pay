@@ -340,4 +340,17 @@ checks += 5;
   checks += 5;
 }
 
-console.log(`Billing golden tests passed (${checks} checks): invoice lines, VAT, WAT months and period rules, every month invoiced in order with a zero invoice for a quiet one, the latest signed terms in effect found by the lender's id, withheld collections and the reversal window from settlement, adjustment credits and debits with references at the rate first billed, refunds of unapplied money, debits settled without a webhook, credit note, recovery fee gate and window.`);
+// ---------- Second review finding 4: the statement's receipts by channel sum naira only and list other currencies beside them ----------
+{
+  const { state } = fixture("statement-currencies", "2027-07-01");
+  const customer = recordsOf(state, "customers")[0]!;
+  const receipt = (channel: "card" | "transfer", reference: string, amountKobo: number, currency?: string) => makeRecord(state, "payments", { name: reference, status: "unallocated", customerId: customer.id, amountKobo, reference, data: { channel, collectionStatus: "received", settlementStatus: "unsettled", observedAt: wat("2027-07-01T07:00:00"), reversalStatus: "none", refundStatus: "none", allocatedKobo: 0, ...(currency ? { currency } : {}) } });
+  receipt("card", "CARD-USD-1", 100_000, "USD"); receipt("card", "CARD-NGN-1", 700_000); receipt("card", "CARD-EUR-1", 5_000, " eur "); receipt("transfer", "TRF-NGN-1", 300_000);
+  state.settings.billingPeriod = "2027-07";
+  const statement = buildReports(state, wat("2027-07-02T09:00:00")).billing;
+  assert.deepEqual(statement.channelBreakdown.card, { count: 3, kobo: 700_000, otherCurrencies: { EUR: { count: 1, amount: 5_000 } , USD: { count: 1, amount: 100_000 } }, billable: 0, reason: "This payment is included in reconciliation reports but is not charged a collection fee." }, "every receipt counts; the naira value leaves the dollars and euros out and lists them beside it");
+  assert.deepEqual([statement.channelBreakdown.transfer.count, statement.channelBreakdown.transfer.kobo, "otherCurrencies" in statement.channelBreakdown.transfer], [1, 300_000, false], "a channel with naira alone lists no other currency");
+  checks += 2;
+}
+
+console.log(`Billing golden tests passed (${checks} checks): invoice lines, VAT, WAT months and period rules, every month invoiced in order with a zero invoice for a quiet one, the latest signed terms in effect found by the lender's id, withheld collections and the reversal window from settlement, adjustment credits and debits with references at the rate first billed, refunds of unapplied money, debits settled without a webhook, credit note, recovery fee gate and window, and receipts by channel in naira with other currencies beside them.`);

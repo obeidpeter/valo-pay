@@ -28,12 +28,12 @@ import {
   ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, exportPermitted, handBackOwners, isCloseTime,
   nextCloseInstant, recordKinds, roles, sensitiveExportRefusal,
 } from "@workspace/valopay-schema";
-import { amendDueItem, customerTimeline, executeAction, makeRecord, rescheduleAfterSettings, validateRecord } from "../../api-server/src/domain";
+import { allocationPayer, amendDueItem, customerTimeline, executeAction, makeRecord, rescheduleAfterSettings, validateRecord } from "../../api-server/src/domain";
 import { enrolEligibleFailures } from "../../api-server/src/domain/policy-engine";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "../../api-server/src/domain/types";
 import { seedMerchant } from "../../api-server/src/lib/valopay-seed";
 import { getGates } from "../../api-server/src/lib/valopay-readiness";
-import { allocatableOnly, pageRecords } from "../../api-server/src/lib/valopay-list";
+import { allocatableOnly, allocationChoices, pageRecords } from "../../api-server/src/lib/valopay-list";
 import { pageQueue } from '../../api-server/src/lib/valopay-queues';
 import { importCsv } from "../../api-server/src/lib/valopay-import";
 import { exportJobView, publicExportRecord, queueExport, retryExport } from '../../api-server/src/lib/export-jobs';
@@ -229,7 +229,11 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
       const parsed = S.ListRecordsQueryParams.parse(query);
       allocatableOnly(params.kind!, parsed);
       return S.ListRecordsResponse.parse(withState(parsed.merchantId, (state) => {
-        const page = pageRecords(state.records.filter((record) => record.kind === params.kind), parsed, params.kind);
+        // One payment's allocation choices (paymentId) as the server's list reads them: the payer rule of its manual allocation.
+        const payment = parsed.paymentId === undefined ? undefined : state.records.find((record) => record.kind === "payments" && record.id === parsed.paymentId) ?? fail("Payment not found in this lender. Refresh the payments and choose one again.", 404);
+        const named = payment && !payment.customerId && payment.data.dueItemId ? state.records.find((record) => record.kind === "due-items" && record.id === payment.data.dueItemId)?.customerId : undefined;
+        const query = payment ? allocationChoices(parsed, allocationPayer(payment, named)) : parsed;
+        const page = query ? pageRecords(state.records.filter((record) => record.kind === params.kind), query, params.kind) : { items: [], total: 0 };
         return { ...page, items: page.items.map((record) => record.kind === "exports" ? publicExportRecord(record) : record) };
       }));
     }],

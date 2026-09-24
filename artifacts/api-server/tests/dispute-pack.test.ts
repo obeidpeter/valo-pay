@@ -3,12 +3,13 @@
 // as they applied at the time of each event.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { addNotice, ctxAt, decodePdfText, liveFixture, wat } from "./helpers.js";
+import { addNotice, addObservation, ctxAt, decodePdfText, liveFixture, wat } from "./helpers.js";
 import { reconcile } from "../src/domain/reconciliation.js";
 import { executeAction } from "../src/domain/actions.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
 import { buildDisputePack, disputePackCsv, renderDisputePackPdf } from "../src/lib/valopay-packs.js";
 import { buildExportBytes } from "../src/lib/valopay-exports.js";
+import { positionFor } from "../src/domain/close.js";
 
 let checks = 0;
 const { state, due, customer, policy } = liveFixture({ merchantId: "dispute-pack" });
@@ -77,7 +78,7 @@ checks += 12;
 const csv = disputePackCsv(pack);
 const lines = csv.split("\r\n");
 assert.equal(lines.length, pack.timeline.length + 1, "one CSV row per event");
-assert.match(lines[0]!, /^environment,merchant,customer,customerReference,generatedAt,at,atWAT,kind,event,status,reference,amountKobo,detail,actor,policyVersion/);
+assert.match(lines[0]!, /^environment,merchant,customer,customerReference,generatedAt,at,atWAT,kind,event,status,reference,amountKobo,currency,detail,actor,policyVersion/);
 assert.ok(lines.every((line, index) => index === 0 || line.startsWith('"synthetic_sandbox"')), "every row names the environment");
 const json = await buildExportBytes(state, ctx, { kind: "customer-pack", customerId: customer.id, format: "json" });
 const parsed = JSON.parse(json.bytes.toString());
@@ -93,6 +94,33 @@ assert.equal(createHash("sha256").update(asCsv.bytes).digest("hex").length, 64, 
 await assert.rejects(buildExportBytes(state, ctx, { kind: "customer-pack", customerId: "missing", format: "pdf" }), /Customer not found/);
 checks += 11;
 
+// ---- Second review finding 4: money in another currency is never added to a naira total, and every amount is printed in its own currency ----
+{
+  const { state: usd, customer: payer } = liveFixture({ withFailure: false, merchantId: "dispute-pack-currencies" });
+  addObservation(usd, { reference: "CARD-USD-1", amountKobo: 100_000, source: "card", customerId: payer.id, eventId: "c1", occurredAt: wat("2027-07-01T07:00:00"), currency: "USD" } as any);
+  addObservation(usd, { reference: "CARD-NGN-1", amountKobo: 700_000, source: "card", customerId: payer.id, eventId: "c2", occurredAt: wat("2027-07-01T07:00:00") });
+  executeAction(usd, ctxAt(wat("2027-07-02T07:30:00"), "Finance"), { action: "daily_close" });
+  const held = buildDisputePack(usd, ctxAt(wat("2027-07-02T09:00:00"), "Finance"), payer.id);
+  const payments = recordsOf(usd, "payments").filter((item) => item.customerId === payer.id);
+  const nairaKobo = payments.filter((item) => String(item.data.currency || "NGN") === "NGN").reduce((sum, item) => sum + item.amountKobo, 0);
+  assert.deepEqual(held.summary.payments, { count: payments.length, kobo: nairaKobo, otherCurrencies: { USD: { count: 1, amount: 100_000 } }, reversed: 0 }, "the payments total counts every payment, sums naira only and lists the USD payment beside it");
+  assert.deepEqual([held.position.unallocatedKobo, held.position.unallocatedOtherCurrencies], [positionFor(usd, payer.id).unallocatedKobo, { USD: { count: 1, amount: 100_000 } }], "the unallocated position is naira, with the USD money beside it");
+  const currencyOfRow = (kind: string, reference: string) => held.timeline.find((event) => event.kind === kind && event.reference === reference)?.currency;
+  assert.deepEqual([currencyOfRow("payments", "CARD-USD-1"), currencyOfRow("observations", "CARD-USD-1"), currencyOfRow("payments", "CARD-NGN-1"), currencyOfRow("observations", "CARD-NGN-1")], ["USD", "USD", "NGN", "NGN"], "the timeline carries each amount's currency");
+  assert.equal(held.timeline.find((event) => event.kind === "exceptions" && /CARD-USD-1/.test(event.detail))?.currency, "USD", "and an exception about the USD payment is in USD too");
+  assert.match(held.timeline.find((event) => event.kind === "payments" && event.reference === "CARD-USD-1")!.detail, /allocated USD 0\.00; Payment CARD-USD-1 is in USD[^]*resolve it with Finance\.$/, "its detail prints its money in USD, with one full stop");
+  const text = decodePdfText(await renderDisputePackPdf(held, { compress: false }));
+  const printed = text.split("\n");
+  const after = (label: string) => printed.slice(printed.indexOf(label), printed.indexOf(label) + 2).join(" | ");
+  assert.match(after("Payments"), new RegExp(`^Payments \\|\\s+${payments.length} totalling NGN [0-9,.]+ and USD 1,000\\.00 \\(0 reversed\\)$`), `the PDF sums naira and lists the dollars beside it (${after("Payments")})`);
+  assert.match(after("Unallocated payments"), /^Unallocated payments \|\s+NGN [0-9,.]+ and USD 1,000\.00 in another currency, held for Finance$/, `and so does the unallocated line (${after("Unallocated payments")})`);
+  const usdRow = printed.indexOf("Payment CARD-USD-1 unallocated");
+  assert.ok(usdRow > 0 && printed.slice(usdRow, usdRow + 15).includes("USD 1,000.00") && !text.includes("NGN 1,000.00"), "the USD payment's timeline row prints its amount in USD, never as naira");
+  const csvRow = disputePackCsv(held).split("\r\n").find((line) => line.includes('"payments","Payment CARD-USD-1 unallocated"'));
+  assert.match(String(csvRow), /"100000","USD",/, "and the CSV gives its currency beside the amount");
+  checks += 9;
+}
+
 // ---- The gate pack freezes the uplift report with the pre-registered rule ----
 const gate = await buildExportBytes(state, ctx, { kind: "gate-pack", format: "json" });
 const gatePack = JSON.parse(gate.bytes.toString());
@@ -100,4 +128,4 @@ assert.ok(Array.isArray(gatePack.data.upliftReport.results), "MEA-02: the gate p
 assert.equal(gatePack.data.upliftReport.result, "not_proven");
 checks += 2;
 
-console.log(`Dispute pack tests passed (${checks} checks): timeline content, governing versions, paginated PDF, CSV and JSON parity, gate pack.`);
+console.log(`Dispute pack tests passed (${checks} checks): timeline content, governing versions, paginated PDF, CSV and JSON parity, money in another currency beside naira totals, gate pack.`);

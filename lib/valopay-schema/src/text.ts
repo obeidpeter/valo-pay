@@ -29,3 +29,37 @@ export function nairaText(kobo: number): string {
     .map((part) => part.type === "integer" ? numberFormat.format(whole / 100n) : part.type === "fraction" ? String(whole % 100n).padStart(2, "0") : part.value);
   return `NGN ${parts.join("")}`;
 }
+
+/** The decimal places of a currency's minor unit, as Intl knows it: 2 for USD, 0 for JPY; 2 for a code it cannot read. */
+function minorUnitDigits(currency: string): number {
+  try {
+    return new Intl.NumberFormat(MARKET_LOCALE, { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
+  } catch {
+    return 2;
+  }
+}
+/**
+ * An amount in its currency's minor unit, as a payment stores it, written the
+ * way the API's messages write money: naira as nairaText does ("NGN 25,000.00"),
+ * any other currency by its code with its own decimals ("USD 1,000.00" for
+ * 100,000 cents), with the same integer arithmetic.
+ */
+export function moneyText(amount: number, currency = "NGN"): string {
+  const code = String(currency || "NGN").trim().toUpperCase();
+  if (code === "NGN") return nairaText(amount);
+  const digits = minorUnitDigits(code), layout = new Intl.NumberFormat(MARKET_LOCALE, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  if (!Number.isSafeInteger(amount)) return `${code} ${layout.format(amount / 10 ** digits)}`;
+  const minor = BigInt(amount), whole = minor < 0n ? -minor : minor, unit = 10n ** BigInt(digits);
+  const parts = layout.formatToParts(minor < 0n ? -1 : 1)
+    .map((part) => part.type === "integer" ? numberFormat.format(whole / unit) : part.type === "fraction" ? String(whole % unit).padStart(digits, "0") : part.value);
+  return `${code} ${parts.join("")}`;
+}
+/**
+ * Money in currencies other than naira, as the close and the billing statement
+ * list it beside a naira total (otherCurrencies: each code's count and amount
+ * in its minor unit), for a sentence: "EUR 50.00 and USD 1,000.00", by code.
+ */
+export function otherCurrenciesText(other: Readonly<Record<string, { amount: number }>> | undefined): string {
+  const rows = Object.entries(other ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return new Intl.ListFormat("en-GB").format(rows.map(([code, row]) => moneyText(row.amount, code)));
+}

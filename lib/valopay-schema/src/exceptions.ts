@@ -12,7 +12,7 @@ export interface ExceptionDefinition {
 export const exceptionCatalogue = {
   activation_expired: { title: "Activation deadline passed", trigger: "Mandate passes its activation deadline", owner: "Operations", slaBusinessDays: 2, severity: "medium", resolutionCodes: ["reissued", "customer_declined", "wrong_number", "abandoned"] },
   unallocated_payment: { title: "Unallocated payment", trigger: "A payment is still unmatched after 24 hours", owner: "Finance", slaBusinessDays: 2, severity: "medium", resolutionCodes: ["allocated_manual", "refund_requested", "held_credit", "not_ours"] },
-  suspected_duplicate: { title: "Suspected duplicate", trigger: "A payment may be a duplicate of another payment", owner: "Finance", slaBusinessDays: 2, severity: "high", resolutionCodes: ["confirmed_duplicate_refund", "distinct_payments", "applied_to_next"] },
+  suspected_duplicate: { title: "Suspected duplicate", trigger: "A payment may be a duplicate of another payment", owner: "Finance", slaBusinessDays: 2, severity: "high", resolutionCodes: ["confirmed_duplicate_refund", "distinct_payments", "applied_to_next", "same_payment", "not_money"] },
   overpayment: { title: "Overpayment", trigger: "The allocated amount is more than the instalment due", owner: "Finance", slaBusinessDays: 2, severity: "medium", resolutionCodes: ["refund_requested", "held_credit", "applied_to_next"] },
   unpaid_after_final_attempt: { title: "Unpaid after final attempt", trigger: "The retry policy allows no further attempts", owner: "Operations", slaBusinessDays: 2, severity: "medium", resolutionCodes: ["paid_other_channel", "rescheduled_by_lms", "written_off_by_lms", "mandate_reissued"] },
   mandate_limit_exceeded: { title: "Mandate limit exceeded", trigger: "Due amount above the mandate limit", owner: "Operations", slaBusinessDays: 2, severity: "medium", resolutionCodes: ["limit_raised_new_mandate", "split_by_lms", "cancelled"] },
@@ -61,4 +61,43 @@ export const conditionClearedCode = "condition_cleared";
 export function resolutionCodesFor(rawType: unknown): readonly string[] {
   const type = resolveExceptionType(rawType);
   return type ? exceptionCatalogue[type].resolutionCodes : genericResolutionCodes;
+}
+
+/**
+ * Finance's resolutions of payment evidence held for review (a
+ * suspected_duplicate linked to the evidence): same_payment joins it to the
+ * payment its exception names as more evidence of that payment, and not_money
+ * sets it aside, so no payment is made from it.
+ */
+export const heldEvidenceCodes = { samePayment: "same_payment", notMoney: "not_money" } as const;
+
+/**
+ * The condition a suspected_duplicate for held payment evidence is raised
+ * with: the evidence, the payment its exception names, and whether it was
+ * held only because it came through another connection than that payment.
+ */
+export function heldEvidenceCondition(observationId: string, paymentId: string, connectionOnly: boolean): string {
+  return connectionOnly ? `suspected_duplicate:${observationId}:connection:${paymentId}` : `suspected_duplicate:${observationId}:${paymentId}`;
+}
+
+/** What a held-evidence condition (heldEvidenceCondition) names; undefined for any other condition. */
+export function heldEvidenceOf(condition: unknown): { observationId: string; paymentId: string; connectionOnly: boolean } | undefined {
+  const parts = String(condition ?? "").split(":");
+  if (parts[0] !== "suspected_duplicate" || !parts[1]) return undefined;
+  if (parts.length === 4 && parts[2] === "connection" && parts[3]) return { observationId: parts[1], paymentId: parts[3], connectionOnly: true };
+  if (parts.length === 3 && parts[2]) return { observationId: parts[1], paymentId: parts[2], connectionOnly: false };
+  return undefined;
+}
+
+/**
+ * The resolution codes one exception offers: its type's, less those that do
+ * not apply to it. A suspected_duplicate offers same_payment only for payment
+ * evidence held because it came through another connection alone, and
+ * not_money only for held payment evidence, never for a held payment.
+ */
+export function resolutionCodesForException(exception: { data?: { type?: unknown; condition?: unknown } | null } | null | undefined): readonly string[] {
+  const codes = resolutionCodesFor(exception?.data?.type);
+  if (resolveExceptionType(exception?.data?.type) !== "suspected_duplicate") return codes;
+  const held = heldEvidenceOf(exception?.data?.condition);
+  return codes.filter((code) => code === heldEvidenceCodes.samePayment ? held?.connectionOnly === true : code === heldEvidenceCodes.notMoney ? held !== undefined : true);
 }
