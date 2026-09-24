@@ -1,0 +1,177 @@
+// Team & access on a staff host, with the directory the API answers each viewer: what a colleague's row counts, and
+// what an applied change or a decision leaves on the page and where focus goes once its button has gone (console
+// review of 24 September, items 3 to 5).
+import { afterEach, beforeEach, expect, it } from "vitest";
+import type { StaffDirectory } from "@workspace/valopay-schema";
+import { installFakeApi, type FakeApi } from "./fake-api";
+import { renderApp, screen, userEvent, waitFor, within } from "./harness";
+
+let api: FakeApi;
+beforeEach(() => { api = installFakeApi(); });
+afterEach(() => api.uninstall());
+
+type Member = StaffDirectory["members"][number];
+type Lender = StaffDirectory["lenders"][number];
+const DAY = 24 * 60 * 60 * 1000;
+const at = (days: number) => new Date(Date.now() + days * DAY).toISOString();
+const member = (id: string, actor: string, name: string, role: Member["role"], lenderIds: string[], expiresAt: string | null = at(60)): Member =>
+  ({ id, actor, name, role, status: "active", expiresAt, updatedAt: at(-1), lenderIds: role === "Admin" ? [] : lenderIds, allLenders: role === "Admin" });
+const directory = (actor: string, members: Member[], rest: Partial<StaffDirectory> = {}): StaffDirectory =>
+  ({ mode: "staff", actor, members, lenders: [], invitations: [], changes: [], events: [], message: "Verified staff access.", ...rest });
+const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+/** A membership as a change answers it: no lender fields, and an expiry. */
+const answered = ({ lenderIds: _lenders, allLenders: _all, ...rest }: Member) => ({ ...rest, expiresAt: rest.expiresAt ?? at(60) });
+
+/**
+ * Serves the fake API as a staff host signed in as `viewer`. `team` answers the team routes (undefined passes a
+ * request on) and is given the workspace's lenders.
+ */
+function staffHost(viewer: { actor: string; role: string }, team: (path: string, method: string, body: any, lenders: Lender[]) => unknown) {
+  const send = globalThis.fetch;
+  let lenders: Lender[] = [];
+  globalThis.fetch = async (input, options) => {
+    const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+    const path = new URL(url, "http://localhost").pathname, method = options?.method ?? "GET";
+    if (path.startsWith("/api/v1/team") && path !== "/api/v1/team/readiness") {
+      const answer = team(path.slice("/api/v1".length), method, options?.body ? JSON.parse(String(options.body)) : undefined, lenders);
+      if (answer !== undefined) return json(answer);
+    }
+    const response = await send(input, options);
+    if (path !== "/api/v1/workspace") return response;
+    const workspace = await response.json();
+    lenders = workspace.merchants;
+    return json({ ...workspace, accessMode: "staff", actor: viewer.actor, role: viewer.role, authenticated: true });
+  };
+}
+const card = (name: string) => screen.getByRole("heading", { name }).closest("article")!;
+
+it("counts on a colleague's row the lenders the viewer shares with them, not their permitted lenders", async () => {
+  const [first, second] = api.merchantIds as [string, string];
+  // To someone who is not an administrator the API sends only the lenders they share with each colleague.
+  staffHost({ actor: "Clerk:user_ops", role: "Operations" }, (path) => path === "/team" ? directory("Clerk:user_ops", [
+    member("m-ops", "Clerk:user_ops", "Ope Adéyẹmí", "Operations", [first, second]),
+    member("m-fin", "Clerk:user_fin", "Funmi Ọbi", "Finance", [first], null),
+    member("m-comp", "Clerk:user_comp", "Chika Ifẹ", "Compliance reviewer", [first, second], null),
+    member("m-admin", "Clerk:user_admin", "Ada Admin", "Admin", [], null),
+  ]) : undefined);
+  renderApp("/team");
+  await screen.findByRole("heading", { name: "Funmi Ọbi" });
+  expect(card("Funmi Ọbi").textContent).toContain("1 lender you share");
+  expect(card("Chika Ifẹ").textContent).toContain("2 lenders you share");
+  // The viewer's own row and an administrator's say what they may open.
+  expect(card("Ope Adéyẹmí").textContent).toContain("2 permitted lenders");
+  expect(card("Ada Admin").textContent).toContain("All lenders in this workspace");
+  expect(screen.queryByText(/^1 permitted lender$/)).toBeNull();
+});
+
+it("counts every permitted lender on each row for an administrator, whose directory is whole", async () => {
+  const [first, second] = api.merchantIds as [string, string];
+  staffHost({ actor: "Clerk:user_admin", role: "Admin" }, (path, _method, _body, lenders) => path === "/team" ? directory("Clerk:user_admin", [
+    member("m-admin", "Clerk:user_admin", "Ada Admin", "Admin", []),
+    member("m-fin", "Clerk:user_fin", "Funmi Ọbi", "Finance", [first, second]),
+    member("m-ops", "Clerk:user_ops", "Ope Adéyẹmí", "Operations", [second]),
+  ], { lenders }) : undefined);
+  renderApp("/team");
+  await screen.findByRole("heading", { name: "Funmi Ọbi" });
+  expect(card("Funmi Ọbi").textContent).toContain("2 permitted lenders");
+  expect(card("Ope Adéyẹmí").textContent).toContain("1 permitted lender");
+  expect(screen.queryByText(/you share/)).toBeNull();
+});
+
+/** An administrator's directory whose members, invitations and waiting changes change as the API would change them: every change to a membership is a new version. */
+function liveTeam() {
+  const [first] = api.merchantIds as [string];
+  const state: Pick<StaffDirectory, "members" | "invitations" | "changes"> = {
+    members: [member("m-admin", "Clerk:user_admin", "Ada Admin", "Admin", []), member("m-ops", "Clerk:user_ops", "Chidi Ops", "Operations", [first], at(80)), member("m-fin", "Clerk:user_fin", "Funmi Ọbi", "Finance", [first], at(80))],
+    invitations: [{ id: "i-1", email: "finance.new@example.test", role: "Finance", status: "pending", expiresAt: at(6), invitedBy: "Clerk:user_other", approval: "awaiting", approvedBy: null }],
+    changes: [
+      { id: "c-1", memberId: "m-ops", name: "Chidi Ops", from: { role: "Operations", status: "active" }, to: { role: "Finance", status: "active" }, reason: "Needs to review closes", requestedBy: "Clerk:user_other", requestedAt: at(-0.1) },
+      { id: "c-2", memberId: "m-fin", name: "Funmi Ọbi", from: { role: "Finance", status: "active" }, to: { role: "Admin", status: "active" }, reason: "Covers administration in August", requestedBy: "Clerk:user_other", requestedAt: at(-0.2) },
+    ],
+  };
+  const version = (id: string, change: Partial<Member>) => {
+    state.members = state.members.map((item) => item.id === id ? { ...item, ...change, updatedAt: new Date(Date.parse(item.updatedAt) + 1000).toISOString() } : item);
+    return state.members.find((item) => item.id === id)!;
+  };
+  staffHost({ actor: "Clerk:user_admin", role: "Admin" }, (path, method, body, lenders) => {
+    if (path === "/team" && method === "GET") return directory("Clerk:user_admin", state.members, { lenders, invitations: state.invitations, changes: state.changes });
+    const edited = /^\/team\/members\/([^/]+)$/.exec(path);
+    if (edited && method === "PATCH") {
+      const saved = version(edited[1]!, { role: body.role, status: body.status, ...(body.status === "revoked" ? { lenderIds: [] } : {}) });
+      return { ...answered(saved), message: body.status === "revoked" ? `${saved.name}’s access is revoked. Their lender access and pending invitations are removed.` : `${saved.name} is now ${saved.role} (${saved.status}).`, pendingChange: null };
+    }
+    const granted = /^\/team\/members\/([^/]+)\/lenders$/.exec(path);
+    if (granted && method === "PATCH") return { ...answered(version(granted[1]!, { lenderIds: body.lenderIds })), lenderIds: body.lenderIds, allLenders: false, message: "Lender access saved. Existing sessions must pass these permissions on their next request." };
+    if (path === "/team/invitations/i-1/approve") {
+      state.invitations = state.invitations.map((item) => ({ ...item, approval: "approved", approvedBy: "Clerk:user_admin" }));
+      return { message: "Invitation approved: finance.new@example.test can now accept it as Finance." };
+    }
+    const decided = /^\/team\/changes\/([^/]+)\/(approve|decline)$/.exec(path);
+    if (decided) {
+      const request = state.changes.find((item) => item.id === decided[1])!;
+      state.changes = state.changes.filter((item) => item !== request);
+      if (decided[2] === "decline") return { message: "Change request declined. The membership is unchanged." };
+      return { ...answered(version(request.memberId, request.to)), message: `Change approved: ${request.name} is now ${request.to.role} (${request.to.status}).`, pendingChange: null };
+    }
+    return undefined;
+  });
+  return state;
+}
+
+it("keeps what an applied suspension or revocation did once the directory shows the membership's new version", async () => {
+  const user = userEvent.setup();
+  liveTeam();
+  renderApp("/team");
+  await screen.findByRole("heading", { name: "Chidi Ops" });
+  await user.selectOptions(within(card("Funmi Ọbi")).getByLabelText("Access for Funmi Ọbi"), "suspended");
+  await user.type(within(card("Funmi Ọbi")).getByLabelText("Reason for changing Funmi Ọbi"), "On leave until the audit ends");
+  await user.click(within(card("Funmi Ọbi")).getByRole("button", { name: "Save access change" }));
+  // The new version renews the card's form, which shows the membership as it now stands; its button goes with the old
+  // form, so focus goes to what the change did.
+  await waitFor(() => expect(within(card("Funmi Ọbi")).getByText(/^Finance · suspended/)).toBeTruthy());
+  expect((within(card("Funmi Ọbi")).getByLabelText("Reason for changing Funmi Ọbi") as HTMLInputElement).value).toBe("");
+  const suspended = within(card("Funmi Ọbi")).getByRole("status");
+  expect(suspended.textContent).toBe("Funmi Ọbi is now Finance (suspended).");
+  await waitFor(() => expect(document.activeElement).toBe(suspended));
+
+  await user.selectOptions(within(card("Chidi Ops")).getByLabelText("Access for Chidi Ops"), "revoked");
+  await user.type(within(card("Chidi Ops")).getByLabelText("Reason for changing Chidi Ops"), "Left the pilot team this week");
+  await user.click(within(card("Chidi Ops")).getByRole("button", { name: "Save access change" }));
+  await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Revoke access" }));
+  await waitFor(() => expect(within(card("Chidi Ops")).getByText(/^Operations · revoked/)).toBeTruthy());
+  expect(within(card("Chidi Ops")).getByRole("status").textContent).toBe("Chidi Ops’s access is revoked. Their lender access and pending invitations are removed.");
+});
+
+it("keeps the confirmation of saved lender access, which gives the membership a new version", async () => {
+  const user = userEvent.setup();
+  liveTeam();
+  renderApp("/team");
+  await screen.findByRole("heading", { name: "Chidi Ops" });
+  expect(card("Chidi Ops").textContent).toContain("1 permitted lender");
+  const form = within(within(card("Chidi Ops")).getByRole("group", { name: "Lenders available to Chidi Ops" }));
+  await user.click(form.getAllByRole("checkbox").find((box) => !(box as HTMLInputElement).checked)!);
+  await user.type(form.getByLabelText("Reason for lender access change for Chidi Ops"), "Also works on the second lender's collections");
+  await user.click(form.getByRole("button", { name: "Save lender access" }));
+  await waitFor(() => expect(card("Chidi Ops").textContent).toContain("2 permitted lenders"));
+  const saved = within(card("Chidi Ops")).getByText("Lender access saved.");
+  await waitFor(() => expect(document.activeElement).toBe(saved));
+});
+
+it("moves focus to the decision's message when Approve invitation, Approve change or Decline change removes its item", async () => {
+  const user = userEvent.setup();
+  liveTeam();
+  renderApp("/team");
+  const panel = (await screen.findByRole("heading", { name: "Waiting for a second administrator" })).closest("section")!;
+  for (const [button, said] of [
+    ["Approve invitation", "Invitation approved: finance.new@example.test can now accept it as Finance."],
+    ["Approve change", "Change approved: Chidi Ops is now Finance (active)."],
+    ["Decline change", "Change request declined. The membership is unchanged."],
+  ] as const) {
+    const pressed = within(panel).getAllByRole("button", { name: button })[0]!;
+    await user.click(pressed);
+    await waitFor(() => expect(pressed.isConnected).toBe(false));
+    const message = within(panel).getByText(said);
+    await waitFor(() => expect(document.activeElement).toBe(message));
+  }
+  expect(within(panel).getByText("Nothing is waiting for approval.")).toBeTruthy();
+});

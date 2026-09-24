@@ -6,6 +6,7 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { useSafeCreateExport, useSafeRetryExportJob } from '@/lib/safe-mutations';
 import { Button } from './ui/button';
 import { DiscardOriginalRequest } from './discard-original-request';
+import { readableLabel } from './record-label';
 import { formatDate, formatNumber } from '@/lib/formatters';
 import { notifyDone, notifyProblem, saidBy } from '@/lib/notify';
 import { exportPermitted, exportResultSchema, sensitiveExportRefusal } from '@workspace/valopay-schema';
@@ -16,6 +17,12 @@ type Format = 'pdf' | 'csv' | 'json';
 /** What a saved export holds, in words: the packs by their names, anything else as `fallback`. */
 export function exportKindTitle(kind: string, fallback = 'Saved export'): string {
   return kind === 'billing' ? 'Billing CSV' : kind === 'gate-pack' ? 'Evidence pack' : kind === 'reviewed-close' ? 'Reviewed close evidence' : kind === 'closes' ? 'Close evidence' : ['customer-pack','dispute-pack'].includes(kind) ? 'Dispute pack' : fallback;
+}
+/** A saved export's state in words, the one list Saved exports filters by. */
+export const exportStatusLabels: Record<string, string> = { queued: 'Waiting', running: 'Preparing', ready: 'Completed', failed: 'Needs retry' };
+/** A saved export's state as Saved exports and the recent exports beside an export button both show it, never its machine name ("ready"). */
+export function exportStatusLabel(record: { status: string; data: Record<string, unknown> }): string {
+  return record.data.fileDeletedAt ? 'File expired' : exportStatusLabels[record.status] || readableLabel(record.status);
 }
 
 /** Jobs survive page changes and reloads. Poll only the selected lender/job; downloads always re-authorise on the server. */
@@ -105,6 +112,6 @@ export function ExportJobControl({ kind, customerId, closeReviewId, savedJobId, 
       {state === 'ready' && <><p className="text-xs text-muted-foreground">Sample data only{job.generatedAt ? ` · ${formatDate(job.generatedAt)}` : ''}</p>{canOpen && <Button asChild variant="outline" size="sm"><a href={job.downloadUrl} target="_blank" rel="noopener noreferrer">{openLabel}</a></Button>}<details className="text-xs"><summary className="min-h-8 cursor-pointer content-center font-medium">File verification and access</summary><p className="mt-2 font-mono break-all">SHA-256: {job.checksum}</p><p className="mt-2 text-muted-foreground">Workspace access is checked on every download. An administrator may remove this file through an approved retention run after the lender’s retention period. Its checksum and deletion receipt are retained. A copy already downloaded cannot be recalled.</p></details></>}
     </div>}
     {!savedJobId && id && <Link href={`/exports?job=${encodeURIComponent(id)}`} className="inline-flex min-h-9 items-center text-xs text-primary underline">View all saved exports</Link>}
-    {previous.length > 1 && <details className="text-xs"><summary className="cursor-pointer font-medium">Recent exports ({formatNumber(previous.length)})</summary><ul className="mt-2 space-y-1">{previous.map(record => <li key={record.id}><button type="button" className="min-h-8 text-left underline" onClick={() => setSelected({ scope, job: { id: record.id, downloadUrl: `/api/v1/exports/${record.id}/download?merchantId=${merchantId}`, status: record.status as ExportResult['status'] } })}>{String(record.data.format).toUpperCase()} · {formatDate(record.createdAt)} · {record.status}</button></li>)}</ul></details>}
+    {previous.length > 1 && <details className="text-xs"><summary className="cursor-pointer font-medium">Recent exports ({formatNumber(previous.length)})</summary><ul className="mt-2 space-y-1">{previous.map(record => <li key={record.id}><button type="button" className="min-h-8 text-left underline" onClick={() => setSelected({ scope, job: { id: record.id, downloadUrl: `/api/v1/exports/${record.id}/download?merchantId=${merchantId}`, status: record.status as ExportResult['status'] } })}>{String(record.data.format).toUpperCase()} · {formatDate(record.createdAt)} · {exportStatusLabel(record)}</button></li>)}</ul></details>}
   </div>;
 }

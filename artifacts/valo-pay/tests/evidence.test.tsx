@@ -63,6 +63,14 @@ describe('evidence register and operational reviews', () => {
     expect(await screen.findByText('No reviews logged')).toBeTruthy();
   });
 
+  it('says, before the first review, that a review is recorded in the signed-in person\'s name, as its dialog records it', async () => {
+    renderApp('/evidence');
+    const empty = (await screen.findByText('No reviews logged')).closest('tr')!;
+    // The dialog no longer takes a reviewer, so the row must not ask for one.
+    expect(empty.textContent).not.toMatch(/name the reviewer/i);
+    expect(empty.textContent).toContain('The review is recorded in your name, with the time the service saves it.');
+  });
+
   it('reports export failures and leaves an Open link when the browser blocks the new tab', async () => {
     const user = userEvent.setup();
     vi.spyOn(window, 'open').mockReturnValue(null);

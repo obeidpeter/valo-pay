@@ -13,6 +13,18 @@ const focused = (page: Page) => page.evaluate(() => {
   return active ? { tag: active.tagName.toLowerCase(), id: active.id, text: (active.getAttribute("aria-label") || active.innerText || "").trim().replace(/\s+/g, " ").slice(0, 80) } : null;
 });
 
+const DAY = 86_400_000;
+const inDays = (days: number) => new Date(Date.now() + days * DAY).toISOString();
+/** Answers the workspace as a staff pilot's, signed in as administrator A; everything else stays the synthetic API's. */
+async function staffAdministrator(page: Page) {
+  await page.route("**/api/v1/workspace", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...(await response.json()), accessMode: "staff", actor: "Clerk:user_admin_a", role: "Admin" } });
+  });
+}
+/** Answers a staff request as the service would, after long enough for the pressed button to wait disabled. */
+const slowly = () => new Promise((resolve) => setTimeout(resolve, 600));
+
 /** Whether the page has an h1, as axe's best-practice rule asks. */
 async function headingOne(page: Page) {
   await page.addScriptTag({ path: path.resolve("node_modules/axe-core/axe.min.js") });
@@ -48,6 +60,68 @@ test("a pay-by-bank step that removes its button moves focus to what it did", as
   await page.keyboard.press("Enter");
   await expect(browserReturn).toHaveCount(0);
   await expect.poll(() => focused(page)).toMatchObject({ tag: "p", text: expect.stringMatching(/^Browser return recorded\./) });
+});
+
+test("a decision on Team & access moves focus to what it did, and a staff administrator is still warned", async ({ page }) => {
+  // Console review of 24 September, item 3, with the staff answers at the network edge.
+  await staffAdministrator(page);
+  const member = (id: string, name: string, role: string, expiresAt: string) => ({ id, actor: `Clerk:user_${id}`, name, role, status: "active", expiresAt, updatedAt: inDays(-1), lenderIds: [], allLenders: role === "Admin" });
+  const members = [member("admin_a", "Ada Admin", "Admin", inDays(10)), member("admin_b", "Bola Admin", "Admin", inDays(60)), member("ops", "Chidi Ops", "Operations", inDays(80)), member("fin", "Funmi Obi", "Finance", inDays(80))];
+  const change = (id: string, memberId: string, name: string, from: string, to: string) => ({ id, memberId, name, from: { role: from, status: "active" }, to: { role: to, status: "active" }, reason: "Covers the close reviews", requestedBy: "Clerk:user_admin_b", requestedAt: inDays(-0.1) });
+  let invitations = [{ id: "i-1", email: "finance.new@example.test", role: "Finance", status: "pending", expiresAt: inDays(6), invitedBy: "Clerk:user_admin_b", approval: "awaiting", approvedBy: null }];
+  let changes = [change("c-1", "ops", "Chidi Ops", "Operations", "Finance"), change("c-2", "fin", "Funmi Obi", "Finance", "Compliance reviewer")];
+  await page.route("**/api/v1/team", (route) => route.request().method() === "GET" ? route.fulfill({ json: { mode: "staff", actor: "Clerk:user_admin_a", members, lenders: [], invitations, changes, events: [], message: "Verified staff access." } }) : route.fallback());
+  await page.route(/\/api\/v1\/team\/(invitations|changes)\/[^/]+\/(approve|decline)$/, async (route) => {
+    await slowly();
+    const [, , , , kind, id, decision] = new URL(route.request().url()).pathname.split("/");
+    if (kind === "invitations") { invitations = []; return route.fulfill({ json: { message: "Invitation approved: finance.new@example.test can now accept it as Finance." } }); }
+    const request = changes.find((item) => item.id === id)!;
+    changes = changes.filter((item) => item !== request);
+    if (decision === "decline") return route.fulfill({ json: { message: "Change request declined. The membership is unchanged." } });
+    return route.fulfill({ json: { id: request.memberId, actor: `Clerk:user_${request.memberId}`, name: request.name, role: request.to.role, status: "active", expiresAt: inDays(80), updatedAt: new Date().toISOString(), message: `Change approved: ${request.name} is now ${request.to.role} (active).`, pendingChange: null } });
+  });
+  await page.goto("/team");
+  // Administrator A's access ends within 14 days: the warning's code loads for a staff administrator.
+  await expect(page.getByRole("status", { name: "Administrator access" })).toContainText("Your administrator access ends on");
+  const panel = page.locator("section").filter({ has: page.getByRole("heading", { name: "Waiting for a second administrator" }) });
+  for (const [name, said] of [["Approve invitation", /^Invitation approved/], ["Approve change", /^Change approved: Chidi Ops/], ["Decline change", /^Change request declined/]] as const) {
+    const count = await panel.getByRole("button", { name }).count();
+    await panel.getByRole("button", { name }).first().focus();
+    await page.keyboard.press("Enter");
+    await expect(panel.getByRole("button", { name })).toHaveCount(count - 1);
+    await expect.poll(() => focused(page)).toMatchObject({ tag: "p", text: expect.stringMatching(said) });
+  }
+});
+
+test("Approve turning it off and Keep the stop on move focus to what they did when their box goes", async ({ page }) => {
+  // Console review of 24 September, item 3: another administrator asked to lift the stop.
+  await staffAdministrator(page);
+  let waiting = true, stopOn = true;
+  await page.route(/\/api\/v1\/settings\?/, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch(), body = await response.json();
+    const release = { lender: { requestedBy: "Clerk:user_admin_b", requestedAt: inDays(-0.02), reason: "Provider incident resolved", policyId: null } };
+    await route.fulfill({ response, json: { ...body, merchant: { ...body.merchant, killSwitch: stopOn }, settings: { ...body.settings, ...(waiting ? { emergencyStopReleases: release } : {}) } } });
+  });
+  await page.route(/\/api\/v1\/actions\?/, async (route) => {
+    const sent = route.request().postDataJSON();
+    if (!["approve_kill_switch_off", "kill_switch"].includes(sent.action)) return route.fallback();
+    await slowly();
+    waiting = false;
+    stopOn = sent.action === "kill_switch";
+    await route.fulfill({ json: { message: `Lender emergency stop is ${stopOn ? "on" : "off"}. No collection instruction was sent.`, data: { enabled: stopOn } } });
+  });
+  for (const [name, said] of [["Approve turning it off", /^Lender emergency stop is off\./], ["Keep the stop on", /^Lender emergency stop is on\./]] as const) {
+    waiting = true;
+    stopOn = true;
+    await page.goto("/settings");
+    await page.getByLabel("Reason for changing the emergency stop").fill("Second administrator's decision on the request");
+    const button = page.getByRole("button", { name });
+    await button.focus();
+    await page.keyboard.press("Enter");
+    await expect(button).toHaveCount(0);
+    await expect.poll(() => focused(page)).toMatchObject({ tag: "p", text: expect.stringMatching(said) });
+  }
 });
 
 test("End presentation moves focus to the page content", async ({ page }) => {
@@ -121,4 +195,28 @@ test("the anonymous sandbox on a host without sign-in never fetches Clerk's code
   for (const url of scripts) if ((await (await request.get(url)).text()).includes('"@clerk/react"')) withClerk.push(url);
   expect(withClerk).toEqual([]);
   expect(scripts.size).toBeGreaterThan(5);
+});
+
+test("the landing page and the anonymous sandbox carry no shared schemas, zod or administrator warning in their entry script", async ({ page, request }) => {
+  const scripts = new Set<string>();
+  page.on("request", (sent) => { if (sent.resourceType() === "script" || sent.url().endsWith(".js")) scripts.add(sent.url()); });
+  // Text the minifier keeps: zod's type names, a message of the shared record schemas and the warning's heading.
+  const signatures = { zod: /ZodObject/, "shared schemas": /Use YYYY-MM-DD or a UTC timestamp/, "administrator warning": /Administrator access is ending/ };
+  const entryCarries = async (route: string) => {
+    const entry = await page.locator('script[type="module"][src]').getAttribute("src");
+    const code = await (await request.get(entry!)).text();
+    return Object.entries(signatures).filter(([, signature]) => signature.test(code)).map(([name]) => `${route}: ${name}`);
+  };
+  await page.goto("/");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  expect(await entryCarries("/")).toEqual([]);
+  await page.goto("/overview");
+  await expect(page.getByRole("heading", { level: 1, name: "Operations overview" })).toBeVisible();
+  expect(await entryCarries("/overview")).toEqual([]);
+  // The console fetches every page's code while idle; none of it is the warning, which only a staff administrator loads.
+  await expect.poll(() => [...scripts].some((url) => /\/team-[\w-]+\.js$/.test(url)), { timeout: 15_000 }).toBe(true);
+  await page.waitForLoadState("networkidle");
+  const withWarning: string[] = [];
+  for (const url of scripts) if (signatures["administrator warning"].test(await (await request.get(url)).text())) withWarning.push(url);
+  expect(withWarning).toEqual([]);
 });

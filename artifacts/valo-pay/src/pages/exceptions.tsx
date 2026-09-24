@@ -153,7 +153,8 @@ export default function ExceptionsPage() {
                         String(exception.data?.severity) === 'medium' ? 'bg-warning text-warning-foreground border-warning-border' : 
                         'bg-secondary text-secondary-foreground'
                       }`}>
-                        {String(exception.data?.severity || 'low')}
+                        {/* A stored exception may have none (an earlier edit could clear it): it is never shown as low. */}
+                        {exception.data?.severity ? String(exception.data.severity) : 'No severity'}
                       </span>
                     </td>
                     <td className="px-6 py-4">
@@ -229,7 +230,8 @@ export default function ExceptionsPage() {
           ] : [
             { name: 'owner', label: 'Assigned owner', type: 'text', isData: true },
             { name: 'notes', label: 'Notes', type: 'textarea', isData: true },
-            { name: 'severity', label: 'Severity', type: 'select', isData: true, options: exceptionSeverities.map(severity => ({ label: severity.charAt(0).toUpperCase() + severity.slice(1), value: severity })) }
+            // Every exception type has a severity (the service gives a new exception its type's), so an edit never clears it.
+            { name: 'severity', label: 'Severity', type: 'select', isData: true, required: true, options: exceptionSeverities.map(severity => ({ label: severity.charAt(0).toUpperCase() + severity.slice(1), value: severity })) }
           ]
         }
       />
