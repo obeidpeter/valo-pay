@@ -438,7 +438,7 @@ export const getGetOverviewUrl = (params: GetOverviewParams,) => {
 }
 
 /**
- * Metrics, queues, recent activity (the eight latest audit entries), upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02), whose audit check covers the entries since the last one verified.
+ * Metrics, queues, recent activity (the eight latest audit entries), upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02), whose audit check covers the entries since the last one verified. The last one verified stays before the first entry that breaks the chain, so a break this check or verify_audit found stays in the feed until the chain is valid again.
  * @summary The operations overview for one lender
  */
 export const getOverview = async (params: GetOverviewParams, options?: Parameters<typeof customFetch>[1]): Promise<Overview> => {
@@ -524,7 +524,7 @@ export const getListRecordsUrl = (kind: string,
 }
 
 /**
- * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync; allocatable for the instalments a manual allocation accepts.
+ * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync; allocatable for the instalments a manual allocation accepts. Closes are listed, and searched, as their summaries, as the reports have earlier closes: without operational and metrics, and with the report reduced to its unallocated and exceptions totals; GET /v1/close-history/{id} returns a close whole.
  * @summary Records of one kind for one lender, newest first
  */
 export const listRecords = async (kind: string,
