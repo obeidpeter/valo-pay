@@ -309,6 +309,8 @@ it("a lost mandate create can be discarded deliberately, which unlocks the dialo
   expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Check Operations"));
   await waitFor(() => expect(cancel.disabled).toBe(false));
   expect(screen.queryByText("Mandate creation outcome unconfirmed")).toBeNull();
+  // The notice went with its button: focus is on the form's own button again, not on the page or the dialog's top.
+  await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Create mandate" })));
   expect(
     within(dialog).getByLabelText(/Mandate name/).closest("fieldset")?.disabled,
   ).toBe(false);
@@ -386,6 +388,7 @@ it("the unconfirmed emergency-stop notice discards its original request, and the
   );
   expect(reason.disabled).toBe(false);
   expect(api.state().merchant.killSwitch).toBe(false);
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Activate emergency stop" })));
   await user.click(
     screen.getByRole("button", { name: "Activate emergency stop" }),
   );
@@ -426,6 +429,24 @@ it("offers the retry of a lost emergency-stop answer while a request to lift the
   expect(api.state().merchant.killSwitch).toBe(true);
   expect(api.state().settings.emergencyStopReleases).toBeUndefined();
   await waitFor(() => expect(screen.queryByText(/asked to turn the emergency stop off/)).toBeNull());
+});
+
+it("moves focus back to Approve turning it off when its lost answer is discarded", async () => {
+  // Second review of the audit fixes, the older focus patterns: Discard original request left focus on the page body.
+  const user = userEvent.setup();
+  staffWithWaitingRelease();
+  renderApp("/settings");
+  await screen.findByText(/Clerk:user_b asked to turn the emergency stop off/);
+  await user.type(screen.getByLabelText("Reason for changing the emergency stop"), "Checked the incident notes with Operations.");
+  // The approval never reached the service: the request still waits.
+  api.failNext(/^\/v1\/actions$/, "offline", "POST");
+  await user.click(screen.getByRole("button", { name: "Approve turning it off" }));
+  const notice = (await screen.findByText(/The approval's response is unconfirmed/)).closest("[role=alert]") as HTMLElement;
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  within(notice).getByRole("button", { name: "Discard original request" }).focus();
+  await user.keyboard("{Enter}");
+  await waitFor(() => expect(screen.queryByText(/The approval's response is unconfirmed/)).toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Approve turning it off" })));
 });
 
 it("keeps a lost approval's notice and its retry when a refetch takes the waiting request away", async () => {

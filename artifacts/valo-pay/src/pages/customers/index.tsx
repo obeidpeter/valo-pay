@@ -14,7 +14,7 @@ import { RecordDialog } from '@/components/record-dialog';
 import { recordStatuses } from '@workspace/valopay-schema';
 import { LoadProblem } from '@/components/load-problem';
 import { RecordPagination } from '@/components/record-pagination';
-import { useDebouncedSearch } from '@/lib/use-record-pagination';
+import { keepRowsWhilePaging, useDebouncedSearch } from '@/lib/use-record-pagination';
 import { useCustomerDirectory } from '@/lib/use-customer-directory';
 import { customerReturnTo } from '@/lib/record-navigation';
 import { useHashTarget } from '@/lib/use-hash-target';
@@ -32,7 +32,7 @@ export default function CustomersPage() {
   const customersQuery = useListRecords(
     'customers',
     params,
-    { query: { enabled: !!merchantId && sameLender && !searchPending, queryKey: getListRecordsQueryKey('customers', params) } }
+    { query: { enabled: !!merchantId && sameLender && !searchPending, queryKey: getListRecordsQueryKey('customers', params), placeholderData: keepRowsWhilePaging(params) } }
   );
   const { data, isLoading, isFetching, error, refetch } = customersQuery;
   const rowTargets = useMemo(() => data?.items.map(customer => `record-${customer.id}`) || [], [data]);

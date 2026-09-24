@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
-import { renderApp, screen, userEvent, within } from "./harness";
+import { renderApp, screen, userEvent, waitFor, within } from "./harness";
 import { fireEvent } from '@testing-library/react';
+import { makeRecord } from "../../api-server/src/domain/records";
+import { executeAction } from "../../api-server/src/domain";
+import { formatKobo, formatNumber } from "@/lib/formatters";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -41,6 +44,72 @@ describe("reports", () => {
     expect(screen.getByText(String(closes[0]!.data.summary))).toBeTruthy();
     expect(screen.getByText(/Since the first daily close on/)).toBeTruthy();
     expect(screen.queryByText("No daily close yet")).toBeNull();
+  });
+
+  // Second review of the audit fixes, console finding 1: a close's money in another currency is listed in that currency.
+  /** A USD 1,000.00 card payment's evidence, which reconciliation holds as a payment for Finance. */
+  const usdPayment = () => api.mutate(state => makeRecord(state, "observations", {
+    name: "card CARD-USD-1", status: "unresolved", reference: "CARD-USD-1", amountKobo: 100_000,
+    customerId: state.records.find(record => record.kind === "customers")!.id,
+    data: { provider: state.merchant.provider, source: "card", eventId: "usd-1", occurredAt: api.now, currency: "USD" },
+  }));
+  /** The recorded close's measures, by label, as View close details shows them. */
+  async function closeDetails(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByText("View close details"));
+    const list = await screen.findByText("Unmatched at start");
+    const measures = list.closest("dl")!;
+    return (label: string) => within(measures).getByText(label, { selector: "dt" }).nextElementSibling!.textContent;
+  }
+  const usd = (text: string) => text.replace("USD ", "USD\u00a0");
+
+  it("lists a close's money in another currency beside its naira, as the API counts it", async () => {
+    const user = userEvent.setup();
+    usdPayment();
+    // Reconciliation holds the USD payment before the close, so the close opens with it waiting too.
+    api.mutate((state, ctx) => executeAction(state, ctx, { action: "run_reconciliation" }));
+    renderApp("/reports");
+    await user.click(await screen.findByRole("button", { name: "Run daily close" }));
+    await screen.findByText("Daily close completed");
+    const report = api.state().records.find(record => record.kind === "closes")!.data.report;
+    // The seeded naira transfer and the USD card payment both wait for Finance, before the close and after it.
+    for (const money of [report.openingUnallocated, report.unallocated]) {
+      expect(money.kobo).toBeGreaterThan(0);
+      expect(money.otherCurrencies).toEqual({ USD: { count: 1, amount: 100_000 } });
+    }
+    const measure = await closeDetails(user);
+    expect(measure("Unmatched at start")).toBe(usd(`${formatNumber(report.openingUnallocated.count)} · ${formatKobo(report.openingUnallocated.kobo)} and USD 1,000.00 (1 payment)`));
+    expect(measure("Unmatched at close")).toBe(usd(`${formatNumber(report.unallocated.count)} · ${formatKobo(report.unallocated.kobo)} and USD 1,000.00 (1 payment) · ${formatNumber(report.unallocated.olderThan24Hours)} older than 24 hours`));
+  });
+
+  it("never shows a lone payment in another currency as nothing waiting", async () => {
+    const user = userEvent.setup();
+    renderApp("/reports");
+    await user.click(await screen.findByRole("button", { name: "Run daily close" }));
+    await screen.findByText("Daily close completed");
+    // The API's shape once every currency is counted: one USD payment waits, and no naira.
+    const usdOnly = { count: 1, kobo: 0, otherCurrencies: { USD: { count: 1, amount: 100_000 } } };
+    api.mutate(state => { const report = state.records.find(record => record.kind === "closes")!.data.report; report.openingUnallocated = usdOnly; report.unallocated = { ...usdOnly, olderThan24Hours: 1 }; });
+    const measure = await closeDetails(user);
+    expect(measure("Unmatched at start")).toBe(usd("1 · ₦0.00 and USD 1,000.00 (1 payment)"));
+    expect(measure("Unmatched at close")).toBe(usd("1 · ₦0.00 and USD 1,000.00 (1 payment) · 1 older than 24 hours"));
+  });
+
+  it("lists receipts in another currency beside a payment method's naira value", async () => {
+    const user = userEvent.setup();
+    const baseFetch = globalThis.fetch;
+    // The billing statement's shape once receipts in another currency are listed beside the naira value.
+    globalThis.fetch = async (input, init) => {
+      const response = await baseFetch(input, init);
+      if (!String(input).includes("/api/v1/reports")) return response;
+      const body = await response.json();
+      body.billing.channelBreakdown.card = { count: 2, kobo: 250_000, billable: 0, reason: "Not charged.", otherCurrencies: { USD: { count: 1, amount: 100_000 } } };
+      return new Response(JSON.stringify(body), { status: response.status, headers: response.headers });
+    };
+    renderApp("/reports?view=billing");
+    const receipts = (await screen.findByText("Receipts by payment method")).closest("details")!;
+    await user.click(receipts.querySelector("summary")!);
+    const row = within(receipts).getByText("Card").closest("tr")!;
+    await waitFor(() => expect([...row.querySelectorAll("td")].map(cell => cell.textContent)).toEqual(["Card", "2", usd("₦2,500.00 and USD 1,000.00 (1 receipt)"), "0"]));
   });
 
   it("says when the automatic close is off", async () => {

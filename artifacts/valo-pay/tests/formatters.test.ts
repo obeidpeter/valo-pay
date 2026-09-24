@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatCompactDate, formatCount, formatDate, formatKobo, formatNumber, formatPercent, formatPercentagePoints } from "@/lib/formatters";
+import { formatMinor, formatWithOtherCurrencies } from "@/lib/currencies";
 
 describe("formatters", () => {
   it("shows kobo as naira and instants in West Africa Time, with the zone named", () => {
@@ -61,5 +62,32 @@ describe("formatters", () => {
     expect(formatCount(0, "item")).toBe("0 items");
     expect(formatCount(2, "entry", "entries")).toBe("2 entries");
     expect(formatCount(1234, "record")).toBe("1,234 records");
+  });
+
+  it("shows money in another currency in that currency, from its minor unit, exactly", () => {
+    // Intl puts a no-break space between a currency code and the amount.
+    const code = (text: string) => text.replace(" ", "\u00a0");
+    expect(formatMinor(100_000, "USD")).toBe(code("USD 1,000.00"));
+    expect(formatMinor(100, " usd ")).toBe(code("USD 1.00"));
+    expect(formatMinor(-100_050, "USD")).toBe(`-${code("USD 1,000.50")}`);
+    expect(formatMinor(9_007_199_254_740_991, "USD")).toBe(code("USD 90,071,992,547,409.91"));
+    expect(formatMinor(1_000, "JPY")).toBe(code("JPY 1,000"));
+    expect(formatMinor(1_000_000, "KWD")).toBe(code("KWD 1,000.000"));
+    expect(formatMinor(2_500_000, "NGN")).toBe("₦25,000.00");
+    expect(formatMinor(100_000, "DOLLARS")).toBe("100,000 in the smallest unit of DOLLARS");
+    // Ordinary amounts come out exactly as Intl formats them, whatever the currency's minor unit.
+    for (const [currency, unit] of [["USD", 100], ["JPY", 1], ["KWD", 1000]] as const) {
+      const intl = new Intl.NumberFormat("en-NG", { style: "currency", currency, currencyDisplay: "code" });
+      for (let amount = -1500; amount <= 1500; amount += 7) expect(formatMinor(amount * 13, currency)).toBe(intl.format((amount * 13) / unit));
+    }
+  });
+
+  it("lists money in other currencies beside a naira total, never added to it", () => {
+    const code = (text: string) => text.replaceAll(/([A-Z]{3}) /g, "$1\u00a0");
+    expect(formatWithOtherCurrencies(0, { USD: { count: 1, amount: 100_000 } }, "payment")).toBe(code("₦0.00 and USD 1,000.00 (1 payment)"));
+    expect(formatWithOtherCurrencies(3_200_000, { USD: { count: 2, amount: 150_000 }, GBP: { count: 1, amount: 5_000 } }, "payment"))
+      .toBe(code("₦32,000.00, GBP 50.00 (1 payment) and USD 1,500.00 (2 payments)"));
+    expect(formatWithOtherCurrencies(3_200_000, undefined, "payment")).toBe("₦32,000.00");
+    expect(formatWithOtherCurrencies(3_200_000, {}, "receipt")).toBe("₦32,000.00");
   });
 });

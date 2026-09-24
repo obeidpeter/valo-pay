@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, LockKeyhole, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
 import { lifecycleViewSchema, lifecycleRunViewSchema, type LifecycleRunView, type LifecycleView, type RetentionPolicy, type LifecycleCandidate } from '@workspace/valopay-schema';
 import { useWorkspace } from '@/lib/workspace-context';
-import { useSafeMutation } from '@/lib/safe-mutations';
+import { outcomeIsUnconfirmed, requestClosed, useSafeMutation } from '@/lib/safe-mutations';
 import { useUnsavedChanges } from '@/lib/unsaved-changes';
 import { lenderPath, pilotRequest } from '@/lib/pilot';
 import { INCOMPLETE_CONFIRMATION } from '@/lib/answers';
@@ -11,11 +11,16 @@ import { formatCount, formatDate, formatNumber } from '@/lib/formatters';
 import { PilotError, PilotHeading, PilotPanel, RecoveryNotice, pilotField } from '@/components/pilot-ui';
 import { Button } from '@/components/ui/button';
 import { focusLost, useFocusWhenLost } from '@/lib/focus';
+import { errorWords } from '@/lib/notify';
 
 const names = { raw_csv: 'Raw import CSV', journal_payload: 'Completed request payload', export_file: 'Export file' } as const;
 /** Why a source is kept as evidence, in words. */
 const evidenceWords = (evidence: LifecycleView['targets'][number]['evidence']) => evidence.map(item => item.reason === 'open_case' ? `linked to open case ${item.recordId}` : `the reviewed-close export of approved close review ${item.recordId}`).join('; ');
 type Variables = { path: string; data: unknown; response: 'view' | 'run' };
+/** How far a run has got, as its last confirmed answer says. */
+const removedSoFar = (run: LifecycleRunView) => `Removed so far: ${formatNumber(run.successful)} of ${formatCount(run.candidateCount, 'source')}.`;
+/** Words that end as a sentence. */
+const sentence = (words: string) => /[.!?]$/.test(words) ? words : `${words}.`;
 /** An approved run being executed request after request, and whether the person asked it to stop. */
 type Running = { runId: string; stopping: boolean };
 export default function LifecyclePage() {
@@ -54,7 +59,8 @@ function LifecycleControls() {
   /**
    * Executes an approved run request after request (each removes what fits in the service's time budget) until it
    * completes, a source is blocked or its deletion fails, the person stops it, or a request fails, which the recovery
-   * notice then shows. Each request is new, with its own key; a lost answer is recovered with Check original request.
+   * notice then shows while the status area says the run stopped, why and how far it got. Each request is new, with
+   * its own key; a lost answer is recovered with Check original request.
    */
   const execute = async (run: LifecycleRunView) => {
     executing.current = true; stopRequested.current = false; setRunning({ runId: run.id, stopping: false }); setMessage('');
@@ -64,7 +70,7 @@ function LifecycleControls() {
         const seen = new Set(current.receipts.map(receipt => receipt.id)), before = current.successful;
         current = await mutation.mutateAsync({ path: `/lifecycle/runs/${run.id}/execute`, data: { previewDigest: run.previewDigest }, response: 'run' }) as LifecycleRunView;
         if (!mounted.current) return;
-        const removed = `Removed so far: ${formatNumber(current.successful)} of ${formatCount(current.candidateCount, 'source')}.`;
+        const removed = removedSoFar(current);
         const problem = current.receipts.find(receipt => (receipt.status === 'blocked' || receipt.status === 'failed') && !seen.has(receipt.id));
         if (current.status === 'completed') outcome = 'This run is complete. Inspect its saved deletion receipts below.';
         else if (problem) outcome = `The run stopped at ${names[problem.kind]} ${problem.sourceId}, which ${problem.status === 'blocked' ? 'is blocked' : 'could not be deleted'}: ${problem.detail} ${removed}`;
@@ -73,7 +79,12 @@ function LifecycleControls() {
         else continue;
         break;
       }
-    } catch { /* The recovery notice shows the refusal or the unconfirmed outcome; nothing more is sent. */ }
+    } catch (error) {
+      // The recovery notice shows the refusal or the unconfirmed outcome; nothing more is sent. Stop goes with the run, so the status area says what happened.
+      outcome = requestClosed(error) || !outcomeIsUnconfirmed(error)
+        ? `The run stopped because its last request was refused: ${sentence(errorWords(error, 'The service gave no reason'))} ${removedSoFar(current)}`
+        : `The run stopped because its last request was not confirmed: it failed or its answer was lost, and it may have removed more sources. Use Check original request above to find out. ${removedSoFar(current)}`;
+    }
     finally { executing.current = false; if (mounted.current) { setRunning(null); if (outcome) setMessage(outcome); } }
   };
   const stop = () => { stopRequested.current = true; setRunning(value => value && { ...value, stopping: true }); };

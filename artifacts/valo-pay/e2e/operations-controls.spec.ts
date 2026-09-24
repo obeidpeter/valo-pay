@@ -56,6 +56,39 @@ test('an approved retention run keeps going until every source is removed', asyn
   await audit(page);
 });
 
+// Second review of the audit fixes, console finding 2: a run that stops on a failed or lost request says so, and focus goes there.
+for (const [how, said] of [
+  ['answered 502 by a proxy', 'The run stopped because its last request was not confirmed: it failed or its answer was lost, and it may have removed more sources. Use Check original request above to find out. Removed so far: 1 of 3 sources.'],
+  ['lost after the service removed its source', 'The run stopped because its last request was not confirmed: it failed or its answer was lost, and it may have removed more sources. Use Check original request above to find out. Removed so far: 1 of 3 sources.'],
+] as const) test(`a retention run whose second request is ${how} says where it stopped, and focus goes there`, async ({ page, request }) => {
+  expect((await request.post('/__test/aged-batches?count=3')).ok()).toBeTruthy();
+  await page.goto('/lifecycle');
+  await page.getByRole('checkbox', { name: 'Raw CSV after import' }).check();
+  await page.getByLabel('Reason for the policy change').fill('Pilot agreement: raw files are kept for 30 days only.');
+  await page.getByRole('button', { name: 'Save retention policy' }).click();
+  await expect(page.getByText('Retention policy saved. Saving a policy does not delete data.')).toBeVisible();
+  await page.getByRole('button', { name: 'Prepare deletion preview' }).click();
+  await page.getByRole('checkbox', { name: /I reviewed every source identity/ }).check();
+  await page.getByLabel('Reason for approving this deletion').fill('Approved under the pilot retention agreement.');
+  await page.getByRole('button', { name: 'Approve exact deletion run' }).click();
+  let sent = 0;
+  await page.route(/\/api\/v1\/lifecycle\/runs\/[^/]+\/execute/, async route => {
+    if (++sent !== 2) return route.fallback();
+    if (how.startsWith('answered')) return route.fulfill({ status: 502, contentType: 'text/html', body: '<html><body>502 Bad Gateway</body></html>' });
+    await route.fetch();
+    await route.abort('connectionreset');
+  });
+  const execute = page.getByRole('button', { name: 'Execute approved run' });
+  await execute.focus();
+  await page.keyboard.press('Enter');
+  const outcome = page.getByText(said, { exact: true });
+  await expect(outcome).toBeVisible();
+  // Stop went with the run: reading continues from what happened, never from the page body.
+  await expect(outcome).toBeFocused();
+  await expect(page.getByText('Outcome not confirmed', { exact: true })).toBeVisible();
+  await audit(page);
+});
+
 for (const theme of ['light', 'dark'] as const) test(`new operations pages expose bounded state and clear setup controls in ${theme}`, async ({ page }, info) => {
   await page.emulateMedia({ colorScheme: theme });
   await page.addInitScript(value => localStorage.setItem('valopay-theme', value), theme);

@@ -362,3 +362,36 @@ describe('payer confirmation', () => {
     expect(options.map(option => (option as HTMLOptionElement).value).sort()).toEqual(open.map(record => record.id).sort());
   });
 });
+
+describe('settlement batch edits', () => {
+  it('sends the fields the dialog shows, never the lines the batch recorded', async () => {
+    // Every edit sent the batch's stored data back whole: with about 5,000 lines or more its line lists pass the API's
+    // 10,000-value body cap, so the batch could no longer be edited (413). An edit merges data, so it sends only its fields.
+    const user = userEvent.setup();
+    const lines = Array.from({ length: 6000 }, (_, index) => `line-${index}`);
+    const batch = api.mutate(state => makeRecord(state, 'settlement-batches', {
+      name: 'Large settlement batch', status: 'reconciled', reference: 'LARGE-BATCH-1',
+      data: { provider: state.merchant.provider, batchReference: 'LARGE-BATCH-1', grossKobo: 1_000_000, feeKobo: 10_000, netKobo: 990_000, lineObservationIds: lines, linePaymentIds: lines.map(id => `payment-${id}`) },
+    }));
+    renderApp('/reconciliation');
+    await user.click(await screen.findByRole('button', { name: 'Edit settlement batch LARGE-BATCH-1' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit settlement batch' });
+    const name = within(dialog).getByLabelText(/^Name/);
+    await user.clear(name);
+    await user.type(name, 'Large settlement batch, checked');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit settlement batch' })).toBeNull());
+    const sent = api.calls.find(call => call.method === 'PATCH' && call.path === `/v1/records/settlement-batches/${batch.id}`)!;
+    expect(sent.status).toBe(200);
+    const data = (sent.body as { data: Record<string, unknown> }).data;
+    expect(data).not.toHaveProperty('lineObservationIds');
+    expect(data).not.toHaveProperty('linePaymentIds');
+    expect(Object.keys(data).sort()).toEqual(['feeKobo', 'grossKobo', 'netKobo', 'provider']);
+    // What an edit leaves out, the service keeps.
+    const saved = api.state().records.find(record => record.id === batch.id)!;
+    expect(saved.name).toBe('Large settlement batch, checked');
+    expect(saved.data.lineObservationIds).toHaveLength(6000);
+    expect(saved.data.linePaymentIds).toHaveLength(6000);
+    expect(saved.data.batchReference).toBe('LARGE-BATCH-1');
+  });
+});

@@ -105,7 +105,8 @@ export default function MandatesPage() {
         queryClient.invalidateQueries();
         if (submitted !== createSession.current) return;
         setIsCreateOpen(false);
-        setDraft(emptyMandate);
+        // The next mandate starts afresh, as after Cancel: no search and no customer chosen.
+        setDraft(emptyMandate); setCustomerSearch(''); setChosenCustomer(null);
         setFieldErrors({}); setFormErrors([]);
       },
       onError: (error: unknown, _variables, submitted) => {

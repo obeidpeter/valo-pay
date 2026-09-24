@@ -13,7 +13,7 @@ import {
 import { StaffSession } from "@/components/staff-session";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useDialogFocusReturn, useFocusWhenLost } from "@/lib/focus";
+import { focusLost, focusMain, useDialogFocusReturn, useFocusWhenLost } from "@/lib/focus";
 import { formatCount, formatDate } from "@/lib/formatters";
 import { AccessReadiness } from '@/components/access-readiness';
 
@@ -271,7 +271,7 @@ function AccessForm({ member, mutation }: { member: any; mutation: ReturnType<ty
     [reason, setReason] = useState(""),
     // Revoking cannot be undone here, so it takes one more step after its reason; other changes save at once.
     [confirming, setConfirming] = useState(false);
-  const restoreFocus = useDialogFocusReturn(confirming);
+  const restoreFocus = useDialogFocusReturn(confirming), revoking = useRef(false);
   const save = () =>
     mutation.mutate({
       path: `/team/members/${member.id}`,
@@ -344,7 +344,9 @@ function AccessForm({ member, mutation }: { member: any; mutation: ReturnType<ty
         </Button>
       </form>
       <Dialog open={confirming} onOpenChange={(open) => { if (!open) setConfirming(false); }}>
-        <DialogContent onCloseAutoFocus={restoreFocus}>
+        {/* Revoke access sends the change, whose new version replaces this form and its button: focus waits on the page's
+            main region, if the answer has not already moved it, for the member's kept message, which then takes it. */}
+        <DialogContent onCloseAutoFocus={(event) => { if (!revoking.current) return restoreFocus(event); revoking.current = false; event.preventDefault(); if (focusLost()) focusMain(); }}>
           <DialogHeader>
             <DialogTitle>Revoke {member.name}’s access?</DialogTitle>
             <DialogDescription>
@@ -357,7 +359,7 @@ function AccessForm({ member, mutation }: { member: any; mutation: ReturnType<ty
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirming(false)}>Keep access</Button>
-            <Button variant="destructive" onClick={() => { setConfirming(false); save(); }}>Revoke access</Button>
+            <Button variant="destructive" onClick={() => { revoking.current = true; setConfirming(false); save(); }}>Revoke access</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

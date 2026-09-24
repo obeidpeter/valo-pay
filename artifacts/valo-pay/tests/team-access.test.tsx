@@ -142,6 +142,23 @@ it("keeps what an applied suspension or revocation did once the directory shows 
   expect(within(card("Chidi Ops")).getByRole("status").textContent).toBe("Chidi Ops’s access is revoked. Their lender access and pending invitations are removed.");
 });
 
+it("returns focus to the kept confirmation once Revoke access is confirmed and answered", async () => {
+  // Second review of the audit fixes, the older focus patterns: confirming Revoke access left focus on the page's main region.
+  const user = userEvent.setup();
+  liveTeam();
+  renderApp("/team");
+  await screen.findByRole("heading", { name: "Chidi Ops" });
+  await user.selectOptions(within(card("Chidi Ops")).getByLabelText("Access for Chidi Ops"), "revoked");
+  await user.type(within(card("Chidi Ops")).getByLabelText("Reason for changing Chidi Ops"), "Left the pilot team this week");
+  within(card("Chidi Ops")).getByRole("button", { name: "Save access change" }).focus();
+  await user.keyboard("{Enter}");
+  within(await screen.findByRole("dialog")).getByRole("button", { name: "Revoke access" }).focus();
+  await user.keyboard("{Enter}");
+  const said = await within(card("Chidi Ops")).findByText("Chidi Ops’s access is revoked. Their lender access and pending invitations are removed.");
+  await waitFor(() => expect(within(card("Chidi Ops")).getByText(/^Operations · revoked/)).toBeTruthy());
+  await waitFor(() => expect(document.activeElement).toBe(said));
+});
+
 it("keeps the confirmation of saved lender access, which gives the membership a new version", async () => {
   const user = userEvent.setup();
   liveTeam();
