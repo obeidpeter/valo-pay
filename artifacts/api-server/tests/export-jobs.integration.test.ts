@@ -29,7 +29,8 @@ const storage:ExportJobStorage={existing:async claim=>objects.get(claim.location
 try{
  const merchants=await inWorkspace(request(),response(),listMerchants);
  const merchantId=merchants[0]!.id,siblingId=merchants[1]!.id;
- const read=()=>inWorkspace(request(),response(),ctx=>loadState(ctx,merchantId,'share'),'read');
+ // A loaded state no longer carries the audit chain: the lender's stored entries are read beside it, so every check below walks the whole chain.
+ const read=async()=>{const state=await inWorkspace(request(),response(),ctx=>loadState(ctx,merchantId,'share'),'read');const audit=(await pool.query("SELECT id,kind,name,data FROM valopay_records WHERE merchant_id=$1 AND kind='audit'",[merchantId])).rows;return {...state,records:[...state.records,...audit]};};
  const customer=(await read()).records.find(record=>record.kind==='customers')!;
  const app=express();app.use(express.json());app.use((req,_res,next)=>{(req as any).auth=auth();(req as any).log={info(){}};next();});app.use('/api',router);app.use((error:any,_req:any,res:any,_next:any)=>res.status(error.status||500).json({error:error.message}));
  server=await new Promise<Server>(resolve=>{const running=app.listen(0,'127.0.0.1',()=>resolve(running));});
@@ -220,6 +221,10 @@ try{
  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at)
   SELECT x.id,x."merchantId",x.kind,x.name,x.status,x.reference,x."amountKobo",x."customerId",x.data,x."createdAt",x."updatedAt"
   FROM jsonb_to_recordset($1::jsonb) AS x(id text,"merchantId" text,kind text,name text,status text,reference text,"amountKobo" bigint,"customerId" text,data jsonb,"createdAt" timestamptz,"updatedAt" timestamptz)`,[JSON.stringify(history)]);
+ // The requests that wrote such a history would have moved the head the lender keeps, which the next request's write
+ // continues from (settings.auditChain; a write reads only the entries since the last one it verified): so does this one.
+ const historyEnd={sequence,hash:previousHash,at:(history.at(-1) as {createdAt:string}).createdAt};
+ await pool.query("UPDATE valopay_merchants SET settings=jsonb_set(settings,'{auditChain}',$2::jsonb) WHERE id=$1",[merchantId,JSON.stringify({...historyEnd,verified:historyEnd})]);
  await pool.query('ANALYZE valopay_records');
  const bounded=await api('/exports',{method:'POST',body:input,key:'bounded-head'});
  const headReads:Array<{text:string;values:unknown[]}>=[];

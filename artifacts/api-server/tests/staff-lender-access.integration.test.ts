@@ -7,7 +7,7 @@ import { readFile } from "node:fs/promises";
 if (process.env.VALOPAY_RUN_INTEGRATION !== "1") { console.log("Opt in on a disposable PostgreSQL database to test staff lender access."); process.exit(0); }
 // Only Clerk's verified-email lookup is replaced below; no external call is made.
 const savedClerkKey = process.env.CLERK_SECRET_KEY; process.env.CLERK_SECRET_KEY = "sk_test_placeholder";
-const { pool, poolSize } = await import("@workspace/db"), store = await import("../src/lib/valopay-store"), { default: router } = await import("../src/routes/index"), { errorHandler } = await import("../src/lib/error-handler");
+const { pool } = await import("@workspace/db"), store = await import("../src/lib/valopay-store"), { default: router } = await import("../src/routes/index"), { errorHandler } = await import("../src/lib/error-handler");
 const { clerkClient } = await import("@clerk/express"), savedGetUser = clerkClient.users.getUser;
 const saved = { VALOPAY_STAFF_ACCESS: process.env.VALOPAY_STAFF_ACCESS, VALOPAY_STAFF_ISSUER: process.env.VALOPAY_STAFF_ISSUER, VALOPAY_STAFF_ORIGINS: process.env.VALOPAY_STAFF_ORIGINS };
 Object.assign(process.env, { VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://identity.example", VALOPAY_STAFF_ORIGINS: "https://pilot.example" });
@@ -98,7 +98,7 @@ try {
   owned.push((await store.provisionStaffWorkspace(otherOrg, outsider, "Another organisation")).workspaceId);
   let releaseOutsiders!: () => void;
   const outsidersHeld = new Promise<void>(resolve => { releaseOutsiders = resolve; }), outsidersIn: Promise<void>[] = [];
-  const outsiders = Array.from({ length: Math.floor(poolSize / 2) }, () => {
+  const outsiders = Array.from({ length: store.lenderConnections }, () => {
     let inside!: () => void; outsidersIn.push(new Promise<void>(resolve => { inside = resolve; }));
     return store.inWorkspace({ ...requestFor("outsider"), query: { merchantId: a.id } }, responseStub, async () => { inside(); await outsidersHeld; }, "read").finally(() => inside());
   });
