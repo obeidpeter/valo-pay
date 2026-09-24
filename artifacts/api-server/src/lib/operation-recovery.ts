@@ -1,9 +1,9 @@
 import type { RequestHandler } from "express";
 import { parse } from "csv-parse/sync";
-import { definitiveRefusalStatuses } from "@workspace/valopay-schema";
+import { definitiveRefusalStatuses, pathId } from "@workspace/valopay-schema";
 import { lenderQuery, optionalKey } from "./contract";
 import { assertNoRealBankDetails } from "../domain/records";
-import { registerRefusalCloser } from "./refused-operations";
+import { markKeyed, markKeyUnused, registerRefusalCloser, type OperationState } from "./refused-operations";
 import {
   bindOperation,
   boundOperation,
@@ -16,6 +16,10 @@ import {
 
 // Only routes whose writes and receipt commit in one workspace transaction.
 // No URLs, headers, provider calls, team invitations or arbitrary HTTP replay.
+// A path is matched as the router matches it (routes/index.ts): each literal
+// segment exactly, in its case, with no trailing slash, and a parameter as any
+// segment, still percent-encoded. So a keyed write reaches a journaled route
+// only journaled, however its path is spelled.
 export function recoverableRequest(
   method: string,
   path: string,
@@ -23,14 +27,14 @@ export function recoverableRequest(
 ): boolean {
   if (method === "PATCH")
     return (
-      /^\/v1\/records\/[a-z-]+\/[^/]+$/.test(path) || path === "/v1/settings"
+      /^\/v1\/records\/[^/]+\/[^/]+$/.test(path) || path === "/v1/settings"
     );
   if (method !== "POST") return false;
   if (path === "/v1/actions") return body?.action !== "set_role";
   if (path === "/v1/imports") return body?.commit === true;
   return (
     path === "/v1/connected/actions" ||
-    /^\/v1\/records\/[a-z-]+$/.test(path) ||
+    /^\/v1\/records\/[^/]+$/.test(path) ||
     path === "/v1/exports" ||
     /^\/v1\/exports\/[^/]+\/retry$/.test(path) ||
     /^\/v1\/pilot\/batches(?:\/[^/]+\/(?:save|commit))?$/.test(path) ||
@@ -43,36 +47,44 @@ export function recoverableRequest(
   );
 }
 // Statuses that mean the same request would be refused again (shared with the
-// console, which then drops the key). A rate limit, a timeout or a service
-// failure leaves the entry pending: its outcome is unknown.
+// console, which then drops the key). A 401 or 429 leaves the entry pending;
+// a failure is settled for the key (closeRejectedOperation).
 const definitive = new Set<number>(definitiveRefusalStatuses);
 /** Whether an HTTP status is a definitive refusal of the request that received it. */
 export const definitiveRejection = (status: number) => definitive.has(status);
-/** Closes the request's journal entry after a definitive refusal, or after a
- * failure whose transaction was rolled back (nothing was saved, so the entry
- * has nothing to confirm), so such requests never accumulate as pending and
- * lock the person out. Resolves to whether the entry is cancelled afterwards,
- * which the answer then says. Returns nothing when there is no entry to close,
- * so an ordinary refusal is answered synchronously. A failure to record it is
- * logged and leaves the entry pending, the safe direction, and is never
- * reported as cancelled. */
-export function closeRejectedOperation(req: Parameters<RequestHandler>[0], status: number, message: string, notSaved = false): Promise<boolean> | undefined {
-  const bound = boundOperation(req);
-  if (!bound || !(definitiveRejection(status) || notSaved)) return undefined;
-  return rejectOperation(req, bound, { status, message }).catch((error: unknown) => {
-    req.log?.warn?.({ event: "operation.rejection_unrecorded", err: error instanceof Error ? error : new Error(String(error)) }, "A refused request stays pending in the operations journal");
-    return false;
+/** Settles the request's journal entry after a refusal or failure, and resolves
+ * to its state afterwards, which the answer then names. A definitive refusal
+ * closes the entry: the same request would be refused again. A failure that
+ * saved nothing closes it only when this attempt created the entry and no other
+ * attempt is running it (rejectOperation), so a repeat's failure never cancels
+ * the request its original attempt is still running and never says nothing was
+ * saved for a request that was. Any other failure only reads the entry. A 401
+ * or 429 is not final: its entry is left pending and unread, and nothing is
+ * returned, so the refusal is answered at once. A failure to settle the entry
+ * is logged and leaves it as it was, the safe direction, and its state unknown. */
+export function closeRejectedOperation(req: Parameters<RequestHandler>[0], status: number, message: string, notSaved = false): Promise<OperationState | undefined> | undefined {
+  const bound = boundOperation(req), definitive = definitiveRejection(status);
+  if (!bound || !(definitive || status >= 500)) return undefined;
+  const close = definitive ? "refused" : notSaved && bound.created ? "unsaved" : undefined;
+  return rejectOperation(req, bound, { status, message }, close).catch((error: unknown) => {
+    req.log?.warn?.({ event: "operation.rejection_unrecorded", err: error instanceof Error ? error : new Error(String(error)) }, "A refused request's journal entry could not be settled and stays as it was");
+    return undefined;
   });
 }
 export const recoveryMiddleware: RequestHandler = async (req, res, next) => {
   try {
-    const replay = /^\/v1\/operations\/([a-f0-9]{64})\/retry$/.exec(req.path);
+    // The id is any one segment, as the router matches a parameter, read as every route reads an id (pathId): an
+    // empty or over-long one is a 400 naming id, and one no journal entry has is not found (404), as for a cancel.
+    const replay = /^\/v1\/operations\/([^/]+)\/retry$/.exec(req.path);
     if (req.method === "POST" && replay) {
+      // A retry repeats a request with its key: however it ends, it is answered for that key.
+      markKeyed(req);
       const { merchantId } = lenderQuery(req);
+      const id = pathId(decodeURIComponent(replay[1]!));
       const stored = await inWorkspace(
         req,
         res,
-        (ctx) => readOperation(ctx, merchantId, replay[1]!),
+        (ctx) => readOperation(ctx, merchantId, id),
         "read",
       );
       if (
@@ -132,10 +144,12 @@ export const recoveryMiddleware: RequestHandler = async (req, res, next) => {
           path: req.path,
           body: req.body ?? {},
         };
-        const id = await inWorkspace(req, res, (ctx) =>
-          prepareOperation(ctx, merchantId, key, request),
+        const { id, created } = await inWorkspace(req, res, (ctx) =>
+          prepareOperation(ctx, merchantId, key, request, () => markKeyUnused(req)),
         );
-        bindOperation(req, id, merchantId);
+        bindOperation(req, id, merchantId, created);
+        // From here the entry, not what the key held before, says what became of the request.
+        markKeyUnused(req, false);
         registerRefusalCloser(req, (status, message, notSaved) => closeRejectedOperation(req, status, message, notSaved));
         res.setHeader("X-Valopay-Operation", id);
       }

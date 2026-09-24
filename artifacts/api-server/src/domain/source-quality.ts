@@ -1,5 +1,5 @@
 import { parse } from "csv-parse/sync";
-import { csvAmountToKobo, sourceProfileInputSchema, type SourceProfileInput, type SourceBatchQuality } from "@workspace/valopay-schema";
+import { counted, csvAmountToKobo, sourceProfileInputSchema, type SourceProfileInput, type SourceBatchQuality } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "./types";
 import { makeRecord, assertSourceOpened, recordsOf } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
@@ -55,12 +55,12 @@ export function batchSourceQuality(state: DomainState, batch: ValopayRecord): So
     quality.importedRows = imported.length;
     quality.importedAmountKobo = safeSum(imported.map(r => r.amountKobo));
     if (profile) {
-      if (profile.data.expectedRows != null && profile.data.expectedRows !== rows.length) issues.push(`Expected ${profile.data.expectedRows} source rows; this batch contains ${rows.length}.`);
+      if (profile.data.expectedRows != null && profile.data.expectedRows !== rows.length) issues.push(`Expected ${counted(profile.data.expectedRows, "source row")}; this batch contains ${rows.length}.`);
       if (profile.data.expectedAmountKobo != null && profile.data.expectedAmountKobo !== quality.sourceAmountKobo) issues.push("The source total does not match the expected amount in the source profile.");
       if (profile.data.identityColumn !== batch.data.identityColumn || profile.data.amountUnit !== batch.data.amountUnit || JSON.stringify(Object.entries(profile.data.mapping || {}).sort()) !== JSON.stringify(Object.entries(batch.data.mapping || {}).filter(([key, value]) => !(key === batch.data.identityColumn && value === "" && !Object.hasOwn(profile.data.mapping || {}, key))).sort())) issues.push("This batch uses different mapping, row identity or amount units from its active source profile. Review the mapping or update the profile first.");
     }
   } catch (error) { quality.status = "unavailable"; issues.push(error instanceof Error ? error.message : "The source totals could not be checked."); }
-  if (quality.invalidRows) issues.push(`${quality.invalidRows} source rows still need correction.`);
+  if (quality.invalidRows) issues.push(`${counted(quality.invalidRows, "source row still needs", "source rows still need")} correction.`);
   if (quality.status !== "unavailable" && issues.length) quality.status = "needs_review";
   return quality;
 }

@@ -42,6 +42,25 @@ export function referenceOf(error: unknown): string | undefined {
   return typeof inHeader === 'string' && inHeader.trim() ? inHeader.trim() : undefined;
 }
 
+/** Said when no answer came back at all: the browser's own words for that ("Failed to fetch", "signal timed out") mean nothing to the reader. */
+export const NO_ANSWER = 'No answer arrived from the service.';
+
+/**
+ * An error in words for the reader: the service's own (`data.error`), plain
+ * words when no answer arrived (a network failure or a timeout), the fallback
+ * when an answer came without words of its own (a proxy's error page, an
+ * unreadable body), and otherwise the console's own message. Never the
+ * browser's error text or an HTTP status line.
+ */
+export function errorWords(error: unknown, fallback: string): string {
+  const said = (error as { data?: { error?: unknown } } | null)?.data?.error;
+  if (typeof said === 'string' && said.trim()) return said.trim();
+  if (error instanceof TypeError || (typeof DOMException !== 'undefined' && error instanceof DOMException)) return NO_ANSWER;
+  if (typeof (error as { status?: unknown } | null)?.status === 'number') return fallback;
+  const message = (error as { message?: unknown } | null)?.message;
+  return typeof message === 'string' && message.trim() ? message.trim() : fallback;
+}
+
 /**
  * The words the server gave, or a plain fallback; never an HTTP status line.
  * When the service itself failed (a 5xx), its words are general, so the

@@ -5,8 +5,9 @@ import { inWorkspace, loadState, caseAssignees } from '../lib/valopay-store';
 import { withState } from './valopay';
 import { contractAnswer, lenderQuery, requiredKey } from '../lib/contract';
 import { derivePersonalWork, recordWorkReceipt } from '../domain/personal-work';
+import { routerOptions } from './router-options';
 
-const router: IRouter = Router();
+const router: IRouter = Router(routerOptions);
 router.get('/v1/work', async (req, res) => {
   lenderQuery(req);
   const query = personalWorkQuerySchema.parse(req.query);

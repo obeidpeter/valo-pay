@@ -4,6 +4,8 @@ import type { Context, DomainState, ValopayRecord } from '../domain/types';
 import { makeRecord } from '../domain/records';
 import type { ExportInput } from './valopay-exports';
 import { reviewedCloseEvidence } from '../domain/close-review';
+import { sensitiveExportKinds, sensitiveExportRefusal } from '@workspace/valopay-schema';
+import { rolePermits } from './pilot-access';
 
 export const EXPORT_LEASE_MS = 5 * 60_000;
 export const MAX_EXPORT_BYTES = 32 * 1024 * 1024;
@@ -38,6 +40,10 @@ export interface ExportJobView {
 }
 const fail = (message: string, status: number, details: { retryAfterSeconds?: number } = {}): never => { throw Object.assign(new Error(message), { status }, details); };
 
+/** export_sensitive (lib/pilot-access.ts): a dispute pack, the customer register or the audit trail is queued, retried and downloaded only by an Admin, Finance or Compliance reviewer; anyone else is refused (403) in plain words. */
+export function assertExportPermitted(role: string, kind: unknown): void {
+  if ((sensitiveExportKinds as readonly unknown[]).includes(kind) && !rolePermits(role, 'export_sensitive')) fail(sensitiveExportRefusal, 403);
+}
 export function findExportJob(state: DomainState, id: string): ValopayRecord {
   return state.records.find(record => record.kind === 'exports' && record.id === id) ?? fail('Export not found in this lender.', 404);
 }
@@ -67,6 +73,8 @@ export function exportJobView(record: ValopayRecord, now = new Date().toISOStrin
 }
 /** Queueing writes metadata only; no rendering, object-storage calls or credentials belong in this transaction. */
 export function queueExport(state: DomainState, ctx: Context, input: ExportInput, privateDirectory: string): ExportJobView {
+  // A sensitive kind is refused first, so a Read-only person is not told they may download it.
+  assertExportPermitted(ctx.role, input.kind);
   if (ctx.role === 'Read-only') fail('Your read-only role may download existing exports. Ask a colleague to generate new evidence.', 403);
   const review = input.kind === 'reviewed-close' ? reviewedCloseEvidence(state, input.closeReviewId || '', true) : undefined;
   if (!privateDirectory || !/^\/?[^/]+\/.+/.test(privateDirectory)) fail('Private export storage is not configured. Contact the workspace administrator.', 503);
@@ -82,8 +90,9 @@ export function exportIsClaimable(record: ValopayRecord, now: string): boolean {
   return record.status === 'queued' || (record.status === 'running' && (!record.data.leaseExpiresAt || Date.parse(record.data.leaseExpiresAt) <= Date.parse(now)));
 }
 export function retryExport(state: DomainState, ctx: Context, id: string): ExportJobView {
-  if (ctx.role === 'Read-only') fail('Your read-only role may download existing exports. Ask a colleague to retry evidence generation.', 403);
   const record = findExportJob(state, id);
+  assertExportPermitted(ctx.role, record.data.kind);
+  if (ctx.role === 'Read-only') fail('Your read-only role may download existing exports. Ask a colleague to retry evidence generation.', 403);
   if(record.data.fileDeletedAt)fail('This export file expired under the retention policy. Start a new export if current evidence is needed.',410);
   if (record.status === 'ready' || record.status === 'queued') return exportJobView(record, ctx.now);
   if (record.status === 'running' && !exportIsClaimable(record, ctx.now)) return exportJobView(record, ctx.now);
@@ -106,12 +115,16 @@ export interface ExportJobRepository {
   progress?(claim: ClaimedExport, stage: ExportStage): Promise<ExportWriteResult>;
   finish(claim: ClaimedExport, artifact: ExportArtifact): Promise<ExportWriteResult>;
   fail(claim: ClaimedExport, message: string): Promise<ExportWriteResult>;
-  /** A stopping worker hands its claim back: queued again, fenced by the lease token, never marked failed. */
-  release(claim: ClaimedExport): Promise<ExportWriteResult>;
+  /** A worker hands its claim back, because it is stopping or the lender stayed busy past a progress or failure
+   * write: queued again, fenced by the lease token, never marked failed. */
+  release(claim: ClaimedExport, reason?: ExportReleaseReason): Promise<ExportWriteResult>;
 }
-/** 'released': a stopping worker returned the job to the queue. 'interrupted': it stopped and could not, so the job
- * keeps its lease and a later poll recovers it once the lease expires. */
-export type ExportAttemptResult = 'ready' | 'failed' | 'skipped' | 'released' | 'interrupted';
+/** Why a claim goes back to the queue unfinished: the worker is stopping, or its lender stayed busy. */
+export type ExportReleaseReason = 'stopping' | 'busy';
+/** 'released': a stopping worker returned the job to the queue. 'requeued': the lender stayed busy for longer than a
+ * progress or failure write waits, so the worker returned the job to the queue for a later look. 'interrupted': it could not
+ * hand the job back either way, so the job keeps its lease and a later poll recovers it once the lease expires. */
+export type ExportAttemptResult = 'ready' | 'failed' | 'skipped' | 'released' | 'requeued' | 'interrupted';
 export interface ExportJobStorage {
   existing(claim: ClaimedExport, signal?: AbortSignal): Promise<ExportArtifact | null>;
   put(claim: ClaimedExport, bytes: Buffer, artifact: ExportArtifact, signal?: AbortSignal): Promise<void>;
@@ -134,16 +147,31 @@ export async function processExportJob(repository: ExportJobRepository, storage:
   const timeout = new AbortController(), timer = setTimeout(() => timeout.abort(new Error('Export attempt timed out.')), options.timeoutMs ?? EXPORT_ATTEMPT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout.signal]) : timeout.signal;
   const write = (fn: () => Promise<ExportWriteResult>) => retryExportWrite(fn, signal, options.backoffMs);
-  const progress = async (stage: ExportStage) => !repository.progress || await write(() => repository.progress!(claim, stage)) === 'saved';
+  /** Hands the claim back; if even that write cannot be made, the lease expires and a later poll recovers the job. */
+  const release = async (reason: ExportReleaseReason, handed: ExportAttemptResult): Promise<ExportAttemptResult> => {
+    try {
+      const released = await retryExportWrite(() => repository.release(claim, reason), undefined, options.backoffMs);
+      return released === 'saved' ? handed : released === 'lost' ? 'skipped' : 'interrupted';
+    } catch { return 'interrupted'; }
+  };
+  // A progress write waits for a busy lender (export-job-store.ts). One that still cannot be made would leave the job
+  // running under a lease minutes away, with Retry unavailable, so the claim goes back to the queue instead; a lost
+  // lease belongs to another worker. Undefined once the progress is saved.
+  const progress = async (stage: ExportStage): Promise<ExportAttemptResult | undefined> => {
+    const written = repository.progress ? await write(() => repository.progress!(claim, stage)) : 'saved';
+    return written === 'saved' ? undefined : written === 'busy' ? release('busy', 'requeued') : 'skipped';
+  };
   try {
     signal.throwIfAborted();
     let artifact = await storage.existing(claim, signal);
     if (!artifact) {
-      if (!await progress('rendering')) return 'skipped';
+      const rendering = await progress('rendering');
+      if (rendering) return rendering;
       const generated = await generate(claim, signal);
       signal.throwIfAborted();
       if (generated.bytes.length > MAX_EXPORT_BYTES) throw Object.assign(new Error('Export exceeds the 32 MB file limit. Export a customer pack or a smaller record category.'), { exportTooLarge: true });
-      if (!await progress('uploading')) return 'skipped';
+      const uploading = await progress('uploading');
+      if (uploading) return uploading;
       try { await storage.put(claim, generated.bytes, generated.artifact, signal); artifact = generated.artifact; }
       catch (error) {
         // An upload can commit while its acknowledgement is lost, or another expired lease can finish first.
@@ -153,24 +181,23 @@ export async function processExportJob(repository: ExportJobRepository, storage:
       }
     }
     signal.throwIfAborted();
-    if (!await progress('confirming')) return 'skipped';
+    const confirming = await progress('confirming');
+    if (confirming) return confirming;
     return await write(() => repository.finish(claim, artifact!)) === 'saved' ? 'ready' : 'skipped';
   } catch (error) {
     // The worker is stopping (options.signal, not the attempt's own timeout), which says nothing about the export:
-    // hand the claim back for the next worker. If that write cannot be made, the lease expires and a later poll recovers it.
-    if (options.signal?.aborted) {
-      try {
-        const released = await retryExportWrite(() => repository.release(claim), undefined, options.backoffMs);
-        return released === 'saved' ? 'released' : released === 'lost' ? 'skipped' : 'interrupted';
-      } catch { return 'interrupted'; }
-    }
+    // hand the claim back for the next worker.
+    if (options.signal?.aborted) return await release('stopping', 'released');
     const message = (error as { exportPdfFieldTooLarge?: boolean })?.exportPdfFieldTooLarge
       ? 'A field is too long to lay out safely in PDF. Choose JSON or CSV to preserve the complete record.'
       : (error as { exportTooLarge?: boolean })?.exportTooLarge
       ? 'Export exceeds the 32 MB file limit. Export a customer pack or a smaller record category.'
       : 'Export generation could not finish. Retry this export. If it fails again, contact the workspace administrator.';
-    // A stop is handled above. If the database is unavailable, leave the durable running lease to expire and recover on a later poll.
-    try { await retryExportWrite(() => repository.fail(claim, message), undefined, options.backoffMs); } catch { /* durable lease recovery */ }
+    // A stop is handled above. A failure the lender stays too busy to record goes back to the queue, as a busy progress
+    // write does. If the database is unavailable, leave the durable running lease to expire and recover on a later poll.
+    try {
+      if (await retryExportWrite(() => repository.fail(claim, message), undefined, options.backoffMs) === 'busy') return await release('busy', 'requeued');
+    } catch { /* durable lease recovery */ }
     return 'failed';
   } finally { clearTimeout(timer); }
 }

@@ -184,13 +184,33 @@ try {
   connected = ok(await call(q("/v1/connected")));
   ok(await call(q("/v1/connected/actions"), "POST", { action: "credit.assess", reason: "Run a sample assessment", data: { customerId: customer, scenario: "ready" }, expectedRevision: connected.revision }, { key: key() }));
   assert.equal(ok(await call(q("/v1/connected"))).credit.assessments.length, 1);
+  // A pay-by-bank step that closes an exception whose condition cleared names it in its audit entry (the review of the audit fixes).
+  {
+    const allocated = ok(await call(q("/v1/records/payments?limit=100"))).items.find((item: any) => item.reference === "SBX-PAY-1001");
+    const stale = ok(await call(q("/v1/records/exceptions"), "POST", { name: "Unallocated payment", customerId: allocated.customerId, amountKobo: allocated.amountKobo, data: { type: "unallocated_payment", notes: "Raised before the payment was allocated.", linkedRecordId: allocated.id } }, { key: key() }));
+    const step = async (action: string, recordId?: string, data: Record<string, unknown> = {}) => ok(await call(q("/v1/connected/actions"), "POST", { action, recordId, reason: `Contract check: ${action}`, data, expectedRevision: ok(await call(q("/v1/connected"))).revision }, { key: key() }));
+    const open = ok(await call(q("/v1/connected"))).payments.dues.find((item: any) => !item.blocked);
+    const intent = (await step("payment.create", undefined, { dueItemId: open.id, amountKobo: open.outstandingKobo })).record;
+    await step("payment.authorise", intent.id);
+    await step("payment.outcome", intent.id, { outcome: "failed" });
+    const cleared = (await pool.query("SELECT status,data FROM valopay_records WHERE id=$1", [stale.id])).rows[0];
+    assert.deepEqual([cleared.status, cleared.data.resolutionCode], ["closed", "condition_cleared"], "the outcome step closed the exception whose condition cleared");
+    const entry = (await pool.query("SELECT data FROM valopay_records WHERE merchant_id=$1 AND kind='audit' AND name='payment.outcome' ORDER BY (data->>'sequence')::int DESC LIMIT 1", [lender])).rows[0];
+    assert.equal(entry.data.summary, "Contract check: payment.outcome. Closed 1 exception whose condition cleared (unallocated payment: payment SBX-PAY-1001 is allocated in full).", "and its audit entry names it after the reason");
+  }
 
   // ---- The legacy writes take an optional key: with one they are journaled, without one they still run ----
   const customerBody = { name: "Contract customer", reference: `CONTRACT-${randomUUID()}`, data: { consentProvenance: "Synthetic fixture" } };
   const keyed = key();
   const record = ok(await call(q("/v1/records/customers"), "POST", customerBody, { key: keyed }));
   ok(await call(q("/v1/records/customers"), "POST", { ...customerBody, reference: `CONTRACT-${randomUUID()}` }));
-  ok(await call(q(`/v1/records/customers/${record.id}`), "PATCH", { name: "Contract customer, renamed", expectedUpdatedAt: record.updatedAt }, { key: key() }));
+  const renamed = ok(await call(q(`/v1/records/customers/${record.id}`), "PATCH", { name: "Contract customer, renamed", data: { phoneMasked: "+234 ••• ••31" }, expectedUpdatedAt: record.updatedAt }, { key: key() }));
+  assert.equal(renamed.data.phoneMasked, "+234 ••• ••31");
+  // An edit clears an optional data field by sending it as null (a merge patch); the fields it leaves out keep their values.
+  const cleared = ok(await call(q(`/v1/records/customers/${record.id}`), "PATCH", { data: { phoneMasked: null }, expectedUpdatedAt: renamed.updatedAt }, { key: key() }));
+  assert.equal("phoneMasked" in cleared.data, false, "a field sent as null is removed");
+  assert.equal(cleared.data.consentProvenance, "Synthetic fixture", "a field left out keeps its value");
+  assert.equal(cleared.name, "Contract customer, renamed");
   ok(await call(q(`/v1/customers/${record.id}/timeline`)));
   ok(await call(q(`/v1/customers/${record.id}/history`)));
   ok(await call(q("/v1/imports"), "POST", { kind: "customers", csv: "name,reference,consentProvenance\nImported contract customer,CONTRACT-I001,Synthetic consent", syntheticOnly: true, commit: false, amountUnit: "kobo" }));
@@ -201,6 +221,14 @@ try {
   ok(await call(q(`/v1/exports/${job.id}/retry`), "POST"));
   await act({ action: "run_reconciliation" });
 
+  // ---- Finance identifies the payer of a payment whose evidence named none, in one action, and the audit entry says so ----
+  const unidentified = ok(await call(q("/v1/records/payments?search=SBX-UNIDENTIFIED-001"))).items[0];
+  const instalment = ok(await call(q("/v1/records/due-items?status=scheduled"))).items.find((item: any) => Number(item.data.outstandingKobo) >= 1_000_000);
+  const identified = await act({ action: "manual_allocate", recordId: unidentified.id, reason: "Payer confirmed by phone", data: { dueItemId: instalment.id, amountKobo: 1_000_000 } });
+  assert.equal(identified.data.payerCustomerId, instalment.customerId);
+  const trail = (await pool.query("SELECT customer_id,data FROM valopay_records WHERE merchant_id=$1 AND kind='audit' ORDER BY (data->>'sequence')::int DESC LIMIT 1", [lender])).rows[0];
+  assert.deepEqual([trail.data.action, trail.data.summary, trail.customer_id], ["manual_allocate", `Payer confirmed by phone. ${identified.data.auditNote}`, instalment.customerId], "the audit entry names the payer Finance identified");
+
   // ---- Operations: the journal, a recovered request and a cancelled one ----
   const journal = ok(await call(q("/v1/operations")));
   const completed = journal.items.find((item: any) => item.status === "completed" && item.recordId === record.id);
@@ -208,7 +236,7 @@ try {
   assert.equal(ok(await call(q(`/v1/operations/${completed.id}/retry`), "POST")).id, record.id);
   const sandboxRequest = () => ({ headers: { cookie }, secure: false, auth: Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true }) }) as any;
   const response = { cookie() {} } as any;
-  const pendingId = await store.inWorkspace(sandboxRequest(), response, (ctx) => store.prepareOperation(ctx, lender, key(), { method: "POST", path: "/v1/records/customers", body: { name: "Never sent" } }));
+  const { id: pendingId } = await store.inWorkspace(sandboxRequest(), response, (ctx) => store.prepareOperation(ctx, lender, key(), { method: "POST", path: "/v1/records/customers", body: { name: "Never sent" } }));
   assert.match(ok(await call(q(`/v1/operations/${pendingId}/cancel`), "POST")).message, /cancelled it/);
 
   // ---- Handover, personal work and receipts ----
@@ -255,10 +283,10 @@ try {
   // Every keyed write of the journey the journal records, made as the persona acting now, is repeated after the run.
   const repeatable = keyedWrites.filter((write) => write.persona === persona && recoverableRequest(write.method, write.path.split("?")[0]!, write.body));
   assert.ok(repeatable.length >= 10, `the journey saved keyed writes to repeat: ${repeatable.map((write) => `${write.method} ${write.path}`).join(", ")}`);
-  // As far as the policy can tell, those requests finished two days ago.
-  await pool.query("UPDATE valopay_operations SET updated_at=updated_at - interval '2 days' WHERE merchant_id=$1 AND status='completed' AND request_key=ANY($2::text[])", [lender, repeatable.map((write) => write.key)]);
+  // As far as the policy can tell, those requests finished a month ago: the sandbox keeps every category at least 30 days.
+  await pool.query("UPDATE valopay_operations SET updated_at=updated_at - interval '31 days' WHERE merchant_id=$1 AND status='completed' AND request_key=ANY($2::text[])", [lender, repeatable.map((write) => write.key)]);
   lifecycle = ok(await call(q("/v1/lifecycle")));
-  lifecycle = ok(await call(q("/v1/lifecycle/policy"), "POST", { policy: { rawCsvDays: 30, journalPayloadDays: 1, exportFileDays: null, auditTrail: "retain" }, expectedRevision: lifecycle.policyRevision, reason: "Remove request payloads a day after they finish." }, { key: key() }));
+  lifecycle = ok(await call(q("/v1/lifecycle/policy"), "POST", { policy: { rawCsvDays: 30, journalPayloadDays: 30, exportFileDays: null, auditTrail: "retain" }, expectedRevision: lifecycle.policyRevision, reason: "Remove request payloads thirty days after they finish." }, { key: key() }));
   let run = ok(await call(q("/v1/lifecycle/runs"), "POST", { expectedPolicyRevision: lifecycle.policyRevision }, { key: key() }));
   assert.equal(run.candidates.filter((candidate: any) => candidate.kind === "journal_payload").length, repeatable.length, "the run removes each repeatable request's stored payload and result");
   ok(await call(q(`/v1/lifecycle/runs/${run.id}`)));
@@ -291,7 +319,8 @@ try {
   connected = ok(await call(q("/v1/connected")));
   const replayKey = key(), replayGrant = { action: "consent.grant", reason: "Grant a synthetic permission for the replay check", data: { purpose: "erp_draft", subjectId: "sme", days: 30 }, expectedRevision: connected.revision };
   const grantAnswer = ok(await call(q("/v1/connected/actions"), "POST", replayGrant, { key: replayKey }));
-  const receiptId = store.digest(`connected:${lender}:${replayKey}`);
+  // A journaled request's answer is kept under its journal entry.
+  const receiptId = (await pool.query("SELECT id FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2", [lender, replayKey])).rows[0].id as string;
   const consents = async () => Number((await pool.query("SELECT count(*)::int AS n FROM valopay_records WHERE merchant_id=$1 AND kind='connected-consents'", [lender])).rows[0].n);
   const consentCount = await consents();
   assert.equal((await pool.query(`UPDATE valopay_idempotency SET response=jsonb_set(response,'{record,effectiveStatus}','"active"') WHERE merchant_id=$1 AND id=$2`, [lender, receiptId])).rowCount, 1);
@@ -303,14 +332,14 @@ try {
   await pool.query(`UPDATE valopay_idempotency SET response=response #- '{record,kind}' WHERE merchant_id=$1 AND id=$2`, [lender, receiptId]);
   logged.length = 0;
   const unanswerable = await call(q("/v1/connected/actions"), "POST", replayGrant, { key: replayKey });
-  assert.deepEqual([unanswerable.status, unanswerable.data.error, unanswerable.data.committed], [500, "We could not confirm this action. Check Operations or retry the same request before submitting a new one.", undefined], "a saved request is never answered as saving nothing");
+  assert.deepEqual([unanswerable.status, unanswerable.data.error, unanswerable.data.committed, unanswerable.data.operation], [500, "This request was saved, but the service could not give its answer. Retry the same request, or check Operations, to see its saved result.", undefined, "completed"], "a saved request is never answered as saving nothing: the answer says it was saved");
   assert.deepEqual(events("response.invalid").map((line) => [line.level, line.fields.replayed]), [["error", true]]);
   assert.equal(await consents(), consentCount, "the consent was saved once");
   assert.equal((await pool.query("SELECT status FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2", [lender, replayKey])).rows[0].status, "completed", "and its journal entry stays completed");
   // The same for a write whose route answers from withState, and for a repeated lender set-up.
   const manifestKey = key(), laterManifest = { ...manifest, businessDate: new Date(Date.now() + 10 * 86_400_000).toISOString().slice(0, 10) };
   const declared = ok(await call(q("/v1/sources/manifests"), "POST", laterManifest, { key: manifestKey }));
-  await pool.query(`UPDATE valopay_idempotency SET response=response || '{"legacyField": true}'::jsonb WHERE merchant_id=$1 AND id=$2`, [lender, store.digest(`${lender}:${manifestKey}`)]);
+  await pool.query(`UPDATE valopay_idempotency SET response=response || '{"legacyField": true}'::jsonb WHERE merchant_id=$1 AND id=(SELECT id FROM valopay_operations WHERE merchant_id=$1 AND request_key=$2)`, [lender, manifestKey]);
   assert.deepEqual(ok(await call(q("/v1/sources/manifests"), "POST", laterManifest, { key: manifestKey })), declared, "a replayed record answers without the field the contract no longer lists");
   const setUp = keyedWrites.find((write) => write.path === "/v1/pilot/lenders")!;
   await pool.query(`UPDATE valopay_merchants SET info=info || '{"legacyField": true}'::jsonb WHERE id=$1`, [created.id]);
@@ -380,6 +409,11 @@ try {
   const invitation = ok(await call("/v1/team/invitations", "POST", { email: "finance@example.test", role: "Finance" }, { identity: "admin" }));
   const spare = ok(await call("/v1/team/invitations", "POST", { email: "spare@example.test", role: "Operations" }, { identity: "admin" }));
   ok(await call(`/v1/team/invitations/${spare.id}/revoke`, "POST", undefined, { identity: "admin" }));
+  // A Finance grant waits for a second administrator, whom the operator adds.
+  const second = `user_${randomUUID().replaceAll("-", "")}`;
+  identities.set("second", staffAuth(second));
+  await store.addStaffAdministrator(organisation, second, "Second contract administrator");
+  ok(await call(`/v1/team/invitations/${invitation.id}/approve`, "POST", undefined, { identity: "second" }));
   (clerkClient.users as any).getUser = async () => ({ emailAddresses: [{ emailAddress: "finance@example.test", verification: { status: "verified" } }] });
   const accepted = ok(await call("/v1/team/accept", "POST", { token: invitation.token }, { identity: "finance" }));
   assert.equal(accepted.role, "Finance");
@@ -388,7 +422,13 @@ try {
   assert.ok(directory.invitations.length >= 2 && directory.events.length >= 3, "an administrator sees invitations and access history");
   const member = directory.members.find((row: any) => row.actor === `Clerk:${finance}`);
   const granted = ok(await call(`/v1/team/members/${member.id}/lenders`, "PATCH", { expectedUpdatedAt: withOffset(member.updatedAt), lenderIds: [staffLender.id], reason: "Assign Finance to the contract lender." }, { identity: "admin" }));
-  ok(await call(`/v1/team/members/${member.id}`, "PATCH", { role: "Finance", status: "suspended", expectedUpdatedAt: withOffset(granted.updatedAt), reason: "Suspended at the end of the contract check." }, { identity: "admin" }));
+  const suspended = ok(await call(`/v1/team/members/${member.id}`, "PATCH", { role: "Finance", status: "suspended", expectedUpdatedAt: withOffset(granted.updatedAt), reason: "Suspended at the end of the contract check." }, { identity: "admin" }));
+  // Reactivating Finance is a grant again: a request the second administrator declines, and then one it approves.
+  const reactivate = { role: "Finance", status: "active", expectedUpdatedAt: withOffset(suspended.updatedAt), reason: "Back for the contract check." };
+  const declined = ok(await call(`/v1/team/members/${member.id}`, "PATCH", reactivate, { identity: "admin" }));
+  ok(await call(`/v1/team/changes/${declined.pendingChange.id}/decline`, "POST", undefined, { identity: "second" }));
+  const requested = ok(await call(`/v1/team/members/${member.id}`, "PATCH", reactivate, { identity: "admin" }));
+  assert.equal(ok(await call(`/v1/team/changes/${requested.pendingChange.id}/approve`, "POST", undefined, { identity: "second" })).status, "active");
   const financeTeam = ok(await call("/v1/team", "GET", undefined, { identity: "admin" }));
   assert.ok(financeTeam.members.every((row: any) => Array.isArray(row.lenderIds) && typeof row.allLenders === "boolean"));
   const readiness = ok(await call("/v1/team/readiness", "GET", undefined, { identity: "admin" }));

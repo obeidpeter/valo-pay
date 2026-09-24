@@ -1,12 +1,12 @@
 import {
   ABSOLUTE_TICKET_FLOOR_KOBO, PLATFORM_OWNER, activationWorkflows, defaultStatus, describeIssues,
   editableKinds, exceptionCatalogue, exceptionTransitions, experimentRules, isActionOnlyStatus, mandateTransitions, normaliseFailureCode,
-  normaliseOwner, policyGuardrails, recordDataSchemas, recordStatuses, resolveExceptionType, roles, isKnownFailureCode, templateTextProblems,
+  normaliseOwner, policyGuardrails, recordDataSchemas, recordStatuses, recordTextLimits, resolveExceptionType, roles, isKnownFailureCode, isRealDate, templateTextProblems,
 } from "@workspace/valopay-schema";
 import { isDeepStrictEqual } from "node:util";
 import { assertNoRealBankDetails, findRecord, masked, recordsOf } from "./records";
 import type { Context, DomainState, RecordOf, TypedRecord, ValopayRecord } from "./types";
-import { addBusinessDays } from "./calendar";
+import { addBusinessDays, watDate } from "./calendar";
 import { countedAttempts, minimumTicketKobo, policySummary } from "./policy-engine";
 
 const roleSet = new Set<string>(roles);
@@ -24,9 +24,10 @@ function positiveInteger(value: unknown, label: string, allowZero = false): void
   }
 }
 
+/** A real calendar date as written: 2026-02-30 is refused, not read as 2 March (isRealDate). */
 function isoDate(value: unknown, label: string): void {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/.test(value) || Number.isNaN(Date.parse(value))) {
-    throw new Error(`${label} must use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z.`);
+  if (typeof value !== "string" || !isRealDate(value)) {
+    throw new Error(`${label} must use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z, and name a real date.`);
   }
 }
 
@@ -59,6 +60,22 @@ function parseData(kind: string, data: Record<string, any>): void {
 export function cutoverComplete(cutover: TypedRecord<"cutovers">): boolean {
   const data = cutover.data;
   return cutover.status === "ready" && data.incumbentDisabled === true && data.externalAttemptsImported === true && data.dualRunComplete === true && Boolean(data.accountableUser) && Boolean(data.confirmation);
+}
+
+/** When collection ownership was last handed back (DEB-12), or null if it never was. */
+export function lastHandBackAt(state: DomainState): string | null {
+  return recordsOf(state, "cutovers").filter((item) => item.status === "handed_back").map((item) => String(item.data.handedBackAt || item.createdAt)).sort().at(-1) ?? null;
+}
+
+/**
+ * DEB-11 and DEB-12: Valo Pay may hold collection ownership only under a
+ * complete contract.  A hand-back ends every contract recorded before it,
+ * because the incumbent schedules were re-enabled, so only one recorded
+ * after the last hand-back counts.
+ */
+export function cutoverInForce(state: DomainState): boolean {
+  const handedBack = lastHandBackAt(state);
+  return recordsOf(state, "cutovers").some((item) => cutoverComplete(item) && (handedBack === null || item.createdAt > handedBack));
 }
 
 function assertTransition(kind: string, from: string, to: string): void {
@@ -95,6 +112,13 @@ export function validateRecord(
   // object: JSON can carry such a key, and code that copies fields would otherwise inherit from it.
   for (const key of Object.keys(input.data ?? {})) {
     if (key === "__proto__" || key === "constructor" || key === "prototype") throw new Error(`data.${key} is not an allowed field.`);
+  }
+  // A record is named: an empty name used to be saved as the kind's name ("customers").
+  if (typeof input.name === "string" && !input.name.trim()) throw new Error("name cannot be empty. Enter a name for this record.");
+  // Indexed text is bounded, so an over-long value is refused here, naming its field, and never fails at the index.
+  for (const field of ["status", "reference", "customerId"] as const) {
+    const value = input[field];
+    if (typeof value === "string" && value.length > recordTextLimits[field]) throw new Error(`${field} is at most ${recordTextLimits[field]} characters.`);
   }
   assertNoRealBankDetails(input);
   validateDates(input);
@@ -165,6 +189,10 @@ export function validateRecord(
     if (existing && ["consentEvidence", "workflow", "origin"].some((key) => JSON.stringify(data[key]) !== JSON.stringify(existing.data[key]))) {
       throw new Error("Existing consent evidence cannot be changed. Reissue the mandate with a new consent record.");
     }
+    // MAN-02: the customer consented to this limit; a different limit needs a new consent record.
+    if (existing && input.amountKobo !== existing.amountKobo) {
+      throw new Error("The debit limit is part of the customer's consent and cannot be changed here. Reissue the mandate with new consent evidence for the new limit.");
+    }
     if (existing?.data.policyId && data.policyId !== existing.data.policyId) throw new Error("Use Apply policy version to change the version for this mandate and record the required notice and consent.");
     if (existing && consentKeys.some((key) => existing.data[key] !== undefined && JSON.stringify(data[key]) !== JSON.stringify(existing.data[key]))) {
       throw new Error("Use Apply policy version to update the version covered by consent.");
@@ -188,8 +216,11 @@ export function validateRecord(
       const mandate = parent(state, data.mandateId, "mandates", "dueItem mandateId");
       if (mandate.customerId !== input.customerId) throw new Error("Choose a mandate that belongs to the customer on this instalment.");
     }
-    if (data.owner === PLATFORM_OWNER && !recordsOf(state, "cutovers").some(cutoverComplete)) {
-      throw new Error("Valo Pay cannot take collection ownership until the handover agreement and parallel-run day are complete, with a named responsible user and written confirmation.");
+    if (data.owner === PLATFORM_OWNER && !cutoverInForce(state)) {
+      const handedBack = lastHandBackAt(state);
+      throw new Error(handedBack
+        ? `Valo Pay cannot take collection ownership again until a new handover agreement, recorded after the hand-back on ${watDate(Date.parse(handedBack))}, and its parallel-run day are complete, with a named responsible user and written confirmation.`
+        : "Valo Pay cannot take collection ownership until the handover agreement and parallel-run day are complete, with a named responsible user and written confirmation.");
     }
     if (data.outstandingKobo !== undefined && (!Number.isInteger(data.outstandingKobo) || data.outstandingKobo < 0 || data.outstandingKobo > input.amountKobo!)) {
       throw new Error("Outstanding balance cannot exceed the due amount.");
@@ -217,6 +248,8 @@ export function validateRecord(
     if (isUpdate) throw new Error("Saved payment evidence cannot be edited. Add a new record to correct it.");
     // Evidence of money received; an absent amount would be saved as 0.
     if (!Number.isSafeInteger(input.amountKobo) || Number(input.amountKobo) < 1) throw new Error("Enter the amount received. Payment evidence must be for more than ₦0.");
+    // A gross is what was collected before fees came off, so it is never less than what was received.
+    if (data.grossAmountKobo !== undefined && Number(data.grossAmountKobo) < Number(input.amountKobo)) throw new Error("The gross amount cannot be less than the amount received. Enter the amount collected before fees, or leave the gross amount blank.");
     if (data.paymentId !== undefined || data.resolutionKey !== undefined || input.status === "resolved") {
       throw new Error("Valo Pay determines how payment evidence is matched. Do not set its resolution when creating it.");
     }
@@ -228,6 +261,8 @@ export function validateRecord(
   if (kind === "policies") {
     requireRole(ctx, ["Admin"]);
     if (!isUpdate && input.status && input.status !== "draft") throw new Error("Policies are created as drafts only.");
+    // RET-01: the reviewer approves the rules that were submitted, so they are frozen until a reviewer rejects them.
+    if (existing?.status === "submitted") throw new Error("A submitted policy cannot be edited. A reviewer must reject it before its author can make changes.");
     if (data.reviewer !== undefined && data.reviewer !== existing?.data.reviewer) throw new Error("The policy reviewer is recorded during approval and cannot be changed here.");
     for (const key of ["previousVersionId", "approvedAt", "submittedAt", "rejectedAt"]) {
       if (JSON.stringify(data[key]) !== JSON.stringify(existing?.data[key])) throw new Error(`Policy ${key} is recorded by its review or version action and cannot be changed here.`);
@@ -270,7 +305,7 @@ export function validateRecord(
   }
   if (kind === "exceptions" && data.linkedRecordId) {
     const linked = state.records.find((item) => item.id === data.linkedRecordId);
-    if (!linked || linked.merchantId !== state.merchant.id) throw new Error("Link the exception to a record in this lender workspace.");
+    if (!linked || linked.merchantId !== state.merchant.id) throw Object.assign(new Error("Link the exception to a record in this lender workspace."), { status: 404 });
   }
   if (kind === "commercial" && data.designPartner && !data.signedFullPriceTerms) {
     // A discounted design-partner entry is allowed, but it cannot be treated as proof of a real Test 3 sale.
@@ -278,6 +313,10 @@ export function validateRecord(
   }
   if (kind === "cutovers") {
     requireRole(ctx, ["Admin"]);
+    const handedBack = lastHandBackAt(state);
+    if (input.status === "ready" && existing && existing.status !== "ready" && handedBack !== null && existing.createdAt <= handedBack) {
+      throw new Error(`This cutover contract ended with the hand-back on ${watDate(Date.parse(handedBack))}. Record a new cutover contract to take collection ownership again.`);
+    }
     if (input.status === "ready" && existing?.status !== "ready") {
       const candidate = { ...(existing ?? { id: "", merchantId: "", kind, name: "", reference: "", amountKobo: 0, customerId: "", createdAt: "", updatedAt: "" }), status: "ready", data } as TypedRecord<"cutovers">;
       if (!cutoverComplete(candidate)) throw new Error("The handover is ready only after the previous collection system is disabled in writing, external attempts are imported, the parallel-run day is complete, and a named responsible user has confirmed.");
@@ -286,6 +325,15 @@ export function validateRecord(
   }
   if (["evidence", "experiments"].includes(kind)) requireRole(ctx, ["Admin"]);
   if (["commercial", "costs", "settlement-batches"].includes(kind)) requireRole(ctx, ["Admin", "Finance"]);
+  // SCH-04: the business calendar decides when collections run, so only the roles that run them maintain it.
+  if (kind === "calendar") requireRole(ctx, ["Admin", "Operations"]);
+  // MEA-05: a fortnightly review is recorded by its reviewer at the service's time; neither is typed in.
+  if (kind === "reviews" && !isUpdate) {
+    if (data.reviewer !== undefined && data.reviewer !== ctx.actor) throw new Error("The reviewer is the person recording the review. Sign in as the reviewer to record it, and leave the reviewer out.");
+    if (data.reviewedAt !== undefined) throw new Error("The review time is recorded by the service when the review is saved. Leave the review date out.");
+    data.reviewer = ctx.actor;
+    data.reviewedAt = ctx.now;
+  }
   if (kind === "settlement-batches") {
     for (const key of ["grossKobo", "feeKobo", "netKobo"]) positiveInteger(data[key], key, true);
     if (data.grossKobo - data.feeKobo !== data.netKobo) throw new Error("The net settlement amount must equal the gross amount minus fees.");

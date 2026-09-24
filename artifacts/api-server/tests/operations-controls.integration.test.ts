@@ -24,7 +24,7 @@ const {createPaystackIngress}=await import("../src/routes/sources");
 const {paystackConnectionTransaction,paystackIngress}=await import("../src/lib/paystack-connection");
 const {receivePaystackEvent}=await import("../src/providers/paystack-inbox");
 const {runDueCloses}=await import("../src/lib/close-scheduler");
-const {inMerchantAsSystem,loadState,revealImportPayloads,SYSTEM_ACTOR_PREFIX,digest}=await import("../src/lib/valopay-store");
+const {inMerchantAsSystem,loadState,revealImportPayloads,SYSTEM_ACTOR_PREFIX}=await import("../src/lib/valopay-store");
 // The Paystack test ingress reads its own raw body, so it is mounted before JSON parsing, as in app.ts.
 const app=express();app.use((req,_res,next)=>{(req as any).log={info(){},warn(){},error(){}};next();});app.use("/api",createPaystackIngress(paystackIngress));
 app.use(express.json({limit:"2mb"}));app.use((req,_res,next)=>{(req as any).auth=Object.assign(()=>({userId:null}),{[Symbol.for("@clerk/express.auth")]:true});next();});app.use("/api",router);app.use(errorHandler);
@@ -100,8 +100,9 @@ try{
     const keyedName=`Keyed save during the outage ${randomUUID()}`,keyed=await post(`/v1/records/customers?merchantId=${lender}`,{name:keyedName,reference:`KEYED-${randomUUID()}`,data:{consentProvenance:"Synthetic consent"}});
     assert.equal(keyed.status,503);assert.equal((keyed.data as {committed?:unknown}).committed,false);
     assert.equal((await pool.query("SELECT count(*)::int AS count FROM valopay_records WHERE merchant_id=$1 AND name=$2",[lender,keyedName])).rows[0].count,0);
-    // Due long ago; the pass is scoped to this lender, so other due lenders in a reused database never crowd it out.
-    await pool.query("UPDATE valopay_merchants SET settings=settings||'{\"nextCloseAt\":\"2000-01-01T00:00:00.000Z\"}'::jsonb WHERE id=$1",[lender]);
+    // Due an hour ago; the pass is scoped to this lender, so other due lenders in a reused database never crowd it out.
+    // (A cursor years old would leave the lender owing a catch-up close for every business date since.)
+    await pool.query("UPDATE valopay_merchants SET settings=settings||jsonb_build_object('nextCloseAt',$2::text) WHERE id=$1",[lender,new Date(Date.now()-60*60*1000).toISOString()]);
     const closes=await runDueCloses({batchSize:25,onlyMerchantIds:[lender]});
     assert.deepEqual(closes.failed.filter(failure=>failure.merchantId===lender),[],"the scheduled close does not need the key service");
     assert.ok(closes.closed.some(closed=>closed.merchantId===lender),"the scheduled close ran during the outage");
@@ -119,7 +120,8 @@ try{
   // A completed request's answer is stored once, as the replay copy under its key; the journal keeps only a reference
   // to what it saved, which is what Operations shows. A daily close answers with its whole record (about 100 KB for a
   // pilot-scale lender), and both tables used to hold it. A retried key still replays the copy and never runs twice.
-  const replayCopy=async(key:string)=>{const row=(await pool.query("SELECT id,response,pg_column_size(response) AS size FROM valopay_idempotency WHERE merchant_id=$1 AND id=$2",[lender,digest(`${lender}:${key}`)])).rows[0];return {size:Number(row.size),response:await openPayload(row.response,{lender,record:row.id,field:"response"},managedWrappingKeys)};};
+  // A journaled request's answer is kept under its journal entry.
+  const replayCopy=async(key:string)=>{const row=(await pool.query("SELECT i.id,i.response,pg_column_size(i.response) AS size FROM valopay_idempotency i JOIN valopay_operations o ON o.id=i.id AND o.merchant_id=i.merchant_id WHERE i.merchant_id=$1 AND o.request_key=$2",[lender,key])).rows[0];return {size:Number(row.size),response:await openPayload(row.response,{lender,record:row.id,field:"response"},managedWrappingKeys)};};
   // The reference names only the record's ID and kind, so it is not sealed: Operations links to the saved result
   // without the key service, as it does with encryption off.
   assert.deepEqual(completed.receipt,{id:customer.id,kind:"customers"},"the journal keeps a reference to the saved record, unsealed");
@@ -176,7 +178,7 @@ try{
   await pool.query("UPDATE valopay_operations SET updated_at=$3::timestamptz WHERE merchant_id=$1 AND id=ANY($2::text[])",[lender,[completed.id,cancelled.id,pending.id],at(30)]);
   await pool.query("UPDATE valopay_records SET data=jsonb_set(data,'{committedAt}',to_jsonb($3::text)),updated_at=$3::timestamptz WHERE id=$1 AND merchant_id=$2",[batch.id,lender,at(30)]);
   let lifecycle=ok(await call(`/v1/lifecycle?merchantId=${lender}`));
-  lifecycle=ok(await post(`/v1/lifecycle/policy?merchantId=${lender}`,{policy:{rawCsvDays:1,journalPayloadDays:1,exportFileDays:null,auditTrail:"retain"},expectedRevision:lifecycle.policyRevision,reason:"Synthetic retention integration rehearsal"}));
+  lifecycle=ok(await post(`/v1/lifecycle/policy?merchantId=${lender}`,{policy:{rawCsvDays:30,journalPayloadDays:30,exportFileDays:null,auditTrail:"retain"},expectedRevision:lifecycle.policyRevision,reason:"Synthetic retention integration rehearsal"}));
   lifecycle=ok(await post(`/v1/lifecycle/holds?merchantId=${lender}`,{kind:"raw_csv",sourceId:batch.id,held:true,expectedHoldRevision:lifecycle.holdRevision,reason:"Preserve raw source while journal tests run"}));
   assert.equal(lifecycle.targets.some((target:any)=>target.sourceId===pending.id),false);
   let run=ok(await post(`/v1/lifecycle/runs?merchantId=${lender}`,{expectedPolicyRevision:lifecycle.policyRevision}));
@@ -187,13 +189,16 @@ try{
   lifecycle=ok(await post(`/v1/lifecycle/holds?merchantId=${lender}`,{kind:"journal_payload",sourceId:firstCandidate.sourceId,held:true,expectedHoldRevision:lifecycle.holdRevision,reason:"Hold added after approval must block deletion"}));
   const blocked=ok(await post(`/v1/lifecycle/runs/${run.id}/execute?merchantId=${lender}`,{previewDigest:run.previewDigest}));
   assert.equal(blocked.status,"attention");assert.equal(blocked.receipts[0].status,"blocked");
+  assert.equal(blocked.receipts.length,1,"a blocked source stops the run with its reason; nothing after it is attempted");
+  assert.match(blocked.receipts[0].detail,/is held/);
   lifecycle=ok(await post(`/v1/lifecycle/holds?merchantId=${lender}`,{kind:"journal_payload",sourceId:firstCandidate.sourceId,held:false,expectedHoldRevision:lifecycle.holdRevision,reason:"Release hold for checked synthetic cleanup"}));
   const stale=ok(await post(`/v1/lifecycle/runs?merchantId=${lender}`,{expectedPolicyRevision:lifecycle.policyRevision}));
   await pool.query("UPDATE valopay_operations SET updated_at=$3::timestamptz WHERE merchant_id=$1 AND id=$2",[lender,completed.id,at(31)]);
   assert.equal((await post(`/v1/lifecycle/runs/${stale.id}/approve?merchantId=${lender}`,{expectedUpdatedAt:stale.updatedAt,previewDigest:stale.previewDigest,reason:"A stale inventory must not be approved"})).status,409);
   run=ok(await post(`/v1/lifecycle/runs?merchantId=${lender}`,{expectedPolicyRevision:lifecycle.policyRevision}));
   run=ok(await post(`/v1/lifecycle/runs/${run.id}/approve?merchantId=${lender}`,{expectedUpdatedAt:run.updatedAt,previewDigest:run.previewDigest,reason:"Approve current exact source inventory"}));
-  for(let count=0;count<4&&run.status!=="completed";count++)run=ok(await post(`/v1/lifecycle/runs/${run.id}/execute?merchantId=${lender}`,{previewDigest:run.previewDigest}));
+  // One request executes every source of the run it can within its time budget, each checked and given a receipt.
+  run=ok(await post(`/v1/lifecycle/runs/${run.id}/execute?merchantId=${lender}`,{previewDigest:run.previewDigest}));
   assert.equal(run.status,"completed");assert.equal(run.successful,2);
   const retained=(await pool.query("SELECT id,status,request,receipt FROM valopay_operations WHERE merchant_id=$1 AND id=ANY($2::text[])",[lender,[completed.id,cancelled.id,pending.id]])).rows;
   assert.equal(retained.find((r:any)=>r.id===completed.id).request.purged,true);
@@ -230,7 +235,14 @@ try{
   // A test delivery loads the lender without opening its protected source rows, so it is received while the key service is down.
   const workingUnwrap=managedWrappingKeys.unwrap,workingIngressWrap=managedWrappingKeys.wrap;managedWrappingKeys.unwrap=managedWrappingKeys.wrap=async()=>{throw new Error("key service unavailable");};
   let receipt:Awaited<ReturnType<typeof ingest>>;try{receipt=await ingest();}finally{managedWrappingKeys.unwrap=workingUnwrap;managedWrappingKeys.wrap=workingIngressWrap;}
+  const audits=async()=>Number((await pool.query("SELECT count(*) AS n FROM valopay_records WHERE merchant_id=$1 AND kind='audit'",[lender])).rows[0].n);
+  const storedReceipt=async()=>(await pool.query("SELECT data->>'deliveryCount' AS count,updated_at FROM valopay_records WHERE merchant_id=$1 AND kind='provider-events'",[lender])).rows[0];
+  const auditsBefore=await audits(),receiptBefore=await storedReceipt();
   const duplicate=await ingest();assert.equal(receipt.event.id,duplicate.event.id);assert.equal(duplicate.duplicate,true);
+  // A replayed delivery appends no audit entry, and within a minute of its receipt's last write it writes nothing at all.
+  for(let replay=0;replay<5;replay++)assert.equal((await ingest()).duplicate,true);
+  assert.equal(await audits(),auditsBefore,"repeat deliveries append no audit entry");
+  assert.deepEqual(await storedReceipt(),receiptBefore,"and leave the receipt unwritten within a minute of its last write");
   assert.equal(Number((await pool.query("SELECT count(*) AS n FROM valopay_records WHERE merchant_id=$1 AND kind='provider-events'",[lender])).rows[0].n),1);
   await assert.rejects(()=>paystackConnectionTransaction("f".repeat(64),()=>true),/not found/);
   // Over HTTP: the signature is checked on the raw bytes before the lender is locked, loaded or decrypted.

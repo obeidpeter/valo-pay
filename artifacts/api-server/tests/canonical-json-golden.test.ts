@@ -27,7 +27,7 @@ const { cashEvidenceHash } = await import("../src/domain/connected-cash.js");
 const { assessCredit, createSyntheticCreditInput } = await import("../src/domain/connected-credit.js");
 const { connectedRevision } = await import("../src/domain/connected.js");
 const { appendAudit, verifyAudit } = await import("../src/lib/valopay-store.js");
-const { requestFingerprint } = await import("../src/lib/digests.js");
+const { canonicalDigest, requestFingerprint } = await import("../src/lib/digests.js");
 
 const date = "2026-09-22";
 const ops = { actor: "Clerk:operator", principalId: "person-operator", role: "Operations", now: "2026-09-23T09:00:00.000Z" };
@@ -79,6 +79,13 @@ const correction = { batchId: batch.id, targetId: target.id, expectedUpdatedAt: 
 const preview = previewImportCorrection(state, ops, correction);
 proposeImportCorrection(state, ops, { ...correction, previewDigest: preview.previewDigest, reviewer: finance.actor, reason: "Correct the misspelled source name", evidence: "SOURCE-CORRECTION-GOLDEN" }, [{ actor: finance.actor, role: "Finance" }]);
 const proposal = state.records.find((record) => record.kind === "import-corrections")!;
+// A proposal records its proposer's role since the 23 September audit (item 20), and its digest covers it: checked
+// here against the same rules. The golden values are pinned on the proposal as earlier builds stored it, without the
+// role, so they still prove the digest rules unchanged.
+const { proposalDigest: storedDigest, proposedRole, ...earlierProposal } = proposal.data;
+assert.equal(proposedRole, ops.role);
+assert.equal(storedDigest, canonicalDigest({ ...earlierProposal, proposedRole }, "legacy-en-us-replacer"));
+proposal.data = { ...earlierProposal, proposalDigest: canonicalDigest(earlierProposal, "legacy-en-us-replacer") };
 values.correction = { preview: preview.previewDigest, impact: proposal.data.impactDigest, proposal: proposal.data.proposalDigest };
 
 // Retention: policy and hold revisions, candidate digests and a preview.
@@ -95,7 +102,13 @@ values.retryDecision = decisionFingerprint({ dueItemId: "due-golden", attemptId:
 // Connected banking evidence.
 values.cashEvidence = [cashEvidenceHash(tricky), cashEvidenceHash([tricky, null, { skipped: undefined, kept: true }])];
 const creditContext = { tenantId: state.merchant.id, actorId: ops.actor, permissions: ["credit:assess"] as const, now: ops.now };
-values.creditAssessment = assessCredit(createSyntheticCreditInput({ tenantId: state.merchant.id, applicantId: "golden-applicant", applicationRef: "golden-application", now: ops.now }), { ...creditContext, permissions: [...creditContext.permissions] }).id;
+const creditInput = createSyntheticCreditInput({ tenantId: state.merchant.id, applicantId: "golden-applicant", applicationRef: "golden-application", now: ops.now });
+// The sample schedule as the earlier builds wrote it, every 30 days (it now falls due monthly), so the digest covers the same input.
+creditInput.repaymentSchedule = [30, 60, 90].map((days) => ({ dueAt: new Date(Date.parse(ops.now) + days * 86_400_000).toISOString(), amountKobo: 9_000_000 }));
+values.creditAssessment = assessCredit(creditInput, { ...creditContext, permissions: [...creditContext.permissions] }).id;
+// The connected revision is never stored: an action compares it with the one its view was given. The 23 September
+// audit narrowed it to what the workspace shows and its actions read, and the review of those fixes to the settings
+// the workspace reads, so its value here is the narrowed one's.
 values.connectedRevision = connectedRevision(state);
 
 // Request fingerprints stored with idempotency receipts and journal entries.
@@ -157,7 +170,7 @@ const golden = {
     "e358ad9a1fd8a46d1ca85a6fd84b839d195dcb366026fc99fd98136691f39737"
   ],
   "creditAssessment": "credit-66ff9d3a7f89f8791bd795dd075d227c",
-  "connectedRevision": "045ecc3b5a46c52bc2861760d9cb8b6c47b842427c5535103ccf4fda325a34e8",
+  "connectedRevision": "7d3f8d05afd569ba80a34fd16e8fcf6a99a8847a75eeedd9746f3d6035bdd675",
   "requestFingerprints": [
     "f7960ff0d2491d875296293e6d68985433711ef9e7318094fe35c4dc2e9a27c3",
     "5f0924e2e458c05413a430d4a245829aa1dca699e16b6b441b5ba80d47d80d74",

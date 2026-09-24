@@ -17,6 +17,7 @@ export interface EffectiveCloseSchedule {
   automatic: boolean;
   /** @nullable */
   nextAt: string | null;
+  /** The close service as this process sees it (the health answer's scheduler state). With external a separate scheduled job runs the closes: nothing is advertised as automatic, but a close that job has not run is still missed. */
   runtimeState: EffectiveCloseScheduleRuntimeState;
   /** @nullable */
   serviceIssue: EffectiveCloseScheduleServiceIssue;

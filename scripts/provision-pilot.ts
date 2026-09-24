@@ -2,18 +2,27 @@
 // Needs that database's DATABASE_URL and VALOPAY_STAFF_ACCESS=staging. The
 // arguments and the staff setting are checked before the store, and with it
 // the database pool, is loaded, so a mistake here never opens a connection.
-const usage =
-  'Usage: VALOPAY_STAFF_ACCESS=staging pnpm --filter @workspace/scripts exec tsx ./provision-pilot.ts --synthetic-staging org_ID user_ID "Workspace name"';
+// Three modes (docs/pilot-workflow-release.md, "Pilot administrators"):
+// provision an organisation with its first administrator, add another
+// administrator, or renew an administrator's 90 days. Each can be run again:
+// it says where things stand instead of failing on a duplicate.
+const command = "VALOPAY_STAFF_ACCESS=staging pnpm --filter @workspace/scripts exec tsx ./provision-pilot.ts --synthetic-staging";
+const usage = [
+  `Usage: ${command} org_ID user_ID "Workspace name"`,
+  `       ${command} --add-administrator org_ID user_ID "Display name"`,
+  `       ${command} --renew org_ID user_ID`,
+].join("\n");
 const given = process.argv.slice(2);
 // A leading `--` is skipped, as the other operator commands skip it.
 const args = given[0] === "--" ? given.slice(1) : given;
-const [confirmation, organisation, administrator, name] = args;
+const [confirmation, ...rest] = args;
+const mode = rest[0] === "--add-administrator" ? "add" : rest[0] === "--renew" ? "renew" : "provision";
+const operands = mode === "provision" ? rest : rest.slice(1);
+const [organisation, administrator, name] = operands;
 if (
-  args.length !== 4 ||
   confirmation !== "--synthetic-staging" ||
-  !organisation ||
-  !administrator ||
-  !name
+  operands.length !== (mode === "renew" ? 2 : 3) ||
+  operands.some((value) => !value || value.startsWith("--"))
 ) {
   console.error(usage);
   process.exit(1);
@@ -25,11 +34,20 @@ if (process.env.VALOPAY_STAFF_ACCESS !== "staging") {
   process.exit(1);
 }
 // The store's own pool; the scripts package does not depend on @workspace/db.
-const { provisionStaffWorkspace, closeDatabase } = await import(
+const { provisionStaffWorkspace, addStaffAdministrator, renewStaffAdministrator, closeDatabase } = await import(
   "../artifacts/api-server/src/lib/valopay-store"
 );
 try {
-  console.log(await provisionStaffWorkspace(organisation, administrator, name));
+  const result =
+    mode === "add" ? await addStaffAdministrator(organisation!, administrator!, name!)
+    : mode === "renew" ? await renewStaffAdministrator(organisation!, administrator!)
+    : await provisionStaffWorkspace(organisation!, administrator!, name!);
+  console.log(JSON.stringify(result, null, 2));
+} catch (error) {
+  // A refusal is said in its own words; anything else by its message alone, never with a stack or the database's detail.
+  const refusal = typeof (error as { status?: unknown }).status === "number";
+  console.error(refusal ? (error as Error).message : `Provisioning failed: ${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
 } finally {
   await closeDatabase();
 }

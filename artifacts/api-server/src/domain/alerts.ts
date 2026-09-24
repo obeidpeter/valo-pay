@@ -4,11 +4,11 @@
  * derived on every read and frozen into each daily close; they are never
  * stored on their own.
  */
-import { counted, alertRules, isBillableChannel, isOpenException, type AlertSeverity } from "@workspace/valopay-schema";
+import { counted, alertRules, deadlinePassed, isBillableChannel, isOpenException, paymentAwaitsAllocation, type AlertSeverity } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { DomainState } from "./types";
-import { paymentObservedAt } from "./reconciliation";
-import { closeSchedule, positionMismatches } from "./close";
+import { UNKNOWN_OUTCOME_AGE_MS, checkoutUnknownSince, paymentObservedAt } from "./reconciliation";
+import { closeSchedule, owedCloseDates, positionMismatches } from "./close";
 import { attemptTime } from "./policy-engine";
 import { collectionSucceeded, monthOf } from "./billing";
 import { exportHealth } from '../lib/export-jobs';
@@ -49,10 +49,16 @@ export function buildAlerts(state: DomainState, now: string, audit?: AuditVerifi
   const drift = positionMismatches(state);
   if (drift.length) alerts.push({ key: "position_drift", severity: "high", title: "Stored balances do not match payment allocations", detail: `${counted(drift.length, "instalment has", "instalments have")} an unpaid amount that does not match the confirmed payment allocations. Review reconciliation to investigate.`, count: drift.length, linkedRecordId: drift[0]!.dueItemId });
   const threshold = setting(state, "unallocatedAlertThreshold", alertRules.unallocatedThreshold);
-  const aged = recordsOf(state, "payments").filter((item) => item.status === "unallocated" && nowMs - paymentObservedAt(item) >= DAY_MS);
-  if (aged.length > threshold) alerts.push({ key: "unallocated_over_threshold", severity: "high", title: "Too many payments are waiting for allocation", detail: `${counted(aged.length, "payment has", "payments have")} been waiting to be assigned to an instalment for at least 24 hours. The lender's alert limit is ${threshold}. Review the unallocated payments.`, count: aged.length });
-  const overdue = recordsOf(state, "exceptions").filter((item) => isOpenException(item.status) && Date.parse(String(item.data.dueBy)) < nowMs);
+  // Money waiting for Finance as the Finance queue and the daily close count it: an unallocated payment, or the unapplied rest of one applied in part.
+  const aged = recordsOf(state, "payments").filter((item) => paymentAwaitsAllocation(item) && nowMs - paymentObservedAt(item) >= DAY_MS);
+  if (aged.length > threshold) alerts.push({ key: "unallocated_over_threshold", severity: "high", title: "Too many payments are waiting for allocation", detail: `${counted(aged.length, "payment has", "payments have")} money that has waited at least 24 hours to be assigned to an instalment, including the unapplied rest of a payment applied in part. The lender's alert limit is ${threshold}. Review the payments waiting in the Finance queue.`, count: aged.length });
+  // A date-only deadline lasts its whole WAT day, as in the queues (deadlinePassed).
+  const overdue = recordsOf(state, "exceptions").filter((item) => isOpenException(item.status) && deadlinePassed(item.data.dueBy, nowMs));
   if (overdue.length) alerts.push({ key: "exceptions_overdue", severity: "medium", title: "Exceptions past their deadline", detail: `${counted(overdue.length, "open exception is", "open exceptions are")} overdue. Review each item with its assigned owner. Deadlines are calculated in business days.`, count: overdue.length, linkedRecordId: overdue[0]!.id });
+  // Item 10: a pay-by-bank checkout whose outcome stays unknown holds its instalment until Finance records the outcome.
+  const heldCheckouts = recordsOf(state, "connected-intents").filter((item) => item.status === "unknown" && nowMs - Date.parse(checkoutUnknownSince(item)) >= UNKNOWN_OUTCOME_AGE_MS)
+    .sort((a, b) => checkoutUnknownSince(a).localeCompare(checkoutUnknownSince(b)));
+  if (heldCheckouts.length) alerts.push({ key: "pay_by_bank_outcome_unknown", severity: "high", title: "Pay-by-bank outcomes unknown for over 24 hours", detail: `${counted(heldCheckouts.length, "pay-by-bank checkout has", "pay-by-bank checkouts have")} had an unknown outcome for at least 24 hours. Each one holds its instalment: no new checkout or retry is planned until Finance confirms the payment with its evidence or marks it failed. The daily close raises an unknown-outcome exception for Finance for each one.`, count: heldCheckouts.length, linkedRecordId: heldCheckouts[0]!.id, since: checkoutUnknownSince(heldCheckouts[0]!) });
   const deferred = recordsOf(state, "exceptions").filter((item) => isOpenException(item.status) && item.data.type === "notice_not_evidenced");
   if (deferred.length) alerts.push({ key: "attempts_deferred", severity: "medium", title: "Collection attempts delayed: notice evidence missing", detail: `${counted(deferred.length, "planned attempt passed its", "planned attempts passed their")} notice deadline without a record that the provider accepted the customer notice. Review the missing evidence before a retry.`, count: deferred.length, linkedRecordId: deferred[0]!.id });
   // This WAT month's message cost per collection: a direct debit collected by webhook or settlement line counts.
@@ -66,7 +72,11 @@ export function buildAlerts(state: DomainState, now: string, audit?: AuditVerifi
   else if (nowMs - Date.parse(lastClose) > alertRules.closeOverdueHours * HOUR_MS) alerts.push({ key: "close_overdue", severity: "medium", title: "Daily close overdue", detail: `The last close was ${Math.floor((nowMs - Date.parse(lastClose)) / HOUR_MS)} hours ago. A close is due every day at the time set for this lender. Review the schedule or run a daily close.`, since: lastClose });
   // A scheduled close that has not run well past its time is the close analogue of a missed execution window (NFR-OBS-02).
   const schedule = closeSchedule(state, now);
-  if (schedule.missed) alerts.push({ key: "close_missed", severity: "high", title: "Scheduled daily close missed", detail: `The automatic close due at ${schedule.time} WAT is ${counted(schedule.overdueMinutes, "minute")} late. The scheduler may have stopped or the close may have failed. Check the schedule and run a daily close if needed.`, since: schedule.nextAt });
+  if (schedule.missed) {
+    // Each missed business date gets its own catch-up close, oldest first; the alert names the dates still owed.
+    const owed = owedCloseDates(state, now, 5), dates = new Intl.ListFormat("en-GB").format(owed.total > owed.dates.length ? [...owed.dates, `${owed.total - owed.dates.length} more`] : owed.dates);
+    alerts.push({ key: "close_missed", severity: "high", title: "Scheduled daily close missed", detail: `The automatic close due at ${schedule.time} WAT is ${counted(schedule.overdueMinutes, "minute")} late. ${owed.total === 1 ? "Business date" : "Business dates"} still to close: ${dates}. The scheduler may have stopped or the close may have failed. Check the schedule and run a daily close if needed.`, count: owed.total, since: schedule.nextAt });
+  }
   const switches = Object.entries((state.settings.policyKillSwitches || {}) as Record<string, unknown>).filter(([, on]) => on === true).map(([id]) => id);
   if (state.merchant.killSwitch || switches.length) alerts.push({ key: "kill_switch_active", severity: "info", title: state.merchant.killSwitch ? "Lender emergency stop is on" : "A policy emergency stop is on", detail: state.merchant.killSwitch ? "No collection instructions will be planned until an administrator turns off the emergency stop." : `The emergency stop is on for ${counted(switches.length, "policy version")}. No collection instructions will be planned under those versions until an administrator turns it off.`, count: switches.length || undefined });
   return alerts.sort((a, b) => order[a.severity] - order[b.severity] || a.key.localeCompare(b.key));

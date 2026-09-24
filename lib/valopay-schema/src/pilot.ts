@@ -4,7 +4,7 @@ import { importKinds } from "./kinds";
 import { businessDateSchema } from "./source-quality";
 
 /** HTTP statuses the service treats as a definitive refusal: the same request would be refused again, so its operations-journal entry is cancelled and its key cannot run again. */
-export const definitiveRefusalStatuses = [400, 403, 404, 409, 410, 413, 415, 422] as const;
+export const definitiveRefusalStatuses = [400, 403, 404, 409, 410, 413, 415] as const;
 /** Roles granted by a provisioned pilot administrator, never a browser persona. */
 export const pilotRoleSchema = z.enum([
   "Admin",
@@ -13,6 +13,16 @@ export const pilotRoleSchema = z.enum([
   "Compliance reviewer",
   "Read-only",
 ]);
+/** Export kinds that carry a customer's history or the audit trail (the export_sensitive rule): dispute packs under either name, the customer register and the audit chain. */
+export const sensitiveExportKinds = ["dispute-pack", "customer-pack", "customers", "audit"] as const;
+/** The roles that may queue, retry or download a sensitive export. */
+export const sensitiveExportRoles = ["Admin", "Finance", "Compliance reviewer"] as const;
+/** Whether a role may queue, retry or download an export of this kind: any role for other kinds, only `sensitiveExportRoles` for `sensitiveExportKinds`. */
+export function exportPermitted(role: string, kind: string): boolean {
+  return !(sensitiveExportKinds as readonly string[]).includes(kind) || (sensitiveExportRoles as readonly string[]).includes(role);
+}
+/** The refusal, in plain words, for a role that may not queue, retry or download a sensitive export. */
+export const sensitiveExportRefusal = "Only an Admin, Finance or Compliance reviewer can export or download dispute packs, customer records or the audit trail.";
 /** Saved synthetic source batch, including the current revision for corrections. */
 export const batchInputSchema = z
   .object({

@@ -79,7 +79,7 @@ it("retries an emergency-stop outcome without toggling the changed server state 
   await queryClient.invalidateQueries();
   expect((reason as HTMLInputElement).disabled).toBe(true);
   await user.click(retry);
-  await screen.findByText("Emergency stop updated");
+  await screen.findByText("Lender emergency stop is on. No collection instruction was sent.");
   expect(requests).toHaveLength(2);
   expect(requests[1]).toEqual(requests[0]);
   expect(api.state().merchant.killSwitch).toBe(true);
@@ -389,8 +389,66 @@ it("the unconfirmed emergency-stop notice discards its original request, and the
   await user.click(
     screen.getByRole("button", { name: "Activate emergency stop" }),
   );
-  await screen.findByText("Emergency stop updated");
+  await screen.findByText("Lender emergency stop is on. No collection instruction was sent.");
   expect(api.state().merchant.killSwitch).toBe(true);
   expect(keys).toHaveLength(2);
   expect(keys[1]).not.toBe(keys[0]);
+});
+
+/** Signs the console in as a staff administrator while another administrator's request to lift the lender's stop waits. */
+function staffWithWaitingRelease() {
+  const send = globalThis.fetch;
+  globalThis.fetch = async (input, options) => {
+    const response = await send(input, options);
+    if (new URL(String(input instanceof Request ? input.url : input), "http://localhost").pathname !== "/api/v1/workspace") return response;
+    return new Response(JSON.stringify({ ...(await response.json()), accessMode: "staff", actor: "Clerk:user_a" }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  api.mutate((state) => { state.merchant.killSwitch = true; state.settings.emergencyStopReleases = { lender: { requestedBy: "Clerk:user_b", requestedAt: api.now, reason: "The incident is closed.", policyId: null } }; });
+}
+
+it("offers the retry of a lost emergency-stop answer while a request to lift the stop waits, and holds back its opposite", async () => {
+  const user = userEvent.setup();
+  staffWithWaitingRelease();
+  renderApp("/settings");
+  await screen.findByText(/Clerk:user_b asked to turn the emergency stop off/);
+  const reason = screen.getByLabelText("Reason for changing the emergency stop") as HTMLInputElement;
+  await user.type(reason, "Keep it on until the provider confirms");
+  api.failNext(/^\/v1\/actions$/, "offline", "POST");
+  await user.click(screen.getByRole("button", { name: "Keep the stop on" }));
+  // The answer was lost, so the stop may already be kept on and the request settled: only the original is retried.
+  const retry = await screen.findByRole("button", { name: "Retry original emergency-stop request" });
+  expect(screen.getByText(/The emergency-stop response is unconfirmed/)).toBeTruthy();
+  expect((screen.getByRole("button", { name: "Approve turning it off" }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "Keep the stop on" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(reason.disabled).toBe(true);
+  await user.click(retry);
+  expect(await screen.findByText("Lender emergency stop is on. No collection instruction was sent.")).toBeTruthy();
+  expect(api.state().merchant.killSwitch).toBe(true);
+  expect(api.state().settings.emergencyStopReleases).toBeUndefined();
+  await waitFor(() => expect(screen.queryByText(/asked to turn the emergency stop off/)).toBeNull());
+});
+
+it("keeps a lost approval's notice and its retry when a refetch takes the waiting request away", async () => {
+  const user = userEvent.setup();
+  staffWithWaitingRelease();
+  renderApp("/settings");
+  await screen.findByText(/Clerk:user_b asked to turn the emergency stop off/);
+  await user.type(screen.getByLabelText("Reason for changing the emergency stop"), "Checked the incident notes with Operations.");
+  const requests = loseFirstResponse("/v1/actions", "POST");
+  await user.click(screen.getByRole("button", { name: "Approve turning it off" }));
+  await screen.findByText(/The approval's response is unconfirmed/);
+  expect((screen.getByRole("button", { name: "Keep the stop on" }) as HTMLButtonElement).disabled).toBe(true);
+  // The approval did reach the service: read again, the settings show the stop off and no request waiting.
+  expect(api.state().merchant.killSwitch).toBe(false);
+  await queryClient.invalidateQueries();
+  await waitFor(() => expect(screen.queryByText(/asked to turn the emergency stop off/)).toBeNull());
+  const notice = screen.getByText(/The approval's response is unconfirmed/).closest("[role=alert]") as HTMLElement;
+  // Nothing that would reverse it is offered while its outcome is unconfirmed.
+  expect((screen.getByRole("button", { name: "Activate emergency stop" }) as HTMLButtonElement).disabled).toBe(true);
+  await user.click(within(notice).getByRole("button", { name: "Retry original approval" }));
+  expect(await screen.findByText("Lender emergency stop is off. No collection instruction was sent.")).toBeTruthy();
+  expect(screen.queryByText(/The approval's response is unconfirmed/)).toBeNull();
+  expect(requests).toHaveLength(2);
+  expect(requests[1]).toEqual(requests[0]);
+  expect((screen.getByRole("button", { name: "Activate emergency stop" }) as HTMLButtonElement).disabled).toBe(true);
 });

@@ -117,4 +117,46 @@ try {
   for (const name of names) { const value = saved[name]; if (value === undefined) delete process.env[name]; else process.env[name] = value; }
   await new Promise<void>((resolve, reject) => lookupServer.close(error => error ? reject(error) : resolve()));
 }
-console.log("Raw Paystack ingress checks passed: signature verified on the exact bytes before any lender is opened, mapped-lender isolation, duplicate acknowledgement, test-only boundary, ingress settings, and a busy lender told from a mapping to a missing one.");
+// One connection's signed deliveries are limited whichever addresses they come from (a replayed capture can
+// rotate them): the 61st in a minute is refused before the lender is tried.
+const limitedConnection = "d".repeat(64);
+let tries = 0;
+const limited = express();
+limited.use(createPaystackIngress({ secretKey: paystackTestSecretKey, transact: createPaystackConnectionTransaction({ inMerchantAsSystem: async () => { tries++; return undefined; }, merchantInWorkspace: async () => true }) }));
+limited.use((error: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => { res.status(error.status || 400).json({ error: error.message }); });
+const limitedServer = limited.listen(0, "127.0.0.1");
+await new Promise<void>(resolve => limitedServer.once("listening", resolve));
+try {
+  process.env.VALOPAY_PAYSTACK_INGRESS = "test"; process.env.PAYSTACK_TEST_SECRET_KEY = key;
+  process.env.VALOPAY_PAYSTACK_CONNECTIONS = JSON.stringify({ [limitedConnection]: { workspaceId: "w1", merchantId: "m1" } });
+  const statuses: number[] = [];
+  for (let i = 0; i < 61; i++) { const response = await fetch(`http://127.0.0.1:${(limitedServer.address() as { port: number }).port}/v1/providers/paystack/${limitedConnection}/events`, { method: "POST", headers: { "content-type": "application/json", "x-paystack-signature": signature }, body }); statuses.push(response.status); await response.arrayBuffer(); }
+  assert.deepEqual([statuses.filter(status => status === 503).length, statuses.at(-1)], [60, 429], "60 signed deliveries a minute per connection; the busy lender answers each of them 503");
+  assert.equal(tries, 60, "a refused delivery never tries the lender");
+} finally {
+  for (const name of names) { const value = saved[name]; if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+  await new Promise<void>((resolve, reject) => limitedServer.close(error => error ? reject(error) : resolve()));
+}
+
+// A repeat delivery writes nothing within a minute of its receipt's last write, and never an audit entry:
+// only a new receipt is saved with one. Repeats in between are counted at the receipt's next write.
+const { createDeliveryRecorder } = await import("../src/lib/paystack-connection");
+const { receivePaystackEvent } = await import("../src/providers/paystack-inbox");
+const { parsePaystackTestWebhook } = await import("../src/providers/paystack");
+const recorder = createDeliveryRecorder(60_000), event = parsePaystackTestWebhook(Buffer.from(body), signature, key);
+let stored = seedMerchant("recorded-lender", true); stored.records = [];
+/** One delivery in its own transaction: what it would write, and what is stored afterwards. */
+const deliverAt = (now: string) => {
+  const working = structuredClone(stored), seen = recorder.before(working);
+  receivePaystackEvent(working, { ...ctx, now }, event, { connectionId, mode: "test" });
+  const write = recorder.after(working, seen, "recorded-lender", now);
+  if (write !== "none") stored = working;
+  return write;
+};
+assert.equal(deliverAt("2026-09-22T12:00:00.000Z"), "receipt", "a new event is a receipt, saved with its audit entry");
+assert.deepEqual([deliverAt("2026-09-22T12:00:10.000Z"), deliverAt("2026-09-22T12:00:20.000Z"), deliverAt("2026-09-22T12:00:59.999Z")], ["none", "none", "none"], "repeats within a minute of the last write write nothing");
+assert.equal(stored.records[0]!.data.deliveryCount, 1);
+assert.equal(deliverAt("2026-09-22T12:01:00.000Z"), "count", "a minute after the last write, the count alone is written");
+assert.deepEqual([stored.records.length, stored.records[0]!.data.deliveryCount, stored.records[0]!.data.lastReceivedAt], [1, 5, "2026-09-22T12:01:00.000Z"], "with the repeats tallied meanwhile, and no other record");
+assert.equal(deliverAt("2026-09-22T12:01:30.000Z"), "none", "and the next minute starts from that write");
+console.log("Raw Paystack ingress checks passed: signature verified on the exact bytes before any lender is opened, mapped-lender isolation, duplicate acknowledgement, test-only boundary, ingress settings, a busy lender told from a mapping to a missing one, a delivery limit per connection, and repeats written at most once a minute without an audit entry.");

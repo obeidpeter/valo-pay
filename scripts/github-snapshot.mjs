@@ -9,6 +9,8 @@ const docs = new Set(["docs/pilot-workflow-release.md", "docs/connected-banking.
 for (const name of ['README.md', 'audit.md', 'role-task-map.md', 'core-findings.md', 'import-findings.md', 'connected-findings.md', 'research-kit.md', 'release.md', 'measurement-template.csv']) docs.add(`docs/usability/${name}`);
 docs.add('docs/pilot-operations-controls.md');
 docs.add('docs/investor-presentation.md');
+docs.add('docs/deployment.md');
+docs.add('docs/database-migrations.md');
 // Workflows execute code on GitHub. Review each file before approving its export.
 const workflows = new Set([".github/workflows/ci.yml"]);
 const sourceExtension = /\.(?:ts|tsx|js|jsx|mjs|cjs|json|yaml|yml|toml|css|html|svg|sh|md|sql)$/;

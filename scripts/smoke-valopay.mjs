@@ -19,7 +19,8 @@ async function call(path,{method="GET",body,key,expected=200,foreign=false}={}){
  return data;
 }
 const workspace=await call("workspace");assert.equal(workspace.merchants.length,2);assert.equal(workspace.productionEnabled,false);merchantId=workspace.merchants[0].id;
-assert.equal(cookie,`valopay_sandbox=${legacyToken}`,"Legacy sandbox cookie must migrate without changing its token.");
+// On HTTPS the current cookie is __Host-valopay_sandbox; the answer sets it first, then clears the legacy one.
+assert.equal(cookie,`__Host-valopay_sandbox=${legacyToken}`,"Legacy sandbox cookie must migrate without changing its token.");
 const restoredWorkspace=await call("workspace");
 assert.deepEqual(restoredWorkspace.merchants.map(m=>m.id),workspace.merchants.map(m=>m.id),"Renamed cookie must retain the same lender workspaces.");
 for(const path of ["overview","reports","gates","settings","records/mandates","records/exceptions","records/payments","openapi.json"])await call(path);

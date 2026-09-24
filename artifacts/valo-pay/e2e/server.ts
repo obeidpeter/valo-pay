@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { installFakeApi } from "../tests/fake-api";
+import { makeRecord } from "../../api-server/src/domain/records";
 if (process.env.VALOPAY_BROWSER_TEST !== "1")
   throw new Error("Use the isolated browser-test command.");
 let api: ReturnType<typeof installFakeApi>;
@@ -80,6 +81,18 @@ createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1:4173");
     if (url.pathname === "/__test/reset" && req.method === "POST") {
       reset();
+      res.end("ok");
+      return;
+    }
+    if (url.pathname === "/__test/aged-batches" && req.method === "POST") {
+      // Committed import batches old enough for a 30-day raw CSV retention policy.
+      const count = Number(url.searchParams.get("count") || 1);
+      api.mutate((state) => {
+        for (let i = 0; i < count; i++) {
+          const at = new Date(Date.parse(api.now) - (60 - i) * 86_400_000).toISOString();
+          makeRecord(state, "import-batches", { name: `Aged sample import ${i + 1}`, status: "committed", createdAt: at, updatedAt: at, data: { csv: `reference,name\nAGED-${i + 1},Sample customer`, committedAt: at, rowIds: [`aged-${i + 1}`], recordIds: [], check: { valid: 1, invalid: 0, imported: 1, rows: [], preview: [] } } });
+        }
+      });
       res.end("ok");
       return;
     }

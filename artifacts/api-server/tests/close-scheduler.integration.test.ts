@@ -4,11 +4,13 @@
 // lender's failure from the others and backs off before retrying it, never
 // waiting for a lender held elsewhere to record the failure; drains batches
 // until nothing is due, sharing each batch across workspaces and putting
-// lenders being retried after the rest; pauses an idle anonymous sandbox
+// lenders being retried after the rest; catches up a lender's missed business
+// dates one close per pass, oldest first; pauses an idle anonymous sandbox
 // instead of closing it; stops between lenders when told to; gives legacy
-// lenders a cursor without a close; and its audit entries never keep an
-// abandoned sandbox alive. Every pass is scoped to this test's own lenders, so
-// other due lenders in a reused database never crowd them out.
+// lenders a cursor without a close; runs once, as the one-shot close pass,
+// with an exit status; and its audit entries never keep an abandoned sandbox
+// alive. Every pass is scoped to this test's own lenders, so other due
+// lenders in a reused database never crowd them out.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 
@@ -20,7 +22,9 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
 const { pool } = await import("@workspace/db");
 const { nextCloseInstant } = await import("@workspace/valopay-schema");
 const { SYSTEM_ACTOR_PREFIX, appendAudit, dueScheduledCloses, inWorkspace, listMerchants, loadState, recordScheduledCloseFailure, saveState } = await import("../src/lib/valopay-store.js");
-const { SCHEDULED_CLOSE_ACTOR, runDueCloses, startCloseScheduler, schedulerStatus } = await import("../src/lib/close-scheduler.js");
+const { SCHEDULED_CLOSE_ACTOR, runClosePassOnce, runDueCloses, startCloseScheduler, schedulerStatus } = await import("../src/lib/close-scheduler.js");
+const { followingCloseInstant, scheduledCloseBusinessDate } = await import("../src/domain/close.js");
+const { makeRecord } = await import("../src/domain/records.js");
 
 const requestFor = (token: string) => ({ headers: { cookie: `valopay_sandbox=${token}` }, secure: false, auth: Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true }) }) as any;
 const response = () => ({ cookie() { /* a valid test cookie is already supplied */ } }) as any;
@@ -98,6 +102,15 @@ try {
   // Lender A became due an hour ago (the platform was down): it is closed late; B is left alone.
   const dueAt = new Date(Date.parse(dbNow) - 60 * 60 * 1000).toISOString();
   await setCursor(a, dueAt);
+  // An exception left open on a payment already allocated in full: the close clears it, and its audit entry says so (the review of the audit fixes).
+  let settledException = "";
+  await inWorkspace(requestFor(sandbox), response(), async (context) => {
+    const state = await loadState(context, a, "update");
+    const allocated = state.records.find((record) => record.kind === "payments" && record.reference === "SBX-PAY-1001")!;
+    settledException = makeRecord(state, "exceptions", { name: "Unallocated payment", status: "open", customerId: allocated.customerId, amountKobo: allocated.amountKobo, createdAt: context.now, data: { type: "unallocated_payment", severity: "medium", owner: "Finance", notes: "Raised before the payment was allocated.", linkedRecordId: allocated.id } }).id;
+    appendAudit(state, context, "post.records.exceptions", settledException, "Synthetic workspace operation");
+    await saveState(context, state);
+  });
   const run = await runDueCloses({ batchSize: 100, onlyMerchantIds: only });
   const closedA = run.closed.find((item) => item.merchantId === a);
   assert.ok(closedA, "the due lender is closed");
@@ -112,11 +125,15 @@ try {
     assert.equal(closes[0]!.data.schedule.trigger, "scheduled");
     assert.equal(closes[0]!.data.schedule.scheduledFor, dueAt);
     assert.equal(closes[0]!.data.schedule.late, true);
-    const audit = state.records.filter((record) => record.kind === "audit").sort((x, y) => Number(x.data.sequence) - Number(y.data.sequence)).at(-1)!;
+    // The audit chain is not part of a loaded state: its head is read from the lender's records.
+    const audit = (await pool.query<{ name: string; data: Record<string, any> }>("SELECT name,data FROM valopay_records WHERE merchant_id=$1 AND kind='audit' ORDER BY (data->>'sequence')::int DESC LIMIT 1", [a])).rows[0]!;
     assert.equal(audit.data.actor, SCHEDULED_CLOSE_ACTOR);
     assert.equal(audit.name, "daily_close");
     assert.equal(audit.data.objectId, closedA.closeId);
-    assert.equal(state.settings.nextCloseAt, nextCloseInstant(String(closes[0]!.data.closedAt), "07:00"), "the cursor moved to the next 07:00 WAT after the close");
+    const cleared = state.records.find((record) => record.id === settledException)!;
+    assert.deepEqual([cleared.status, cleared.data.resolutionCode], ["closed", "condition_cleared"], "the scheduled close closed the exception whose condition cleared");
+    assert.match(String(audit.data.summary), /^Scheduled daily close of \d{4}-\d{2}-\d{2} completed.* Closed 1 exception whose condition cleared \(unallocated payment: payment SBX-PAY-1001 is allocated in full\)\.$/, `the scheduled close's audit entry names it: ${audit.data.summary}`);
+    assert.equal(state.settings.nextCloseAt, followingCloseInstant(dueAt, "07:00"), "the cursor moved one business date on, to 07:00 WAT the day after the time it covered");
     assert.ok(String(state.settings.nextCloseAt) > dbNow);
   });
   const again = await runDueCloses({ batchSize: 100, onlyMerchantIds: only });
@@ -280,6 +297,18 @@ try {
   assert.deepEqual(closedIds(fair).sort(), [x1, x2, y1, s1].sort(), "a pass drains every due lender");
   assert.equal(closedIds(fair)[0], s1); assert.equal(fair.batches, 5, "four full batches of one and a last empty one");
 
+  // A lender owed several missed business dates gets one catch-up close per pass, the oldest date first, even when
+  // full batches would read it again: the others due are not held back behind its backlog.
+  const [k1, k2] = await sandboxLenders();
+  clock = await databaseNow();
+  const owedFrom = nextCloseInstant(clock - 96 * 60 * 60 * 1000, "07:00"); // four scheduled times have passed since
+  await setCursor(k1, owedFrom); await setCursor(k2, hoursAgo(clock, 1));
+  assert.deepEqual(closedIds(await runDueCloses({ batchSize: 1, onlyMerchantIds: [k1, k2] })), [k1, k2], "each due lender is closed once in the pass");
+  assert.equal(await cursorOf(k1), followingCloseInstant(owedFrom, "07:00"), "one business date on");
+  for (let pass = 2; pass <= 4; pass += 1) assert.deepEqual(closedIds(await runDueCloses({ batchSize: 1, onlyMerchantIds: [k1, k2] })), [k1], `pass ${pass} closes the next owed date`);
+  assert.equal((await runDueCloses({ batchSize: 1, onlyMerchantIds: [k1, k2] })).examined, 0, "caught up");
+  assert.deepEqual((await closesOf(k1)).map((close) => close.data.sourceBusinessDate), [0, 1, 2, 3].map((day) => scheduledCloseBusinessDate(new Date(Date.parse(owedFrom) + day * 24 * 60 * 60 * 1000).toISOString())), "one close per missed business date, oldest first");
+
   // Within staff and signed-in lenders, and within anonymous sandboxes, lenders being retried come after the rest,
   // and a workspace's lender being retried takes its last turn, not its first.
   const [r1, r2] = await sandboxLenders(), [h1] = await sandboxLenders(), [g1] = await sandboxLenders();
@@ -330,11 +359,14 @@ try {
   clock = await databaseNow();
   const stopAt = hoursAgo(clock, 1);
   await setCursor(t1, stopAt); await setCursor(t2, stopAt);
-  assert.equal((await runDueCloses({ onlyMerchantIds: [t1, t2], budgetMs: 0 })).examined, 0, "a pass whose budget is spent starts no close");
+  const outOfTime = await runDueCloses({ onlyMerchantIds: [t1, t2], budgetMs: 0 });
+  assert.equal(outOfTime.examined, 0, "a pass whose budget is spent starts no close");
+  assert.equal(outOfTime.budgetSpent, true, "and records that its budget ended it with lenders possibly still due");
   const aborted = new AbortController();
   aborted.abort();
   const none = await runDueCloses({ onlyMerchantIds: [t1, t2], signal: aborted.signal });
   assert.equal(none.closed.length, 0, "a pass told to stop before it starts closes nothing");
+  assert.equal(none.budgetSpent, false, "a stop is not the budget");
   assert.equal(await cursorOf(t1), stopAt); assert.equal(await cursorOf(t2), stopAt);
   const halfway = new AbortController();
   const stopAfterFirst = { child: () => ({ info: (_fields: unknown, message: string) => { if (message === "scheduled daily close completed") halfway.abort(); }, error() {}, debug() {} }) } as any;
@@ -350,6 +382,34 @@ try {
   assert.equal((await pass)!.closed.length, 0, "stop ends a pass that has not reached a lender");
   assert.equal(await cursorOf(left), stopAt);
   assert.deepEqual(closedIds(await runDueCloses({ onlyMerchantIds: [left] })), [left], "the next pass closes it");
+
+  // The one-shot pass (close-pass.ts), which a host without an in-process scheduler runs on a schedule: the same
+  // pass and the same scheduled closes, exit 2 when its budget ran out with lenders still due and while a close
+  // failed and is waiting for its retry, then 0.
+  const [o1, o2] = await sandboxLenders();
+  clock = await databaseNow();
+  const oneShotDue = hoursAgo(clock, 1);
+  await setCursor(o1, oneShotDue); await setCursor(o2, oneShotDue);
+  const oneShotLines: Array<Record<string, any>> = [];
+  const oneShotLog: any = { info: (fields: object) => oneShotLines.push(fields), error: (fields: object) => oneShotLines.push(fields), debug() {}, child: () => oneShotLog };
+  const spentFirst = await runClosePassOnce({ onlyMerchantIds: [o1, o2], log: oneShotLog, budgetMs: 0 });
+  assert.deepEqual([spentFirst.exitCode, spentFirst.run!.budgetSpent, spentFirst.run!.examined], [2, true, 0], "a pass its budget ended before two due lenders is not a success");
+  assert.deepEqual([await cursorOf(o1), await cursorOf(o2)], [oneShotDue, oneShotDue], "both are still due for the next run");
+  const brokenOnce = await breakLender(o2);
+  const withFailure = await runClosePassOnce({ onlyMerchantIds: [o1, o2], log: oneShotLog });
+  assert.equal(withFailure.run!.budgetSpent, false, "a pass that took up every due lender did not run out of time");
+  assert.equal(withFailure.exitCode, 2, "a failed close makes the scheduled run fail");
+  assert.deepEqual(closedIds(withFailure.run!), [o1], "the healthy lender is closed");
+  assert.deepEqual(withFailure.run!.failed.map((item) => [item.merchantId, item.failures]), [[o2, 1]], "the failure is recorded for its retry");
+  const oneShotClose = (await closesOf(o1))[0]!;
+  assert.equal(oneShotClose.data.schedule.trigger, "scheduled", "a one-shot close is a scheduled close");
+  assert.equal(oneShotClose.data.schedule.late, true);
+  await pool.query("UPDATE valopay_records SET data = $2 WHERE id=$1", [brokenOnce.id, brokenOnce.data]);
+  await retryNow(o2);
+  const afterRetry = await runClosePassOnce({ onlyMerchantIds: [o1, o2], log: oneShotLog });
+  assert.equal(afterRetry.exitCode, 0);
+  assert.deepEqual(closedIds(afterRetry.run!), [o2]);
+  assert.deepEqual(oneShotLines.filter((line) => line.event === "close.one_shot").map((line) => [line.exitCode, line.budgetSpent]), [[2, true], [2, false], [0, false]], "one close.one_shot line a run, with its exit status and whether the budget ended it");
 
   // Expiry: scheduled-close audit entries never keep an abandoned sandbox alive.
   const workspace = (await pool.query<{ workspace_id: string }>("SELECT workspace_id FROM valopay_merchants WHERE id=$1", [a])).rows[0]!.workspace_id;

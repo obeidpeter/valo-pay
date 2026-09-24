@@ -1,4 +1,5 @@
 import { type ReactNode } from 'react';
+import { errorWords } from '@/lib/notify';
 
 /**
  * What every form in the console shares when a value is missing or refused:
@@ -79,11 +80,14 @@ export function formErrorMessage(message: string, fields: Array<{ name: string; 
 /**
  * Sorts what the server said into messages for the fields it names and the
  * rest. A validation failure whose every detail lands on a field needs no
- * general message; any other refusal (a rule, a role) is the title.
+ * general message; any other refusal (a rule, a role) is the title. The
+ * service names at most 20 fields, with how many problems it found
+ * (detailCount): any it did not name are counted in a general message.
  */
 export function serverFieldErrors(error: unknown, resolve: (path: string) => string | null): { fields: Record<string, string>; general: string[] } {
-  const data = (error as { data?: { error?: unknown; details?: unknown } } | null)?.data;
-  const said = typeof data?.error === 'string' ? data.error : (error as { message?: string } | null)?.message || 'This was not saved.';
+  const data = (error as { data?: { error?: unknown; details?: unknown; detailCount?: unknown } } | null)?.data;
+  // Without the service's words, plain ones: never the browser's own error text ("Failed to fetch") or an HTTP status line.
+  const said = typeof data?.error === 'string' ? data.error : errorWords(error, 'The service did not confirm the result.');
   const details = Array.isArray(data?.details) ? (data.details as Detail[]) : [];
   const fields: Record<string, string> = {};
   const general: string[] = [];
@@ -93,6 +97,8 @@ export function serverFieldErrors(error: unknown, resolve: (path: string) => str
     if (name && !fields[name]) fields[name] = message;
     else general.push(path ? `${path}: ${message}` : message);
   }
+  const unnamed = typeof data?.detailCount === 'number' ? data.detailCount - details.length : 0;
+  if (unnamed > 0) general.push(`${unnamed} more ${unnamed === 1 ? 'problem was' : 'problems were'} found. Correct these and save again to see ${unnamed === 1 ? 'it' : 'them'}.`);
   const validation = /^validation failed\.?$/i.test(said);
   if (!validation || general.length > 0 || details.length === 0) general.unshift(said);
   return { fields, general };

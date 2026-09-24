@@ -5,6 +5,7 @@ import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-re
 import { useWorkspace } from '@/lib/workspace-context';
 import { PRESENTATION_CUSTOMER, presentationChecks, presentationSteps } from '@/lib/presentation';
 import { Button } from './ui/button';
+import { focusMain } from '@/lib/focus';
 
 type Rehearsal = { active: boolean; step: number; checked: string[] };
 const initial = (): Rehearsal => ({ active: false, step: 0, checked: [] });
@@ -65,21 +66,29 @@ export function PresentationGuide() {
   const visible = state.active && workspace?.environment === 'sandbox';
   const hrefFor = usePresentationHref(visible && 'customer' in step);
   if (!visible) return null;
-  return <section aria-label="Presentation guide" className="mb-5 rounded-xl border border-primary/25 bg-card p-4 print:hidden">
-    <div className="flex flex-wrap items-center gap-3">
-      <Presentation className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
-      <div className="min-w-0 flex-1"><p className="text-xs font-medium text-muted-foreground">Presentation · Sample data only</p><p className="mt-1 text-sm font-semibold" aria-live="polite">{state.step + 1} of {presentationSteps.length} · {step.title}</p></div>
-      <Button asChild size="sm"><Link href={hrefFor(step)}>{step.action}<ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" /></Link></Button>
-      <Button variant="ghost" size="sm" onClick={() => save({ ...state, active: false })}><X className="mr-1 h-4 w-4" aria-hidden="true" />End presentation</Button>
+  // The title keeps at least 16rem, so where the row is too narrow for it and the actions (a phone, or a tablet
+  // beside the sidebar) the actions wrap under it instead of squeezing it to a word a line; on a phone the guide
+  // is tighter, so the page it is guiding stays in view.
+  return <section aria-label="Presentation guide" className="mb-4 rounded-xl border border-primary/25 bg-card p-3 sm:mb-5 sm:p-4 print:hidden">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <div className="flex min-w-[min(100%,16rem)] flex-1 items-center gap-3">
+        <Presentation className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
+        <div className="min-w-0"><p className="text-xs font-medium text-muted-foreground">Presentation · Sample data only</p><p className="mt-0.5 text-sm font-semibold sm:mt-1" aria-live="polite">{state.step + 1} of {presentationSteps.length} · {step.title}</p></div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button asChild size="sm"><Link href={hrefFor(step)}>{step.action}<ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" /></Link></Button>
+        {/* Ending removes the guide and this button with it, so the reader continues from the top of the page's content. */}
+        <Button variant="ghost" size="sm" className="px-2 sm:px-3" onClick={() => { save({ ...state, active: false }); focusMain(); }}><X className="mr-1 h-4 w-4" aria-hidden="true" />End presentation</Button>
+      </div>
     </div>
-    <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3">
+    <div className="mt-2 flex flex-wrap items-center gap-2 border-t pt-2 sm:mt-3 sm:pt-3">
       <label htmlFor="presentation-step" className="text-xs font-medium">Talking point</label>
-      <select id="presentation-step" className="min-h-9 max-w-full rounded-md border bg-background px-2 text-sm" value={state.step} onChange={e => save({ ...state, step: Number(e.target.value) })}>
+      <select id="presentation-step" className="min-h-9 min-w-0 max-w-full flex-1 rounded-md border bg-background px-2 text-sm sm:flex-none" value={state.step} onChange={e => save({ ...state, step: Number(e.target.value) })}>
         {presentationSteps.map((s, i) => <option key={s.href} value={i}>{i + 1}. {s.title}</option>)}
       </select>
       <Button size="sm" variant="outline" disabled={state.step === presentationSteps.length - 1} onClick={() => save({ ...state, step: state.step + 1 })}>Next talking point</Button>
       <Link href="/presentation" className="ml-auto inline-flex min-h-9 items-center text-sm text-primary underline underline-offset-4">Presentation preparation</Link>
     </div>
-    <details key={state.step} className="mt-3 text-sm"><summary className="min-h-9 cursor-pointer py-2 font-medium">Show presenter notes (visible on this screen)</summary><p className="mt-2">{step.show}</p><p className="mt-2 text-muted-foreground">Say: {step.say}</p><p className="mt-2 text-muted-foreground">If needed: {step.fallback}</p></details>
+    <details key={state.step} className="mt-1 text-sm sm:mt-3"><summary className="min-h-9 cursor-pointer py-2 font-medium">Show presenter notes (visible on this screen)</summary><p className="mt-2">{step.show}</p><p className="mt-2 text-muted-foreground">Say: {step.say}</p><p className="mt-2 text-muted-foreground">If needed: {step.fallback}</p></details>
   </section>;
 }

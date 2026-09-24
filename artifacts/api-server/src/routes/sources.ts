@@ -1,7 +1,7 @@
 import { Router, raw, type IRouter } from "express";
 import { z } from "zod";
 import { ReceivePaystackTestEventResponse } from "@workspace/api-zod";
-import { sourceProfileInputSchema, paystackFixtureInputSchema, providerReplayInputSchema, sourceManifestInputSchema, businessDateSchema, sourcesViewSchema, paystackFixtureResultSchema, providerEventViewSchema, valopayRecordSchema } from "@workspace/valopay-schema";
+import { sourceProfileInputSchema, paystackFixtureInputSchema, providerReplayInputSchema, sourceManifestInputSchema, businessDateSchema, sourcesViewSchema, paystackFixtureResultSchema, providerEventViewSchema, valopayRecordSchema, pathId } from "@workspace/valopay-schema";
 import { withState } from "./valopay";
 import { contractAnswer, lenderQuery, requiredKey } from "../lib/contract";
 import { revealImportPayloads } from "../lib/valopay-store";
@@ -10,8 +10,9 @@ import { saveSourceManifest } from "../domain/source-completeness";
 import { providerEventView, receivePaystackEvent, replayProviderEvent, runPaystackFixture } from "../providers/paystack-inbox";
 import { parsePaystackTestWebhook, PaystackError, type PaystackWebhook } from "../providers/paystack";
 import type { DomainState, Context } from "../domain/types";
+import { routerOptions } from "./router-options";
 
-const router: IRouter = Router();
+const router: IRouter = Router(routerOptions);
 router.get("/v1/sources", async (req, res) => {
   lenderQuery(req);
   const { businessDate } = z.object({ businessDate: businessDateSchema.optional() }).parse({ businessDate: req.query.businessDate });
@@ -30,10 +31,10 @@ router.post("/v1/sources/profiles", async (req, res) => {
 router.post("/v1/sources/manifests", async (req, res) => {
   requiredKey(req);
   const input = sourceManifestInputSchema.parse(req.body);
-  res.json(await withState(req, res, (state, ctx) => saveSourceManifest(state, ctx, input), true, valopayRecordSchema));
+  res.json(await withState(req, res, (state, ctx) => saveSourceManifest(state, ctx, input), true, valopayRecordSchema, { reason: input.reason }));
 });
 router.post("/v1/sources/profiles/:id/save", async (req, res) => {
-  const input = sourceProfileInputSchema.parse(req.body), id = z.string().min(1).max(100).parse(req.params.id);
+  const id = pathId(req.params.id), input = sourceProfileInputSchema.parse(req.body);
   res.json(await withState(req, res, (state, ctx) => saveSourceProfile(state, ctx, input, id), true, valopayRecordSchema));
 });
 router.post("/v1/sources/paystack/fixtures", async (req, res) => {
@@ -41,8 +42,8 @@ router.post("/v1/sources/paystack/fixtures", async (req, res) => {
   res.json(await withState(req, res, (state, ctx) => { const result = runPaystackFixture(state, ctx, input.scenario); return { ...result, event: providerEventView(result.event) }; }, true, paystackFixtureResultSchema));
 });
 router.post("/v1/sources/events/:id/replay", async (req, res) => {
-  const input = providerReplayInputSchema.parse(req.body), id = z.string().min(1).max(100).parse(req.params.id);
-  res.json(await withState(req, res, (state, ctx) => providerEventView(replayProviderEvent(state, ctx, id, input.expectedUpdatedAt, input.reason)), true, providerEventViewSchema));
+  const id = pathId(req.params.id), input = providerReplayInputSchema.parse(req.body);
+  res.json(await withState(req, res, (state, ctx) => providerEventView(replayProviderEvent(state, ctx, id, input.expectedUpdatedAt, input.reason)), true, providerEventViewSchema, { reason: input.reason }));
 });
 export default router;
 
@@ -59,9 +60,9 @@ const paystackRefusal = (error: unknown) => error instanceof PaystackError ? Obj
  * decrypted, so a forged delivery costs one HMAC and learns nothing about the connection or its lender.
  */
 export function createPaystackIngress({ secretKey, transact }: PaystackIngress): IRouter {
-  const ingress = Router();
+  const ingress = Router(routerOptions);
   ingress.post("/v1/providers/paystack/:connectionId/events", raw({ type: "application/json", limit: "256kb" }), async (req, res) => {
-    const connectionId = z.string().regex(/^[a-f0-9]{64}$/).parse(req.params.connectionId);
+    const connectionId = z.string().regex(/^[a-f0-9]{64}$/).parse(req.params.connectionId, { path: ["connectionId"] });
     if (!Buffer.isBuffer(req.body)) throw Object.assign(new Error("A signed JSON body is required."), { status: 400 });
     let event: PaystackWebhook;
     try { event = parsePaystackTestWebhook(req.body, req.header("x-paystack-signature"), secretKey()); } catch (error) { throw paystackRefusal(error); }

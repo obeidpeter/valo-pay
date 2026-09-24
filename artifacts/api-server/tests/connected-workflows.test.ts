@@ -8,9 +8,13 @@ import {
 } from "../src/domain/connected";
 import { makeRecord } from "../src/domain/records";
 import { evaluateRetry } from "../src/domain/policy-engine";
+import { reconcile } from "../src/domain/reconciliation";
+import { runDailyClose } from "../src/domain/actions";
+import { pauseIdleSandboxClose } from "../src/domain/close";
 import type { Context, DomainState, ValopayRecord } from "../src/domain/types";
+import { workflowFixture } from "./workflow-fixture";
 process.env.DATABASE_URL ||= "postgres://unused:unused@127.0.0.1:1/unused";
-const { assertFinalState } = await import("../src/lib/valopay-store");
+const { assertFinalState, appendAudit } = await import("../src/lib/valopay-store");
 const ctx: Context = {
   now: "2026-09-21T10:00:00.000Z",
   role: "Admin",
@@ -272,7 +276,8 @@ check(() => {
   assert.throws(() => run(s, "payment.refund_confirm", {}, i.id), /Finance/);
   run(s, "payment.refund_confirm", {}, i.id, finance);
   assert.equal(i.status, "refunded");
-  assert.equal(openDue(s).status, "in_dispute");
+  // A refund reopens the instalment by its balance, not in dispute; only a reversal puts it in dispute.
+  assert.equal(openDue(s).status, "scheduled");
   assert.equal(openDue(s).data.outstandingKobo, openDue(s).amountKobo);
   // The refunded money left the allocation queues and is no customer credit.
   const refunded = s.records.find((r) => r.id === i.data.paymentId)!;
@@ -418,6 +423,118 @@ check(() => {
     s.records.find((record) => record.id === i.data.consentId)!.status,
     "revoked",
   );
+});
+check(() => {
+  // The revision covers what the workspace shows and what its actions read, and
+  // nothing else (the 23 September audit): history elsewhere in the lender no
+  // longer makes a reviewed form stale, and a write, which loads older closes as
+  // summaries, computes the revision the read computed.
+  const s = fresh(),
+    revision = connectedRevision(s);
+  makeRecord(s, "audit", { status: "recorded", createdAt: ctx.now, data: { action: "elsewhere" } });
+  const close = makeRecord(s, "closes" as string, {
+    status: "completed",
+    createdAt: ctx.now,
+    data: { report: { unallocated: { count: 1 } }, operational: { rows: [1, 2, 3] } },
+  });
+  makeRecord(s, "exports", { status: "queued", createdAt: ctx.now, data: { kind: "payments" } });
+  s.records.find((r) => r.kind === "payments")!.data.narration = "Edited elsewhere";
+  // A settled instalment and its collected attempt are history too.
+  const settled = s.records.find((r) => r.kind === "due-items" && r.status === "paid")!;
+  settled.name = "Renamed settled instalment";
+  s.records.find((r) => r.kind === "attempts" && r.data.dueItemId === settled.id)!.data.note = "Checked";
+  assert.equal(connectedRevision(s), revision, "history outside the workspace keeps its revision");
+  delete close.data.operational;
+  assert.equal(connectedRevision(s), revision, "a close loaded as a summary keeps it too");
+  const receipt = (t: DomainState) => {
+    const i = checkout(t);
+    run(t, "payment.authorise", {}, i.id);
+    run(t, "payment.outcome", { outcome: "confirmed" }, i.id);
+    return t.records.find((r) => r.id === i.data.paymentId)!;
+  };
+  const changes: [string, (t: DomainState) => void][] = [
+    ["a customer's name", (t) => { t.records.find((r) => r.kind === "customers")!.name = "Renamed applicant"; }],
+    ["a customer removed", (t) => { t.records = t.records.filter((r) => r !== t.records.find((x) => x.kind === "customers")); }],
+    ["an instalment's balance", (t) => { openDue(t).data.outstandingKobo = 1; }],
+    ["an attempt's status", (t) => { t.records.find((r) => r.kind === "attempts" && r.status === "failed")!.status = "unknown"; }],
+    ["an instalment settled", (t) => { const due = openDue(t); due.status = "paid"; due.data.outstandingKobo = 0; }],
+    ["a new attempt", (t) => { makeRecord(t, "attempts", { status: "sent", customerId: openDue(t).customerId, createdAt: ctx.now, data: { dueItemId: openDue(t).id } }); }],
+    ["a connected record", (t) => { makeRecord(t, "connected-cash-forecasts", { createdAt: ctx.now, data: { entityId: "elsewhere" } }); }],
+    ["a pay-by-bank receipt", (t) => { const payment = receipt(t), before = connectedRevision(t); payment.data.refundStatus = "refunded"; assert.notEqual(connectedRevision(t), before); }],
+    ["a receipt's allocation", (t) => { const payment = receipt(t), before = connectedRevision(t); t.records.find((r) => r.kind === "allocations" && r.data.paymentId === payment.id)!.status = "superseded"; assert.notEqual(connectedRevision(t), before); }],
+    ["a lender setting", (t) => { t.settings.environment = "production"; }],
+    ["the lender", (t) => { t.merchant.killSwitch = true; }],
+  ];
+  for (const [label, change] of changes) {
+    const t = fresh(),
+      before = connectedRevision(t);
+    change(t);
+    assert.notEqual(connectedRevision(t), before, `${label} changes the revision`);
+  }
+});
+check(() => {
+  // The review of those fixes: of the lender's settings, the revision covers only
+  // the ones the workspace and its actions read (the environment), so the
+  // scheduler's bookkeeping, an unrelated audited write and a scheduled close
+  // that changes nothing the workspace shows keep a reviewed form current.
+  const unrelated: [string, (t: DomainState) => void][] = [
+    ["the next scheduled close", (t) => { t.settings.nextCloseAt = "2026-09-22T06:00:00.000Z"; }],
+    ["a failed scheduled close's retry", (t) => { t.settings.closeRetry = { cursor: t.settings.nextCloseAt, failures: 1, retryAt: "2026-09-21T10:02:00.000Z", lastFailedAt: ctx.now }; }],
+    ["a pause for an idle sandbox", (t) => { pauseIdleSandboxClose(t, ctx.now); }],
+    ["the close time", (t) => { t.settings.closeTime = "08:00"; }],
+    ["the audit chain's head", (t) => { t.settings.auditChain = { sequence: 1, hash: "a".repeat(64) }; }],
+    ["an audited write elsewhere", (t) => { appendAudit(t, ctx, "elsewhere", "workspace", "An unrelated audited write."); }],
+  ];
+  for (const [label, change] of unrelated) {
+    const t = fresh(),
+      before = connectedRevision(t);
+    change(t);
+    assert.equal(connectedRevision(t), before, `${label} keeps the revision`);
+  }
+  const t = fresh();
+  t.settings.nextCloseAt = "2026-09-21T06:00:00.000Z";
+  reconcile(t, { ...finance, now: "2026-09-21T06:00:00.000Z" });
+  const before = connectedRevision(t);
+  runDailyClose(t, { ...ctx, now: "2026-09-21T06:01:00.000Z", actor: "system:scheduled close" }, "scheduled");
+  assert.notEqual(t.settings.nextCloseAt, "2026-09-21T06:00:00.000Z", "the close moved the scheduler's cursor");
+  assert.equal(connectedRevision(t), before, "a scheduled close that changes nothing the workspace shows keeps the revision");
+});
+check(() => {
+  // The view's work grows with the records, not with the customers or the open
+  // instalments times the records, and the customers are listed once (the
+  // 23 September audit).
+  const s = workflowFixture(200);
+  const customers = s.records.filter((r) => r.kind === "customers");
+  customers.forEach((customer, index) => {
+    if (index % 4) return;
+    for (const purpose of index % 8 ? ["account_read"] : ["account_read", "credit_assessment"])
+      run(s, "consent.grant", { purpose, subjectId: customer.id });
+  });
+  const assessed = customers.filter((_, index) => index % 8 === 0).slice(0, 3);
+  for (const customer of assessed) run(s, "credit.assess", { customerId: customer.id, scenario: "ready" });
+  const dues = s.records.filter((r) => r.kind === "due-items" && r.status === "scheduled");
+  dues.forEach((due, index) => {
+    if (index % 10 === 0) makeRecord(s, "attempts", { status: "sent", customerId: due.customerId, createdAt: ctx.now, data: { dueItemId: due.id } });
+  });
+  let visits = 0;
+  for (const name of ["filter", "find", "some"] as const) {
+    const original = Array.prototype[name] as (...args: any[]) => any;
+    Object.defineProperty(s.records, name, { configurable: true, value(this: ValopayRecord[], ...args: any[]) { visits += this.length; return original.apply(this, args); } });
+  }
+  const view = connectedView(s, ctx);
+  for (const name of ["filter", "find", "some"]) delete (s.records as any)[name];
+  assert.ok(visits < s.records.length * 40, `the view visited ${visits} records scanning a list of ${s.records.length}`);
+  assert.equal(view.customers.length, 200);
+  assert.equal("customers" in view.credit, false, "the customer list is not sent twice");
+  assert.deepEqual(
+    view.credit.permissions,
+    customers.filter((_, index) => index % 4 === 0).map((customer, index) => ({ customerId: customer.id, accountRead: true, creditAssessment: index % 2 === 0 })),
+    "only applicants holding a permission are listed, with both of theirs",
+  );
+  assert.deepEqual(view.credit.assessments.map((item) => [item.customerId, item.customerName, item.permissionRestricted]).sort(), assessed.map((customer) => [customer.id, customer.name, false]).sort());
+  assert.equal(view.payments.dues.length, dues.length);
+  assert.deepEqual(view.payments.dues.filter((due) => due.blocked).map((due) => due.id), dues.filter((_, index) => index % 10 === 0).map((due) => due.id));
+  assert.ok(view.payments.dues.every((due) => due.customerName === customers.find((customer) => customer.id === due.customerId)!.name));
 });
 console.log(
   `${checks} connected workflow, authority, race and persistence checks passed.`,

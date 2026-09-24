@@ -72,6 +72,22 @@ describe("reports", () => {
     expect(screen.getByRole('link', { name: 'View close record' }).getAttribute('href')).toBe('/reports?view=operations#daily-closes');
   });
 
+  it('invoices every month in order and names the month to issue first', async () => {
+    api.setNow('2027-04-03T09:00:00.000Z');
+    api.mutate(state => { const terms = state.records.find(record => record.kind === 'commercial')!; terms.data.signed = true; terms.data.effectiveDate = '2027-01-01'; });
+    const user = userEvent.setup();
+    renderApp('/reports?view=billing');
+    expect(await screen.findByText(/^No invoice has been issued\. The next covers 2027-01\./)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Issue invoice' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Issue the monthly invoice' });
+    expect(within(dialog).getByText('Months are invoiced in order, a month with nothing to bill for zero. The next invoice covers 2027-01.')).toBeTruthy();
+    await user.type(within(dialog).getByLabelText(/^Invoice month/), '2027-03');
+    await user.type(within(dialog).getByLabelText('Reason *'), 'Month-end invoice');
+    await user.click(within(dialog).getByRole('button', { name: 'Issue invoice' }));
+    expect(await within(dialog).findByText(/issue the invoice for 2027-01 first, the month the signed terms took effect\.$/)).toBeTruthy();
+    expect(api.state().records.some(record => record.kind === 'invoices')).toBe(false);
+  });
+
   it('keeps billing exports reachable when the browser blocks the new tab', async () => {
     const user = userEvent.setup();
     vi.spyOn(window, 'open').mockReturnValue(null);

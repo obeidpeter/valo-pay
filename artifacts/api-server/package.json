@@ -7,6 +7,7 @@
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
+    "close-pass": "node --enable-source-maps ./dist/close-pass.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.tests.json"
   },
   "dependencies": {
@@ -16,8 +17,6 @@
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
     "@workspace/valopay-schema": "workspace:*",
-    "cookie-parser": "^1.4.7",
-    "cors": "^2.8.6",
     "csv-parse": "^7.0.2",
     "drizzle-orm": "catalog:",
     "express": "^5.2.1",
@@ -29,8 +28,6 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/cookie-parser": "^1.4.10",
-    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "catalog:",
     "@types/pdfkit": "^0.17.6",

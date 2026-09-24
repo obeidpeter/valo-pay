@@ -1,6 +1,6 @@
 import { WAT_OFFSET_MS } from "@workspace/valopay-schema";
 import type { DomainState } from "./types";
-import { recordsOf } from "./records";
+import { recordsOfKind } from "./record-index";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -23,7 +23,7 @@ export function watMonthStart(period: string): number {
 
 /** Nigerian public holidays and non-banking days are data (SCH-04), one calendar record per date. */
 export function holidaySet(state: DomainState): Set<string> {
-  return new Set(recordsOf(state, "calendar").map((record) => String(record.data.date)));
+  return new Set(recordsOfKind(state, "calendar").map((record) => String(record.data.date)));
 }
 
 /** Monday to Friday in WAT, excluding the holiday table. */

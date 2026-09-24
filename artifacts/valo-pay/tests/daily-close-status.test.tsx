@@ -15,6 +15,23 @@ describe('effective daily-close status', () => {
     expect(api.state().settings.scheduledCloseEnabled).toBe(true);
   });
 
+  it.each(['/overview', '/reports', '/settings'])('says daily closes run from a scheduled job at %s instead of asking for manual closes', async (path) => {
+    api.scheduler.state = 'external';
+    renderApp(path);
+    expect(await screen.findByText('Daily closes run from a scheduled job.')).toBeTruthy();
+    expect(screen.queryByText(/Run closes manually/)).toBeNull();
+    expect(screen.queryByText(/^Next daily close:/)).toBeNull();
+  });
+
+  it('warns of a close the scheduled job has not run, with the missed-close alert', async () => {
+    api.scheduler.state = 'external';
+    api.mutate(state => { state.settings.nextCloseAt = new Date(Date.parse(api.now) - 45 * 60_000).toISOString(); });
+    renderApp('/overview');
+    expect(await screen.findByText(/^Scheduled close at \d\d:\d\d WAT missed: 45 minutes past its time\. Daily closes run from a scheduled job/)).toBeTruthy();
+    expect(screen.getByText('Scheduled daily close missed')).toBeTruthy();
+    expect(screen.getByText(/Business date still to close:/)).toBeTruthy();
+  });
+
   it('keeps saving a requested schedule distinct from starting the service', async () => {
     const user = userEvent.setup();
     api.scheduler.state = 'off';

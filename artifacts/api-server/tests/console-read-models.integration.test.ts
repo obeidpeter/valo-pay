@@ -153,6 +153,15 @@ try {
     ["READ-REFUND-LEGACY", "returned", 1_000_000, { allocatedKobo: 0, refundStatus: "recorded_externally" }],
     ["READ-REFUND-WHOLE", "returned", 700_000, { allocatedKobo: 0, refundStatus: "refunded", refundedKobo: 700_000 }],
     ["READ-REVERSED", "returned", 900_000, { allocatedKobo: 0, reversalStatus: "reversed" }],
+    // Finance's payments queue holds the unapplied rest of a partial or overpaid payment, and nothing once it is all applied or returned.
+    ["READ-PARTIAL-REST", "partial", 3_000_000, { allocatedKobo: 1_000_000 }],
+    ["READ-OVERPAID-REST", "overpaid", 3_000_000, { allocatedKobo: 2_500_000 }],
+    ["READ-PARTIAL-SPENT", "partial", 3_000_000, { allocatedKobo: 2_500_000, refundStatus: "refunded", refundedKobo: 500_000 }],
+    // The review of those fixes: money in another currency is no naira credit, whatever the spelling of its currency, and a payment with nothing unapplied waits for nobody.
+    ["READ-USD", "unallocated", 100_000, { allocatedKobo: 0, currency: "USD" }],
+    ["READ-USD-SPELLED", "unallocated", 50_000, { allocatedKobo: 0, currency: " usd " }],
+    ["READ-NGN-SPELLED", "unallocated", 70_000, { allocatedKobo: 0, currency: " ngn " }],
+    ["READ-ZERO", "unallocated", 0, { allocatedKobo: 0 }],
   ] as const) {
     const { proposedDueItemId: _due, proposedAmountKobo: _amount, ...kept } =
       paymentTemplate.data;
@@ -179,7 +188,8 @@ try {
     request(),
     response(),
     async (ctx) => {
-      const full = await loadState(ctx, merchantId, "share");
+      // The reference for every paged read model is the whole stored lender: a load has earlier closes as summaries and no audit chain.
+      const full = { ...(await loadState(ctx, merchantId, "share")), records: (await pool.query("SELECT * FROM valopay_records WHERE merchant_id=$1 ORDER BY created_at,id", [merchantId])).rows.map((row): ValopayRecord => ({ id: row.id, merchantId: row.merchant_id, kind: row.kind, name: row.name, status: row.status, reference: row.reference, amountKobo: Number(row.amount_kobo), customerId: row.customer_id, data: row.data, createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString() })) };
       for (const queue of reconciliationQueues)
         for (const filters of [
           { limit: 25 },
@@ -203,6 +213,13 @@ try {
           assert.ok(actual.items.length <= filters.limit);
           assert.ok(actual.related.every((r) => r.merchantId === merchantId));
         }
+      // The payments queue holds the money waiting for Finance, the unapplied rest of partial and overpaid payments included.
+      const queued = (await listReconciliation(ctx, merchantId, "payments", { limit: 100 })).items.map((item) => item.reference);
+      assert.ok(queued.includes("READ-PARTIAL-REST") && queued.includes("READ-OVERPAID-REST") && !queued.includes("READ-PARTIAL-SPENT"), `payments queue: ${queued.join(", ")}`);
+      assert.ok(queued.includes("READ-USD") && !queued.includes("READ-ZERO"), `money in another currency still waits for Finance, and a payment with nothing unapplied does not: ${queued.join(", ")}`);
+      // Customer credit in SQL is naira only: what the customer's position is without the payments in another currency.
+      const naira = full.records.filter((r) => !["READ-USD", "READ-USD-SPELLED"].includes(r.reference));
+      assert.equal((await getCustomerHistory(ctx, merchantId, due.customerId, {})).position.unallocatedKobo, customerTimeline({ ...full, records: naira }, due.customerId).position.unallocatedKobo, "customer credit leaves out money in another currency");
       // The audit month is the same WAT month in SQL and in the domain.
       const watMonth = (at: string) =>
         new Date(Date.parse(at) + 3_600_000).toISOString().slice(0, 7);
@@ -304,7 +321,7 @@ try {
     (e: any) => e.status === 404,
   );
   console.log(
-    "Console read models passed: 906 additional records, all reconciliation queues, seeded audit parity, WAT history, lazy evidence, unchanged report measures and isolation.",
+    "Console read models passed: 918 additional records, all reconciliation queues, seeded audit parity, WAT history, lazy evidence, unchanged report measures and isolation.",
   );
 } finally {
   const principals = tokens.map((token) =>

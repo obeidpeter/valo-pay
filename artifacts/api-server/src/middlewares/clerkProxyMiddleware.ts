@@ -13,6 +13,13 @@
  * IMPORTANT:
  * - Only active in production (Clerk proxying doesn't work for dev instances)
  * - Must be mounted BEFORE express.json() middleware
+ * - What it tells Clerk comes from configuration and the trusted hop, never
+ *   from a client's headers: the proxy URL and forwarded host are a
+ *   configured application origin's (signInOrigins in lib/staff-access.ts),
+ *   and the client address is the one the host's edge saw (req.ip). With no
+ *   origin configured it answers 503.
+ * - The anonymous sandbox's cookies are this API's bearer token: the Cookie
+ *   header Clerk gets carries Clerk's own cookies and never those.
  *
  * Usage in app.ts:
  *   import { CLERK_PROXY_PATH, clerkProxyMiddleware } from "./middlewares/clerkProxyMiddleware";
@@ -20,8 +27,10 @@
  */
 
 import type { IncomingHttpHeaders } from 'http';
-import type { RequestHandler } from 'express';
+import type { Request, RequestHandler } from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
+import { originFor } from '../lib/staff-access';
+import { withoutSandboxCookies } from '../lib/sandbox-cookie';
 
 const CLERK_FAPI = 'https://frontend-api.clerk.dev';
 export const CLERK_PROXY_PATH = '/api/__clerk';
@@ -38,10 +47,9 @@ export const CLERK_PROXY_PATH = '/api/__clerk';
  *     replaced the header (Node folds duplicate headers this way), or a
  *     string[] in some Express typings
  * In the multi-value case, the leftmost value is the original client-
- * facing host. Take that one in all forms. Exported so that app.ts
- * (clerkMiddleware callback) and this proxy middleware agree on which
- * hostname is canonical — otherwise multi-domain/custom-domain flows
- * break.
+ * facing host. Take that one in all forms. app.ts's origin rule compares a
+ * request's Origin with it. A client can choose it, so nothing sent to Clerk
+ * is built from it: see originFor in lib/staff-access.ts.
  */
 export function getClerkProxyHost(req: {
   headers: IncomingHttpHeaders;
@@ -63,7 +71,7 @@ export function clerkProxyMiddleware(): RequestHandler {
     return (_req, _res, next) => next();
   }
 
-  return createProxyMiddleware({
+  const proxy = createProxyMiddleware({
     target: CLERK_FAPI,
     changeOrigin: true,
     // Take over the response so it can be re-sent with a Content-Length (see
@@ -73,20 +81,26 @@ export function clerkProxyMiddleware(): RequestHandler {
       path.replace(new RegExp(`^${CLERK_PROXY_PATH}`), ''),
     on: {
       proxyReq: (proxyReq, req) => {
-        const protocol = req.headers['x-forwarded-proto'] || 'https';
-        const host = getClerkProxyHost(req) || '';
-        const proxyUrl = `${protocol}://${host}${CLERK_PROXY_PATH}`;
-
-        proxyReq.setHeader('Clerk-Proxy-Url', proxyUrl);
+        // The configured origin the request's host names, else the first; checked to exist before proxying.
+        const origin = originFor(req)!;
+        proxyReq.setHeader('Clerk-Proxy-Url', `${origin.origin}${CLERK_PROXY_PATH}`);
         proxyReq.setHeader('Clerk-Secret-Key', secretKey);
+        proxyReq.setHeader('X-Forwarded-Host', origin.host);
+        proxyReq.setHeader('X-Forwarded-Proto', origin.protocol.slice(0, -1));
 
-        const xff = req.headers['x-forwarded-for'];
-        const clientIp =
-          (Array.isArray(xff) ? xff[0] : xff)?.split(',')[0]?.trim() ||
-          req.socket?.remoteAddress ||
-          '';
-        if (clientIp) {
-          proxyReq.setHeader('X-Forwarded-For', clientIp);
+        // The client address the host's edge saw (one trusted hop), not the
+        // leftmost forwarded-for entry, which the client writes itself.
+        const clientIp = (req as Request).ip || req.socket?.remoteAddress;
+        if (clientIp) proxyReq.setHeader('X-Forwarded-For', clientIp);
+        else proxyReq.removeHeader('X-Forwarded-For');
+        for (const header of ['forwarded', 'x-real-ip', 'cf-connecting-ip']) proxyReq.removeHeader(header);
+
+        // The sandbox's token is this API's bearer credential: Clerk gets the other cookies, its own among them.
+        const cookie = proxyReq.getHeader('cookie');
+        if (cookie !== undefined) {
+          const kept = withoutSandboxCookies(Array.isArray(cookie) ? cookie.join('; ') : String(cookie));
+          if (kept) proxyReq.setHeader('Cookie', kept);
+          else proxyReq.removeHeader('Cookie');
         }
       },
       // Clerk's dynamic Frontend API responses (/v1/environment, /v1/client,
@@ -143,4 +157,11 @@ export function clerkProxyMiddleware(): RequestHandler {
       },
     },
   }) as RequestHandler;
+  return (req, res, next) => {
+    if (!originFor(req)) {
+      res.status(503).json({ error: 'Sign-in is not available on this host.', requestId: req.id });
+      return;
+    }
+    return proxy(req, res, next);
+  };
 }

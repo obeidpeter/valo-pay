@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
 import {
   ABSOLUTE_TICKET_FLOOR_KOBO, DEFAULT_MINIMUM_TICKET_KOBO, PLATFORM_OWNER, WAT_OFFSET_MS,
-  clampExecutionHour, executionWindow, experimentRules, normaliseFailureCode, policyGuardrails, retryRuleFor,
+  clampExecutionHour, counted as countedText, executionWindow, experimentRules, normaliseFailureCode, policyGuardrails, retryRuleFor,
   type ExperimentArm, type FailureCode, type RetryDecisionKind,
 } from "@workspace/valopay-schema";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { makeRecord, recordsOf } from "./records";
-import { holidaySet, isBusinessDay, nonBusinessDaysBetween } from "./calendar";
+import { indexedPass, recordsWhere } from "./record-index";
+import { holidaySet, isBusinessDay, nonBusinessDaysBetween, watDate } from "./calendar";
 import { canonicalDigest } from "../lib/digests";
 
 const HOUR = 60 * 60 * 1000;
@@ -46,7 +47,7 @@ export interface RetryDecision {
 /** The policy parameters as a sentence: what a consent record stores as the policy text as it stood (MAN-02, RET-07). */
 export function policySummary(policy: TypedRecord<"policies">): string {
   const d = policy.data;
-  return `Version ${d.version ?? 1}: up to ${d.maxAttempts ?? policyGuardrails.defaultMaxAttempts} attempts in total across all collection systems; at least ${d.spacingHours ?? policyGuardrails.defaultSpacingHours} hours between attempts; first notice ${d.firstNoticeHours ?? policyGuardrails.defaultFirstNoticeHours} hours before the first attempt; failed-debit notice ${d.retryNoticeHours ?? policyGuardrails.defaultRetryNoticeHours} hours before any retry; partial debits ${d.partialAllowed ? "allowed" : "not allowed"}.`;
+  return `Version ${d.version ?? 1}: up to ${countedText(Number(d.maxAttempts ?? policyGuardrails.defaultMaxAttempts), "attempt")} in total across all collection systems; at least ${d.spacingHours ?? policyGuardrails.defaultSpacingHours} hours between attempts; first notice ${d.firstNoticeHours ?? policyGuardrails.defaultFirstNoticeHours} hours before the first attempt; failed-debit notice ${d.retryNoticeHours ?? policyGuardrails.defaultRetryNoticeHours} hours before any retry; partial debits ${d.partialAllowed ? "allowed" : "not allowed"}.`;
 }
 
 /** Two policy records are versions of the same policy when their previousVersionId chains share a root, or they carry the same name. */
@@ -77,18 +78,18 @@ export function policyLineage(state: DomainState, policy: TypedRecord<"policies"
 export const policyVersionOf = (policy: TypedRecord<"policies">): number => Number(policy.data.version || 1);
 
 export function policyIdFor(state: DomainState, due: TypedRecord<"due-items">): string | undefined {
-  return due.data.policyId || recordsOf(state, "mandates").find((r) => r.id === due.data.mandateId)?.data.policyId;
+  return due.data.policyId || recordsWhere(state, "mandates", "id", due.data.mandateId)[0]?.data.policyId;
 }
 
 export function approvedPolicyFor(state: DomainState, due: TypedRecord<"due-items">): TypedRecord<"policies"> | undefined {
   const id = policyIdFor(state, due);
-  return id ? recordsOf(state, "policies").find((policy) => policy.id === id && policy.status === "approved") : undefined;
+  return id ? recordsWhere(state, "policies", "id", id).find((policy) => policy.status === "approved") : undefined;
 }
 
 export const attemptTime = (attempt: TypedRecord<"attempts">): string => String(attempt.data.occurredAt || attempt.createdAt);
 
 export function attemptsFor(state: DomainState, dueItemId: string): TypedRecord<"attempts">[] {
-  return recordsOf(state, "attempts").filter((attempt) => attempt.data.dueItemId === dueItemId).sort((a, b) => attemptTime(a).localeCompare(attemptTime(b)));
+  return recordsWhere(state, "attempts", "data.dueItemId", dueItemId).sort((a, b) => attemptTime(a).localeCompare(attemptTime(b)));
 }
 
 /** Attempts the customer experienced.  Cancelled and not-yet-sent attempts never count toward the ceiling (DEB-05). */
@@ -156,9 +157,12 @@ const iso = (ms: number): string => new Date(ms).toISOString();
 /**
  * TRD 6.3 decision table, applied after a failed attempt.  Rows fire in the
  * documented order; ownership and mode are evaluated last so a backtest can
- * show what the policy would have done while the merchant observes.
+ * show what the policy would have done while the merchant observes.  A
+ * backtest is a `simulation`: it tries a version, approved or not, as if it
+ * were approved and applied, so the approval and consented-version rows are
+ * left out.  Its decisions are never recorded.
  */
-export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord<"due-items">, policy: TypedRecord<"policies">): RetryDecision {
+export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord<"due-items">, policy: TypedRecord<"policies">, options: { simulation?: boolean } = {}): RetryDecision {
   const attempts = attemptsFor(state, due.id);
   const counted = countedAttempts(state, due.id);
   const last = counted.at(-1);
@@ -171,7 +175,7 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
     ...(noticeRequired ? { noticeRequired } : {}),
   });
   const finalNotice: NoticeRequirement = { purpose: "final_attempt", leadHours: 0, requiredBy: null, noticeId: null, acceptedAt: null, evidenced: false };
-  if(state.records.some(r=>r.kind==='connected-intents' && r.data.dueItemId===due.id && ['authorised','pending','unknown'].includes(r.status))) return explain('blocked','in_flight','A pay-by-bank payment is pending or has an unknown outcome. Reconcile it before scheduling another collection.');
+  if(recordsWhere(state,'connected-intents','data.dueItemId',due.id).some(r=>['authorised','pending','unknown'].includes(r.status))) return explain('blocked','in_flight','A pay-by-bank payment is pending or has an unknown outcome. Reconcile it before scheduling another collection.');
 
   // Row 1: settled by any channel, or the obligation is frozen or closed.
   const outstanding = Number.isInteger(due.data.outstandingKobo) ? Number(due.data.outstandingKobo) : due.amountKobo;
@@ -189,21 +193,24 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
   inputs.rawCode = last.data.failureCode;
   inputs.attemptAt = attemptTime(last);
   const retry = retryRuleFor(code);
-  if (retry === "never") return explain("stop", "customer_disputed", "The customer disputed the debit. Collection is paused and a dispute exception is raised with a one-business-day deadline.");
+  // A disputed debit is never retried; once its dispute was not upheld or Finance released the instalment, it no longer freezes it.
+  if (retry === "never") return due.data.disputeRelease?.attemptId === last.id
+    ? explain("stop", "dispute_released", "The customer's dispute of this debit was not upheld, or Finance released the instalment from dispute. A disputed debit is never retried automatically: collect the instalment through another channel.")
+    : explain("stop", "customer_disputed", "The customer disputed the debit. Collection is paused and a dispute exception is raised with a one-business-day deadline.");
   if (retry === "unresolved") return explain("blocked", "timeout_unknown", "The outcome is unknown. Check with the provider using the payment reference. An exception is raised after 24 hours without a confirmed outcome.");
   // Row 3: non-retryable code.
   if (retry === "no") return explain("give_up", "non_retryable", `${code} does not allow a retry. Follow-up requires a final notice, an exception and an update to the loan management system.`, null, finalNotice);
   // Row 4: attempt ceiling across every source.
-  if (counted.length >= policyCeiling(policy)) return explain("give_up", "ceiling", `The limit of ${policyCeiling(policy)} attempts has been reached across all collection systems. Follow-up requires a final notice, an exception and an update to the loan management system.`, null, finalNotice);
+  if (counted.length >= policyCeiling(policy)) return explain("give_up", "ceiling", `The limit of ${countedText(policyCeiling(policy), "attempt")} has been reached across all collection systems. Follow-up requires a final notice, an exception and an update to the loan management system.`, null, finalNotice);
   // Row 5: ACCOUNT_RESTRICTED is retried once only.
   if (retry === "once" && counted.filter((attempt) => attempt.status === "failed" && normaliseFailureCode(attempt.data.failureCode) === code).length >= 2) {
     return explain("give_up", "restricted_once", `${code} has already had its one permitted retry. Follow-up requires a final notice, an exception and an update to the loan management system.`, null, finalNotice);
   }
   // RET-01: only an approved version by a reviewer who is not its author may plan a retry.
-  if (policy.status !== "approved" || !policy.data.reviewer || policy.data.reviewer === policy.data.author) return explain("blocked", "unapproved_policy", "Independent compliance approval is required before a retry can be planned.");
-  const mandate = recordsOf(state, "mandates").find((record) => record.id === due.data.mandateId);
+  if (!options.simulation && (policy.status !== "approved" || !policy.data.reviewer || policy.data.reviewer === policy.data.author)) return explain("blocked", "unapproved_policy", "Independent compliance approval is required before a retry can be planned.");
+  const mandate = recordsWhere(state, "mandates", "id", due.data.mandateId)[0];
   // RET-07: the engine applies the version the consent covers until a notice, and fresh consent where required, moves the mandate to a newer one.
-  if (mandate?.data.consentPolicyId && mandate.data.consentPolicyId !== policy.id) {
+  if (!options.simulation && mandate?.data.consentPolicyId && mandate.data.consentPolicyId !== policy.id) {
     inputs.consentPolicyVersion = mandate.data.consentPolicyVersion;
     return explain("blocked", "policy_version_not_consented", `The customer consent covers version ${mandate.data.consentPolicyVersion}. Before applying version ${policy.data.version ?? "?"}, record the required policy-change notice and any new consent required by the lender's terms.`);
   }
@@ -228,8 +235,10 @@ export function evaluateRetry(state: DomainState, ctx: Context, due: TypedRecord
   Object.assign(inputs, { spacingHours, leadHours, window: executionWindowFor(state) });
   if (!Number.isFinite(planned)) return explain("blocked", "window", "There is no available business-day time within the configured collection hours.");
   const calendar = (fromMs: number, toMs: number) => ({ earliestAt: iso(fromMs), rolledForward: toMs > fromMs, ...nonBusinessDaysBetween(state, fromMs, toMs) });
-  // NOT-10: the notice clock runs from provider acceptance, never from submission or simulation.
-  const notice = recordsOf(state, "notifications").find((record) => record.id === last.data.noticeId && ["pre_debit", "failed_debit"].includes(String(record.data.purpose)) && record.data.acceptedAt && record.data.synthetic !== true);
+  // NOT-10: the notice clock runs from provider acceptance, never from submission or simulation.  The notice for a
+  // retry follows the failure it reports: one accepted before the failure announced an earlier debit.
+  const failedAt = Date.parse(attemptTime(last));
+  const notice = recordsWhere(state, "notifications", "id", last.data.noticeId).find((record) => ["pre_debit", "failed_debit"].includes(String(record.data.purpose)) && record.data.acceptedAt && record.data.synthetic !== true && Date.parse(String(record.data.acceptedAt)) > failedAt);
   if (notice) {
     const acceptedAt = Date.parse(String(notice.data.acceptedAt));
     const earliest = Math.max(earliestBySpacing, acceptedAt + leadHours * HOUR);
@@ -281,7 +290,7 @@ export function decisionFingerprint(decision: DecisionIdentity): string {
 }
 
 export function latestDecisionFor(state: DomainState, dueItemId: string): TypedRecord<"retry-decisions"> | undefined {
-  return recordsOf(state, "retry-decisions").filter((record) => record.data.dueItemId === dueItemId).sort((a, b) => String(a.data.evaluatedAt).localeCompare(String(b.data.evaluatedAt)) || a.createdAt.localeCompare(b.createdAt)).at(-1);
+  return recordsWhere(state, "retry-decisions", "data.dueItemId", dueItemId).sort((a, b) => String(a.data.evaluatedAt).localeCompare(String(b.data.evaluatedAt)) || a.createdAt.localeCompare(b.createdAt)).at(-1);
 }
 
 /**
@@ -327,6 +336,9 @@ export function assignArm(seed: string, merchantId: string, dueItemId: string, h
  * dispute, not amended after the failure, inside the enrolment window.
  */
 export function enrolEligibleFailures(state: DomainState, ctx: Context): void {
+  indexedPass(state, () => enrolFailures(state, ctx));
+}
+function enrolFailures(state: DomainState, ctx: Context): void {
   for (const due of recordsOf(state, "due-items")) {
     if (due.data.experimentId || due.data.owner !== PLATFORM_OWNER) continue;
     if (["cancelled", "closed", "in_dispute", "paid", "unpaid_final"].includes(due.status) || due.amountKobo < ABSOLUTE_TICKET_FLOOR_KOBO) continue;
@@ -336,12 +348,13 @@ export function enrolEligibleFailures(state: DomainState, ctx: Context): void {
     const retry = retryRuleFor(first.data.failureCode);
     if (retry !== "yes" && retry !== "once") continue;
     if (counted.some((attempt) => normaliseFailureCode(attempt.data.failureCode) === "CUSTOMER_DISPUTED")) continue;
-    const mandate = recordsOf(state, "mandates").find((record) => record.id === due.data.mandateId);
+    const mandate = recordsWhere(state, "mandates", "id", due.data.mandateId)[0];
     if (!mandate || mandate.status !== "active") continue;
     const failureAt = attemptTime(first);
     if (due.data.amendedAt && String(due.data.amendedAt) > failureAt) continue;
-    const experiment = recordsOf(state, "experiments").find((item) =>
-      item.status === "preregistered" && item.data.policyId === policyIdFor(state, due) && failureAt >= String(item.data.preregisteredAt) && failureAt <= `${item.data.enrolmentClose}T23:59:59.999Z`,
+    // Enrolment closes at the end of its WAT day: a failure counts by its West Africa Time date.
+    const experiment = recordsWhere(state, "experiments", "data.policyId", policyIdFor(state, due)).find((item) =>
+      item.status === "preregistered" && failureAt >= String(item.data.preregisteredAt) && watDate(Date.parse(failureAt)) <= String(item.data.enrolmentClose).slice(0, 10),
     );
     if (!experiment) continue;
     due.data.experimentId = experiment.id;

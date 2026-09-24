@@ -1,6 +1,6 @@
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {installFakeApi,type FakeApi} from './fake-api';
-import {renderApp,screen,userEvent,waitFor} from './harness';
+import {renderApp,screen,userEvent,waitFor,within} from './harness';
 import { queueExport } from '../../api-server/src/lib/export-jobs';
 let api:FakeApi;
 beforeEach(()=>{api=installFakeApi({queuedExports:true});vi.spyOn(window,'open').mockReturnValue(null);});
@@ -75,6 +75,29 @@ describe('saved background exports',()=>{
   expect(link.getAttribute('href')).toContain(job.id);
   expect(api.calls.filter(call=>call.path==='/v1/exports'&&call.method==='POST')).toHaveLength(1);
  });
+ it('keeps dispute packs to Admin, Finance and Compliance reviewer: other roles cannot queue or open one',async()=>{
+  const customer=api.state().records.find(record=>record.kind==='customers')!;
+  const pack=api.mutate((state,ctx)=>queueExport(state,{...ctx,role:'Finance'},{kind:'dispute-pack',format:'pdf',customerId:customer.id},'/private/test'));
+  api.mutate(state=>{const record=state.records.find(record=>record.id===pack.id)!;record.status='ready';Object.assign(record.data,{checksum:'b'.repeat(64),generatedAt:api.now,byteLength:321});});
+  api.role='Operations';
+  const view=renderApp(`/customers/${customer.id}`);
+  const refusal=/Only an Admin, Finance or Compliance reviewer can export or download dispute packs, customer records or the audit trail\. Ask one of them for this file\./;
+  expect((await screen.findAllByText(refusal)).length).toBeGreaterThan(0);
+  expect(screen.getByRole('button',{name:'Export dispute pack (PDF)'}).hasAttribute('disabled')).toBe(true);
+  view.unmount();
+  renderApp(`/exports?job=${pack.id}`);
+  expect(await screen.findByText(/Dispute pack is ready to download/)).toBeTruthy();
+  expect(screen.getByText(refusal)).toBeTruthy();
+  expect(screen.queryByRole('link',{name:'Open dispute pack'})).toBeNull();
+ });
+ it('lets Finance open a ready dispute pack',async()=>{
+  const customer=api.state().records.find(record=>record.kind==='customers')!;
+  const pack=api.mutate((state,ctx)=>queueExport(state,{...ctx,role:'Finance'},{kind:'dispute-pack',format:'pdf',customerId:customer.id},'/private/test'));
+  api.mutate(state=>{const record=state.records.find(record=>record.id===pack.id)!;record.status='ready';Object.assign(record.data,{checksum:'c'.repeat(64),generatedAt:api.now,byteLength:321});});
+  api.role='Finance';
+  renderApp(`/exports?job=${pack.id}`);
+  expect((await screen.findByRole('link',{name:'Open dispute pack'})).getAttribute('href')).toContain(pack.id);
+ });
  it('retries a failed saved job using the same id and private object key',async()=>{
   const user=userEvent.setup();renderApp('/evidence');
   await user.click(await screen.findByRole('button',{name:'Export evidence pack'}));
@@ -99,5 +122,22 @@ describe('saved background exports',()=>{
   await waitFor(()=>expect(screen.queryByText(/Saved export status could not be loaded/)).toBeNull());
   expect(screen.getByText('Billing CSV is queued')).toBeTruthy();
   expect(api.calls.filter(call=>call.path==='/v1/exports'&&call.method==='POST')).toHaveLength(1);
+ });
+ it('names recent exports by the states Saved exports shows, never their machine words',async()=>{
+  const user=userEvent.setup();
+  const customer=api.state().records.find(record=>record.kind==='customers')!;
+  api.mutate((state,ctx)=>{
+   const ready=queueExport(state,ctx,{kind:'dispute-pack',format:'csv',customerId:customer.id},'/private/test');
+   const failed=queueExport(state,ctx,{kind:'dispute-pack',format:'json',customerId:customer.id},'/private/test');
+   const record=state.records.find(record=>record.id===ready.id)!;record.status='ready';Object.assign(record.data,{stage:'ready',checksum:'d'.repeat(64),generatedAt:ctx.now,byteLength:321});
+   state.records.find(record=>record.id===failed.id)!.status='failed';
+  });
+  renderApp(`/customers/${customer.id}`);
+  const summary=await screen.findByText('Recent exports (2)');
+  await user.click(summary);
+  const recent=summary.closest('details')!;
+  expect(within(recent).getByRole('button',{name:/^CSV · .+ · Completed$/})).toBeTruthy();
+  expect(within(recent).getByRole('button',{name:/^JSON · .+ · Needs retry$/})).toBeTruthy();
+  expect(recent.textContent).not.toMatch(/\b(ready|failed)\b/);
  });
 });

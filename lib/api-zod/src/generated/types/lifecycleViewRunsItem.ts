@@ -35,6 +35,8 @@ export type LifecycleViewRunsItem = {
   /** @minimum 0 */
   moreEligible: number;
   /** @nullable */
+  preparedBy?: string | null;
+  /** @nullable */
   approvedBy: string | null;
   /** @nullable */
   approvedAt: Date | null;

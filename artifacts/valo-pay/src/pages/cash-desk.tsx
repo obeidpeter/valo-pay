@@ -31,6 +31,7 @@ import { LoadProblem } from "@/components/load-problem";
 import {
   ConnectedFrame,
   ConnectedRecovery,
+  ConnectedState,
 } from "@/components/connected-frame";
 import { useConnected } from "@/lib/connected";
 import { useWorkspace } from "@/lib/workspace-context";
@@ -349,6 +350,8 @@ function ForecastChart({
     </svg>
   );
 }
+const TITLE = "Cash Desk",
+  DESCRIPTION = "A clearer view of business cash, commitments and the work ahead.";
 export default function CashDeskPage() {
   const api = useConnected();
   const { data, isLoading, error, refetch, run, pending, canWrite } = api;
@@ -475,10 +478,10 @@ export default function CashDeskPage() {
       },
     });
   };
-  if (isLoading) return <Loading what="Cash Desk" />;
+  if (isLoading) return <Loading what="Cash Desk" heading />;
   if (error && !cash)
     return (
-      <>
+      <ConnectedState title={TITLE} description={DESCRIPTION}>
         <LoadProblem
           what="Cash Desk"
           error={error}
@@ -487,9 +490,9 @@ export default function CashDeskPage() {
           }}
         />
         <ConnectedRecovery recovery={api} />
-      </>
+      </ConnectedState>
     );
-  if (!cash) return <Loading what="Cash Desk" />;
+  if (!cash) return <Loading what="Cash Desk" heading />;
   const position = cash.positions.find((p) => p.currency === "NGN");
   const base =
     cash.forecast?.scenarios.find((s) => s.name === "base")?.points ?? [];
@@ -498,8 +501,8 @@ export default function CashDeskPage() {
   const canOperate = canWrite && cash.initialised && cash.permissions.read;
   return (
     <ConnectedFrame
-      title="Cash Desk"
-      description="A clearer view of business cash, commitments and the work ahead."
+      title={TITLE}
+      description={DESCRIPTION}
       recovery={api}
       onRecovered={() => {
         setProblem("");
@@ -803,7 +806,9 @@ export default function CashDeskPage() {
                 <p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
                   <CircleHelp className="mt-0.5 h-4 w-4 shrink-0" />
                   Only information known at the forecast date is included. Draft
-                  commitments and future knowledge are excluded.
+                  commitments and future knowledge are excluded. An approved
+                  outflow past its due date counts as due now; an overdue
+                  receipt is left out.
                 </p>
               </div>
             </Section>

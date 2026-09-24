@@ -83,9 +83,9 @@ export default function CustomerTimelinePage() {
 
   if (!merchantId) return null;
   if (!sameLender) return <NotFoundNotice title="Choose the linked lender" primary={{ href: '/collections', label: 'Go to collections' }} secondary={{ href: '/customers', label: 'Go to customers' }}><p>This link belongs to {workspace?.merchants.find(merchant => merchant.id === search.get('lender'))?.name || 'another lender'}. Select that lender using the lender menu to review this customer.</p></NotFoundNotice>;
-  if (isLoading) return <Loading what="the customer history" />;
+  if (isLoading) return <Loading what="the customer history" heading />;
   if ((error as { status?: number } | null)?.status === 404) return <MissingCustomer id={String(id)} />;
-  if (error || !timeline) return <LoadProblem what="customer history" error={error} retry={() => { void refetch(); }} busy={isFetching} />;
+  if (error || !timeline) return <div className="space-y-4"><h1 className="text-2xl font-bold tracking-tight">Customer history</h1><LoadProblem what="customer history" error={error} retry={() => { void refetch(); }} busy={isFetching} /></div>;
 
   const { customer, position, events, mandates, dueItems, payments } = timeline;
 

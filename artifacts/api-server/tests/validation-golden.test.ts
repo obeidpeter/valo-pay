@@ -71,6 +71,55 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   checks += 6;
 }
 
+// ---------- Hand-back (DEB-12, audit item 7): it ends every earlier contract; only a cutover recorded after it restores owner valo ----------
+{
+  const { state, due } = liveFixture({ merchantId: "hand-back-contract" });
+  const contract = recordsOf(state, "cutovers").find((item) => item.status === "ready")!;
+  contract.createdAt = contract.updatedAt = wat("2027-06-01T09:00:00");
+  const draft = makeRecord(state, "cutovers", { name: "Cohort 2 draft", status: "draft", createdAt: wat("2027-06-20T09:00:00"), data: { inventory: "LMS scheduler", fallbackOwner: "lms" } });
+  executeAction(state, ops, { action: "hand_back", reason: "Lender exit" });
+  assert.equal(due.data.owner, "lms");
+  const nextDay = ctxAt(wat("2027-07-02T09:00:00"), "Operations");
+  assert.throws(() => validateRecord(state, nextDay, "due-items", patch(due, { data: { owner: "valopay" } }), true), /recorded after the hand-back/, "the contract the hand-back ended no longer lets Valo Pay collect");
+  const flags = { incumbentDisabled: true, externalAttemptsImported: true, dualRunComplete: true, accountableUser: "Ops lead", confirmation: "Signed again" };
+  assert.throws(() => validateRecord(state, admin, "cutovers", patch(draft, { status: "ready", data: flags }), true), /ended with the hand-back/, "a contract drafted before the hand-back cannot be completed afterwards");
+  assert.doesNotThrow(() => validateRecord(state, admin, "cutovers", { name: "Cohort 2 cutover", status: "ready", data: { ...flags, fallbackOwner: "lms" } }), "a new contract can be recorded ready");
+  makeRecord(state, "cutovers", { name: "Cohort 2 cutover", status: "ready", createdAt: wat("2027-07-03T09:00:00"), data: { ...flags, fallbackOwner: "lms" } });
+  assert.doesNotThrow(() => validateRecord(state, ctxAt(wat("2027-07-03T10:00:00"), "Operations"), "due-items", patch(due, { data: { owner: "valopay" } }), true), "a cutover completed after the hand-back restores ownership");
+  checks += 5;
+}
+
+// ---------- Mandate limit (MAN-02, audit item 8): the consented limit changes only through a reissue with new consent ----------
+{
+  const { state, mandate } = liveFixture({ withFailure: false, merchantId: "mandate-limit" });
+  assert.throws(() => validateRecord(state, ops, "mandates", patch(mandate, { amountKobo: 10_000_000 }), true), /limit is part of the customer's consent/);
+  assert.throws(() => validateRecord(state, ops, "mandates", patch(mandate, { amountKobo: mandate.amountKobo - 1 }), true), /limit is part of the customer's consent/, "lowering it is refused too: the consent names one limit");
+  assert.doesNotThrow(() => validateRecord(state, ops, "mandates", patch(mandate, { name: "Renamed mandate" }), true), "other fields stay editable");
+  executeAction(state, ops, { action: "mandate_cancel", recordId: mandate.id, reason: "The customer agreed a higher limit" });
+  assert.throws(() => executeAction(state, ops, { action: "mandate_reissue", recordId: mandate.id, reason: "Higher limit", data: { consentEvidence: "CONSENT-LIMIT-2", amountKobo: 0 } }), /debit limit/);
+  const reissued = executeAction(state, ops, { action: "mandate_reissue", recordId: mandate.id, reason: "Higher limit", data: { consentEvidence: "CONSENT-LIMIT-2", amountKobo: 10_000_000 } }).record!;
+  assert.equal(reissued.amountKobo, 10_000_000, "the new consent carries the new limit");
+  assert.equal(mandate.amountKobo, 5_000_000, "the old mandate keeps the limit its consent covered");
+  const same = executeAction(state, ops, { action: "mandate_reissue", recordId: reissued.id, reason: "Consent captured again", data: { consentEvidence: "CONSENT-LIMIT-3" } }).record!;
+  assert.equal(same.amountKobo, 10_000_000, "without a new limit a reissue keeps the current one");
+  checks += 7;
+}
+
+// ---------- Policy review (RET-01, audit item 18): a submitted policy is frozen until a reviewer rejects it ----------
+{
+  const state = seedMerchant("policy-freeze");
+  const policy = recordsOf(state, "policies")[0]!;
+  const reviewer = ctxAt(admin.now, "Compliance reviewer");
+  const rules = (maxAttempts: number, spacingHours: number) => patch(policy, { data: { maxAttempts, spacingHours } });
+  assert.doesNotThrow(() => validateRecord(state, admin, "policies", rules(3, 48), true), "a draft is editable by its author");
+  executeAction(state, admin, { action: "submit_policy", recordId: policy.id, reason: "Ready for review" });
+  assert.throws(() => validateRecord(state, admin, "policies", rules(4, 24), true), /submitted policy cannot be edited/);
+  assert.throws(() => validateRecord(state, admin, "policies", patch(policy, { name: "Renamed while in review" }), true), /submitted policy cannot be edited/);
+  executeAction(state, reviewer, { action: "reject_policy", recordId: policy.id, reason: "Explain the spacing" });
+  assert.doesNotThrow(() => validateRecord(state, admin, "policies", rules(4, 24), true), "a rejected policy is editable again before it is resubmitted");
+  checks += 4;
+}
+
 // ---------- Attempts: failure codes are normalised to the 4.4 catalogue, raw codes kept for mapping ----------
 {
   const { state, due } = liveFixture({ withFailure: false, merchantId: "codes" });
@@ -256,4 +305,4 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   checks += 16;
 }
 
-console.log(`Validation golden tests passed (${checks} checks): state machines, exception codes, cutover contract, failure-code normalisation, batch/status vocabularies, template lifecycle, guided CSV imports, blank CSV numbers and ₦0 receipts, and the bank-detail screen.`);
+console.log(`Validation golden tests passed (${checks} checks): state machines, exception codes, cutover contract and hand-back, mandate limits, submitted policies, failure-code normalisation, batch/status vocabularies, template lifecycle, guided CSV imports, blank CSV numbers and ₦0 receipts, and the bank-detail screen.`);

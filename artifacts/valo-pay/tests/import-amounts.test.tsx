@@ -41,7 +41,7 @@ describe('CSV amount units', () => {
     await user.type(screen.getByLabelText('CSV content'), 'name,reference,amount,source,feeKobo\nZero receipt,CSV-ZERO,0,webhook,\nBlank fee,CSV-BLANK-FEE,100.00,webhook,');
     await user.selectOptions(screen.getByLabelText('Amounts in your CSV *'), 'naira');
     await user.click(screen.getByRole('button', { name: 'Check data' }));
-    expect(await screen.findByText('0 imported · 0 skipped as duplicates · 1 rows to fix · 1 valid rows')).toBeTruthy();
+    expect(await screen.findByText('0 imported · 0 skipped as duplicates · 1 row to fix · 1 valid row')).toBeTruthy();
     expect(screen.getByText(/Enter the amount received\. Payment evidence must be for more than ₦0\./)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Import data' })).toHaveProperty('disabled', true);
     expect(api.state().records.some(record => ['CSV-ZERO', 'CSV-BLANK-FEE'].includes(record.reference))).toBe(false);

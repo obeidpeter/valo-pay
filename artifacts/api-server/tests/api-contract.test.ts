@@ -45,10 +45,11 @@ await section("error body and statuses", () => {
   const error = schemas.ErrorBody;
   assert.ok(error, "the contract describes the error body every refusal and failure carries");
   assert.deepEqual([...error.required].sort(), ["error", "requestId"]);
-  assert.deepEqual(Object.keys(error.properties).sort(), ["code", "committed", "details", "error", "operation", "requestId"]);
+  assert.deepEqual(Object.keys(error.properties).sort(), ["code", "committed", "detailCount", "details", "error", "operation", "requestId"]);
   assert.deepEqual(error.properties.committed.const, false, "committed is only ever false: nothing was saved");
-  assert.deepEqual(error.properties.operation.const, "cancelled");
-  checks += 5;
+  assert.deepEqual(error.properties.operation.enum, ["pending", "running", "completed", "cancelled"], "operation names the journal entry's state");
+  assert.equal(error.properties.details.maxItems, 20, "a validation refusal names at most 20 fields");
+  checks += 6;
   for (const entry of operations) {
     const { responses } = entry.operation;
     assert.ok(responses["500"], `${label(entry)} lists the 500 every route can answer`);

@@ -17,7 +17,7 @@ import { RecordDialog } from '@/components/record-dialog';
 import { useQueryClient } from '@tanstack/react-query';
 import { activationWorkflows, mandateFrequencies } from '@workspace/valopay-schema';
 import { RecordLabel, StatusBadge, readableLabel } from '@/components/record-label';
-import { deadlineInstant, isDueToday, isDeadlineOverdue as isOverdue, useQueueFilters } from '@/lib/queue-filters';
+import { isDueToday, isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { nairaToKobo } from '@/lib/money-input';
 import { MandateActionContext } from '@/components/mandate-action-context';
 import { recordDestination, safeCollectionReturnTo } from '@/lib/record-navigation';
@@ -26,6 +26,8 @@ import { usePagedQueue } from '@/lib/use-paged-queue';
 import { SavedQueueViews } from '@/components/saved-queue-views';
 import { RecordPagination } from '@/components/record-pagination';
 import { DiscardOriginalRequest } from '@/components/discard-original-request';
+import { useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
+import { LoadProblem } from '@/components/load-problem';
 
 const mandateViews = ['all', 'awaiting-activation', 'overdue', 'due-today'] as const;
 const emptyMandate = { name: '', customerId: '', amountKobo: '', reference: '', workflow: 'hosted_consent', consentEvidence: '', consentGaps: '', policyId: '', frequency: 'monthly' };
@@ -65,20 +67,29 @@ export default function MandatesPage() {
   const createSession = useRef({ scope: draftScope });
   if (createSession.current.scope !== draftScope) createSession.current = { scope: draftScope };
   const { confirmDiscard } = useUnsavedChanges(isCreateOpen && JSON.stringify(draft) !== JSON.stringify(emptyMandate));
-  const changeCreateOpen = (open: boolean) => { if (!open && (createMandate.isPending || createMandate.hasUnconfirmedOutcome)) return; if (open || confirmDiscard()) { if (!open) setDraft(emptyMandate); setIsCreateOpen(open); } };
+  const changeCreateOpen = (open: boolean) => { if (!open && (createMandate.isPending || createMandate.hasUnconfirmedOutcome)) return; if (open || confirmDiscard()) { if (!open) { setDraft(emptyMandate); setCustomerSearch(''); setChosenCustomer(null); } setIsCreateOpen(open); } };
   useEffect(() => () => { createSession.current = { scope: 'unmounted' }; }, []);
   useEffect(() => {
     setSelectedMandate(null); setIsDialogOpen(false); setIsCreateOpen(false);
-    setFieldErrors({}); setFormErrors([]); setDraft(emptyMandate);
+    setFieldErrors({}); setFormErrors([]); setDraft(emptyMandate); setCustomerSearch(''); setChosenCustomer(null);
   }, [merchantId]);
   const queryClient = useQueryClient();
 
   const { data, isLoading, error, refetch, pagination } = usePagedQueue('mandates', { view, record: targetId ? wrongLender ? 'unavailable' : targetId : undefined });
-  const { data: customers } = useListRecords(
+  // The customer picker asks for one searchable page of customers, never the whole book (a pilot lender's was about 400 KB).
+  const [customerSearch, setCustomerSearch] = useState('');
+  const { search: customerTerm, searchPending: customerSearchPending } = useDebouncedSearch(customerSearch, draftScope);
+  const customerPage = useRecordPagination(`${draftScope}:${customerTerm}`);
+  const customerParams = { merchantId: merchantId!, search: customerTerm, limit: customerPage.pageSize, offset: customerPage.offset };
+  const { data: customers, error: customersError, isFetching: fetchingCustomers, refetch: retryCustomers } = useListRecords(
     'customers',
-    { merchantId: merchantId! },
-    { query: { enabled: !!merchantId && isCreateOpen, queryKey: getListRecordsQueryKey('customers', { merchantId: merchantId! }) } }
+    customerParams,
+    { query: { enabled: !!merchantId && isCreateOpen && !customerSearchPending, queryKey: getListRecordsQueryKey('customers', customerParams) } }
   );
+  // The chosen customer stays in the list while the person searches or pages on.
+  const [chosenCustomer, setChosenCustomer] = useState<{ value: string; label: string } | null>(null);
+  const customerOptions = (customers?.items || []).map(customer => ({ value: customer.id, label: `${customer.name} · ${customer.reference}` }));
+  if (chosenCustomer && chosenCustomer.value === draft.customerId && !customerOptions.some(option => option.value === chosenCustomer.value)) customerOptions.unshift(chosenCustomer);
   useHashTarget(`record-${targetId || ''}`, !!targetId && !isLoading && !error && !wrongLender);
   const { data: policies } = useListRecords(
     'policies',
@@ -225,7 +236,7 @@ export default function MandatesPage() {
                     <td className="px-6 py-4"><StatusBadge status={mandate.status} /></td>
                     <td className="px-6 py-4 font-mono">{formatKobo(mandate.amountKobo)}</td>
                     <td className="px-6 py-4 text-xs text-muted-foreground" title={readableLabel(mandate.data?.workflow || 'standard')}>{readableLabel(mandate.data?.workflow || 'standard')}</td>
-                    <td className="px-6 py-4 text-xs"><p>{formatDate(deadlineInstant(mandate.data?.activationDeadline))}</p>{mandate.status === 'pending_activation' && isOverdue(mandate.data?.activationDeadline, now) && <p className="mt-1 font-semibold text-destructive">Overdue · follow up or reissue</p>}{mandate.status === 'pending_activation' && !isOverdue(mandate.data?.activationDeadline, now) && isDueToday(mandate.data?.activationDeadline, now) && <p className="mt-1 font-semibold text-warning-strong">Activation due today</p>}</td>
+                    <td className="px-6 py-4 text-xs"><p>{formatDate(String(mandate.data?.activationDeadline || ''))}</p>{mandate.status === 'pending_activation' && isOverdue(mandate.data?.activationDeadline, now) && <p className="mt-1 font-semibold text-destructive">Overdue · follow up or reissue</p>}{mandate.status === 'pending_activation' && !isOverdue(mandate.data?.activationDeadline, now) && isDueToday(mandate.data?.activationDeadline, now) && <p className="mt-1 font-semibold text-warning-strong">Activation due today</p>}</td>
                     <td className="px-6 py-4 text-right space-x-2">
                       {mandate.status === 'active' && <Button size="sm" variant="outline" className="h-7 text-xs" action="mandate_suspend" record={mandate} onClick={() => handleAction(mandate, 'mandate_suspend')}>Suspend</Button>}
                       {mandate.status === 'suspended' && <Button size="sm" variant="outline" className="h-7 text-xs" action="mandate_reinstate" record={mandate} onClick={() => handleAction(mandate, 'mandate_reinstate')}>Resume</Button>}
@@ -269,7 +280,10 @@ export default function MandatesPage() {
           action={actionKind}
           policyName={approvedVersionOptions.find(policy => policy.value === values.policyId)?.label}
         />}
-        fields={actionKind === 'mandate_reissue' ? [{ name: 'consentEvidence', label: 'New consent evidence reference (reissuing creates a new mandate)', type: 'text', isData: true, required: true }]
+        fields={actionKind === 'mandate_reissue' ? [
+            { name: 'consentEvidence', label: 'New consent evidence reference (reissuing creates a new mandate)', type: 'text', isData: true, required: true },
+            { name: 'amountKobo', label: 'Debit limit the new consent covers', type: 'number', isData: true, required: true },
+          ]
           : actionKind === 'notify_policy_change' ? [{ name: 'policyId', label: 'Approved policy version (the notice is simulated and is not proof of delivery)', type: 'select', isData: true, required: true, options: approvedVersionOptions }]
           : actionKind === 'apply_policy_version' ? [
             { name: 'policyId', label: 'Approved policy version to apply', type: 'select', isData: true, required: true, options: approvedVersionOptions },
@@ -290,7 +304,11 @@ export default function MandatesPage() {
                 <FormAlert title={formErrors[0] ?? attentionTitle(Object.keys(fieldErrors).length)}>{formErrors.slice(1).map(message => <p key={message}>{message}</p>)}</FormAlert>
               )}
               <MandateField label="Mandate name" value={draft.name} id="mandate-name" error={fieldErrors.name} onChange={value => change('name', value)} required />
-              <MandateSelect label="Customer" value={draft.customerId} id="mandate-customerId" error={fieldErrors.customerId} onChange={value => change('customerId', value)} required options={(customers?.items || []).map(customer => ({ value: customer.id, label: `${customer.name} · ${customer.reference}` }))} />
+              <div className="space-y-2">
+                <label className="grid gap-1 text-sm font-medium">Search customers<input type="search" value={customerSearch} onChange={event => { setCustomerSearch(event.target.value); customerPage.setPage(0); }} placeholder="Name or reference" className={controlClass} /></label>
+                <MandateSelect label="Customer" value={draft.customerId} id="mandate-customerId" error={fieldErrors.customerId} onChange={value => { change('customerId', value); setChosenCustomer(customerOptions.find(option => option.value === value) ?? null); }} required options={customerOptions} />
+                {customersError ? <LoadProblem what="customer choices" error={customersError} retry={() => { void retryCustomers(); }} busy={fetchingCustomers} /> : fetchingCustomers || customerSearchPending ? <p role="status" className="text-xs text-muted-foreground">Loading customer choices…</p> : <RecordPagination pagination={customerPage} total={customers?.total || 0} busy={fetchingCustomers} label="customer choices" />}
+              </div>
               <MandateField label="Debit limit (₦)" inputMode="decimal" value={draft.amountKobo} id="mandate-amountKobo" error={fieldErrors.amountKobo} onChange={value => change('amountKobo', value)} required />
               <MandateField label="Provider reference" value={draft.reference} id="mandate-reference" error={fieldErrors.reference} onChange={value => change('reference', value)} required />
               <MandateSelect label="Activation method" value={draft.workflow} id="mandate-workflow" error={fieldErrors.workflow} onChange={value => change('workflow', value)} required options={activationWorkflows.map(workflow => ({ value: workflow, label: readableLabel(workflow) }))} />

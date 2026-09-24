@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { useMutation } from "@tanstack/react-query";
 import { pilotRequest } from "@/lib/pilot";
@@ -8,6 +8,9 @@ import { PilotError, PilotHeading, PilotPanel } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
 import { useSessionUser } from "@/lib/auth";
 
+/** Shown when the acceptance got no answer: team changes are not in Operations, so the pilot workspace shows whether it took effect. */
+const ACCEPTANCE_PROBLEM =
+  "Your invitation could not be accepted. Open the pilot workspace to check whether your membership is active before you try again.";
 /** Shown when the acceptance's answer is not the confirmation its schema describes: the membership may already be active. */
 const UNCONFIRMED_ACCEPTANCE =
   "The service returned an incomplete confirmation. Open the pilot workspace to check whether your membership is active before accepting again.";
@@ -15,6 +18,10 @@ const UNCONFIRMED_ACCEPTANCE =
 export default function TeamInvitePage() {
   const [token] = useState(() => window.location.hash.slice(1)),
     { userId } = useSessionUser();
+  // Outside the console's layout, which names each page, so the page names itself.
+  useEffect(() => {
+    document.title = "Join your pilot workspace · Valo Pay";
+  }, []);
   const accept = useMutation({
     mutationFn: () =>
       pilotRequest("/team/accept", invitationAcceptedSchema, {
@@ -59,7 +66,7 @@ export default function TeamInvitePage() {
         >
           Accept invitation
         </Button>
-        <PilotError error={accept.error} />
+        <PilotError error={accept.error} fallback={ACCEPTANCE_PROBLEM} />
         {accept.isSuccess && (
           <p role="status" className="text-sm">
             {accept.data.message}{" "}

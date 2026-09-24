@@ -7,17 +7,59 @@ import { importKinds, type RecordKind } from "./kinds";
 import { sourceBatchQualitySchema, expectedSourceFileSchema } from "./source-quality";
 import { importCorrectionPreviewSchema } from "./import-corrections";
 import { lifecycleCandidateSchema, lifecycleKindSchema, lifecycleReceiptStatusSchema, retentionPolicySchema } from "./lifecycle";
+import { WAT_OFFSET_MS } from "./policy";
 
-/** ISO date (YYYY-MM-DD) or a UTC ISO timestamp with millisecond precision or less. */
-export const isoDateOrTimestamp = z.string().regex(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/, "Use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z.").refine((value) => !Number.isNaN(Date.parse(value)), "Enter a valid date.");
-/** A day as YYYY-MM-DD. */
-export const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD, for example 2026-09-18.").refine((value) => !Number.isNaN(Date.parse(value)), "Enter a valid date.");
+const DAY_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+/**
+ * Whether a day (YYYY-MM-DD) or a UTC timestamp to the millisecond names a
+ * real date and time exactly as written, from the year 0001 (PostgreSQL has
+ * no year 0). Date.parse rolls 2026-02-30 over to 2 March and 24:00 over to
+ * the next day; this refuses both.
+ */
+export function isRealDate(value: string): boolean {
+  const day = DAY_ONLY.test(value);
+  if (!day && !UTC_TIMESTAMP.test(value)) return false;
+  const time = Date.parse(day ? `${value}T00:00:00.000Z` : value), written = day ? 10 : 19;
+  return Number.isFinite(time) && !value.startsWith("0000") && new Date(time).toISOString().slice(0, written) === value.slice(0, written);
+}
+/**
+ * When a deadline passes, in milliseconds: a timestamp at its instant, and a
+ * date-only deadline (YYYY-MM-DD) at the end of that day in West Africa Time
+ * (23:59:59.999 WAT), so it lasts the whole day. NaN for an impossible date,
+ * which is no deadline, as the SQL queues read it.
+ */
+export function deadlineEnds(value: unknown): number {
+  const text = typeof value === "string" ? value : "";
+  if (DAY_ONLY.test(text)) return isRealDate(text) ? Date.parse(`${text}T00:00:00.000Z`) + 24 * 60 * 60 * 1000 - WAT_OFFSET_MS - 1 : NaN;
+  return UTC_TIMESTAMP.test(text) && !isRealDate(text) ? NaN : Date.parse(text);
+}
+/** Whether a deadline has passed at `now` (an instant in milliseconds, or ISO text): after its instant, or once its WAT day is over. */
+export function deadlinePassed(value: unknown, now: number | string): boolean {
+  return deadlineEnds(value) < (typeof now === "number" ? now : Date.parse(now));
+}
+
+/**
+ * The longest a record's indexed text may be, in characters. Status, reference
+ * and customerId are columns of the record indexes, and a payment evidence
+ * record's eventId is in its unique index; PostgreSQL refuses an index entry
+ * over about 2,700 bytes. Longer text is refused as input, naming its field
+ * (400), before anything is saved.
+ */
+export const recordTextLimits = { status: 100, reference: 200, customerId: 100, eventId: 200 } as const;
+
+/** ISO date (YYYY-MM-DD) or a UTC ISO timestamp with millisecond precision or less, naming a real date. */
+export const isoDateOrTimestamp = z.string().regex(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/, "Use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z.").refine(isRealDate, "Enter a valid date.");
+/** A day as YYYY-MM-DD, naming a real date. */
+export const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD, for example 2026-09-18.").refine(isRealDate, "Enter a valid date.");
 /** An amount in kobo: a non-negative safe integer. */
 export const kobo = z.number({ invalid_type_error: 'Enter an amount as a number.' }).int('Enter a whole number in kobo (100 kobo = ₦1).').min(0, 'The amount cannot be negative.').max(Number.MAX_SAFE_INTEGER, 'The amount is too large.');
 const versionNumber = z.coerce.number().int().min(1);
 /** Every record the platform writes is marked synthetic; a provider-accepted notice clears it (NOT-10). */
 const common = { synthetic: z.boolean().optional() };
-const money = z.object({ count: z.number().int().min(0), kobo: z.number().int() });
+/** Money in another currency than naira, by currency code: how many payments, and their amount in that currency's minor unit as each payment stores it. It is never added to a naira total. */
+const otherCurrencies = z.record(z.object({ count: z.number().int().min(0), amount: z.number().int() }));
+const money = z.object({ count: z.number().int().min(0), kobo: z.number().int(), otherCurrencies: otherCurrencies.optional() });
 
 /** A headline metric as the overview and the reports return it, and as each close freezes it. */
 export const metricSchema = z.object({ key: z.string(), label: z.string(), value: z.number(), unit: z.string(), detail: z.string() });
@@ -153,6 +195,14 @@ export const recordDataSchemas = {
     giveUpRule: z.string().optional(),
     lastActionReason: z.string().optional(),
     handedBackAt: isoDateOrTimestamp.optional(),
+    /**
+     * The latest release from dispute: a customer dispute resolved as not upheld, or Finance's release with a reason; who,
+     * when, why, the status the balance gave it and the last counted attempt, whose disputed debit does not freeze it again.
+     */
+    disputeRelease: z.object({
+      via: z.enum(["not_upheld", "finance_release"]), releasedAt: isoDateOrTimestamp, releasedBy: z.string(), reason: z.string(),
+      exceptionId: z.string().optional(), attemptId: z.string().nullable(), status: z.string(), outstandingKobo: kobo,
+    }).optional(),
   }).passthrough(),
   attempts: z.object({
     ...common,
@@ -187,7 +237,7 @@ export const recordDataSchemas = {
     source: z.enum(observationSources),
     dueItemId: z.string().optional(),
     provider: z.string().optional(),
-    eventId: z.string().optional(),
+    eventId: z.string().max(recordTextLimits.eventId, `An event ID is at most ${recordTextLimits.eventId} characters.`).optional(),
     narration: z.string().optional(),
     batchReference: z.string().optional(),
     feeKobo: kobo.optional(),
@@ -203,6 +253,10 @@ export const recordDataSchemas = {
     resolutionKey: z.string().optional(),
     resolvedAt: isoDateOrTimestamp.optional(),
     duplicateSettlementLine: z.boolean().optional(),
+    /** A settlement line for a collection another batch already counts: the batch it is counted in. */
+    countedInBatchId: z.string().optional(),
+    /** A statement credit repeating one already counted for its batch (same reference and amount): it adds nothing. */
+    duplicateStatementCredit: z.boolean().optional(),
     reversalApplied: z.boolean().optional(),
     statementNetKobo: z.number().int().optional(),
     linePaymentIds: z.array(z.string()).optional(),
@@ -238,6 +292,18 @@ export const recordDataSchemas = {
     refundedKobo: kobo.optional(),
     /** Instalments Finance said this payment does not belong to; automatic matching never proposes them again. */
     rejectedDueItemIds: z.array(z.string()).optional(),
+    /** Evidence named no payer, so Finance identified the payer when it applied the payment: who, when, why and through which allocation. */
+    payerIdentification: z.object({ customerId: z.string(), identifiedBy: z.string(), identifiedAt: isoDateOrTimestamp, reason: z.string(), dueItemId: z.string(), allocationId: z.string() }).optional(),
+    /** Identifications withdrawn once a review or rejection took the match that made them out of use, with nothing of the payment applied: each as recorded, and who withdrew it, when and why. */
+    payerIdentificationHistory: z.array(z.object({ customerId: z.string(), identifiedBy: z.string(), identifiedAt: isoDateOrTimestamp, reason: z.string(), dueItemId: z.string(), allocationId: z.string(), withdrawnBy: z.string(), withdrawnAt: isoDateOrTimestamp, withdrawnReason: z.string() })).optional(),
+    /** Finance's resolution of a suspected duplicate held on this payment; "distinct_payments" means it is never held again for the same reason. */
+    duplicateReview: z.object({ exceptionId: z.string(), resolutionCode: z.string(), reviewedBy: z.string(), reviewedAt: isoDateOrTimestamp }).optional(),
+    /** Made from evidence that conflicted with another payment sharing its reference, or came through another connection than the payment with its reference, once Finance resolved that exception. */
+    evidenceConflict: z.object({ paymentId: z.string(), exceptionId: z.string(), resolutionCode: z.string() }).optional(),
+    /** The amount came from a settlement line that stated only what it paid out: the debit's own gross raises it, whatever is applied, until its money goes back. */
+    grossUnstated: z.boolean().optional(),
+    /** A pay-by-bank receipt Finance confirmed after its outcome stayed unknown: the masked reference of the evidence that it arrived. */
+    evidenceReference: z.string().optional(),
     duplicateSettlementLine: z.boolean().optional(),
     statementObservationId: z.string().optional(),
     settlementBatchId: z.string().optional(),
@@ -328,6 +394,10 @@ export const recordDataSchemas = {
     condition: z.string().optional(),
     /** For an unknown outcome resolved as failed: the failure code the provider confirmed. */
     confirmedFailureCode: z.string().optional(),
+    /** The kind of the linked record when it is not the kind the type usually names: connected-intents for a pay-by-bank checkout. */
+    linkedKind: z.string().optional(),
+    /** Set when the platform closed the exception because its condition cleared (resolutionCode condition_cleared): when, in whose action and why. */
+    conditionCleared: z.object({ at: isoDateOrTimestamp, by: z.string(), reason: z.string() }).optional(),
   }).passthrough(),
   policies: z.object({
     ...common,
@@ -642,6 +712,13 @@ export const recordDataSchemas = {
     events: z.array(z.object({ at: isoDateOrTimestamp, status: z.string(), detail: z.string() }).passthrough()), consentId: z.string(), paymentId: z.string(),
     observationId: z.string(), receiptReference: z.string(), confirmedAt: isoDateOrTimestamp,
     refundRequest: z.object({ maker: z.string(), reason: z.string(), at: isoDateOrTimestamp }).passthrough(),
+    /** The unknown-outcome exception a checkout whose outcome stayed unknown for 24 hours was raised under. */
+    outcomeExceptionId: z.string(),
+    /** Finance's resolution of an outcome that stayed unknown: the outcome it recorded, with the evidence for a payment confirmed as received. */
+    outcomeResolution: z.object({
+      exceptionId: z.string(), resolutionCode: z.string(), outcome: z.enum(["confirmed", "failed"]), evidenceReference: z.string().optional(),
+      resolvedBy: z.string(), resolvedAt: isoDateOrTimestamp, reason: z.string(),
+    }).passthrough(),
   }).partial().passthrough(),
   /** A synthetic credit assessment (immutable): the engine's result (connected-credit.ts) and how it was started. */
   "connected-credit-assessments": z.object({

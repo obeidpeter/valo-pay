@@ -14,10 +14,11 @@ configure({ asyncUtilTimeout: 5_000 });
 // without changing or contacting the managed Clerk runtime.
 vi.mock("@/lib/auth", () => ({
   authEnabled: false,
-  clerkPublishableKey: undefined,
   useSessionUser: () => ({ userId: null, isLoaded: true }),
   useSignOut: () => () => {},
   AuthShow: () => null,
+  AuthProvider: ({ children }: { children: unknown }) => children,
+  ClerkSlot: () => null,
 }));
 
 class ResizeObserverStub {

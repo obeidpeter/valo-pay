@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { DiscardOriginalRequest } from "@/components/discard-original-request";
 import { RefreshProblem, type RefreshableQuery } from "@/components/load-problem";
 import { requestClosed } from "@/lib/safe-mutations";
+import { errorWords } from "@/lib/notify";
 import "@/connected.css";
 /** The connected workspace's held request and, for a failed refresh, its query. */
 type Recovery = {
@@ -36,9 +37,34 @@ export function ConnectedFrame({
   /** The held request was let go without a result: discarded, or refused as cancelled. */
   onReleased?: () => void;
 }) {
-  const [location] = useLocation();
   return (
     <div className="connected-page space-y-6">
+      <ConnectedHeader title={title} description={description} />
+      <RefreshProblem what={title} shown="records" query={recovery} />
+      <ConnectedRecovery
+        recovery={recovery}
+        onRecovered={onRecovered}
+        onReleased={onReleased}
+      />
+      <fieldset
+        disabled={recovery?.pending || recovery?.hasUnconfirmedOutcome}
+        className="space-y-6 min-w-0"
+        aria-label="Connected workspace actions and records"
+      >
+        {children}
+      </fieldset>
+    </div>
+  );
+}
+/**
+ * A connected page's heading and the tabs between the four modules. The page
+ * shows them while its workspace loads and when it cannot be loaded too, so
+ * every state has its h1 and a way to the other modules.
+ */
+export function ConnectedHeader({ title, description }: { title: string; description: string }) {
+  const [location] = useLocation();
+  return (
+    <>
       <header className="connected-heading">
         <div>
           <p className="connected-eyebrow">
@@ -74,19 +100,15 @@ export function ConnectedFrame({
           </Link>
         ))}
       </nav>
-      <RefreshProblem what={title} shown="records" query={recovery} />
-      <ConnectedRecovery
-        recovery={recovery}
-        onRecovered={onRecovered}
-        onReleased={onReleased}
-      />
-      <fieldset
-        disabled={recovery?.pending || recovery?.hasUnconfirmedOutcome}
-        className="space-y-6 min-w-0"
-        aria-label="Connected workspace actions and records"
-      >
-        {children}
-      </fieldset>
+    </>
+  );
+}
+/** A connected page that waits for its workspace, or could not load it: its heading and tabs, then the state. */
+export function ConnectedState({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+  return (
+    <div className="connected-page space-y-6">
+      <ConnectedHeader title={title} description={description} />
+      {children}
     </div>
   );
 }
@@ -144,9 +166,9 @@ export function ConnectedRecovery({
                   if (requestClosed(error)) {
                     onReleased?.();
                     setRecoveryError(
-                      `The original request was not saved. ${(error as Error).message}`,
+                      `The original request was not saved. ${errorWords(error, "")}`,
                     );
-                  } else setRecoveryError((error as Error).message);
+                  } else setRecoveryError(errorWords(error, "The service did not confirm the result."));
                 }
               }}
             >

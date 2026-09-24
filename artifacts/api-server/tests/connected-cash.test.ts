@@ -212,6 +212,53 @@ assert.equal(forecast.scenarios[1]!.points[1]!.closingMinor, 15_000);
 assert.ok(forecast.excludedCommitmentIds.includes("future"));
 assert.equal(forecast.openingMinor, 100_000);
 checks += 5;
+// An approved outflow past its due date is still owed, so it counts as due now in
+// every point of both scenarios; a receipt past its due date is not counted on.
+const overdue = forecastCash(
+  scope,
+  100_000,
+  [
+    {
+      ...scope,
+      id: "late-bill",
+      label: "Overdue supplier bill",
+      direction: "outflow",
+      amountMinor: 30_000,
+      dueAt: "2026-09-18T10:00:00Z",
+      knownAt: "2026-09-01T10:00:00Z",
+      approved: true,
+      source: "bill",
+      version: "1",
+    },
+    {
+      ...scope,
+      id: "late-invoice",
+      label: "Overdue customer invoice",
+      direction: "inflow",
+      amountMinor: 50_000,
+      dueAt: "2026-09-19T10:00:00Z",
+      knownAt: "2026-09-01T10:00:00Z",
+      approved: true,
+      source: "invoice",
+      version: "1",
+    },
+  ],
+  { asOf: now, openingQualified: true, version: "1", bufferMinor: 10_000 },
+);
+for (const scenario of overdue.scenarios)
+  assert.deepEqual(
+    scenario.points.map((p) => [p.inflowMinor, p.outflowMinor, p.closingMinor]),
+    Array.from({ length: 5 }, () => [0, 30_000, 70_000]),
+    scenario.name,
+  );
+assert.deepEqual(overdue.includedCommitmentIds, ["late-bill"]);
+assert.deepEqual(overdue.excludedCommitmentIds, ["late-invoice"]);
+assert.ok(
+  overdue.warnings.includes(
+    "An approved outflow past its due date is included as due now.",
+  ),
+);
+checks += 5;
 assert.equal(
   forecastCash(scope, 1, [], {
     asOf: now,

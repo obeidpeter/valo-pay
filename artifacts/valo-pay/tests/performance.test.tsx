@@ -79,12 +79,24 @@ describe("performance", () => {
     }
   });
 
-  it("asks for the two typefaces from the page shell, alongside the stylesheet, and for nothing else", () => {
+  it("serves the two typefaces itself, with the stylesheet, and asks Google for nothing", () => {
     const shell = readFileSync(packageFile("index.html"), "utf8");
     const css = readFileSync(packageFile("src", "index.css"), "utf8");
-    expect(shell).toMatch(/<link href="https:\/\/fonts\.googleapis\.com\/css2\?family=Plus\+Jakarta\+Sans[^"]*Spline\+Sans\+Mono[^"]*" rel="stylesheet">/);
+    const fonts = readFileSync(packageFile("src", "fonts.css"), "utf8");
+    expect(readFileSync(packageFile("src", "main.tsx"), "utf8")).toContain("import './fonts.css';");
+    for (const text of [shell, css, fonts]) expect(text).not.toMatch(/fonts\.googleapis\.com|fonts\.gstatic\.com/);
     expect(shell).not.toContain("family=Inter");
-    expect(css).not.toContain("@import url('https://fonts.googleapis.com");
+    const faces = [...fonts.matchAll(/@font-face \{([^}]*)\}/g)].map(([, rule]) => rule);
+    // The families, weights and subsets Google served: four subsets of Plus Jakarta Sans at 400 to 800, two of Spline Sans Mono at 400 to 600.
+    expect(faces.filter((rule) => rule.includes("font-family: 'Plus Jakarta Sans'") && rule.includes("font-weight: 400 800"))).toHaveLength(4);
+    expect(faces.filter((rule) => rule.includes("font-family: 'Spline Sans Mono'") && rule.includes("font-weight: 400 600"))).toHaveLength(2);
+    for (const rule of faces) {
+      expect(rule).toContain("font-display: swap;");
+      expect(rule).toMatch(/unicode-range: U\+/);
+      const file = /url\('([^']+\.woff2)'\) format\('woff2'\)/.exec(rule)?.[1];
+      expect(file, rule).toMatch(/^@fontsource-variable\//);
+      expect(existsSync(packageFile("node_modules", file!)), file).toBe(true);
+    }
   });
 
   it("loads the console pages on demand and keeps the landing page in the shell", () => {

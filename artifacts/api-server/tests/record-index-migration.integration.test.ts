@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { requireCreateDatabase, requireLoopback, throwawayDatabaseName } from './throwaway-database';
 
 if (process.env.VALOPAY_RUN_INTEGRATION !== '1') {
   console.log('Record index migration tests require a disposable local PostgreSQL instance.'); process.exit(0);
 }
+// Any loopback database whose login can create databases: the rehearsal builds its own throwaway one beside it.
+const suite = 'Record index migration rehearsal';
 const connection = new URL(process.env.DATABASE_URL || '');
-assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(connection.hostname), 'index migration rehearsal refuses remote hosts');
-assert.equal(connection.pathname, '/valopay', 'use the disposable CI database named valopay');
+requireLoopback(suite, connection);
 const { pool, Pool } = await import('@workspace/db');
-const database = `valopay_index_rehearsal_${randomUUID().replaceAll('-', '')}`;
-assert.match(database, /^valopay_index_rehearsal_[a-f0-9]{32}$/);
+await requireCreateDatabase(suite, pool);
+const database = throwawayDatabaseName(connection, 'index_rehearsal');
 const targetUrl = new URL(connection); targetUrl.pathname = `/${database}`;
 const script = fileURLToPath(new URL('../../../scripts/apply-record-list-indexes.mjs', import.meta.url));
 const names = ['valopay_records_lender_kind_page', 'valopay_records_lender_kind_status_page', 'valopay_records_lender_customer', 'valopay_records_lender_kind_updated'];

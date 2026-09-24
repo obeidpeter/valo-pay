@@ -12,6 +12,7 @@ import {
   ConnectedPanel,
   ConnectedStatus,
   ConnectedRecovery,
+  ConnectedState,
 } from "@/components/connected-frame";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -109,11 +110,11 @@ interface CreditDeskView {
   canAssess: boolean;
   canReview: boolean;
   actor: string;
-  customers: {
-    id: string;
-    name: string;
-    reference: string;
-    permissions: { accountRead: boolean; creditAssessment: boolean };
+  /** Applicants holding a permission; one not listed holds neither. */
+  permissions: {
+    customerId: string;
+    accountRead: boolean;
+    creditAssessment: boolean;
   }[];
   assessments: Assessment[];
   model: {
@@ -163,6 +164,9 @@ const outcomeLabels: Record<string, string> = {
   request_information: "More information requested",
 };
 
+const TITLE = "Credit Desk",
+  DESCRIPTION =
+    "Turn authorised evidence into a clear assessment. Keep the lender’s decision separate.";
 export default function CreditDeskPage() {
   const api = useConnected(),
     { merchantId } = useWorkspace();
@@ -184,21 +188,26 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
   const [amountErrors, setAmountErrors] = useState<Record<string, string>>({});
   // An assessment typed but not run is a draft: leaving asks first.
   const draft = useFormDraft({ customerId, scenario, principal, repayment, months, reason });
-  if (api.isLoading) return <Loading what="Credit Desk" />;
+  if (api.isLoading) return <Loading what="Credit Desk" heading />;
   if (!api.data)
     return (
-      <>
+      <ConnectedState title={TITLE} description={DESCRIPTION}>
         <LoadProblem
           what="Credit Desk"
           error={api.error}
           retry={() => void api.refetch()}
         />
         <ConnectedRecovery recovery={api} />
-      </>
+      </ConnectedState>
     );
   const data = api.data.credit as CreditDeskView;
+  // The applicants are the workspace's customers, listed once for every connected page.
+  const applicants = api.data.customers;
   const customer =
-    data.customers.find((item) => item.id === customerId) ?? data.customers[0];
+    applicants.find((item) => item.id === customerId) ?? applicants[0];
+  const permissions = data.permissions.find(
+    (item) => item.customerId === customer?.id,
+  ) ?? { accountRead: false, creditAssessment: false };
   const selected =
     data.assessments.find((item) => item.id === selectedId) ??
     data.assessments[0];
@@ -259,8 +268,8 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
   };
   return (
     <ConnectedFrame
-      title="Credit Desk"
-      description="Turn authorised evidence into a clear assessment. Keep the lender’s decision separate."
+      title={TITLE}
+      description={DESCRIPTION}
       recovery={api}
       onReleased={() => setError("")}
       onRecovered={() => {
@@ -321,7 +330,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
                 onChange={(event) => setCustomerId(event.target.value)}
                 required
               >
-                {data.customers.map((item) => (
+                {applicants.map((item) => (
                   <option value={item.id} key={item.id}>
                     {item.name} · {item.reference}
                   </option>
@@ -333,16 +342,14 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
                 <p className="font-medium">Separate permissions</p>
                 <p>
                   Account reading:{" "}
-                  {customer.permissions.accountRead ? "Active" : "Required"}
+                  {permissions.accountRead ? "Active" : "Required"}
                 </p>
                 <p>
                   Credit assessment:{" "}
-                  {customer.permissions.creditAssessment
-                    ? "Active"
-                    : "Required"}
+                  {permissions.creditAssessment ? "Active" : "Required"}
                 </p>
-                {(!customer.permissions.accountRead ||
-                  !customer.permissions.creditAssessment) && (
+                {(!permissions.accountRead ||
+                  !permissions.creditAssessment) && (
                   <Link
                     href="/connections"
                     className="font-medium underline underline-offset-4"
@@ -408,7 +415,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
               </div>
               <div>
                 <label htmlFor="credit-repayment">
-                  Repayment per period (₦)
+                  Repayment per month (₦)
                 </label>
                 <input
                   id="credit-repayment"
@@ -435,7 +442,7 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
               </div>
             </div>
             <div>
-              <label htmlFor="credit-term">Number of 30-day repayments</label>
+              <label htmlFor="credit-term">Number of monthly repayments</label>
               <select
                 id="credit-term"
                 value={months}
@@ -448,8 +455,9 @@ function CreditDeskContent({ api }: { api: ReturnType<typeof useConnected> }) {
                 ))}
               </select>
               <p className="mt-1 text-xs text-muted-foreground">
-                Include all charges. Payments falling in the same calendar month
-                are combined for the affordability check.
+                Include all charges. One repayment falls due each calendar month,
+                on today’s date or the month’s last day when it is shorter; the
+                affordability check takes each month’s total.
               </p>
             </div>
             <div>

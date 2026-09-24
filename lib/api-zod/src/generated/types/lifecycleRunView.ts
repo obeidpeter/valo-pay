@@ -10,7 +10,7 @@ import type { LifecycleRunViewReceiptsItem } from './lifecycleRunViewReceiptsIte
 import type { LifecycleRunViewStatus } from './lifecycleRunViewStatus';
 
 /**
- * One retention run: its reviewed manifest, approval state and per-item receipts.
+ * One retention run: its reviewed manifest, who prepared it, approval state and per-item receipts.
  */
 export interface LifecycleRunView {
   /**
@@ -37,6 +37,8 @@ export interface LifecycleRunView {
   candidateCount: number;
   /** @minimum 0 */
   moreEligible: number;
+  /** @nullable */
+  preparedBy?: string | null;
   /** @nullable */
   approvedBy: string | null;
   /** @nullable */

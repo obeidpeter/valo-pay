@@ -1,6 +1,6 @@
 // Disposable PostgreSQL only; no object-storage credentials or external calls.
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Server } from 'node:http';
 import type { ExportArtifact, ExportJobStorage } from '../src/lib/export-jobs';
@@ -9,6 +9,8 @@ const {pool}=await import('@workspace/db');
 const {inWorkspace,listMerchants,loadState,saveState,appendAudit,verifyAudit}=await import('../src/lib/valopay-store');
 const {exportJobRepository:repository}=await import('../src/lib/export-job-store');
 const {processExportJob}=await import('../src/lib/export-jobs');
+const {overrideDatabaseLimits}=await import('../src/lib/database-limits');
+const {auditEntryData}=await import('../src/lib/digests');
 const {generateExportArtifact}=await import('../src/lib/valopay-exports');
 const {default:express}=await import('express');
 const {default:router}=await import('../src/routes/valopay');
@@ -27,7 +29,8 @@ const storage:ExportJobStorage={existing:async claim=>objects.get(claim.location
 try{
  const merchants=await inWorkspace(request(),response(),listMerchants);
  const merchantId=merchants[0]!.id,siblingId=merchants[1]!.id;
- const read=()=>inWorkspace(request(),response(),ctx=>loadState(ctx,merchantId,'share'),'read');
+ // A loaded state no longer carries the audit chain: the lender's stored entries are read beside it, so every check below walks the whole chain.
+ const read=async()=>{const state=await inWorkspace(request(),response(),ctx=>loadState(ctx,merchantId,'share'),'read');const audit=(await pool.query("SELECT id,kind,name,data FROM valopay_records WHERE merchant_id=$1 AND kind='audit'",[merchantId])).rows;return {...state,records:[...state.records,...audit]};};
  const customer=(await read()).records.find(record=>record.kind==='customers')!;
  const app=express();app.use(express.json());app.use((req,_res,next)=>{(req as any).auth=auth();(req as any).log={info(){}};next();});app.use('/api',router);app.use((error:any,_req:any,res:any,_next:any)=>res.status(error.status||500).json({error:error.message}));
  server=await new Promise<Server>(resolve=>{const running=app.listen(0,'127.0.0.1',()=>resolve(running));});
@@ -71,6 +74,7 @@ try{
 
  // Reproduce the observed completion contention: the file and confirming
  // checkpoint are saved, then a brief reader holds the lender share lock.
+ // The completion waits for the reader to finish rather than skip the lender.
  const contended=await api('/exports',{method:'POST',body:input,key:'contended-export'});
  const contendedTarget={merchantId,id:contended.body.id},reachedFinish=gate(),releaseCompletion=gate();
  const holder=await pool.connect();let completionCalls=0;
@@ -82,7 +86,7 @@ try{
  }},storage,generateExportArtifact,contendedTarget);
  try{await within(reachedFinish.promise);releaseCompletion.resolve();await delay(350);await holder.query('COMMIT');}
  finally{releaseCompletion.resolve();await holder.query('ROLLBACK');holder.release();}
- assert.equal(await completion,'ready');assert.ok(completionCalls>=2,'real SKIP LOCKED contention is retried');
+ assert.equal(await completion,'ready');assert.equal(completionCalls,1,'the completion waited for the reader instead of skipping the lender');
  assert.ok(performance.now()-started<6000,'brief contention does not wait for the old five-minute lease');
  assert.equal(uploads,beforeContentionUploads+1,'completion retries must never generate a second object');
  const contentionRecord=(await read()).records.find(record=>record.id===contendedTarget.id)!;
@@ -152,23 +156,94 @@ try{
  assert.equal(await processExportJob(repository,storage,generateExportArtifact,lockedTarget),'ready');
 
  // The worker's stop() takes the same path and logs each hand-back. Both jobs
- // belong to one lender, so the two hand-backs may contend for its lock and retry.
- // Claims are serialised, and a claim that finds the lender locked (by the other
- // job's progress write) is tried again, only so that both attempts start: the
- // worker itself skips such a job and a later poll picks it up.
+ // belong to one lender: the worker's two slots take turns at it, so both claims
+ // succeed and both hand-backs are written.
  const {startExportWorker}=await import('../src/lib/export-worker');
  const stoppedIds=[await api('/exports',{method:'POST',body:input,key:'stopped-one'}),await api('/exports',{method:'POST',body:input,key:'stopped-two'})].map(queued=>queued.body.id as string);
  let uploading=0,bothUploading!:()=>void;const bothBlocked=new Promise<void>(resolve=>{bothUploading=resolve;});
  const lines:Array<{event:string;status?:string}>=[];
- const claimWhenFree=async(merchant:string,id:string)=>{for(let attempt=0;attempt<50;attempt++){const claimed=await repository.claim(merchant,id);if(claimed)return claimed;await delay(20);}return null;};
- let claims:Promise<unknown>=Promise.resolve();
  const worker=startExportWorker({intervalMs:60_000,log:{info:(line:any)=>lines.push(line),error:(line:any)=>lines.push(line)} as any,
-  repository:{...repository,candidates:async()=>stoppedIds.map(id=>({merchantId,id})),claim:(merchant,id)=>{const next=claims.then(()=>claimWhenFree(merchant,id));claims=next.catch(()=>null);return next;}},storage:blockedUpload(()=>{if(++uploading===2)bothUploading();}),generate:generateExportArtifact});
+  repository:{...repository,candidates:async()=>stoppedIds.map(id=>({merchantId,id}))},storage:blockedUpload(()=>{if(++uploading===2)bothUploading();}),generate:generateExportArtifact});
  try{await within(bothBlocked,'Both exports in the stop() check must reach their uploads.',10_000);}finally{worker.stop();await worker.settle();}
  assert.deepEqual(lines.map(line=>[line.event,line.status]),[['export.job','released'],['export.job','released']]);
  for(const id of stoppedIds){const view=(await api(`/exports/${id}`)).body;assert.equal(view.status,'queued');assert.equal(view.error,undefined);}
  state=await read();assert.equal(verifyAudit(state).valid,true,'released and interrupted attempts keep one valid audit chain');
- console.log('Durable export DB checks passed: queue replay, tenant isolation, private metadata, lock-free upload, audit chain, crash recovery, stable object adoption, retriable failures and hand-back on stop.');
+
+ // Another writer holds the lender for 4 s just after a claim (a save, or a daily close): the progress write waits
+ // for the lender instead of giving up after its retries, so the export finishes in this attempt, never left
+ // 'running' under its five-minute lease with Retry unavailable.
+ const auditOf=(id:string)=>state.records.filter(record=>record.kind==='audit'&&record.data.objectId===id).sort((a,b)=>a.data.sequence-b.data.sequence);
+ const brief=await api('/exports',{method:'POST',body:input,key:'brief-busy'});
+ const briefHolder=await pool.connect();let briefHold:Promise<unknown>|undefined;
+ try{
+  const holdFor=async(ms:number)=>{await briefHolder.query('BEGIN');await briefHolder.query('SELECT 1 FROM valopay_merchants WHERE id=$1 FOR UPDATE',[merchantId]);await delay(ms);await briefHolder.query('COMMIT');};
+  const outcome=await processExportJob(repository,{...storage,existing:async claim=>{briefHold=holdFor(4000);await delay(100);return storage.existing(claim);}},generateExportArtifact,{merchantId,id:brief.body.id});
+  assert.equal(outcome,'ready','a busy moment of 4 s does not strand the export');
+ }finally{await briefHold;briefHolder.release();}
+ state=await read();
+ // The request's own entry names the export it queued (the audit object is the record a route created), then the worker's.
+ assert.deepEqual(auditOf(brief.body.id).map(record=>record.data.action),['post.exports','export.started','export.ready']);
+ assert.equal(state.records.find(record=>record.id===brief.body.id)!.data.attempts,1);
+
+ // Held for longer than a progress write waits, the lender gets the claim handed back: the job is queued again at
+ // once, with the hand-back in its audit log, and the next look finishes it.
+ const restoreLimits=overrideDatabaseLimits({worker:{lockMs:100}});
+ const long=await api('/exports',{method:'POST',body:input,key:'long-busy'});
+ const longHolder=await pool.connect();let longRelease:Promise<unknown>|undefined;
+ try{
+  await longHolder.query('BEGIN');
+  const outcome=await processExportJob({...repository,release:async(claim,reason)=>{longRelease??=delay(150).then(()=>longHolder.query('COMMIT'));return repository.release(claim,reason);}},
+   {...storage,existing:async claim=>{await longHolder.query('SELECT 1 FROM valopay_merchants WHERE id=$1 FOR UPDATE',[merchantId]);return storage.existing(claim);}},generateExportArtifact,{merchantId,id:long.body.id},{backoffMs:0});
+  assert.equal(outcome,'requeued');
+ }finally{restoreLimits();await (longRelease??longHolder.query('ROLLBACK'));longHolder.release();}
+ const longView=(await api(`/exports/${long.body.id}`)).body;
+ assert.equal(longView.status,'queued');assert.equal(longView.stage,'queued');assert.equal(longView.recoveryAt,undefined);assert.equal(longView.stalled,false);
+ state=await read();
+ const handBack=auditOf(long.body.id).at(-1)!;
+ assert.equal(handBack.data.action,'export.released');assert.match(handBack.data.summary,/busy/);
+ assert.equal(await processExportJob(repository,storage,generateExportArtifact,{merchantId,id:long.body.id}),'ready');
+
+ // Two exports of one lender in one pass: the worker's two slots take turns at the lender instead of the second
+ // skipping the first's claim, so both finish in the same pass.
+ const pair=[await api('/exports',{method:'POST',body:input,key:'pair-one'}),await api('/exports',{method:'POST',body:input,key:'pair-two'})].map(queuedPair=>({merchantId,id:queuedPair.body.id as string}));
+ const {runExportPass}=await import('../src/lib/export-worker');
+ assert.deepEqual(await runExportPass({repository:{...repository,candidates:async()=>pair},storage,generate:generateExportArtifact}),['ready','ready']);
+
+ // The audit chain's head is read from the entries since an hour before the job's claim, not from the whole
+ // history: 5,000 older entries are left unread, the read examines only this hour's, and the chain stays valid.
+ const tail=(await pool.query("SELECT data FROM valopay_records WHERE merchant_id=$1 AND kind='audit' ORDER BY (data->>'sequence')::bigint DESC LIMIT 1",[merchantId])).rows[0]!.data;
+ let sequence=Number(tail.sequence),previousHash=String(tail.hash);const history:unknown[]=[];
+ for(let index=0;index<5000;index++){
+  const at=new Date(Date.now()-3*86_400_000+index*1000).toISOString();
+  const data=auditEntryData({sequence:++sequence,actor:'Sandbox Operations',action:'synthetic.history',objectId:randomUUID(),summary:'Synthetic earlier work',changes:{changedRecords:1},previousHash,timestamp:at});
+  previousHash=data.hash;history.push({id:randomUUID(),merchantId,kind:'audit',name:data.action,status:'recorded',reference:'',amountKobo:0,customerId:'',data,createdAt:at,updatedAt:at});
+ }
+ await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at)
+  SELECT x.id,x."merchantId",x.kind,x.name,x.status,x.reference,x."amountKobo",x."customerId",x.data,x."createdAt",x."updatedAt"
+  FROM jsonb_to_recordset($1::jsonb) AS x(id text,"merchantId" text,kind text,name text,status text,reference text,"amountKobo" bigint,"customerId" text,data jsonb,"createdAt" timestamptz,"updatedAt" timestamptz)`,[JSON.stringify(history)]);
+ // The requests that wrote such a history would have moved the head the lender keeps, which the next request's write
+ // continues from (settings.auditChain; a write reads only the entries since the last one it verified): so does this one.
+ const historyEnd={sequence,hash:previousHash,at:(history.at(-1) as {createdAt:string}).createdAt};
+ await pool.query("UPDATE valopay_merchants SET settings=jsonb_set(settings,'{auditChain}',$2::jsonb) WHERE id=$1",[merchantId,JSON.stringify({...historyEnd,verified:historyEnd})]);
+ await pool.query('ANALYZE valopay_records');
+ const bounded=await api('/exports',{method:'POST',body:input,key:'bounded-head'});
+ const headReads:Array<{text:string;values:unknown[]}>=[];
+ const probe=await pool.connect();probe.release();
+ const clients=Object.getPrototypeOf(probe) as {query:(this:unknown,...args:any[])=>unknown};
+ const query=clients.query;
+ clients.query=function(this:unknown,...args:any[]){if(typeof args[0]==='string'&&/kind='audit'/.test(args[0])&&/ORDER BY \(r\.data->>'sequence'\)::bigint DESC LIMIT 1/.test(args[0]))headReads.push({text:args[0],values:args[1]});return query.apply(this,args);};
+ try{assert.equal(await processExportJob(repository,storage,generateExportArtifact,{merchantId,id:bounded.body.id}),'ready');}
+ finally{clients.query=query;}
+ assert.equal(headReads.length,1,'the claim takes the head from the records it loads anyway; the completion reads it once');
+ const plan=(await pool.query(`EXPLAIN (ANALYZE, FORMAT JSON) ${headReads[0]!.text}`,headReads[0]!.values)).rows[0]['QUERY PLAN'][0].Plan;
+ const scans:Array<{rows:number;removed:number}>=[];
+ const walk=(node:any)=>{if(node['Relation Name']==='valopay_records')scans.push({rows:node['Actual Rows'],removed:node['Rows Removed by Filter']??0});for(const child of node.Plans??[])walk(child);};
+ walk(plan);
+ const recent=Number((await pool.query("SELECT count(*) FROM valopay_records r JOIN valopay_records job ON job.id=$2 WHERE r.merchant_id=$1 AND r.kind='audit' AND r.created_at >= (job.data->>'startedAt')::timestamptz - interval '1 hour'",[merchantId,bounded.body.id])).rows[0].count);
+ assert.ok(recent<500,`${recent} entries from this test's hour`);
+ assert.ok(scans.length>0&&scans.every(scan=>scan.rows+scan.removed<=recent),`the head read examined ${JSON.stringify(scans)} rows of a chain of over 5,000 entries, ${recent} of them from the hour before the claim`);
+ state=await read();assert.equal(verifyAudit(state).valid,true,'busy hand-backs, shared lender turns and bounded head reads keep one valid audit chain');
+ console.log('Durable export DB checks passed: queue replay, tenant isolation, private metadata, lock-free upload, audit chain, crash recovery, stable object adoption, retriable failures, hand-back on stop, progress through a busy lender, hand-back when it stays busy, two slots on one lender and a bounded audit head.');
 }finally{
  if(oldDirectory===undefined)delete process.env.PRIVATE_OBJECT_DIR;else process.env.PRIVATE_OBJECT_DIR=oldDirectory;
  if(server)await new Promise<void>((resolve,reject)=>server!.close(error=>error?reject(error):resolve()));

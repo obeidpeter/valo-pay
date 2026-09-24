@@ -6,9 +6,9 @@ const obj = (properties, required = Object.keys(properties)) => ({ type: "object
 const schemas = {
   HealthStatus: obj({ status: str, build: str, startedAt: str, uptimeSeconds: num, scheduler: ref("SchedulerStatus") }),
   SchedulerRun: obj({ runId: str, at: str, durationMs: num, initialised: num, examined: num, closed: num, skipped: num, failed: num }),
-  SchedulerStatus: obj({ state: { type: "string", enum: ["not_started", "running", "off", "stopped"] }, intervalMs: { type: ["integer", "null"] }, ticks: num, lastTickAt: { type: ["string", "null"] }, lastRun: { oneOf: [ref("SchedulerRun"), { type: "null" }] } }),
+  SchedulerStatus: obj({ state: { type: "string", enum: ["not_started", "running", "off", "external", "stopped"], description: "running: this process schedules the daily closes. off: it schedules none (VALOPAY_CLOSE_SCHEDULER=off). external: it schedules none because a separate scheduled job runs them with the one-shot close pass (VALOPAY_CLOSE_SCHEDULER=external), which this process cannot observe. not_started and stopped: the scheduler has not started yet, or has stopped." }, intervalMs: { type: ["integer", "null"] }, ticks: num, lastTickAt: { type: ["string", "null"] }, lastRun: { oneOf: [ref("SchedulerRun"), { type: "null" }] } }),
   DatabaseCheck: obj({ status: { type: "string", enum: ["ok", "failed"] }, latencyMs: num }),
-  SchemaCheck: obj({ status: { type: "string", enum: ["ok", "indexes_missing", "incomplete", "unchecked"], description: "ok: every table, column and index this build needs is present. indexes_missing: ready, but an index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table or column is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and the migration that adds it." } }),
+  SchemaCheck: obj({ status: { type: "string", enum: ["ok", "indexes_missing", "incomplete", "unchecked"], description: "ok: every table, column, unique index, check constraint and read index this build needs is present. indexes_missing: ready, but a read index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table, column, unique index or check constraint is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and where it comes from." } }),
   ReadinessStatus: obj({ status: { type: "string", enum: ["ok", "degraded"] }, build: str, checks: obj({ database: ref("DatabaseCheck"), schema: ref("SchemaCheck") }) }),
   RecordData: { type: "object", additionalProperties: {} },
   ValopayRecord: obj({ id: str, merchantId: str, kind: str, name: str, status: str, reference: str, amountKobo: num, customerId: str, createdAt: str, updatedAt: str, data: ref("RecordData") }),
@@ -35,7 +35,7 @@ const schemas = {
   ExportResult: obj({ id:str, downloadUrl: str, status:{type:'string',enum:['queued','running','ready','failed']}, stage:{type:'string',enum:['queued','checking','rendering','uploading','confirming','ready','failed']}, lastProgressAt:str, stalled:bool, retryAllowed:bool, recoveryAt:str, expiredAt:str, kind:str, format:str, customerId:str, requestedAt:str, attempts:num, checksum:str, generatedAt:str, byteLength:num, generationMs:num, error:str }, ['id','downloadUrl']),
   EffectiveCloseSchedule: obj({
     time: str, enabled: bool, automatic: bool, nextAt: { type: ["string", "null"] },
-    runtimeState: { type: "string", enum: ["not_started", "running", "off", "stopped"] },
+    runtimeState: { type: "string", enum: ["not_started", "running", "off", "external", "stopped"], description: "The close service as this process sees it (the health answer's scheduler state). With external a separate scheduled job runs the closes: nothing is advertised as automatic, but a close that job has not run is still missed." },
     serviceIssue: { type: ["string", "null"], enum: ["starting", "delayed", "failed", null] },
     missed: bool, overdueMinutes: num, lateAfterMinutes: num,
     lastAt: { type: ["string", "null"] }, lastTrigger: { type: ["string", "null"] },
@@ -56,6 +56,7 @@ schemas.SettingsInput.properties.expectedRevision = str;
 schemas.ImportResult.properties.columns = { type: "array", items: str };
 schemas.ImportResult.properties.preview = { type: "array", items: obj({ row: num, values: ref("RecordData"), amountKobo: num }, ["row", "values"]) };
 schemas.ImportResult.properties.skipped = num;
+schemas.ImportResult.properties.warnings = { type: "array", items: str };
 // An operation and its success answer. The refusals and failures it can answer are listed by
 // listErrorAnswers at the end, from what its route does, with the error body they carry.
 function add(path, method, id, response, body, params = []) {
@@ -67,31 +68,34 @@ function add(path, method, id, response, body, params = []) {
 // A key the operations journal records makes its request answer 410 once retention has removed its stored result.
 const journaled = new WeakSet();
 const journal = (parameter) => { journaled.add(parameter); return parameter; };
-const keyRules = "8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender's retention policy has removed that stored result, the repeat is refused (410).";
+const keyRules = "8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender's retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request's journal entry, so a key names one request of the person who sent it, in its lender.";
 const requiredKey = journal({ name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 }, description: `Required: a request without one is refused (400, naming the header). ${keyRules}` });
 const optionalKey = (detail = "") => journal({ name: "Idempotency-Key", in: "header", required: false, schema: { type: "string", minLength: 8, maxLength: 200 }, description: `Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. ${keyRules}${detail ? ` ${detail}` : ""}` });
 /** A new lender's key: it names the lender, and the journal does not record the request. */
 const lenderKey = { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 }, description: "Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per new lender. The key names the lender it creates: a repeat returns that lender, and the same key with different details is refused (409). The request is not recorded in Operations, so a request refused before the lender was created (by the caller's role, or at the sandbox's five-lender limit) may be sent again with the same key once the refusal no longer applies." };
 const pathDescriptions = { kind: "Record kind: one of the shared schema's recordKinds (customers, mandates, due-items, attempts, observations, payments, ...).", id: "The record's id.", provider: "Provider name; this generic address refuses every provider (the Paystack test ingress has its own address)." };
-const pathParam = (name) => ({name,in:"path",required:true,schema:str,description:pathDescriptions[name]});
+/** The id an address names: 1 to 100 characters, refused (400, naming id) otherwise, as every route checks it (pathIdSchema). */
+const idSchema = { type: "string", minLength: 1, maxLength: 100 };
+const pathParam = (name) => ({name,in:"path",required:true,schema:name==="id"?idSchema:str,description:pathDescriptions[name]});
 const merchant = {name:"merchantId",in:"query",required:true,schema:{type:"string",minLength:1,maxLength:100},description:"The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation."};
-const search = {name:"search",in:"query",schema:str,description:"Text matched, ignoring case and accents, against the name, reference, status and data."};
+const search = {name:"search",in:"query",schema:str,description:"Text matched, ignoring case and accents, against the record's name, its reference and the text and number values in its data, nested ones included; never a field's name, true, false or null."};
 const status = {name:"status",in:"query",schema:str,description:"Only records in this status; omitted or \"all\" for every status."};
-const limit = {name:"limit",in:"query",schema:{type:"integer",minimum:1,maximum:500},description:"Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views."};
+const limit = {name:"limit",in:"query",schema:{type:"integer",minimum:1,maximum:500},description:"Page size, from 1 to 500; a value outside that range is refused (400). Omitted, a kind that grows with history (audit, closes, exports, notifications, retry-decisions) returns its newest 500 with nextOffset to page on, and any other kind its whole filtered set, for existing relationship and balance views."};
 const offset = {name:"offset",in:"query",schema:{type:"integer",minimum:0},description:"Rows to skip in the newest-first order."};
-const updatedSince = {name:"updatedSince",in:"query",schema:str,description:"ISO timestamp; only records updated at or after it (incremental sync)."};
+const updatedSince = {name:"updatedSince",in:"query",schema:str,description:"An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00; only records updated at or after that instant (incremental sync). A number, a date without a time, a time without Z or an offset, or a year outside 0001 to 9999 is refused (400, naming updatedSince)."};
 const customerId = {name:"customerId",in:"query",schema:str,description:"Only records directly linked to this customer, in the selected lender."};
 const recordId = {name:"id",in:"query",schema:str,description:"Only this exact record ID, in the selected kind and lender."};
+const allocatable = {name:"allocatable",in:"query",schema:{type:"string",enum:["true","false"]},description:"Instalments (due-items) only. true lists just the instalments that can take an allocation now: those that still owe an amount and are not cancelled, closed or in dispute, the ones a manual allocation accepts, so total counts the choices. Omitted or false lists every instalment. Refused (400) for any other kind."};
 add("/healthz","get","healthCheck","HealthStatus");
 add("/readyz","get","readinessCheck","ReadinessStatus");
 const describe = (path, method, summary, description) => Object.assign(paths[path][method], { summary, description });
-paths["/readyz"].get.responses["503"]={description:"Not ready: the database cannot be reached within the check's time limit, or lacks a table or column this build needs",content:{"application/json":{schema:ref("ReadinessStatus")}}};
+paths["/readyz"].get.responses["503"]={description:"Not ready: the database cannot be reached within the check's time limit, or lacks a table, column, unique index or check constraint this build needs",content:{"application/json":{schema:ref("ReadinessStatus")}}};
 add("/v1/workspace","get","getWorkspace","Workspace");
 add("/v1/overview","get","getOverview","Overview",null,[merchant]);
-add("/v1/records/{kind}","get","listRecords","RecordList",null,[pathParam("kind"),merchant,search,status,limit,offset,updatedSince,customerId,recordId]);
+add("/v1/records/{kind}","get","listRecords","RecordList",null,[pathParam("kind"),merchant,search,status,limit,offset,updatedSince,customerId,recordId,allocatable]);
 add("/v1/records/{kind}","post","createRecord","ValopayRecord","RecordInput",[pathParam("kind"),merchant,optionalKey()]);
 add("/v1/records/{kind}/{id}","patch","updateRecord","ValopayRecord","RecordUpdate",[pathParam("kind"),pathParam("id"),merchant,optionalKey()]);
-add("/v1/actions","post","performAction","ActionResult","ActionInput",[merchant,optionalKey("A set_role change is repeatable with its key but is not recorded in Operations, so a refused one may be sent again and retention never removes its result.")]);
+add("/v1/actions","post","performAction","ActionResult","ActionInput",[merchant,optionalKey("A set_role change is repeatable with its key but is not recorded in Operations, so a refused one may be sent again and retention never removes its result. Its result is kept apart from the journal's, so a journaled write sent with the same key is a separate request.")]);
 add("/v1/imports","post","importRecords","ImportResult","ImportInput",[merchant,optionalKey("Only a commit (commit true) uses it: a preview writes nothing.")]);
 add("/v1/customers/{id}/timeline","get","getCustomerTimeline","Timeline",null,[pathParam("id"),merchant]);
 add("/v1/reports","get","getReports","Report",null,[merchant]);
@@ -104,13 +108,13 @@ add('/v1/exports/{id}/retry','post','retryExportJob','ExportResult',null,[pathPa
 paths["/v1/exports/{id}/download"]={get:{operationId:"downloadExport",tags:["valopay"],parameters:[pathParam("id"),merchant],responses:{"200":{description:"Private verified export bytes",content:{"application/octet-stream":{schema:{type:"string",format:"binary"}}}},"404":{description:"Export not found in tenant"}}}};
 paths["/v1/openapi.json"]={get:{operationId:"getOpenApiDocument",tags:["valopay"],responses:{"200":{description:"Versioned public API specification",content:{"application/json":{schema:{type:"object",additionalProperties:true}}}}}}};
 paths["/v1/webhooks/{provider}"]={post:{operationId:"disabledProviderWebhook",tags:["valopay"],parameters:[pathParam("provider")],responses:{"403":{description:"Disabled until a provider-specific signed adapter is configured. No events are processed."}}}};
-describe("/healthz","get","Liveness: the process answers, with its build, uptime and scheduler state","Never touches the database, so a database outage does not read as a dead process. Needs no sandbox or sign-in.");
-describe("/readyz","get","Readiness: one bounded round trip to the database, which also checks its schema","Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table or column this build needs. A missing index leaves the answer ready, with checks.schema.status indexes_missing, since every request still works, only slower. The log names what is missing and the migration that adds it, and any connection error; the answer does not. Needs no sandbox or sign-in.");
-describe("/v1/workspace","get","The caller's workspace: its lenders, roles and actor","On a first visit an anonymous caller gets a new synthetic sandbox with two lenders; a signed-in person gets their own workspace. New sandboxes are limited per client address.");
-describe("/v1/overview","get","The operations overview for one lender","Metrics, queues, recent activity, upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02).");
-describe("/v1/records/{kind}","get","Records of one kind for one lender, newest first","Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync.");
+describe("/healthz","get","Liveness: the process answers, with its build, uptime and scheduler state","Never touches the database, so a database outage does not read as a dead process. Needs no sandbox or sign-in, and answers whether or not Clerk is configured. At most 120 health checks a minute per client network, both health addresses together (an IPv6 client's network is its /64).");
+describe("/readyz","get","Readiness: one bounded round trip to the database, which also checks its schema","Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table, column, unique index or check constraint this build needs. A missing read index leaves the answer ready, with checks.schema.status indexes_missing, since every request still works, only slower. The log names what is missing and where it comes from, and any connection error; the answer does not. Probes share one check: while it runs every probe waits for it, and its answer is reused for a second after it finishes, so a burst makes one database round trip. Needs no sandbox or sign-in, and answers whether or not Clerk is configured. At most 120 health checks a minute per client network, both health addresses together.");
+describe("/v1/workspace","get","The caller's workspace: its lenders, roles and actor","On a first visit an anonymous caller gets a new synthetic sandbox with two lenders, and the sandbox cookie that names it on every later request (components.securitySchemes.sandboxCookie); a signed-in person gets their own workspace. New sandboxes are limited per client network (20 an hour; an IPv6 client's network is its /64, and a /48 starts at most 60) and per server (300 an hour, which hold back only a network that has already started one in its hour: a network's first is never refused because of others). A browser that sends two different sandbox cookies is refused (400) rather than guessed between.");
+describe("/v1/overview","get","The operations overview for one lender","Metrics, queues, recent activity (the eight latest audit entries), upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02), whose audit check covers the entries since the last one verified.");
+describe("/v1/records/{kind}","get","Records of one kind for one lender, newest first","Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync; allocatable for the instalments a manual allocation accepts.");
 describe("/v1/records/{kind}","post","Create a record of an editable kind","Validated against the kind's data schema; a status only a domain action may set is refused.");
-describe("/v1/records/{kind}/{id}","patch","Update a record","Editable kinds only; an approved, preregistered or closed version is immutable. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version.");
+describe("/v1/records/{kind}/{id}","patch","Update a record","Editable kinds only; an approved, preregistered or closed version is immutable. data is merged over the stored data as a merge patch: a field left out keeps its value and a field sent as null is removed, which is how an edit clears an optional field. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version.");
 describe("/v1/actions","post","Run a domain action on the lender's state","Every action is audited, most require a reason, and the persona's role applies; the catalogue of actions is in docs/frontend-contract.md.");
 describe("/v1/imports","post","Preview or commit a synthetic CSV import","commit=false validates every row and reports each; commit=true persists all rows or none. syntheticOnly must be true: no real lender data.");
 describe("/v1/customers/{id}/timeline","get","A customer's position and complete timeline","Every event, mandate, due item and payment, with each retry decision as it was recorded.");
@@ -118,10 +122,10 @@ describe("/v1/reports","get","Reports for one lender","Metrics, the billing stat
 describe("/v1/gates","get","Production readiness gates","Prerequisites and decisions, always unproven on synthetic data, and the limitations the sandbox cannot remove.");
 describe("/v1/settings","get","A lender's settings, permissions, integrations, members and calendar","Permissions are those of the caller's current persona.");
 describe("/v1/settings","patch","Change a lender's execution settings","Admin only. Send expectedRevision from the settings originally opened; 409 leaves outdated edits unapplied. The revision covers editable preferences and is unaffected by scheduler cursor changes. An identical successful Idempotency-Key replay returns its original result before checking the version.");
-describe("/v1/exports","post","Queue a private export","Durably saves a queued export job and returns immediately. Poll its status before downloading. Rendering and private storage run outside the database transaction; retries use the same immutable object key. A record kind, gate pack, billing statement or customer dispute pack supports JSON, CSV or PDF.");
+describe("/v1/exports","post","Queue a private export","Durably saves a queued export job and returns immediately. Poll its status before downloading. Rendering and private storage run outside the database transaction; retries use the same immutable object key. A record kind, gate pack, billing statement or customer dispute pack supports JSON, CSV or PDF. A dispute pack (either name), the customer register or the audit trail is queued only by an Admin, Finance or Compliance reviewer (403 otherwise).");
 describe('/v1/exports/{id}','get','Check a saved export','Tenant-authorised status, safe failure reason and checksum/download details once ready. Older immediate export records remain downloadable.');
-describe('/v1/exports/{id}/retry','post','Retry a saved export','Requeues a failed or expired job while preserving its identity and private object key. Running and ready jobs are returned unchanged; retries cannot overwrite a completed file.');
-describe("/v1/exports/{id}/download","get","Download an export","The bytes are read from private storage and checked against the recorded SHA-256 before any are sent.");
+describe('/v1/exports/{id}/retry','post','Retry a saved export','Requeues a failed or expired job while preserving its identity and private object key. Running and ready jobs are returned unchanged; retries cannot overwrite a completed file. A dispute pack, the customer register or the audit trail is retried only by an Admin, Finance or Compliance reviewer (403 otherwise).');
+describe("/v1/exports/{id}/download","get","Download an export","The bytes are read from private storage and checked against the recorded SHA-256 before any are sent. A dispute pack (either name), the customer register or the audit trail is downloaded only by an Admin, Finance or Compliance reviewer (403 otherwise); every role may read a job's status.");
 describe("/v1/openapi.json","get","This specification","The versioned public contract the console and the generated clients are built from.");
 describe("/v1/webhooks/{provider}","post","Generic provider webhook address, always refused","Always 403: no event is processed here. Paystack test events go to POST /v1/providers/paystack/{connectionId}/events.");
 const schemaDescriptions = {
@@ -129,12 +133,12 @@ const schemaDescriptions = {
   SchedulerRun: "The last scheduler pass that found work: its id, when it ran, how long it took, how many batches it read and what it did, including idle sandboxes whose automatic close it paused.",
   SchedulerStatus: "Whether closes are scheduled in this process, how often it looks, when it last looked and its last pass with work.",
   DatabaseCheck: "One round trip to the database and how long it took.",
-  SchemaCheck: "Whether the database holds every table, column and index this build needs: ok, indexes_missing (ready, some reads slower), incomplete (not ready) or unchecked while the database does not answer. The server log, not the answer, names what is missing.",
-  ReadinessStatus: "The readiness answer: ok, or degraded while the database does not answer or lacks a table or column this build needs.",
+  SchemaCheck: "Whether the database holds every table, column, unique index, check constraint and read index this build needs: ok, indexes_missing (ready, some reads slower), incomplete (not ready) or unchecked while the database does not answer. The server log, not the answer, names what is missing.",
+  ReadinessStatus: "The readiness answer: ok, or degraded while the database does not answer or lacks a table, column, unique index or check constraint this build needs.",
   RecordData: "A record's data: the fields the kind's schema declares, and anything else a caller stored.",
   ValopayRecord: "A stored record of any kind, with its lender, status, reference, amount in kobo and data.",
-  RecordInput: "A new record: only the name is required; the kind's default status applies when none is given.",
-  RecordUpdate: "The fields to change on a record; omitted fields keep their values.",
+  RecordInput: "A new record: only the name is required, and it cannot be empty; the kind's default status applies when none is given. A status is at most 100 characters, a reference 200 and a customerId 100.",
+  RecordUpdate: "The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed. A name cannot be empty, and a status, reference or customerId is bounded as a new record's is.",
   Merchant: "A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags.",
   Workspace: "The caller's workspace: who is acting, in which role, whether they signed in, and the lenders and roles available.",
   Metric: "A named measurement with its unit and the basis it was derived from.",
@@ -145,7 +149,7 @@ const schemaDescriptions = {
   ActionResult: "What an action did, in words, with the record it produced or changed and any data it returns.",
   ImportInput: "A synthetic CSV to preview or commit for one kind, with an optional column mapping.",
   ImportRow: "The outcome of one imported row.",
-  ImportResult: "How many rows were valid, invalid and imported, and each row's outcome.",
+  ImportResult: "How many rows were valid, invalid and imported, and each row's outcome. warnings, when present, says which name or reference came from a fallback (the reference, a row number or a generated reference) while a column was left unused, and the check and the commit are not refused for it.",
   Report: "The reports: metrics, billing, the experiment, operational measurement and the daily closes.",
   Gate: "One readiness gate: what it needs, its status and the evidence recorded.",
   Gates: "The prerequisites and decisions, the sandbox's limitations, and the cash and burn figures used for the funding decision.",
@@ -214,7 +218,7 @@ schemas.QueuePage = {
       "type": "string"
     }
   },
-  "description": "A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states."
+  "description": "A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states: a deadline written as a day alone (YYYY-MM-DD) is due all that West Africa Time day and overdue once it ends, one with a time passes at that instant, and one that is not a real date is no deadline."
 };
 paths["/v1/queues/{queue}"] = {
   "get": {
@@ -349,9 +353,9 @@ schemas.CloseHistoryPage = obj({items:arr('ValopayRecord'),total:num,allTotal:nu
 schemas.CloseHistoryPage.description = 'Paged close summaries and first/latest closing positions for the entire WAT date range; full REC-07 evidence is fetched separately.';
 add('/v1/close-history','get','listCloseHistory','CloseHistoryPage',null,[merchant,...['from','to'].map(name=>({name,in:'query',schema:{type:'string',maxLength:10},description:'Inclusive date in YYYY-MM-DD format, in West Africa Time.'})),...pageParams]);
 describe('/v1/close-history','get','Page recorded daily closes','Newest first, with complete range counts and whole-range comparison endpoints. Missing historical measures remain absent. Invalid dates or reversed ranges are rejected.');
-add('/v1/close-history/{id}','get','getCloseDetail','ValopayRecord',null,[merchant,{name:'id',in:'path',required:true,schema:str,description:'Close record in the active lender.'}]);
+add('/v1/close-history/{id}','get','getCloseDetail','ValopayRecord',null,[merchant,{name:'id',in:'path',required:true,schema:idSchema,description:'Close record in the active lender.'}]);
 describe('/v1/close-history/{id}','get','Read the evidence for one recorded close','Returns the full immutable close report on demand within the current lender.');
-paths['/v1/reports'].get.parameters.push({name:'includeCloses',in:'query',schema:{type:'string',enum:['true','false']},description:'Default true for compatibility. The console passes false and loads paged close summaries separately.'});
+paths['/v1/reports'].get.parameters.push({name:'includeCloses',in:'query',schema:{type:'string',enum:['true','false']},description:'Default true for compatibility: the close array, where closes more than a week before the latest carry their summary (GET /v1/close-history/{id} returns any close whole). The console passes false and loads paged close summaries separately.'});
 
 paths['/v1/reconciliation/{queue}'].get.parameters.push({name:'q',in:'query',schema:{type:'string',maxLength:200},description:'Literal case- and accent-insensitive customer, payment or instalment name/reference search before counting and paging. Audit sample metadata remains unfiltered.'});
 const historySections=['events','mandates','dueItems','payments'];
@@ -359,7 +363,7 @@ schemas.CustomerHistoryCounts=obj(Object.fromEntries(historySections.map(key=>[k
 schemas.CustomerHistoryCounts.description='Complete counts or actual offsets for the four customer-history sections.';
 schemas.CustomerHistory=obj({...schemas.Timeline.properties,totals:ref('CustomerHistoryCounts'),offsets:ref('CustomerHistoryCounts'),focusedRecord:ref('ValopayRecord')},[...schemas.Timeline.required,'totals','offsets']);
 schemas.CustomerHistory.description='Bounded pages of customer records with balances derived from every related record, full section counts and an optional lender-scoped selected record.';
-add('/v1/customers/{id}/history','get','getCustomerHistory','CustomerHistory',null,[merchant,{name:'id',in:'path',required:true,schema:str,description:'Customer in the active lender.'},{name:'record',in:'query',schema:{type:'string',maxLength:200},description:'Optional selected history record; must belong to this customer and lender.'},...historySections.flatMap(section=>pageParams.map(p=>({...p,name:section+p.name[0].toUpperCase()+p.name.slice(1)})))]);
+add('/v1/customers/{id}/history','get','getCustomerHistory','CustomerHistory',null,[merchant,{name:'id',in:'path',required:true,schema:idSchema,description:'Customer in the active lender.'},{name:'record',in:'query',schema:{type:'string',maxLength:200},description:'Optional selected history record; must belong to this customer and lender.'},...historySections.flatMap(section=>pageParams.map(p=>({...p,name:section+p.name[0].toUpperCase()+p.name.slice(1)})))]);
 describe('/v1/customers/{id}/history','get','Page a customer history with complete balances','Each section is independently paged in SQL, newest first with stable ID ordering. Counts and monetary aggregates are calculated before paging; no partial state may be written. Unknown customers return 404. The existing timeline endpoint retains its full-history contract.');
 // ---- Console-facing operations: shapes from the shared zod definitions ----
 // Their request and response shapes are the shared zod definitions in lib/valopay-schema,
@@ -452,6 +456,11 @@ function twin(name, zodSchema) {
     if (Array.isArray(value)) return value.map(plain);
     if (!value || typeof value !== "object") return value;
     if (value.$ref) return plain(schemas[value.$ref.replace("#/components/schemas/", "")]);
+    // A nullable enum is written either way: as a type list with null among its values, or as anyOf the enum and null.
+    if (Array.isArray(value.type) && value.type.includes("null") && Array.isArray(value.enum) && value.enum.includes(null)) {
+      const types = value.type.filter((type) => type !== "null");
+      return plain({ anyOf: [{ ...value, type: types.length === 1 ? types[0] : types, enum: value.enum.filter((item) => item !== null) }, { type: "null" }] });
+    }
     return Object.fromEntries(Object.entries(value).filter(([key]) => key !== "description" && key !== "additionalProperties").map(([key, item]) => [key, plain(item)]));
   };
   const written = plain(schemas[name]), translated = plain(fromZod(zodSchema, zodSchema));
@@ -462,17 +471,29 @@ function twin(name, zodSchema) {
 twin("RecordData", shared.recordDataSchema);
 twin("ValopayRecord", shared.valopayRecordSchema);
 twin("Merchant", shared.merchantSchema);
+// The record API's confirmations, which the console checks with these shared twins rather than the generated contract.
+twin("ActionResult", shared.actionResultSchema);
+twin("ImportRow", shared.importRowSchema);
+twin("ImportResult", shared.importResultSchema);
+twin("EffectiveCloseSchedule", shared.effectiveCloseScheduleSchema);
+twin("Settings", shared.settingsViewSchema);
+twin("ExportResult", shared.exportResultSchema);
+// A record's name is never empty, and its indexed text is bounded (recordTextLimits): an over-long value is refused, naming its field, before anything is saved.
+for (const name of ["RecordInput", "RecordUpdate"]) {
+  schemas[name].properties.name = { type: "string", minLength: 1 };
+  for (const field of ["status", "reference", "customerId"]) schemas[name].properties[field] = { type: "string", maxLength: shared.recordTextLimits[field] };
+}
 const journalOffset = { name: "offset", in: "query", schema: { type: "integer", minimum: 0, maximum: 100000 }, description: "Rows to skip in the newest-first order; pages hold 25 rows." };
 const operation = (path, method, id, response, body, params, summary, description) => { add(path, method, id, response, body, params); describe(path, method, summary, description); };
 
 // The error body every refusal and failure carries.
 derived("ErrorDetail", shared.errorDetailSchema, "One field a request got wrong: its dotted path (a query value or header by its name) and what is wrong with it.");
-derived("ErrorBody", shared.errorBodySchema, "The body of every refusal and failure: what happened in plain words and the request's reference, with the fields validation refused, the staff-access refusal code, whether nothing was saved (committed false) and whether the request's journal entry is cancelled (operation cancelled).");
+derived("ErrorBody", shared.errorBodySchema, "The body of every refusal and failure: what happened in plain words and the request's reference, with the fields validation refused (at most 20, and how many there were), the staff-access refusal code, whether nothing was saved (committed false) and the state of the request's journal entry (operation).");
 
 // Connected workspace: the Credit Desk and Cash Desk documents, the workspace and its actions.
 derived("CreditAssessmentResult", shared.creditAssessmentResultSchema, "An illustrative synthetic credit assessment: evidence, features, rule score, affordability and policy recommendation. Never a probability of default or a lending decision; features, score and affordability are null when the evidence or authority does not allow them.");
 derived("CreditReview", shared.creditReviewViewSchema, "A recorded sandbox review of one assessment version; never an actual lending decision and never moves funds.");
-derived("CreditDesk", shared.creditViewSchema, "The Credit Desk: applicants with their current permissions, assessments with their reviews, the illustrative rulecard and the closed credit gate.");
+derived("CreditDesk", shared.creditViewSchema, "The Credit Desk: the current permissions of each applicant holding any (the applicants are the workspace's customers, listed once; one not listed here holds neither), assessments with their reviews, the illustrative rulecard and the closed credit gate.");
 derived("CashForecast", shared.cashForecastSchema, "Base and downside cash forecasts from approved commitments: a planning estimate, not an available balance.");
 derived("ErpManifest", shared.erpManifestSchema, "A reviewed accounting export: what an ERP would receive. The service never posts it.");
 derived("VatSchedule", shared.vatScheduleSchema, "A VAT evidence review schedule reconciled to the ledger control: never a filed return or a payment.");
@@ -480,7 +501,7 @@ derived("PayrollPlan", shared.payrollPlanSchema, "A funding plan for an approved
 derived("PayrollManifest", shared.payrollManifestSchema, "An approved payroll bank export: the unsent items and their totals. It does not reserve funds or prove payment.");
 derived("CashDesk", shared.cashViewSchema, "The Cash Desk: a separate sample SME's accounts, positions, commitments, forecast, accounting drafts, VAT schedules and payroll plans, as its permissions allow.");
 derived("ConnectedWorkspace", shared.connectedViewSchema, "Synthetic connected workspace: granular consents with their effective state, bound sample payment intents, the Credit and Cash Desks and the live gates, every one closed. No read creates sample records.");
-derived("ConnectedActionInput", shared.connectedActionInputSchema, "Action-specific data is validated by the server. Names use consent, payment, credit or cash prefixes. Every action requires a current whole-workspace revision and a reason. No input can enable live routes.");
+derived("ConnectedActionInput", shared.connectedActionInputSchema, "Action-specific data is validated by the server. Names use consent, payment, credit or cash prefixes. Every action requires the workspace's current revision and a reason: the revision changes with anything the workspace shows or its actions read (the lender and its settings, customers, the instalments it offers, a checkout names or a receipt was applied to and their attempts, connected records, and pay-by-bank receipts with their allocations), not with the lender's history (closes, the audit trail, exports, settled instalments or other payments). No input can enable live routes.");
 derived("CashActionOutcome", shared.cashActionOutcomeSchema, "What a Cash Desk action did: its message, the record it saved or changed, and any export it prepared.");
 derived("ConnectedActionResult", shared.connectedActionResultSchema, "Committed sample operation, in the shape its action gives (connectedActionResultFor in lib/valopay-schema): a cash.* action answers its outcome with the Cash Desk record it saved or changed (absent only when the Cash Desk was already set up) and, for an export, the manifest it prepared; every other action answers the record it produced or changed, of the lender the request named: a consent for consent.*, a checkout for payment.*, an assessment for credit.assess and a review for credit.review. A receipt is evidence from the server simulator only.");
 operation("/v1/connected", "get", "getConnectedWorkspace", "ConnectedWorkspace", null, [merchant], "Read the connected workspace", "Same-origin, private and tenant scoped. Returns granular consent state, bound sample payment intents, explained credit assessments, independent SME cash planning and closed live gates.");
@@ -518,13 +539,16 @@ operation("/v1/pilot/cases/{id}", "get", "getCase", "CaseDetail", null, [pathPar
 operation("/v1/pilot/cases/{id}", "post", "coordinateCase", "ValopayRecord", "CaseInput", [pathParam("id"), merchant, optionalKey()], "Hand over or update a case", "Records the assignee, next action and evidence, with the version being changed. The next action must be in the future.");
 
 // Team and readiness.
-derived("StaffMember", shared.staffMemberSchema, "A staff membership as a change answers it: its role, state, expiry and version.");
-derived("StaffDirectoryMember", shared.staffDirectoryMemberSchema, "A membership in the team directory, with the lenders it may open; an administrator opens every lender and lists none.");
-derived("StaffInvitation", shared.staffInvitationSchema, "A pending, accepted or revoked invitation; the token is shown once, at creation.");
+derived("StaffMember", shared.staffMemberSchema, "A staff membership: its role, state, expiry and version.");
+derived("StaffAccess", shared.staffAccessSchema, "A membership's role and state, before or after a change.");
+derived("StaffChangeRequest", shared.staffChangeRequestSchema, "A membership change that grants Admin, Finance or Compliance reviewer and waits for a second administrator: who asked, when and why. Approving it applies exactly this change; a later change to the membership leaves it out of date, and it is no longer listed.");
+derived("StaffMemberChange", shared.staffChangeResultSchema, "A membership change's answer: the membership as it now stands, what happened in plain words, and the waiting request when the change needs a second administrator (the membership is then unchanged).");
+derived("StaffDirectoryMember", shared.staffDirectoryMemberSchema, "A membership in the team directory, with the lenders it may open; an administrator opens every lender and lists none. A viewer who is not an administrator sees only the colleagues who share a lender with them, only the lenders they share, and no one's expiry but their own (expiresAt null).");
+derived("StaffInvitation", shared.staffInvitationSchema, "A pending, accepted or revoked invitation, who sent it and whether it waits for, or has, the second administrator's approval an Admin, Finance or Compliance reviewer invitation needs; the token is shown once, at creation.");
 derived("StaffEvent", shared.staffEventSchema, "One entry of the team's access history.");
-derived("StaffDirectory", shared.staffDirectorySchema, "The team as the caller may see it: members for everyone; lenders, invitations and history for administrators. In the sandbox every list, lenders included, is empty and the message says why.");
+derived("StaffDirectory", shared.staffDirectorySchema, "The team as the caller may see it: members as StaffDirectoryMember describes; lenders, invitations, changes awaiting a second administrator and history for administrators. In the sandbox every list, lenders included, is empty and the message says why.");
 derived("InvitationInput", shared.invitationInputSchema, "An invitation: email address and pilot role.");
-derived("InvitationCreated", shared.invitationCreatedSchema, "The invitation and its one-time acceptance token; no email is sent.");
+derived("InvitationCreated", shared.invitationCreatedSchema, "The invitation, its one-time acceptance token and whether it waits for a second administrator's approval; no email is sent.");
 derived("AcceptInvitationInput", shared.acceptInvitationInputSchema, "The acceptance token from the invitation link.");
 derived("InvitationAccepted", shared.invitationAcceptedSchema, "Confirmation of the new membership and its role.");
 derived("MembershipInput", shared.membershipInputSchema, "A membership change: role, state, the version being changed and the reason.");
@@ -539,9 +563,12 @@ operation("/v1/team/verify", "post", "verifyStaffIdentity", "Message", null, [],
 operation("/v1/team", "get", "getTeam", "StaffDirectory", null, [], "Read the team directory", "Members, lenders, invitations and access history as the caller's role allows. In the sandbox every list is empty.");
 operation("/v1/team/invitations", "post", "inviteStaff", "InvitationCreated", "InvitationInput", [], "Invite a staff member", "Administrator with recent MFA. Replaces any pending invitation for the same address; the token expires in seven days and is never emailed by the service.");
 operation("/v1/team/invitations/{id}/revoke", "post", "revokeInvitation", "Message", null, [pathParam("id")], "Revoke an invitation", "Administrator with recent MFA. A revoked token cannot be accepted; an invitation that is no longer pending is refused (409).");
-operation("/v1/team/members/{id}", "patch", "updateStaffMember", "StaffMember", "MembershipInput", [pathParam("id")], "Change a membership", "Administrator with recent MFA; nobody changes their own membership. Records the reason in the access history.");
+operation("/v1/team/invitations/{id}/approve", "post", "approveInvitation", "Message", null, [pathParam("id")], "Approve an invitation as the second administrator", "Administrator with recent MFA, other than the one who sent it (403); the approval is recorded in the access history. Only a pending Admin, Finance or Compliance reviewer invitation waits for one: any other, or one already approved, is refused (409). The invited person can accept it afterwards.");
+operation("/v1/team/members/{id}", "patch", "updateStaffMember", "StaffMemberChange", "MembershipInput", [pathParam("id")], "Change a membership", "Administrator with recent MFA; nobody changes their own membership. Records the reason in the access history. A change that leaves the membership active as Admin, Finance or Compliance reviewer when it was not (a new role, or a reactivation) is saved as a request for a second administrator: the answer names it (pendingChange), the membership stays as it is until another administrator approves it, and the same request again answers the same waiting request. Every other change takes effect at once.");
+operation("/v1/team/changes/{id}/approve", "post", "approveStaffChange", "StaffMemberChange", null, [pathParam("id")], "Approve a membership change as the second administrator", "Administrator with recent MFA, other than the one who asked and other than the person changed (403). Applies exactly the requested change and records who asked and who approved. A request already approved or declined, or whose membership changed since it was made, is refused (409).");
+operation("/v1/team/changes/{id}/decline", "post", "declineStaffChange", "Message", null, [pathParam("id")], "Decline or withdraw a membership change", "Administrator with recent MFA, other than the person changed (403); the administrator who asked withdraws it the same way. Recorded in the access history; the membership is unchanged. A request already approved or declined is refused (409).");
 operation("/v1/team/members/{id}/lenders", "patch", "updateStaffLenders", "StaffLenderAccess", "StaffLenderAccessInput", [pathParam("id")], "Set a member's lender access", "Administrator with recent MFA. Non-administrators open only the lenders named here; sessions pick the change up on their next request.");
-operation("/v1/team/accept", "post", "acceptInvitation", "InvitationAccepted", "AcceptInvitationInput", [], "Accept an invitation", "The signed-in person's verified email must match the invitation. Creates a 90-day membership.");
+operation("/v1/team/accept", "post", "acceptInvitation", "InvitationAccepted", "AcceptInvitationInput", [], "Accept an invitation", "The signed-in person's verified email must match the invitation. Creates a 90-day membership. An Admin, Finance or Compliance reviewer invitation is refused (403) until a second administrator has approved it.");
 operation("/v1/team/readiness", "get", "getAccessReadiness", "AccessReadiness", null, [], "Read the access readiness checks", "What this host has configured and verified for real staff access, from the request's own checks.");
 operation("/v1/team/readiness/encryption", "post", "verifyEncryption", "EncryptionVerification", null, [], "Verify managed payload encryption", "Administrator with recent MFA. Seals and opens a synthetic payload with the configured key (503 when none is configured).");
 operation("/v1/team/readiness/protect", "post", "protectPayloads", "PayloadProtection", null, [], "Protect stored payloads", "Administrator with recent MFA. Seals one bounded batch of unprotected import rows and recovery payloads; run until none remain (503 when no key is configured).");
@@ -600,15 +627,15 @@ operation("/v1/sources/events/{id}/replay", "post", "replayProviderEvent", "Prov
 described("PaystackTestEvent", obj({ event: str, data: { type: "object", additionalProperties: {}, description: "The event's payload as Paystack sent it." } }), "A Paystack test event exactly as Paystack signed it. The signature covers these bytes, so the body is authenticated before it is parsed. charge.success and the two direct-debit authorisation events are recorded; any other signed event is acknowledged and recorded as ignored.");
 described("PaystackDeliveryReceipt", obj({ accepted: { type: "boolean", const: true }, duplicate: bool }), "The acknowledgement Paystack receives: the signed event is saved in the mapped lender's inbox, or recognised as a repeat delivery of one already saved.");
 const connectionIdParam = { name: "connectionId", in: "path", required: true, schema: { type: "string", pattern: "^[a-f0-9]{64}$" }, description: "The opaque ID an operator mapped to one synthetic lender in VALOPAY_PAYSTACK_CONNECTIONS; it alone selects the lender, and it is not a credential." };
-const paystackSignature = { name: "x-paystack-signature", in: "header", required: true, schema: { type: "string", pattern: "^[a-fA-F0-9]{128}$" }, description: "HMAC-SHA512 of the exact request bytes under the configured test secret key, in hexadecimal." };
-operation("/v1/providers/paystack/{connectionId}/events", "post", "receivePaystackTestEvent", "PaystackDeliveryReceipt", "PaystackTestEvent", [connectionIdParam, paystackSignature], "Receive a signed Paystack test event", "The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key, and at most 120 deliveries a minute per client address.");
+const paystackSignature = { name: "x-paystack-signature", in: "header", required: true, schema: { type: "string", pattern: "^[a-fA-F0-9]{128}$" }, description: "HMAC-SHA512, under the configured test secret key and in hexadecimal, of the body's exact bytes: the JSON as sent, or, for a body sent with Content-Encoding gzip, deflate or br, the JSON bytes after decompression (not the compressed bytes); any other encoding is refused (415)." };
+operation("/v1/providers/paystack/{connectionId}/events", "post", "receivePaystackTestEvent", "PaystackDeliveryReceipt", "PaystackTestEvent", [connectionIdParam, paystackSignature], "Receive a signed Paystack test event", "The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the body's bytes, decompressed first when its Content-Encoding is gzip, deflate or br, before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key. At most 120 deliveries a minute per client network and, once signed, 60 a minute per connection. A repeat of a saved event is acknowledged without an audit entry, and its delivery count is written at most once a minute.");
 Object.assign(paths["/v1/providers/paystack/{connectionId}/events"].post.responses, {
   "400": { description: "The body is not JSON bytes, the connection ID is malformed, or the signed event is inconsistent or from live mode" },
-  "401": { description: "The signature does not match the exact bytes under the configured test key; nothing was locked, read or saved" },
+  "401": { description: "The signature does not match the body's bytes (decompressed first, when the body is compressed) under the configured test key; nothing was locked, read or saved" },
   "403": { description: "With the lender locked, the mapping names another workspace, or the lender is not a synthetic lender in sandbox or observation mode with its kill switch on" },
   "404": { description: "No lender is mapped to this connection ID, or, when the lender cannot be locked, it is not in the mapped workspace (removed, or the mapping names the wrong lender or workspace); correct the connection mapping, since delivering again will not help" },
   "413": { description: "The body is larger than 256 KiB" },
-  "429": { description: "More than 120 deliveries a minute from this client address; retry after the Retry-After seconds" },
+  "429": { description: "More than 120 deliveries a minute from this client network, or more than 60 signed deliveries a minute to this connection; retry after the Retry-After seconds" },
   "503": { description: "The ingress is off or misconfigured, or the mapped lender is in its workspace but busy; Paystack delivers again" },
 });
 
@@ -626,8 +653,8 @@ operation("/v1/work/notifications/read", "post", "readNotification", "WorkReceip
 operation("/v1/work/handovers/acknowledge", "post", "acknowledgeHandover", "WorkReceipt", "WorkReceiptInput", [merchant, requiredKey], "Acknowledge a handover", "Records that the assignee took the case over; a stale version is refused.");
 
 // Retention and lifecycle (administrators only).
-derived("LifecycleView", shared.lifecycleViewSchema, "The lender's retention policy, holds, bounded inventory of what the policy would touch, and saved retention runs.");
-derived("LifecycleRunView", shared.lifecycleRunViewSchema, "One retention run: its reviewed manifest, approval state and per-item receipts.");
+derived("LifecycleView", shared.lifecycleViewSchema, "The lender's retention policy, the shortest periods it may set (minimumDays) and whether a second administrator approves runs (secondApprover), holds, bounded inventory of what the policy would touch, and saved retention runs.");
+derived("LifecycleRunView", shared.lifecycleRunViewSchema, "One retention run: its reviewed manifest, who prepared it, approval state and per-item receipts.");
 derived("RetentionPolicyInput", shared.retentionPolicyInputSchema, "The retention periods per kind, with the version being changed and the reason.");
 derived("RetentionHoldInput", shared.retentionHoldInputSchema, "A hold on one item, or its release, with the reason.");
 derived("LifecyclePreviewInput", shared.lifecyclePreviewInputSchema, "Which kinds to preview and the reason for the run.");
@@ -635,33 +662,36 @@ derived("LifecycleApproveInput", shared.lifecycleApproveInputSchema, "Approval o
 derived("LifecycleExecuteInput", shared.lifecycleExecuteInputSchema, "Execution of an approved run, quoting its manifest digest, in bounded batches.");
 operation("/v1/lifecycle", "get", "getLifecycle", "LifecycleView", null, [merchant, journalOffset], "Read retention controls", "Administrators only (403). Policy, holds, inventory and runs for the lender.");
 operation("/v1/lifecycle/runs/{id}", "get", "getLifecycleRun", "LifecycleRunView", null, [pathParam("id"), merchant], "Read a retention run", "Administrators only. The run's manifest and receipts.");
-operation("/v1/lifecycle/policy", "post", "saveRetentionPolicy", "LifecycleView", "RetentionPolicyInput", [merchant, requiredKey], "Change the retention policy", "Administrators only. Keeps every previous policy version with its reason.");
+operation("/v1/lifecycle/policy", "post", "saveRetentionPolicy", "LifecycleView", "RetentionPolicyInput", [merchant, requiredKey], "Change the retention policy", "Administrators only. Keeps every previous policy version with its reason. A period shorter than the workspace's minimum (minimumDays: 30 days in the sandbox; in a staff pilot, six years for original source files and export files and a year for recovery payloads) is refused (400).");
 operation("/v1/lifecycle/holds", "post", "setRetentionHold", "LifecycleView", "RetentionHoldInput", [merchant, requiredKey], "Place or release a hold", "Administrators only. A held item is never deleted by a run.");
 operation("/v1/lifecycle/runs", "post", "previewLifecycleRun", "LifecycleRunView", "LifecyclePreviewInput", [merchant, requiredKey], "Preview a retention run", "Administrators only. Records the exact manifest of what would be deleted; nothing is deleted. With nothing old enough to delete, the preview is refused (400).");
-operation("/v1/lifecycle/runs/{id}/approve", "post", "approveLifecycleRun", "LifecycleRunView", "LifecycleApproveInput", [pathParam("id"), merchant, requiredKey], "Approve a retention run", "Administrators only. The manifest digest must match the preview; a changed inventory must be previewed again.");
-operation("/v1/lifecycle/runs/{id}/execute", "post", "executeLifecycleRun", "LifecycleRunView", "LifecycleExecuteInput", [pathParam("id"), merchant, requiredKey], "Execute an approved run", "Administrators only. Deletes in bounded batches with a receipt per item; blocked and failed items are reported, never skipped silently.");
+operation("/v1/lifecycle/runs/{id}/approve", "post", "approveLifecycleRun", "LifecycleRunView", "LifecycleApproveInput", [pathParam("id"), merchant, requiredKey], "Approve a retention run", "Administrators only; in a staff pilot, an administrator other than the one who prepared the preview (403). The manifest digest must match the preview; a changed inventory must be previewed again.");
+operation("/v1/lifecycle/runs/{id}/execute", "post", "executeLifecycleRun", "LifecycleRunView", "LifecycleExecuteInput", [pathParam("id"), merchant, requiredKey], "Execute an approved run", "Administrators only. Removes as many of the run's sources as fit in a two-second budget under the lender lock, each checked again just before it is deleted and given a receipt. A blocked source, or a deletion that cannot be confirmed, stops the run with its reason (status attention) and the sources after it wait; nothing is skipped silently. Send it again to continue until the status is completed: sources not yet attempted go first.");
 
 // ---- The refusals and failures each operation can answer ----
-// Listed from what its route does: the /api/v1 middleware (the origin rule and the per-address
-// request limit), the body parser, the workspace transaction and its database limits, the lender
+// Listed from what its route does: the /api/v1 middleware (the origin rule and the request
+// limits), the body parser, the workspace transaction and its database limits, the lender
 // scope, the journal and the route's own refusals. Every one carries ErrorBody (lib/error-handler.ts
 // and the app's own refusals) except readiness's 503 and the identity provider's re-verification.
 const failures = {
-  400: "Refused: a parameter, header or body field failed validation (details names each one), the body is not valid JSON or holds a NUL character, or a rule refused the request in its own words. Nothing was saved.",
+  400: "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
   401: "Sign-in required: a staff host answers only a signed-in pilot staff session.",
   403: "Refused: another origin, or the caller's role, membership, lender access, recent MFA or a readiness gate does not allow it.",
-  404: "Not found in the caller's workspace: the lender, or what the path names.",
+  404: "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
   409: "Conflict: what the request names changed since it was read, its Idempotency-Key belongs to another request or its journal entry is cancelled, or the change conflicts with saved records. Nothing was saved.",
   410: "Gone: a request with this Idempotency-Key already completed, and the lender's retention policy has since removed its stored result, so it cannot run again. Its entry in Operations remains.",
-  413: "The body is larger than 2 MB.",
-  415: "The body's character set or encoding is not supported; send UTF-8 JSON.",
-  429: "Too many requests: more than 300 a minute from this address, or too many new sandboxes from it (try again in an hour).",
-  500: "The service failed. With committed false nothing was saved; otherwise the outcome is unconfirmed: check Operations, or repeat the same request with its Idempotency-Key.",
+  413: "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+  415: "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+  429: "Too many requests: more than 300 a minute for this client (a signed-in person, a sandbox this server has served, or otherwise the client's network: an IPv4 address or an IPv6 /64), more than 1,200 a minute from its network, or too many new sandboxes from its network or on this server (try again in an hour).",
+  500: "The service failed. With committed false nothing was saved (for a request with an Idempotency-Key, nothing sent with the key); with operation completed a request with the key was saved; otherwise the outcome is unconfirmed: check Operations, or repeat the same request with its Idempotency-Key.",
   502: "Private storage answered with an error; nothing was sent.",
-  503: "Busy or unavailable: a database limit turned the request away (a busy lender or workspace, a lock or statement past its limit, a lost or unavailable connection), or a service it needs, such as the key service or private storage, is unavailable or not configured. committed false says nothing was saved.",
+  503: "Busy or unavailable: a database limit turned the request away (a busy lender or workspace, a lock or statement past its limit, a lost or unavailable connection), the same request is still running (operation running), or a service it needs is unavailable or not configured: the key service, or private storage or the identity provider out of reach. committed false says nothing was saved (for a request with an Idempotency-Key, nothing sent with the key); operation completed says a request with the key was saved.",
   504: "Private storage did not answer in time; nothing was sent.",
 };
 const retryAfter = (description) => ({ "Retry-After": { description, schema: { type: "integer", minimum: 1 } } });
+/** The journal entry a keyed request is recorded under, on every answer once the entry exists (lib/operation-recovery.ts); each answer refers to the one component. */
+const headers = { "X-Valopay-Operation": { description: "The id of this request's entry in the operations journal: GET /v1/operations lists it, and POST /v1/operations/{id}/retry and /cancel take it. Sent on every answer, success, refusal or failure, to a request whose Idempotency-Key the journal records, once the entry exists; absent without a key, when the key itself is refused, and for a demo role switch, which the journal does not record.", schema: { type: "string" } } };
+const operationHeader = { "X-Valopay-Operation": { $ref: "#/components/headers/X-Valopay-Operation" } };
 const outsideWorkspace = new Set(["GET /healthz", "GET /readyz", "GET /v1/openapi.json", "POST /v1/webhooks/{provider}", "POST /v1/team/verify", "POST /v1/team/accept", "POST /v1/providers/paystack/{connectionId}/events"]);
 /** Statuses a route answers beyond what its traits imply. */
 const ownStatuses = {
@@ -673,6 +703,8 @@ const ownStatuses = {
   "GET /v1/exports/{id}/download": [409, 410, 502, 503, 504],
   "POST /v1/exports/{id}/retry": [410],
   "POST /v1/providers/paystack/{connectionId}/events": [400, 401, 403, 404, 413, 429, 503],
+  "GET /healthz": [429],
+  "GET /readyz": [429],
 };
 const exportQueue = "the lender already has ten exports waiting or running (Retry-After 30, about the time one takes to finish)";
 const expiredRequest = "Gone: the stored request expired under the lender's retention policy and cannot run again.";
@@ -680,13 +712,16 @@ const expiredRequest = "Gone: the stored request expired under the lender's rete
 const ownDescriptions = {
   "POST /v1/operations/{id}/retry": { 410: `${expiredRequest.replace(/\.$/, "")}; or the request it repeats is gone itself, as an export whose file retention deleted is.`, 429: `${failures[429].replace(/\.$/, "")}, or, repeating an export, ${exportQueue}.` },
   "POST /v1/operations/{id}/cancel": { 410: expiredRequest },
-  "POST /v1/exports": { 429: `Too many requests: ${exportQueue}, more than 300 requests came from this address in a minute, or too many new sandboxes came from it (try again in an hour).` },
+  "POST /v1/exports": { 429: `Too many requests: ${exportQueue}, more than 300 requests came from this client or 1,200 from its network in a minute, or too many new sandboxes came from its network or were started on this server (try again in an hour).` },
+  "GET /healthz": { 429: "More than 120 health checks a minute from this client network; retry after the Retry-After seconds." },
+  "GET /readyz": { 429: "More than 120 health checks a minute from this client network; retry after the Retry-After seconds." },
   "GET /v1/exports/{id}/download": { 410: "Gone: the lender's retention policy removed this export's file. Its checksum and deletion receipt are kept; start a new export if current evidence is needed." },
   "POST /v1/exports/{id}/retry": { 410: "Gone: the lender's retention policy removed this export's file, so it cannot be generated again under the same identity (start a new export); or a request with this Idempotency-Key already completed and retention has since removed its stored result." },
 };
 /** What a 429's Retry-After says: the request limit's minute, the new-sandbox limit's hour and, where the export queue applies, about the time a queued export takes. */
 function retryAfter429(name) {
   if (name === "POST /v1/providers/paystack/{connectionId}/events") return retryAfter("Seconds to wait: 60, the delivery limit's window.");
+  if (name === "GET /healthz" || name === "GET /readyz") return retryAfter("Seconds to wait: 60, the health limit's window.");
   const queue = name === "POST /v1/exports" || name === "POST /v1/operations/{id}/retry" ? ", and 30 when the lender's export queue is full" : "";
   return retryAfter(`Seconds to wait: 60 after the request limit, 3600 after the new-sandbox limit${queue}.`);
 }
@@ -707,10 +742,16 @@ function listErrorAnswers(path, method, op) {
     if (name === "GET /readyz" && status === 503) continue; // readiness answers its own body
     answer.content = { "application/json": { schema: name === "POST /v1/team/verify" && status === 403 ? { anyOf: [ref("ErrorBody"), ref("ReverificationRequired")] } : ref("ErrorBody") } };
     if (status === 429) answer.headers = retryAfter429(name);
-    if (status === 503) answer.headers = retryAfter("Seconds to wait before trying again: sent when a database limit turned the request away; absent when a service it needs is unavailable or not configured.");
+    if (status === 503) answer.headers = retryAfter("Seconds to wait before trying again: sent when a database limit turned the request away, the same request is still running, or private storage or the identity provider could not be reached or said it is unavailable; absent when a service it needs is not configured, or the key service cannot open protected data.");
   }
+  // A journaled request names its journal entry on every answer; a retry re-enters the entry it names.
+  if (params.some((item) => journaled.has(item)) || name === "POST /v1/operations/{id}/retry") for (const answer of Object.values(op.responses)) answer.headers = { ...(answer.headers ?? {}), ...operationHeader };
   op.responses = Object.fromEntries(Object.entries(op.responses).sort(([a], [b]) => Number(a) - Number(b)));
 }
 for (const [path, methods] of Object.entries(paths)) for (const [method, op] of Object.entries(methods)) listErrorAnswers(path, method, op);
 
-fs.writeFileSync("lib/api-spec/openapi.json",JSON.stringify({openapi:"3.1.0",info:{title:"Valo Pay sandbox API",version:"1.1.0",description:"Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules."},servers:[{url:"/api"}],paths,components:{schemas}},null,2));
+// How a caller is identified: an anonymous sandbox by its cookie, which the service sets on the first visit and renews on every answer; a staff host by a signed-in session instead.
+const securitySchemes = {
+  sandboxCookie: { type: "apiKey", in: "cookie", name: "__Host-valopay_sandbox", description: "The anonymous sandbox's cookie: a 32-byte random token in hexadecimal that the service sets on the first visit (GET /v1/workspace) and renews on every answer, HttpOnly, SameSite=Lax and lasting 30 days from the last visit. Behind TLS it is __Host-valopay_sandbox (Secure, Path=/, no Domain); on a plain-HTTP local run it is valopay_sandbox. A missing or malformed token starts a new sandbox; two different tokens are refused (400). The sandbox is found by the token's digest, never by the token, which is never stored or logged. A staff host identifies a signed-in session instead." },
+};
+fs.writeFileSync("lib/api-spec/openapi.json",JSON.stringify({openapi:"3.1.0",info:{title:"Valo Pay sandbox API",version:"1.1.0",description:"Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules."},servers:[{url:"/api"}],paths,components:{schemas,headers,securitySchemes}},null,2));

@@ -11,9 +11,10 @@ const recordRoles: Record<string, string[]> = {
   policies: ['Admin'], templates: ['Admin'], experiments: ['Admin'], evidence: ['Admin'], cutovers: ['Admin'],
   commercial: ['Admin', 'Finance'], costs: ['Admin', 'Finance'], 'settlement-batches': ['Admin', 'Finance'],
   exceptions: [...operators, 'Compliance reviewer'], reviews: [...operators, 'Compliance reviewer'],
+  calendar: ['Admin', 'Operations'],
 };
 const actionRoles: Record<string, string[]> = {
-  kill_switch: ['Admin'], update_settings: ['Admin'], import_records: operators,
+  kill_switch: ['Admin'], approve_kill_switch_off: ['Admin'], update_settings: ['Admin'], import_records: operators,
   mandate_suspend: ['Admin', 'Operations'], mandate_cancel: ['Admin', 'Operations'], mandate_reinstate: ['Admin', 'Operations'],
   mandate_reissue: ['Admin', 'Operations'], activation_reminder: ['Admin', 'Operations'],
   notify_policy_change: ['Admin', 'Operations'], apply_policy_version: ['Admin', 'Operations'],
@@ -23,7 +24,7 @@ const actionRoles: Record<string, string[]> = {
   approve_template: ['Compliance reviewer'], reject_template: ['Compliance reviewer'],
   run_reconciliation: operators, daily_close: operators,
   confirm_allocation: ['Admin', 'Finance'], reject_allocation: ['Admin', 'Finance'], manual_allocate: ['Admin', 'Finance'],
-  review_allocation: ['Admin', 'Finance'], record_refund: ['Admin', 'Finance'], issue_invoice: ['Admin', 'Finance'],
+  review_allocation: ['Admin', 'Finance'], record_refund: ['Admin', 'Finance'], release_dispute: ['Admin', 'Finance'], issue_invoice: ['Admin', 'Finance'],
   edit_batch: ['Admin', 'Finance'], resolve_exception: operators,
   simulate_failure: ['Admin', 'Operations'], hand_back: ['Admin', 'Operations'],
   backtest_policy: [...operators, 'Compliance reviewer'], preregister_experiment: ['Admin'],
@@ -45,6 +46,8 @@ export function permissionReason(workspace: ActingWorkspace, { action, kind, rec
   // One refund is recorded per payment, even one that returned only part of it, and reversed money already went back.
   if (action === 'record_refund' && normaliseReversalStatus(record?.data?.reversalStatus) === 'reversed') return 'The provider reversed this payment, so its money already went back.';
   if (action === 'record_refund' && normaliseRefundStatus(record?.data?.refundStatus) === 'refunded') return 'A refund is already recorded for this payment.';
+  // Confirming a pay-by-bank payment whose outcome stayed unknown records a receipt, so Finance records it.
+  if (action === 'resolve_exception' && record?.data?.linkedKind === 'connected-intents' && !['Admin', 'Finance'].includes(workspace.role)) return 'Requires Admin or Finance: the outcome of a pay-by-bank payment is Finance’s to record.';
   if (!action && ['templates', 'policies'].includes(kind || '') && record && !['draft', 'rejected'].includes(record.status || '')) {
     return 'This submitted or approved version cannot be edited. Create a draft version to make changes.';
   }

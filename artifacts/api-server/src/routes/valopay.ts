@@ -3,54 +3,73 @@ import { listReconciliation, listCloseHistory, getCloseDetail, loadReportsView }
 import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
 import { z } from "zod";
-import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, roles, fail, appendAudit, verifyAudit, digest, listMerchants, findIdempotency, saveIdempotency, changeRole, type StoreContext } from "../lib/valopay-store";
+import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, auditObject, roles, fail, appendAudit, auditOverview, verifyAuditTrail, listMerchants, findIdempotency, findStoredAnswer, saveIdempotency, receiptOf, changeRole, type StoreContext } from "../lib/valopay-store";
 import { requestFingerprint } from "../lib/digests";
 import { amendDueItem, customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction, type TypedRecord } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
 import { bindCloseReviewBasis } from '../domain/close-review';
 import { assertNoDirectImportedCorrection } from '../domain/import-corrections';
-import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, isCloseTime, recordKinds } from "@workspace/valopay-schema";
+import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, instantInputSchema, isCloseTime, pathId, recordKinds } from "@workspace/valopay-schema";
 import type { DomainState, ValopayRecord } from "../domain/types";
 import { getGates } from "../lib/valopay-readiness";
 import { importCsv } from "../lib/valopay-import";
 import { exportDescriptorForRecord, exportKinds, readExport } from "../lib/valopay-exports";
-import { exportJobView, publicExportRecord, queueExport, retryExport } from '../lib/export-jobs';
-import { assertRecordVersion, assertSettingsVersion } from "../lib/edit-versions";
+import { assertExportPermitted, exportJobView, publicExportRecord, queueExport, retryExport } from '../lib/export-jobs';
+import { assertRecordVersion, assertSettingsVersion, mergeData } from "../lib/edit-versions";
 import { schedulerStatus } from "../lib/close-scheduler";
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../lib/valopay-close-views";
 import { listQueue } from '../lib/valopay-store';
 import { completeOperation, viewerScope } from '../lib/valopay-store';
 import { contractAnswer, lenderQuery, optionalKey, replayedAnswer } from '../lib/contract';
+import { routerOptions } from './router-options';
 
-const router:IRouter=Router();
+const router:IRouter=Router(routerOptions);
 const kinds=new Set<string>(recordKinds);
-function safeKind(value:unknown):string { const kind=z.string().parse(value);if(!kinds.has(kind))fail("Unknown resource.",404);return kind; }
+/** A list's query: an incremental sync's watermark is an RFC 3339 instant with Z or an offset, refused (400, naming updatedSince) otherwise. */
+const listRecordsQuery=S.ListRecordsQueryParams.extend({updatedSince:instantInputSchema.optional()});
+function safeKind(value:unknown):string { const kind=z.string().parse(value,{path:["kind"]});if(!kinds.has(kind))fail("Unknown resource.",404);return kind; }
 /**
- * One lender's state for a route: read under a share lock, or written under the
- * exclusive lock with an audit entry and, when the request carries an
- * Idempotency-Key, a receipt its repeat is answered from. A fresh answer is
+ * What a write's audit entry takes from its request, as the route's schema
+ * parsed it: the action a route runs by name, the record its body names and
+ * the reason. A route passes only fields its schema has.
+ */
+export type AuditInput = { action?: string; recordId?: string; reason?: string };
+/**
+ * One lender's state for a route: read from the read's snapshot, or written
+ * under the exclusive lock with an audit entry and, when the request carries
+ * an Idempotency-Key, a receipt its repeat is answered from. A fresh answer is
  * checked against the route's response schema before COMMIT, so an answer that
  * does not match its contract is a 500 that saved nothing. A replayed receipt
  * was saved with its request, so it is never answered as saving nothing: it is
- * given without fields the contract no longer lists, or as the general
- * unconfirmed 500 (replayedAnswer, lib/contract.ts).
+ * given without fields the contract no longer lists, or as a 500 that says the
+ * request was saved (replayedAnswer, lib/contract.ts). A receipt is kept where
+ * receiptOf says, and a read is never fingerprinted. A repeat is answered from
+ * its receipt before the lender is loaded, so it neither loads nor waits for
+ * the lender. `wholeCloses` keeps that many of the newest closes whole in the
+ * load (loadState).
+ *
+ * A write's audit entry takes nothing from the raw body: its action is the
+ * route's (or the action the route parsed), its object comes from the route or
+ * the record the write changed (auditObject), and its summary is the reason
+ * the route's own schema carries, passed in `audit`, or the default.
  */
-export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>unknown,mutating:boolean,responseSchema:S):Promise<z.output<S>>{
+export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>unknown,mutating:boolean,responseSchema:S,audit:AuditInput={},options:{wholeCloses?:number}={}):Promise<z.output<S>>{
  const {merchantId}=lenderQuery(req);
- // A write's key is checked by name before anything runs; a read ignores one.
+ // A write's key is checked by name before anything runs; a read ignores one, and nothing of a read is fingerprinted.
  const key=mutating?optionalKey(req):undefined;
+ const setRole=req.path==="/v1/actions"&&req.body?.action==="set_role";
+ // Where a keyed write's answer is kept for its repeats; a demo-role switch is never journaled, so it keeps its own (receiptOf).
+ const receipt=key?receiptOf(req,merchantId,key,setRole?"persona":"workspace"):undefined;
  return inWorkspace(req,res,async ctx=>{
-  // A read takes a share lock so it never queues behind other reads; a mutation takes the exclusive lock.
-  const state=await loadState(ctx,merchantId,mutating?"update":"share");
   // A demo-role switch changes ctx.actor itself. Its unchanged retry must keep
   // the original request identity; all other actions stay persona-bound.
-  const replayActor=req.path==="/v1/actions"&&req.body?.action==="set_role"?"Sandbox role switch":ctx.actor;
-  const fingerprint=requestFingerprint({path:req.path,method:req.method,body:req.body,actor:replayActor});
-  const idempotencyKey=key?digest(`${merchantId}:${key}`):undefined;
-  if(idempotencyKey){
-    const found=await findIdempotency(ctx,idempotencyKey);
-    if(found){if(found.request_hash!==fingerprint)fail("This idempotency key was used with different input.",409);const receipt=replayedAnswer(req,responseSchema,found.response);await completeOperation(ctx,receipt);return receipt;}
-  }
+  const fingerprint=receipt?requestFingerprint({path:req.path,method:req.method,body:req.body,actor:setRole?"Sandbox role switch":ctx.actor}):"";
+  const replay=async(found:{request_hash:string;response:unknown})=>{if(found.request_hash!==fingerprint)fail("This idempotency key was used with different input.",409);const saved=replayedAnswer(req,responseSchema,found.response);await completeOperation(ctx,saved);return saved;};
+  if(receipt){const found=await findStoredAnswer(ctx,merchantId,receipt.id,receipt.earlier);if(found)return replay(found);}
+  // A read loads from its snapshot and takes no lock; a mutation takes the exclusive lock (and holds its journal entry first).
+  const state=await loadState(ctx,merchantId,mutating?"update":"share",options);
+  // Again once the entry is held: an attempt with the key that finished after the first look is visible only now.
+  if(receipt){const found=await findIdempotency(ctx,receipt.id,receipt.earlier);if(found)return replay(found);}
    const rawResult=await operation(state,ctx);
    // Versions advance before the response is built, so it carries them; the audit entry commits to exactly what changed.
    let changes:ReturnType<typeof settleChanges>|undefined;
@@ -58,9 +77,11 @@ export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response
    // Validate before committing: an invalid response must not leave durable writes.
    const result=contractAnswer(responseSchema,rawResult);
   if(mutating){
-   appendAudit(state,ctx,req.path.includes("/actions")?String(req.body.action):`${req.method.toLowerCase()}.${req.path.split("/").slice(2).join(".")}`,req.body.recordId||String(req.params.id||"workspace"),req.body.reason||"Synthetic workspace operation",changes);
+   // A domain action may add what it established to the reason, such as the payer Finance identified: server-built text in its answer.
+   const reason=audit.reason?.trim()||"Synthetic workspace operation",auditNote=audit.action===undefined?undefined:(rawResult as {data?:{auditNote?:unknown}}|undefined)?.data?.auditNote;
+   appendAudit(state,ctx,audit.action??`${req.method.toLowerCase()}.${req.path.split("/").slice(2).join(".")}`,auditObject(ctx,state,{path:req.params.id,body:audit.recordId,answer:rawResult},"workspace"),typeof auditNote==="string"&&auditNote?`${reason}${/[.!?]$/.test(reason)?"":"."} ${auditNote}`:reason,changes);
     await saveState(ctx,state);
-    if(idempotencyKey)await saveIdempotency(ctx,idempotencyKey,fingerprint,result);
+    if(receipt)await saveIdempotency(ctx,receipt.id,fingerprint,result);
   }
   return result;
  },!mutating?"read":req.path==="/v1/actions"&&req.body?.action==="set_role"?"persona":"write");
@@ -72,11 +93,12 @@ router.get("/v1/workspace",async(req,res)=>{
  }),"read"));
 });
 router.get("/v1/overview",async(req,res)=>{
- res.json(await withState(req,res,(state,ctx)=>buildConsoleOverview(state,ctx.now,verifyAudit(state),schedulerStatus()),false,S.GetOverviewResponse));
+ // The audit chain is not in the loaded state: the store checks the entries since the last verified one and reads the eight latest.
+ res.json(await withState(req,res,async(state,ctx)=>{const audit=await auditOverview(ctx,state);return buildConsoleOverview({...state,records:[...state.records,...audit.recent]},ctx.now,audit.verification,schedulerStatus());},false,S.GetOverviewResponse));
 });
 router.get("/v1/records/:kind",async(req,res)=>{
  lenderQuery(req);
- const kind=safeKind(req.params.kind),query=S.ListRecordsQueryParams.parse(req.query);
+ const kind=safeKind(req.params.kind),query=listRecordsQuery.parse(req.query);
  res.json(await inWorkspace(req,res,async ctx=>{
   const page=await listRecords(ctx,query.merchantId,kind,query);
   // Never leak internal storage location through collection APIs.
@@ -109,7 +131,7 @@ router.patch("/v1/records/:kind/:id",async(req,res)=>{
   if (kind === 'exceptions' && old.data.case?.assignee && old.data.case.assignee !== ctx.actor && ctx.role !== 'Admin') fail('Ask the case assignee or an administrator to make this change.',403);
   assertRecordVersion(old,body.expectedUpdatedAt);
   const {expectedUpdatedAt: _version,...changes}=body;
-  const input={...old,...changes,data:{...old.data,...body.data,synthetic:true} as Record<string,any>,updatedAt:ctx.now};
+  const input={...old,...changes,data:{...mergeData(old.data,body.data),synthetic:true} as Record<string,any>,updatedAt:ctx.now};
   assertNoDirectImportedCorrection(old,input);
   // An instalment's balance is rebuilt from its allocations and its status follows it.
   if(kind==="due-items")return amendDueItem(state,ctx,old as TypedRecord<"due-items">,input as TypedRecord<"due-items">);
@@ -131,10 +153,11 @@ router.post("/v1/actions",async(req,res)=>{
     await changeRole(ctx,role);
    return {message:`Demo role changed to ${role}. This only affects the sample workspace.`,data:{role}};
   }
-  if(body.action==="verify_audit")return {message:"Audit log check complete.",data:verifyAudit(state)};
+  // The whole chain, from its first entry, as the lender's database holds it.
+  if(body.action==="verify_audit")return {message:"Audit log check complete.",data:await verifyAuditTrail(ctx,state)};
   if(body.action==="mark_pack_used")fail("Synthetic packs cannot be recorded as evidence used in a real case.",403);
   return executeAction(state,ctx,body);
-  },true,S.PerformActionResponse);
+  },true,S.PerformActionResponse,{action:body.action,recordId:body.recordId,reason:body.reason});
  res.json(result);
 });
 router.post("/v1/imports",async(req,res)=>{
@@ -213,12 +236,13 @@ router.post("/v1/exports",async(req,res)=>{
  req.log.info({event:"export.queued",kind:body.kind,format:body.format,exportId:result.id},"Export queued durably");
  res.json(result);
 });
-/** An export of the request's lender, read in the tenant transaction and handed to `use` there, with the transaction clock. */
-async function authorisedExport<T>(req:Request,res:Response,use:(record:ValopayRecord,now:string)=>T){
- const {merchantId}=lenderQuery(req);
+/** An export of the request's lender, read in the tenant transaction and handed to `use` there, with the transaction clock. A download also needs the role its kind requires (export_sensitive). */
+async function authorisedExport<T>(req:Request,res:Response,use:(record:ValopayRecord,now:string)=>T,download=false){
+ const {merchantId}=lenderQuery(req),id=pathId(req.params.id);
  return inWorkspace(req,res,async ctx=>{
-  const page=await listRecords(ctx,merchantId,'exports',{id:String(req.params.id),limit:1});
+  const page=await listRecords(ctx,merchantId,'exports',{id,limit:1});
   if(!page.items[0])fail('Export not found in this lender.',404);
+  if(download)assertExportPermitted(ctx.role,page.items[0].data.kind);
   // The transaction clock decides whether the export is stalled or its lease expired.
   return use(page.items[0],ctx.now);
  },'read');
@@ -228,8 +252,9 @@ router.get('/v1/exports/:id',async(req,res)=>{
  res.json(await authorisedExport(req,res,(record,now)=>contractAnswer(S.GetExportJobResponse,exportJobView(record,now))));
 });
 router.post('/v1/exports/:id/retry',async(req,res)=>{
+ const id=pathId(req.params.id);
  req.body={};
- res.json(await withState(req,res,(state,ctx)=>retryExport(state,ctx,String(req.params.id)),true,S.RetryExportJobResponse));
+ res.json(await withState(req,res,(state,ctx)=>retryExport(state,ctx,id),true,S.RetryExportJobResponse));
 });
 router.get("/v1/exports/:id/download",async(req,res)=>{
  const cancellation=new AbortController();
@@ -239,7 +264,7 @@ router.get("/v1/exports/:id/download",async(req,res)=>{
  res.once("close",close);
  try{
  // The authorised metadata is read inside the transaction; the object-storage read happens after it ends, so no merchant lock is held across the download.
- const descriptor=await authorisedExport(req,res,record=>exportDescriptorForRecord(record));
+ const descriptor=await authorisedExport(req,res,record=>exportDescriptorForRecord(record),true);
  if(cancellation.signal.aborted)return;
  const result=await readExport(descriptor,cancellation.signal);
  if(cancellation.signal.aborted)return;

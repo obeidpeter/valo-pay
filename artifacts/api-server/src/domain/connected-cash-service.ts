@@ -1,3 +1,4 @@
+import { watMonth } from "./calendar";
 import { makeRecord, touch } from "./records";
 import type {
   ActionResult,
@@ -270,7 +271,8 @@ function sample(state: DomainState, now: string) {
     ],
     source: "synthetic",
   };
-  const period = now.slice(0, 7);
+  // The tax period is the West Africa Time month: at 00:30 WAT on the 1st, UTC still says the month before.
+  const period = watMonth(now);
   const vatInvoices: VatInvoiceEvidence[] = [
     {
       ...scope,

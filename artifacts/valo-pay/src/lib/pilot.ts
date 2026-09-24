@@ -6,7 +6,7 @@ import { answerProblem, INCOMPLETE_CONFIRMATION, readAnswer, UNREADABLE_ANSWER }
 import {
   encryptionVerificationSchema, importCorrectionViewSchema, invitationCreatedSchema, lifecycleRunViewSchema, lifecycleViewSchema, merchantSchema,
   messageSchema, operationReplaySchema, payloadProtectionSchema, paystackFixtureResultSchema, providerEventViewSchema, staffLenderAccessSchema,
-  staffMemberSchema, valopayRecordSchema, workReceiptSchema,
+  staffChangeResultSchema, valopayRecordSchema, workReceiptSchema,
 } from "@workspace/valopay-schema";
 
 /**
@@ -79,8 +79,10 @@ const receipts: Array<{ path: RegExp; schema: ZodTypeAny; matches?: (answer: Rec
   { path: /^\/lifecycle\/runs(?:\/[^/]+\/(?:approve|execute))?$/, schema: lifecycleRunViewSchema, matches: (answer, _input, merchantId) => answer.merchantId === merchantId },
   { path: /^\/lifecycle\/(?:policy|holds)$/, schema: lifecycleViewSchema, matches: (answer, _input, merchantId) => answer.merchantId === merchantId },
   { path: /^\/team\/invitations$/, schema: invitationCreatedSchema },
-  { path: /^\/team\/invitations\/[^/]+\/revoke$/, schema: messageSchema },
-  { path: /^\/team\/members\/[^/]+$/, schema: staffMemberSchema },
+  { path: /^\/team\/invitations\/[^/]+\/(?:revoke|approve)$/, schema: messageSchema },
+  { path: /^\/team\/members\/[^/]+$/, schema: staffChangeResultSchema },
+  { path: /^\/team\/changes\/[^/]+\/approve$/, schema: staffChangeResultSchema },
+  { path: /^\/team\/changes\/[^/]+\/decline$/, schema: messageSchema },
   { path: /^\/team\/members\/[^/]+\/lenders$/, schema: staffLenderAccessSchema },
   { path: /^\/team\/readiness\/encryption$/, schema: encryptionVerificationSchema },
   { path: /^\/team\/readiness\/protect$/, schema: payloadProtectionSchema },

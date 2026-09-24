@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { presentationSamples } from '../src/lib/presentation';
+import { presentationSamples } from '../src/lib/presenter-brief';
 
 test.beforeEach(async ({ request }) => { await request.post('/__test/reset'); });
 

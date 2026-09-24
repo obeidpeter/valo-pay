@@ -1,7 +1,8 @@
-import { closeRules, closeTimeOf, isOpenException, nextCloseInstant, paymentUnappliedKobo, type CloseReport } from "@workspace/valopay-schema";
+import { WAT_OFFSET_MS, closeRules, closeTimeOf, deadlinePassed, isOpenException, nextCloseInstant, paymentAwaitsAllocation, paymentUnappliedKobo, type CloseReport } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
-import { allocationConfirmedAt, paymentObservedAt } from "./reconciliation";
+import { allocationConfirmedAt, currencyOf, paymentObservedAt } from "./reconciliation";
+import { watDate } from "./calendar";
 
 const DAY_MS = 24 * 60 * 60 * 1000, MINUTE_MS = 60 * 1000;
 
@@ -41,6 +42,43 @@ const validInstant = (value: unknown): value is string => typeof value === "stri
 export function storedCloseCursor(state: DomainState): string | null {
   const value = state.settings.nextCloseAt;
   return validInstant(value) ? value : null;
+}
+
+/**
+ * The WAT business date a scheduled close closes, whose source files it
+ * checks: the day before the WAT date of its scheduled time, the last whole
+ * day (the 07:00 close of 29 June closes 28 June), whatever the time of day.
+ */
+export function scheduledCloseBusinessDate(scheduledFor: string): string {
+  return watDate(Date.parse(scheduledFor) - DAY_MS);
+}
+
+/**
+ * The scheduled time after the one a close covered: the configured time on
+ * the next WAT day.  A missed time is never skipped: when this one has passed
+ * too, the lender is still due and the next close catches it up, so every
+ * business date gets its own close.
+ */
+export function followingCloseInstant(covered: string, closeTime: string): string {
+  const nextDay = Date.parse(`${watDate(Date.parse(covered))}T00:00:00.000Z`) - WAT_OFFSET_MS + DAY_MS;
+  return nextCloseInstant(nextDay - 1, closeTime);
+}
+
+/**
+ * The business dates whose scheduled close is still owed at `now`, oldest
+ * first: the pending time's, and one for each configured time since.  Nothing
+ * is owed while the automatic close is off.  At most `limit` dates are
+ * listed; `total` counts them all.
+ */
+export function owedCloseDates(state: DomainState, now: string, limit = 31): { dates: string[]; total: number } {
+  const cursor = storedCloseCursor(state), nowMs = Date.parse(now);
+  if (state.settings.scheduledCloseEnabled === false || cursor === null || Date.parse(cursor) > nowMs) return { dates: [], total: 0 };
+  const next = Date.parse(followingCloseInstant(cursor, closeTimeOf(state.settings)));
+  // After the first, the configured times are a whole day apart: WAT keeps no daylight saving.
+  const total = 1 + (next <= nowMs ? Math.floor((nowMs - next) / DAY_MS) + 1 : 0);
+  const dates = [scheduledCloseBusinessDate(cursor)];
+  for (let at = next; dates.length < Math.min(total, limit); at += DAY_MS) dates.push(scheduledCloseBusinessDate(new Date(at).toISOString()));
+  return { dates, total };
 }
 
 /** The recorded retry, only while it belongs to the pending close time: one left from an earlier time is inert. */
@@ -148,7 +186,8 @@ function positionIndex(state: DomainState) {
       const dueId = record.data.dueItemId;
       if (typeof dueId === "string") appliedByDue.set(dueId, (appliedByDue.get(dueId) ?? 0) + record.amountKobo);
     }
-    if (record.kind === "payments" && position) position.unallocatedKobo += paymentUnappliedKobo(record);
+    // Instalments are owed in naira: money in another currency is held for Finance, never a customer's naira credit.
+    if (record.kind === "payments" && position && currencyOf(record) === "NGN") position.unallocatedKobo += paymentUnappliedKobo(record);
   }
   for (const position of positions.values()) position.outstandingKobo = Math.max(0, position.obligationsKobo - position.allocatedKobo);
   return { positions, appliedByDue };
@@ -158,7 +197,7 @@ export function positionFor(state: DomainState, customerId: string): CustomerPos
   const related = state.records.filter((record) => record.customerId === customerId);
   const obligationsKobo = related.filter((record) => record.kind === "due-items" && record.status !== "cancelled").reduce((sum, record) => sum + record.amountKobo, 0);
   const allocatedKobo = related.filter((record) => record.kind === "allocations" && record.status === "confirmed").reduce((sum, record) => sum + record.amountKobo, 0);
-  const unallocatedKobo = related.filter((record) => record.kind === "payments").reduce((sum, record) => sum + paymentUnappliedKobo(record), 0);
+  const unallocatedKobo = related.filter((record) => record.kind === "payments" && currencyOf(record) === "NGN").reduce((sum, record) => sum + paymentUnappliedKobo(record), 0);
   return { customerId, obligationsKobo, allocatedKobo, outstandingKobo: Math.max(0, obligationsKobo - allocatedKobo), unallocatedKobo };
 }
 
@@ -177,20 +216,39 @@ export function positionSnapshot(state: DomainState): Map<string, CustomerPositi
 }
 
 const sumOf = (items: ValopayRecord[]) => ({ count: items.length, kobo: items.reduce((sum, item) => sum + item.amountKobo, 0) });
-/** Unallocated payments by the money they hold: what a refund of part of one returned is not waiting for Finance. */
-const heldOf = (items: TypedRecord<"payments">[]) => ({ count: items.length, kobo: items.reduce((sum, item) => sum + paymentUnappliedKobo(item), 0) });
+/** Money in another currency than naira, by currency code: how many payments and their amount in that currency's minor unit, as the payment stores it. */
+type OtherCurrencies = Record<string, { count: number; amount: number }>;
+/**
+ * Payments by the money each holds (`amount`): naira in the count and kobo,
+ * and money in any other currency listed by its code instead
+ * (otherCurrencies, only when there is some), never added to a naira total.
+ */
+function inNaira(items: TypedRecord<"payments">[], amount: (item: TypedRecord<"payments">) => number): { count: number; kobo: number; otherCurrencies?: OtherCurrencies } {
+  let count = 0, kobo = 0;
+  const other = new Map<string, { count: number; amount: number }>();
+  for (const item of items) {
+    const currency = currencyOf(item);
+    if (currency === "NGN") { count += 1; kobo += amount(item); continue; }
+    const row = other.get(currency) ?? { count: 0, amount: 0 };
+    row.count += 1; row.amount += amount(item);
+    other.set(currency, row);
+  }
+  return { count, kobo, ...(other.size ? { otherCurrencies: Object.fromEntries([...other].sort(([a], [b]) => (a < b ? -1 : 1))) } : {}) };
+}
+/** Payments waiting for Finance (paymentAwaitsAllocation) by the money they hold: the unapplied rest of one applied in part is waiting, what a refund of part of one returned is not. */
+const heldOf = (items: TypedRecord<"payments">[]) => inNaira(items, paymentUnappliedKobo);
 const inPeriod = (at: string | undefined, from: string | null, to: string) => Boolean(at) && (from === null || String(at) > from) && String(at) <= to;
 
 /** What the close needs to remember from before reconciliation ran. */
 export interface OpeningSnapshot {
   since: string | null;
-  unallocated: { count: number; kobo: number };
+  unallocated: { count: number; kobo: number; otherCurrencies?: OtherCurrencies };
   positions: Map<string, CustomerPosition>;
 }
 
 export function openingSnapshot(state: DomainState): OpeningSnapshot {
   const closes = recordsOf(state, "closes").map((close) => String(close.data.closedAt || close.createdAt)).sort();
-  return { since: closes.at(-1) ?? null, unallocated: heldOf(recordsOf(state, "payments").filter((item) => item.status === "unallocated")), positions: positionSnapshot(state) };
+  return { since: closes.at(-1) ?? null, unallocated: heldOf(recordsOf(state, "payments").filter(paymentAwaitsAllocation)), positions: positionSnapshot(state) };
 }
 
 /**
@@ -226,7 +284,7 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
     row.count += 1; row.kobo += allocation.amountKobo; if (allocation.data.automatic === true) row.automatic += 1;
   }
 
-  const unallocated = payments.filter((item) => item.status === "unallocated");
+  const unallocated = payments.filter(paymentAwaitsAllocation);
   const variances = recordsOf(state, "settlement-batches").filter((item) => item.status === "variance").map((batch) => ({
     batchId: batch.id, reference: batch.reference, feeVarianceKobo: Number(batch.data.feeVarianceKobo || 0), netKobo: Number(batch.data.netKobo || 0),
     statementNetKobo: batch.data.statementNetKobo ?? null, explanation: batch.data.explanation ?? null,
@@ -253,13 +311,13 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
     allocatedByRule,
     allocated: sumOf(confirmed),
     proposed: sumOf(payments.filter((item) => item.status === "proposed")),
-    unallocated: { ...heldOf(unallocated), olderThan24Hours: unallocated.filter((item) => Date.parse(to) - paymentObservedAt(item) >= DAY_MS).length },
-    possibleDuplicates: sumOf(payments.filter((item) => item.status === "possible_duplicate")),
+    unallocated: { ...heldOf(unallocated), olderThan24Hours: unallocated.filter((item) => currencyOf(item) === "NGN" && Date.parse(to) - paymentObservedAt(item) >= DAY_MS).length },
+    possibleDuplicates: inNaira(payments.filter((item) => item.status === "possible_duplicate"), (item) => item.amountKobo),
     variances: { count: variances.length, feeVarianceKobo: variances.reduce((sum, item) => sum + item.feeVarianceKobo, 0), batches: variances },
     exceptions: {
       opened: { count: opened.length, byType: byType(opened) }, closed: { count: closed.length, byType: byType(closed) },
       openAtClose: exceptions.filter((item) => isOpenException(item.status)).length,
-      overdueAtClose: exceptions.filter((item) => isOpenException(item.status) && Date.parse(String(item.data.dueBy)) < Date.parse(to)).length,
+      overdueAtClose: exceptions.filter((item) => isOpenException(item.status) && deadlinePassed(item.data.dueBy, to)).length,
     },
     retryDecisions: { recorded: Number(reconciled.retryDecisionsRecorded || 0), finalAttempts: Number(reconciled.finalAttemptExceptions || 0), disputesFrozen: Number(reconciled.disputesFrozen || 0), noticesNotEvidenced: Number(reconciled.noticesNotEvidenced || 0) },
     customerPositionsChanged: positionsChanged,

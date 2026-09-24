@@ -117,8 +117,9 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   equal([closed.data.report.unallocated.kobo, exceptionsFor(state, "unallocated_payment", over.id).map((item) => item.amountKobo)], [waiting + GROSS, [GROSS]], "the close and its exception count the NGN 25,000 it holds, not the NGN 30,000 received");
   refused(() => executeAction(state, finance(wat("2027-07-05T09:30:00")), { action: "record_refund", recordId: over.id, reason: "Again", data: { reference: "RF-OVER-2" } }), /already recorded/, 409, "one refund per payment, even when the payment holds money again");
   refused(() => executeAction(state, finance(wat("2027-07-05T10:00:00")), { action: "manual_allocate", recordId: over.id, reason: "Whole receipt", data: { dueItemId: third.id, amountKobo: 3_000_000 } }), /in part: NGN 5,000\.00 went back, so only NGN 25,000\.00 is left to allocate/, 409, "the refunded part still cannot be allocated");
+  // The overpayment exception closed when its excess was refunded: its condition cleared (console decision on exceptions).
+  equal([exceptionsFor(state, "overpayment", over.id)[0]!.status, exceptionsFor(state, "overpayment", over.id)[0]!.data.resolutionCode], ["closed", "condition_cleared"], "the refunded excess closed its overpayment exception");
   // Finance applies what stayed: it settles instalment 6 and the rest is an overpayment of what the payment still holds.
-  executeAction(state, finance(wat("2027-07-05T10:02:00")), { action: "resolve_exception", recordId: exceptionsFor(state, "overpayment", over.id)[0]!.id, reason: "The excess was refunded to the payer.", data: { resolutionCode: "refund_requested" } });
   const sixth = recordsOf(state, "due-items").find((item) => item.reference === "DEMO-LOAN-2006")!;
   executeAction(state, finance(wat("2027-07-05T10:05:00")), { action: "manual_allocate", recordId: over.id, reason: "Right loan", data: { dueItemId: sixth.id, amountKobo: 1_234_500 } });
   const overpayment = exceptionsFor(state, "overpayment", over.id).at(-1)!;
@@ -196,10 +197,16 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   invariant(state);
 }
 {
-  // One payment the ladder cannot apply is left for Finance with the reason; the close still completes.
+  // A payment with nothing to allocate, as an earlier build made from a settlement line whose gross was 0, is left alone
+  // (the review of the audit fixes): the ladder never tries it, so no exception opens and closes at every close.
   const { state, due } = liveFixture({ withFailure: false, merchantId: "isolated-payment" });
-  const odd = makeRecord(state, "payments", { name: "Canonical payment", status: "unallocated", reference: "ZERO-1", customerId: due.customerId, amountKobo: 0, data: { allocatedKobo: 0, observedAt: wat("2027-07-01T09:00:00"), channel: "transfer", virtualAccountCustomerId: due.customerId } });
-  const run = reconcile(state, finance(wat("2027-07-01T09:05:00")));
+  const zero = makeRecord(state, "payments", { name: "Canonical payment", status: "unallocated", reference: "ZERO-1", customerId: due.customerId, amountKobo: 0, data: { allocatedKobo: 0, observedAt: wat("2027-07-01T09:00:00"), channel: "transfer", virtualAccountCustomerId: due.customerId } });
+  const quiet = reconcile(state, finance(wat("2027-07-01T09:05:00")));
+  equal([quiet.data.paymentsSkipped, zero.data.explanation, recordsOf(state, "exceptions").filter((item) => item.data.linkedRecordId === zero.id).length], [0, undefined, 0], "a payment with nothing unapplied is not matched, skipped or raised");
+  // One payment the ladder cannot apply, such as a corrupt row whose amount is not whole kobo, is left for Finance with the reason; the close still completes.
+  const odd = makeRecord(state, "payments", { name: "Canonical payment", status: "unallocated", reference: "ODD-1", customerId: due.customerId, data: { allocatedKobo: 0, observedAt: wat("2027-07-01T09:00:00"), channel: "transfer", virtualAccountCustomerId: due.customerId } });
+  odd.amountKobo = 1.5;
+  const run = reconcile(state, finance(wat("2027-07-01T09:10:00")));
   equal(run.data.paymentsSkipped, 1, "the close completes and counts the skipped payment");
   check(String(odd.data.explanation).startsWith("Automatic matching left this payment for Finance: "), "the payment says why it was left");
   const updatedAt = odd.updatedAt;

@@ -2,7 +2,7 @@ import { parse } from "csv-parse/sync";
 import { canonicalDigest } from './digests';
 import { makeRecord, validateRecord } from "../domain";
 import type { Context, DomainState } from "../domain/types";
-import { csvAmountToKobo, defaultStatus, importBooleanFields, importKinds as sharedImportKinds, importNumericFields } from "@workspace/valopay-schema";
+import { counted, csvAmountToKobo, defaultStatus, importBooleanFields, importFieldsOf, importKinds as sharedImportKinds, importNumericFields, suggestImportField } from "@workspace/valopay-schema";
 
 const importKinds:readonly string[]=sharedImportKinds;
 const topFields=new Set(["name","status","reference","amountKobo","customerId"]);
@@ -10,7 +10,30 @@ const numeric=importNumericFields;
 const boolean=importBooleanFields;
 function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
 const unsafeKey = (key: string) => ["__proto__", "constructor", "prototype"].includes(key);
-export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:string;syntheticOnly:boolean;commit:boolean;mapping?:Record<string,unknown>;amountUnit?:'naira'|'kobo'; identities?: { source: string; batchId: string; ids: string[] }}){
+/**
+ * A warning for each displayed value that fell back while a column went unused: a name taken from the reference
+ * (or the row number) and a generated reference. A column is unused when it is skipped or names no field of the
+ * kind, so the importer keeps it only as extra detail that nothing reads; the row identity column is metadata.
+ * Without an unused column a fallback is taken as intended: the source simply has no such value.
+ */
+function fallbackWarnings(kind: string, columns: string[], targets: string[], identityColumn: string | undefined, fallbacks: { name: number; reference: number }): string[] {
+  const fields = new Set(importFieldsOf(kind));
+  const unused = columns.filter((column, index) => targets[index] ? !fields.has(targets[index]!) : column !== identityColumn);
+  if (!unused.length) return [];
+  const warnings: string[] = [];
+  for (const field of ["name", "reference"] as const) {
+    const rows = fallbacks[field], one = rows === 1, label = field === "name" ? "Name" : "Reference";
+    if (!rows) continue;
+    const fallback = field === "name"
+      ? targets.includes(field) ? `${one ? "its name is" : "their names are"} taken from ${one ? "its reference (or its row number" : "their references (or their row numbers"} without one)` : "each record's name is taken from its reference (or its row number without one)"
+      : targets.includes(field) ? `${one ? "it gets a generated reference" : "they get generated references"}` : "each record gets a generated reference";
+    const what = targets.includes(field) ? `${label} is blank on ${counted(rows, "row")}, so ${fallback}.` : `No column is mapped to ${label}, so ${fallback}.`;
+    const list = unused.map((column) => suggestImportField(kind, column) === field ? `${column}, which looks like the ${field}` : column).join("; ");
+    warnings.push(`${what} Not mapped to a field: ${list}. Map the column that holds the ${field}, or commit knowing the fallback is saved.`);
+  }
+  return warnings;
+}
+export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:string;syntheticOnly:boolean;commit:boolean;mapping?:Record<string,unknown>;amountUnit?:'naira'|'kobo'; identityColumn?: string; identities?: { source: string; batchId: string; ids: string[] }}){
   if(!input.syntheticOnly)fail("Pre-data gate is closed. Only synthetic sample records are accepted.",403);
   if(!importKinds.includes(input.kind))fail("This resource does not support CSV import.");
   const amountUnit = input.amountUnit ?? 'kobo';
@@ -39,6 +62,8 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
   const working=structuredClone(state), rows:{row:number;status:string;message:string}[]=[];
   const amounts = new Map<number, number>();
   let valid=0,invalid=0,imported=0;
+  // Imported rows whose name or reference came from a fallback rather than the file.
+  const fallbacks={name:0,reference:0};
   for(const [index,raw] of parsed.entries()){
     try{
       const record:Record<string,any>={data:{synthetic:true}}, blankAsZero:Record<string,number>={};
@@ -72,6 +97,7 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
           rows.push({ row: index + 2, status: 'duplicate', message: 'Already imported: the same source row and data are saved.' }); continue;
         }
       }
+      const named=Boolean(record.name),referenced=Boolean(record.reference);
       record.name ||= record.reference || `${input.kind} import ${index+1}`;
       record.status ||= defaultStatus[input.kind as keyof typeof defaultStatus];
       if(record.customerId&&!working.records.some(r=>r.id===record.customerId&&r.kind==="customers")){
@@ -86,18 +112,27 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
       if(input.kind==="due-items")record.data.outstandingKobo=record.amountKobo;
       if(input.kind==="attempts"){record.data.source="external";record.data.simulated=true;}
       if(input.kind==="mandates"){record.data.origin="imported";record.data.consentGaps ||= [];}
-      if(record.reference&&working.records.some(r=>r.kind===input.kind&&r.reference===record.reference&&(input.kind!=="observations"||r.data.source===record.data.source))){
+      // Payment evidence is the same when its source event is or, without event IDs, when its source, reference, payer,
+      // amounts, currency, connection and batch are. Evidence that only shares a reference is new: reconciliation
+      // merges it into its payment or holds it as a conflict, and never loses its money.
+      const sameDetails=(saved:{reference:string;customerId:string;amountKobo:number;data:Record<string,any>})=>saved.reference===record.reference&&saved.customerId===(record.customerId||"")&&saved.amountKobo===record.amountKobo
+        &&["grossAmountKobo","feeKobo","batchReference","currency","provider","providerConnection"].every(key=>saved.data[key]===record.data[key]);
+      const savedEvidence=input.kind==="observations"?working.records.find(r=>r.kind==="observations"&&r.data.source===record.data.source&&(r.data.eventId!==undefined||record.data.eventId!==undefined?String(r.data.eventId)===String(record.data.eventId):sameDetails(r))):undefined;
+      if(savedEvidence&&!sameDetails(savedEvidence))throw new Error('This source event is already saved with different details. Review the saved payment evidence; it cannot be replaced by importing again.');
+      if(record.reference&&(input.kind==="observations"?savedEvidence:working.records.some(r=>r.kind===input.kind&&r.reference===record.reference))){
         if (identity) throw new Error('This reference belongs to another saved record. Check its source row identity before importing; a conflicting row will not be silently skipped.');
-        rows.push({row:index+2,status:"duplicate",message:"Skipped: this source already has a record with the same reference."});continue;
+        rows.push({row:index+2,status:"duplicate",message:input.kind==="observations"?"Skipped: the same payment evidence is already saved.":"Skipped: this source already has a record with the same reference."});continue;
       }
       validateRecord(working,ctx,input.kind,record);
       if (identity) record.data.importIdentity = { ...identity, fingerprint: identityFingerprint };
       makeRecord(working,input.kind,{...record,createdAt:ctx.now,updatedAt:ctx.now});
       valid++;rows.push({row:index+2,status:"valid",message:input.commit?"Sample record imported.":"Checked and ready to import."});
+      if(!named)fallbacks.name++;if(!referenced)fallbacks.reference++;
     }catch(error){invalid++;rows.push({row:index+2,status:"invalid",message:error instanceof Error?error.message:"Invalid record."});}
   }
   // All-or-nothing: review every error before committing.
   if(input.commit&&invalid===0){state.records=working.records;imported=valid;}
   else if(input.commit&&invalid>0)rows.forEach(r=>{if(r.status==="valid")r.message="Not imported: resolve all row errors first.";});
-  return {valid,invalid,imported,skipped:rows.filter(row=>row.status==='duplicate').length,rows,columns,preview:parsed.slice(0,10).map((values,index)=>({row:index+2,values,...(amounts.has(index+2)?{amountKobo:amounts.get(index+2)}:{})}))};
+  const warnings=fallbackWarnings(input.kind,columns,targets,input.identityColumn,fallbacks);
+  return {valid,invalid,imported,skipped:rows.filter(row=>row.status==='duplicate').length,rows,columns,preview:parsed.slice(0,10).map((values,index)=>({row:index+2,values,...(amounts.has(index+2)?{amountKobo:amounts.get(index+2)}:{})})),...(warnings.length?{warnings}:{})};
 }

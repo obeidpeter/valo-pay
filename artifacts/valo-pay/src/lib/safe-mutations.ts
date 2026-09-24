@@ -6,8 +6,9 @@ import {
   type UpdateRecordMutationVariables, type UpdateSettingsMutationVariables,
   type ImportRecordsMutationVariables, type CreateExportMutationVariables, type RetryExportJobMutationVariables,
 } from '@workspace/api-client-react';
-import { CreateRecordResponse, UpdateRecordResponse, PerformActionResponse, ImportRecordsResponse, UpdateSettingsResponse, CreateExportResponse, RetryExportJobResponse } from '@workspace/api-zod';
-import { canonicalJson, definitiveRefusalStatuses } from '@workspace/valopay-schema';
+import type { ZodTypeAny } from 'zod';
+import { actionResultSchema, canonicalJson, definitiveRefusalStatuses, exportResultSchema, importResultSchema, settingsViewSchema, valopayRecordSchema } from '@workspace/valopay-schema';
+import { readAnswer } from './answers';
 
 /** Object key order must not turn an unchanged retry into another operation: the canonical form, the same in any browser locale. */
 export function submissionFingerprint(value: unknown): string {
@@ -38,21 +39,33 @@ export function requestClosed(error: unknown): boolean {
   return Boolean(response?.status && response.status >= 400 && response.data?.operation === 'cancelled' && typeof response.data.error === 'string');
 }
 
-/** A structured refusal the service treats as final for its key (400, 403, 404, 409, 410, 413, 415, 422): the same
- * request would be refused again, and its key cannot run again. A 401 or 429 keeps the key. */
+/** The service says a request with this key was saved, is still running or is not confirmed yet (`operation`
+ * completed, running or pending): whatever this answer refused, the key is kept to recover its result. */
+export function requestOpen(error: unknown): boolean {
+  const operation = (error as { data?: { operation?: unknown } } | null)?.data?.operation;
+  return operation === 'completed' || operation === 'running' || operation === 'pending';
+}
+
+/** A structured refusal the service treats as final for its key (400, 403, 404, 409, 410, 413, 415): the same
+ * request would be refused again, and its key cannot run again. A 401 or 429 keeps the key, as does a refusal that
+ * says a request with the key was saved or is still open (requestOpen). */
 export function definitiveRefusal(error: unknown): boolean {
   const response = error as { status?: number; data?: { error?: unknown } } | null;
-  return (definitiveRefusalStatuses as readonly number[]).includes(response?.status ?? 0) && typeof response?.data?.error === 'string';
+  return (definitiveRefusalStatuses as readonly number[]).includes(response?.status ?? 0) && typeof response?.data?.error === 'string' && !requestOpen(error);
 }
 
 function recoveryError(message: string) {
   return Object.assign(new Error(message), { data: { error: message } });
 }
 
-/** HTTP success alone is not confirmation when its receipt is missing or malformed. */
-async function checkedResponse<Result>(response: Promise<Result>, schema: { safeParse(value: unknown): { success: boolean } }, matches: (value: Result) => boolean = () => true): Promise<Result> {
+/**
+ * HTTP success alone is not confirmation when its receipt is missing or malformed. Receipts are read with the
+ * shared schemas the contract checks field for field (lib/valopay-schema), not the whole generated contract, so a
+ * page that writes does not load every schema the API has; a field a newer service added is accepted (readAnswer).
+ */
+async function checkedResponse<Result>(response: Promise<Result>, schema: ZodTypeAny, matches: (value: Result) => boolean = () => true): Promise<Result> {
   const value = await response;
-  if (!schema.safeParse(value).success || !matches(value)) {
+  if (readAnswer(schema, value) === undefined || !matches(value)) {
     throw recoveryError('The service returned an incomplete confirmation. The request may have been saved. Retry the original request to check its result.');
   }
   return value;
@@ -121,23 +134,23 @@ export function useSafeMutation<Result, Variables>(send: (variables: Variables, 
 }
 
 export function useSafePerformAction(options?: Options<Awaited<ReturnType<typeof performAction>>, PerformActionMutationVariables>, scope?: unknown) {
-  return useSafeMutation((v: PerformActionMutationVariables, request) => checkedResponse(performAction(v.data, v.params, request), PerformActionResponse, value => Boolean(value.message.trim()) && (!value.record || value.record.merchantId === v.params.merchantId)), options, scope);
+  return useSafeMutation((v: PerformActionMutationVariables, request) => checkedResponse(performAction(v.data, v.params, request), actionResultSchema, value => Boolean(value.message.trim()) && (!value.record || value.record.merchantId === v.params.merchantId)), options, scope);
 }
 export function useSafeCreateRecord(options?: Options<Awaited<ReturnType<typeof createRecord>>, CreateRecordMutationVariables>, scope?: unknown) {
-  return useSafeMutation((v: CreateRecordMutationVariables, request) => checkedResponse(createRecord(v.kind, v.data, v.params, request), CreateRecordResponse, value => Boolean(value.id) && value.merchantId === v.params.merchantId && value.kind === v.kind), options, scope);
+  return useSafeMutation((v: CreateRecordMutationVariables, request) => checkedResponse(createRecord(v.kind, v.data, v.params, request), valopayRecordSchema, value => Boolean(value.id) && value.merchantId === v.params.merchantId && value.kind === v.kind), options, scope);
 }
 export function useSafeUpdateRecord(options?: Options<Awaited<ReturnType<typeof updateRecord>>, UpdateRecordMutationVariables>, scope?: unknown) {
-  return useSafeMutation((v: UpdateRecordMutationVariables, request) => checkedResponse(updateRecord(v.kind, v.id, v.data, v.params, request), UpdateRecordResponse, value => value.id === v.id && value.merchantId === v.params.merchantId && value.kind === v.kind), options, scope);
+  return useSafeMutation((v: UpdateRecordMutationVariables, request) => checkedResponse(updateRecord(v.kind, v.id, v.data, v.params, request), valopayRecordSchema, value => value.id === v.id && value.merchantId === v.params.merchantId && value.kind === v.kind), options, scope);
 }
 export function useSafeUpdateSettings(options?: Options<Awaited<ReturnType<typeof updateSettings>>, UpdateSettingsMutationVariables>, scope?: unknown) {
-  return useSafeMutation((v: UpdateSettingsMutationVariables, request) => checkedResponse(updateSettings(v.data, v.params, request), UpdateSettingsResponse, value => value.merchant.id === v.params.merchantId), options, scope);
+  return useSafeMutation((v: UpdateSettingsMutationVariables, request) => checkedResponse(updateSettings(v.data, v.params, request), settingsViewSchema, value => value.merchant.id === v.params.merchantId), options, scope);
 }
 export function useSafeImportRecords(options?: Options<Awaited<ReturnType<typeof importRecords>>, ImportRecordsMutationVariables>, scope?: unknown) {
-  return useSafeMutation((v: ImportRecordsMutationVariables, request) => checkedResponse(importRecords(v.data, v.params, request), ImportRecordsResponse, value => [value.valid, value.invalid, value.imported, value.skipped ?? 0].every(count => Number.isSafeInteger(count) && count >= 0)), options, scope, v => Boolean(v.data.commit));
+  return useSafeMutation((v: ImportRecordsMutationVariables, request) => checkedResponse(importRecords(v.data, v.params, request), importResultSchema, value => [value.valid, value.invalid, value.imported, value.skipped ?? 0].every(count => Number.isSafeInteger(count) && count >= 0)), options, scope, v => Boolean(v.data.commit));
 }
 export function useSafeCreateExport(options?: Options<Awaited<ReturnType<typeof createExport>>, CreateExportMutationVariables>, scope?: unknown) {
-  return useSafeMutation((v: CreateExportMutationVariables, request) => checkedResponse(createExport(v.data, v.params, request), CreateExportResponse, exportReceipt), options, scope);
+  return useSafeMutation((v: CreateExportMutationVariables, request) => checkedResponse(createExport(v.data, v.params, request), exportResultSchema, exportReceipt), options, scope);
 }
 export function useSafeRetryExportJob(options?: Options<Awaited<ReturnType<typeof retryExportJob>>, RetryExportJobMutationVariables>, scope?: unknown) {
-  return useSafeMutation((v: RetryExportJobMutationVariables, request) => checkedResponse(retryExportJob(v.id, v.params, request), RetryExportJobResponse, value => value.id === v.id && exportReceipt(value)), options, scope);
+  return useSafeMutation((v: RetryExportJobMutationVariables, request) => checkedResponse(retryExportJob(v.id, v.params, request), exportResultSchema, value => value.id === v.id && exportReceipt(value)), options, scope);
 }

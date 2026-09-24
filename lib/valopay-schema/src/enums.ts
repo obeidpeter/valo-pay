@@ -126,6 +126,19 @@ export function paymentUnappliedKobo(payment: { amountKobo?: unknown; data?: { a
   return Math.max(0, Number(payment.amountKobo || 0) - Number(payment.data?.allocatedKobo || 0) - paymentRefundedKobo(payment));
 }
 /**
+ * REC-04: a payment whose money waits for Finance to allocate it: an
+ * unallocated payment, or the unapplied rest of one that is partly applied
+ * (partial, or overpaid after its instalment was settled), holding money it
+ * has not applied. A proposal, a duplicate hold, returned money and a payment
+ * with nothing unapplied, such as one an earlier build made for ₦0, wait for
+ * no one. Finance's payments queue, the unallocated ageing and the close
+ * totals read payments through this.
+ */
+export function paymentAwaitsAllocation(payment: { status?: unknown; amountKobo?: unknown; data?: { allocatedKobo?: unknown; reversalStatus?: unknown; refundStatus?: unknown; refundedKobo?: unknown } | null } | null | undefined): boolean {
+  if (!payment) return false;
+  return (payment.status === "unallocated" || payment.status === "partial" || payment.status === "overpaid") && paymentUnappliedKobo(payment) > 0;
+}
+/**
  * What a refund returned to the payer: data.refundedKobo as recorded, or the
  * whole payment for a refund recorded before the amount was kept.
  */
@@ -142,6 +155,22 @@ export function paymentRefundedKobo(payment: { amountKobo?: unknown; data?: { re
 export function paymentAppliedKobo(payment: { amountKobo?: unknown; data?: { allocatedKobo?: unknown; reversalStatus?: unknown; refundStatus?: unknown; refundedKobo?: unknown } | null } | null | undefined): number {
   if (!payment || normaliseReversalStatus(payment.data?.reversalStatus) === "reversed") return 0;
   return Math.max(0, Math.min(Number(payment.data?.allocatedKobo || 0), Number(payment.amountKobo || 0) - paymentRefundedKobo(payment)));
+}
+/** Instalment statuses that take no allocation, whatever is still owed. */
+export const allocationClosedStatuses = ["cancelled", "closed", "in_dispute"] as const;
+/** What an instalment still owes: its outstanding balance, or its whole amount before it has one. */
+export function instalmentOutstandingKobo(due: { amountKobo: number; data?: { outstandingKobo?: unknown } | null }): number {
+  const outstanding = due.data?.outstandingKobo;
+  return Number.isInteger(outstanding) ? Number(outstanding) : due.amountKobo;
+}
+/**
+ * An instalment that can take an allocation now: it still owes something and
+ * is not cancelled, closed or in dispute. A manual allocation is refused for
+ * any other, and the allocation picker lists only these (the record list's
+ * `allocatable`), so its count is the count of choices.
+ */
+export function canTakeAllocation(due: { status: string; amountKobo: number; data?: { outstandingKobo?: unknown } | null }): boolean {
+  return instalmentOutstandingKobo(due) > 0 && !(allocationClosedStatuses as readonly string[]).includes(due.status);
 }
 
 /** Why a customer message was sent. */

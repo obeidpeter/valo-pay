@@ -1,4 +1,5 @@
 import { useSearchParams } from 'wouter';
+import { deadlinePassed } from '@workspace/valopay-schema';
 import { TIME_ZONE } from './formatters';
 
 const dayFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -12,24 +13,14 @@ export function queueDay(value: string | number | Date): string {
   return ['year', 'month', 'day'].map(type => parts.find(part => part.type === type)?.value).join('-');
 }
 
-/** A day-only deadline lasts the whole day; a timed deadline expires at its stated instant. */
+/**
+ * Whether a deadline has passed, as the API reads every deadline (an
+ * instalment's due date, an exception's dueBy, a mandate's activation
+ * deadline): a day-only deadline lasts the whole day in West Africa Time, a
+ * timed one expires at its stated instant, and an impossible date is none.
+ */
 export function isOverdue(value: unknown, now = Date.now()): boolean {
-  const deadline = String(value || '');
-  if (!deadline) return false;
-  return /^\d{4}-\d{2}-\d{2}$/.test(deadline)
-    ? deadline < queueDay(now)
-    : Date.parse(deadline) < now;
-}
-
-/** Match the API's exception/activation deadline comparison, including imported day-only deadlines. */
-export function isDeadlineOverdue(value: unknown, now = Date.now()): boolean {
-  return Date.parse(String(value || '')) < now;
-}
-
-/** Unlike an instalment due date, a stored deadline is an instant in the API. */
-export function deadlineInstant(value: unknown): string {
-  const deadline = String(value || '');
-  return /^\d{4}-\d{2}-\d{2}$/.test(deadline) ? `${deadline}T00:00:00.000Z` : deadline;
+  return deadlinePassed(value, now);
 }
 
 export function isDueToday(value: unknown, now = Date.now()): boolean {

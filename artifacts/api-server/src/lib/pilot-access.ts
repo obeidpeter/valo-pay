@@ -3,7 +3,7 @@
  * never a decoded-but-unverified token, browser role, request body or sandbox persona.
  * Signature, issuer and authorised-party verification still belong to that middleware.
  */
-import type { PilotAccessFailureCode } from '@workspace/valopay-schema';
+import { sensitiveExportRoles, type PilotAccessFailureCode } from '@workspace/valopay-schema';
 export interface VerifiedClerkSession {
   userId?: string | null;
   sessionId?: string | null;
@@ -66,8 +66,14 @@ const rolesForAction: Record<PilotAction, readonly PilotRole[]> = {
   confirm_match: ['Admin', 'Finance'],
   approve_policy: ['Compliance reviewer'],
   manage_settings: ['Admin'],
-  export_sensitive: ['Admin', 'Finance', 'Compliance reviewer'],
+  // Dispute packs, the customer register and the audit trail (sensitiveExportKinds): lib/export-jobs.ts checks it when one is queued, retried or downloaded.
+  export_sensitive: sensitiveExportRoles,
 };
+/** Whether a provisioned role may perform an action, by the table authorizePilotAccess checks. For a rule the per-request check does not name, such as export_sensitive, which depends on what is exported. */
+export function rolePermits(role: string, action: PilotAction): boolean {
+  const allowed = Object.prototype.hasOwnProperty.call(rolesForAction, action) ? rolesForAction[action] : undefined;
+  return !!allowed && (allowed as readonly string[]).includes(role);
+}
 const nonempty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0 && value.length <= 256;
 const seconds = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 const minutes = (value: unknown, maximum: number): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= maximum;

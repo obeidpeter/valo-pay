@@ -1,45 +1,72 @@
 // Runs the database-backed suites against the database in DATABASE_URL, in
-// order.  Opt-in only: each suite creates fresh synthetic fixtures in that
-// database, so it must be a disposable development database with the schema
-// pushed, never production.  The export-stream suite (App Storage credentials)
-// and the HTTP suites (Replit development domain and Clerk) stay outside; see
-// the README.
+// order, every one of them, and then names the ones that failed.  Opt-in
+// only: each suite creates fresh synthetic fixtures in that database, so it
+// must be a disposable development database with the schema pushed, never
+// production.  The three migration rehearsals also create throwaway databases
+// beside it, so they need a loopback PostgreSQL whose login can create
+// databases; elsewhere they skip, saying why.  The export-stream suite (App
+// Storage credentials) and the HTTP suites (Replit development domain and
+// Clerk) stay outside; see the README.
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const root = path.resolve(import.meta.dirname, "..");
 const tsx = path.join(root, "scripts", "node_modules", "tsx", "dist", "cli.mjs");
-if (!existsSync(tsx)) throw new Error("tsx is missing; run pnpm install first.");
-if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
-  throw new Error("Set VALOPAY_RUN_INTEGRATION=1 to run the database-backed suites; they write synthetic fixtures to DATABASE_URL.");
-}
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL must point at a disposable development database that carries the pushed schema.");
-}
-const env = { ...process.env, NODE_ENV: process.env.NODE_ENV || "development" };
-const suites = [
+export const suites = [
   'artifacts/api-server/tests/source-close-controls.integration.test.ts',
   'artifacts/api-server/tests/staff-lender-access.integration.test.ts',
+  'artifacts/api-server/tests/staff-governance.integration.test.ts',
   'artifacts/api-server/tests/runtime-isolation.integration.test.ts',
   'artifacts/api-server/tests/operations-controls.integration.test.ts',
+  'artifacts/api-server/tests/payload-rewrap.integration.test.ts',
   "artifacts/api-server/tests/pilot-workflow.integration.test.ts",
   "artifacts/api-server/tests/api-contract.integration.test.ts",
   "artifacts/api-server/tests/connected-workflows.integration.test.ts",
   "artifacts/api-server/tests/record-index-migration.integration.test.ts",
   "artifacts/api-server/tests/pilot-workflow-migration.integration.test.ts",
+  "artifacts/api-server/tests/schema-push.integration.test.ts",
+  "artifacts/api-server/tests/integrity-guards.integration.test.ts",
   "artifacts/api-server/tests/valopay-store.integration.test.ts",
   "artifacts/api-server/tests/close-scheduler.integration.test.ts",
+  "artifacts/api-server/tests/background-worker.integration.test.ts",
+  "artifacts/api-server/tests/pilot-administrators.integration.test.ts",
   "artifacts/api-server/tests/record-lists.integration.test.ts",
   "artifacts/api-server/tests/priority-queues.integration.test.ts",
   "artifacts/api-server/tests/console-read-models.integration.test.ts",
   "artifacts/api-server/tests/workspace-concurrency.integration.test.ts",
+  "artifacts/api-server/tests/journal-outcomes.integration.test.ts",
+  "artifacts/api-server/tests/lender-history.integration.test.ts",
+  "artifacts/api-server/tests/input-semantics.integration.test.ts",
   "artifacts/api-server/tests/export-jobs.integration.test.ts",
   "artifacts/api-server/tests/workflow-performance.integration.test.ts",
 ];
-for (const suite of suites) {
-  console.log(`\n▶ ${suite}`);
-  const result = spawnSync(process.execPath, [tsx,suite], { cwd: root, env, stdio: "inherit" });
-  if (result.status !== 0) { console.error(`✕ ${suite} failed`); process.exit(result.status ?? 1); }
+
+/** Runs each suite whatever the ones before it did, and returns the ones that failed. */
+export function runSuites(list, run, say = console) {
+  const failed = [];
+  for (const suite of list) {
+    say.log(`\n▶ ${suite}`);
+    const status = run(suite);
+    if (status !== 0) { say.error(`✕ ${suite} failed`); failed.push(suite); }
+  }
+  return failed;
 }
-console.log("\nDatabase-backed suites passed.");
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  if (!existsSync(tsx)) throw new Error("tsx is missing; run pnpm install first.");
+  if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
+    throw new Error("Set VALOPAY_RUN_INTEGRATION=1 to run the database-backed suites; they write synthetic fixtures to DATABASE_URL.");
+  }
+  if (!process.env.DATABASE_URL) {
+    throw new Error("DATABASE_URL must point at a disposable development database that carries the pushed schema.");
+  }
+  const env = { ...process.env, NODE_ENV: process.env.NODE_ENV || "development" };
+  const failed = runSuites(suites, (suite) => spawnSync(process.execPath, [tsx, suite], { cwd: root, env, stdio: "inherit" }).status);
+  if (failed.length) {
+    console.error(`\n${failed.length} of ${suites.length} database-backed suites failed:\n${failed.map((suite) => `  ${suite}`).join("\n")}`);
+    process.exit(1);
+  }
+  console.log(`\nAll ${suites.length} database-backed suites passed.`);
+}

@@ -89,6 +89,72 @@ it('recovers an execution whose committed response was lost using the identical 
   expect(api.state().records.filter(record => record.kind === 'retention-receipts')).toHaveLength(1);
 });
 
+/** Two more aged committed batches, so a run has three sources: the first, then these in order. */
+function moreBatches() {
+  return ['2026-08-02T10:00:00.000Z', '2026-08-03T10:00:00.000Z'].map((at, index) => api.mutate(state => makeRecord(state, 'import-batches', { name: `Aged sample import ${index + 2}`, status: 'committed', createdAt: at, updatedAt: at, data: { csv: `reference,name\nSAMPLE-ROW-${index + 2},Sample customer`, committedAt: at, rowIds: [`source-${index + 2}`], recordIds: [`original-record-${index + 2}`], check: { valid: 1, invalid: 0, imported: 1, rows: [], preview: [] } } }).id));
+}
+const csvLeft = (ids: string[]) => ids.filter(id => typeof api.state().records.find(record => record.id === id)!.data.csv === 'string').length;
+/** Every execute request's Idempotency-Key, in order. */
+function executeKeys() {
+  const keys: string[] = [], baseFetch = globalThis.fetch;
+  globalThis.fetch = async (input, options) => { if (String(input).includes('/execute')) keys.push(new Headers(options?.headers).get('Idempotency-Key')!); return baseFetch(input, options); };
+  return keys;
+}
+
+it('keeps executing an approved run, request after request, until every source is removed', async () => {
+  const ids = [batchId, ...moreBatches()];
+  enable(); const user = userEvent.setup(); renderApp('/lifecycle');
+  await prepare(user); await approve(user);
+  const keys = executeKeys(), release = api.hold(/\/execute$/);
+  await user.click(await screen.findByRole('button', { name: 'Execute approved run' }));
+  // While a request runs, the page's status area shows how far the run has got, and Stop takes the focus from Execute, which waits.
+  expect((await screen.findByText(/Deleting the approved sources\. 0 of 3 sources removed\./)).getAttribute('role')).toBe('status');
+  expect(screen.getByRole('progressbar', { name: 'Sources removed' })).toBeTruthy();
+  expect((screen.getByRole('button', { name: 'Execute approved run' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Stop' }));
+  release();
+  const outcome = await screen.findByText('This run is complete. Inspect its saved deletion receipts below.');
+  // Stop goes with the run, and reading continues from what happened.
+  await waitFor(() => expect(document.activeElement).toBe(outcome));
+  // The service removed one source a request here, so the console asked three times, each a new request with its own key.
+  expect(api.calls.filter(call => call.path.endsWith('/execute')).map(call => call.status)).toEqual([200, 200, 200]);
+  expect(new Set(keys).size).toBe(3);
+  expect(csvLeft(ids)).toBe(0);
+  expect(api.state().records.filter(record => record.kind === 'retention-receipts' && record.data.result === 'deleted')).toHaveLength(3);
+  expect(screen.queryByRole('button', { name: /Execute approved run|Resume approved run|Stop/ })).toBeNull();
+});
+
+it('stops after the current request when asked, and Resume carries the run on', async () => {
+  const ids = [batchId, ...moreBatches()];
+  enable(); const user = userEvent.setup(); renderApp('/lifecycle');
+  await prepare(user); await approve(user);
+  const release = api.hold(/\/execute$/);
+  await user.click(await screen.findByRole('button', { name: 'Execute approved run' }));
+  await user.click(await screen.findByRole('button', { name: 'Stop' }));
+  expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Stopping…' }));
+  expect(screen.getByText(/^Stopping after the current step\./)).toBeTruthy();
+  release();
+  await screen.findByText('Stopped. Removed so far: 1 of 3 sources. Resume approved run to continue; each source is checked again first.');
+  expect(api.calls.filter(call => call.path.endsWith('/execute'))).toHaveLength(1);
+  expect(csvLeft(ids)).toBe(2);
+  await user.click(screen.getByRole('button', { name: 'Resume approved run' }));
+  await screen.findByText('This run is complete. Inspect its saved deletion receipts below.');
+  expect(csvLeft(ids)).toBe(0);
+});
+
+it('stops the run at a blocked source and says why', async () => {
+  const ids = [batchId, ...moreBatches()];
+  enable(); const user = userEvent.setup(); renderApp('/lifecycle');
+  await prepare(user); await approve(user);
+  api.mutate((state, ctx) => setLifecycleHold(state, ctx, { kind: 'raw_csv', sourceId: ids[1]!, held: true, expectedHoldRevision: lifecycleHolds(state).revision, reason: 'A new sample case needs this source after all.' }));
+  await user.click(await screen.findByRole('button', { name: 'Execute approved run' }));
+  await screen.findByText(`The run stopped at Raw import CSV ${ids[1]}, which is blocked: This source changed, is held or no longer meets the approved policy. Review the source and prepare a fresh preview. Removed so far: 1 of 3 sources.`);
+  expect(api.calls.filter(call => call.path.endsWith('/execute'))).toHaveLength(2);
+  expect(csvLeft(ids)).toBe(2);
+  expect(api.state().records.find(record => record.id === ids[2])!.data.csv).toContain('SAMPLE-ROW-3');
+  expect(screen.getByRole('button', { name: 'Resume approved run' })).toBeTruthy();
+});
+
 it('keeps retention details and controls unavailable to non-administrators', async () => {
   api.role = 'Finance'; renderApp('/lifecycle');
   await screen.findByText(/Only a currently authorised administrator can inspect or change retention controls/);
@@ -111,11 +177,41 @@ it('lets an administrator place an exact artifact hold with an accountable reaso
 it('says why an export file kept as evidence is never offered for deletion', async () => {
   api.mutate((state, ctx) => saveLifecyclePolicy(state, ctx, { policy: { rawCsvDays: 30, journalPayloadDays: null, exportFileDays: 30, auditTrail: 'retain' }, expectedRevision: lifecyclePolicy(state).revision, reason: 'Sample sources and files have passed their retention review.' }));
   const exportId = api.mutate(state => makeRecord(state, 'exports', { name: 'Sample customer pack', status: 'ready', createdAt: '2026-08-02T10:00:00.000Z', data: { kind: 'customer-pack', format: 'json', bucket: 'synthetic-private', objectName: 'exports/sample.json', checksum: 'c'.repeat(64), generatedAt: '2026-08-02T10:00:00.000Z' } }).id);
-  const caseId = api.mutate(state => makeRecord(state, 'exceptions', { name: 'Open sample case', status: 'in_progress', createdAt: '2026-08-02T10:00:00.000Z', data: { type: 'unmatched_payment', case: { assignee: 'Sandbox Admin', assigneeName: 'Demo Admin', nextAction: 'Review the linked export', nextActionAt: '2026-10-01T10:00:00.000Z', evidenceIds: [exportId] } } }).id);
+  const caseId = api.mutate(state => makeRecord(state, 'exceptions', { name: 'Open sample case', status: 'in_progress', createdAt: '2026-08-02T10:00:00.000Z', data: { type: 'unmatched_payment', case: { assignee: 'Sandbox Admin', assigneeName: 'Sandbox Admin', nextAction: 'Review the linked export', nextActionAt: '2026-10-01T10:00:00.000Z', evidenceIds: [exportId] } } }).id);
   api.lifecycleExternal = [{ kind: 'export_file', merchantId: api.merchantIds[0]!, sourceId: exportId, version: 'generation-1', createdAt: '2026-08-02T10:00:00.000Z', label: 'Private export file', digest: 'd'.repeat(64), status: 'ready' }];
   const user = userEvent.setup(); renderApp('/lifecycle');
   await screen.findByText(/1 source currently eligible · 1 kept as evidence/);
   await user.selectOptions(await screen.findByRole('combobox', { name: 'Source to hold or release' }), `export_file:${exportId}`);
   expect(screen.getByText(new RegExp(`Kept as evidence \\(linked to open case ${caseId}\\), so it is not eligible for deletion`))).toBeTruthy();
   expect(screen.getByRole('option', { name: new RegExp(`${exportId} · Evidence`) })).toBeTruthy();
+});
+
+it('explains the retention minimum, and in the sandbox that a pilot needs a second administrator to approve a run', async () => {
+  enable();
+  const user = userEvent.setup(); renderApp('/lifecycle');
+  expect(await screen.findByText('The sandbox keeps every category for at least 30 days, the time an inactive sandbox is kept. A pilot keeps evidence for six years.')).toBeTruthy();
+  expect(screen.getByRole('spinbutton', { name: 'Raw CSV after import: minimum days' }).getAttribute('min')).toBe('30');
+  await prepare(user);
+  expect(screen.getByText(/In a pilot, an administrator other than the one who prepared a preview must approve it\. This sandbox has one person playing every role, so here you may approve your own preview\./)).toBeTruthy();
+  await approve(user);
+  await screen.findByRole('button', { name: 'Execute approved run' });
+});
+
+it('keeps a pilot administrator from approving the preview they prepared', async () => {
+  enable();
+  // A staff pilot's view: its minimums, and a second administrator approves each run.
+  const send = globalThis.fetch;
+  globalThis.fetch = async (input, options) => {
+    const response = await send(input, options);
+    if (new URL(String(input instanceof Request ? input.url : input), 'http://localhost').pathname !== '/api/v1/lifecycle' || (options?.method ?? 'GET') !== 'GET') return response;
+    return new Response(JSON.stringify({ ...(await response.json()), secondApprover: true, minimumDays: { rawCsvDays: 2192, journalPayloadDays: 366, exportFileDays: 2192 } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const user = userEvent.setup(); renderApp('/lifecycle');
+  expect(await screen.findByText(/This pilot keeps raw CSV and export files for at least 2,192 days \(six years\)/)).toBeTruthy();
+  await prepare(user);
+  expect(screen.getByText('You prepared this preview, so another administrator must approve it. Either of you can execute it once approved.')).toBeTruthy();
+  await user.click(screen.getByRole('checkbox', { name: /I reviewed every source identity/ }));
+  await user.type(screen.getByRole('textbox', { name: 'Reason for approving this deletion' }), 'Approving my own preview is not allowed in a pilot.');
+  expect((screen.getByRole('button', { name: 'Approve exact deletion run' }) as HTMLButtonElement).disabled).toBe(true);
+  globalThis.fetch = send;
 });
