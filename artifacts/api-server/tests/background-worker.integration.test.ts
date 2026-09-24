@@ -50,25 +50,35 @@ const lenderHeld = async (merchantId: string) => (await pool.query<{ held: boole
   "SELECT EXISTS (SELECT 1 FROM valopay_merchants m JOIN pg_locks l ON l.locktype='transactionid' AND l.transactionid=m.xmax AND l.granted WHERE m.id=$1) AS held", [merchantId])).rows[0]!.held;
 
 /**
- * Probes /api/healthz from another process, as a host's health check does, every 20 ms until an answer reports a pass
- * that found work, and returns each probe: a probe from this process could not tell, since it would wait on the same
- * event loop it measures.
+ * Probes /api/healthz from another process, as a host's health check does, until an answer reports a pass that found
+ * work, and returns each probe answered and how many were skipped: a probe from this process could not tell, since it
+ * would wait on the same event loop it measures. A probe waits 100 ms after the last answer, and an answer other than
+ * 200, such as the health limit's 429 once a network has made its 120 checks in a minute, is a skipped probe.
  */
 type Probe = { ms: number; ticks: number; lastRun: { closed: number; durationMs: number } | null };
-async function probeHealth(url: string): Promise<Probe[]> {
+async function probeHealth(url: string): Promise<{ probes: Probe[]; skipped: number }> {
   const script = `const { performance } = require("node:perf_hooks"); const until = Date.now() + 180000;
     (async () => { for (;;) {
-      const sent = performance.now(), body = await (await fetch(process.argv[1])).json();
-      console.log(JSON.stringify({ ms: performance.now() - sent, ticks: body.scheduler.ticks, lastRun: body.scheduler.lastRun }));
-      if (body.scheduler.lastRun || Date.now() > until) break;
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      const sent = performance.now(), answer = await fetch(process.argv[1]);
+      if (answer.status === 200) {
+        const body = await answer.json();
+        console.log(JSON.stringify({ ms: performance.now() - sent, ticks: body.scheduler.ticks, lastRun: body.scheduler.lastRun }));
+        if (body.scheduler.lastRun) break;
+      } else {
+        await answer.arrayBuffer();
+        console.log(JSON.stringify({ skipped: answer.status }));
+      }
+      if (Date.now() > until) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
     } })();`;
   const child = spawn(process.execPath, ["-e", script, url], { stdio: ["ignore", "pipe", "inherit"] });
   let output = "";
   child.stdout.on("data", (chunk) => { output += chunk; });
   const status = await new Promise<number | null>((resolve) => child.on("close", resolve));
   assert.equal(status, 0, "the health probe ran to the end");
-  return output.split("\n").filter(Boolean).map((line) => JSON.parse(line) as Probe);
+  const answers = output.split("\n").filter(Boolean).map((line) => JSON.parse(line) as Probe | { skipped: number });
+  const probes = answers.filter((answer): answer is Probe => !("skipped" in answer));
+  return { probes, skipped: answers.length - probes.length };
 }
 
 /** Loads the performance suite's synthetic workflow fixture into a lender, its dates moved to now, as a pilot lender that has not closed yet. */
@@ -120,7 +130,7 @@ try {
   assert.equal(queued.status, 200, JSON.stringify(queued.body));
   const loop = monitorEventLoopDelay({ resolution: 10 });
   loop.enable();
-  const probes = await probeHealth(`${base}/healthz`);
+  const { probes, skipped } = await probeHealth(`${base}/healthz`);
   loop.disable();
   const pass = probes.at(-1)?.lastRun;
   assert.ok(pass, "the scheduled close finished within three minutes");
@@ -174,7 +184,7 @@ try {
   const order = lines().map((line) => line.event).filter((event) => event === "close.run" || event === "background.stopped");
   assert.deepEqual(order.slice(-2), ["close.run", "background.stopped"]);
   background = undefined;
-  console.log(`Background worker integration test passed: a ${pass.durationMs} ms scheduled close of ${seeded} records on the thread while ${during.length} health probes from another process answered in at most ${Math.round(slowest)} ms and the main event loop stalled at most ${stalled} ms; an export claimed and settled by the thread; and a stop during a close that let it finish.`);
+  console.log(`Background worker integration test passed: a ${pass.durationMs} ms scheduled close of ${seeded} records on the thread while ${during.length} health probes from another process answered in at most ${Math.round(slowest)} ms (${skipped} more answered other than 200, and were skipped) and the main event loop stalled at most ${stalled} ms; an export claimed and settled by the thread; and a stop during a close that let it finish.`);
 } finally {
   if (background) { background.stop(); await background.settle(); }
   if (server) await new Promise<void>((resolve, reject) => server!.close((error) => error ? reject(error) : resolve()));
