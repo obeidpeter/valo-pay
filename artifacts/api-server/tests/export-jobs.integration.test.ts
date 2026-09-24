@@ -181,7 +181,8 @@ try{
   assert.equal(outcome,'ready','a busy moment of 4 s does not strand the export');
  }finally{await briefHold;briefHolder.release();}
  state=await read();
- assert.deepEqual(auditOf(brief.body.id).map(record=>record.data.action),['export.started','export.ready']);
+ // The request's own entry names the export it queued (the audit object is the record a route created), then the worker's.
+ assert.deepEqual(auditOf(brief.body.id).map(record=>record.data.action),['post.exports','export.started','export.ready']);
  assert.equal(state.records.find(record=>record.id===brief.body.id)!.data.attempts,1);
 
  // Held for longer than a progress write waits, the lender gets the claim handed back: the job is queued again at
