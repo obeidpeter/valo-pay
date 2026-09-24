@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
 import { useWorkspace } from "@/lib/workspace-context";
 import { usePilotMutation, usePilotQuery } from "@/lib/pilot";
@@ -13,7 +13,7 @@ import {
 import { StaffSession } from "@/components/staff-session";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useDialogFocusReturn } from "@/lib/focus";
+import { useDialogFocusReturn, useFocusWhenLost } from "@/lib/focus";
 import { formatCount, formatDate } from "@/lib/formatters";
 import { AccessReadiness } from '@/components/access-readiness';
 
@@ -41,6 +41,12 @@ export default function TeamPage() {
   const revoke = usePilotMutation((result) => setMessage(result.message));
   const [decision, setDecision] = useState("");
   const decide = usePilotMutation((result) => setDecision(result.message));
+  // A decision clears the last one's message as it starts, so the next takes focus even when worded the same.
+  const choose = (path: string) => { setDecision(""); decide.mutate({ path, lender: false }); };
+  // Revoking an invitation removes its button, and creating one holds its button disabled until the answer, so focus
+  // then goes to what happened rather than to the page.
+  const said = useRef<HTMLParagraphElement>(null);
+  useFocusWhenLost(said, message);
   // The directory as the shared schema read it: every list present, lenders included.
   const directory = query.data;
   const admin = directory?.mode === "staff" && workspace?.role === "Admin";
@@ -78,16 +84,17 @@ export default function TeamPage() {
             <div className="space-y-3">
               {directory.members.map((member: any) => (
                 <Member
-                  key={`${member.id}:${member.updatedAt}`}
+                  key={member.id}
                   member={member}
                   editable={admin && member.actor !== workspace?.actor}
+                  shared={!admin && member.actor !== workspace?.actor}
                   lenders={directory.lenders}
                 />
               ))}
             </div>
           </PilotPanel>
           {admin && (
-            <Approvals directory={directory} actor={workspace?.actor} decide={decide} message={decision} />
+            <Approvals directory={directory} actor={workspace?.actor} decide={decide} choose={choose} message={decision} />
           )}
           {admin && (
             <PilotPanel title="Invite a team member">
@@ -105,6 +112,7 @@ export default function TeamPage() {
                 onSubmit={(e) => {
                   e.preventDefault();
                   setLink("");
+                  setMessage("");
                   invite.mutate({
                     path: "/team/invitations",
                     lender: false,
@@ -157,7 +165,7 @@ export default function TeamPage() {
                   />
                 </label>
               )}
-              <p role="status" className="text-sm">
+              <p ref={said} role="status" className="text-sm">
                 {message}
               </p>
               <div className="space-y-3">
@@ -177,12 +185,13 @@ export default function TeamPage() {
                         variant="outline"
                         disabled={revoke.hasUnconfirmedOutcome}
                         busy={revoke.isPending}
-                        onClick={() =>
+                        onClick={() => {
+                          setMessage("");
                           revoke.mutate({
                             path: `/team/invitations/${item.id}/revoke`,
                             lender: false,
-                          })
-                        }
+                          });
+                        }}
                       >
                         Revoke invitation
                       </Button>
@@ -222,13 +231,46 @@ export default function TeamPage() {
     </div>
   );
 }
-function Member({ member, editable, lenders }: { member: any; editable: boolean; lenders: any[] }) {
+/**
+ * A member's card lasts as long as the membership, and its forms start again from each version of it (updatedAt),
+ * so after any change they show the membership as it now stands. What a change made here did, or a change whose
+ * outcome is unconfirmed, stays on the card rather than going with the form the new version replaced.
+ */
+function Member({ member, editable, shared, lenders }: { member: any; editable: boolean; shared: boolean; lenders: any[] }) {
+  const change = usePilotMutation(), grant = usePilotMutation();
+  // The button that made a change goes with that form, so focus then goes to what the change did.
+  const changed = useRef<HTMLParagraphElement>(null), granted = useRef<HTMLParagraphElement>(null);
+  useFocusWhenLost(changed, change.data);
+  useFocusWhenLost(granted, grant.data);
+  const count = member.lenderIds?.length || 0;
+  return (
+    <article className="space-y-3 rounded-lg border p-4">
+      <div>
+        <h3 className="text-sm font-semibold">{member.name}</h3>
+        <p className="text-xs text-muted-foreground">
+          {member.role} · {member.status}
+          {member.expiresAt ? ` · expires ${formatDate(member.expiresAt)}` : ""}
+        </p>
+      </div>
+      {/* Someone who is not an administrator is sent only the lenders they share with a colleague, so that is what a colleague's row counts. */}
+      <p className="text-sm text-muted-foreground">{member.role === "Admin" ? "All lenders in this workspace" : shared ? formatCount(count, "lender you share", "lenders you share") : formatCount(count, "permitted lender")}</p>
+      {editable && <AccessForm key={`access:${member.updatedAt}`} member={member} mutation={change} />}
+      <RecoveryNotice mutation={change} persistent={false} />
+      {change.data?.message && <p ref={changed} role="status" className="text-sm">{change.data.message}</p>}
+      {editable && member.role !== "Admin" && member.status === "active" && <LenderGrants key={`lenders:${member.updatedAt}`} member={member} lenders={lenders} mutation={grant} />}
+      <RecoveryNotice mutation={grant} persistent={false} />
+      {grant.isSuccess && <p ref={granted} role="status" className="text-sm">Lender access saved.</p>}
+    </article>
+  );
+}
+
+/** A membership's role and access as one version of it stands, and the change sent against that version. */
+function AccessForm({ member, mutation }: { member: any; mutation: ReturnType<typeof usePilotMutation> }) {
   const [role, setRole] = useState(member.role),
     [status, setStatus] = useState(member.status),
     [reason, setReason] = useState(""),
     // Revoking cannot be undone here, so it takes one more step after its reason; other changes save at once.
     [confirming, setConfirming] = useState(false);
-  const mutation = usePilotMutation();
   const restoreFocus = useDialogFocusReturn(confirming);
   const save = () =>
     mutation.mutate({
@@ -243,76 +285,64 @@ function Member({ member, editable, lenders }: { member: any; editable: boolean;
       },
     });
   return (
-    <article className="space-y-3 rounded-lg border p-4">
-      <div>
-        <h3 className="text-sm font-semibold">{member.name}</h3>
-        <p className="text-xs text-muted-foreground">
-          {member.role} · {member.status}
-          {member.expiresAt ? ` · expires ${formatDate(member.expiresAt)}` : ""}
-        </p>
-      </div>
-      <p className="text-sm text-muted-foreground">{member.role === "Admin" ? "All lenders in this workspace" : formatCount(member.lenderIds?.length || 0, "permitted lender")}</p>
-      {editable && (
-        <form
-          className="space-y-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (status === "revoked" && member.status !== "revoked") setConfirming(true);
-            else save();
-          }}
-        >
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1 text-sm">
-              Role for {member.name}
-              <select
-                className={pilotField}
-                disabled={mutation.isPending || mutation.hasUnconfirmedOutcome}
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-              >
-                {roles.map((value) => (
-                  <option key={value}>{value}</option>
-                ))}
-              </select>
-            </label>
-            <label className="space-y-1 text-sm">
-              Access for {member.name}
-              <select
-                className={pilotField}
-                disabled={mutation.isPending || mutation.hasUnconfirmedOutcome}
-                value={status}
-                onChange={(e) => setStatus(e.target.value)}
-              >
-                {["active", "suspended", "revoked"].map((value) => (
-                  <option key={value}>{value}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <label className="block space-y-1 text-sm">
-            Reason for changing {member.name}
-            <input
+    <>
+      <form
+        className="space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (status === "revoked" && member.status !== "revoked") setConfirming(true);
+          else save();
+        }}
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="space-y-1 text-sm">
+            Role for {member.name}
+            <select
               className={pilotField}
-              required
-              minLength={3}
-              maxLength={500}
               disabled={mutation.isPending || mutation.hasUnconfirmedOutcome}
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-            />
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+            >
+              {roles.map((value) => (
+                <option key={value}>{value}</option>
+              ))}
+            </select>
           </label>
-          <Button
-            variant={status === "revoked" ? "destructive" : "outline"}
-            type="submit"
-            disabled={mutation.hasUnconfirmedOutcome}
-            busy={mutation.isPending}
-          >
-            Save access change
-          </Button>
-          <RecoveryNotice mutation={mutation} persistent={false} />
-          {mutation.data?.message && <p role="status" className="text-sm">{mutation.data.message}</p>}
-        </form>
-      )}
+          <label className="space-y-1 text-sm">
+            Access for {member.name}
+            <select
+              className={pilotField}
+              disabled={mutation.isPending || mutation.hasUnconfirmedOutcome}
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+            >
+              {["active", "suspended", "revoked"].map((value) => (
+                <option key={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <label className="block space-y-1 text-sm">
+          Reason for changing {member.name}
+          <input
+            className={pilotField}
+            required
+            minLength={3}
+            maxLength={500}
+            disabled={mutation.isPending || mutation.hasUnconfirmedOutcome}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+        </label>
+        <Button
+          variant={status === "revoked" ? "destructive" : "outline"}
+          type="submit"
+          disabled={mutation.hasUnconfirmedOutcome}
+          busy={mutation.isPending}
+        >
+          Save access change
+        </Button>
+      </form>
       <Dialog open={confirming} onOpenChange={(open) => { if (!open) setConfirming(false); }}>
         <DialogContent onCloseAutoFocus={restoreFocus}>
           <DialogHeader>
@@ -331,8 +361,7 @@ function Member({ member, editable, lenders }: { member: any; editable: boolean;
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {editable && member.role !== "Admin" && member.status === "active" && <LenderGrants key={member.updatedAt} member={member} lenders={lenders} />}
-    </article>
+    </>
   );
 }
 
@@ -341,9 +370,12 @@ function Member({ member, editable, lenders }: { member: any; editable: boolean;
  * administrator who asked cannot approve (the service refuses it too), but may withdraw a change; the person a change
  * is for neither approves nor declines it (refused too).
  */
-function Approvals({ directory, actor, decide, message }: { directory: StaffDirectory; actor?: string; decide: ReturnType<typeof usePilotMutation>; message: string }) {
+function Approvals({ directory, actor, decide, choose, message }: { directory: StaffDirectory; actor?: string; decide: ReturnType<typeof usePilotMutation>; choose: (path: string) => void; message: string }) {
   const invitations = directory.invitations.filter((item) => item.status === "pending" && item.approval === "awaiting");
   const busy = decide.isPending || decide.hasUnconfirmedOutcome;
+  // A decision removes its item, and its button with it, so focus then goes to what the decision did.
+  const decided = useRef<HTMLParagraphElement>(null);
+  useFocusWhenLost(decided, message);
   return (
     <PilotPanel title="Waiting for a second administrator">
       <p className="text-sm text-muted-foreground">
@@ -357,7 +389,7 @@ function Approvals({ directory, actor, decide, message }: { directory: StaffDire
             <li key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 text-sm">
               <span>Invitation: {item.email} as {item.role}<small className="mt-1 block text-muted-foreground">Sent by {item.invitedBy} · expires {formatDate(item.expiresAt)}</small></span>
               {item.invitedBy === actor ? <span className="text-xs text-muted-foreground">You sent it: another administrator approves it.</span> : (
-                <Button variant="outline" disabled={busy} onClick={() => decide.mutate({ path: `/team/invitations/${item.id}/approve`, lender: false })}>Approve invitation</Button>
+                <Button variant="outline" disabled={busy} onClick={() => choose(`/team/invitations/${item.id}/approve`)}>Approve invitation</Button>
               )}
             </li>
           ))}
@@ -368,9 +400,9 @@ function Approvals({ directory, actor, decide, message }: { directory: StaffDire
               <div className="flex flex-wrap gap-2">
                 {directory.members.some((member) => member.id === change.memberId && member.actor === actor) ? <span className="self-center text-xs text-muted-foreground">A change to your own membership: another administrator approves or declines it.</span> : <>
                   {change.requestedBy === actor ? <span className="self-center text-xs text-muted-foreground">You asked for it: another administrator approves it.</span> : (
-                    <Button variant="outline" disabled={busy} onClick={() => decide.mutate({ path: `/team/changes/${change.id}/approve`, lender: false })}>Approve change</Button>
+                    <Button variant="outline" disabled={busy} onClick={() => choose(`/team/changes/${change.id}/approve`)}>Approve change</Button>
                   )}
-                  <Button variant="ghost" disabled={busy} onClick={() => decide.mutate({ path: `/team/changes/${change.id}/decline`, lender: false })}>{change.requestedBy === actor ? "Withdraw request" : "Decline change"}</Button>
+                  <Button variant="ghost" disabled={busy} onClick={() => choose(`/team/changes/${change.id}/decline`)}>{change.requestedBy === actor ? "Withdraw request" : "Decline change"}</Button>
                 </>}
               </div>
             </li>
@@ -378,19 +410,22 @@ function Approvals({ directory, actor, decide, message }: { directory: StaffDire
         </ul>
       )}
       <RecoveryNotice mutation={decide} persistent={false} />
-      {message && <p role="status" className="text-sm">{message}</p>}
+      {message && <p ref={decided} role="status" className="text-sm">{message}</p>}
     </PilotPanel>
   );
 }
 
-function LenderGrants({ member, lenders }: { member: any; lenders: any[] }) {
+/** A member's lenders as one version of the membership stands; what a save did stays on the member's card. */
+function LenderGrants({ member, lenders, mutation }: { member: any; lenders: any[]; mutation: ReturnType<typeof usePilotMutation> }) {
   const [selected, setSelected] = useState<string[]>(member.lenderIds || []), [reason, setReason] = useState("");
-  const mutation = usePilotMutation(() => setReason("")), busy = mutation.isPending || mutation.hasUnconfirmedOutcome;
+  const busy = mutation.isPending || mutation.hasUnconfirmedOutcome;
+  // A saved change's reason is spent, even before the new version renews this form.
+  useEffect(() => { if (mutation.data) setReason(""); }, [mutation.data]);
   return <form className="space-y-3 border-t pt-4" onSubmit={event => { event.preventDefault(); mutation.mutate({ path: `/team/members/${member.id}/lenders`, lender: false, method: "PATCH", data: { expectedUpdatedAt: member.updatedAt, lenderIds: selected, reason } }); }}>
     <fieldset disabled={busy} className="space-y-2"><legend className="mb-2 text-sm font-semibold">Lenders available to {member.name}</legend>{lenders.length ? lenders.map(lender => <label key={lender.id} className="flex min-h-11 items-center gap-3 text-sm"><input type="checkbox" checked={selected.includes(lender.id)} onChange={event => setSelected(current => event.target.checked ? [...current, lender.id] : current.filter(id => id !== lender.id))} />{lender.name}</label>) : <p className="text-sm text-muted-foreground">Create a lender from the pilot journey before assigning access.</p>}
       <label className="block space-y-1 text-sm">Reason for lender access change for {member.name}<textarea className={pilotField} required minLength={10} maxLength={1000} rows={2} value={reason} onChange={event => setReason(event.target.value)} /></label>
       <p className="text-xs text-muted-foreground">Clearing every selection removes lender access. Saved sessions are checked again on the next request.</p>
       <Button type="submit" variant="outline" busy={mutation.isPending}>Save lender access</Button>
-    </fieldset><RecoveryNotice mutation={mutation} persistent={false} />{mutation.isSuccess && <p role="status" className="text-sm">Lender access saved.</p>}
+    </fieldset>
   </form>;
 }
