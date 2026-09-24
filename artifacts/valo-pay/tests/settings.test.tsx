@@ -143,7 +143,8 @@ describe("settings", () => {
     expect(await screen.findByText(/In a pilot, turning the stop off needs a second administrator’s approval\. In this sandbox one person plays every role, so it takes effect at once\./)).toBeTruthy();
     await user.type(screen.getByLabelText("Reason for changing the emergency stop"), "The rehearsal incident is over.");
     await user.click(screen.getByRole("button", { name: "Turn off emergency stop" }));
-    await screen.findByText("Emergency stop updated");
+    // The page says what the request did, in the service's words.
+    expect((await screen.findByText("Lender emergency stop is off. No collection instruction was sent.")).getAttribute("role")).toBe("status");
     expect(api.state().merchant.killSwitch).toBe(false);
   });
 
@@ -162,7 +163,7 @@ describe("settings", () => {
     expect(screen.queryByRole("button", { name: /Turn off emergency stop|Ask to turn off emergency stop/ })).toBeNull();
     await user.type(screen.getByLabelText("Reason for changing the emergency stop"), "Checked the incident notes with Operations.");
     await user.click(screen.getByRole("button", { name: "Approve turning it off" }));
-    await screen.findByText("Emergency stop turned off");
+    await screen.findByText("Lender emergency stop is off. No collection instruction was sent.");
     expect(api.state().merchant.killSwitch).toBe(false);
     expect(api.state().settings.emergencyStopReleases).toBeUndefined();
     globalThis.fetch = send;

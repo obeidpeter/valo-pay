@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { keyboardShortcuts } from '@/lib/focus';
+import { keyboardShortcuts, useFocusWhenLost } from '@/lib/focus';
 import { themeChoices, useTheme } from '@/lib/theme';
 import { Loading } from '@/components/loading';
 import { DailyCloseStatus } from '@/components/daily-close-status';
@@ -55,6 +55,16 @@ export default function SettingsPage() {
   const approveStop = usePerformAction({ mutation: { onSuccess: changedData } }, merchantId);
   useUnsavedChanges(approveStop.isPending || approveStop.hasUnconfirmedOutcome);
   useEffect(() => { approveStop.reset(); }, [merchantId]);
+  // One stop request at a time: while one runs, or its answer was lost, nothing that could reverse it is sent, only its retry.
+  const stopPending = killSwitch.isPending || approveStop.isPending;
+  // What the last stop request did, in the service's words, on the page. Approve turning it off and Keep the stop on take
+  // their box away when they succeed, so focus then goes to this rather than to the page body; a lost answer's notice,
+  // with its retry, takes it the same way.
+  const [stopResult, setStopResult] = useState('');
+  const stopResultMessage = useRef<HTMLParagraphElement>(null), stopNotice = useRef<HTMLDivElement>(null), approvalNotice = useRef<HTMLDivElement>(null);
+  useFocusWhenLost(stopResultMessage, stopResult);
+  useFocusWhenLost(stopNotice, killSwitch.hasUnconfirmedOutcome);
+  useFocusWhenLost(approvalNotice, approveStop.hasUnconfirmedOutcome);
   const updateExecSettings = useUpdateSettings({ mutation: { onSuccess: changedData } }, `${merchantId}:${isEditingExec}`);
   const otherOutcomeUnconfirmed = killSwitch.hasUnconfirmedOutcome || requestInstruction.hasUnconfirmedOutcome || updateExecSettings.hasUnconfirmedOutcome;
   const otherActionPending = killSwitch.isPending || requestInstruction.isPending || updateExecSettings.isPending;
@@ -69,23 +79,25 @@ export default function SettingsPage() {
     } catch (error) { if (isCurrent()) notifyProblem(outcomeIsUnconfirmed(error) ? 'Demo role outcome unconfirmed' : 'Demo role was not changed', saidBy(error, 'Retry the original request to confirm its outcome.')); }
   };
   const changeStop = async (enabled = !settings?.merchant.killSwitch) => {
-    if (!merchantId || !settings || killSwitch.isPending) return;
+    if (!merchantId || !settings || stopPending || approveStop.hasUnconfirmedOutcome) return;
     const blocked = permissionReason(workspace, { action: 'kill_switch' });
     if (blocked) { notifyProblem('Emergency stop unchanged', blocked); return; }
     const isCurrent = captureVisit();
+    setStopResult('');
     try {
       const data = await (killSwitch.hasUnconfirmedOutcome ? killSwitch.retryUnconfirmed() : killSwitch.mutateAsync({ data: { action: 'kill_switch', reason: killReason, data: { enabled } }, params: { merchantId } }));
-      if (isCurrent()) { setKillReason(''); notifyDone('Emergency stop updated', data.message); }
+      if (isCurrent()) { setKillReason(''); setStopResult(data.message); }
     } catch (error) { if (isCurrent()) notifyProblem(outcomeIsUnconfirmed(error) ? 'Emergency stop outcome unconfirmed' : 'The emergency stop was not changed', saidBy(error, 'Retry the original request to confirm its outcome.')); }
   };
   const approveRelease = async () => {
-    if (!merchantId || approveStop.isPending) return;
+    if (!merchantId || stopPending || killSwitch.hasUnconfirmedOutcome) return;
     const blocked = permissionReason(workspace, { action: 'approve_kill_switch_off' });
     if (blocked) { notifyProblem('Emergency stop unchanged', blocked); return; }
     const isCurrent = captureVisit();
+    setStopResult('');
     try {
       const data = await (approveStop.hasUnconfirmedOutcome ? approveStop.retryUnconfirmed() : approveStop.mutateAsync({ data: { action: 'approve_kill_switch_off', reason: killReason, data: {} }, params: { merchantId } }));
-      if (isCurrent()) { setKillReason(''); notifyDone('Emergency stop turned off', data.message); }
+      if (isCurrent()) { setKillReason(''); setStopResult(data.message); }
     } catch (error) { if (isCurrent()) notifyProblem(outcomeIsUnconfirmed(error) ? 'Emergency stop outcome unconfirmed' : 'The emergency stop was not turned off', saidBy(error, 'Retry the original request to confirm its outcome.')); }
   };
   const testInstruction = async () => {
@@ -113,7 +125,7 @@ export default function SettingsPage() {
   const [refreshingLatest, setRefreshingLatest] = useState(false);
   const pendingErrorFocus = useRef<string | null>(null);
   useEffect(() => { if (!updateExecSettings.isPending && pendingErrorFocus.current) { focusField(`settings-${pendingErrorFocus.current}`); pendingErrorFocus.current = null; } }, [updateExecSettings.isPending, execErrors]);
-  useEffect(() => { execSession.current += 1; setIsEditingExec(false); setExecErrors({}); setExecAlert(''); setExecConflict(false); setRefreshingLatest(false); setKillReason(''); setRole(workspace?.role || 'Admin'); setIsHandBackOpen(false); updateRole.reset(); killSwitch.reset(); requestInstruction.reset(); updateExecSettings.reset(); }, [merchantId]);
+  useEffect(() => { execSession.current += 1; setIsEditingExec(false); setExecErrors({}); setExecAlert(''); setExecConflict(false); setRefreshingLatest(false); setKillReason(''); setStopResult(''); setRole(workspace?.role || 'Admin'); setIsHandBackOpen(false); updateRole.reset(); killSwitch.reset(); requestInstruction.reset(); updateExecSettings.reset(); }, [merchantId]);
   useEffect(() => () => { visit.current = { merchantId: null, generation: visit.current.generation + 1 }; }, []);
   useEffect(() => { if (workspace?.role) setRole(workspace.role); }, [workspace?.role]);
   const execKeys = ['closeTime', 'unallocatedAlertThreshold', 'notificationCostAlertKobo'] as const;
@@ -408,19 +420,20 @@ export default function SettingsPage() {
                     placeholder="Explain why you are turning the stop on or off"
                     aria-describedby="kill-reason-help"
                     value={killReason}
-                    disabled={killSwitch.isPending || killSwitch.hasUnconfirmedOutcome}
+                    disabled={stopPending || killSwitch.hasUnconfirmedOutcome || approveStop.hasUnconfirmedOutcome}
                     onChange={(e) => setKillReason(e.target.value)}
                     className="w-full bg-background border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   <p id="kill-reason-help" className="mt-1 text-xs text-muted-foreground">Enter a reason. The change and your reason will be recorded in the audit log.</p>
                 </div>
                 <div className="flex flex-col gap-2 sm:flex-row">
-                {!release && <Button 
+                {/* While a request to lift the stop waits, its box offers the answers to it; a stop request whose answer was lost is retried here all the same. */}
+                {(!release || killSwitch.hasUnconfirmedOutcome) && <Button 
                   variant="destructive"
                   action="kill_switch" onClick={() => { void changeStop(); }}
-                  disabled={!killReason && !killSwitch.hasUnconfirmedOutcome}
+                  disabled={(!killReason && !killSwitch.hasUnconfirmedOutcome) || approveStop.isPending || approveStop.hasUnconfirmedOutcome}
                   busy={killSwitch.isPending}
-                  busyLabel={settings.merchant.killSwitch ? (staffPilot ? 'Asking…' : 'Deactivating…') : 'Activating…'}
+                  busyLabel={killSwitch.hasUnconfirmedOutcome ? 'Checking original request…' : settings.merchant.killSwitch ? (staffPilot ? 'Asking…' : 'Deactivating…') : 'Activating…'}
                 >
                   {killSwitch.hasUnconfirmedOutcome ? 'Retry original emergency-stop request' : settings.merchant.killSwitch ? (staffPilot ? 'Ask to turn off emergency stop' : 'Turn off emergency stop') : 'Activate emergency stop'}
                 </Button>}
@@ -433,7 +446,7 @@ export default function SettingsPage() {
                 </Button>
                 </div>
               </div>
-              {killSwitch.hasUnconfirmedOutcome && <div role="alert" className="text-sm mt-3"><p>The emergency-stop response is unconfirmed. The stop may already have changed. Retry the original request to recover its result; do not submit the opposite action.</p><DiscardOriginalRequest disabled={killSwitch.isPending} onDiscard={killSwitch.abandonUnconfirmed} /></div>}
+              {killSwitch.hasUnconfirmedOutcome && <div ref={stopNotice} role="alert" className="text-sm mt-3"><p>The emergency-stop response is unconfirmed. The stop may already have changed. Retry the original request to recover its result; do not submit the opposite action.</p><DiscardOriginalRequest disabled={killSwitch.isPending} onDiscard={killSwitch.abandonUnconfirmed} /></div>}
               {settings.merchant.killSwitch && (
                 <p className="text-xs text-destructive mt-2 flex items-center gap-1 font-bold">
                   <AlertTriangle className="h-3 w-3" /> Emergency stop active. No instructions can be sent to a provider or bank.
@@ -444,15 +457,17 @@ export default function SettingsPage() {
                   <p>{release.requestedBy} asked to turn the emergency stop off on {formatDate(release.requestedAt)}: “{release.reason}”. The stop stays on until another administrator approves it, with a reason above.</p>
                   <div className="flex flex-wrap gap-2">
                     {release.requestedBy === workspace?.actor ? <p className="self-center text-xs text-muted-foreground">You asked for this, so another administrator must approve it.</p> : (
-                      <Button variant="destructive" size="sm" action="approve_kill_switch_off" onClick={() => { void approveRelease(); }} disabled={!killReason && !approveStop.hasUnconfirmedOutcome} busy={approveStop.isPending} busyLabel="Approving…">{approveStop.hasUnconfirmedOutcome ? 'Retry original approval' : 'Approve turning it off'}</Button>
+                      <Button variant="destructive" size="sm" action="approve_kill_switch_off" onClick={() => { void approveRelease(); }} disabled={!killReason || approveStop.hasUnconfirmedOutcome || killSwitch.isPending || killSwitch.hasUnconfirmedOutcome} busy={approveStop.isPending} busyLabel="Approving…">Approve turning it off</Button>
                     )}
-                    <Button variant="outline" size="sm" action="kill_switch" onClick={() => { void changeStop(true); }} disabled={!killReason || killSwitch.hasUnconfirmedOutcome} busy={killSwitch.isPending} busyLabel="Keeping it on…">Keep the stop on</Button>
+                    <Button variant="outline" size="sm" action="kill_switch" onClick={() => { void changeStop(true); }} disabled={!killReason || killSwitch.hasUnconfirmedOutcome || approveStop.isPending || approveStop.hasUnconfirmedOutcome} busy={killSwitch.isPending} busyLabel="Keeping it on…">Keep the stop on</Button>
                   </div>
-                  {approveStop.hasUnconfirmedOutcome && <div role="alert"><p>The approval's response is unconfirmed. The stop may already be off. Retry the original approval to recover its result.</p><DiscardOriginalRequest disabled={approveStop.isPending} onDiscard={approveStop.abandonUnconfirmed} /></div>}
                 </div>
               ) : settings.merchant.killSwitch && (
                 <p className="mt-2 text-xs text-muted-foreground">{staffPilot ? 'Turning the stop off needs two administrators: your request waits until another administrator approves it.' : 'In a pilot, turning the stop off needs a second administrator’s approval. In this sandbox one person plays every role, so it takes effect at once.'}</p>
               )}
+              {/* Outside the box: a refetch that shows the request settled, as a lost approval may have settled it, takes the box away. */}
+              {approveStop.hasUnconfirmedOutcome && <div ref={approvalNotice} role="alert" className="mt-3 space-y-2 text-sm"><p>The approval's response is unconfirmed. The stop may already be off. Retry the original approval to recover its result.</p><div className="flex flex-wrap items-center gap-2"><Button variant="outline" size="sm" action="approve_kill_switch_off" onClick={() => { void approveRelease(); }} busy={approveStop.isPending} busyLabel="Checking original request…">Retry original approval</Button><DiscardOriginalRequest disabled={approveStop.isPending} onDiscard={approveStop.abandonUnconfirmed} /></div></div>}
+              {stopResult && <p ref={stopResultMessage} role="status" className="mt-3 text-sm">{stopResult}</p>}
             </div>
           </div>
         </section>
@@ -468,6 +483,7 @@ export default function SettingsPage() {
         onDone={response => {
           // The service switched the emergency stop on: show it at once, before the refetch the write started returns.
           queryClient.setQueryData<typeof settings>(getGetSettingsQueryKey({ merchantId }), current => current && { ...current, merchant: { ...current.merchant, killSwitch: true } });
+          setStopResult('');
           notifyDone('Collection ownership returned', handBackResult(response));
         }}
       />
