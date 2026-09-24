@@ -1269,10 +1269,11 @@ export async function loadState(context: StoreContext, merchantId: string, lock:
 export async function auditOverview(context: StoreContext, state: DomainState) {
   const session = sessionFor(context), merchantId = state.merchant.id;
   if (session.lockedMerchantId !== merchantId) conflict("Load this lender before reading its audit log.");
-  const { verification } = await readAuditChain(session, merchantId, state.settings);
+  const { chain, verification } = await readAuditChain(session, merchantId, state.settings);
   const recent = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='audit' ORDER BY r.created_at DESC,r.id LIMIT 8`,
     [merchantId, session.workspace.id, session.principal])).rows.map(rowToRecord);
-  return { verification, recent };
+  // The alert names the entry after the last verified one, the first that breaks the chain.
+  return { verification: { ...verification, verifiedSequence: chain.verified.sequence }, recent };
 }
 
 /**
