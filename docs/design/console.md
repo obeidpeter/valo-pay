@@ -249,7 +249,7 @@ Responsiveness is one of Dix's three parts of robustness, and a lender's staff r
 
 | Chunk | Before | After |
 | --- | --- | --- |
-| Entry: the landing page and the shell | 537.87 kB (163.67 kB) | 440.66 kB (138.54 kB) |
+| Entry: the landing page and the shell | 537.87 kB (163.67 kB) | 440.66 kB (138.53 kB) |
 | Write receipts (`safe-mutations`), with the first page that writes | 141.15 kB (22.84 kB) | 5.65 kB (2.20 kB) |
 | Shared schemas and zod (`connected`), with it | 104.65 kB (26.61 kB) | 110.99 kB (28.52 kB) |
 | Clerk (`@clerk/react`, `@clerk/shared`) | in the entry | 92.49 kB (22.92 kB), only where sign-in is available |
