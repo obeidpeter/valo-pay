@@ -9,7 +9,7 @@ import { closeDatabase, watchDatabase } from "./lib/valopay-store";
  * and exits with the pass's status (0 all done, 2 some closes failed and are
  * retried next time, or the budget ran out with lenders still due for the next
  * run, 1 it could not run or was stopped), for a host whose API
- * process runs no scheduler, such as Autoscale with VALOPAY_CLOSE_SCHEDULER=off
+ * process runs no scheduler, such as Autoscale with VALOPAY_CLOSE_SCHEDULER=external
  * and a Replit Scheduled Deployment running `node artifacts/api-server/dist/close-pass.mjs`.
  * A stop signal ends the pass after the lender close in progress.
  */

@@ -4,7 +4,7 @@ The shipped sandbox remains synthetic. These checks exercise recovery, alert del
 
 ## Incident and recovery delivery
 
-`scripts/monitor-valopay.mjs` checks liveness and database readiness, with bounded requests and no redirects. If automatic closes are explicitly expected, it also checks the scheduler state and fresh successful heartbeat, which the API's background worker thread reports to the health answer; a thread that crashed reads as a failed check (`scheduler_failed`) until the restarted thread's first pass succeeds. An intentionally disabled scheduler is healthy unless the operator configures that expectation.
+`scripts/monitor-valopay.mjs` checks liveness and database readiness, with bounded requests and no redirects. If automatic closes are explicitly expected, it also checks the scheduler state and fresh successful heartbeat, which the API's background worker thread reports to the health answer; a thread that crashed reads as a failed check (`scheduler_failed`) until the restarted thread's first pass succeeds. An intentionally disabled scheduler is healthy unless the operator configures that expectation. On a host whose closes run from a scheduled job it checks instead that the web instances report the scheduler as `external` (`scheduler_not_external` otherwise), since `off` would hide a close the job has missed; the job's own runs are not visible to it.
 
 Run `pnpm run check:operations` with `VALOPAY_MONITOR_ORIGIN` set to the HTTPS service origin. The default is a dry run: it prints only the service origin, check time and fixed failure codes. It reads no customer records and sends no alerts. The one option is `--deliver`; a `--` before it is skipped, since pnpm passes one on to the script where npm would not. A mistyped option is named in the error with the usage; a word that is not an option is only counted, in case it is a credential. Without `VALOPAY_MONITOR_ORIGIN` it says that setting is missing. Any other failure prints one general message, so no credential or response body reaches the terminal.
 
@@ -13,7 +13,7 @@ External delivery requires a configured service. The email recipient is the addr
 | Variable | Meaning |
 | --- | --- |
 | `VALOPAY_MONITOR_ORIGIN` | HTTPS origin only; no embedded credentials, path, query or fragment. |
-| `VALOPAY_MONITOR_EXPECT_SCHEDULER` | Set to `on` only when this host's API process is expected to run automatic closes (a Reserved VM). A host whose closes run from a Scheduled Deployment reports its scheduler as off (`docs/deployment.md`). |
+| `VALOPAY_MONITOR_EXPECT_SCHEDULER` | `on` when this host's API process is expected to run automatic closes (a Reserved VM): the scheduler must be running with a fresh successful check. `external` when a Scheduled Deployment runs them (`VALOPAY_CLOSE_SCHEDULER=external`, `docs/deployment.md`): the web instances must report `external`. Either in any case; leave it unset to check neither. Any other value stops the monitor with a message naming this setting, never its value. |
 | `VALOPAY_MONITOR_OWNER` | Person or operational team responsible for responding. |
 | `VALOPAY_MONITOR_STATE_FILE` | Private, persistent state file owned by the monitor; use one process and a lock in the host scheduler. |
 | `VALOPAY_MONITOR_ALERT_URL` | Optional HTTPS receiver; this takes precedence over the email adapter. Store any receiver token securely. |

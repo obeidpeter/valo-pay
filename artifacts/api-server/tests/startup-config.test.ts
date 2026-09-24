@@ -1,10 +1,10 @@
 // The settings are checked once, at startup, before any module reads them: a
 // bad value ends the process with one structured fatal line naming the
-// setting, never its value; the close scheduler's switch takes on or off in
-// any case and refuses anything else instead of failing open; and the export
-// worker slows down while its queue cannot be read, logging the outage once
-// and the recovery once instead of an error at every poll. Offline: the
-// processes this starts use an unusable loopback database.
+// setting, never its value; the close scheduler's switch takes on, off or
+// external in any case and refuses anything else instead of failing open; and
+// the export worker slows down while its queue cannot be read, logging the
+// outage once and the recovery once instead of an error at every poll.
+// Offline: the processes this starts use an unusable loopback database.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -27,8 +27,12 @@ const defaults = readStartupConfig(base, "server");
 assert.deepEqual(defaults, { port: 8080, closeScheduler: "on", logLevel: "info", logFormat: null, nodeEnv: null, databasePoolSize: 10, expiredWorkspaceCleanup: "off", staffAccess: "off", runtimeIsolation: "off", payloadEncryption: "off" });
 for (const value of ["off", "OFF", "Off"]) assert.equal(readStartupConfig({ ...base, VALOPAY_CLOSE_SCHEDULER: value }, "server").closeScheduler, "off", value);
 for (const value of ["on", "ON", ""]) assert.equal(readStartupConfig({ ...base, VALOPAY_CLOSE_SCHEDULER: value }, "server").closeScheduler, "on", value);
-for (const value of ["false", "0", "no", "disabled", "of"]) assert.deepEqual(problems({ ...base, VALOPAY_CLOSE_SCHEDULER: value }), ["VALOPAY_CLOSE_SCHEDULER must be on or off (in any case)."], value);
-checks += 11;
+// external: closes run from a separate scheduled job (the one-shot close pass), so this process schedules none either.
+for (const value of ["external", "EXTERNAL", "External"]) assert.equal(readStartupConfig({ ...base, VALOPAY_CLOSE_SCHEDULER: value }, "server").closeScheduler, "external", value);
+assert.equal(readStartupConfig({ DATABASE_URL: database, VALOPAY_CLOSE_SCHEDULER: "external" }, "close-pass").closeScheduler, "external", "the close pass checks the switch as the server does");
+for (const value of ["false", "0", "no", "disabled", "of", "extern", "job"]) assert.deepEqual(problems({ ...base, VALOPAY_CLOSE_SCHEDULER: value }), ["VALOPAY_CLOSE_SCHEDULER must be on, off or external (in any case)."], value);
+assert.deepEqual(problems({ DATABASE_URL: database, VALOPAY_CLOSE_SCHEDULER: "false" }, "close-pass"), ["VALOPAY_CLOSE_SCHEDULER must be on, off or external (in any case)."], "and refuses what the server refuses");
+checks += 17;
 
 // ---- Each rule, named without the value ----
 const rules: Array<[Record<string, string>, string]> = [
@@ -114,7 +118,7 @@ const refusals: Array<[string, Record<string, string>, string]> = [
   ["index.ts", { PORT: "18093", DATABASE_URL: database, LOG_LEVEL: "verbose" }, "LOG_LEVEL must be fatal, error, warn, info, debug, trace or silent."],
   ["index.ts", { PORT: "18093", DATABASE_URL: database, VALOPAY_DATABASE_POOL_SIZE: "1" }, "VALOPAY_DATABASE_POOL_SIZE must be a whole number from 2 to 100."],
   ["index.ts", { PORT: "18093", DATABASE_URL: database, VALOPAY_DATABASE_POOL_SIZE: "0010" }, "VALOPAY_DATABASE_POOL_SIZE must be a whole number from 2 to 100."],
-  ["index.ts", { PORT: "18093", DATABASE_URL: database, VALOPAY_CLOSE_SCHEDULER: "false" }, "VALOPAY_CLOSE_SCHEDULER must be on or off (in any case)."],
+  ["index.ts", { PORT: "18093", DATABASE_URL: database, VALOPAY_CLOSE_SCHEDULER: "false" }, "VALOPAY_CLOSE_SCHEDULER must be on, off or external (in any case)."],
   ["index.ts", { PORT: "18093" }, "DATABASE_URL is required: the PostgreSQL connection URL."],
   ["close-pass.ts", { DATABASE_URL: database, VALOPAY_RUNTIME_ISOLATION: "on" }, "VALOPAY_RUNTIME_ISOLATION must be off or staging."],
 ];
@@ -130,26 +134,32 @@ for (const [entry, env, problem] of refusals) {
   checks += 4;
 }
 
-// OFF, in capitals, is off: the health answer and the log say so, and nothing is scheduled.
-const free = createServer();
-free.listen(0, "127.0.0.1");
-await once(free, "listening");
-const port = (free.address() as { port: number }).port;
-free.close();
-const server = start("index.ts", { PORT: String(port), DATABASE_URL: database, VALOPAY_CLOSE_SCHEDULER: "OFF", LOG_FORMAT: "json", CLERK_SECRET_KEY: "sk_test_placeholder", CLERK_PUBLISHABLE_KEY: `pk_test_${Buffer.from("clerk.example.test$").toString("base64")}`, CLERK_TELEMETRY_DISABLED: "1" });
-try {
-  let health: { scheduler?: { state?: string } } | undefined;
-  for (let attempt = 0; attempt < 100 && !health; attempt++) {
-    health = await fetch(`http://127.0.0.1:${port}/api/healthz`).then((response) => response.ok ? response.json() as Promise<typeof health> : undefined, () => undefined);
-    if (!health) await new Promise((resolve) => setTimeout(resolve, 200));
+// OFF and External, in any case: the health answer and the log say which, nothing is scheduled, and the background
+// worker thread starts with the export worker alone.
+for (const [value, state, event] of [["OFF", "off", "scheduler.off"], ["External", "external", "scheduler.external"]] as const) {
+  const free = createServer();
+  free.listen(0, "127.0.0.1");
+  await once(free, "listening");
+  const port = (free.address() as { port: number }).port;
+  free.close();
+  const server = start("index.ts", { PORT: String(port), DATABASE_URL: database, VALOPAY_CLOSE_SCHEDULER: value, LOG_FORMAT: "json", CLERK_SECRET_KEY: "sk_test_placeholder", CLERK_PUBLISHABLE_KEY: `pk_test_${Buffer.from("clerk.example.test$").toString("base64")}`, CLERK_TELEMETRY_DISABLED: "1" });
+  try {
+    let health: { scheduler?: { state?: string } } | undefined;
+    for (let attempt = 0; attempt < 100 && !health; attempt++) {
+      health = await fetch(`http://127.0.0.1:${port}/api/healthz`).then((response) => response.ok ? response.json() as Promise<typeof health> : undefined, () => undefined);
+      if (!health) await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    assert.equal(health?.scheduler?.state, state, server.output().stdout);
+    const lines = () => server.output().stdout.split("\n").filter((text) => text.startsWith("{")).map((text) => JSON.parse(text) as Record<string, unknown>);
+    for (let wait = 0; wait < 50 && !lines().some((line) => line.event === "background.started"); wait++) await new Promise((resolve) => setTimeout(resolve, 100));
+    const events = lines().map((line) => line.event);
+    assert.ok(events.includes(event) && !events.includes("scheduler.started"), `${value}: ${events.join(",")}`);
+    assert.deepEqual(lines().filter((line) => line.event === "background.started").map((line) => [line.closes, line.exports]), [[false, true]], `${value}: the thread runs the export worker and no scheduled close`);
+    checks += 3;
+  } finally {
+    server.child.kill("SIGTERM");
+    await server.exited;
   }
-  assert.equal(health?.scheduler?.state, "off", server.output().stdout);
-  const events = server.output().stdout.split("\n").filter((text) => text.startsWith("{")).map((text) => JSON.parse(text).event);
-  assert.ok(events.includes("scheduler.off") && !events.includes("scheduler.started"), events.join(","));
-  checks += 2;
-} finally {
-  server.child.kill("SIGTERM");
-  await server.exited;
 }
 
 // ---- The export worker: slower looks at a queue that cannot be read, and two lines for the whole outage ----
@@ -175,4 +185,4 @@ assert.equal(logged[0]!.retryInMs, 20);
 assert.equal(logged[1]!.failures, failedLooks);
 checks += 5;
 
-console.log(`Startup configuration checks passed (${checks}): every setting checked once with one fatal line that names it and never its value, the close scheduler's switch in any case and refusing anything but on or off, and an export queue outage slowing the worker's looks and logged once when it starts and once when it ends.`);
+console.log(`Startup configuration checks passed (${checks}): every setting checked once with one fatal line that names it and never its value, the close scheduler's switch in any case and refusing anything but on, off or external, off and external starting the thread without the scheduled close, and an export queue outage slowing the worker's looks and logged once when it starts and once when it ends.`);

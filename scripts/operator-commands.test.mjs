@@ -56,6 +56,14 @@ result = await run(monitor, ["https://alerts.example/synthetic-receiver-token"],
 assert.equal(result.status, 1);
 assert.match(result.stderr, /^Argument 1 is not an option/);
 assert.ok(!result.output.includes("synthetic-receiver-token"));
+// A scheduler expectation the monitor does not know stops it, named without its value, rather than checking nothing.
+result = await run(monitor, [], { VALOPAY_MONITOR_ORIGIN: "https://127.0.0.1:1", VALOPAY_MONITOR_EXPECT_SCHEDULER: "synthetic-typo" });
+assert.equal(result.status, 1);
+assert.equal(result.stderr.trim(), "VALOPAY_MONITOR_EXPECT_SCHEDULER must be on or external when it is set (docs/operational-rehearsals.md).");
+assert.ok(!result.output.includes("synthetic-typo"));
+result = await run(monitor, ["--"], { VALOPAY_MONITOR_ORIGIN: "https://127.0.0.1:1", VALOPAY_MONITOR_EXPECT_SCHEDULER: "External" });
+assert.equal(result.status, 0, result.output);
+assert.deepEqual(JSON.parse(result.stdout).codes, ["database_unready", "service_unavailable"], "external, in any case, is taken");
 
 // ---- pnpm run check:paystack ----
 const paystack = "scripts/src/check-paystack.ts";
@@ -143,4 +151,4 @@ try {
   assert.equal(connections, 0, "nothing was sent to a host that is not a Replit development domain");
 } finally { listener.close(); }
 
-console.log("Operator commands passed offline: options after pnpm's --, a named mistyped option, uncopied values, the monitor's dry run, its missing origin named and its careful failure, the Paystack check's refusals before any request, provision-pilot's three modes with their usage, staff-access check and store refusal before any connection, rewrap-payloads' usage, key settings and restricted-runtime refusal before any connection, and the smoke and security scripts' refusal of any host but a Replit development domain.");
+console.log("Operator commands passed offline: options after pnpm's --, a named mistyped option, uncopied values, the monitor's dry run, its missing origin and unknown scheduler expectation named and its careful failure, the Paystack check's refusals before any request, provision-pilot's three modes with their usage, staff-access check and store refusal before any connection, rewrap-payloads' usage, key settings and restricted-runtime refusal before any connection, and the smoke and security scripts' refusal of any host but a Replit development domain.");

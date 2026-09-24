@@ -6,6 +6,9 @@
  * OpenAPI spec version: 1.1.0
  */
 
+/**
+ * The close service as this process sees it (the health answer's scheduler state). With external a separate scheduled job runs the closes: nothing is advertised as automatic, but a close that job has not run is still missed.
+ */
 export type EffectiveCloseScheduleRuntimeState = typeof EffectiveCloseScheduleRuntimeState[keyof typeof EffectiveCloseScheduleRuntimeState];
 
 
@@ -13,5 +16,6 @@ export const EffectiveCloseScheduleRuntimeState = {
   not_started: 'not_started',
   running: 'running',
   off: 'off',
+  external: 'external',
   stopped: 'stopped',
 } as const;

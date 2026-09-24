@@ -22,8 +22,12 @@ export const logLevels = ["fatal", "error", "warn", "info", "debug", "trace", "s
 export interface StartupConfig {
   /** The port the server listens on; null for the close pass. */
   port: number | null;
-  /** Whether this process runs the scheduled daily close: VALOPAY_CLOSE_SCHEDULER, on or off in any case, default on. */
-  closeScheduler: "on" | "off";
+  /**
+   * Whether this process runs the scheduled daily close: VALOPAY_CLOSE_SCHEDULER, on, off or external in any case,
+   * default on. Neither off nor external runs it; external says a separate scheduled job does (the one-shot close
+   * pass), so a close it misses is still reported as missed.
+   */
+  closeScheduler: "on" | "off" | "external";
   logLevel: (typeof logLevels)[number];
   logFormat: "pretty" | "json" | null;
   nodeEnv: "development" | "production" | "test" | null;
@@ -89,8 +93,8 @@ export function readStartupConfig(env: Record<string, string | undefined>, purpo
   const logLevel = oneOf("LOG_LEVEL", logLevels, "info");
   const logFormat = given("LOG_FORMAT") === undefined ? null : oneOf("LOG_FORMAT", ["pretty", "json"] as const, "json");
   const nodeEnv = given("NODE_ENV") === undefined ? null : oneOf("NODE_ENV", ["development", "production", "test"] as const, "production");
-  // REC-01's switch fails closed: a value that is neither on nor off stops the process rather than scheduling closes.
-  const closeScheduler = oneOf("VALOPAY_CLOSE_SCHEDULER", ["on", "off"] as const, "on", true);
+  // REC-01's switch fails closed: a value that is not on, off or external stops the process rather than scheduling closes.
+  const closeScheduler = oneOf("VALOPAY_CLOSE_SCHEDULER", ["on", "off", "external"] as const, "on", true);
   // The store deletes expired sandboxes only for exactly "on"; any other spelling is refused here, not read as off.
   const expiredWorkspaceCleanup = oneOf("VALOPAY_EXPIRED_WORKSPACE_CLEANUP", ["on", "off"] as const, "off");
 

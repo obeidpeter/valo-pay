@@ -28,13 +28,17 @@ const server = app.listen(port, (err) => {
 
   logger.info({ event: "server.started", port, build: BUILD, node: process.version }, "Server listening");
   // REC-01: the daily close runs at each lender's configured time unless this process is told not to schedule it
-  // (VALOPAY_CLOSE_SCHEDULER=off in any case; any value but on or off was refused at startup). The scheduled closes
-  // and the export worker run on the background worker thread, off the event loop that answers requests.
+  // (VALOPAY_CLOSE_SCHEDULER=off, or external where a separate scheduled job runs the one-shot close pass, in any
+  // case; any other value was refused at startup). The scheduled closes and the export worker run on the background
+  // worker thread, off the event loop that answers requests.
   if (serverSettings.closeScheduler === "off") {
     markSchedulerOff();
     logger.warn({ event: "scheduler.off" }, "VALOPAY_CLOSE_SCHEDULER=off: this process runs no scheduled close; run closes by hand or with the one-shot close pass.");
+  } else if (serverSettings.closeScheduler === "external") {
+    markSchedulerOff("external");
+    logger.info({ event: "scheduler.external" }, "VALOPAY_CLOSE_SCHEDULER=external: this process runs no scheduled close; a scheduled job runs them with the one-shot close pass, and a close it misses still raises the missed-close alert.");
   }
-  background = startBackgroundWorker({ log: logger, closes: serverSettings.closeScheduler === "off" ? null : {}, exports: {} });
+  background = startBackgroundWorker({ log: logger, closes: serverSettings.closeScheduler === "on" ? {} : null, exports: {} });
 });
 
 /**

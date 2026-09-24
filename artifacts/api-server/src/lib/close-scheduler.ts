@@ -36,9 +36,13 @@ export const SCHEDULED_CLOSE_ACTOR = `${SYSTEM_ACTOR_PREFIX}scheduled close`;
 /** One lender closed by a pass. */
 export interface ClosedMerchant { merchantId: string; closeId: string; late: boolean; delayMinutes: number | null }
 
-/** What the scheduler is doing, for /api/healthz: whether it ticks, when it last looked, and what its last pass that found work did. */
+/**
+ * What the scheduler is doing, for /api/healthz: whether it ticks, when it last looked, and what its last pass that
+ * found work did. `off` and `external` both mean this process schedules no closes; `external` says a separate
+ * scheduled job runs them (the one-shot close pass), so a close it misses still counts as missed.
+ */
 export interface SchedulerStatus {
-  state: "not_started" | "running" | "off" | "stopped";
+  state: "not_started" | "running" | "off" | "external" | "stopped";
   intervalMs: number | null;
   ticks: number;
   lastTickAt: string | null;
@@ -60,7 +64,7 @@ export type SchedulerEvent =
   | { type: "succeeded"; at: string; run: SchedulerStatus["lastRun"] }
   | { type: "failed"; at: string }
   | { type: "stopped" }
-  | { type: "off" };
+  | { type: "off" | "external" };
 const observers = new Set<(event: SchedulerEvent) => void>();
 /**
  * Applies a change to this thread's scheduler state and passes it to the
@@ -75,7 +79,7 @@ export function applySchedulerEvent(event: SchedulerEvent): void {
   else if (event.type === "succeeded") { status.lastSuccessAt = event.at; status.lastErrorAt = null; if (event.run) status.lastRun = event.run; }
   else if (event.type === "failed") status.lastErrorAt = event.at;
   else if (event.type === "stopped") status.state = "stopped";
-  else status.state = "off";
+  else status.state = event.type;
   for (const observer of observers) observer(event);
 }
 /** Calls `observer` with every later change to this thread's scheduler state; returns what ends that. */
@@ -83,8 +87,8 @@ export function observeScheduler(observer: (event: SchedulerEvent) => void): () 
   observers.add(observer);
   return () => { observers.delete(observer); };
 }
-/** Recorded when the process is told not to schedule closes (VALOPAY_CLOSE_SCHEDULER=off), so the health answer says so. */
-export function markSchedulerOff(): void { applySchedulerEvent({ type: "off" }); }
+/** Recorded when the process is told not to schedule closes (VALOPAY_CLOSE_SCHEDULER=off, or external where a scheduled job runs them), so the health answer says so. */
+export function markSchedulerOff(state: "off" | "external" = "off"): void { applySchedulerEvent({ type: state }); }
 /** What one scheduler pass did. */
 export interface CloseRun {
   runId: string;
@@ -215,7 +219,7 @@ export interface OneShotCloseRun {
 
 /**
  * The scheduled daily close run once, for a host that runs no in-process
- * scheduler (VALOPAY_CLOSE_SCHEDULER=off), such as a Replit Scheduled
+ * scheduler (VALOPAY_CLOSE_SCHEDULER=external), such as a Replit Scheduled
  * Deployment next to an Autoscale deployment: the same pass the tick loop
  * runs (runDueCloses), through the same repository, locks and audit, with a
  * longer budget, ending with one close.one_shot line that carries its exit
