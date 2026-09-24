@@ -114,7 +114,7 @@ Provide credentials through your environment's secret manager, never through com
 | `VALOPAY_STAFF_ISSUER` | Exact HTTPS Clerk issuer for staging staff sessions; required in staff mode |
 | `VALOPAY_STAFF_ORIGINS` | Comma-separated HTTPS application origins allowed to use staging staff sessions; required in staff mode |
 | `VALOPAY_RUNTIME_ISOLATION` | `staging` opts into the separately commissioned restricted database; unset or `off` leaves it disabled. Every transaction then compares the row-security policies, scope helpers and workspace guard with the reviewed set and answers 503 on any difference. |
-| `VALOPAY_RUNTIME_SCHEMA` | Dedicated `valopay_runtime_staging_*` schema; public schemas are refused. |
+| `VALOPAY_RUNTIME_SCHEMA` | Dedicated `valopay_runtime_staging_*` schema; public schemas are refused. When it is set, the payload re-wrap command (`scripts/rewrap-payloads.ts`) reads this schema's tables (`docs/pilot-security.md`, Key rotation). |
 | `VALOPAY_RUNTIME_ROLE` | Actual restricted database login expected by the runtime; elevated connections are refused. |
 | `VALOPAY_RUNTIME_SERVICE_ORG` | Explicitly provisioned organisation for the background worker in isolated staging. |
 | `VALOPAY_RUNTIME_SERVICE_USER` | Active service member whose lender grants constrain background work. |
