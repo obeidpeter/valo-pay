@@ -135,7 +135,7 @@ conforms(connectedViewSchema, connectedView(state, { ...admin, now: "2027-01-01T
 
 // Pilot progress and the close review list, before and after a daily close.
 for (const accessMode of ["sandbox", "staff"]) conforms(pilotProgressSchema, pilotProgress(state, accessMode), `pilot progress on a ${accessMode} host`);
-const reviewList = () => ({ ...closeReviewList(state), actor: admin.actor, reviewers: [{ actor: "Sandbox Finance", name: "Demo Finance", role: "Finance" }], accessMode: "sandbox", ownPrincipal: "browser" });
+const reviewList = () => ({ ...closeReviewList(state), actor: admin.actor, reviewers: [{ actor: "Sandbox Finance", name: "Sandbox Finance", role: "Finance" }], accessMode: "sandbox", ownPrincipal: "browser" });
 conforms(closeReviewListSchema, reviewList(), "the close review list before a close");
 const before = new Set(state.records.map((record) => record.id));
 executeAction(state, admin, { action: "daily_close", reason: "Check the answer shapes" });

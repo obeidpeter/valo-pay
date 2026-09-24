@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, LockKeyhole, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
 import { lifecycleViewSchema, lifecycleRunViewSchema, type LifecycleRunView, type LifecycleView, type RetentionPolicy, type LifecycleCandidate } from '@workspace/valopay-schema';
@@ -10,11 +10,14 @@ import { INCOMPLETE_CONFIRMATION } from '@/lib/answers';
 import { formatCount, formatDate, formatNumber } from '@/lib/formatters';
 import { PilotError, PilotHeading, PilotPanel, RecoveryNotice, pilotField } from '@/components/pilot-ui';
 import { Button } from '@/components/ui/button';
+import { focusLost, useFocusWhenLost } from '@/lib/focus';
 
 const names = { raw_csv: 'Raw import CSV', journal_payload: 'Completed request payload', export_file: 'Export file' } as const;
 /** Why a source is kept as evidence, in words. */
 const evidenceWords = (evidence: LifecycleView['targets'][number]['evidence']) => evidence.map(item => item.reason === 'open_case' ? `linked to open case ${item.recordId}` : `the reviewed-close export of approved close review ${item.recordId}`).join('; ');
 type Variables = { path: string; data: unknown; response: 'view' | 'run' };
+/** An approved run being executed request after request, and whether the person asked it to stop. */
+type Running = { runId: string; stopping: boolean };
 export default function LifecyclePage() {
   const { merchantId, workspace } = useWorkspace();
   return <LifecycleControls key={`${merchantId}:${workspace?.actor}:${workspace?.role}`} />;
@@ -22,6 +25,10 @@ export default function LifecyclePage() {
 function LifecycleControls() {
   const { merchantId, workspace } = useWorkspace(), cache = useQueryClient();
   const [offset, setOffset] = useState(0), [selected, setSelected] = useState<LifecycleRunView | null>(null), [message, setMessage] = useState('');
+  const [running, setRunning] = useState<Running | null>(null), executing = useRef(false), stopRequested = useRef(false), mounted = useRef(true), messageRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => () => { mounted.current = false; }, []);
+  // A finished run removes its Stop button: reading continues from what happened.
+  useFocusWhenLost(messageRef, message);
   const query = useQuery({ queryKey: ['lifecycle', merchantId, workspace?.actor, offset], enabled: !!merchantId && workspace?.role === 'Admin', queryFn: async ({ signal }) => {
     const data = await pilotRequest(lenderPath('/lifecycle', merchantId, offset), lifecycleViewSchema, { signal });
     if (data.merchantId !== merchantId || data.actor !== workspace?.actor) throw new Error('The response did not match this lender and administrator. Refresh the page.');
@@ -35,21 +42,54 @@ function LifecycleControls() {
     if (expectedRun && (!('id' in result) || result.id !== expectedRun)) throw new Error('The response named a different retention run. Check the original request.');
     return result;
   }, { mutation: { onSuccess: (result, variables) => {
-    if ('candidates' in result) { setSelected(result); setMessage(result.status === 'preview' ? 'Deletion preview saved. No source has been deleted.' : result.status === 'approved' ? 'The exact preview is approved. Execute it when ready; source versions and holds are checked again.' : result.status === 'completed' ? 'This run is complete. Inspect its saved deletion receipts below.' : 'Execution progress saved. Review any blocked items, then resume the run.'); }
+    // While execute (below) carries a run on, it says the outcome once the run stops; a recovered answer is said here.
+    if ('candidates' in result) { setSelected(result); if (!(executing.current && variables.path.endsWith('/execute'))) setMessage(result.status === 'preview' ? 'Deletion preview saved. No source has been deleted.' : result.status === 'approved' ? 'The exact preview is approved. Execute it when ready; source versions and holds are checked again.' : result.status === 'completed' ? 'This run is complete. Inspect its saved deletion receipts below.' : 'Execution progress saved. Review any blocked items, then resume the run.'); }
     else setMessage(variables.path.endsWith('/policy') ? 'Retention policy saved. Saving a policy does not delete data.' : 'Retention hold updated. Every deletion checks current holds.');
     void cache.invalidateQueries();
   } } }, `${merchantId}:${workspace?.actor}:${workspace?.role}`);
-  const locked = mutation.isPending || mutation.hasUnconfirmedOutcome;
+  const locked = mutation.isPending || mutation.hasUnconfirmedOutcome || !!running;
+  // Leaving while a run is being executed asks first; leaving stops it after the current request.
   useUnsavedChanges(locked);
   const data = query.data;
-  const submit = (path: string, body: unknown, response: 'view' | 'run' = 'view') => mutation.mutate({ path, data: body, response });
+  /**
+   * Executes an approved run request after request (each removes what fits in the service's time budget) until it
+   * completes, a source is blocked or its deletion fails, the person stops it, or a request fails, which the recovery
+   * notice then shows. Each request is new, with its own key; a lost answer is recovered with Check original request.
+   */
+  const execute = async (run: LifecycleRunView) => {
+    executing.current = true; stopRequested.current = false; setRunning({ runId: run.id, stopping: false }); setMessage('');
+    let current = run, outcome = '';
+    try {
+      for (;;) {
+        const seen = new Set(current.receipts.map(receipt => receipt.id)), before = current.successful;
+        current = await mutation.mutateAsync({ path: `/lifecycle/runs/${run.id}/execute`, data: { previewDigest: run.previewDigest }, response: 'run' }) as LifecycleRunView;
+        if (!mounted.current) return;
+        const removed = `Removed so far: ${formatNumber(current.successful)} of ${formatCount(current.candidateCount, 'source')}.`;
+        const problem = current.receipts.find(receipt => (receipt.status === 'blocked' || receipt.status === 'failed') && !seen.has(receipt.id));
+        if (current.status === 'completed') outcome = 'This run is complete. Inspect its saved deletion receipts below.';
+        else if (problem) outcome = `The run stopped at ${names[problem.kind]} ${problem.sourceId}, which ${problem.status === 'blocked' ? 'is blocked' : 'could not be deleted'}: ${problem.detail} ${removed}`;
+        else if (current.successful <= before) outcome = 'Execution progress saved. Review any blocked items, then resume the run.';
+        else if (stopRequested.current) outcome = `Stopped. ${removed} Resume approved run to continue; each source is checked again first.`;
+        else continue;
+        break;
+      }
+    } catch { /* The recovery notice shows the refusal or the unconfirmed outcome; nothing more is sent. */ }
+    finally { executing.current = false; if (mounted.current) { setRunning(null); if (outcome) setMessage(outcome); } }
+  };
+  const stop = () => { stopRequested.current = true; setRunning(value => value && { ...value, stopping: true }); };
+  // Execute approved run and Resume approved run carry the run on until it stops (execute, above).
+  const submit = (path: string, body: unknown, response: 'view' | 'run' = 'view') => {
+    if (selected && path === `/lifecycle/runs/${selected.id}/execute`) void execute(selected);
+    else mutation.mutate({ path, data: body, response });
+  };
   return <div className="space-y-6">
     <PilotHeading title="Data retention">Control how long sample source files and completed request payloads remain available. Deletion requires an exact preview and administrator approval. Financial records and the audit trail are retained.</PilotHeading>
     {workspace?.role !== 'Admin' ? <p role="status" className="rounded-xl border bg-card p-5">Only a currently authorised administrator can inspect or change retention controls. Ask your administrator about holds and approved deletion runs.</p> : <>
       <PilotError error={query.error} retry={() => { void query.refetch(); }} />
       {query.isLoading && <p role="status">Loading retention policy and saved runs…</p>}
       <RecoveryNotice mutation={mutation} />
-      {message && <p role="status" className="rounded-lg border bg-secondary/20 p-4 text-sm">{message}</p>}
+      {message && <p ref={messageRef} role="status" className="rounded-lg border bg-secondary/20 p-4 text-sm">{message}</p>}
+      {running && selected?.id === running.runId && <RunProgress run={selected} running={running} stop={stop} />}
       {data && <>
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4"><p className="text-sm"><strong>{data.lenderName}</strong><span className="block text-xs text-muted-foreground">Sample data · {formatCount(data.eligibleCount, 'source')} currently eligible{data.evidenceTotal ? ` · ${formatNumber(data.evidenceTotal)} kept as evidence` : ''} · Checked {formatDate(data.asOf)}</span></p><Button variant="outline" busy={query.isFetching} busyLabel="Refreshing…" onClick={() => { void query.refetch(); }}><RefreshCw className="size-4" />Refresh retention</Button></div>
         <div className="grid gap-4 md:grid-cols-2"><div className="flex gap-3 rounded-xl border bg-card p-4"><ShieldCheck className="size-5 shrink-0 text-success-foreground" /><div><h2 className="font-semibold">Audit and financial evidence stay</h2><p className="mt-1 text-sm text-muted-foreground">This release cannot delete the audit trail, imported financial records, original record identities, case history or deletion receipts.</p></div></div><div className="flex gap-3 rounded-xl border bg-card p-4"><LockKeyhole className="size-5 shrink-0" /><div><h2 className="font-semibold">Holds take priority</h2><p className="mt-1 text-sm text-muted-foreground">A hold blocks deletion even after approval. Pending and unconfirmed requests are never retention candidates.</p></div></div></div>
@@ -89,4 +129,21 @@ function RunReview({ run, locked, submit, secondApprover, actor }: { run: Lifecy
     {run.status === 'preview' ? <form className="space-y-4" onSubmit={event => { event.preventDefault(); submit(`/lifecycle/runs/${run.id}/approve`, { expectedUpdatedAt: run.updatedAt, previewDigest: run.previewDigest, reason }, 'run'); }}><p className="text-sm">Approve before {formatDate(run.expiresAt)}. Deletion cannot be undone in this console. It removes these source artifacts only; the audit trail and imported records remain.</p><p role="note" className="text-sm">{ownPreview ? 'You prepared this preview, so another administrator must approve it. Either of you can execute it once approved.' : secondApprover ? 'An administrator other than the one who prepared a preview approves it.' : 'In a pilot, an administrator other than the one who prepared a preview must approve it. This sandbox has one person playing every role, so here you may approve your own preview.'}</p><label className="flex items-start gap-3 text-sm"><input type="checkbox" className="mt-1 size-4" disabled={locked} checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />I reviewed every source identity in this preview and authorise this exact deletion run.</label><label className="block space-y-2 text-sm font-medium">Reason for approving this deletion<textarea className={pilotField} required disabled={locked} minLength={10} maxLength={500} value={reason} onChange={event => setReason(event.target.value)} /></label><Button type="submit" variant="destructive" disabled={locked || ownPreview || !confirmed || reason.trim().length < 10}>Approve exact deletion run</Button></form> : <><p className="text-sm">Approved {run.approvedAt ? formatDate(run.approvedAt) : ''}. Source identities, the saved policy and holds are checked again before each deletion.</p>{run.status !== 'completed' && <Button variant="destructive" disabled={locked} onClick={() => submit(`/lifecycle/runs/${run.id}/execute`, { previewDigest: run.previewDigest }, 'run')}><Trash2 className="size-4" />{run.status === 'approved' ? 'Execute approved run' : 'Resume approved run'}</Button>}</>}
     {!!run.receipts.length && <div className="space-y-3 border-t pt-4"><h3 className="font-semibold">Saved deletion receipts</h3><ul className="space-y-3">{run.receipts.map(receipt => <li key={receipt.id} className="rounded-lg border p-3 text-sm"><p className="font-semibold">{names[receipt.kind]} · {receipt.status.replaceAll('_', ' ')}</p><p className="break-all font-mono text-xs">{receipt.sourceId}</p><p>{receipt.detail}</p><p className="text-xs text-muted-foreground">{formatDate(receipt.at)}</p></li>)}</ul></div>}
   </PilotPanel>;
+}
+/**
+ * An approved run being executed: how many of its sources are removed, and Stop, which ends the run after the current
+ * request, since a deletion already sent cannot be recalled. It stands in the page's status area, where the run's
+ * outcome is said once it stops.
+ */
+function RunProgress({ run, running, stop }: { run: LifecycleRunView; running: Running; stop(): void }) {
+  const stopButton = useRef<HTMLButtonElement>(null);
+  // Execute approved run is disabled while the run goes on: the keyboard moves on to Stop rather than to the page.
+  useEffect(() => { const active = document.activeElement; if (focusLost() || (active instanceof HTMLButtonElement && active.disabled)) stopButton.current?.focus(); }, []);
+  return <div className="space-y-3 rounded-lg border bg-card p-4">
+    <p role="status" className="text-sm font-medium">{running.stopping ? 'Stopping after the current step.' : 'Deleting the approved sources.'} {formatNumber(run.successful)} of {formatCount(run.candidateCount, 'source')} removed.</p>
+    <progress className="h-2 w-full accent-primary" max={Math.max(1, run.candidateCount)} value={run.successful} aria-label="Sources removed" />
+    <p className="text-xs text-muted-foreground">The run continues until every source is removed or one is blocked. Each source is checked against the saved policy and holds just before it is deleted.</p>
+    {/* Pressing it again changes nothing; it stays enabled so the keyboard keeps its place until the run stops. */}
+    <Button ref={stopButton} variant="outline" onClick={stop}>{running.stopping ? 'Stopping…' : 'Stop'}</Button>
+  </div>;
 }

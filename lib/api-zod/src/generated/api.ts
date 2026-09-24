@@ -178,7 +178,7 @@ export const GetOverviewResponse = zod.object({
 
 
 /**
- * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync.
+ * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync; allocatable for the instalments a manual allocation accepts.
  * @summary Records of one kind for one lender, newest first
  */
 export const ListRecordsParams = zod.object({
@@ -201,7 +201,8 @@ export const ListRecordsQueryParams = zod.object({
   "offset": zod.coerce.number().int().min(listRecordsQueryOffsetMin).optional().describe('Rows to skip in the newest-first order.'),
   "updatedSince": zod.string().optional().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00; only records updated at or after that instant (incremental sync). A number, a date without a time, a time without Z or an offset, or a year outside 0001 to 9999 is refused (400, naming updatedSince).'),
   "customerId": zod.string().optional().describe('Only records directly linked to this customer, in the selected lender.'),
-  "id": zod.string().optional().describe('Only this exact record ID, in the selected kind and lender.')
+  "id": zod.string().optional().describe('Only this exact record ID, in the selected kind and lender.'),
+  "allocatable": zod.enum(['true', 'false']).optional().describe('Instalments (due-items) only. true lists just the instalments that can take an allocation now: those that still owe an amount and are not cancelled, closed or in dispute, the ones a manual allocation accepts, so total counts the choices. Omitted or false lists every instalment. Refused (400) for any other kind.')
 })
 
 export const ListRecordsResponse = zod.object({
@@ -442,8 +443,9 @@ export const ImportRecordsResponse = zod.object({
   "values": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
   "amountKobo": zod.number().int().optional()
 })).optional(),
-  "skipped": zod.number().int().optional()
-}).describe('How many rows were valid, invalid and imported, and each row\'s outcome.')
+  "skipped": zod.number().int().optional(),
+  "warnings": zod.array(zod.string()).optional()
+}).describe('How many rows were valid, invalid and imported, and each row\'s outcome. warnings, when present, says which name or reference came from a fallback (the reference, a row number or a generated reference) while a column was left unused, and the check and the commit are not refused for it.')
 
 
 /**
@@ -5561,7 +5563,7 @@ export const ApproveLifecycleRunResponse = zod.object({
 
 
 /**
- * Administrators only. Deletes in bounded batches with a receipt per item; blocked and failed items are reported, never skipped silently.
+ * Administrators only. Removes as many of the run's sources as fit in a two-second budget under the lender lock, each checked again just before it is deleted and given a receipt. A blocked source, or a deletion that cannot be confirmed, stops the run with its reason (status attention) and the sources after it wait; nothing is skipped silently. Send it again to continue until the status is completed: sources not yet attempted go first.
  * @summary Execute an approved run
  */
 export const executeLifecycleRunPathIdMax = 100;

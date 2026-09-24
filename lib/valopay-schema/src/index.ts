@@ -15,6 +15,7 @@ export * from './personal-work';
 export * from './staff-lender-access';
 export * from './lifecycle';
 export * from './import-corrections';
+export * from './import-mapping';
 export * from './canonical-json';
 export * from './api';
 export * from './receipts';

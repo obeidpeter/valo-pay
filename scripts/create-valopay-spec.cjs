@@ -56,6 +56,7 @@ schemas.SettingsInput.properties.expectedRevision = str;
 schemas.ImportResult.properties.columns = { type: "array", items: str };
 schemas.ImportResult.properties.preview = { type: "array", items: obj({ row: num, values: ref("RecordData"), amountKobo: num }, ["row", "values"]) };
 schemas.ImportResult.properties.skipped = num;
+schemas.ImportResult.properties.warnings = { type: "array", items: str };
 // An operation and its success answer. The refusals and failures it can answer are listed by
 // listErrorAnswers at the end, from what its route does, with the error body they carry.
 function add(path, method, id, response, body, params = []) {
@@ -84,13 +85,14 @@ const offset = {name:"offset",in:"query",schema:{type:"integer",minimum:0},descr
 const updatedSince = {name:"updatedSince",in:"query",schema:str,description:"An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00; only records updated at or after that instant (incremental sync). A number, a date without a time, a time without Z or an offset, or a year outside 0001 to 9999 is refused (400, naming updatedSince)."};
 const customerId = {name:"customerId",in:"query",schema:str,description:"Only records directly linked to this customer, in the selected lender."};
 const recordId = {name:"id",in:"query",schema:str,description:"Only this exact record ID, in the selected kind and lender."};
+const allocatable = {name:"allocatable",in:"query",schema:{type:"string",enum:["true","false"]},description:"Instalments (due-items) only. true lists just the instalments that can take an allocation now: those that still owe an amount and are not cancelled, closed or in dispute, the ones a manual allocation accepts, so total counts the choices. Omitted or false lists every instalment. Refused (400) for any other kind."};
 add("/healthz","get","healthCheck","HealthStatus");
 add("/readyz","get","readinessCheck","ReadinessStatus");
 const describe = (path, method, summary, description) => Object.assign(paths[path][method], { summary, description });
 paths["/readyz"].get.responses["503"]={description:"Not ready: the database cannot be reached within the check's time limit, or lacks a table, column, unique index or check constraint this build needs",content:{"application/json":{schema:ref("ReadinessStatus")}}};
 add("/v1/workspace","get","getWorkspace","Workspace");
 add("/v1/overview","get","getOverview","Overview",null,[merchant]);
-add("/v1/records/{kind}","get","listRecords","RecordList",null,[pathParam("kind"),merchant,search,status,limit,offset,updatedSince,customerId,recordId]);
+add("/v1/records/{kind}","get","listRecords","RecordList",null,[pathParam("kind"),merchant,search,status,limit,offset,updatedSince,customerId,recordId,allocatable]);
 add("/v1/records/{kind}","post","createRecord","ValopayRecord","RecordInput",[pathParam("kind"),merchant,optionalKey()]);
 add("/v1/records/{kind}/{id}","patch","updateRecord","ValopayRecord","RecordUpdate",[pathParam("kind"),pathParam("id"),merchant,optionalKey()]);
 add("/v1/actions","post","performAction","ActionResult","ActionInput",[merchant,optionalKey("A set_role change is repeatable with its key but is not recorded in Operations, so a refused one may be sent again and retention never removes its result. Its result is kept apart from the journal's, so a journaled write sent with the same key is a separate request.")]);
@@ -110,7 +112,7 @@ describe("/healthz","get","Liveness: the process answers, with its build, uptime
 describe("/readyz","get","Readiness: one bounded round trip to the database, which also checks its schema","Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table, column, unique index or check constraint this build needs. A missing read index leaves the answer ready, with checks.schema.status indexes_missing, since every request still works, only slower. The log names what is missing and where it comes from, and any connection error; the answer does not. Probes share one check: while it runs every probe waits for it, and its answer is reused for a second after it finishes, so a burst makes one database round trip. Needs no sandbox or sign-in, and answers whether or not Clerk is configured. At most 120 health checks a minute per client network, both health addresses together.");
 describe("/v1/workspace","get","The caller's workspace: its lenders, roles and actor","On a first visit an anonymous caller gets a new synthetic sandbox with two lenders, and the sandbox cookie that names it on every later request (components.securitySchemes.sandboxCookie); a signed-in person gets their own workspace. New sandboxes are limited per client network (20 an hour; an IPv6 client's network is its /64, and a /48 starts at most 60) and per server (300 an hour). A browser that sends two different sandbox cookies is refused (400) rather than guessed between.");
 describe("/v1/overview","get","The operations overview for one lender","Metrics, queues, recent activity, upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02).");
-describe("/v1/records/{kind}","get","Records of one kind for one lender, newest first","Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync.");
+describe("/v1/records/{kind}","get","Records of one kind for one lender, newest first","Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync; allocatable for the instalments a manual allocation accepts.");
 describe("/v1/records/{kind}","post","Create a record of an editable kind","Validated against the kind's data schema; a status only a domain action may set is refused.");
 describe("/v1/records/{kind}/{id}","patch","Update a record","Editable kinds only; an approved, preregistered or closed version is immutable. data is merged over the stored data as a merge patch: a field left out keeps its value and a field sent as null is removed, which is how an edit clears an optional field. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version.");
 describe("/v1/actions","post","Run a domain action on the lender's state","Every action is audited, most require a reason, and the persona's role applies; the catalogue of actions is in docs/frontend-contract.md.");
@@ -147,7 +149,7 @@ const schemaDescriptions = {
   ActionResult: "What an action did, in words, with the record it produced or changed and any data it returns.",
   ImportInput: "A synthetic CSV to preview or commit for one kind, with an optional column mapping.",
   ImportRow: "The outcome of one imported row.",
-  ImportResult: "How many rows were valid, invalid and imported, and each row's outcome.",
+  ImportResult: "How many rows were valid, invalid and imported, and each row's outcome. warnings, when present, says which name or reference came from a fallback (the reference, a row number or a generated reference) while a column was left unused, and the check and the commit are not refused for it.",
   Report: "The reports: metrics, billing, the experiment, operational measurement and the daily closes.",
   Gate: "One readiness gate: what it needs, its status and the evidence recorded.",
   Gates: "The prerequisites and decisions, the sandbox's limitations, and the cash and burn figures used for the funding decision.",
@@ -664,7 +666,7 @@ operation("/v1/lifecycle/policy", "post", "saveRetentionPolicy", "LifecycleView"
 operation("/v1/lifecycle/holds", "post", "setRetentionHold", "LifecycleView", "RetentionHoldInput", [merchant, requiredKey], "Place or release a hold", "Administrators only. A held item is never deleted by a run.");
 operation("/v1/lifecycle/runs", "post", "previewLifecycleRun", "LifecycleRunView", "LifecyclePreviewInput", [merchant, requiredKey], "Preview a retention run", "Administrators only. Records the exact manifest of what would be deleted; nothing is deleted. With nothing old enough to delete, the preview is refused (400).");
 operation("/v1/lifecycle/runs/{id}/approve", "post", "approveLifecycleRun", "LifecycleRunView", "LifecycleApproveInput", [pathParam("id"), merchant, requiredKey], "Approve a retention run", "Administrators only; in a staff pilot, an administrator other than the one who prepared the preview (403). The manifest digest must match the preview; a changed inventory must be previewed again.");
-operation("/v1/lifecycle/runs/{id}/execute", "post", "executeLifecycleRun", "LifecycleRunView", "LifecycleExecuteInput", [pathParam("id"), merchant, requiredKey], "Execute an approved run", "Administrators only. Deletes in bounded batches with a receipt per item; blocked and failed items are reported, never skipped silently.");
+operation("/v1/lifecycle/runs/{id}/execute", "post", "executeLifecycleRun", "LifecycleRunView", "LifecycleExecuteInput", [pathParam("id"), merchant, requiredKey], "Execute an approved run", "Administrators only. Removes as many of the run's sources as fit in a two-second budget under the lender lock, each checked again just before it is deleted and given a receipt. A blocked source, or a deletion that cannot be confirmed, stops the run with its reason (status attention) and the sources after it wait; nothing is skipped silently. Send it again to continue until the status is completed: sources not yet attempted go first.");
 
 // ---- The refusals and failures each operation can answer ----
 // Listed from what its route does: the /api/v1 middleware (the origin rule and the request

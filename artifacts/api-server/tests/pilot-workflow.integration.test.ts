@@ -627,6 +627,9 @@ try {
   );
   assert.equal(caseDetail.events.length, 1);
   assert.equal(caseDetail.record.data.case.assignee, "Sandbox Admin");
+  // A demo persona has one name: the actor its changes are recorded under, in the case roster and on the case alike.
+  assert.equal(caseDetail.record.data.case.assigneeName, "Sandbox Admin");
+  assert.ok(caseDetail.assignees.length > 0 && caseDetail.assignees.every((person: { actor: string; name: string }) => person.name === person.actor), JSON.stringify(caseDetail.assignees));
 
   // Complete the empty lender journey using actual routes and persisted state.
   const ingest = async (kind: string, csv: string) => {

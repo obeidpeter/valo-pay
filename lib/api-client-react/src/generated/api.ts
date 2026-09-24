@@ -524,7 +524,7 @@ export const getListRecordsUrl = (kind: string,
 }
 
 /**
- * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync.
+ * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync; allocatable for the instalments a manual allocation accepts.
  * @summary Records of one kind for one lender, newest first
  */
 export const listRecords = async (kind: string,
@@ -6968,7 +6968,7 @@ export const getExecuteLifecycleRunUrl = (id: string,
 }
 
 /**
- * Administrators only. Deletes in bounded batches with a receipt per item; blocked and failed items are reported, never skipped silently.
+ * Administrators only. Removes as many of the run's sources as fit in a two-second budget under the lender lock, each checked again just before it is deleted and given a receipt. A blocked source, or a deletion that cannot be confirmed, stops the run with its reason (status attention) and the sources after it wait; nothing is skipped silently. Send it again to continue until the status is completed: sources not yet attempted go first.
  * @summary Execute an approved run
  */
 export const executeLifecycleRun = async (id: string,

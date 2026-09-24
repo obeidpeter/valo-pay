@@ -6,7 +6,8 @@ import { saveSourceManifest } from '../../api-server/src/domain/source-completen
 import { providerEventView, replayProviderEvent, runPaystackFixture } from '../../api-server/src/providers/paystack-inbox';
 import { pilotProgress, closeReviewList, prepareCloseReview, decideCloseReview, bindCloseReviewBasis, reviewIsCurrent } from '../../api-server/src/domain/close-review';
 import { derivePersonalWork, recordWorkReceipt } from '../../api-server/src/domain/personal-work';
-import { lifecycleView, lifecycleRunView, saveLifecyclePolicy, setLifecycleHold, lifecyclePreview, approveLifecycleRun, assertLifecycleCandidate, eraseLifecycleRawCsv, recordLifecycleReceipt } from '../../api-server/src/domain/lifecycle';
+import { lifecycleView, lifecycleRunView, saveLifecyclePolicy, setLifecycleHold, lifecyclePreview, approveLifecycleRun } from '../../api-server/src/domain/lifecycle';
+import { executeApprovedRun } from '../../api-server/src/domain/lifecycle-run';
 import { sourceProfileInputSchema, paystackFixtureInputSchema, providerReplayInputSchema, prepareCloseReviewSchema, decideCloseReviewSchema, personalWorkQuerySchema, personalWorkViewSchema, workReceiptInputSchema, workReceiptSchema, ERROR_DETAIL_LIMIT } from '@workspace/valopay-schema';
 import { advanceRecordVersions, mergeData } from '../../api-server/src/lib/edit-versions';
 import { pageCustomerHistory } from '../../api-server/src/lib/customer-history';
@@ -32,7 +33,7 @@ import { enrolEligibleFailures } from "../../api-server/src/domain/policy-engine
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "../../api-server/src/domain/types";
 import { seedMerchant } from "../../api-server/src/lib/valopay-seed";
 import { getGates } from "../../api-server/src/lib/valopay-readiness";
-import { pageRecords } from "../../api-server/src/lib/valopay-list";
+import { allocatableOnly, pageRecords } from "../../api-server/src/lib/valopay-list";
 import { pageQueue } from '../../api-server/src/lib/valopay-queues';
 import { importCsv } from "../../api-server/src/lib/valopay-import";
 import { exportJobView, publicExportRecord, queueExport, retryExport } from '../../api-server/src/lib/export-jobs';
@@ -58,6 +59,8 @@ export interface FakeApi {
   mutate<T>(fn: (state: DomainState, ctx: Context) => T, merchantId?: string): T;
   /** The terminal request payloads and export files the server's storage inventory would list for retention (none by default). */
   lifecycleExternal: LifecycleExternalCandidate[];
+  /** How long one retention execute request keeps starting sources: 0, the default, removes one source a request, so a test sees the console carry a run on; the server allows 2 s. */
+  lifecycleStepBudgetMs: number;
   setNow(iso: string): void;
   /** Makes the next request whose path (and method, when given) matches fail: with an API-style error body and status, or as a network failure ("offline"). */
   failNext(pattern: RegExp, failure: { status: number; error: string; details?: Array<{ field: string; message: string }>; headers?: Record<string, string> } | "offline", method?: string): void;
@@ -111,6 +114,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
     state(merchantId) { const id = merchantId ?? api.merchantIds[0]!; return states.get(id) ?? fail("Lender not found in this workspace.", 404); },
     mutate(fn, merchantId) { return withState(merchantId ?? api.merchantIds[0]!, fn, { action: "test.mutation", objectId: "workspace", summary: "Arranged by a console test" }); },
     lifecycleExternal: [],
+    lifecycleStepBudgetMs: 0,
     setNow(iso) { api.now = iso; if (api.scheduler.state === 'running') { api.scheduler.lastTickAt = iso; api.scheduler.lastSuccessAt = iso; } },
     failNext(pattern, failure, method) { failures.push({ pattern, failure, method: method?.toUpperCase() }); },
     hold(pattern) {
@@ -141,16 +145,27 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
     const draft = structuredClone(current);
     const before = canonicalDigest(draft);
     const result = fn(draft, ctx);
+    commit(merchantId, current, draft, ctx, before, audit);
+    return result;
+  }
+  /** withState for an operation that waits on something outside the lender, as a retention run's external deletions do: the state is replaced only once it finishes. */
+  async function withStateAsync<T>(merchantId: string, fn: (state: DomainState, ctx: Context) => Promise<T>, audit: { action: string; objectId: string; summary: string }): Promise<T> {
+    const current = states.get(merchantId) ?? fail("Lender not found in this workspace.", 404);
+    const ctx = context(), draft = structuredClone(current), before = canonicalDigest(draft);
+    const result = await fn(draft, ctx);
+    commit(merchantId, current, draft, ctx, before, audit);
+    return result;
+  }
+  function commit(merchantId: string, current: DomainState, draft: DomainState, ctx: Context, before: string, audit: { action: string; objectId: string; summary: string }): void {
     enrolEligibleFailures(draft, ctx);
     for (const close of draft.records.filter(r => r.kind === 'closes' && !current.records.some(old => old.id === r.id))) bindCloseReviewBasis(draft, close);
     advanceRecordVersions(current, draft, ctx.now);
     appendAudit(draft, ctx, audit.action, audit.objectId, audit.summary, { beforeDigest: before, afterDigest: canonicalDigest(draft) });
     states.set(merchantId, draft);
-    return result;
   }
   const merchantOf = (query: Record<string, string>) => S.GetOverviewQueryParams.parse(query).merchantId;
 
-  const roster = () => roles.filter(role => role !== 'Read-only').map(role => ({ actor: 'Sandbox ' + role, name: 'Demo ' + role, role }));
+  const roster = () => roles.filter(role => role !== 'Read-only').map(role => ({ actor: 'Sandbox ' + role, name: 'Sandbox ' + role, role }));
   const pilotWrite = (q: Record<string,string>, fn: (s: DomainState,c: Context)=>ValopayRecord) => withState(merchantOf(q), (state,ctx) => { const before=structuredClone(state); const result=fn(state,ctx); advanceRecordVersions(before,state,ctx.now); return contract(valopayRecordSchema, result); }, { action:'pilot.change',objectId:'workspace',summary:'Synthetic pilot workflow' });
   const routes: Array<[string, RegExp, Handler]> = [
     ['GET', /^\/v1\/team$/, () => contract(staffDirectorySchema, {mode:'sandbox', actor:context().actor, members:[], lenders:[], invitations:[], changes:[], events:[], message:'Demo personas are active.'})],
@@ -180,7 +195,10 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
     ['POST', /^\/v1\/lifecycle\/holds$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>{setLifecycleHold(s,c,b,api.lifecycleExternal);return lifecycleView(s,c,api.lifecycleExternal);},{action:'retention.hold',objectId:'retention',summary:'Change preservation hold'})],
     ['POST', /^\/v1\/lifecycle\/runs$/, (_p,q,b) => withState(merchantOf(q),(s,c)=>lifecyclePreview(s,c,b,api.lifecycleExternal),{action:'retention.preview',objectId:'retention',summary:'Save bounded deletion preview'})],
     ['POST', /^\/v1\/lifecycle\/runs\/(?<id>[^/]+)\/approve$/, (p,q,b) => withState(merchantOf(q),(s,c)=>approveLifecycleRun(s,c,p.id!,b,api.lifecycleExternal),{action:'retention.approve',objectId:p.id!,summary:'Approve exact retention preview'})],
-    ['POST', /^\/v1\/lifecycle\/runs\/(?<id>[^/]+)\/execute$/, (p,q,b) => withState(merchantOf(q),(s,c)=>{if(c.role!=='Admin')fail('An administrator is required.',403);const run=s.records.find(r=>r.kind==='retention-runs'&&r.id===p.id);if(!run||run.data.previewDigest!==b.previewDigest)fail('The approved preview does not match.',409);for(const candidate of run.data.candidates){try{if(!assertLifecycleCandidate(s,c,run.id,candidate))continue;if(candidate.kind==='raw_csv'){eraseLifecycleRawCsv(s,c,run.id,candidate);recordLifecycleReceipt(s,c,run.id,candidate,'deleted','Raw synthetic CSV removed; imported records and audit retained.');}else recordLifecycleReceipt(s,c,run.id,candidate,'blocked','External storage deletion is not simulated.');}catch(error){recordLifecycleReceipt(s,c,run.id,candidate,'blocked',error instanceof Error?error.message:'Source check failed.');}}return lifecycleRunView(s,run);},{action:'retention.execute',objectId:p.id!,summary:'Execute approved synthetic raw CSV cleanup'})],
+    ['POST', /^\/v1\/lifecycle\/runs\/(?<id>[^/]+)\/execute$/, (p,q,b) => withStateAsync(merchantOf(q),async(s,c)=>{if(c.role!=='Admin')fail('An administrator is required.',403);const run=s.records.find(r=>r.kind==='retention-runs'&&r.id===p.id);if(!run||run.data.previewDigest!==b.previewDigest)fail('The approved preview does not match.',409);
+      // No journal or private storage here: a request payload is simply gone, and an export file is marked deleted on its record.
+      const remove=async(candidate:{kind:string;sourceId:string}):Promise<'deleted'|'already_absent'>=>{if(candidate.kind!=='export_file')return 'deleted';const file=s.records.find(r=>r.kind==='exports'&&r.id===candidate.sourceId);if(!file)return 'already_absent';file.data.fileDeletedAt=c.now;file.data.fileRetentionRunId=run.id;return 'deleted';};
+      return executeApprovedRun(s,c,run.id,api.lifecycleExternal,remove,{budgetMs:api.lifecycleStepBudgetMs});},{action:'retention.execute',objectId:p.id!,summary:'Execute approved synthetic retention run'})],
     ['GET', /^\/v1\/pilot\/batches$/, (_p,q)=>{const all=api.state(merchantOf(q)).records.filter(r=>r.kind==='import-batches');return contract(importBatchListSchema, {items:all.slice(Number(q.offset||0),Number(q.offset||0)+25).map(r=>batchView(r)),total:all.length,offset:Number(q.offset||0)});}],
     ['GET', /^\/v1\/pilot\/batches\/(?<id>[^/]+)$/, (p,q)=>{const s=api.state(merchantOf(q)), batch=s.records.find(r=>r.kind==='import-batches'&&r.id===p.id);if(!batch)fail('Batch not found.',404);if(!['Admin','Operations','Finance'].includes(api.role))fail('An import operator role is required.',403);return contract(importBatchDetailSchema, {batch,revisions:s.records.filter(r=>r.kind==='import-revisions'&&r.data.batchId===p.id)});}],
     ['POST', /^\/v1\/pilot\/batches$/, (_p,q,b)=>pilotWrite(q,(s,c)=>saveImportBatch(s,c,b))],
@@ -209,6 +227,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
     ["GET", /^\/v1\/records\/(?<kind>[^/]+)$/, (params, query) => {
       if (!kinds.has(params.kind!)) fail("Unknown resource.", 404);
       const parsed = S.ListRecordsQueryParams.parse(query);
+      allocatableOnly(params.kind!, parsed);
       return S.ListRecordsResponse.parse(withState(parsed.merchantId, (state) => {
         const page = pageRecords(state.records.filter((record) => record.kind === params.kind), parsed);
         return { ...page, items: page.items.map((record) => record.kind === "exports" ? publicExportRecord(record) : record) };
@@ -332,7 +351,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
       if (!url.pathname.startsWith("/api")) fail("Not found.", 404);
       const route = routes.find(([verb, pattern]) => verb === method && pattern.test(path));
       if (!route) fail(path.startsWith("/v1/webhooks/") ? "Disabled until a provider-specific signed adapter is configured." : "Unknown resource.", path.startsWith("/v1/webhooks/") ? 403 : 404);
-      payload = route[2](path.match(route[1])?.groups ?? {}, query, body);
+      payload = await route[2](path.match(route[1])?.groups ?? {}, query, body);
     } catch (error) {
       ({ status, body: payload } = toHttpError(error));
     }

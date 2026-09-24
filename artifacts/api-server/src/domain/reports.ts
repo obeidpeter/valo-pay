@@ -1,4 +1,4 @@
-import { PLAN_GROSS_MARGIN, VARIABLE_COST_PER_COLLECTION_KOBO, deadlinePassed, experimentRules, isOpenException, measurementRules, paymentAppliedKobo, paymentAwaitsAllocation, type RecordKind } from "@workspace/valopay-schema";
+import { PLAN_GROSS_MARGIN, VARIABLE_COST_PER_COLLECTION_KOBO, counted, deadlinePassed, experimentRules, isOpenException, measurementRules, paymentAppliedKobo, paymentAwaitsAllocation, type RecordKind } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { DomainState, Metric, Report, TypedRecord, ValopayRecord } from "./types";
 import { allocationConfirmedAt, paymentObservedAt, paymentReversed } from "./reconciliation";
@@ -260,8 +260,8 @@ export function buildReports(state: DomainState, now: string): Report {
   const unallocated = payments.filter(paymentAwaitsAllocation);
   const openExceptions = exceptions.filter((item) => isOpenException(item.status));
   const metrics: Metric[] = [
-    metric("allocation_rate", "Allocation rate", allocationRate, "ratio", `${allocated.length} of ${payments.length} payments are fully or partly allocated, or exceed the amount due.`),
-    metric("allocation_precision", "Accuracy of reviewed allocations", precision, "ratio", reviewedAll.length ? `${reviewedAll.length} allocations reviewed. Unreviewed allocations are excluded from this accuracy measure.` : "No payment matches have been reviewed yet."),
+    metric("allocation_rate", "Allocation rate", allocationRate, "ratio", `${allocated.length} of ${counted(payments.length, "payment")} ${allocated.length === 1 ? "is" : "are"} fully or partly allocated, or ${allocated.length === 1 ? "exceeds" : "exceed"} the amount due.`),
+    metric("allocation_precision", "Accuracy of reviewed allocations", precision, "ratio", reviewedAll.length ? `${counted(reviewedAll.length, "allocation")} reviewed. Unreviewed allocations are excluded from this accuracy measure.` : "No payment matches have been reviewed yet."),
     metric("open_exceptions", "Open exceptions", openExceptions.length, "count", "Unresolved issues in this sample workspace."),
     metric("outstanding_kobo", "Outstanding amount", dueItems.reduce((sum, item) => sum + Number(item.data.outstandingKobo ?? item.amountKobo), 0), "kobo", "Amount still due on instalments. We never hold money."),
   ];

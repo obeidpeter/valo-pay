@@ -2,7 +2,7 @@
 
 ## Verified authority
 
-The deployed sandbox has five personas: **Admin, Operations, Finance, Compliance reviewer and Read-only**. The server creates an actor such as Sandbox Finance. Switching a persona is a demonstration of role rules, not a real staff appointment, identity proof or MFA acceptance. Source: `artifacts/api-server/src/lib/valopay-store.ts`, `artifacts/api-server/src/domain/actions.ts`, `artifacts/valo-pay/src/lib/permissions.ts` and the three connected domain services.
+The deployed sandbox has five personas: **Admin, Operations, Finance, Compliance reviewer and Read-only**. The server creates an actor such as Sandbox Finance, and that is the persona's only name: the history records its changes under it, and the case assignees and close reviewers list it the same way (they used to say Demo Finance). Switching a persona is a demonstration of role rules, not a real staff appointment, identity proof or MFA acceptance. Source: `artifacts/api-server/src/lib/valopay-store.ts`, `artifacts/api-server/src/domain/actions.ts`, `artifacts/valo-pay/src/lib/permissions.ts` and the three connected domain services.
 
 | Persona / audience | Existing authority and useful work | Boundary |
 | --- | --- | --- |
