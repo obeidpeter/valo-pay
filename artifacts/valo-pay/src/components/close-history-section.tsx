@@ -9,6 +9,7 @@ import {
 } from "@workspace/api-client-react";
 import { useWorkspace } from "@/lib/workspace-context";
 import { useUrlPagination } from "@/lib/use-url-pagination";
+import { keepRowsWhilePaging } from "@/lib/use-record-pagination";
 import { closeHistory } from "@/lib/close-history";
 import {
   formatCount,
@@ -145,16 +146,20 @@ export function CloseHistorySection({ active }: { active: boolean }) {
     limit: pagination.pageSize,
     offset: pagination.offset,
   };
+  const closesKey = getListCloseHistoryQueryKey(params);
   const query = useListCloseHistory(params, {
     query: {
       enabled: !!merchantId && active && !validation.error,
-      queryKey: getListCloseHistoryQueryKey(params),
+      queryKey: closesKey,
+      // Paging keeps the closes shown until the next page arrives, so the pager and the control pressed stay.
+      placeholderData: keepRowsWhilePaging(closesKey),
     },
   });
   useEffect(() => {
-    if (query.data && query.data.offset !== pagination.offset)
+    // The previous page's closes, shown while this one loads, say nothing of where this page is.
+    if (query.data && !query.isPlaceholderData && query.data.offset !== pagination.offset)
       pagination.correctPage(Math.floor(query.data.offset / pagination.pageSize));
-  }, [query.data, pagination.offset, pagination.pageSize]);
+  }, [query.data, query.isPlaceholderData, pagination.offset, pagination.pageSize]);
   const history = closeHistory(
     query.data?.first && query.data.latest
       ? query.data.first.id === query.data.latest.id

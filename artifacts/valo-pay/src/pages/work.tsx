@@ -11,6 +11,8 @@ import { INCOMPLETE_CONFIRMATION } from '@/lib/answers';
 import { formatCount, formatDate, formatNumber } from '@/lib/formatters';
 import { PilotError, PilotHeading, PilotPanel, RecoveryNotice, pilotField } from '@/components/pilot-ui';
 import { Button } from '@/components/ui/button';
+import { PageButtons } from '@/components/record-pagination';
+import { keepRowsWhilePaging } from '@/lib/use-record-pagination';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
 const filterLabels = { all: 'All work', overdue: 'Overdue follow-ups', handover: 'Handovers to acknowledge', review: 'Pending reviews', unread: 'Unread notifications' } as const;
@@ -31,7 +33,9 @@ function WorkQueue() {
   const [feedback, setFeedback] = useState('');
   const heading = useRef<HTMLHeadingElement>(null);
   const focusPage = useRef(false);
-  const query = useQuery({ queryKey: ['personal-work', merchantId, workspace?.actor, workspace?.role, scope, filter, offset], enabled: !!merchantId && !!workspace, refetchInterval: 60000,
+  // Paging keeps the work shown, and so the page buttons and the one pressed, until the next page arrives.
+  const workKey = ['personal-work', merchantId, workspace?.actor, workspace?.role, scope, filter, { offset }];
+  const query = useQuery({ queryKey: workKey, enabled: !!merchantId && !!workspace, refetchInterval: 60000, placeholderData: keepRowsWhilePaging(workKey),
     queryFn: async ({ signal }) => {
       const result = await pilotRequest(lenderPath(`/work?scope=${scope}&filter=${filter}&offset=${offset}&limit=25`, merchantId), personalWorkViewSchema, { signal });
       if (result.merchantId !== merchantId || result.actor !== workspace?.actor || result.scope !== scope) throw new Error('The service returned work for a different context. Refresh the selected lender.');
@@ -80,7 +84,7 @@ function WorkQueue() {
           {item.escalationReason && <p className="text-sm text-warning-foreground">{item.escalationReason}</p>}{item.notice && <p className="rounded-lg bg-secondary/30 p-3 text-sm">{item.notice}</p>}
           <div className="flex flex-wrap gap-2"><Button asChild variant="outline"><Link href={item.href}>{item.type === 'review' ? 'Open close review' : 'Open case'}<ArrowRight className="size-4" /></Link></Button>{item.canAcknowledge && <Button disabled={locked} onClick={() => { setSelected(item); setReviewed(false); setFeedback(''); }}><Handshake className="size-4" />Review handover</Button>}{data.canWork && item.assignee === data.actor && !item.readAt && <Button variant="ghost" disabled={locked} busy={mutation.isPending && mutation.variables?.action === 'read' && mutation.variables.data.sourceId === item.sourceId} busyLabel="Saving read status…" onClick={() => mutation.mutate({ action: 'read', data: receiptInput(item) })}>Mark as read</Button>}</div>
         </li>)}</ul>}
-        {data.total > 0 && <nav aria-label="Work pages" className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-muted-foreground">{formatNumber(Math.min(data.offset + 1, data.total))}–{formatNumber(Math.min(data.offset + data.items.length, data.total))} of {formatNumber(data.total)}</p><div className="flex gap-2"><Button variant="outline" disabled={locked || offset === 0} onClick={() => movePage(Math.max(0, offset - data.limit))}>Previous</Button><Button variant="outline" disabled={locked || offset + data.limit >= data.total} onClick={() => movePage(offset + data.limit)}>Next</Button></div></nav>}
+        {data.total > 0 && <nav aria-label="Work pages" className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-muted-foreground">{formatNumber(Math.min(data.offset + 1, data.total))}–{formatNumber(Math.min(data.offset + data.items.length, data.total))} of {formatNumber(data.total)}</p><div className="flex gap-2"><PageButtons label="work" busy={query.isPlaceholderData} atStart={locked || offset === 0} atEnd={locked || offset + data.limit >= data.total} onPrevious={() => movePage(Math.max(0, offset - data.limit))} onNext={() => movePage(offset + data.limit)} /></div></nav>}
       </section>
       <details className="rounded-xl border bg-card p-4 text-sm"><summary className="min-h-8 cursor-pointer font-semibold">Notification and escalation rules</summary><p className="mt-3">{data.escalationRule}</p><p className="mt-2 text-muted-foreground">Marking a notification as read records that you saw it. Acknowledging a handover records receipt of the assignment. Neither action resolves the case or approves a close.</p></details>
       <PilotPanel title="Your recent read and acknowledgement history">{!data.history.length ? <p className="text-sm text-muted-foreground">No read or handover acknowledgements recorded for you in this lender yet.</p> : <><p className="text-xs text-muted-foreground">Your 10 most recent saved events. Older events remain in the audit record.</p><ol className="divide-y">{data.history.map(event => <li key={event.id} className="space-y-1 py-3 text-sm"><p className="font-medium">{event.action === 'read' ? 'Notification read' : 'Handover acknowledged'} · {event.summary}</p><p className="text-muted-foreground">{formatDate(event.at)}</p><Link href={event.href} className="inline-flex min-h-9 items-center text-primary underline">Open source record</Link></li>)}</ol></>}</PilotPanel>

@@ -125,6 +125,27 @@ it('shows administrators a scoped team workload without another person’s ackno
   expect(screen.queryByRole('button', { name: 'Mark as read' })).toBeNull();
 });
 
+it('keeps keyboard focus off the page body while the next page of work loads, then moves it to the list', async () => {
+  // Second review of the audit fixes: paging dropped the list and its pager while the next page loaded.
+  for (let i = 0; i < 26; i++) assigned('Clerk:alice', `Paged case ${i}`);
+  const user = userEvent.setup(); mount();
+  await screen.findByText('1–25 of 26');
+  const send = globalThis.fetch;
+  let open!: () => void;
+  const held = new Promise<void>(resolve => { open = resolve; });
+  globalThis.fetch = async (input, options) => { if (String(input).includes('/api/v1/work') && String(input).includes('offset=25')) await held; return send(input, options); };
+  screen.getByRole('button', { name: 'Next' }).focus();
+  await user.keyboard('{Enter}');
+  // The last page leaves Next nowhere to go, so while the page loads Previous has the focus, waiting.
+  const previous = screen.getByRole('button', { name: 'Previous' });
+  await waitFor(() => expect(previous.getAttribute('aria-disabled')).toBe('true'));
+  expect(document.activeElement).toBe(previous);
+  expect(screen.getAllByRole('heading', { level: 3 })).toHaveLength(25);
+  open();
+  await screen.findByText('26–26 of 26');
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'All work (26)' })));
+});
+
 it('paginates a bounded queue without losing total counts', async () => {
   for (let i = 0; i < 26; i++) assigned('Clerk:alice', `Paged case ${i}`);
   const user = userEvent.setup(); mount();

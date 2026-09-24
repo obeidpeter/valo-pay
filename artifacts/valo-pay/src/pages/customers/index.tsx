@@ -29,10 +29,11 @@ export default function CustomersPage() {
   const { search: settledSearch, searchPending } = useDebouncedSearch(search, merchantId);
   const params = { merchantId: merchantId!, search: settledSearch || undefined, limit: pagination.pageSize, offset: pagination.offset };
   
+  const customersKey = getListRecordsQueryKey('customers', params);
   const customersQuery = useListRecords(
     'customers',
     params,
-    { query: { enabled: !!merchantId && sameLender && !searchPending, queryKey: getListRecordsQueryKey('customers', params), placeholderData: keepRowsWhilePaging(params) } }
+    { query: { enabled: !!merchantId && sameLender && !searchPending, queryKey: customersKey, placeholderData: keepRowsWhilePaging(customersKey) } }
   );
   const { data, isLoading, isFetching, error, refetch } = customersQuery;
   const rowTargets = useMemo(() => data?.items.map(customer => `record-${customer.id}`) || [], [data]);

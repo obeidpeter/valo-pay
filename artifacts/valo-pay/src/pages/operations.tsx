@@ -10,6 +10,8 @@ import {
   RecoveryNotice,
 } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
+import { PageButtons } from "@/components/record-pagination";
+import { keepRowsWhilePaging } from "@/lib/use-record-pagination";
 import { formatDate, formatNumber } from "@/lib/formatters";
 
 export default function OperationsPage() {
@@ -20,9 +22,12 @@ export default function OperationsPage() {
     setOffset(0);
     setMessage("");
   }, [merchantId, workspace?.actor]);
+  const listKey = ["pilot", "operations", workspace?.actor, merchantId, { offset }];
   const list = useQuery({
-    queryKey: ["pilot", "operations", workspace?.actor, merchantId, offset],
+    queryKey: listKey,
     enabled: !!merchantId,
+    // Paging keeps the requests shown, and so the page buttons and the one pressed, until the next page arrives.
+    placeholderData: keepRowsWhilePaging(listKey),
     refetchInterval: 15000,
     queryFn: ({ signal }) =>
       pilotRequest(lenderPath("/operations", merchantId, offset), operationListSchema, { signal }),
@@ -141,25 +146,20 @@ export default function OperationsPage() {
       )}
       {list.data && list.data.total > 25 && (
         <div className="flex items-center gap-3">
-          <Button
-            variant="outline"
-            disabled={!offset || list.isFetching}
-            onClick={() => setOffset((n) => Math.max(0, n - 25))}
+          <PageButtons
+            label="operations"
+            busy={list.isPlaceholderData}
+            atStart={!offset}
+            atEnd={offset + 25 >= list.data.total}
+            onPrevious={() => setOffset((n) => Math.max(0, n - 25))}
+            onNext={() => setOffset((n) => n + 25)}
           >
-            Previous
-          </Button>
-          <span className="text-sm">
-            {formatNumber(offset + 1)}–
-            {formatNumber(Math.min(offset + 25, list.data.total))} of{" "}
-            {formatNumber(list.data.total)}
-          </span>
-          <Button
-            variant="outline"
-            disabled={offset + 25 >= list.data.total || list.isFetching}
-            onClick={() => setOffset((n) => n + 25)}
-          >
-            Next
-          </Button>
+            <span className="text-sm">
+              {formatNumber(offset + 1)}–
+              {formatNumber(Math.min(offset + 25, list.data.total))} of{" "}
+              {formatNumber(list.data.total)}
+            </span>
+          </PageButtons>
         </div>
       )}
       <p className="max-w-3xl text-xs text-muted-foreground">

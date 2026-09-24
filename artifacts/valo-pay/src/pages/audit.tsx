@@ -27,10 +27,11 @@ export default function AuditPage() {
   currentMerchant.current = merchantId;
   const verificationRequest = useRef(0);
 
+  const auditKey = getListRecordsQueryKey('audit', listParams);
   const { data, isLoading, error, refetch, isFetching } = useListRecords(
     'audit',
     listParams,
-    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('audit', listParams), placeholderData: keepRowsWhilePaging(listParams) } }
+    { query: { enabled: !!merchantId, queryKey: auditKey, placeholderData: keepRowsWhilePaging(auditKey) } }
   );
 
   const verify = usePerformAction(undefined, merchantId);

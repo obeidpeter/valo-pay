@@ -26,7 +26,7 @@ import { usePagedQueue } from '@/lib/use-paged-queue';
 import { SavedQueueViews } from '@/components/saved-queue-views';
 import { RecordPagination } from '@/components/record-pagination';
 import { DiscardOriginalRequest } from '@/components/discard-original-request';
-import { useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
+import { keepRowsWhilePaging, useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
 import { LoadProblem } from '@/components/load-problem';
 
 const mandateViews = ['all', 'awaiting-activation', 'overdue', 'due-today'] as const;
@@ -75,16 +75,18 @@ export default function MandatesPage() {
   }, [merchantId]);
   const queryClient = useQueryClient();
 
-  const { data, isLoading, error, refetch, pagination } = usePagedQueue('mandates', { view, record: targetId ? wrongLender ? 'unavailable' : targetId : undefined });
+  const { data, isLoading, isPlaceholderData, error, refetch, pagination } = usePagedQueue('mandates', { view, record: targetId ? wrongLender ? 'unavailable' : targetId : undefined });
   // The customer picker asks for one searchable page of customers, never the whole book (a pilot lender's was about 400 KB).
   const [customerSearch, setCustomerSearch] = useState('');
   const { search: customerTerm, searchPending: customerSearchPending } = useDebouncedSearch(customerSearch, draftScope);
   const customerPage = useRecordPagination(`${draftScope}:${customerTerm}`);
   const customerParams = { merchantId: merchantId!, search: customerTerm, limit: customerPage.pageSize, offset: customerPage.offset };
+  // Paging keeps the choices shown, and so the pager and the control pressed, until the next page arrives.
+  const customersKey = getListRecordsQueryKey('customers', customerParams);
   const { data: customers, error: customersError, isFetching: fetchingCustomers, refetch: retryCustomers } = useListRecords(
     'customers',
     customerParams,
-    { query: { enabled: !!merchantId && isCreateOpen && !customerSearchPending, queryKey: getListRecordsQueryKey('customers', customerParams) } }
+    { query: { enabled: !!merchantId && isCreateOpen && !customerSearchPending, queryKey: customersKey, placeholderData: keepRowsWhilePaging(customersKey) } }
   );
   // The chosen customer stays in the list while the person searches or pages on.
   const [chosenCustomer, setChosenCustomer] = useState<{ value: string; label: string } | null>(null);
@@ -253,7 +255,7 @@ export default function MandatesPage() {
             </table>
           </ScrollFrame>
         )}
-        {!isLoading && !error && !targetId && <RecordPagination pagination={pagination} total={data?.total || 0} label="mandates" />}
+        {!isLoading && !error && !targetId && <RecordPagination pagination={pagination} total={data?.total || 0} busy={isPlaceholderData} label="mandates" />}
       </div>
 
       {replacements.length > 0 && <section aria-label="Reissued mandates" className="rounded-xl border bg-card p-5 text-sm">
@@ -308,7 +310,10 @@ export default function MandatesPage() {
               <div className="space-y-2">
                 <label className="grid gap-1 text-sm font-medium">Search customers<input type="search" value={customerSearch} onChange={event => { setCustomerSearch(event.target.value); customerPage.setPage(0); }} placeholder="Name or reference" className={controlClass} /></label>
                 <MandateSelect label="Customer" value={draft.customerId} id="mandate-customerId" error={fieldErrors.customerId} onChange={value => { change('customerId', value); setChosenCustomer(customerOptions.find(option => option.value === value) ?? null); }} required options={customerOptions} />
-                {customersError ? <LoadProblem what="customer choices" error={customersError} retry={() => { void retryCustomers(); }} busy={fetchingCustomers} /> : fetchingCustomers || customerSearchPending ? <p role="status" className="text-xs text-muted-foreground">Loading customer choices…</p> : <RecordPagination pagination={customerPage} total={customers?.total || 0} busy={fetchingCustomers} label="customer choices" />}
+                {customersError ? <LoadProblem what="customer choices" error={customersError} retry={() => { void retryCustomers(); }} busy={fetchingCustomers} /> : <>
+                  {(fetchingCustomers || customerSearchPending) && <p role="status" className="text-xs text-muted-foreground">Loading customer choices…</p>}
+                  {customers && !customerSearchPending && <RecordPagination pagination={customerPage} total={customers.total} busy={fetchingCustomers} label="customer choices" />}
+                </>}
               </div>
               <MandateField label="Debit limit (₦)" inputMode="decimal" value={draft.amountKobo} id="mandate-amountKobo" error={fieldErrors.amountKobo} onChange={value => change('amountKobo', value)} required />
               <MandateField label="Provider reference" value={draft.reference} id="mandate-reference" error={fieldErrors.reference} onChange={value => change('reference', value)} required />

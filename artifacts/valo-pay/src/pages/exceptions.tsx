@@ -50,7 +50,7 @@ export default function ExceptionsPage() {
   };
 
   const exceptionsQuery = usePagedQueue('exceptions', { view: filter, owner, type, record: targetId ? wrongLender ? 'unavailable' : targetId : undefined });
-  const { data, isLoading, error, refetch, pagination } = exceptionsQuery;
+  const { data, isLoading, isPlaceholderData, error, refetch, pagination } = exceptionsQuery;
   useHashTarget(`record-${targetId || ''}`, !!targetId && !isLoading && !error && !wrongLender);
   const customerById = new Map(data?.related.filter(row => row.kind === 'customers').map(row => [row.id, row]));
 
@@ -200,7 +200,7 @@ export default function ExceptionsPage() {
             </table>
           </ScrollFrame>
         )}
-        {!isLoading && !error && !targetId && (data?.total || 0) > 25 && <RecordPagination pagination={pagination} total={data?.total || 0} label="exceptions" />}
+        {!isLoading && !error && !targetId && (data?.total || 0) > 25 && <RecordPagination pagination={pagination} total={data?.total || 0} busy={isPlaceholderData} label="exceptions" />}
         </div>
       </div>
 
