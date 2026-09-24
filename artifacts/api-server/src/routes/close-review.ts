@@ -11,13 +11,14 @@ router.get("/v1/pilot/progress", async (req, res) => {
   res.json(await withState(req, res, (state, ctx) => pilotProgress(state, ctx.accessMode), false, pilotProgressSchema));
 });
 router.get("/v1/pilot/close-reviews", async (req, res) => {
+  // The list shows the 25 newest closes whole (closeReviewList); earlier ones load as summaries.
   res.json(await withState(req, res, async (state, ctx) => ({
     ...closeReviewList(state),
     actor: ctx.actor,
     reviewers: (await caseAssignees(ctx)).filter(person => person.role === "Finance"),
     accessMode: ctx.accessMode,
     ownPrincipal: ctx.principalId,
-  }), false, closeReviewListSchema));
+  }), false, closeReviewListSchema, {}, { wholeCloses: 25 }));
 });
 router.post("/v1/pilot/close-reviews/prepare", async (req, res) => {
   requiredKey(req);

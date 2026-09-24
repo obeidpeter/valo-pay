@@ -72,24 +72,33 @@ const headRead = (since: boolean) => `SELECT r.* FROM valopay_records r WHERE r.
  * claim, stamped with its own start, at most a few lock waits earlier. So the
  * read follows the lender's recent work, not its whole history. Without a
  * start to go by, or with no entry in that hour, it reads the whole chain.
+ *
+ * The lender's settings keep the head its requests last appended (auditChain,
+ * lib/valopay-store.ts), which this worker's own entries do not move. When
+ * that head is further on than any entry, an entry has gone missing: the next
+ * entry follows the stored head, as a request's does, so the missing sequence
+ * is never issued again and the gap stays visible to every check of the chain.
  */
-async function auditHead(client: PoolClient, scope: Scope, from: { records: ValopayRecord[] } | { since: unknown }): Promise<ValopayRecord | undefined> {
+async function auditHead(client: PoolClient, scope: Scope, from: { records: ValopayRecord[] } | { since: unknown }): Promise<{ sequence: number; hash: string } | undefined> {
+  let head: ValopayRecord | undefined;
   if ('records' in from) {
-    let head: ValopayRecord | undefined;
     for (const record of from.records) if (record.kind === 'audit' && (!head || Number(record.data.sequence) > Number(head.data.sequence))) head = record;
-    return head;
+  } else {
+    const scoped = [scope.id, scope.workspace_id, scope.principal_hash];
+    const since = typeof from.since === 'string' && Number.isFinite(Date.parse(from.since)) ? from.since : undefined;
+    const row = (since ? (await client.query<Row>(headRead(true), [...scoped, since])).rows[0] : undefined) ?? (await client.query<Row>(headRead(false), scoped)).rows[0];
+    head = row && recordOf(row);
   }
-  const scoped = [scope.id, scope.workspace_id, scope.principal_hash];
-  const since = typeof from.since === 'string' && Number.isFinite(Date.parse(from.since)) ? from.since : undefined;
-  const row = (since ? (await client.query<Row>(headRead(true), [...scoped, since])).rows[0] : undefined) ?? (await client.query<Row>(headRead(false), scoped)).rows[0];
-  return row && recordOf(row);
+  const stored = (scope.settings as { auditChain?: { sequence?: unknown; hash?: unknown } } | null)?.auditChain;
+  if (stored && Number.isSafeInteger(stored.sequence) && typeof stored.hash === 'string' && stored.hash && (stored.sequence as number) > Number(head?.data.sequence ?? 0)) return { sequence: stored.sequence as number, hash: stored.hash };
+  return head && { sequence: Number(head.data.sequence), hash: String(head.data.hash) };
 }
 /** Appends the job's entry after `previous`, the chain's head; returns it as stored. */
-async function audit(client: PoolClient, scope: Scope, job: ValopayRecord, action: string, summary: string, previous: ValopayRecord | undefined): Promise<ValopayRecord | undefined> {
-  const sequence=previous?Number(previous.data.sequence)+1:1;
+async function audit(client: PoolClient, scope: Scope, job: ValopayRecord, action: string, summary: string, previous: { sequence: number; hash: string } | undefined): Promise<ValopayRecord | undefined> {
+  const sequence=previous?previous.sequence+1:1;
   if(!Number.isSafeInteger(sequence)||sequence<1)throw new Error('Invalid audit sequence.');
   const now=scope.now.toISOString();
-  const data=auditEntryData({sequence,actor,action,objectId:job.id,summary,changes:{status:job.status,attempt:job.data.attempts,checksum:job.data.checksum},previousHash:previous?.data.hash,timestamp:now});
+  const data=auditEntryData({sequence,actor,action,objectId:job.id,summary,changes:{status:job.status,attempt:job.data.attempts,checksum:job.data.checksum},previousHash:previous?.hash,timestamp:now});
   const entry:ValopayRecord={id:randomUUID(),merchantId:scope.id,kind:'audit',name:action,status:'recorded',reference:'',amountKobo:0,customerId:job.customerId,createdAt:now,updatedAt:now,data};
   const inserted=(await client.query<Row>(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at)
     SELECT $4,$1,'audit',$5,$6,$7,$8,$9,$10,$11,$12 WHERE ${ownership} RETURNING *`,

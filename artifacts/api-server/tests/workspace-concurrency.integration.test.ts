@@ -6,7 +6,8 @@ if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
   process.exit(0);
 }
 const { pool, Pool, poolSize, POOL_WAIT_MS } = await import("@workspace/db");
-const { inWorkspace, listMerchants, loadState, saveState, changeRole, appendAudit, verifyAudit, saveIdempotency, findIdempotency, digest, pingDatabase, closeDatabase } = await import("../src/lib/valopay-store");
+const { inWorkspace, listMerchants, loadState, saveState, changeRole, appendAudit, auditOverview, saveIdempotency, findIdempotency, digest, pingDatabase, closeDatabase, lenderConnections, tenantConnections } = await import("../src/lib/valopay-store");
+const { verifyAuditChain } = await import("../src/lib/digests");
 const { databaseLimitOf, DatabaseLimitError, overrideDatabaseLimits } = await import("../src/lib/database-limits");
 const { wasRolledBack } = await import("../src/lib/transaction-outcome");
 const token = randomBytes(32).toString("hex"), otherToken = randomBytes(32).toString("hex");
@@ -42,12 +43,15 @@ try {
   for (const rows of bootstrap) assert.deepEqual(rows.map(row => row.id), ids, "concurrent read/write bootstrap shares one fully seeded workspace");
   const [first, second] = ids as [string, string];
 
+  // A read answers from one snapshot and takes no lender lock (decision 4 of the 23 September audit): a write never
+  // waits for it, it never waits for a write, and it sees the state from before a write still running.
   const readerReady = gate(), releaseReader = gate(); cleanup.push(releaseReader.resolve);
   const heldReader = track(inWorkspace(req(), res(), async context => {
     const before = await loadState(context, first, "share");
     readerReady.resolve(); await releaseReader.promise;
     const after = await loadState(context, first, "share");
-    assert.deepEqual(after, before, "a read's lender state cannot change between reads");
+    assert.deepEqual(after, before, "a read's lender state cannot change between reads, even across a committed write");
+    assert.equal(after.settings.concurrencyFixture, undefined, "the write committed meanwhile is not in the read's snapshot");
     assert.equal(context.role, "Admin");
     await assert.rejects(() => saveState(context, after), /read transaction cannot write/);
     await assert.rejects(() => loadState(context, first, "update"), /read transaction cannot acquire/);
@@ -70,17 +74,21 @@ try {
     await saveState(context, state);
     await saveIdempotency(context, `concurrency-${token}`, "fixed-request", { committed: true });
   }));
-  await staysBlocked(writerReady.promise, "same-lender writer waits for reader");
-  releaseReader.resolve(); await heldReader; await within(writerReady.promise, "writer after read completes");
+  await within(writerReady.promise, "a same-lender writer does not wait for an open read");
   await within(inWorkspace(req(), res(), async context => { await loadState(context, second, "share"); }, "read"), "other lender read during write");
-  const waitingReaderEntered = gate();
-  const waitingReader = track(inWorkspace(req(), res(), async context => {
-    const state = await loadState(context, first, "share"); waitingReaderEntered.resolve();
-    assert.equal(state.settings.concurrencyFixture, "committed writer");
-    assert.equal(verifyAudit(state).valid, true, "audit chain survives concurrent reads and writes");
-  }, "read"));
-  await staysBlocked(waitingReaderEntered.promise, "same-lender reader waits for writer commit");
-  releaseWriter.resolve(); await heldWriter; await within(waitingReader, "reader after commit");
+  // A read during a long write answers at once, with the state from before the write.
+  const duringWrite = await within(inWorkspace(req(), res(), context => loadState(context, first, "share"), "read"), "a read of the lender during its write", 1_000);
+  assert.equal(duringWrite.settings.concurrencyFixture, undefined, "a read during a write sees the state before it");
+  releaseWriter.resolve(); await heldWriter;
+  await inWorkspace(req(), res(), async context => {
+    const state = await loadState(context, first, "share");
+    assert.equal(state.settings.concurrencyFixture, "committed writer", "a read after the commit sees the write");
+    assert.equal(state.records.some(record => record.kind === "audit"), false, "the audit chain is not part of a loaded state");
+    assert.equal((await auditOverview(context, state)).verification.valid, true, "audit chain survives concurrent reads and writes");
+  }, "read");
+  const chain = (await pool.query<{ data: Record<string, any> }>("SELECT data FROM valopay_records WHERE merchant_id=$1 AND kind='audit'", [first])).rows;
+  assert.deepEqual(verifyAuditChain(chain), { valid: true, count: 2, headHash: chain.find(row => row.data.sequence === 2)!.data.hash }, "and verifies from its first entry");
+  releaseReader.resolve(); await within(heldReader, "the first reader, whose snapshot held");
   await inWorkspace(req(), res(), async context => {
     await loadState(context, first);
     assert.deepEqual(await findIdempotency(context, `concurrency-${token}`), { request_hash: "fixed-request", response: { committed: true } });
@@ -123,16 +131,23 @@ try {
     releaseHolder.resolve(); await within(holder, "held reader");
   }
 
-  // ---- Database limits: one busy lender, a slow statement, an idle or lost connection and a full pool ----
+  // ---- Database limits: one busy lender, one busy sandbox, a slow statement, an idle or lost connection and a full pool ----
   const uncaught: unknown[] = [];
   const heard = (error: unknown) => { uncaught.push(error); };
   process.on("uncaughtException", heard);
   try {
     const [otherLender] = (await inWorkspace(reqFor(undefined, otherToken), res(), listMerchants, "read")).map(row => row.id) as [string];
-    const capacity = Math.floor(poolSize / 2);
+    assert.deepEqual([tenantConnections, lenderConnections], [Math.max(1, Math.floor(poolSize / 3)), Math.max(1, Math.ceil(Math.floor(poolSize / 3) / 2))], "a tenant's share is a third of the pool, a lender's half of that");
     // A connection of its own, so counting the backends never waits for the pool it watches.
     const monitor = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
     const lockWaiters = async () => Number((await monitor.query<{ count: string }>("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND backend_type='client backend' AND wait_event_type='Lock'")).rows[0]!.count);
+    /** Waits until this many backends wait for a lock, then checks that no more do. */
+    const lockWaitersSettle = async (expected: number, label: string) => {
+      const settle = Date.now() + 1_500;
+      while (await lockWaiters() < expected && Date.now() < settle) await sleep(20);
+      await sleep(100);
+      assert.equal(await lockWaiters(), expected, label);
+    };
     try {
       // The lock limit is longer than the other tenant's bound: had the busy lender taken the whole pool, the other read would wait for the first lock limit to free a connection.
       const restore = overrideDatabaseLimits({ request: { lockMs: 2_000, idleMs: 10_000 } });
@@ -141,48 +156,66 @@ try {
         const writer = track(inWorkspace(reqFor(first), res(), async context => {
           const state = await loadState(context, first);
           writerIn.resolve(); await releaseBusy.promise;
-          state.settings.concurrencyFixture = "writer that outlasted the readers";
+          state.settings.concurrencyFixture = "writer that outlasted the others";
           await saveState(context, state);
         }));
         await within(writerIn.promise, "busy writer");
-        const readers = Array.from({ length: 10 }, () => failure(inWorkspace(reqFor(first), res(), context => loadState(context, first, "share"), "read")));
+        // Reads take no lender lock: they answer from their snapshots at once, the busy writer's change not yet in them.
+        const reads = await within(Promise.all(Array.from({ length: 10 }, () => inWorkspace(reqFor(first), res(), context => loadState(context, first, "share"), "read"))), "reads of the busy lender", 2_000);
+        assert.ok(reads.every(state => state.settings.concurrencyFixture !== "writer that outlasted the others"), "each read sees the state before the write");
+        // Writes wait for the lender's lock, each on a connection, only within the lender's share; the rest wait in the gate without one.
+        const writers = Array.from({ length: 10 }, () => failure(inWorkspace(reqFor(first), res(), context => loadState(context, first))));
         await within(inWorkspace(reqFor(otherLender, otherToken), res(), context => loadState(context, otherLender, "share"), "read"), "another workspace's read while one lender is busy", 1_000);
         assert.equal((await pingDatabase()).status, "ok", "readiness answers while one lender is busy");
-        // The writer holds one of the lender's slots; the readers that got the rest wait for its lock, each on a connection.
-        const settle = Date.now() + 1_500;
-        while (await lockWaiters() < capacity - 1 && Date.now() < settle) await sleep(20);
-        await sleep(100);
-        assert.equal(await lockWaiters(), capacity - 1, `the busy lender holds at most half of the ${poolSize} connections`);
-        const outcomes = await within(Promise.all(readers), "readers of the busy lender", 6_000);
-        outcomes.forEach((error, index) => turnedAway(error, ["lock_timeout", "lender_busy"], `reader ${index + 1}`));
+        // The busy writer holds one of the lender's places; the writes that got the rest wait for its lock.
+        await lockWaitersSettle(lenderConnections - 1, `the busy lender holds at most its share of the ${poolSize} connections`);
+        const outcomes = await within(Promise.all(writers), "writes of the busy lender", 6_000);
+        outcomes.forEach((error, index) => turnedAway(error, ["lock_timeout", "lender_busy"], `write ${index + 1}`));
         const seen = new Set(outcomes.map(databaseLimitOf));
-        assert.ok(seen.has("lock_timeout") && seen.has("lender_busy"), `some readers waited for the lock and the rest for the gate (${[...seen].join(", ")})`);
+        assert.ok(seen.has("lender_busy") && (lenderConnections < 2 || seen.has("lock_timeout")), `some writes waited for the lock and the rest for the gate (${[...seen].join(", ")})`);
         releaseBusy.resolve();
         await within(writer, "the busy writer commits");
       } finally { restore(); }
+      {
+        // One sandbox's own two lenders both busy with writes elsewhere (the audit's pool-starve case): its reads answer from their
+        // snapshots, its writes hold at most the tenant's share of connections, and another tenant is served at once.
+        const restoreLimits = overrideDatabaseLimits({ request: { lockMs: 2_000, idleMs: 10_000 } });
+        const holder = await pool.connect();
+        try {
+          await holder.query("BEGIN");
+          await holder.query("SELECT id FROM valopay_merchants WHERE id = ANY($1::text[]) FOR UPDATE", [[first, second]]);
+          await within(Promise.all([first, second].flatMap(lender => Array.from({ length: 5 }, () => inWorkspace(reqFor(lender), res(), context => loadState(context, lender, "share"), "read")))), "the busy sandbox's reads", 2_000);
+          const writes = [first, second].flatMap(lender => Array.from({ length: 5 }, () => failure(inWorkspace(reqFor(lender), res(), context => loadState(context, lender)))));
+          await lockWaitersSettle(tenantConnections, `the busy sandbox holds at most a third of the ${poolSize} connections`);
+          await within(inWorkspace(reqFor(otherLender, otherToken), res(), context => loadState(context, otherLender, "share"), "read"), "another tenant's read while the sandbox is busy", 1_000);
+          await within(inWorkspace(reqFor(otherLender, otherToken), res(), async context => { const state = await loadState(context, otherLender); state.settings.concurrencyFixture = "written while another sandbox was busy"; await saveState(context, state); }), "and its write", 1_000);
+          (await within(Promise.all(writes), "the busy sandbox's writes", 6_000)).forEach((error, index) => turnedAway(error, ["lock_timeout", "lender_busy"], `busy sandbox write ${index + 1}`));
+        } finally { await holder.query("ROLLBACK"); holder.release(); restoreLimits(); }
+      }
     } finally { await monitor.end(); }
     {
       // Another workspace that names this lender in its own requests fills only its own slots: the gate is per caller and lender.
       // Were it per lender, this workspace's requests would wait behind them for the 5 s lock limit and then be turned away.
       const releaseOthers = gate(); cleanup.push(releaseOthers.resolve);
       const inside: Promise<void>[] = [];
-      const others = Array.from({ length: capacity + 2 }, () => {
+      const others = Array.from({ length: lenderConnections + 2 }, () => {
         const entered = gate(); inside.push(entered.promise);
         return track(failure(inWorkspace(reqFor(first, otherToken), res(), async () => { entered.resolve(); await releaseOthers.promise; }, "read")));
       });
-      await within(Promise.all(inside.slice(0, capacity)), "another workspace's requests naming this lender", 2_000);
+      await within(Promise.all(inside.slice(0, lenderConnections)), "another workspace's requests naming this lender", 2_000);
       await within(inWorkspace(reqFor(first), res(), context => loadState(context, first, "share"), "read"), "this workspace's read of its own lender while another workspace names it", 1_000);
       await within(inWorkspace(reqFor(first), res(), async context => { const state = await loadState(context, first); state.settings.concurrencyFixture = "written while another workspace named this lender"; await saveState(context, state); }), "and its write", 1_000);
       releaseOthers.resolve();
       assert.deepEqual(await within(Promise.all(others), "the other workspace's requests", 3_000), others.map(() => undefined), "which finish in their own workspace");
     }
     {
+      // A write waiting for a lender held elsewhere is stopped at the statement limit (a read no longer waits at all).
       const restore = overrideDatabaseLimits({ request: { lockMs: 5_000, statementMs: 300 } });
       const holder = await pool.connect();
       try {
         await holder.query("BEGIN");
         await holder.query("SELECT id FROM valopay_merchants WHERE id=$1 FOR UPDATE", [first]);
-        turnedAway(await within(failure(inWorkspace(reqFor(first), res(), context => loadState(context, first, "share"), "read")), "statement limit", 2_000), ["statement_timeout"], "a statement past its limit is stopped");
+        turnedAway(await within(failure(inWorkspace(reqFor(first), res(), context => loadState(context, first))), "statement limit", 2_000), ["statement_timeout"], "a statement past its limit is stopped");
       } finally { await holder.query("ROLLBACK"); holder.release(); restore(); }
     }
     {
@@ -229,7 +262,7 @@ try {
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(uncaught, [], "a lost or killed connection never reaches the process as an uncaught error");
   } finally { process.off("uncaughtException", heard); }
-  console.log("Workspace concurrency passed: concurrent readers, cross-lender reads/writes, same-lender isolation, bootstrap, read capability, persona, audit and idempotency; a persona change is not overtaken by later readers and gives up with a 503 when it cannot start in time; one busy lender holds at most half the pool, another workspace naming a lender never holds it up, and a busy lender, a slow statement, an idle or lost connection (also just before COMMIT) and a full pool are each turned away with a 503 without holding up another lender or readiness.");
+  console.log("Workspace concurrency passed: concurrent readers, cross-lender reads/writes, reads from a snapshot that never wait for a write and see the state before it, bootstrap, read capability, persona, audit and idempotency; a persona change is not overtaken by later readers and gives up with a 503 when it cannot start in time; one busy lender holds at most its share of the pool and one busy sandbox at most a third, another workspace naming a lender never holds it up, and a busy lender, a slow statement, an idle or lost connection (also just before COMMIT) and a full pool are each turned away with a 503 without holding up another lender or readiness.");
 } finally {
   cleanup.forEach(release => release());
   await Promise.allSettled(pending);

@@ -117,4 +117,22 @@ describe('actionable operational queues', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Create mandate' }));
     await waitFor(() => expect(api.calls.find(call => call.method === 'POST' && call.path === '/v1/records/mandates')?.body).toMatchObject({ amountKobo: 1234567 }));
   });
+
+  it('offers the mandate customers one searched page at a time, keeping the one chosen', async () => {
+    const user = userEvent.setup();
+    renderApp('/mandates');
+    await user.click(await screen.findByRole('button', { name: 'Create synthetic mandate' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Create synthetic mandate' });
+    const customers = api.state().records.filter(record => record.kind === 'customers');
+    const picker = within(dialog).getByLabelText(/Customer/) as HTMLSelectElement;
+    await waitFor(() => expect(picker.options.length).toBe(customers.length + 1));
+    const listed = () => api.calls.filter(call => call.method === 'GET' && call.path === '/v1/records/customers');
+    expect(listed().every(call => call.query.limit === '25'), 'the picker asks for a page, never every customer').toBe(true);
+    const [chosen, other] = [customers[0]!, customers.find(customer => customer.id !== customers[0]!.id && !customer.name.includes(customers[0]!.name))!];
+    await user.selectOptions(picker, chosen.id);
+    await user.type(within(dialog).getByLabelText('Search customers'), other.reference);
+    await waitFor(() => expect(listed().some(call => call.query.search === other.reference)).toBe(true));
+    await waitFor(() => expect([...picker.options].map(option => option.value)).toEqual(['', chosen.id, other.id]));
+    expect(picker.value, 'the chosen customer stays chosen while the person searches').toBe(chosen.id);
+  });
 });
