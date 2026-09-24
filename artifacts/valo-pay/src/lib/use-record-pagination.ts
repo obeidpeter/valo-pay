@@ -33,3 +33,13 @@ export function useRecordPagination(resetKey: string, total?: number) {
 }
 
 export type RecordPaginationState = ReturnType<typeof useRecordPagination>;
+
+/**
+ * A list query's placeholder while a person pages: the rows shown stay until the next page arrives, so the table, its
+ * pager and the control pressed stay in place. Another lender, search or filter never shows the earlier rows.
+ */
+export function keepRowsWhilePaging(params: object) {
+  const scope = (value: unknown) => JSON.stringify({ ...(value as object), limit: undefined, offset: undefined });
+  return <T,>(previous: T | undefined, previousQuery?: { queryKey: readonly unknown[] }): T | undefined =>
+    previousQuery && scope(previousQuery.queryKey[1]) === scope(params) ? previous : undefined;
+}

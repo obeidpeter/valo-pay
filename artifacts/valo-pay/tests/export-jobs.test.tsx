@@ -38,6 +38,8 @@ describe('saved background exports',()=>{
   await user.click(screen.getByRole('button',{name:'Discard original request'}));
   await waitFor(()=>expect(screen.queryByRole('button',{name:'Retry original request'})).toBeNull());
   expect(screen.queryByRole('button',{name:'Check saved exports'})).toBeNull();
+  // The notice went with its button: focus is on the export's own buttons again, not on the page.
+  await waitFor(()=>expect(document.activeElement).toBe(screen.getByRole('button',{name:'JSON'})));
   expect(screen.getByRole('button',{name:'JSON'}).hasAttribute('disabled')).toBe(false);
   await user.click(screen.getByRole('button',{name:'JSON'}));
   expect(await screen.findByText('Dispute pack is queued')).toBeTruthy();

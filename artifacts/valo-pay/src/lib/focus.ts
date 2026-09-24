@@ -82,18 +82,20 @@ export function focusLost(): boolean {
 /**
  * After an action whose button was disabled while it ran, or removed when it
  * finished (often only once the refreshed records arrive, after the message),
- * focus falls to the page body. From the time `shown` says what happened (a
- * result or problem message) until that message has focus or is replaced,
- * each update that finds focus fallen moves it to the message, so reading
- * continues from there rather than from the top of the page. Focus still on a
- * field or another control is left where it is.
+ * focus falls to the page body, or a dialog that sent it returned focus to the
+ * page's main region because nothing better was there yet. From the time
+ * `shown` says what happened (a result or problem message) until that message
+ * has focus or is replaced, each update that finds focus fallen, or resting on
+ * the main region, moves it to the message, so reading continues from there
+ * rather than from the top of the page. Focus still on a field or another
+ * control is left where it is.
  */
 export function useFocusWhenLost(message: RefObject<HTMLElement | null>, shown: unknown): void {
   const watching = useRef(false);
   useEffect(() => { watching.current = Boolean(shown); }, [shown]);
   useEffect(() => {
     const target = message.current;
-    if (!watching.current || !target?.isConnected || !focusLost()) return;
+    if (!watching.current || !target?.isConnected || !(focusLost() || document.activeElement === document.getElementById('main'))) return;
     watching.current = false;
     // A message is not a keyboard stop, but it can hold focus so reading continues from it.
     if (!target.hasAttribute('tabindex')) target.tabIndex = -1;
