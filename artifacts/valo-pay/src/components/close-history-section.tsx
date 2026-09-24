@@ -16,6 +16,7 @@ import {
   formatKobo,
   formatNumber,
 } from "@/lib/formatters";
+import { formatWithOtherCurrencies } from "@/lib/currencies";
 import { Button } from "./ui/button";
 import { RecordPagination } from "./record-pagination";
 import { LoadProblem, RefreshProblem } from "./load-problem";
@@ -33,8 +34,9 @@ function CloseEvidence({ close }: { close: ValopayRecord }) {
   const report = query.data?.data?.report as Record<string, any> | undefined;
   // A count from the recorded report, grouped the market's way; one the report left out is 0.
   const count = (value: unknown) => formatNumber(Number(value ?? 0));
+  // The payments the report counts, their naira, and any money in another currency in that currency, never added to the naira.
   const money = (value: any) =>
-    `${count(value?.count)} · ${formatKobo(Number(value?.kobo || 0))}`;
+    `${count(value?.count)} · ${formatWithOtherCurrencies(Number(value?.kobo || 0), value?.otherCurrencies, "payment")}`;
   const measures = report
     ? [
         ["Unmatched at start", money(report.openingUnallocated)],
@@ -253,7 +255,9 @@ export function CloseHistorySection({ active }: { active: boolean }) {
                   <p className="mt-2 text-xs text-muted-foreground">
                     First: {formatDate(history.first!.createdAt)} · Latest:{" "}
                     {formatDate(history.latest!.createdAt)}. These are closing
-                    positions, not money collected during the period.
+                    positions, not money collected during the period. Money in
+                    another currency is left out here; each close's details
+                    list it.
                   </p>
                   <div className="mt-4 grid gap-4 sm:grid-cols-2">
                     {history.metrics.map((metric) => (

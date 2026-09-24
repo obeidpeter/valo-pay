@@ -11,6 +11,7 @@ import { useGetReports, getGetReportsQueryKey, useListRecords, getListRecordsQue
 import { BarChart3, FileText, CheckSquare, RefreshCcw, ChevronDown } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { formatKobo, formatDate, formatCount, formatNumber, formatPercent, formatPercentagePoints } from '@/lib/formatters';
+import { formatWithOtherCurrencies } from '@/lib/currencies';
 import { RecordDialog } from '@/components/record-dialog';
 import { readableLabel } from '@/components/record-label';
 import { Link, useSearchParams } from 'wouter';
@@ -183,7 +184,7 @@ export default function ReportsPage() {
       ) : (
         <div className="space-y-6">
           <RefreshProblem what="Reports" query={reportsQuery} />
-          <p className="text-xs text-muted-foreground">{view === 'operations' ? `Current workspace totals${reports.operational?.asOf ? ` as at ${formatDate(String(reports.operational.asOf))}` : ''}.` : view === 'billing' ? `Billing period: ${String(reports.billing?.period || 'not available')}. Amounts are in Nigerian naira.` : `Accuracy sample: ${String((reports.operational?.precisionAudit as any)?.month || 'completed month')}.`} All figures use sample data.</p>
+          <p className="text-xs text-muted-foreground">{view === 'operations' ? `Current workspace totals${reports.operational?.asOf ? ` as at ${formatDate(String(reports.operational.asOf))}` : ''}.` : view === 'billing' ? `Billing period: ${String(reports.billing?.period || 'not available')}. Amounts are in Nigerian naira unless another currency is named.` : `Accuracy sample: ${String((reports.operational?.precisionAudit as any)?.month || 'completed month')}.`} All figures use sample data.</p>
           <section hidden={view !== 'operations'} aria-label="Operational metrics" className={view === 'operations' ? 'grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4' : ''}>
             {reports.metrics.map(metric => (
               <div key={metric.key} className="min-w-0 rounded-xl border bg-card p-5 shadow-sm">
@@ -294,7 +295,7 @@ export default function ReportsPage() {
                       <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Payment method</th><th className="py-1 pr-2 text-right">Receipts</th><th className="py-1 pr-2 text-right">Value</th><th className="py-1 pr-2 text-right">Billable</th></tr></thead>
                       <tbody className="divide-y">
                         {Object.entries((reports.billing?.channelBreakdown as Record<string, any>) || {}).map(([channel, row]) => (
-                          <tr key={channel}><td className="py-1 pr-2">{labelOf(channel)}</td><td className="py-1 pr-2 text-right">{count(row.count)}</td><td className="py-1 pr-2 text-right">{formatKobo(Number(row.kobo || 0))}</td><td className="py-1 pr-2 text-right">{count(row.billable)}</td></tr>
+                          <tr key={channel}><td className="py-1 pr-2">{labelOf(channel)}</td><td className="py-1 pr-2 text-right">{count(row.count)}</td><td className="py-1 pr-2 text-right">{formatWithOtherCurrencies(Number(row.kobo || 0), row.otherCurrencies, 'receipt')}</td><td className="py-1 pr-2 text-right">{count(row.billable)}</td></tr>
                         ))}
                         {Object.keys((reports.billing?.channelBreakdown as Record<string, any>) || {}).length === 0 && <tr><td colSpan={4} className="py-2 text-muted-foreground">No receipts in this period.</td></tr>}
                       </tbody>
