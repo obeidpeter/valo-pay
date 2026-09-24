@@ -82,7 +82,8 @@ export function readStartupConfig(env: Record<string, string | undefined>, purpo
   let databasePoolSize = 10;
   const pool = given("VALOPAY_DATABASE_POOL_SIZE");
   if (pool !== undefined) {
-    if (wholeNumber(pool, 2, 100)) databasePoolSize = Number(pool);
+    // lib/db's own rule, which reads the value again when it loads: at most three digits, so 0010 is refused there too.
+    if (/^[0-9]{1,3}$/.test(pool) && wholeNumber(pool, 2, 100)) databasePoolSize = Number(pool);
     else problems.push("VALOPAY_DATABASE_POOL_SIZE must be a whole number from 2 to 100.");
   }
   const logLevel = oneOf("LOG_LEVEL", logLevels, "info");

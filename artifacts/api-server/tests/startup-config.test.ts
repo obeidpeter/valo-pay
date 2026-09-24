@@ -58,6 +58,17 @@ for (const [change, problem] of rules) {
   assert.ok(!found.join(" ").includes("synthetic-secret"), "a value is never repeated: it may be a credential");
   checks += 2;
 }
+// lib/db reads the pool size again when it loads: the check accepts exactly what it does (up to three digits, 2 to
+// 100), so a value the check passes never ends the process with lib/db's bare stack instead of the fatal line.
+const databaseModule = new URL("../../../lib/db/src/index.ts", import.meta.url).href;
+for (const size of ["2", "10", "010", "002", "100", "0010", "0002", "0100", "1", "0", "101", "999", "1000", "1e1", "+10", " 10", "10.0", "0x10"]) {
+  process.env["VALOPAY_DATABASE_POOL_SIZE"] = size;
+  const loaded = await import(`${databaseModule}?poolSize=${encodeURIComponent(size)}`).then(async (db) => { await db.pool.end(); return db.poolSize as number; }, () => undefined);
+  const checked = problems({ ...base, VALOPAY_DATABASE_POOL_SIZE: size }).length ? undefined : readStartupConfig({ ...base, VALOPAY_DATABASE_POOL_SIZE: size }, "server").databasePoolSize;
+  assert.equal(checked, loaded, `VALOPAY_DATABASE_POOL_SIZE=${JSON.stringify(size)}: the start-up check and lib/db read it alike`);
+  checks += 1;
+}
+delete process.env["VALOPAY_DATABASE_POOL_SIZE"];
 // The close pass listens on no port, so it needs none.
 assert.equal(readStartupConfig({ DATABASE_URL: database }, "close-pass").port, null);
 assert.deepEqual(problems({ DATABASE_URL: database, PORT: "not a port" }, "close-pass"), []);
@@ -102,6 +113,7 @@ const refusals: Array<[string, Record<string, string>, string]> = [
   ["index.ts", { PORT: "70000", DATABASE_URL: database }, "PORT must be a whole number from 1 to 65535."],
   ["index.ts", { PORT: "18093", DATABASE_URL: database, LOG_LEVEL: "verbose" }, "LOG_LEVEL must be fatal, error, warn, info, debug, trace or silent."],
   ["index.ts", { PORT: "18093", DATABASE_URL: database, VALOPAY_DATABASE_POOL_SIZE: "1" }, "VALOPAY_DATABASE_POOL_SIZE must be a whole number from 2 to 100."],
+  ["index.ts", { PORT: "18093", DATABASE_URL: database, VALOPAY_DATABASE_POOL_SIZE: "0010" }, "VALOPAY_DATABASE_POOL_SIZE must be a whole number from 2 to 100."],
   ["index.ts", { PORT: "18093", DATABASE_URL: database, VALOPAY_CLOSE_SCHEDULER: "false" }, "VALOPAY_CLOSE_SCHEDULER must be on or off (in any case)."],
   ["index.ts", { PORT: "18093" }, "DATABASE_URL is required: the PostgreSQL connection URL."],
   ["close-pass.ts", { DATABASE_URL: database, VALOPAY_RUNTIME_ISOLATION: "on" }, "VALOPAY_RUNTIME_ISOLATION must be off or staging."],
