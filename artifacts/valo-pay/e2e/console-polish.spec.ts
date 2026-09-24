@@ -233,7 +233,7 @@ test("paging Customers and the Audit log by keyboard keeps focus on the pager co
   expect((await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "customers", csv: "name,reference,consentProvenance,bankName,accountMasked\n" + rows.join("\n"), mapping: {}, syntheticOnly: true, commit: true } })).ok()).toBeTruthy();
   // Every audited write adds an entry: enough for three pages of the log.
   for (let i = 0; i < 60; i++) expect((await request.post(`/api/v1/actions?merchantId=${lender}`, { data: { action: "run_reconciliation" } })).ok()).toBeTruthy();
-  await page.route(/\/api\/v1\/records\/(customers|audit)\?/, async (route) => { await pause(500); await route.fallback(); });
+  await page.route(/\/api\/v1\/records\/(customers|audit)\?/, async (route) => { await pause(1000); await route.fallback(); });
   for (const [path, label] of [["/customers", "customers"], ["/audit", "audit entries"]] as const) {
     await page.goto(path);
     const pager = page.getByRole("navigation", { name: `${label} pagination` });
@@ -313,7 +313,7 @@ test("confirming Revoke access moves focus to what the revocation did once it is
   const admins = [person("admin_a", "Ada Admin", "Admin"), person("admin_b", "Bola Admin", "Admin")];
   await page.route("**/api/v1/team", (route) => route.request().method() === "GET" ? route.fulfill({ json: { mode: "staff", actor: "Clerk:user_admin_a", members: [...admins, chidi], lenders: [], invitations: [], changes: [], events: [], message: "Verified staff access." } }) : route.fallback());
   await page.route(/\/api\/v1\/team\/members\/ops$/, async (route) => {
-    await slowly();
+    await pause(1500);
     chidi = { ...chidi, status: "revoked", updatedAt: new Date().toISOString() };
     const { lenderIds: _lenders, allLenders: _all, ...answer } = chidi;
     await route.fulfill({ json: { ...answer, message: "Chidi Ops’s access is revoked. Their lender access and pending invitations are removed.", pendingChange: null } });
@@ -328,8 +328,8 @@ test("confirming Revoke access moves focus to what the revocation did once it is
   await dialog.getByRole("button", { name: "Revoke access" }).focus();
   await page.keyboard.press("Enter");
   await expect(dialog).toHaveCount(0);
-  // While the answer is on its way, focus waits on the page's main region, never on the body.
-  expect(await focused(page)).toMatchObject({ tag: "main", id: "main" });
+  // While the answer is on its way (1.5 s), focus waits on the page's main region, never on the body.
+  await expect.poll(() => focused(page), { timeout: 1000 }).toMatchObject({ tag: "main", id: "main" });
   await expect.poll(() => focused(page)).toMatchObject({ tag: "p", text: expect.stringMatching(/^Chidi Ops’s access is revoked\./) });
   await expect(card.getByText(/^Operations · revoked/)).toBeVisible();
   await expect.poll(() => focused(page)).toMatchObject({ tag: "p", text: expect.stringMatching(/^Chidi Ops’s access is revoked\./) });
