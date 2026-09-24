@@ -128,14 +128,15 @@ export function paymentUnappliedKobo(payment: { amountKobo?: unknown; data?: { a
 /**
  * REC-04: a payment whose money waits for Finance to allocate it: an
  * unallocated payment, or the unapplied rest of one that is partly applied
- * (partial, or overpaid after its instalment was settled). A proposal, a
- * duplicate hold and returned money wait for other work. Finance's payments
- * queue, the unallocated ageing and the close totals read payments through this.
+ * (partial, or overpaid after its instalment was settled), holding money it
+ * has not applied. A proposal, a duplicate hold, returned money and a payment
+ * with nothing unapplied, such as one an earlier build made for ₦0, wait for
+ * no one. Finance's payments queue, the unallocated ageing and the close
+ * totals read payments through this.
  */
 export function paymentAwaitsAllocation(payment: { status?: unknown; amountKobo?: unknown; data?: { allocatedKobo?: unknown; reversalStatus?: unknown; refundStatus?: unknown; refundedKobo?: unknown } | null } | null | undefined): boolean {
   if (!payment) return false;
-  if (payment.status === "unallocated") return true;
-  return (payment.status === "partial" || payment.status === "overpaid") && paymentUnappliedKobo(payment) > 0;
+  return (payment.status === "unallocated" || payment.status === "partial" || payment.status === "overpaid") && paymentUnappliedKobo(payment) > 0;
 }
 /**
  * What a refund returned to the payer: data.refundedKobo as recorded, or the

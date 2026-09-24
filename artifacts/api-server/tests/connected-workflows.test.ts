@@ -8,10 +8,13 @@ import {
 } from "../src/domain/connected";
 import { makeRecord } from "../src/domain/records";
 import { evaluateRetry } from "../src/domain/policy-engine";
+import { reconcile } from "../src/domain/reconciliation";
+import { runDailyClose } from "../src/domain/actions";
+import { pauseIdleSandboxClose } from "../src/domain/close";
 import type { Context, DomainState, ValopayRecord } from "../src/domain/types";
 import { workflowFixture } from "./workflow-fixture";
 process.env.DATABASE_URL ||= "postgres://unused:unused@127.0.0.1:1/unused";
-const { assertFinalState } = await import("../src/lib/valopay-store");
+const { assertFinalState, appendAudit } = await import("../src/lib/valopay-store");
 const ctx: Context = {
   now: "2026-09-21T10:00:00.000Z",
   role: "Admin",
@@ -468,6 +471,33 @@ check(() => {
     change(t);
     assert.notEqual(connectedRevision(t), before, `${label} changes the revision`);
   }
+});
+check(() => {
+  // The review of those fixes: of the lender's settings, the revision covers only
+  // the ones the workspace and its actions read (the environment), so the
+  // scheduler's bookkeeping, an unrelated audited write and a scheduled close
+  // that changes nothing the workspace shows keep a reviewed form current.
+  const unrelated: [string, (t: DomainState) => void][] = [
+    ["the next scheduled close", (t) => { t.settings.nextCloseAt = "2026-09-22T06:00:00.000Z"; }],
+    ["a failed scheduled close's retry", (t) => { t.settings.closeRetry = { cursor: t.settings.nextCloseAt, failures: 1, retryAt: "2026-09-21T10:02:00.000Z", lastFailedAt: ctx.now }; }],
+    ["a pause for an idle sandbox", (t) => { pauseIdleSandboxClose(t, ctx.now); }],
+    ["the close time", (t) => { t.settings.closeTime = "08:00"; }],
+    ["the audit chain's head", (t) => { t.settings.auditChain = { sequence: 1, hash: "a".repeat(64) }; }],
+    ["an audited write elsewhere", (t) => { appendAudit(t, ctx, "elsewhere", "workspace", "An unrelated audited write."); }],
+  ];
+  for (const [label, change] of unrelated) {
+    const t = fresh(),
+      before = connectedRevision(t);
+    change(t);
+    assert.equal(connectedRevision(t), before, `${label} keeps the revision`);
+  }
+  const t = fresh();
+  t.settings.nextCloseAt = "2026-09-21T06:00:00.000Z";
+  reconcile(t, { ...finance, now: "2026-09-21T06:00:00.000Z" });
+  const before = connectedRevision(t);
+  runDailyClose(t, { ...ctx, now: "2026-09-21T06:01:00.000Z", actor: "system:scheduled close" }, "scheduled");
+  assert.notEqual(t.settings.nextCloseAt, "2026-09-21T06:00:00.000Z", "the close moved the scheduler's cursor");
+  assert.equal(connectedRevision(t), before, "a scheduled close that changes nothing the workspace shows keeps the revision");
 });
 check(() => {
   // The view's work grows with the records, not with the customers or the open

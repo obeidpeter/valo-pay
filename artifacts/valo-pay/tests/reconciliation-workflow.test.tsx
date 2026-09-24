@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { renderApp, screen, userEvent, waitFor, within } from './harness';
 import { formatKobo } from '@/lib/formatters';
+import { permissionReason } from '@/lib/permissions';
 import { executeAction } from '../../api-server/src/domain/actions';
 import { makeRecord } from '../../api-server/src/domain/records';
 import { reconcile } from '../../api-server/src/domain/reconciliation';
@@ -149,13 +150,14 @@ describe('external refunds', () => {
     await within(payments).findByText('SBX-REFUNDED-EXCESS');
     const refundFor = (reference: string) => within(payments).getByRole('button', { name: `Record external refund for ${reference}` });
     const reasonFor = (button: HTMLElement) => document.getElementById(button.getAttribute('aria-describedby') || '')?.textContent;
-    const refunded = refundFor('SBX-REFUNDED-EXCESS'), reversed = refundFor('SBX-REVERSED');
+    const refunded = refundFor('SBX-REFUNDED-EXCESS');
     expect(refunded.getAttribute('aria-disabled')).toBe('true');
     expect(reasonFor(refunded)).toBe('A refund is already recorded for this payment.');
-    expect(reversed.getAttribute('aria-disabled')).toBe('true');
-    expect(reasonFor(reversed)).toBe('The provider reversed this payment, so its money already went back.');
+    // Reversed money went back, so it waits for no one and is not in Finance's queue, even with the status an earlier build left.
+    expect(within(payments).queryByText('SBX-REVERSED')).toBeNull();
+    const reversed = api.state().records.find(record => record.reference === 'SBX-REVERSED')!;
+    expect(permissionReason({ role: 'Finance', actor: 'Sandbox Finance' }, { action: 'record_refund', record: reversed })).toBe('The provider reversed this payment, so its money already went back.');
     await user.click(refunded);
-    await user.click(reversed);
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(api.calls.some(call => call.method === 'POST')).toBe(false);
     // What stayed with the lender can still be allocated, and a payment with no refund recorded can still record one.

@@ -103,6 +103,48 @@ for (const key of ["policyId", "experimentId", "proposedDueItemId", "noticeId", 
   after.records.push(structuredClone(after.records[0]!));
   expectConflict(() => assertFinalState(before, after, "merchant-a"));
 }
+{
+  // A recorded payer never changes, except that Finance's identification is withdrawn, back to no payer, while nothing of
+  // the payment is applied and the identification is kept in its history (the review of the 23 September audit fixes).
+  const identified = () => {
+    const state = seed();
+    const payment = state.records.find((record) => record.reference === "SBX-UNIDENTIFIED-001")!;
+    const due = state.records.find((record) => record.kind === "due-items" && record.status === "scheduled")!;
+    const allocation = { ...structuredClone(payment), id: "allocation-identifying", kind: "allocations", name: "Allocation R7", status: "superseded", reference: "SYN-allocation", customerId: due.customerId, amountKobo: 1_000_000, data: { paymentId: payment.id, dueItemId: due.id, rule: "R7", confidence: "manual", automatic: false, supersededByReview: true } };
+    state.records.push(allocation);
+    payment.customerId = due.customerId;
+    payment.data.payerIdentification = { customerId: due.customerId, identifiedBy: "Sandbox Finance", identifiedAt: "2027-07-01T09:00:00.000Z", reason: "By phone.", dueItemId: due.id, allocationId: allocation.id };
+    return { state, payment: payment.id, allocation: allocation.id, customer: due.customerId };
+  };
+  const withdraw = (state: ReturnType<typeof seed>, id: string) => {
+    const payment = state.records.find((record) => record.id === id)!;
+    payment.data.payerIdentificationHistory = [{ ...payment.data.payerIdentification, withdrawnBy: "Sandbox Finance", withdrawnAt: "2027-07-02T09:00:00.000Z", withdrawnReason: "Wrong payer." }];
+    delete payment.data.payerIdentification;
+    payment.customerId = "";
+    return payment;
+  };
+  const { state: before, payment, allocation, customer } = identified();
+  const other = before.records.find((record) => record.kind === "customers" && record.id !== customer)!.id;
+  const withdrawn = structuredClone(before); withdraw(withdrawn, payment);
+  assert.doesNotThrow(() => assertFinalState(before, withdrawn, "merchant-a"), "a withdrawal that keeps its history while nothing is applied is accepted");
+  const forgotten = structuredClone(withdrawn); delete forgotten.records.find((record) => record.id === payment)!.data.payerIdentificationHistory;
+  expectConflict(() => assertFinalState(before, forgotten, "merchant-a"));
+  const applied = structuredClone(before);
+  Object.assign(applied.records.find((record) => record.id === allocation)!, { status: "confirmed" });
+  applied.records.find((record) => record.id === payment)!.data.allocatedKobo = 1_000_000;
+  const appliedWithdrawn = structuredClone(applied); withdraw(appliedWithdrawn, payment);
+  expectConflict(() => assertFinalState(applied, appliedWithdrawn, "merchant-a"));
+  const reassigned = structuredClone(before); reassigned.records.find((record) => record.id === payment)!.customerId = other;
+  expectConflict(() => assertFinalState(before, reassigned, "merchant-a"));
+  const named = structuredClone(before); delete named.records.find((record) => record.id === payment)!.data.payerIdentification;
+  const namedWithdrawn = structuredClone(named); Object.assign(namedWithdrawn.records.find((record) => record.id === payment)!, { customerId: "" });
+  expectConflict(() => assertFinalState(named, namedWithdrawn, "merchant-a"));
+  // After the withdrawal, Finance identifies the real payer; the wrong match keeps the customer the history names, and no other.
+  const reidentified = structuredClone(withdrawn); Object.assign(reidentified.records.find((record) => record.id === payment)!, { customerId: other });
+  assert.doesNotThrow(() => assertFinalState(withdrawn, reidentified, "merchant-a"), "the real payer is recorded next");
+  const unrelated = structuredClone(reidentified); unrelated.records.find((record) => record.id === payment)!.data.payerIdentificationHistory[0].customerId = "someone-else";
+  expectConflict(() => assertFinalState(withdrawn, unrelated, "merchant-a"));
+}
 console.log("valopay repository pure guards passed");
 
 {
