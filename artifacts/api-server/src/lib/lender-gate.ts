@@ -2,12 +2,13 @@ import { DatabaseLimitError } from './database-limits';
 import { markRolledBack } from './transaction-outcome';
 
 /**
- * A per-process cap on how many transactions one lender may hold at once.
- * Requests for a busy lender used to take a connection each and then wait for
- * its lock, until they held the whole pool and every other tenant, and the
- * readiness check, waited behind them. A request past the cap waits here, in
- * arrival order and without a connection, for at most the wait limit, then is
- * turned away with a 503 that says nothing was saved.
+ * A per-process cap on how many transactions one lane (a lender, or a tenant)
+ * may hold at once. Requests for a busy lender used to take a connection each
+ * and then wait for its lock, until they held the whole pool and every other
+ * tenant, and the readiness check, waited behind them. A request past the cap
+ * waits here, in arrival order and without a connection, for at most the wait
+ * limit (or the wait it is given), then is turned away with a 503 that says
+ * nothing was saved.
  */
 export function createLenderGate(options: { capacity: number; waitMs: () => number; maxWaiting?: number }) {
   const maxWaiting = options.maxWaiting ?? 50;
@@ -26,7 +27,7 @@ export function createLenderGate(options: { capacity: number; waitMs: () => numb
   }
   return {
     /** Resolves with the function that leaves once the request's transaction has ended. */
-    enter(lender: string, write: boolean): Promise<() => void> {
+    enter(lender: string, write: boolean, waitMs = options.waitMs()): Promise<() => void> {
       let lane = lanes.get(lender);
       if (!lane) lanes.set(lender, lane = { active: 0, waiting: [] });
       const current = lane;
@@ -38,7 +39,7 @@ export function createLenderGate(options: { capacity: number; waitMs: () => numb
           const at = current.waiting.indexOf(grant);
           if (at >= 0) current.waiting.splice(at, 1);
           reject(busy(write));
-        }, options.waitMs());
+        }, waitMs);
         current.waiting.push(grant);
       });
     },

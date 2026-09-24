@@ -15,7 +15,7 @@ export type GetReportsParams = {
  */
 merchantId: string;
 /**
- * Default true for compatibility. The console passes false and loads paged close summaries separately.
+ * Default true for compatibility: the close array, where closes more than a week before the latest carry their summary (GET /v1/close-history/{id} returns any close whole). The console passes false and loads paged close summaries separately.
  */
 includeCloses?: GetReportsIncludeCloses;
 };

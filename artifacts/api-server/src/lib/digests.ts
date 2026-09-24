@@ -85,17 +85,33 @@ export function auditEntryData(entry: {
   return { ...body, hash: auditEntryHash(body) };
 }
 
+/** A place in a lender's audit chain: an entry's sequence and hash, or sequence 0 and GENESIS before the first entry. */
+export interface AuditPoint { sequence: number; hash: string }
+export const AUDIT_GENESIS: Readonly<AuditPoint> = Object.freeze({ sequence: 0, hash: "GENESIS" });
+
+/**
+ * Walks audit entries in sequence order from `from` (the chain's start unless
+ * given): valid when every entry's sequence follows the one before, its
+ * previous hash is that entry's hash and its own hash is its body's. Returns
+ * the count, the entries before `from` included, the hash where the walk
+ * ended, and the last place it verified with its entry.
+ */
+export function walkAuditChain<E extends { data: Record<string, any> }>(entries: ReadonlyArray<E>, from: AuditPoint = AUDIT_GENESIS): { valid: boolean; count: number; headHash: string; verified: AuditPoint; entry?: E } {
+  const chain = [...entries].sort((a, b) => Number(a.data.sequence) - Number(b.data.sequence));
+  let hash = from.hash, valid = true, sequence = from.sequence, entry: E | undefined;
+  for (const next of chain) {
+    const { hash: recorded, ...body } = next.data;
+    if (body.sequence !== sequence + 1 || body.previousHash !== hash || auditEntryHash(body) !== recorded) { valid = false; break; }
+    sequence += 1; hash = String(recorded); entry = next;
+  }
+  return { valid, count: from.sequence + chain.length, headHash: hash, verified: { sequence, hash }, ...(entry ? { entry } : {}) };
+}
+
 /**
  * Walks a lender's audit entries in sequence order: valid when every entry's
  * sequence, previous hash and hash agree. Returns the count and the head hash.
  */
 export function verifyAuditChain(entries: ReadonlyArray<{ data: Record<string, any> }>): { valid: boolean; count: number; headHash: string } {
-  const chain = [...entries].sort((a, b) => Number(a.data.sequence) - Number(b.data.sequence));
-  let hash = "GENESIS", valid = true, index = 0;
-  for (const entry of chain) {
-    const { hash: recorded, ...body } = entry.data;
-    if (body.sequence !== ++index || body.previousHash !== hash || auditEntryHash(body) !== recorded) { valid = false; break; }
-    hash = String(recorded);
-  }
-  return { valid, count: chain.length, headHash: hash };
+  const { valid, count, headHash } = walkAuditChain(entries);
+  return { valid, count, headHash };
 }

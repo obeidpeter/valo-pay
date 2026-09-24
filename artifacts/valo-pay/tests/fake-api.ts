@@ -229,7 +229,7 @@ export function installFakeApi(options: { now?: string; role?: string; queuedExp
       const parsed = S.ListRecordsQueryParams.parse(query);
       allocatableOnly(params.kind!, parsed);
       return S.ListRecordsResponse.parse(withState(parsed.merchantId, (state) => {
-        const page = pageRecords(state.records.filter((record) => record.kind === params.kind), parsed);
+        const page = pageRecords(state.records.filter((record) => record.kind === params.kind), parsed, params.kind);
         return { ...page, items: page.items.map((record) => record.kind === "exports" ? publicExportRecord(record) : record) };
       }));
     }],

@@ -28,7 +28,8 @@ const oldDirectory = process.env["PRIVATE_OBJECT_DIR"];
 process.env["PRIVATE_OBJECT_DIR"] = "/private/synthetic-export-tests";
 
 const { pool } = await import("@workspace/db");
-const { inWorkspace, listMerchants, loadState, verifyAudit } = await import("../src/lib/valopay-store");
+const { inWorkspace, listMerchants } = await import("../src/lib/valopay-store");
+const { verifyAuditChain } = await import("../src/lib/digests");
 const { startBackgroundWorker } = await import("../src/lib/background-worker");
 const { logger } = await import("../src/lib/logger");
 const { workflowFixture, WORKFLOW_NOW } = await import("./workflow-fixture");
@@ -162,10 +163,11 @@ try {
   }
   const job = (await api(`/exports/${queued.body.id}`)).body;
   assert.ok(["ready", "failed"].includes(job.status), job.status);
-  const state = await inWorkspace(request(), response(), (ctx) => loadState(ctx, other, "share"), "read");
-  const actions = state.records.filter((record) => record.kind === "audit" && record.data.objectId === queued.body.id).sort((a, b) => a.data.sequence - b.data.sequence).map((record) => [record.data.actor, record.data.action]);
+  // A loaded lender does not carry its audit chain (the 23 September audit, item 32): the stored entries are read beside it.
+  const chain = (await pool.query<{ data: Record<string, any> }>("SELECT data FROM valopay_records WHERE merchant_id=$1 AND kind='audit'", [other])).rows;
+  const actions = chain.filter((entry) => entry.data.objectId === queued.body.id).sort((a, b) => a.data.sequence - b.data.sequence).map((entry) => [entry.data.actor, entry.data.action]);
   assert.deepEqual(actions.slice(-2), [["System · export worker", "export.started"], ["System · export worker", job.status === "ready" ? "export.ready" : "export.failed"]]);
-  assert.equal(verifyAudit(state).valid, true, "the thread's export entries keep the lender's audit chain valid");
+  assert.equal(verifyAuditChain(chain).valid, true, "the thread's export entries keep the lender's audit chain valid");
   assert.ok(lines().some((line) => line.thread === "background" && line.event === "export.job" && line.exportId === queued.body.id));
 
   // ---- A stop while a close runs: the close finishes, then the thread ends ----
