@@ -254,7 +254,7 @@ process.env["DATABASE_URL"] ??= "postgres://postgres@127.0.0.1:1/valopay-unused"
 process.env["LOG_LEVEL"] ??= "silent";
 process.env["CLERK_SECRET_KEY"] ??= "sk_test_placeholder";
 process.env["CLERK_PUBLISHABLE_KEY"] ??= `pk_test_${Buffer.from("clerk.example.test$").toString("base64")}`;
-const { default: app } = await import("../src/app.js");
+const { default: app, bodyProblem } = await import("../src/app.js");
 const errorOf = async (response: Response) => ((await response.json()) as { error: string }).error;
 const server = app.listen(0);
 try {
@@ -320,6 +320,28 @@ try {
   const surrogateKey = await post('{"data":{"\\ud800":"x"}}');
   assert.deepEqual([surrogateKey.status, await errorOf(surrogateKey)], [400, "Text must be valid Unicode: data holds an unpaired surrogate (\\ud800 to \\udfff). Remove it and try again."], "also in a field name, naming the object that holds it");
   assert.equal((await post('{"name":"Ada \\ud83d\\ude00"}')).status, 403, "a surrogate pair is ordinary text");
+  // The walk visits a list by its index and an object by its fields, and builds a dotted path only for the value it
+  // refuses; a body holding more than 100,000 values, far more than any request needs, is refused (413) before the
+  // rest is walked, fingerprinted or journaled (the review of b9b10ef, finding 2).
+  const values = (count: number) => `{"name":"Many","junk":[${Array(count).fill(0).join(",")}]}`;
+  assert.equal((await post(values(99_997))).status, 403, "100,000 values, the body and its list among them, reach the route");
+  const tooMany = await post(values(99_998));
+  assert.deepEqual([tooMany.status, await errorOf(tooMany)], [413, "The request body holds more than 100,000 values. Send a smaller request."], "one more is refused, naming the limit");
+  assert.equal((await post(values(1_000_000))).status, 413, "as are the review's two megabytes of a million zeros");
+  assert.deepEqual(bodyProblem({ rows: [...Array<number>(50_000).fill(0), { note: "x\u0000" }] }), { field: "rows.50000.note", problem: "nul" }, "the refused value is named by its path, a list's item by its index");
+  const counted = values(99_997), parsed = JSON.parse(counted) as unknown;
+  const fastest = (run: () => unknown) => Math.min(...Array.from({ length: 5 }, () => { const started = performance.now(); run(); return performance.now() - started; }));
+  const walked = fastest(() => bodyProblem(parsed)), parsing = fastest(() => JSON.parse(counted));
+  assert.ok(walked < 3 * parsing, `walking a body costs about what parsing it does (${walked.toFixed(1)} ms to walk, ${parsing.toFixed(1)} ms to parse)`);
+  // Outside /api/v1 no body is read and no session checked: any other address under /api is unknown, answered before the
+  // parser runs, whatever the body holds (the review of b9b10ef, finding 1).
+  for (const path of ["/api/nowhere", "/api/healthz/", "/api/V1x/anything"]) {
+    for (const body of ['{"broken', JSON.stringify({ name: "x\u0000" }), values(1_000_000), `{"pad":"${"x".repeat(2 * 1024 * 1024 + 10)}"}`]) {
+      const unknown = await fetch(`${base}${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body });
+      assert.deepEqual([unknown.status, await errorOf(unknown)], [404, "Unknown resource."], `${path} is unknown, and its body is never read`);
+    }
+  }
+  checks += 17;
   const form = await raw("POST", "/api/v1/webhooks/test", "action=verify_audit&reason=form", { "Content-Type": "application/x-www-form-urlencoded" });
   assert.deepEqual([form.status, JSON.parse(form.body).error], [415, "Send the request body as JSON, with the Content-Type application/json."], "a form body is refused: the service reads JSON only");
   assert.equal((await raw("POST", "/api/v1/webhooks/test", "{}", { "Content-Type": "text/plain" })).status, 415, "as is any other format");
@@ -380,4 +402,4 @@ try {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-console.log(`API security tests passed (${checks} checks): error answers and statuses, body-parser and NUL refusals, unavailable services and storage failures, prototype keys, response headers, origin rule before the body, the staff pilot origin for changes, body limit, webhook ingress, Paystack signature before any lender work.`);
+console.log(`API security tests passed (${checks} checks): error answers and statuses, body-parser and NUL refusals, unavailable services and storage failures, prototype keys, response headers, origin rule before the body, the staff pilot origin for changes, body limits of size and values with a walk no dearer than parsing, no body read outside /api/v1, webhook ingress, Paystack signature before any lender work.`);

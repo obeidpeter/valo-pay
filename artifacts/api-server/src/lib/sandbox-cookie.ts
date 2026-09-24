@@ -35,6 +35,19 @@ function cookieValues(header: string, name: string): string[] {
   return header.split(";").map((part) => part.trim()).filter((part) => part.startsWith(`${name}=`)).map((part) => part.slice(name.length + 1));
 }
 
+/** Every name the sandbox's token is sent under: the current ones and the legacy one. */
+const SANDBOX_COOKIE_NAMES: readonly string[] = [HOST_SANDBOX_COOKIE, SANDBOX_COOKIE, LEGACY_SANDBOX_COOKIE];
+/**
+ * A Cookie header without the sandbox's cookies, for a request this API passes
+ * to another service (the Clerk proxy): the token is this API's bearer
+ * credential and never another service's. Undefined when nothing else is left.
+ */
+export function withoutSandboxCookies(header: string): string | undefined {
+  const nameOf = (part: string) => { const equals = part.indexOf("="); return (equals === -1 ? part : part.slice(0, equals)).trim(); };
+  const kept = header.split(";").map((part) => part.trim()).filter((part) => part && !SANDBOX_COOKIE_NAMES.includes(nameOf(part)));
+  return kept.length ? kept.join("; ") : undefined;
+}
+
 /** What a request's cookies say about its sandbox. */
 export interface SandboxCookie {
   /** The cookie's name for this request. */
