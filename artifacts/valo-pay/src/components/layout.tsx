@@ -1,4 +1,4 @@
-import React, { ReactNode, useEffect, useId, useRef, useState } from 'react';
+import React, { type ComponentType, ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { Link, useLocation, useSearch } from 'wouter';
 import { useWorkspace } from '@/lib/workspace-context';
 import { AuthShow, useSignOut } from '@/lib/auth';
@@ -12,7 +12,6 @@ import { formatDate } from '@/lib/formatters';
 import { useTheme } from '@/lib/theme';
 import { SandboxGuide } from './sandbox-guide';
 import { PresentationGuide, usePresentation } from './presentation-guide';
-import { AdministratorExpiry } from './administrator-expiry';
 import { useQueuePosition } from '@/lib/queue-position';
 import { WorkspaceRefreshProblem } from './workspace-unavailable';
 
@@ -105,6 +104,22 @@ function NavLinks({ location, spacious = false, onNavigate }: { location: string
   );
 }
 
+/**
+ * The warning above every page for a staff administrator whose access, or the last administrator's, ends soon. Its
+ * code reads the team through the shared schemas, so only a staff administrator loads it, after the shell: the
+ * landing page and the sandbox never fetch it (design rationale, Performance). A chunk that cannot be fetched leaves
+ * the page as it is, since the warning is advice and Team & access shows every expiry.
+ */
+function AdministratorExpiryWarning() {
+  const [Warning, setWarning] = useState<ComponentType | null>(null);
+  useEffect(() => {
+    let current = true;
+    import('./administrator-expiry').then((module) => { if (current) setWarning(() => module.AdministratorExpiry); }, () => undefined);
+    return () => { current = false; };
+  }, []);
+  return Warning ? <Warning /> : null;
+}
+
 /** Sign in or sign out, the same block at the foot of the sidebar and of the drawer. */
 function AuthBlock({ role, signOut }: { role: string | undefined; signOut: () => void }) {
   return (
@@ -175,6 +190,8 @@ export function Layout({ children }: { children: ReactNode }) {
   // Paper carries what the screen's chrome carried: the lender, the sandbox notice, and when it was printed.
   // The time is taken again as the print dialog opens, since a page can sit open for a day before it is printed.
   const lender = workspace?.merchants.find(m => m.id === merchantId);
+  // Only a staff pilot's administrator can be warned that administrator access ends: never the sandbox, whatever its role.
+  const staffAdministrator = workspace?.accessMode === 'staff' && workspace.role === 'Admin';
   const lenderName = lender?.name;
   const pageTitle = navItems.find(n => n.href === location)?.label || (location.startsWith('/cases/') ? 'Case handling' : 'Customer timeline');
   const [printedAt, setPrintedAt] = useState(() => formatDate(new Date().toISOString()));
@@ -283,7 +300,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 as its heading. A page that stops working keeps the sidebar and the lender selector as the way out. */}
             {isLoading && !workspace
               ? <h1 className="text-sm font-normal text-muted-foreground"><span role="status">Loading your workspace…</span></h1>
-              : <>{/* The presentation toolbar sits above the page's boundary, so a page that stops working keeps it and its End presentation. */}{!embedded && <PresentationGuide />}{!embedded && <AdministratorExpiry />}<ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{!embedded && !presentation.state.active && !location.startsWith('/cases/') && !['/presentation','/pilot','/imports','/operations','/team','/pay-by-bank','/credit-desk','/cash-desk','/connections'].includes(location) && <SandboxGuide />}{children}</ErrorBoundary></>}
+              : <>{/* The presentation toolbar sits above the page's boundary, so a page that stops working keeps it and its End presentation. */}{!embedded && <PresentationGuide />}{!embedded && staffAdministrator && <AdministratorExpiryWarning />}<ErrorBoundary resetKey={location} FallbackComponent={ErrorNotice} onErrorChange={setPageError}>{!embedded && !presentation.state.active && !location.startsWith('/cases/') && !['/presentation','/pilot','/imports','/operations','/team','/pay-by-bank','/credit-desk','/cash-desk','/connections'].includes(location) && <SandboxGuide />}{children}</ErrorBoundary></>}
             <p className="hidden print:block mt-8 border-t pt-3 text-xs text-muted-foreground">Printed {printedAt} from the Valo Pay sandbox · {pageTitle}{lenderName ? ` · ${lenderName}` : ''}.</p>
           </div>
         </main>

@@ -122,3 +122,27 @@ test("the anonymous sandbox on a host without sign-in never fetches Clerk's code
   expect(withClerk).toEqual([]);
   expect(scripts.size).toBeGreaterThan(5);
 });
+
+test("the landing page and the anonymous sandbox carry no shared schemas, zod or administrator warning in their entry script", async ({ page, request }) => {
+  const scripts = new Set<string>();
+  page.on("request", (sent) => { if (sent.resourceType() === "script" || sent.url().endsWith(".js")) scripts.add(sent.url()); });
+  // Text the minifier keeps: zod's type names, a message of the shared record schemas and the warning's heading.
+  const signatures = { zod: /ZodObject/, "shared schemas": /Use YYYY-MM-DD or a UTC timestamp/, "administrator warning": /Administrator access is ending/ };
+  const entryCarries = async (route: string) => {
+    const entry = await page.locator('script[type="module"][src]').getAttribute("src");
+    const code = await (await request.get(entry!)).text();
+    return Object.entries(signatures).filter(([, signature]) => signature.test(code)).map(([name]) => `${route}: ${name}`);
+  };
+  await page.goto("/");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  expect(await entryCarries("/")).toEqual([]);
+  await page.goto("/overview");
+  await expect(page.getByRole("heading", { level: 1, name: "Operations overview" })).toBeVisible();
+  expect(await entryCarries("/overview")).toEqual([]);
+  // The console fetches every page's code while idle; none of it is the warning, which only a staff administrator loads.
+  await expect.poll(() => [...scripts].some((url) => /\/team-[\w-]+\.js$/.test(url)), { timeout: 15_000 }).toBe(true);
+  await page.waitForLoadState("networkidle");
+  const withWarning: string[] = [];
+  for (const url of scripts) if (signatures["administrator warning"].test(await (await request.get(url)).text())) withWarning.push(url);
+  expect(withWarning).toEqual([]);
+});
