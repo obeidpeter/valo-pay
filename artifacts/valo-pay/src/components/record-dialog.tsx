@@ -193,7 +193,9 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
     const first = firstNamed(errors);
     if (first) { focusField(fieldId(first)); return; }
 
-    const payload: any = { data: {...(record&&!actionMutation?originalRecord.current?.data:{}),...(defaultValues.data||{})} };
+    // An edit merges data (a merge patch): it sends only the fields this dialog shows, so what the service recorded
+    // beside them, such as a settlement batch's line lists, stays as stored and never travels back in the request.
+    const payload: any = { data: { ...(defaultValues.data || {}) } };
     if (record && !actionMutation) payload.expectedUpdatedAt = originalRecord.current?.updatedAt;
     fields.forEach(f => {
       let val = formData[f.name];
@@ -201,8 +203,8 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
       if (f.type === 'checkbox') val = Boolean(val);
       else if (val === undefined) return;
       else if (val === '' && !f.required && f.type !== 'textarea') {
-        // An optional field left empty is left out, except on an edit that emptied a stored value: the edit
-        // starts from the record's data, so that value is sent as null, which removes it (a merge patch).
+        // An optional field left empty is left out, except on an edit that emptied a stored value: that value is
+        // sent as null, which removes it; left out, the merge would keep it.
         if (!(record && !actionMutation && f.isData && originalRecord.current?.data?.[f.name] !== undefined)) return;
         payload.data[f.name] = null;
         return;
