@@ -24,6 +24,7 @@ const { default: router } = await import("../src/routes/index");
 const { errorHandler } = await import("../src/lib/error-handler");
 const store = await import("../src/lib/valopay-store");
 const { auditEntryData, verifyAuditChain } = await import("../src/lib/digests");
+const { exportJobRepository } = await import("../src/lib/export-job-store");
 
 const quiet = { info() {}, warn() {}, error() {} };
 const app = express();
@@ -188,6 +189,35 @@ try {
     assert.equal(customers.items.length, customers.total, "a kind that grows with the book returns its whole filtered set");
     checks += 3;
   }
+
+  // ---- 9. The export worker's entries follow the stored head as a request's do: a missing entry's sequence is never issued again ----
+  {
+    const workerCookie = `valopay_sandbox=${randomBytes(32).toString("hex")}`, directory = process.env.PRIVATE_OBJECT_DIR;
+    const workerCall = async (path: string, method = "GET", body?: unknown, key?: string) => {
+      const answer = await fetch(base + path, { method, headers: { "Content-Type": "application/json", Cookie: workerCookie, ...(key ? { "Idempotency-Key": key } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      return { status: answer.status, data: (await answer.json()) as any };
+    };
+    const [target] = ok(await workerCall("/v1/workspace")).merchants.map((merchant: { id: string }) => merchant.id) as [string];
+    process.env.PRIVATE_OBJECT_DIR = "/private/synthetic-history-tests";
+    try {
+      const job = ok(await workerCall(`/v1/exports?merchantId=${target}`, "POST", { kind: "gate-pack", format: "json" }, randomUUID()));
+      const queued = (await entriesOf(target)).at(-1)!;
+      assert.equal((await chainOf(target))?.sequence, queued.data.sequence, "the queued export's entry is the stored head");
+      await pool.query("DELETE FROM valopay_records WHERE id=$1", [queued.id]);
+      assert.ok(await exportJobRepository.claim(target, job.id), "the export worker claims the job");
+      const started = (await entriesOf(target)).at(-1)!;
+      assert.deepEqual([started.data.action, started.data.sequence, started.data.previousHash], ["export.started", queued.data.sequence + 1, queued.data.hash], "its entry follows the stored head, not the entry before the missing one");
+      assert.equal(verifyAuditChain(await entriesOf(target)).valid, false, "so the gap stays in the chain");
+      assert.equal(brokenAlert(ok(await workerCall(`/v1/overview?merchantId=${target}`))), true, "and the overview reports it");
+    } finally {
+      if (directory === undefined) delete process.env.PRIVATE_OBJECT_DIR; else process.env.PRIVATE_OBJECT_DIR = directory;
+      const targetWorkspace = (await pool.query("SELECT workspace_id FROM valopay_merchants WHERE id=$1", [target])).rows[0].workspace_id;
+      for (const table of ["valopay_idempotency", "valopay_operations", "valopay_records"]) await pool.query(`DELETE FROM ${table} WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id=$1)`, [targetWorkspace]);
+      await pool.query("DELETE FROM valopay_merchants WHERE workspace_id=$1", [targetWorkspace]);
+      await pool.query("DELETE FROM valopay_workspaces WHERE id=$1", [targetWorkspace]);
+    }
+    checks += 5;
+  }
 } finally {
   server.close();
   await once(server, "close");
@@ -198,4 +228,4 @@ try {
   }
   await pool.end();
 }
-console.log(`Lender history checks passed (${checks} checks): the audit chain stays out of every load and continues from the head kept on the lender, entries written elsewhere are followed, the overview checks from the last verified entry and verify_audit the whole chain, earlier closes load as summaries, settings read only the latest close, and history lists are capped.`);
+console.log(`Lender history checks passed (${checks} checks): the audit chain stays out of every load and continues from the head kept on the lender, entries written elsewhere are followed, the overview checks from the last verified entry and verify_audit the whole chain, earlier closes load as summaries, settings read only the latest close, history lists are capped, and the export worker's entries follow the stored head.`);
