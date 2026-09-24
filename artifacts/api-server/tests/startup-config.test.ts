@@ -1,12 +1,14 @@
 // The settings are checked once, at startup, before any module reads them: a
 // bad value ends the process with one structured fatal line naming the
 // setting, never its value; the close scheduler's switch takes on, off or
-// external in any case and refuses anything else instead of failing open; and
+// external in any case and refuses anything else instead of failing open;
+// Clerk's JWT key is checked as Clerk reads it, and a staff host needs it; and
 // the export worker slows down while its queue cannot be read, logging the
 // outage once and the recovery once instead of an error at every poll.
 // Offline: the processes this starts use an unusable loopback database.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import { once } from "node:events";
 import { createServer } from "node:net";
 import path from "node:path";
@@ -79,16 +81,49 @@ assert.deepEqual(problems({ DATABASE_URL: database, PORT: "not a port" }, "close
 checks += 2;
 
 // Staff access and the restricted runtime need their companions, checked here instead of on every request.
+const jwtKeyRequired = "CLERK_JWT_KEY is required when VALOPAY_STAFF_ACCESS is staging: the Clerk instance's JWT public key, with which staff sessions are verified without a call to Clerk's Backend API.";
 assert.deepEqual(problems({ ...base, VALOPAY_STAFF_ACCESS: "staging" }), [
   "VALOPAY_STAFF_ISSUER must be the Clerk issuer's HTTPS origin when VALOPAY_STAFF_ACCESS is staging.",
   "VALOPAY_STAFF_ORIGINS must list one or more HTTPS origins, separated by commas, when VALOPAY_STAFF_ACCESS is staging.",
   "CLERK_SECRET_KEY is required when VALOPAY_STAFF_ACCESS is staging: without it no one can sign in.",
+  jwtKeyRequired,
 ]);
-const staff = { ...base, VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://clerk.example.test", VALOPAY_STAFF_ORIGINS: "https://valopay.example.test, https://staff.example.test", CLERK_SECRET_KEY: "sk_test_synthetic" };
+const { publicKey: instanceKey, privateKey: instancePrivateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const jwtKey = instanceKey.export({ type: "spki", format: "pem" }).toString();
+const staff = { ...base, VALOPAY_STAFF_ACCESS: "staging", VALOPAY_STAFF_ISSUER: "https://clerk.example.test", VALOPAY_STAFF_ORIGINS: "https://valopay.example.test, https://staff.example.test", CLERK_SECRET_KEY: "sk_test_synthetic", CLERK_JWT_KEY: jwtKey };
 assert.equal(readStartupConfig(staff, "server").staffAccess, "staging");
-// The close pass signs no one in, so a staff host's close pass needs no Clerk key.
-const { CLERK_SECRET_KEY: _clerk, ...staffWithoutClerk } = staff;
+const { CLERK_JWT_KEY: _jwtKey, ...staffWithoutJwtKey } = staff;
+assert.deepEqual(problems(staffWithoutJwtKey), [jwtKeyRequired], "a staff host needs Clerk's JWT key beside its secret key");
+// The close pass signs no one in, so a staff host's close pass needs neither Clerk key.
+const { CLERK_SECRET_KEY: _clerk, ...staffWithoutClerk } = staffWithoutJwtKey;
 assert.deepEqual(problems(staffWithoutClerk, "close-pass"), []);
+checks += 3;
+// CLERK_JWT_KEY is checked as Clerk reads it (the review of 4edd897, finding 2): with a value Clerk cannot use every
+// session would be refused, and the process would still start and read as ready. It must parse as an RSA public key,
+// and Clerk, which takes the modulus after a 2048-bit key's fixed opening bytes, must read that key's. Outside staff
+// mode it may be left unset.
+const escaped = "CLERK_JWT_KEY holds \\n in place of its line breaks, which Clerk cannot read: give the PEM public key with real line breaks, as Clerk shows it, from -----BEGIN PUBLIC KEY----- to -----END PUBLIC KEY-----.";
+const unusable = "CLERK_JWT_KEY must be the Clerk instance's JWT public key as Clerk shows it with the instance's API keys: a 2048-bit RSA public key in PEM form, from -----BEGIN PUBLIC KEY----- to -----END PUBLIC KEY----- on lines of their own.";
+const jwtKeys: Array<[string, string, string | undefined]> = [
+  ["as Clerk shows it", jwtKey, undefined],
+  ["without its final line break", jwtKey.trim(), undefined],
+  ["with Windows line breaks and a trailing space", `${jwtKey.replaceAll("\n", "\r\n")} `, undefined],
+  ["on one line with \\n escapes", jwtKey.trim().replaceAll("\n", "\\n"), escaped],
+  ["with spaces for its line breaks", jwtKey.trim().replaceAll("\n", " "), unusable],
+  ["as PKCS#1", instanceKey.export({ type: "pkcs1", format: "pem" }).toString(), unusable],
+  ["the private key", instancePrivateKey.export({ type: "pkcs8", format: "pem" }).toString(), unusable],
+  ["a 4,096-bit key", generateKeyPairSync("rsa", { modulusLength: 4096 }).publicKey.export({ type: "spki", format: "pem" }).toString(), unusable],
+  ["an elliptic-curve key", generateKeyPairSync("ec", { namedCurve: "P-256" }).publicKey.export({ type: "spki", format: "pem" }).toString(), unusable],
+  ["not a key", "synthetic-secret", unusable],
+];
+for (const [form, value, problem] of jwtKeys) {
+  const found = problems({ ...base, CLERK_JWT_KEY: value });
+  assert.deepEqual(found, problem ? [problem] : [], `CLERK_JWT_KEY ${form}`);
+  assert.deepEqual(problems({ ...staff, CLERK_JWT_KEY: value }), problem ? [problem] : [], `CLERK_JWT_KEY ${form}, on a staff host`);
+  assert.ok(!/synthetic-secret|MII/.test(found.join(" ")), "a value is never repeated");
+  checks += 3;
+}
+assert.deepEqual(problems({ DATABASE_URL: database, CLERK_JWT_KEY: "synthetic-secret" }, "close-pass"), [], "the close pass signs no one in and leaves the key alone");
 checks += 1;
 assert.deepEqual(problems({ ...staff, VALOPAY_STAFF_ORIGINS: "http://valopay.example.test" }), ["VALOPAY_STAFF_ORIGINS must list one or more HTTPS origins, separated by commas, when VALOPAY_STAFF_ACCESS is staging."]);
 assert.deepEqual(problems({ ...base, VALOPAY_RUNTIME_ISOLATION: "staging" }).length, 6, "every missing companion of the restricted runtime is named at once");
@@ -120,6 +155,7 @@ const refusals: Array<[string, Record<string, string>, string]> = [
   ["index.ts", { PORT: "18093", DATABASE_URL: database, VALOPAY_DATABASE_POOL_SIZE: "0010" }, "VALOPAY_DATABASE_POOL_SIZE must be a whole number from 2 to 100."],
   ["index.ts", { PORT: "18093", DATABASE_URL: database, VALOPAY_CLOSE_SCHEDULER: "false" }, "VALOPAY_CLOSE_SCHEDULER must be on, off or external (in any case)."],
   ["index.ts", { PORT: "18093" }, "DATABASE_URL is required: the PostgreSQL connection URL."],
+  ["index.ts", { PORT: "18093", DATABASE_URL: database, CLERK_JWT_KEY: jwtKey.trim().replaceAll("\n", "\\n") }, escaped],
   ["close-pass.ts", { DATABASE_URL: database, VALOPAY_RUNTIME_ISOLATION: "on" }, "VALOPAY_RUNTIME_ISOLATION must be off or staging."],
 ];
 for (const [entry, env, problem] of refusals) {
@@ -185,4 +221,4 @@ assert.equal(logged[0]!.retryInMs, 20);
 assert.equal(logged[1]!.failures, failedLooks);
 checks += 5;
 
-console.log(`Startup configuration checks passed (${checks}): every setting checked once with one fatal line that names it and never its value, the close scheduler's switch in any case and refusing anything but on, off or external, off and external starting the thread without the scheduled close, and an export queue outage slowing the worker's looks and logged once when it starts and once when it ends.`);
+console.log(`Startup configuration checks passed (${checks}): every setting checked once with one fatal line that names it and never its value, the close scheduler's switch in any case and refusing anything but on, off or external, Clerk's JWT key checked as Clerk reads it and required on a staff host, off and external starting the thread without the scheduled close, and an export queue outage slowing the worker's looks and logged once when it starts and once when it ends.`);
