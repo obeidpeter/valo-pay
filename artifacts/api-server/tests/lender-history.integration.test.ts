@@ -9,8 +9,8 @@
 // checks it whole and records how far it held, and a break either finds (a
 // fork, a gap, a changed entry) stays reported until the chain is valid again.
 // Every load has earlier closes as summaries, settings read only the latest
-// close, and a list of a kind that grows with history is capped when it names
-// no limit.
+// close, the records list has every close as its summary, and a list of a kind
+// that grows with history is capped when it names no limit.
 import assert from "node:assert/strict";
 import express from "express";
 import { once } from "node:events";
@@ -195,10 +195,16 @@ try {
     assert.deepEqual([old.data.report.customerPositionsChanged, old.data.operational, old.data.report.unallocated], [undefined, undefined, report.unallocated], "a read has an earlier close as its summary");
     assert.equal(reports.closes.find((close: { id: string }) => close.id === `${lender}-history-latest`).data.report.customerPositionsChanged.length, 100, "and the latest week's whole");
     assert.equal(ok(await call(q(`/v1/close-history/${lender}-history-old`))).data.report.customerPositionsChanged.length, 100, "the close history opens it whole");
+    // The records list has every close as its summary, as the reports read closes: whole, a year of them was 34.8 MB.
+    const listed = ok(await call(q("/v1/records/closes"))).items.filter((close: { id: string }) => close.id.startsWith(`${lender}-history-`));
+    assert.deepEqual(listed.map((close: any) => [close.id, close.data.summary, close.data.report.customerPositionsChanged, close.data.operational, close.data.report.unallocated]),
+      [[`${lender}-history-latest`, "latest", undefined, undefined, report.unallocated], [`${lender}-history-old`, "old", undefined, undefined, report.unallocated]], "the records list has each close as its summary, the latest included");
+    assert.equal(ok(await call(q(`/v1/records/closes?id=${lender}-history-latest`))).items[0].data.report.customerPositionsChanged, undefined, "and so does a list of one close");
+    assert.equal(ok(await call(q(`/v1/close-history/${lender}-history-latest`))).data.report.customerPositionsChanged.length, 100, "which the close history opens whole");
     const settings = await store.inWorkspace(sandboxRequest(), response, (ctx) => store.loadSettingsView(ctx, lender), "read");
     assert.deepEqual(settings.records.filter((record) => record.kind === "closes").map((record) => record.id), [`${lender}-history-latest`], "settings read only the latest close");
     assert.equal(ok(await call(q("/v1/settings"))).closeSchedule.lastAt, new Date(Date.parse(reports.closes.find((close: { id: string }) => close.id === `${lender}-history-latest`).data.closedAt)).toISOString(), "and still show when it ran");
-    checks += 5;
+    checks += 8;
   }
 
   // ---- 8. A list of a kind that grows with history is capped without a limit; other kinds are not ----
@@ -348,4 +354,4 @@ try {
   }
   await pool.end();
 }
-console.log(`Lender history checks passed (${checks} checks): the audit chain stays out of every load and continues from the head kept on the lender, entries written elsewhere are followed, the overview checks from the last verified entry and verify_audit the whole chain, earlier closes load as summaries, settings read only the latest close, history lists are capped, the export worker's entries follow the stored head and its claim reads the head once it holds the lender, and a fork stays reported until the chain is valid again.`);
+console.log(`Lender history checks passed (${checks} checks): the audit chain stays out of every load and continues from the head kept on the lender, entries written elsewhere are followed, the overview checks from the last verified entry and verify_audit the whole chain, earlier closes load as summaries, settings read only the latest close, the records list has closes as summaries, history lists are capped, the export worker's entries follow the stored head and its claim reads the head once it holds the lender, and a fork stays reported until the chain is valid again.`);

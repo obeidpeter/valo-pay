@@ -1377,11 +1377,15 @@ const scopedRecordsWhere = "r.merchant_id=$1 AND m.workspace_id=$2 AND w.id=$2 A
  * Search: the JavaScript fold (matchesSearch) over each record's name,
  * reference and data values as the list shows them (an export without its
  * private storage fields), scanning bounded batches of this kind; only the
- * requested page is retained. Search indexing is a separate change.
+ * requested page is retained. Search indexing is a separate change. Closes are
+ * listed, and searched, as their summaries, as the reports view reads them: a
+ * whole close carries its full report (about 100 KB), which the close history
+ * opens one at a time (getCloseDetail).
  */
 export async function listRecords(context: StoreContext, merchantId: string, kind: string, query: ListQuery) {
   const session = sessionFor(context);
   await readMerchant(context, merchantId);
+  const columns = kind === "closes" ? recordColumns.replace("r.data", `${closeSummarySql} AS data`) : recordColumns;
   const params: unknown[] = [merchantId, session.workspace.id, session.principal, kind];
   let where = `${scopedRecordsWhere} AND r.kind=$4`;
   const filter = (column: string, value: unknown) => { params.push(value); where += ` AND ${column}=$${params.length}`; };
@@ -1407,7 +1411,7 @@ export async function listRecords(context: StoreContext, merchantId: string, kin
     const values = [...params, offset];
     let paging = ` OFFSET $${values.length}`;
     if (limit !== undefined) { values.push(limit); paging += ` LIMIT $${values.length}`; }
-    if (offset < total) items = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${where} ORDER BY r.created_at DESC,r.id DESC${paging}`, values)).rows.map(rowToRecord);
+    if (offset < total) items = (await session.client.query<RecordRow>(`SELECT ${columns} ${scopedRecordsFrom} WHERE ${where} ORDER BY r.created_at DESC,r.id DESC${paging}`, values)).rows.map(rowToRecord);
   } else {
     const search = foldForSearch(query.search);
     total = 0;
@@ -1416,7 +1420,7 @@ export async function listRecords(context: StoreContext, merchantId: string, kin
       const values = [...params];
       let after = "";
       if (cursor) { values.push(cursor.at, cursor.id); after = ` AND (r.created_at,r.id) < ($${values.length - 1}::timestamptz,$${values.length}::text)`; }
-      const batch = (await session.client.query<RecordRow & { cursor_at: string }>(`SELECT ${recordColumns},r.created_at::text AS cursor_at ${scopedRecordsFrom} WHERE ${where}${after} ORDER BY r.created_at DESC,r.id DESC LIMIT ${LIST_PAGE_CEILING}`, values)).rows;
+      const batch = (await session.client.query<RecordRow & { cursor_at: string }>(`SELECT ${columns},r.created_at::text AS cursor_at ${scopedRecordsFrom} WHERE ${where}${after} ORDER BY r.created_at DESC,r.id DESC LIMIT ${LIST_PAGE_CEILING}`, values)).rows;
       for (const row of batch) {
         const record = rowToRecord(row);
         if (!matchesSearch(record.kind === "exports" ? publicExportRecord(record) : record, search)) continue;
