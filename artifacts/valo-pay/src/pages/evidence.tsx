@@ -285,7 +285,7 @@ export default function EvidencePage() {
               ) : reviewsError ? (
                 <tr><td colSpan={4}><LoadProblem what="reviews" error={reviewsError} retry={() => { void retryReviews(); }} busy={fetchingReviews} /></td></tr>
               ) : !reviews || reviews.items.length === 0 ? (
-                <EmptyRow colSpan={4} title="No reviews logged">Every two weeks, name the reviewer and record which tasks they confirmed: mandates, retries, payment matching and audit/dispute records.</EmptyRow>
+                <EmptyRow colSpan={4} title="No reviews logged">Every two weeks, log a review and record which tasks you confirmed: mandate operations, retries, payment matching, and audit and dispute records. The review is recorded in your name, with the time the service saves it.</EmptyRow>
               ) : (
                 reviews.items.map(rev => (
                   <tr key={rev.id} className="hover:bg-secondary/10">

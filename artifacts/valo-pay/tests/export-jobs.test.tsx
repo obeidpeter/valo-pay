@@ -1,6 +1,6 @@
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {installFakeApi,type FakeApi} from './fake-api';
-import {renderApp,screen,userEvent,waitFor} from './harness';
+import {renderApp,screen,userEvent,waitFor,within} from './harness';
 import { queueExport } from '../../api-server/src/lib/export-jobs';
 let api:FakeApi;
 beforeEach(()=>{api=installFakeApi({queuedExports:true});vi.spyOn(window,'open').mockReturnValue(null);});
@@ -122,5 +122,22 @@ describe('saved background exports',()=>{
   await waitFor(()=>expect(screen.queryByText(/Saved export status could not be loaded/)).toBeNull());
   expect(screen.getByText('Billing CSV is queued')).toBeTruthy();
   expect(api.calls.filter(call=>call.path==='/v1/exports'&&call.method==='POST')).toHaveLength(1);
+ });
+ it('names recent exports by the states Saved exports shows, never their machine words',async()=>{
+  const user=userEvent.setup();
+  const customer=api.state().records.find(record=>record.kind==='customers')!;
+  api.mutate((state,ctx)=>{
+   const ready=queueExport(state,ctx,{kind:'dispute-pack',format:'csv',customerId:customer.id},'/private/test');
+   const failed=queueExport(state,ctx,{kind:'dispute-pack',format:'json',customerId:customer.id},'/private/test');
+   const record=state.records.find(record=>record.id===ready.id)!;record.status='ready';Object.assign(record.data,{stage:'ready',checksum:'d'.repeat(64),generatedAt:ctx.now,byteLength:321});
+   state.records.find(record=>record.id===failed.id)!.status='failed';
+  });
+  renderApp(`/customers/${customer.id}`);
+  const summary=await screen.findByText('Recent exports (2)');
+  await user.click(summary);
+  const recent=summary.closest('details')!;
+  expect(within(recent).getByRole('button',{name:/^CSV · .+ · Completed$/})).toBeTruthy();
+  expect(within(recent).getByRole('button',{name:/^JSON · .+ · Needs retry$/})).toBeTruthy();
+  expect(recent.textContent).not.toMatch(/\b(ready|failed)\b/);
  });
 });
