@@ -504,9 +504,10 @@ function identifyPayer(state: DomainState, ctx: Context, payment: TypedRecord<"p
  * stays applied, the identification is withdrawn. The payment has no payer
  * again, so Finance can apply it to its real payer's instalment, and the
  * withdrawn identification stays in payerIdentificationHistory with who
- * withdrew it, when and why. A payer its evidence named, or money that went
- * back, keeps its payer. Returns the customer the identification named, or
- * undefined when it stands.
+ * withdrew it, when and why. A proposal of the payment for that customer,
+ * which rested on the identification, is withdrawn with it. A payer its
+ * evidence named, or money that went back, keeps its payer. Returns the
+ * customer the identification named, or undefined when it stands.
  */
 export function withdrawPayerIdentification(state: DomainState, ctx: Context, payment: TypedRecord<"payments">, reason: string): string | undefined {
   const identification = payment.data.payerIdentification;
@@ -518,6 +519,13 @@ export function withdrawPayerIdentification(state: DomainState, ctx: Context, pa
   delete payment.data.payerIdentification;
   payment.customerId = "";
   touch(payment, ctx.now);
+  const proposals = allocations.filter((item) => item.status === "proposed" && item.customerId === identification.customerId);
+  for (const proposal of proposals) {
+    proposal.status = "superseded";
+    proposal.data.supersededReason = "Superseded: the payer Finance identified was withdrawn.";
+    touch(proposal, ctx.now);
+  }
+  if (proposals.length) settlePaymentStatus(state, ctx, payment);
   return identification.customerId;
 }
 

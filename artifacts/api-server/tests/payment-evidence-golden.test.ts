@@ -11,7 +11,7 @@
 // check, and rolled back when it is refused.
 import assert from "node:assert/strict";
 import { HOUR, addAttempt, addObservation, ctxAt, liveFixture, outstandingOf, wat } from "./helpers.js";
-import { allocatePayment, amendDueItem, paymentObservedAt, reconcile } from "../src/domain/reconciliation.js";
+import { allocatePayment, amendDueItem, paymentObservedAt, reconcile, supersedeAllocation } from "../src/domain/reconciliation.js";
 import { executeAction } from "../src/domain/actions.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
 import { validateRecord } from "../src/domain/validation.js";
@@ -448,6 +448,23 @@ section("a payer identified through a match later found wrong", () => {
   const restored = accepted(request(back, () => executeAction(back, finance(wat("2027-07-02T11:00:00")), { action: "review_allocation", recordId: match.id, reason: "It was right after all.", data: { correct: true } })), "the review marking it correct again");
   equal([match.status, second!.customerId, second!.data.payerIdentification?.reason, backDue.status], ["confirmed", backDue.customerId, "It was right after all.", "paid"], "the match is applied again and identifies the payer again");
   check(/Payer identified as customer/.test(String(restored.data.auditNote)), "and the audit entry says so");
+  // What an earlier build left: the match marked wrong but its payer kept, and the ladder's proposal of the payment for that
+  // payer's other instalment. Reviewing the match as wrong again withdraws the payer and the proposal that rested on it.
+  const { state: stuck } = liveFixture({ withFailure: false, merchantId: "payer-left-by-earlier-build" });
+  const guessedDue = recordsOf(stuck, "due-items").find((item) => item.status === "scheduled")!;
+  const otherOfGuessed = postDue(stuck, wat("2027-07-01T08:00:00"), guessedDue.customerId, String(guessedDue.data.mandateId), "DEMO-LOAN-9101", 1_000_000, "2027-08-01");
+  addObservation(stuck, { reference: "TRF-NOPAYER-9", amountKobo: 1_000_000, source: "transfer", eventId: "np9", occurredAt: wat("2027-07-01T09:00:00") });
+  accepted(request(stuck, () => reconcile(stuck, finance(wat("2027-07-01T09:05:00")))), "the third reconciliation");
+  const [third] = payment(stuck, "TRF-NOPAYER-9");
+  accepted(request(stuck, () => executeAction(stuck, finance(wat("2027-07-01T10:00:00")), { action: "manual_allocate", recordId: third!.id, reason: "Payer guessed.", data: { dueItemId: guessedDue.id, amountKobo: 1_000_000 } })), "the guessed identification");
+  const guessed = allocationsOf(stuck, third!.id)[0]!;
+  supersedeAllocation(stuck, finance(wat("2027-07-02T09:00:00")), guessed, "Precision audit marked this allocation wrong: guessed.");
+  guessed.data.supersededByReview = true;
+  const leftover = makeRecord(stuck, "allocations", { name: "Allocation R5", status: "proposed", customerId: guessedDue.customerId, amountKobo: 1_000_000, createdAt: wat("2027-07-02T09:05:00"), data: { paymentId: third!.id, dueItemId: otherOfGuessed.id, rule: "R5", confidence: "probable", automatic: false, reviewed: null } });
+  Object.assign(third!, { status: "proposed" }); Object.assign(third!.data, { proposedDueItemId: otherOfGuessed.id, proposedAmountKobo: 1_000_000 });
+  equal(third!.customerId, guessedDue.customerId, "the earlier build kept the guessed payer");
+  accepted(request(stuck, () => executeAction(stuck, finance(wat("2027-07-02T10:00:00")), { action: "review_allocation", recordId: guessed.id, reason: "Still wrong: not this customer.", data: { correct: false } })), "the review of the match the earlier build left");
+  equal([third!.customerId, third!.status, leftover.status], ["", "unallocated", "superseded"], "the payer and the proposal that rested on it are withdrawn");
 });
 
 // ---------- Review finding 3: a net-only settlement line applied before the debit's webhook ----------
@@ -678,4 +695,4 @@ if (failures.length) {
   console.error(failures.join("\n"));
   assert.fail(`${failures.length} payment evidence section(s) failed`);
 }
-console.log(`Payment evidence golden tests passed (${checks} checks): evidence with no payer and Finance's payer identification, evidence that shares a reference, R1's currency and connection, R4's narration references, statement credits and lines across settlement batches, the rest of a partly allocated payment, distinct payments, a close that contains a conflict and the conservation property run (${propertyRuns}).`);
+console.log(`Payment evidence golden tests passed (${checks} checks): evidence with no payer and Finance's payer identification, evidence that shares a reference, R1's currency and connection, R4's narration references, statement credits and lines across settlement batches, the rest of a partly allocated payment, distinct payments, evidence and reversals through another connection name, a withdrawn payer, a net line applied before the gross, a gross below the amount, money in another currency, a line an earlier build counted twice, a close that contains a conflict and the conservation property run (${propertyRuns}).`);
