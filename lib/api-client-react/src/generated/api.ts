@@ -524,7 +524,7 @@ export const getListRecordsUrl = (kind: string,
 }
 
 /**
- * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync; allocatable for the instalments a manual allocation accepts. Closes are listed, and searched, as their summaries, as the reports have earlier closes: without operational and metrics, and with the report reduced to its unallocated and exceptions totals; GET /v1/close-history/{id} returns a close whole.
+ * Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync; allocatable for the instalments that can take an allocation, and with paymentId the ones a manual allocation of that payment accepts. Closes are listed, and searched, as their summaries, as the reports have earlier closes: without operational and metrics, and with the report reduced to its unallocated and exceptions totals; GET /v1/close-history/{id} returns a close whole.
  * @summary Records of one kind for one lender, newest first
  */
 export const listRecords = async (kind: string,

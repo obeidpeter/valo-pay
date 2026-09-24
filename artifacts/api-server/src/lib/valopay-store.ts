@@ -21,7 +21,8 @@ import { seedMerchant } from "./valopay-seed";
 import { createSandboxCreationLimits, creationRefusalMessage, WORKSPACE_CREATION_RETRY_AFTER_SECONDS } from "./creation-limit";
 import { readSandboxCookie, sandboxPrincipal, secureRequest, writeSandboxCookie } from "./sandbox-cookie";
 import { rememberSandbox } from "./request-limits";
-import { allocatableOnly, foldForSearch, listLimit, LIST_PAGE_CEILING, matchesSearch, updatedSinceInstant, type ListQuery } from "./valopay-list";
+import { allocatableOnly, allocationChoices, foldForSearch, listLimit, LIST_PAGE_CEILING, matchesSearch, updatedSinceInstant, type ListQuery } from "./valopay-list";
+import { allocationPayer } from "../domain/reconciliation";
 import { publicExportRecord } from "./export-jobs";
 import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
 import { validateCloseRange, pageOffset, type ReadPageQuery, type ReconciliationQueue } from './console-read-models';
@@ -1268,10 +1269,11 @@ export async function loadState(context: StoreContext, merchantId: string, lock:
 export async function auditOverview(context: StoreContext, state: DomainState) {
   const session = sessionFor(context), merchantId = state.merchant.id;
   if (session.lockedMerchantId !== merchantId) conflict("Load this lender before reading its audit log.");
-  const { verification } = await readAuditChain(session, merchantId, state.settings);
+  const { chain, verification } = await readAuditChain(session, merchantId, state.settings);
   const recent = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='audit' ORDER BY r.created_at DESC,r.id LIMIT 8`,
     [merchantId, session.workspace.id, session.principal])).rows.map(rowToRecord);
-  return { verification, recent };
+  // The alert names the entry after the last verified one, the first that breaks the chain.
+  return { verification: { ...verification, verifiedSequence: chain.verified.sequence }, recent };
 }
 
 /**
@@ -1397,6 +1399,17 @@ export async function listRecords(context: StoreContext, merchantId: string, kin
   if (allocatableOnly(kind, query)) {
     params.push([...allocationClosedStatuses]);
     where += ` AND r.status <> ALL($${params.length}::text[]) AND (CASE WHEN jsonb_typeof(r.data->'outstandingKobo') IS DISTINCT FROM 'number' THEN r.amount_kobo WHEN (r.data->>'outstandingKobo')::numeric % 1 <> 0 THEN r.amount_kobo ELSE (r.data->>'outstandingKobo')::numeric END) > 0`;
+    // One payment's choices: the payer rule of its manual allocation (allocationPayer) becomes a customer filter.
+    if (query.paymentId !== undefined) {
+      const scope = [merchantId, session.workspace.id, session.principal];
+      const row = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='payments' AND r.id=$4`, [...scope, query.paymentId])).rows[0];
+      const payment = row ? rowToRecord(row) : fail("Payment not found in this lender. Refresh the payments and choose one again.", 404);
+      const named = !payment.customerId && typeof payment.data.dueItemId === "string" && payment.data.dueItemId
+        ? (await session.client.query<{ customer_id: string }>(`SELECT r.customer_id ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='due-items' AND r.id=$4`, [...scope, payment.data.dueItemId])).rows[0]?.customer_id : undefined;
+      const choices = allocationChoices(query, allocationPayer(payment, named));
+      if (!choices) return { items: [], total: 0 };
+      if (choices.customerId !== query.customerId) filter("r.customer_id", choices.customerId);
+    }
   }
   if (query.updatedSince) {
     params.push(new Date(updatedSinceInstant(query.updatedSince)).toISOString()); where += ` AND r.updated_at >= $${params.length}::timestamptz`;

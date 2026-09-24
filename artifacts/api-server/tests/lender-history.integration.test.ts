@@ -55,6 +55,8 @@ const entriesOf = async (lender: string) => (await pool.query<Entry>("SELECT id,
 const chainOf = async (lender: string) => (await pool.query<{ chain: Record<string, any> | null }>("SELECT settings->'auditChain' AS chain FROM valopay_merchants WHERE id=$1", [lender])).rows[0]!.chain;
 const customer = (name: string) => ({ name, reference: `HISTORY-${randomUUID()}`, data: { consentProvenance: "Synthetic fixture" } });
 const brokenAlert = (overview: any) => overview.alerts.some((alert: { key: string }) => alert.key === "audit_chain_broken");
+// The entry the audit_chain_broken alert says the check stopped at (NaN without the alert).
+const brokenEntry = (overview: any) => Number(/stopped at entry (\d+)/.exec(overview.alerts.find((alert: { key: string }) => alert.key === "audit_chain_broken")?.detail ?? "")?.[1]);
 /** A caller of another sandbox of this run, with a cookie of its own. */
 const sandboxCaller = () => {
   const own = `valopay_sandbox=${randomBytes(32).toString("hex")}`;
@@ -141,23 +143,28 @@ try {
     assert.deepEqual([checked.valid, checked.count, checked.headHash], [false, 4, (await entriesOf(other))[0]!.data.hash], "verify_audit walks the whole chain and stops at the changed entry");
     const overview = ok(await call(q("/v1/overview", other)));
     assert.equal(brokenAlert(overview), true, "from then on the overview reports the break, from the point the chain held to");
+    assert.equal(brokenEntry(overview), 2, "naming the changed entry, the one after the last verified entry, not the one after the last entry counted");
     assert.equal((await chainOf(other))?.verified.sequence, 1, "the lender records how far the chain held");
     ok(await call(q("/v1/records/customers", other), "POST", customer("Written on a broken chain"), randomUUID()));
-    assert.equal(brokenAlert(ok(await call(q("/v1/overview", other)))), true, "and a later write does not hide it");
-    checks += 6;
+    const later = ok(await call(q("/v1/overview", other)));
+    assert.equal(brokenAlert(later), true, "and a later write does not hide it");
+    assert.equal(brokenEntry(later), 2, "nor moves the entry the alert names");
+    checks += 8;
   }
 
   // ---- 5. A missing latest entry is a break, and its sequence is not issued again ----
   {
     const before = await entriesOf(lender), last = before.at(-1)!;
     await pool.query("DELETE FROM valopay_records WHERE id=$1", [last.id]);
-    assert.equal(brokenAlert(ok(await call(q("/v1/overview")))), true, "the stored head is further on than any entry");
+    const missing = ok(await call(q("/v1/overview")));
+    assert.equal(brokenAlert(missing), true, "the stored head is further on than any entry");
+    assert.equal(brokenEntry(missing), last.data.sequence, "the alert names the missing entry");
     ok(await call(q("/v1/records/customers"), "POST", customer("After a deleted entry"), randomUUID()));
     const after = await entriesOf(lender);
     assert.equal(after.at(-1)!.data.sequence, last.data.sequence + 1, "the next entry follows the stored head");
     assert.equal(verifyAuditChain(after).valid, false);
     assert.equal((await verify()).valid, false);
-    checks += 4;
+    checks += 5;
   }
 
   // ---- 6. A lender with no stored position (an earlier build's) is checked whole, and its first write records it ----
@@ -309,6 +316,7 @@ try {
     const [forked, earlier] = ok(await forkCall("/v1/workspace")).merchants.map((merchant: { id: string }) => merchant.id) as [string, string];
     const at = (path: string, merchantId: string) => `${path}${path.includes("?") ? "&" : "?"}merchantId=${merchantId}`;
     const overview = async (merchantId: string) => brokenAlert(ok(await forkCall(at("/v1/overview", merchantId))));
+    const entryNamed = async (merchantId: string) => brokenEntry(ok(await forkCall(at("/v1/overview", merchantId))));
     const write = async (merchantId: string, name: string) => ok(await forkCall(at("/v1/records/customers", merchantId), "POST", customer(name), randomUUID()));
     const verifyChain = async (merchantId: string) => ok(await forkCall(at("/v1/actions", merchantId), "POST", { action: "verify_audit", reason: "Check the synthetic audit log" }, randomUUID())).data;
     try {
@@ -320,6 +328,7 @@ try {
       assert.equal(await overview(forked), true, "the overview reports the fork at once");
       await write(forked, "After the fork");
       assert.equal(await overview(forked), true, "and still after the next write");
+      assert.equal(await entryNamed(forked), head.data.sequence, "naming the sequence two entries claim");
       assert.ok((await chainOf(forked))!.verified.sequence < head.data.sequence, "the lender's last verified entry stays before the forked sequence");
       const checked = await verifyChain(forked);
       assert.deepEqual([checked.valid, checked.headHash], [false, prior.data.hash], "verify_audit stops before the sequence two entries claim");
@@ -341,8 +350,9 @@ try {
       assert.equal(await overview(earlier), true, "from then on the overview reports it");
       await write(earlier, "Written after verify_audit");
       assert.equal(await overview(earlier), true, "and a later write does not hide it");
+      assert.equal(await entryNamed(earlier), 2, "naming the forked entry after the last verified one");
     } finally { await removeWorkspaceOf(forked); }
-    checks += 12;
+    checks += 14;
   }
 } finally {
   server.close();

@@ -40,13 +40,34 @@ export function matchesSearch(record: { name: string; reference: string; data: u
   return matches(record.name) || matches(record.reference) || matches(record.data);
 }
 
-export interface ListQuery { status?: string; search?: string; limit?: number; offset?: number; updatedSince?: string; customerId?: string; id?: string; allocatable?: "true" | "false" }
+export interface ListQuery { status?: string; search?: string; limit?: number; offset?: number; updatedSince?: string; customerId?: string; id?: string; allocatable?: "true" | "false"; paymentId?: string }
 
-/** True when a list asks only for instalments that can take an allocation (`canTakeAllocation`); asked of another kind, it is refused. */
+/**
+ * True when a list asks only for instalments that can take an allocation
+ * (`canTakeAllocation`); asked of another kind, it is refused. `paymentId`
+ * narrows it to one payment's choices (allocationChoices), so it is refused
+ * without allocatable=true.
+ */
 export function allocatableOnly(kind: string, query: ListQuery): boolean {
+  if (query.paymentId !== undefined && query.allocatable !== "true") throw Object.assign(new Error("paymentId lists the instalments a manual allocation of that payment accepts. Use it with allocatable=true."), { status: 400 });
   if (query.allocatable !== "true") return false;
   if (kind !== "due-items") throw Object.assign(new Error("allocatable lists instalments only. Use it with due-items."), { status: 400 });
   return true;
+}
+
+/**
+ * One payment's allocation choices (`paymentId`) as the list's customer
+ * filter: the customer whose instalments a manual allocation of that payment
+ * accepts (allocationPayer: its payer, or the customer of the instalment its
+ * evidence names; no filter when any customer's are). Undefined when no
+ * instalment can take it: the payment takes no allocation at all, or the
+ * list's own customerId names another customer.
+ */
+export function allocationChoices(query: ListQuery, payer: { customerId?: string } | null): ListQuery | undefined {
+  if (!payer) return undefined;
+  if (payer.customerId === undefined) return query;
+  if (query.customerId && query.customerId !== payer.customerId) return undefined;
+  return { ...query, customerId: payer.customerId };
 }
 
 /** Why an incremental sync's watermark was refused. */

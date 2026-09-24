@@ -95,9 +95,10 @@ export default function ReconciliationPage() {
   const [allocationSession,setAllocationSession]=useState(0);
   const {search:allocationTerm,searchPending:allocationSearchPending}=useDebouncedSearch(allocationSearch,`${merchantId}:${allocationSession}`);
   const choicePage=useUrlPagination(merchantId,'allocation-');
-  // A payment whose payer is known is allocated to that customer's instalments; one with no payer offers every instalment, and choosing one identifies the payer.
-  // Only instalments that can take an allocation are asked for, so the pager counts exactly the choices it offers.
-  const choiceParams={merchantId:merchantId!,search:allocationTerm,limit:choicePage.pageSize,offset:choicePage.offset,allocatable:'true' as const,...(actionKind==='manual_allocate'&&selectedRecord?.customerId?{customerId:String(selectedRecord.customerId)}:{})};
+  // The server lists only the instalments a manual allocation of this payment accepts (paymentId): its payer's, or, when its evidence names an
+  // instalment but no payer, that instalment's customer's; one that names neither offers every instalment, and choosing one identifies the payer.
+  // So the pager counts exactly the choices it offers.
+  const choiceParams={merchantId:merchantId!,search:allocationTerm,limit:choicePage.pageSize,offset:choicePage.offset,allocatable:'true' as const,...(actionKind==='manual_allocate'&&selectedRecord?.id?{paymentId:String(selectedRecord.id)}:{})};
   const choicesQuery=useListRecords('due-items',choiceParams,{query:{enabled:!!merchantId && isDialogOpen && actionKind==='manual_allocate' && !allocationSearchPending,queryKey:getListRecordsQueryKey('due-items',choiceParams)}});
   const rows=[...(proposals?.related||[]),...(payments?.related||[]),...(allPayments?.related||[]),...(observations?.related||[]),...(confirmedAllocations?.related||[])];
   const customerById=new Map(rows.filter(r=>r.kind==='customers').map(r=>[r.id,r]));
@@ -505,7 +506,7 @@ export default function ReconciliationPage() {
             <p className="font-semibold">Payment {selectedRecord?.reference}</p>
             <p>Recorded payer: <strong>{customerById.get(String(selectedRecord?.customerId))?.name || (selectedRecord?.customerId ? 'Customer name unavailable' : 'Not identified')}</strong></p>
             {!selectedRecord?.customerId ? <>
-              <p className="text-xs text-muted-foreground">Confirm the payer from the payment evidence, then choose one of their instalments. Allocating records that customer as the payer, with your reason, in the same action.</p>
+              <p className="text-xs text-muted-foreground">Confirm the payer from the payment evidence, then choose one of their instalments. Allocating records that customer as the payer, with your reason, in the same action.{selectedRecord?.data?.dueItemId ? ' Its evidence names an instalment, so only the instalments of that instalment\'s customer are offered.' : ''}</p>
               {due && <p>Payer to be recorded: <strong>{customerById.get(String(due.customerId))?.name || `the customer of instalment ${due.reference}`}</strong></p>}
             </> : <p className="text-xs text-muted-foreground">Only this payer's instalments are offered.</p>}
             <p>Available to allocate: <strong>{formatKobo(available)}</strong></p>

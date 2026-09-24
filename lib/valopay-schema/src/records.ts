@@ -59,6 +59,7 @@ const versionNumber = z.coerce.number().int().min(1);
 const common = { synthetic: z.boolean().optional() };
 /** Money in another currency than naira, by currency code: how many payments, and their amount in that currency's minor unit as each payment stores it. It is never added to a naira total. */
 const otherCurrencies = z.record(z.object({ count: z.number().int().min(0), amount: z.number().int() }));
+/** Records and their money: count takes every one whatever its currency, kobo sums naira only, and otherCurrencies lists money in another currency beside it. */
 const money = z.object({ count: z.number().int().min(0), kobo: z.number().int(), otherCurrencies: otherCurrencies.optional() });
 
 /** A headline metric as the overview and the reports return it, and as each close freezes it. */

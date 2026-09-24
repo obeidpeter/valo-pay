@@ -7,9 +7,10 @@
  */
 import PDFDocument from "pdfkit";
 import { VALO_PACK_SANS_BOLD, VALO_PACK_SANS_REGULAR } from "../fonts/valo-pack-sans";
-import { counted, WAT_OFFSET_MS } from "@workspace/valopay-schema";
+import { counted, moneyText, otherCurrenciesText, paymentUnappliedKobo, WAT_OFFSET_MS } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
-import { positionFor, type CustomerPosition } from "../domain/close";
+import { inNaira, positionFor, type CustomerPosition, type OtherCurrencies } from "../domain/close";
+import { currencyOf } from "../domain/reconciliation";
 import { recordsOf } from "../domain/records";
 import { verifyAudit } from "./valopay-store";
 import { collectExportBytes } from './export-download';
@@ -21,7 +22,10 @@ export interface TimelineEvent {
   event: string;
   status: string;
   reference: string;
+  /** In the minor unit of `currency`: kobo for naira. */
   amountKobo: number;
+  /** The currency of the amount: a payment's or evidence's own, and theirs for an exception about one; NGN for everything else. */
+  currency: string;
   detail: string;
   actor: string | null;
   policyVersion: number | null;
@@ -51,7 +55,8 @@ export interface DisputePack {
   generatedAt: string;
   generatedBy: string;
   customer: Record<string, unknown>;
-  position: CustomerPosition;
+  /** The naira position; unallocatedOtherCurrencies lists money the customer's payments in other currencies hold unapplied, beside it. */
+  position: CustomerPosition & { unallocatedOtherCurrencies?: OtherCurrencies };
   summary: Record<string, unknown>;
   timeline: TimelineEvent[];
   documents: GoverningDocument[];
@@ -119,7 +124,7 @@ function describe(record: ValopayRecord): { event: string; detail: string } {
     case "due-items": return { event: `Due item ${record.reference} ${record.status}`, detail: `Due ${text(d.dueDate)}; owner ${text(d.owner)}; outstanding ${kobo(Number(d.outstandingKobo ?? record.amountKobo))}${d.experimentArm ? `; experiment arm ${d.experimentArm}` : ""}${d.amendedAt ? `; amended ${watStamp(String(d.amendedAt))}` : ""}.` };
     case "attempts": return { event: `Attempt ${text(d.number) || "?"} ${record.status}`, detail: `${text(d.source)} source${d.failureCode ? `; failure code ${d.failureCode}` : ""}${d.rawFailureCode && d.rawFailureCode !== d.failureCode ? ` (raw ${d.rawFailureCode})` : ""}${d.providerReference ? `; provider reference ${d.providerReference}` : ""}${d.cancellationReason ? `; ${d.cancellationReason}` : ""}.` };
     case "observations": return { event: `Observation (${text(d.source)})`, detail: `${record.status}${d.resolutionKey ? ` by ${d.resolutionKey}` : ""}${d.paymentId ? `; resolved to payment ${d.paymentId}` : ""}${d.resolvedTo ? `; resolved to ${d.resolvedTo}` : ""}${d.batchReference ? `; batch ${d.batchReference}` : ""}.` };
-    case "payments": return { event: `Payment ${record.reference} ${record.status}`, detail: `Channel ${text(d.channel)}; collection ${text(d.collectionStatus)}; settlement ${text(d.settlementStatus)}; reversal ${text(d.reversalStatus)}; refund ${text(d.refundStatus)}; allocated ${kobo(Number(d.allocatedKobo || 0))}${d.explanation ? `; ${d.explanation}` : ""}.` };
+    case "payments": return { event: `Payment ${record.reference} ${record.status}`, detail: `Channel ${text(d.channel)}; collection ${text(d.collectionStatus)}; settlement ${text(d.settlementStatus)}; reversal ${text(d.reversalStatus)}; refund ${text(d.refundStatus)}; allocated ${moneyText(Number(d.allocatedKobo || 0), currencyOf(record))}${d.explanation ? `; ${text(d.explanation).replace(/\.$/, "")}` : ""}.` };
     case "allocations": return { event: `Allocation ${text(d.rule)} ${record.status}`, detail: `${text(d.confidence)} confidence${d.automatic ? ", automatic" : ""}; ${text(d.explanation)}${d.supersededReason ? ` Superseded: ${d.supersededReason}` : ""}${typeof d.reviewed === "boolean" ? ` Reviewed ${d.reviewed ? "correct" : "wrong"} by ${text(d.reviewedBy)}.` : ""}` };
     case "exceptions": return { event: `Exception ${text(d.type)} ${record.status}`, detail: `Owner ${text(d.owner)}; severity ${text(d.severity)}; due by ${d.dueBy ? watStamp(String(d.dueBy)) : "n/a"}${d.resolutionCode ? `; resolved ${d.resolutionCode} by ${text(d.resolvedBy)}` : ""}. ${text(d.notes)}` };
     case "notifications": return { event: `Notification ${text(d.purpose)} ${record.status}`, detail: `${text(d.channel)}; ${text(d.class)} class; accepted ${d.acceptedAt ? watStamp(String(d.acceptedAt)) : "not accepted"}; delivered ${d.deliveredAt ? watStamp(String(d.deliveredAt)) : "not delivered"}. Text: ${text(d.renderedText)}` };
@@ -141,11 +146,17 @@ export function buildDisputePack(state: DomainState, ctx: Context, customerId: s
   const relatedIds = new Set(related.map((record) => record.id));
   const actions = recordsOf(state, "audit").filter((record) => relatedIds.has(String(record.data.objectId)) || record.data.objectId === customerId);
   const documents = governingDocuments(state);
+  // Every amount in its own currency: a payment's or evidence's, and theirs for an exception about one; anything else is naira.
+  const byId = new Map(state.records.map((record) => [record.id, record]));
+  const currencyFor = (record: ValopayRecord): string => {
+    const money = record.kind === "exceptions" ? byId.get(String(record.data.linkedRecordId ?? "")) : record;
+    return money && (money.kind === "payments" || money.kind === "observations") ? currencyOf(money) : "NGN";
+  };
   const timeline: TimelineEvent[] = [...related, ...actions].map((record) => {
     const at = eventTime(record);
     const { event, detail } = describe(record);
     return {
-      at, kind: record.kind, event, status: record.status, reference: record.reference, amountKobo: record.amountKobo, detail: detail + (record.data.importIdentity ? ` Imported from ${text(record.data.importIdentity.source)}; source row ${text(record.data.importIdentity.rowId)}; batch ${text(record.data.importIdentity.batchId)}.` : ''),
+      at, kind: record.kind, event, status: record.status, reference: record.reference, amountKobo: record.amountKobo, currency: currencyFor(record), detail: detail + (record.data.importIdentity ? ` Imported from ${text(record.data.importIdentity.source)}; source row ${text(record.data.importIdentity.rowId)}; batch ${text(record.data.importIdentity.batchId)}.` : ''),
       actor: ['audit', 'case-events'].includes(record.kind) ? text(record.data.actor) || null : record.data.confirmedBy || record.data.reviewedBy || record.data.resolvedBy || null,
       policyVersion: governing(documents, "policies", at)?.version ?? null,
       templateVersion: governing(documents, "templates", at)?.version ?? null,
@@ -156,17 +167,19 @@ export function buildDisputePack(state: DomainState, ctx: Context, customerId: s
   const by = (kind: string) => related.filter((record) => record.kind === kind);
   const mandates = by("mandates"), dueItems = by("due-items"), attempts = by("attempts"), payments = by("payments"), exceptions = by("exceptions"), notifications = by("notifications");
   const consent = mandates.map((mandate) => ({ mandate: mandate.reference, evidence: text(mandate.data.consentEvidence), gaps: Array.isArray(mandate.data.consentGaps) ? mandate.data.consentGaps : [], provenance: text(customer.data.consentProvenance) }));
+  // Naira totals as the close keeps them: money in another currency is listed beside them, never added in.
+  const unallocatedOther = inNaira(payments.filter((p) => paymentUnappliedKobo(p) > 0), (p) => paymentUnappliedKobo(p)).otherCurrencies;
   return {
     kind: "dispute-pack", environment: "synthetic_sandbox",
     merchant: { id: state.merchant.id, name: state.merchant.name, provider: state.merchant.provider, mode: state.merchant.mode },
     generatedAt: ctx.now, generatedBy: ctx.actor,
     customer: { id: customer.id, name: customer.name, reference: customer.reference, status: customer.status, bankName: customer.data.bankName ?? null, accountMasked: customer.data.accountMasked ?? null, phoneMasked: customer.data.phoneMasked ?? null, consentProvenance: customer.data.consentProvenance ?? null },
-    position: positionFor(state, customerId),
+    position: { ...positionFor(state, customerId), ...(unallocatedOther ? { unallocatedOtherCurrencies: unallocatedOther } : {}) },
     summary: {
       mandates: { count: mandates.length, active: mandates.filter((m) => m.status === "active").length, pendingActivation: mandates.filter((m) => m.status === "pending_activation").length },
       dueItems: { count: dueItems.length, paid: dueItems.filter((d) => d.status === "paid").length, inCollection: dueItems.filter((d) => ["in_collection", "partially_paid"].includes(d.status)).length, unpaidFinal: dueItems.filter((d) => d.status === "unpaid_final").length, inDispute: dueItems.filter((d) => d.status === "in_dispute").length },
       attempts: { count: attempts.length, failed: attempts.filter((a) => a.status === "failed").length, succeeded: attempts.filter((a) => a.status === "succeeded").length, cancelled: attempts.filter((a) => a.status === "cancelled").length },
-      payments: { count: payments.length, kobo: payments.reduce((sum, p) => sum + p.amountKobo, 0), reversed: payments.filter((p) => p.data.reversalStatus === "reversed").length },
+      payments: { ...inNaira(payments, (p) => p.amountKobo), reversed: payments.filter((p) => p.data.reversalStatus === "reversed").length },
       allocations: { confirmed: by("allocations").filter((a) => a.status === "confirmed").length, superseded: by("allocations").filter((a) => a.status === "superseded").length },
       exceptions: { open: exceptions.filter((e) => ["open", "assigned", "in_progress"].includes(e.status)).length, resolved: exceptions.filter((e) => ["resolved", "closed"].includes(e.status)).length },
       notifications: { count: notifications.length, accepted: notifications.filter((n) => n.data.acceptedAt).length, delivered: notifications.filter((n) => n.data.deliveredAt).length },
@@ -178,7 +191,7 @@ export function buildDisputePack(state: DomainState, ctx: Context, customerId: s
     },
     timeline, documents,
     auditVerification: verifyAudit(state),
-    note: "Sample data only, not live evidence. Amounts are stored in whole kobo and displayed in naira (NGN). Times use West Africa Time (WAT). Valo Pay never holds money. Each file has a SHA-256 checksum to check its integrity, saved with the export record and download link.",
+    note: "Sample data only, not live evidence. Amounts are stored in whole kobo and displayed in naira (NGN); money in another currency is stored in that currency's minor unit, shown in its own currency and never added to a naira total. Times use West Africa Time (WAT). Valo Pay never holds money. Each file has a SHA-256 checksum to check its integrity, saved with the export record and download link.",
   };
 }
 
@@ -189,8 +202,8 @@ export function disputePackCsv(pack: DisputePack): string {
     if (/^[=+\-@\t\r]/.test(cell)) cell = `'${cell}`;
     return `"${cell.replaceAll('"', '""')}"`;
   };
-  const header = ["environment", "merchant", "customer", "customerReference", "generatedAt", "at", "atWAT", "kind", "event", "status", "reference", "amountKobo", "detail", "actor", "policyVersion", "templateVersion", "cutoverId", "recordId"];
-  const rows = pack.timeline.map((event) => [pack.environment, pack.merchant.name, String(pack.customer.name), String(pack.customer.reference), pack.generatedAt, event.at, watStamp(event.at), event.kind, event.event, event.status, event.reference, event.amountKobo, event.detail, event.actor ?? "", event.policyVersion ?? "", event.templateVersion ?? "", event.cutoverId ?? "", event.recordId]);
+  const header = ["environment", "merchant", "customer", "customerReference", "generatedAt", "at", "atWAT", "kind", "event", "status", "reference", "amountKobo", "currency", "detail", "actor", "policyVersion", "templateVersion", "cutoverId", "recordId"];
+  const rows = pack.timeline.map((event) => [pack.environment, pack.merchant.name, String(pack.customer.name), String(pack.customer.reference), pack.generatedAt, event.at, watStamp(event.at), event.kind, event.event, event.status, event.reference, event.amountKobo, event.currency, event.detail, event.actor ?? "", event.policyVersion ?? "", event.templateVersion ?? "", event.cutoverId ?? "", event.recordId]);
   return [header.join(","), ...rows.map((row) => row.map(escape).join(","))].join("\r\n");
 }
 
@@ -247,13 +260,16 @@ export async function renderDisputePackPdf(pack: DisputePack, options: PdfOption
     line("Total instalments", kobo(pack.position.obligationsKobo));
     line("Allocated", kobo(pack.position.allocatedKobo));
     line("Outstanding", kobo(pack.position.outstandingKobo));
-    line("Unallocated payments", kobo(pack.position.unallocatedKobo));
+    // Money in another currency is listed beside the naira totals, never added to them.
+    const beside = (other: OtherCurrencies | undefined) => other ? ` and ${otherCurrenciesText(other)}` : "";
+    const heldElsewhere = pack.position.unallocatedOtherCurrencies;
+    line("Unallocated payments", `${kobo(pack.position.unallocatedKobo)}${heldElsewhere ? `${beside(heldElsewhere)} in ${Object.keys(heldElsewhere).length === 1 ? "another currency" : "other currencies"}, held for Finance` : ""}`);
     heading("Summary");
     const s = pack.summary as Record<string, any>;
     line("Mandates", `${s.mandates.count} (${s.mandates.active} active, ${s.mandates.pendingActivation} awaiting activation)`);
     line("Instalments", `${s.dueItems.count} (${s.dueItems.paid} paid, ${s.dueItems.inCollection} in collection, ${s.dueItems.unpaidFinal} unpaid after final attempt, ${s.dueItems.inDispute} in dispute)`);
     line("Attempts", `${s.attempts.count} (${s.attempts.succeeded} succeeded, ${s.attempts.failed} failed, ${s.attempts.cancelled} cancelled)`);
-    line("Payments", `${s.payments.count} totalling ${kobo(s.payments.kobo)} (${s.payments.reversed} reversed)`);
+    line("Payments", `${s.payments.count} totalling ${kobo(s.payments.kobo)}${beside(s.payments.otherCurrencies)} (${s.payments.reversed} reversed)`);
     line("Allocations", `${s.allocations.confirmed} confirmed, ${s.allocations.superseded} superseded`);
     line("Exceptions", `${s.exceptions.open} open, ${s.exceptions.resolved} resolved`);
     line("Notifications", `${s.notifications.count} (${s.notifications.accepted} accepted by the provider, ${s.notifications.delivered} delivered)`);
@@ -294,7 +310,7 @@ export async function renderDisputePackPdf(pack: DisputePack, options: PdfOption
     tableHeader();
     for (const event of pack.timeline) {
       check();
-      const cells: Record<string, string> = { at: watStamp(event.at), event: pdfSafe(`${event.event}${event.actor ? ` (${event.actor})` : ""}`), detail: pdfSafe(event.detail), amount: event.amountKobo ? kobo(event.amountKobo) : "", policy: event.policyVersion ? `v${event.policyVersion}` : "-" };
+      const cells: Record<string, string> = { at: watStamp(event.at), event: pdfSafe(`${event.event}${event.actor ? ` (${event.actor})` : ""}`), detail: pdfSafe(event.detail), amount: event.amountKobo ? moneyText(event.amountKobo, event.currency) : "", policy: event.policyVersion ? `v${event.policyVersion}` : "-" };
       const height = Math.max(...columns.map((column) => document.heightOfString(cells[column.key] || " ", { width: column.width }))) + 4;
       if (document.y + height > bottom) { document.addPage(); document.y = margin; tableHeader(); }
       const y = document.y;

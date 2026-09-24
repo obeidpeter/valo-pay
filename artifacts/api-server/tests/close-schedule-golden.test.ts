@@ -25,7 +25,7 @@ let checks = 0;
   const now = wat('2027-06-28T08:00:00');
   state.settings.nextCloseAt = wat('2027-06-28T07:00:00');
   const runtime: CloseRuntime = { state: 'off', intervalMs: null, lastTickAt: null, lastSuccessAt: null, lastErrorAt: null };
-  const audit = { valid: true, count: 0, headHash: 'GENESIS' };
+  const audit = { valid: true, count: 0, headHash: 'GENESIS', verifiedSequence: 0 };
   for (const status of ['off', 'external', 'not_started', 'stopped'] as const) {
     runtime.state = status;
     const overview = S.GetOverviewResponse.parse(buildConsoleOverview(state, now, audit, runtime));
