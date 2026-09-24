@@ -21,6 +21,7 @@ import {
   pilotField,
 } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
+import { PageButtons } from "@/components/record-pagination";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useDialogFocusReturn } from "@/lib/focus";
 import { formatCount, formatDate, formatKobo, formatNumber } from "@/lib/formatters";
@@ -205,25 +206,22 @@ function LenderImports() {
         </div>
         {list.data && list.data.total > 25 && (
           <div className="flex flex-wrap items-center gap-3">
-            <Button
-              variant="outline"
-              disabled={!offset || list.isFetching}
-              onClick={() => setOffset((n) => Math.max(0, n - 25))}
+            <PageButtons
+              label="import batches"
+              busy={list.isPlaceholderData}
+              atStart={!offset}
+              atEnd={offset + 25 >= list.data.total}
+              onPrevious={() => setOffset((n) => Math.max(0, n - 25))}
+              onNext={() => setOffset((n) => n + 25)}
+              previous="Previous batches"
+              next="Next batches"
             >
-              Previous batches
-            </Button>
-            <span className="text-sm">
-              {formatNumber(offset + 1)}–
-              {formatNumber(Math.min(offset + 25, list.data.total))} of{" "}
-              {formatNumber(list.data.total)}
-            </span>
-            <Button
-              variant="outline"
-              disabled={offset + 25 >= list.data.total || list.isFetching}
-              onClick={() => setOffset((n) => n + 25)}
-            >
-              Next batches
-            </Button>
+              <span className="text-sm">
+                {formatNumber(offset + 1)}–
+                {formatNumber(Math.min(offset + 25, list.data.total))} of{" "}
+                {formatNumber(list.data.total)}
+              </span>
+            </PageButtons>
           </div>
         )}
       </PilotPanel>

@@ -20,7 +20,7 @@ import { useHashTarget } from '@/lib/use-hash-target';
 import { safeCollectionReturnTo } from '@/lib/record-navigation';
 import { RecordPagination } from '@/components/record-pagination';
 import { useUrlPagination } from '@/lib/use-url-pagination';
-import { useDebouncedSearch } from '@/lib/use-record-pagination';
+import { keepRowsWhilePaging, useDebouncedSearch } from '@/lib/use-record-pagination';
 import { useReconciliationPage } from '@/lib/use-reconciliation-page';
 import { LoadProblem } from '@/components/load-problem';
 import { paymentUnappliedKobo } from '@workspace/valopay-schema';
@@ -99,7 +99,9 @@ export default function ReconciliationPage() {
   // instalment but no payer, that instalment's customer's; one that names neither offers every instalment, and choosing one identifies the payer.
   // So the pager counts exactly the choices it offers.
   const choiceParams={merchantId:merchantId!,search:allocationTerm,limit:choicePage.pageSize,offset:choicePage.offset,allocatable:'true' as const,...(actionKind==='manual_allocate'&&selectedRecord?.id?{paymentId:String(selectedRecord.id)}:{})};
-  const choicesQuery=useListRecords('due-items',choiceParams,{query:{enabled:!!merchantId && isDialogOpen && actionKind==='manual_allocate' && !allocationSearchPending,queryKey:getListRecordsQueryKey('due-items',choiceParams)}});
+  // Paging keeps the choices shown, and so the pager and the control pressed, until the next page arrives.
+  const choicesKey=getListRecordsQueryKey('due-items',choiceParams);
+  const choicesQuery=useListRecords('due-items',choiceParams,{query:{enabled:!!merchantId && isDialogOpen && actionKind==='manual_allocate' && !allocationSearchPending,queryKey:choicesKey,placeholderData:keepRowsWhilePaging(choicesKey)}});
   const rows=[...(proposals?.related||[]),...(payments?.related||[]),...(allPayments?.related||[]),...(observations?.related||[]),...(confirmedAllocations?.related||[])];
   const customerById=new Map(rows.filter(r=>r.kind==='customers').map(r=>[r.id,r]));
   const paymentById=new Map(rows.filter(r=>r.kind==='payments').map(r=>[r.id,r]));
@@ -263,7 +265,7 @@ export default function ReconciliationPage() {
               </tbody>
             </table>
           </ScrollFrame>
-          {!isLoadingProposals && !proposalsError && (proposals?.total || 0) > 25 && <RecordPagination pagination={proposalPage} total={proposals?.total || 0} label="proposed matches" />}
+          {!isLoadingProposals && !proposalsError && (proposals?.total || 0) > 25 && <RecordPagination pagination={proposalPage} total={proposals?.total || 0} busy={proposalsQuery.isPlaceholderData} label="proposed matches" />}
         </div>}
 
         {view !== 'review' && <section aria-label="Possible duplicate payments" className="bg-card border rounded-xl shadow-sm overflow-hidden xl:col-span-2">
@@ -277,7 +279,7 @@ export default function ReconciliationPage() {
               </tr>)}</tbody>
             </table>
           </ScrollFrame>
-          {!isLoadingAllPayments && !allPaymentsError && (allPayments?.total || 0) > 25 && <RecordPagination pagination={duplicatePage} total={allPayments?.total || 0} label="duplicate payments" />}
+          {!isLoadingAllPayments && !allPaymentsError && (allPayments?.total || 0) > 25 && <RecordPagination pagination={duplicatePage} total={allPayments?.total || 0} busy={allPaymentsQuery.isPlaceholderData} label="duplicate payments" />}
         </section>}
 
         {view === 'all' && <>
@@ -327,7 +329,7 @@ export default function ReconciliationPage() {
               </tbody>
             </table>
           </ScrollFrame>
-          {!isLoadingPayments && !paymentsError && (payments?.total || 0) > 25 && <RecordPagination pagination={paymentPage} total={payments?.total || 0} label="unallocated payments" />}
+          {!isLoadingPayments && !paymentsError && (payments?.total || 0) > 25 && <RecordPagination pagination={paymentPage} total={payments?.total || 0} busy={paymentsQuery.isPlaceholderData} label="unallocated payments" />}
         </div>
 
         {/* Unresolved Observations */}
@@ -369,7 +371,7 @@ export default function ReconciliationPage() {
               </tbody>
             </table>
           </ScrollFrame>
-          {!isLoadingObs && !observationsError && (observations?.total || 0) > 25 && <RecordPagination pagination={observationPage} total={observations?.total || 0} label="payment evidence" />}
+          {!isLoadingObs && !observationsError && (observations?.total || 0) > 25 && <RecordPagination pagination={observationPage} total={observations?.total || 0} busy={observationsQuery.isPlaceholderData} label="payment evidence" />}
         </div>
         
         {/* Precision audit */}
@@ -422,7 +424,7 @@ export default function ReconciliationPage() {
               </tbody>
             </table>
           </ScrollFrame>
-          {!isLoadingAudit && !auditError && (confirmedAllocations?.total || 0) > 25 && <RecordPagination pagination={auditPage} total={confirmedAllocations?.total || 0} label="sampled matches" />}
+          {!isLoadingAudit && !auditError && (confirmedAllocations?.total || 0) > 25 && <RecordPagination pagination={auditPage} total={confirmedAllocations?.total || 0} busy={confirmedAllocationsQuery.isPlaceholderData} label="sampled matches" />}
         </div>
 
         {/* Settlement Batches */}
@@ -465,7 +467,7 @@ export default function ReconciliationPage() {
               </tbody>
             </table>
           </ScrollFrame>
-          {!isLoadingBatches && !batchesError && batches && (batches?.total || 0) > 25 && <RecordPagination pagination={batchPage} total={batches?.total || 0} label="settlement batches" />}
+          {!isLoadingBatches && !batchesError && batches && (batches?.total || 0) > 25 && <RecordPagination pagination={batchPage} total={batches?.total || 0} busy={batchesQuery.isPlaceholderData} label="settlement batches" />}
         </div>
 
         </>}
@@ -502,7 +504,10 @@ export default function ReconciliationPage() {
           return <section aria-label="Allocation preview" className="space-y-2 rounded-lg border bg-secondary/20 p-3 text-sm">
             <label className="grid gap-1 text-xs">Find an instalment<input type="search" value={allocationSearch} onChange={event=>{setAllocationSearch(event.target.value);choicePage.resetPage();}} placeholder="Name or reference" className="min-h-10 rounded-md border bg-background px-3" /></label>
             <p className="text-xs text-muted-foreground">Instalments that are paid, cancelled, closed or in dispute cannot take a payment and are not listed.</p>
-            {choicesQuery.error ? <LoadProblem what="instalment choices" error={choicesQuery.error} retry={()=>{void choicesQuery.refetch();}} /> : choicesQuery.isFetching || allocationSearchPending ? <p role="status">Loading instalment choices…</p> : choicesQuery.data?.total === 0 ? <p role="status">{allocationTerm ? 'No instalment that can take a payment matches this search.' : selectedRecord?.customerId ? 'This payer has no instalment that can take a payment.' : 'No instalment can take a payment.'}</p> : <RecordPagination pagination={choicePage} total={choicesQuery.data?.total || 0} label="instalment choices" />}
+            {choicesQuery.error ? <LoadProblem what="instalment choices" error={choicesQuery.error} retry={()=>{void choicesQuery.refetch();}} /> : <>
+              {(choicesQuery.isFetching || allocationSearchPending) && <p role="status">Loading instalment choices…</p>}
+              {!allocationSearchPending && choicesQuery.data && (choicesQuery.data.total === 0 ? !choicesQuery.isFetching && <p role="status">{allocationTerm ? 'No instalment that can take a payment matches this search.' : selectedRecord?.customerId ? 'This payer has no instalment that can take a payment.' : 'No instalment can take a payment.'}</p> : <RecordPagination pagination={choicePage} total={choicesQuery.data.total} busy={choicesQuery.isFetching} label="instalment choices" />)}
+            </>}
             <p className="font-semibold">Payment {selectedRecord?.reference}</p>
             <p>Recorded payer: <strong>{customerById.get(String(selectedRecord?.customerId))?.name || (selectedRecord?.customerId ? 'Customer name unavailable' : 'Not identified')}</strong></p>
             {!selectedRecord?.customerId ? <>

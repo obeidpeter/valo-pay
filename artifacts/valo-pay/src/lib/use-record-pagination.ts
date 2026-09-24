@@ -34,12 +34,27 @@ export function useRecordPagination(resetKey: string, total?: number) {
 
 export type RecordPaginationState = ReturnType<typeof useRecordPagination>;
 
+/** A request's page: `limit` and `offset`, and a paged section's own (`eventsLimit`, `paymentsOffset` and the like). */
+const pageField = /^(?:limit|offset)$|(?:Limit|Offset)$/;
+/** A path whose query string carries its page (`/pilot/batches?offset=25`), without it. */
+const pathWithoutPage = (path: string) => {
+  const [route, query] = path.split('?');
+  if (query === undefined) return path;
+  const params = new URLSearchParams(query);
+  for (const name of [...params.keys()]) if (pageField.test(name)) params.delete(name);
+  return `${route}?${params}`;
+};
+/** A query key without its page, so two pages of one list compare equal and nothing else does. */
+const listOf = (queryKey: readonly unknown[]) => JSON.stringify(queryKey.map(part => typeof part === 'string' ? pathWithoutPage(part)
+  : part && typeof part === 'object' ? Object.fromEntries(Object.entries(part).filter(([name]) => !pageField.test(name))) : part));
+
 /**
  * A list query's placeholder while a person pages: the rows shown stay until the next page arrives, so the table, its
- * pager and the control pressed stay in place. Another lender, search or filter never shows the earlier rows.
+ * pager and the control pressed stay in place. Only another page of the same list keeps them; another lender, record,
+ * search or filter never shows the earlier rows. Pass the query's key.
  */
-export function keepRowsWhilePaging(params: object) {
-  const scope = (value: unknown) => JSON.stringify({ ...(value as object), limit: undefined, offset: undefined });
+export function keepRowsWhilePaging(queryKey: readonly unknown[]) {
+  const list = listOf(queryKey);
   return <T,>(previous: T | undefined, previousQuery?: { queryKey: readonly unknown[] }): T | undefined =>
-    previousQuery && scope(previousQuery.queryKey[1]) === scope(params) ? previous : undefined;
+    previousQuery && listOf(previousQuery.queryKey) === list ? previous : undefined;
 }

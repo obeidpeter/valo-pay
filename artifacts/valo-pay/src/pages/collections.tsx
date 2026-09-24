@@ -185,7 +185,7 @@ export default function CollectionsPage() {
                 </tbody>
               </table>
             </ScrollFrame>
-            {!isLoadingDue && !isLoadingAttempts && !dueError && !attemptsError && <RecordPagination pagination={pagination} total={data?.total || 0} label={view === 'failed' ? 'failed attempts' : 'instalments'} />}
+            {!isLoadingDue && !isLoadingAttempts && !dueError && !attemptsError && <RecordPagination pagination={pagination} total={data?.total || 0} busy={queue.isPlaceholderData} label={view === 'failed' ? 'failed attempts' : 'instalments'} />}
           </section>
         </div>
       </div>

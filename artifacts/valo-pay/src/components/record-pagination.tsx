@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from 'react';
+import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { formatNumber } from '@/lib/formatters';
 import { RECORD_PAGE_SIZES, type RecordPaginationState } from '@/lib/use-record-pagination';
@@ -66,10 +66,10 @@ function press(label: string, control: Control) {
 
 /**
  * Keeps keyboard focus on the pager control that was pressed while its page loads, rather than on the page body or
- * the top of a dialog. While busy the controls stay focusable (aria-disabled) and ignore presses; a pager that a
- * loading line replaces until the page arrives (the pickers) gives the focus back to the control pressed; and a page
- * button that reaching the first or last page disables passes it to the other one. The person's next key or pointer
- * press lets go.
+ * the top of a dialog. While busy the controls stay focusable (aria-disabled) and ignore presses; a pager mounted
+ * again once its page arrives gives the focus back to the control pressed; and a page button that reaching the first
+ * or last page disables passes it to the other one. The person's next key or pointer press lets go. Lists keep their
+ * pager while the next page loads (keepRowsWhilePaging), so the control pressed is normally never lost.
  */
 function usePagerFocus(label: string, busy: boolean) {
   const controls = { previous: useRef<HTMLButtonElement>(null), next: useRef<HTMLButtonElement>(null), size: useRef<HTMLSelectElement>(null) };
@@ -82,6 +82,23 @@ function usePagerFocus(label: string, busy: boolean) {
     if (!busy) held.release();
   });
   return controls;
+}
+
+/**
+ * Previous and Next for a list that pages by a fixed step on its own (a pilot page's history, say), with the pager's
+ * keyboard focus: while `busy`, as its next page loads, both stay focusable and wait; one that the first or last page
+ * disables passes the focus to the other. `label` names the list, as RecordPagination's does. Children go between them.
+ */
+export function PageButtons({ label, busy = false, atStart, atEnd, onPrevious, onNext, previous = 'Previous', next = 'Next', children }: {
+  label: string; busy?: boolean; atStart: boolean; atEnd: boolean; onPrevious(): void; onNext(): void; previous?: string; next?: string; children?: ReactNode;
+}) {
+  const controls = usePagerFocus(label, busy);
+  const go = (control: Control, change: () => void) => { if (busy) return; press(label, control); change(); };
+  return <>
+    <Button ref={controls.previous} variant="outline" disabled={atStart} aria-disabled={busy || undefined} className="aria-disabled:opacity-50" onClick={() => go('previous', onPrevious)}>{previous}</Button>
+    {children}
+    <Button ref={controls.next} variant="outline" disabled={atEnd} aria-disabled={busy || undefined} className="aria-disabled:opacity-50" onClick={() => go('next', onNext)}>{next}</Button>
+  </>;
 }
 
 export function RecordPagination({ pagination, total, busy = false, label = 'records' }: {
