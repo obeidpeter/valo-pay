@@ -257,7 +257,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -470,7 +470,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -626,7 +626,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -716,7 +716,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -731,7 +731,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -740,6 +740,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -886,7 +895,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -976,7 +985,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -991,7 +1000,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1000,6 +1009,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -1126,7 +1144,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1216,7 +1234,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1231,7 +1249,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1240,6 +1258,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -1366,7 +1393,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1456,7 +1483,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1471,7 +1498,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1480,6 +1507,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -1601,7 +1637,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1746,7 +1782,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1879,7 +1915,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2012,7 +2048,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2159,7 +2195,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2249,7 +2285,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2264,7 +2300,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2273,6 +2309,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -2399,7 +2444,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2489,7 +2534,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2504,7 +2549,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2513,6 +2558,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -2634,7 +2688,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2794,7 +2848,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2884,7 +2938,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2899,7 +2953,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2908,6 +2962,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -3020,7 +3083,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3233,7 +3296,7 @@
         ],
         "responses": {
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3253,7 +3316,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3263,11 +3326,22 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
                 }
               }
             }
@@ -3433,7 +3507,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3620,7 +3694,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3791,7 +3865,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3935,7 +4009,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4168,7 +4242,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4301,7 +4375,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4450,7 +4524,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4540,7 +4614,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4555,7 +4629,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4564,6 +4638,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -4684,7 +4767,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4833,7 +4916,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4923,7 +5006,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4938,7 +5021,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4947,6 +5030,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -5058,7 +5150,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5118,7 +5210,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5128,11 +5220,22 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
                 }
               }
             }
@@ -5221,7 +5324,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5354,7 +5457,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5394,7 +5497,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5404,11 +5507,22 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
                 }
               }
             }
@@ -5517,7 +5631,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5664,7 +5778,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5754,7 +5868,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5769,7 +5883,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5778,6 +5892,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -5899,7 +6022,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6059,7 +6182,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6149,7 +6272,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6164,7 +6287,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6173,6 +6296,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -6310,7 +6442,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6400,7 +6532,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6415,7 +6547,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6424,6 +6556,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -6545,7 +6686,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6703,7 +6844,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6793,7 +6934,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6808,7 +6949,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6817,6 +6958,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -6915,7 +7065,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6952,7 +7102,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6962,11 +7112,22 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
                 }
               }
             }
@@ -7125,7 +7286,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7165,7 +7326,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7175,11 +7336,22 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
                 }
               }
             }
@@ -7278,7 +7450,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7328,7 +7500,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7338,11 +7510,22 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
                 }
               }
             }
@@ -7431,7 +7614,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7481,7 +7664,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7491,11 +7674,22 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
                 }
               }
             }
@@ -7584,7 +7778,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7634,7 +7828,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7644,11 +7838,22 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
                 }
               }
             }
@@ -7747,7 +7952,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7797,7 +8002,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7807,11 +8012,22 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
                 }
               }
             }
@@ -7900,7 +8116,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7950,7 +8166,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -7960,11 +8176,22 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
                 }
               }
             }
@@ -8053,7 +8280,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8103,7 +8330,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8113,11 +8340,22 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
                 }
               }
             }
@@ -8204,7 +8442,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8244,7 +8482,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8254,11 +8492,22 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
                 }
               }
             }
@@ -8446,7 +8695,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8486,7 +8735,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8496,11 +8745,22 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
                 }
               }
             }
@@ -8577,7 +8837,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8617,7 +8877,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8627,11 +8887,22 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
                 }
               }
             }
@@ -8720,7 +8991,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8853,7 +9124,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9002,7 +9273,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9092,7 +9363,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9107,7 +9378,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9116,6 +9387,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -9253,7 +9533,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9343,7 +9623,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9358,7 +9638,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9367,6 +9647,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -9488,7 +9777,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9635,7 +9924,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9725,7 +10014,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9740,7 +10029,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9749,6 +10038,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -9859,7 +10157,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9909,7 +10207,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9919,11 +10217,22 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
                 }
               }
             }
@@ -10049,7 +10358,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10139,7 +10448,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10154,7 +10463,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10163,6 +10472,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -10282,7 +10600,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10431,7 +10749,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10521,7 +10839,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10536,7 +10854,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10545,6 +10863,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -10682,7 +11009,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10772,7 +11099,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10787,7 +11114,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -10796,6 +11123,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -10922,7 +11258,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11012,7 +11348,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11027,7 +11363,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11036,6 +11372,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -11162,7 +11507,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11252,7 +11597,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11267,7 +11612,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11276,6 +11621,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -11413,7 +11767,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11503,7 +11857,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11518,7 +11872,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11527,6 +11881,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -11696,7 +12059,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is compressed with a Content-Encoding other than gzip, deflate or br; nothing was read.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11848,7 +12211,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11997,7 +12360,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12087,7 +12450,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12102,7 +12465,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12111,6 +12474,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -12237,7 +12609,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12327,7 +12699,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12342,7 +12714,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12351,6 +12723,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -12471,7 +12852,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12615,7 +12996,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12764,7 +13145,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12854,7 +13235,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12869,7 +13250,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -12878,6 +13259,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -13004,7 +13394,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13094,7 +13484,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13109,7 +13499,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13118,6 +13508,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -13244,7 +13643,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13334,7 +13733,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13349,7 +13748,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13358,6 +13757,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -13495,7 +13903,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13585,7 +13993,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13600,7 +14008,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13609,6 +14017,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }
@@ -13746,7 +14163,7 @@
             }
           },
           "400": {
-            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
+            "description": "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, is nested more than 32 levels deep (refused from its bytes before it is parsed) or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13836,7 +14253,7 @@
             }
           },
           "413": {
-            "description": "The body is larger than 2 MB, or holds more than 100,000 values (every object, list, text, number, true, false and null in it).",
+            "description": "The body is larger than 2 MB, or holds more than 10,000 values (every object, list, text, number, true, false and null in it), counted from its bytes before it is parsed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13851,7 +14268,7 @@
             }
           },
           "415": {
-            "description": "The body is not JSON (a form or text body is refused), or its character set or encoding is not supported; send UTF-8 JSON as application/json.",
+            "description": "The body is not JSON (a form or text body is refused), its character set is not UTF-8, or it is compressed (any Content-Encoding but identity, refused before it is read, with Accept-Encoding: identity); send uncompressed UTF-8 JSON as application/json.",
             "content": {
               "application/json": {
                 "schema": {
@@ -13860,6 +14277,15 @@
               }
             },
             "headers": {
+              "Accept-Encoding": {
+                "description": "identity: sent when the body was refused for its Content-Encoding, naming the one coding the service reads.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "identity"
+                  ]
+                }
+              },
               "X-Valopay-Operation": {
                 "$ref": "#/components/headers/X-Valopay-Operation"
               }

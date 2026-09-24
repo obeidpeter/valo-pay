@@ -15,6 +15,8 @@ What the Replit deployment runs, what holds a release back, what Replit Autoscal
 
 Credentials (`DATABASE_URL`, the Clerk keys, `PRIVATE_OBJECT_DIR` and any optional service keys) come from Replit's secret manager, never from these files. The console is built and served as static files (`artifacts/valo-pay/.replit-artifact/artifact.toml`).
 
+Among the Clerk keys, `CLERK_JWT_KEY` is the instance's JWT public key, pasted in PEM form with its line breaks, as Clerk shows it. A staff host (`VALOPAY_STAFF_ACCESS=staging`) must have it beside `CLERK_SECRET_KEY`, and any host that sets it must give a value Clerk can use (not one on a single line with `\n` escapes): otherwise the process does not start, and its `config.invalid` line names the setting. It is optional elsewhere, but without it a forged session token makes the API fetch the instance's keys from Clerk's Backend API with the secret key, and only the per-network request limit bounds those fetches (1,200 a minute from each IPv4 address or IPv6 /64, in each instance). The start-up check cannot tell another instance's key from the right one, so sign in once after setting it.
+
 ## What holds a release back
 
 The deployment's start-up health check is `GET /api/readyz`, not the liveness answer. Readiness makes one bounded round trip to the database and reads its catalogue, so:

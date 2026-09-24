@@ -30,12 +30,11 @@ describe('large customer directory', () => {
     const calls = () => api.calls.filter(call => call.path === '/v1/records/customers');
     expect(calls().map(call => [call.query.limit, call.query.offset])).toEqual([['25', '0'], ['25', '25']]);
     const beforeSearch = calls().length;
-    // The keys go in without yielding to timers, so a busy machine cannot leave a gap between two of them
-    // longer than the search's pause; half that pause after the last key, nothing has been sent yet.
+    // The keys go in without yielding to timers, so however busy the machine, the search's pause cannot end
+    // between two of them and the whole text goes out as one search. The pause itself is pinned, on a fake
+    // clock, in search-pause.test.ts.
     const typist = userEvent.setup({ delay: null });
     await typist.type(screen.getByRole('textbox', { name: 'Search customers' }), 'Scale customer 00001');
-    await new Promise(resolve => setTimeout(resolve, 150));
-    expect(calls().length - beforeSearch).toBe(0);
     await screen.findByText('Scale customer 00001');
     expect(calls().length - beforeSearch).toBe(1);
     expect(calls().at(-1)?.query).toMatchObject({ limit: '25', offset: '0', search: 'Scale customer 00001' });
