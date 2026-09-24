@@ -8019,7 +8019,7 @@
           }
         },
         "summary": "Decline or withdraw a membership change",
-        "description": "Administrator with recent MFA; the administrator who asked withdraws it the same way. Recorded in the access history; the membership is unchanged. A request already approved or declined is refused (409)."
+        "description": "Administrator with recent MFA, other than the person changed (403); the administrator who asked withdraws it the same way. Recorded in the access history; the membership is unchanged. A request already approved or declined is refused (409)."
       }
     },
     "/v1/team/members/{id}/lenders": {

@@ -516,10 +516,13 @@ export async function approveStaffChange(ctx: StoreContext, requestId: string) {
   const updated = await applyStaffChange(session, ctx, row, request.detail.after, 'staff.change_approved', { reason: request.detail.reason, requestId, requestedBy: request.actor });
   return { ...staffView(updated), message: `Change approved: ${row.display_name} is now ${updated.role} (${updated.status}). Existing sessions must pass it on their next request.`, pendingChange: null };
 }
-/** Declines a waiting change (or withdraws it, for the administrator who asked), recorded in the access history; the membership is unchanged. */
+/** Declines a waiting change (or withdraws it, for the administrator who asked), recorded in the access history; the membership is unchanged. Like an approval, never by the person it changes. */
 export async function declineStaffChange(ctx: StoreContext, requestId: string) {
   const session = teamAdmin(ctx);
   const request = await changeRequest(session, requestId);
+  // Declining a change to one's own membership would keep the access it takes away.
+  const subject = (await session.client.query<{ user_id: string }>('SELECT user_id FROM valopay_staff_memberships WHERE workspace_id=$1 AND id=$2', [session.workspace.id, request.subject])).rows[0];
+  if (subject?.user_id === session.userId) fail('Ask another administrator to decline a change to your own membership.', 403);
   await staffEvent(session.client, session.workspace.id, ctx.actor, 'staff.change_declined', request.subject, { requestId, before: request.detail.before, after: request.detail.after, requestedBy: request.actor });
   return { message: request.actor === ctx.actor ? 'Change request withdrawn. The membership is unchanged.' : 'Change request declined. The membership is unchanged.' };
 }

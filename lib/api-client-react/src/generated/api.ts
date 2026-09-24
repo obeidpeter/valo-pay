@@ -4226,7 +4226,7 @@ export const getDeclineStaffChangeUrl = (id: string,) => {
 }
 
 /**
- * Administrator with recent MFA; the administrator who asked withdraws it the same way. Recorded in the access history; the membership is unchanged. A request already approved or declined is refused (409).
+ * Administrator with recent MFA, other than the person changed (403); the administrator who asked withdraws it the same way. Recorded in the access history; the membership is unchanged. A request already approved or declined is refused (409).
  * @summary Decline or withdraw a membership change
  */
 export const declineStaffChange = async (id: string, options?: Parameters<typeof customFetch>[1]): Promise<Message> => {

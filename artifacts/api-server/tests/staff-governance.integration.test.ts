@@ -99,10 +99,13 @@ try {
   ok(await call(`/v1/team/members/${member.id}`, "adminA", "PATCH", { role: "Operations", status: "suspended", expectedUpdatedAt: suspended.updatedAt, reason: "Leave extended." }));
   assert.equal((await team()).changes.length, 0); checks += 1;
   refused(await call(`/v1/team/changes/${stale.pendingChange.id}/approve`, "adminB", "POST"), 409, /changed after the change was requested/);
-  // Nobody approves a change to their own membership: the second administrator's own promotion from elsewhere is refused.
+  // Nobody approves or declines a change to their own membership: the second administrator's own move is refused either
+  // way (declining it would keep them Admin), and it still waits for the asker to withdraw it.
   const adminBMember = memberOf(await team(), "adminB");
   const demotion = ok(await call(`/v1/team/members/${adminBMember.id}`, "adminA", "PATCH", { role: "Finance", status: "active", expectedUpdatedAt: adminBMember.updatedAt, reason: "Move to Finance reviews." }));
   refused(await call(`/v1/team/changes/${demotion.pendingChange.id}/approve`, "adminB", "POST"), 403, /your own membership/);
+  refused(await call(`/v1/team/changes/${demotion.pendingChange.id}/decline`, "adminB", "POST"), 403, /Ask another administrator to decline a change to your own membership/);
+  assert.deepEqual([(await team()).changes.map((change: any) => change.id), (await events()).filter(event => event.action === "staff.change_declined" && event.detail.requestId === demotion.pendingChange.id).length], [[demotion.pendingChange.id], 0], "the refused decline recorded nothing"); checks += 1;
   ok(await call(`/v1/team/changes/${demotion.pendingChange.id}/decline`, "adminA", "POST"));
 
   // ---- 5. The directory: administrators see everyone; others see colleagues on their lenders, and no one else's expiry ----

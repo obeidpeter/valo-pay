@@ -341,7 +341,7 @@ it("offers to check or discard a lost invitation revocation, and discarding it f
   expect(revokes[1]!.key).not.toBe(revokes[0]!.key);
 });
 
-it("lists what waits for a second administrator and never offers the asker their own approval", async () => {
+it("lists what waits for a second administrator and never offers the asker their own approval, nor anyone a decision on their own membership", async () => {
   const send = globalThis.fetch;
   const posted: string[] = [];
   const pending = (id: string, email: string, role: string, invitedBy: string) => ({ id, email, role, status: "pending", expiresAt: api.now, invitedBy, approval: "awaiting", approvedBy: null });
@@ -353,9 +353,11 @@ it("lists what waits for a second administrator and never offers the asker their
       return json({
         mode: "staff", actor: "Sandbox Admin", message: "Staff access is active.", lenders: [], events: [],
         // Another member's expiry is not shown to everyone; this one arrives without it.
-        members: [{ id: "member-ops", actor: "Clerk:user_ops", name: "ops@example.test", role: "Operations", status: "active", expiresAt: null, updatedAt: api.now, lenderIds: [], allLenders: false }],
+        members: [{ id: "member-ops", actor: "Clerk:user_ops", name: "ops@example.test", role: "Operations", status: "active", expiresAt: null, updatedAt: api.now, lenderIds: [], allLenders: false },
+          { id: "member-change-own", actor: "Sandbox Admin", name: "me@example.test", role: "Admin", status: "active", expiresAt: api.now, updatedAt: api.now, lenderIds: [], allLenders: true }],
         invitations: [pending("invite-theirs", "finance@example.test", "Finance", "Clerk:user_other"), pending("invite-mine", "admin@example.test", "Admin", "Sandbox Admin")],
-        changes: [change("change-theirs", "Clerk:user_other"), change("change-mine", "Sandbox Admin")],
+        // The last is another administrator's request to change the viewer's own membership.
+        changes: [change("change-theirs", "Clerk:user_other"), change("change-mine", "Sandbox Admin"), change("change-own", "Clerk:user_other")],
       });
     if (options?.method === "POST" && /^\/api\/v1\/team\/(invitations|changes)\//.test(path)) {
       posted.push(path);
@@ -370,7 +372,8 @@ it("lists what waits for a second administrator and never offers the asker their
   expect(within(panel).getByText("You sent it: another administrator approves it.")).toBeTruthy();
   expect(within(panel).getAllByRole("button", { name: "Approve change" })).toHaveLength(1);
   expect(within(panel).getByText("You asked for it: another administrator approves it.")).toBeTruthy();
-  expect(within(panel).getByRole("button", { name: "Decline change" })).toBeTruthy();
+  expect(within(panel).getAllByRole("button", { name: "Decline change" })).toHaveLength(1);
+  expect(within(panel).getByText("A change to your own membership: another administrator approves or declines it.")).toBeTruthy();
   expect(screen.getByText(/finance@example\.test · Finance/).parentElement?.textContent).toContain("waiting for a second administrator");
   expect(screen.getByText("Operations · active").textContent).not.toContain("expires");
   await user.click(within(panel).getByRole("button", { name: "Approve invitation" }));
