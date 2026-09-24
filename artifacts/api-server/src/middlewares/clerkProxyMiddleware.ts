@@ -18,6 +18,8 @@
  *   configured application origin's (signInOrigins in lib/staff-access.ts),
  *   and the client address is the one the host's edge saw (req.ip). With no
  *   origin configured it answers 503.
+ * - The anonymous sandbox's cookies are this API's bearer token: the Cookie
+ *   header Clerk gets carries Clerk's own cookies and never those.
  *
  * Usage in app.ts:
  *   import { CLERK_PROXY_PATH, clerkProxyMiddleware } from "./middlewares/clerkProxyMiddleware";
@@ -28,6 +30,7 @@ import type { IncomingHttpHeaders } from 'http';
 import type { Request, RequestHandler } from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { originFor } from '../lib/staff-access';
+import { withoutSandboxCookies } from '../lib/sandbox-cookie';
 
 const CLERK_FAPI = 'https://frontend-api.clerk.dev';
 export const CLERK_PROXY_PATH = '/api/__clerk';
@@ -91,6 +94,14 @@ export function clerkProxyMiddleware(): RequestHandler {
         if (clientIp) proxyReq.setHeader('X-Forwarded-For', clientIp);
         else proxyReq.removeHeader('X-Forwarded-For');
         for (const header of ['forwarded', 'x-real-ip', 'cf-connecting-ip']) proxyReq.removeHeader(header);
+
+        // The sandbox's token is this API's bearer credential: Clerk gets the other cookies, its own among them.
+        const cookie = proxyReq.getHeader('cookie');
+        if (cookie !== undefined) {
+          const kept = withoutSandboxCookies(Array.isArray(cookie) ? cookie.join('; ') : String(cookie));
+          if (kept) proxyReq.setHeader('Cookie', kept);
+          else proxyReq.removeHeader('Cookie');
+        }
       },
       // Clerk's dynamic Frontend API responses (/v1/environment, /v1/client,
       // JWKS, ...) arrive without a Content-Length, so relaying them would use

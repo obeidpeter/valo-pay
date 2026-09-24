@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response } from "express";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import healthRouter from "./routes/health";
@@ -15,31 +15,58 @@ import { clientNetwork, createRequestLimits, createWindowCounter } from './lib/r
 
 /** The deepest a request body may nest objects and arrays. */
 export const MAX_BODY_DEPTH = 32;
+/**
+ * The most values a request body may hold, counting every object, list, text,
+ * number, true, false and null in it, the body itself included. The largest
+ * body the console sends (a close review's 500 responses) holds a few thousand;
+ * an import's CSV travels as one text.
+ */
+export const MAX_BODY_VALUES = 100_000;
 /** A UTF-16 surrogate without its pair: PostgreSQL JSON refuses one, and text silently replaces it. */
 const UNPAIRED_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+type BodyProblem = { field: string; problem: "depth" | "nul" | "surrogate" | "values" };
 /**
- * The first thing in a parsed body that nothing may read: objects and arrays
- * nested more than MAX_BODY_DEPTH levels deep (the checks and fingerprints that
- * walk a body are recursive), a NUL character (PostgreSQL text cannot hold it)
- * or an unpaired surrogate, in a string or a field name. The walk stops at that
- * depth, so it cannot overflow the stack itself. The field is its dotted path:
- * "" for the body itself, and the object holding it (or "a field name") for a
- * field name.
+ * The first thing in a parsed body that nothing may read: more than
+ * MAX_BODY_VALUES values, objects and arrays nested more than MAX_BODY_DEPTH
+ * levels deep (the checks and fingerprints that walk a body are recursive), a
+ * NUL character (PostgreSQL text cannot hold it) or an unpaired surrogate, in a
+ * string or a field name. The walk stops at that depth and that count, so it
+ * can neither overflow the stack nor run long itself: it reads a list by index
+ * and an object by its fields, and gathers the keys of the value it refuses on
+ * the way back, so only that value's path is ever built. The field is its
+ * dotted path: "" for the body itself or too many values, and the object
+ * holding it (or "a field name") for a field name.
  */
-export function bodyProblem(value: unknown, path = "", depth = 0): { field: string; problem: "depth" | "nul" | "surrogate" } | undefined {
-  if (typeof value === "string") return value.includes("\u0000") ? { field: path, problem: "nul" } : UNPAIRED_SURROGATE.test(value) ? { field: path, problem: "surrogate" } : undefined;
-  if (value === null || typeof value !== "object") return undefined;
-  if (depth >= MAX_BODY_DEPTH) return { field: path, problem: "depth" };
-  for (const [key, item] of Object.entries(value)) {
-    if (key.includes("\u0000")) return { field: path || "a field name", problem: "nul" };
-    if (UNPAIRED_SURROGATE.test(key)) return { field: path || "a field name", problem: "surrogate" };
-    const found = bodyProblem(item, path ? `${path}.${key}` : key, depth + 1);
-    if (found) return found;
-  }
-  return undefined;
+export function bodyProblem(body: unknown): BodyProblem | undefined {
+  let values = 0;
+  const walk = (value: unknown, depth: number): { keys: string[]; problem: BodyProblem["problem"]; name?: true } | undefined => {
+    if (++values > MAX_BODY_VALUES) return { keys: [], problem: "values" };
+    if (typeof value === "string") return value.includes("\u0000") ? { keys: [], problem: "nul" } : UNPAIRED_SURROGATE.test(value) ? { keys: [], problem: "surrogate" } : undefined;
+    if (value === null || typeof value !== "object") return undefined;
+    if (depth >= MAX_BODY_DEPTH) return { keys: [], problem: "depth" };
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index++) {
+        const found = walk(value[index], depth + 1);
+        if (found) { found.keys.push(String(index)); return found; }
+      }
+      return undefined;
+    }
+    for (const key in value) {
+      if (key.includes("\u0000")) return { keys: [], problem: "nul", name: true };
+      if (UNPAIRED_SURROGATE.test(key)) return { keys: [], problem: "surrogate", name: true };
+      const found = walk((value as Record<string, unknown>)[key], depth + 1);
+      if (found) { found.keys.push(key); return found; }
+    }
+    return undefined;
+  };
+  const found = walk(body, 0);
+  if (!found) return undefined;
+  const field = found.problem === "values" ? "" : found.keys.reverse().join(".");
+  return { field: found.name && !field ? "a field name" : field, problem: found.problem };
 }
 /** What a person reads about a body problem, naming the field (at most 100 characters of it). */
-function bodyRefusal({ field, problem }: { field: string; problem: "depth" | "nul" | "surrogate" }): string {
+function bodyRefusal({ field, problem }: BodyProblem): string {
+  if (problem === "values") return `The request body holds more than ${MAX_BODY_VALUES.toLocaleString("en-GB")} values. Send a smaller request.`;
   const where = field ? (field.length > 100 ? `${field.slice(0, 100)}…` : field) : "the request";
   return problem === "depth" ? `The request body is nested more than ${MAX_BODY_DEPTH} levels deep, at ${where}. Send a flatter body.`
     : problem === "nul" ? `Text cannot contain the NUL character (\\u0000). Remove it from ${where} and try again.`
@@ -102,9 +129,15 @@ app.use('/api/v1/providers/paystack',(req,res,next)=>{
 });
 // The Paystack test ingress reads its own raw body and checks its signature before it touches a lender.
 app.use('/api',createPaystackIngress(paystackIngress));
-// The response headers, the origin rule, sign-in and the request limits come
-// before the body is read, so a malformed or oversized body is answered with the
-// same headers as any other request, and a refused client never has its body parsed.
+// Every other address the API answers is under /api/v1, matched as the mounts below match it: a whole segment, in
+// either letter case. Any other address under /api is unknown, answered here before a session is checked, a limit
+// counts it or a body is read, so asking for one costs nothing.
+const unknownResource=(req:Request,res:Response)=>{res.status(404).json({error:"Unknown resource.",requestId:req.id});};
+app.use("/api",(req,res,next)=>{if(/^\/v1(?:\/|$)/i.test(req.path))next();else unknownResource(req,res);});
+// Under /api/v1 the response headers, the origin rule, sign-in and the request
+// limits come before the body is read, so a malformed or oversized body is
+// answered with the same headers as any other request, and a refused client
+// never has its body parsed.
 const requestLimits=createRequestLimits();
 const clerk=clerkMiddleware((req)=>clerkOptions(req));
 app.use("/api/v1",(req,res,next)=>{
@@ -125,7 +158,7 @@ app.use("/api/v1",(req,res,next)=>{
 });
 // Sign-in: Clerk checks the session where this host can (signInEnabled); otherwise every request is anonymous.
 // A staff host refuses anonymous requests, and does not start without Clerk (index.ts).
-app.use((req,res,next)=>{
+app.use("/api/v1",(req,res,next)=>{
   if(signInEnabled())return clerk(req,res,next);
   if(staffMode())return next(Object.assign(new Error("Staff sign-in is not configured on this host."),{status:503}));
   return next();
@@ -135,21 +168,21 @@ app.use("/api/v1",(req,res,next)=>requestLimits.principal(req,res,next));
 // A body is JSON, and only a write's is read: a read's body is ignored (never parsed, checked or fingerprinted), and a
 // write's body in any other format, a form's included, is refused (415).
 const json=express.json({limit:"2mb"});
-app.use((req,res,next)=>{
+app.use("/api/v1",(req,res,next)=>{
   if(req.method==="GET"||req.method==="HEAD"){next();return;}
   const sent=req.headers["transfer-encoding"]!==undefined||Number(req.headers["content-length"]??0)>0;
   if(sent&&!req.is("application/json")){req.log.info({event:"request.rejected",status:415,reason:"content_type"},"Request body refused");res.status(415).json({error:"Send the request body as JSON, with the Content-Type application/json.",requestId:req.id});return;}
   json(req,res,next);
 });
-app.use((req,res,next)=>{
-  // Refused here, naming the field, before anything is fingerprinted, journaled or saved.
+app.use("/api/v1",(req,res,next)=>{
+  // Refused here, naming the field, before anything is fingerprinted, journaled or saved; too many values is a 413.
   const found=bodyProblem(req.body);
-  if(found){req.log.info({event:"request.rejected",status:400,reason:found.problem==="depth"?"nesting_depth":found.problem==="nul"?"nul_character":"unpaired_surrogate"},"Request body refused");res.status(400).json({error:bodyRefusal(found),requestId:req.id});return;}
+  if(found){const status=found.problem==="values"?413:400;req.log.info({event:"request.rejected",status,reason:found.problem==="values"?"too_many_values":found.problem==="depth"?"nesting_depth":found.problem==="nul"?"nul_character":"unpaired_surrogate"},"Request body refused");res.status(status).json({error:bodyRefusal(found),requestId:req.id});return;}
   next();
 });
 app.use("/api", router);
-// An address under /api that no route answers is a JSON answer with the request id, not the framework's HTML page.
-app.use("/api",(req,res)=>{res.status(404).json({error:"Unknown resource.",requestId:req.id});});
+// An address under /api/v1 that no route answers is a JSON answer with the request id, not the framework's HTML page.
+app.use("/api",(req,res)=>unknownResource(req,res));
 app.use(errorHandler);
 
 export default app;
