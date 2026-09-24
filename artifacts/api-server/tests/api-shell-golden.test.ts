@@ -1,7 +1,7 @@
 // Offline tests for the API shell helpers: list paging with an updatedSince
 // watermark, and the sandbox creation limiter.
 import assert from "node:assert/strict";
-import { allocatableOnly, pageRecords, LIST_PAGE_CEILING } from "../src/lib/valopay-list.js";
+import { allocatableOnly, allocationChoices, pageRecords, LIST_PAGE_CEILING } from "../src/lib/valopay-list.js";
 import { createCreationLimiter } from "../src/lib/creation-limit.js";
 import type { ValopayRecord } from "../src/domain/types.js";
 
@@ -42,7 +42,13 @@ const records = Array.from({ length: 1200 }, (_, i) => record(i, i % 3 ? "open" 
   assert.equal(allocatableOnly("due-items", { allocatable: "true" }), true);
   assert.equal(allocatableOnly("payments", { allocatable: "false" }), false);
   assert.throws(() => allocatableOnly("payments", { allocatable: "true" }), (error: any) => error.status === 400 && /instalments only/.test(error.message), "asked of another kind, it is refused");
-  checks += 6;
+  // One payment's choices (paymentId): the payer rule of its manual allocation becomes the customer filter.
+  assert.throws(() => allocatableOnly("due-items", { paymentId: "p1" }), (error: any) => error.status === 400 && /Use it with allocatable=true/.test(error.message), "paymentId without allocatable=true is refused");
+  assert.equal(allocatableOnly("due-items", { allocatable: "true", paymentId: "p1" }), true);
+  const query = { allocatable: "true" as const, paymentId: "p1" };
+  assert.deepEqual([allocationChoices(query, { customerId: "c1" }), allocationChoices(query, {}), allocationChoices(query, null), allocationChoices({ ...query, customerId: "c2" }, { customerId: "c1" }), allocationChoices({ ...query, customerId: "c1" }, { customerId: "c1" })],
+    [{ ...query, customerId: "c1" }, query, undefined, undefined, { ...query, customerId: "c1" }], "its payer's instalments, any customer's, none, none for another customer's list, and the payer's list as asked");
+  checks += 8;
 }
 
 {

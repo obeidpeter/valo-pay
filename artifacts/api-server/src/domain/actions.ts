@@ -1,7 +1,7 @@
 import {
   counted, businessDateSchema,
   DEFAULT_ACTIVATION_WINDOW_DAYS, PLATFORM_OWNER, activationReminderCaps, closeRules, failureCodeList, handBackFallbackOwner, isKnownFailureCode,
-  nairaText, nextCloseInstant, normaliseFailureCode, passRuleText, paymentUnappliedKobo, resolutionCodesFor, resolveExceptionType, withinQuietHours, templateTextProblems,
+  heldEvidenceCodes, heldEvidenceOf, nairaText, nextCloseInstant, normaliseFailureCode, otherCurrenciesText, passRuleText, paymentUnappliedKobo, resolutionCodesForException, resolveExceptionType, withinQuietHours, templateTextProblems,
   type CloseTrigger,
 } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
@@ -133,7 +133,10 @@ export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTr
   else if (!cursor) state.settings.nextCloseAt = nextCloseInstant(now, schedule.time);
   delete state.settings.closeRetry;
   const owed = owedCloseDates(state, now).total;
-  const summary = `${counted(report.observations.received, "observation")} received, ${counted(report.allocated.count, "allocation")} confirmed, ${report.unallocated.count} unallocated (${report.unallocated.olderThan24Hours} older than 24h), ${counted(report.exceptions.opened.count, "exception")} opened and ${report.exceptions.closed.count} closed, ${counted(report.customerPositionsChanged.length, "customer position")} changed.`;
+  // Waiting payments count in every currency; money in another currency than naira is named beside the count.
+  const others = Object.keys(report.unallocated.otherCurrencies ?? {}).length;
+  const otherMoney = others ? `, including ${otherCurrenciesText(report.unallocated.otherCurrencies)} in ${others === 1 ? "another currency" : "other currencies"}` : "";
+  const summary = `${counted(report.observations.received, "observation")} received, ${counted(report.allocated.count, "allocation")} confirmed, ${report.unallocated.count} unallocated (${report.unallocated.olderThan24Hours} older than 24h)${otherMoney}, ${counted(report.exceptions.opened.count, "exception")} opened and ${report.exceptions.closed.count} closed, ${counted(report.customerPositionsChanged.length, "customer position")} changed.`;
   const close = makeRecord(state, "closes", {
     name: `Daily close ${runDate}${trigger === "scheduled" ? " · scheduled" : ""}${businessDate === runDate ? "" : ` · business date ${businessDate}`}`, status: "completed", createdAt: now,
     data: {
@@ -466,7 +469,8 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput): Action
     const item = findRecord(state, String(input.recordId), "exceptions");
     if (item.data.case?.assignee && item.data.case.assignee !== ctx.actor && ctx.role !== 'Admin') throw Object.assign(new Error('Ask the case assignee or an administrator to record the resolution. Financial review remains a separate action.'), { status: 409 });
     if (["resolved", "closed"].includes(item.status)) throw new Error("This exception is already resolved.");
-    const allowed = resolutionCodesFor(item.data.type);
+    // Codes that apply to this exception: joining held evidence to its payment only where it was held for its connection alone.
+    const allowed = resolutionCodesForException(item);
     if (!allowed.includes(String(data.resolutionCode))) throw new Error(`Resolution code must be one of: ${allowed.join(", ")}.`);
     const type = resolveExceptionType(item.data.type);
     // Item 10: an unknown outcome of a pay-by-bank checkout is Finance's to record, with the evidence when it was paid.
@@ -511,13 +515,20 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput): Action
     // An unknown outcome's resolution is what the provider confirmed, so the attempt takes that outcome.
     const outcome = type === "unknown_outcome" ? confirmAttemptOutcome(state, ctx, item) : undefined;
     if (outcome) return result(`Exception resolution recorded. The attempt is now recorded as ${outcome}.`, item, { attemptStatus: outcome });
-    // A suspected duplicate resolved as a separate payment leaves its hold; held evidence becomes a payment of its own at the next
-    // reconciliation, except evidence of a reversal, which is set aside rather than made a payment and reversed.
+    // A suspected duplicate resolved as a separate payment leaves its hold. Held evidence joins the payment its exception names
+    // when Finance says it is the same payment, is set aside when Finance says it is not money, and otherwise becomes a payment
+    // of its own at the next reconciliation, except evidence of a reversal, which is set aside rather than made a payment and
+    // reversed. So is a reversal that waited for a payment no connection had seen, once Finance has checked it.
     const released = type === "suspected_duplicate" ? releaseDuplicateHold(state, ctx, item) : undefined;
     if (released) return result(`Exception resolution recorded. Payment ${released.reference} is released from the duplicate hold and is matched like any other payment.`, item, { paymentStatus: released.status });
-    const evidence = type === "suspected_duplicate" ? recordsOf(state, "observations").find((record) => record.id === item.data.linkedRecordId && record.status === "unresolved") : undefined;
+    const evidence = type === "suspected_duplicate" || type === "provider_status_mismatch" ? recordsOf(state, "observations").find((record) => record.id === item.data.linkedRecordId && record.status === "unresolved") : undefined;
+    const joinedTo = evidence && data.resolutionCode === heldEvidenceCodes.samePayment ? recordsOf(state, "payments").find((record) => record.id === heldEvidenceOf(item.data.condition)?.paymentId) : undefined;
+    if (evidence && joinedTo) return result(reportsReversal(evidence)
+      ? `Exception resolution recorded. The next reconciliation applies this reversal evidence to payment ${joinedTo.reference}, which is reversed.`
+      : `Exception resolution recorded. The next reconciliation joins this payment evidence to payment ${joinedTo.reference} as more evidence of it: no second payment is made.`, item);
     if (evidence && reportsReversal(evidence)) return result("Exception resolution recorded. This reversal evidence is set aside at the next reconciliation: no payment is made from it only to be reversed.", item);
-    if (evidence) return result(`Exception resolution recorded. The next reconciliation records this payment evidence as a payment of its own${data.resolutionCode === "confirmed_duplicate_refund" ? ", held until its refund is recorded" : ""}.`, item);
+    if (evidence && data.resolutionCode === heldEvidenceCodes.notMoney) return result("Exception resolution recorded. This payment evidence is set aside at the next reconciliation: no payment is made from it.", item);
+    if (evidence && type === "suspected_duplicate") return result(`Exception resolution recorded. The next reconciliation records this payment evidence as a payment of its own${data.resolutionCode === "confirmed_duplicate_refund" ? ", held until its refund is recorded" : ""}.`, item);
     return result("Exception resolution recorded.", item);
   }
   if (input.action === "record_refund") {

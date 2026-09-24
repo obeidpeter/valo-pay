@@ -24,7 +24,12 @@ export interface Alert {
   since?: string;
   linkedRecordId?: string;
 }
-export interface AuditVerification { valid: boolean; count: number; headHash: string }
+/**
+ * The overview's audit check: whether the chain holds, the entries it counted,
+ * its head hash, and verifiedSequence, the last entry it verified, which is
+ * always before the first entry that breaks the chain.
+ */
+export interface AuditVerification { valid: boolean; count: number; headHash: string; verifiedSequence: number }
 
 const order: Record<AlertSeverity, number> = { critical: 0, high: 1, medium: 2, info: 3 };
 const setting = (state: DomainState, key: string, fallback: number): number => {
@@ -38,7 +43,8 @@ export function buildAlerts(state: DomainState, now: string, audit?: AuditVerifi
   const stalledExports = recordsOf(state, 'exports').filter(record => exportHealth(record, now).stalled);
   if (stalledExports.length) alerts.push({ key: 'exports_stalled', severity: 'medium', title: 'Exports need a status check', detail: `${counted(stalledExports.length, 'saved export has', 'saved exports have')} stopped reporting progress or reached a recovery deadline. Open saved exports to check its stage and retry the same job when available. Do not create another export to replace an uncertain request.`, count: stalledExports.length, linkedRecordId: stalledExports[0]!.id, since: exportHealth(stalledExports[0]!, now).lastProgressAt });
   if (audit && !audit.valid) {
-    alerts.push({ key: "audit_chain_broken", severity: "critical", title: "Audit log verification failed", detail: `The check stopped at entry ${audit.count + 1} because its order or verification hash did not match. Ask an administrator to investigate.`, count: audit.count });
+    // The chain holds up to the last verified entry, so the entry after it is the first that breaks it: changed, missing, out of order or claimed twice.
+    alerts.push({ key: "audit_chain_broken", severity: "critical", title: "Audit log verification failed", detail: `The check stopped at entry ${audit.verifiedSequence + 1}: it is missing, or its order or verification hash does not match. Ask an administrator to investigate.`, count: audit.count });
   }
   // An instruction dispatched in observation mode must never happen (NFR-OBS-02, DEB-10).
   if (state.merchant.mode !== "instruction") {

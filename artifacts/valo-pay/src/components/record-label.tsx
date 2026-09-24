@@ -18,6 +18,7 @@ const displayLabels: Record<string, string> = {
   paper_mandate: 'Paper mandate', not_ours: 'Payment belongs elsewhere',
   allocated_manual: 'Allocated manually', held_credit: 'Kept as unallocated credit',
   confirmed_duplicate_refund: 'Duplicate confirmed; refund required',
+  same_payment: 'Same payment; evidence joined to it', not_money: 'Not money; evidence set aside',
   paid_other_channel: 'Paid through another channel', applied_to_next: 'Applied to the next instalment',
   rescheduled_by_lms: 'Rescheduled in the loan system', written_off_by_lms: 'Written off in the loan system',
   limit_raised_new_mandate: 'Limit increased through a new mandate', split_by_lms: 'Split in the loan system',

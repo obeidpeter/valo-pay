@@ -13,6 +13,7 @@ import {
 import { makeRecord, recordsOf } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { paymentObservedAt, paymentRefunded, paymentReversed } from "./reconciliation";
+import { inNaira, type OtherCurrencies } from "./close";
 import { attemptTime } from "./policy-engine";
 import { watMonth, watMonthStart } from "./calendar";
 
@@ -290,11 +291,14 @@ export function buildBillingStatement(state: DomainState, now: string): Record<s
   const usageBase = billablePayments.reduce((sum, item) => sum + paymentAppliedKobo(item), 0);
   const usageFee = billablePayments.reduce((sum, item) => sum + usageFeeKobo(paymentAppliedKobo(item)), 0);
   const tier = licenceTierFor(billablePayments.length);
-  const channelBreakdown: Record<string, { count: number; kobo: number; billable: number; reason: string }> = {};
-  for (const payment of inPeriod) {
-    const channel = String(payment.data.channel || "manual");
-    const row = (channelBreakdown[channel] ||= { count: 0, kobo: 0, billable: 0, reason: isBillableChannel(channel) ? "A successful direct debit can be billed after settlement on the money it applied, provided that money has not been reversed or refunded and the reversal window from settlement has passed." : "This payment is included in reconciliation reports but is not charged a collection fee." });
-    row.count += 1; row.kobo += payment.amountKobo; if (billableCollection(state, payment, now)) row.billable += 1;
+  // Receipts by channel, as the close counts money: every receipt counts, kobo sums naira only, and money in another currency is listed beside it.
+  const channelBreakdown: Record<string, { count: number; kobo: number; otherCurrencies?: OtherCurrencies; billable: number; reason: string }> = {};
+  for (const channel of [...new Set(inPeriod.map((payment) => String(payment.data.channel || "manual")))]) {
+    const receipts = inPeriod.filter((payment) => String(payment.data.channel || "manual") === channel);
+    channelBreakdown[channel] = {
+      ...inNaira(receipts, (payment) => payment.amountKobo), billable: receipts.filter((payment) => billableCollection(state, payment, now)).length,
+      reason: isBillableChannel(channel) ? "A successful direct debit can be billed after settlement on the money it applied, provided that money has not been reversed or refunded and the reversal window from settlement has passed." : "This payment is included in reconciliation reports but is not charged a collection fee.",
+    };
   }
   // Collections that pass every BIL-01 check except the reversal window are billed on a later statement, never lost.
   const withheld = inPeriod.filter((item) => billableCollection(state, item, now, false) && !billableCollection(state, item, now));
