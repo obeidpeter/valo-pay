@@ -105,6 +105,8 @@ try {
   }
   await assert.rejects(() => inWorkspace(request(), response(), context => listRecords(context, merchantId, "due-items", { allocatable: "true", paymentId: "missing" })), (error: any) => error.status === 404 && /Payment not found/.test(error.message), "a payment the lender does not have is a 404");
   await assert.rejects(() => inWorkspace(request(), response(), context => listRecords(context, merchantId, "due-items", { paymentId: `${prefix}-pay-payer` })), (error: any) => error.status === 400 && /allocatable=true/.test(error.message), "paymentId without allocatable=true is refused");
+  // The payer may be the customer the scoped reads below compare with the baseline, which has none of these payments.
+  await pool.query("DELETE FROM valopay_records WHERE merchant_id = $1 AND id = ANY($2)", [merchantId, ["payer", "named", "none", "usd", "back"].map(suffix => `${prefix}-pay-${suffix}`)]);
   const timing: number[] = [];
   for (let i = 0; i < 5; i++) {
     const start = performance.now();
