@@ -141,27 +141,35 @@ export interface ValopayRecord {
 }
 
 /**
- * A new record: only the name is required; the kind's default status applies when none is given.
+ * A new record: only the name is required, and it cannot be empty; the kind's default status applies when none is given. A status is at most 100 characters, a reference 200 and a customerId 100.
  */
 export interface RecordInput {
+  /** @minLength 1 */
   name: string;
+  /** @maxLength 100 */
   status?: string;
+  /** @maxLength 200 */
   reference?: string;
   /** @minimum 0 */
   amountKobo?: number;
+  /** @maxLength 100 */
   customerId?: string;
   data?: RecordData;
 }
 
 /**
- * The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed.
+ * The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed. A name cannot be empty, and a status, reference or customerId is bounded as a new record's is.
  */
 export interface RecordUpdate {
+  /** @minLength 1 */
   name?: string;
+  /** @maxLength 100 */
   status?: string;
+  /** @maxLength 200 */
   reference?: string;
   /** @minimum 0 */
   amountKobo?: number;
+  /** @maxLength 100 */
   customerId?: string;
   data?: RecordData;
   expectedUpdatedAt?: string;
@@ -535,7 +543,7 @@ export interface ExportResult {
 export type QueuePageCounts = {[key: string]: number};
 
 /**
- * A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states.
+ * A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states: a deadline written as a day alone (YYYY-MM-DD) is due all that West Africa Time day and overdue once it ends, one with a time passes at that instant, and one that is not a real date is no deadline.
  */
 export interface QueuePage {
   items: ValopayRecord[];
@@ -4181,7 +4189,7 @@ export type ListRecordsParams = {
  */
 merchantId: string;
 /**
- * Text matched, ignoring case and accents, against the name, reference, status and data.
+ * Text matched, ignoring case and accents, against the record's name, its reference and the text and number values in its data, nested ones included; never a field's name, true, false or null.
  */
 search?: string;
 /**
@@ -4189,7 +4197,7 @@ search?: string;
  */
 status?: string;
 /**
- * Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views.
+ * Page size, from 1 to 500; a value outside that range is refused (400). Omitted returns the complete filtered kind for existing relationship and balance views.
  * @minimum 1
  * @maximum 500
  */
@@ -4200,7 +4208,7 @@ limit?: number;
  */
 offset?: number;
 /**
- * ISO timestamp; only records updated at or after it (incremental sync).
+ * An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00; only records updated at or after that instant (incremental sync). A number, a date without a time, a time without Z or an offset, or a year outside 0001 to 9999 is refused (400, naming updatedSince).
  */
 updatedSince?: string;
 /**

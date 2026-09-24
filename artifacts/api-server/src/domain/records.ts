@@ -33,10 +33,15 @@ export function assertNoRealBankDetails(value: unknown, key = ""): void {
   }
 }
 
-/** A record by id, typed when the kind is a known literal; a kind given as a string yields the stored shape. */
+/**
+ * A record by id, typed when the kind is a known literal; a kind given as a
+ * string yields the stored shape. A record a request names that the lender
+ * does not have is a 404, whether the path, an action's recordId or a linked
+ * id in the body names it.
+ */
 export function findRecord<K extends string = string>(state: DomainState, id: string, kind?: K): RecordOf<K> {
   const record = state.records.find((item) => item.id === id && (!kind || item.kind === kind));
-  if (!record) throw new Error(`Record ${id} was not found.`);
+  if (!record) throw Object.assign(new Error(`Record ${id.length > 100 ? `${id.slice(0, 100)}…` : id} was not found in this lender.`), { status: 404 });
   return record as RecordOf<K>;
 }
 

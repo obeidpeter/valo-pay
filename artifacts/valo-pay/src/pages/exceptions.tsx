@@ -14,7 +14,7 @@ import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { exceptionSeverities, failureCodeList, resolutionCodesFor, resolveExceptionType } from '@workspace/valopay-schema';
 import { readableLabel, RecordLabel, StatusBadge } from '@/components/record-label';
-import { deadlineInstant, isDueToday, isDeadlineOverdue as isOverdue, useQueueFilters } from '@/lib/queue-filters';
+import { isDueToday, isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { RecordPagination } from '@/components/record-pagination';
 import { ExceptionContext } from '@/components/exception-context';
 import { useHashTarget } from '@/lib/use-hash-target';
@@ -170,7 +170,7 @@ export default function ExceptionsPage() {
                       </div>
                       {!!exception.data?.dueBy && (
                         <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
-                          <Calendar className="h-3 w-3" /> Due {formatDate(deadlineInstant(exception.data.dueBy))}
+                          <Calendar className="h-3 w-3" /> Due {formatDate(String(exception.data.dueBy))}
                           {isOpen(exception.status) && isOverdue(exception.data.dueBy, now) && <span className="font-semibold text-destructive">Overdue</span>}
                         </div>
                       )}

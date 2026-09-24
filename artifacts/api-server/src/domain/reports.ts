@@ -1,4 +1,4 @@
-import { PLAN_GROSS_MARGIN, VARIABLE_COST_PER_COLLECTION_KOBO, experimentRules, isOpenException, measurementRules, paymentAppliedKobo, type RecordKind } from "@workspace/valopay-schema";
+import { PLAN_GROSS_MARGIN, VARIABLE_COST_PER_COLLECTION_KOBO, deadlinePassed, experimentRules, isOpenException, measurementRules, paymentAppliedKobo, paymentAwaitsAllocation, type RecordKind } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { DomainState, Metric, Report, TypedRecord, ValopayRecord } from "./types";
 import { allocationConfirmedAt, paymentObservedAt, paymentReversed } from "./reconciliation";
@@ -33,7 +33,7 @@ export function buildOverview(state: DomainState, now: string, alerts: Alert[] =
       metric("review", "Matches to review", by("allocations").filter((item) => item.status === "proposed").length, "count", "Proposed matches for the Finance team to confirm."),
       metric("duplicates", "Possible duplicates", by("payments").filter((item) => item.status === "possible_duplicate").length, "count", "Finance must review these before any payment is allocated."),
       metric("failures", "Failed collections", by("attempts").filter((item) => item.status === "failed").length, "count", "Failed debit attempts reported by an external collection system."),
-      metric("overdue", "Overdue exceptions", open.filter((item) => Date.parse(String(item.data.dueBy)) < Date.parse(now)).length, "count", "Ask the assigned owner to follow up on these overdue issues."),
+      metric("overdue", "Overdue exceptions", open.filter((item) => deadlinePassed(item.data.dueBy, now)).length, "count", "Ask the assigned owner to follow up on these overdue issues."),
     ],
     activity: by("audit").sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 8),
     upcoming: by("due-items").filter((item) => !["paid", "closed", "cancelled"].includes(item.status)).sort((a, b) => String(a.data.dueDate || '').localeCompare(String(b.data.dueDate || '')) || a.id.localeCompare(b.id)).slice(0, 6),
@@ -256,7 +256,8 @@ export function buildReports(state: DomainState, now: string): Report {
   const reviewed = automaticCertain.filter((item) => typeof item.data.reviewed === "boolean");
   const reviewedAll = allocations.filter((item) => typeof item.data.reviewed === "boolean");
   const precision = reviewedAll.length ? reviewedAll.filter((item) => item.data.reviewed === true).length / reviewedAll.length : 0;
-  const unallocated = payments.filter((item) => item.status === "unallocated");
+  // Money waiting for Finance, as the Finance queue, the alert and the daily close count it (paymentAwaitsAllocation).
+  const unallocated = payments.filter(paymentAwaitsAllocation);
   const openExceptions = exceptions.filter((item) => isOpenException(item.status));
   const metrics: Metric[] = [
     metric("allocation_rate", "Allocation rate", allocationRate, "ratio", `${allocated.length} of ${payments.length} payments are fully or partly allocated, or exceed the amount due.`),
@@ -284,7 +285,7 @@ export function buildReports(state: DomainState, now: string): Report {
       allocationRate, precision,
       certainAutomaticRate: payments.length ? new Set(automaticCertain.map((a) => a.data.paymentId)).size / payments.length : 0,
       reviewedCount: reviewedAll.length, reviewedAutomaticCount: reviewed.length, falseMatchRate: audit.falseMatchRate, falseMatchInterval: audit.interval, requiredAuditSample: audit.requiredSample, precisionAudit: audit,
-      overdueExceptionRate: openExceptions.length ? openExceptions.filter((e) => Date.parse(String(e.data.dueBy)) < Date.parse(now)).length / openExceptions.length : 0,
+      overdueExceptionRate: openExceptions.length ? openExceptions.filter((e) => deadlinePassed(e.data.dueBy, now)).length / openExceptions.length : 0,
       liveDays: test5.liveDays, requiredLiveDays: test5.requiredLiveDays, liveSince: test5.liveSince,
       packsGenerated: test5.packsGenerated, disputePacksGenerated: recordsOf(state, "exports").filter((item) => item.status === "ready" && ["customer-pack", "dispute-pack"].includes(String(item.data.kind))).length,
       realCasesUsed: test5.realCasesUsed, requiredRealCases: test5.requiredRealCases,

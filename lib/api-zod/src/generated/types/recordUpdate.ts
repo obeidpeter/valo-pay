@@ -8,14 +8,18 @@
 import type { RecordData } from './recordData';
 
 /**
- * The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed.
+ * The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed. A name cannot be empty, and a status, reference or customerId is bounded as a new record's is.
  */
 export interface RecordUpdate {
+  /** @minLength 1 */
   name?: string;
+  /** @maxLength 100 */
   status?: string;
+  /** @maxLength 200 */
   reference?: string;
   /** @minimum 0 */
   amountKobo?: number;
+  /** @maxLength 100 */
   customerId?: string;
   data?: RecordData;
   expectedUpdatedAt?: string;

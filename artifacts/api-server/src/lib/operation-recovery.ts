@@ -1,6 +1,6 @@
 import type { RequestHandler } from "express";
 import { parse } from "csv-parse/sync";
-import { definitiveRefusalStatuses } from "@workspace/valopay-schema";
+import { definitiveRefusalStatuses, pathId } from "@workspace/valopay-schema";
 import { lenderQuery, optionalKey } from "./contract";
 import { assertNoRealBankDetails } from "../domain/records";
 import { markKeyed, markKeyUnused, registerRefusalCloser, type OperationState } from "./refused-operations";
@@ -73,15 +73,18 @@ export function closeRejectedOperation(req: Parameters<RequestHandler>[0], statu
 }
 export const recoveryMiddleware: RequestHandler = async (req, res, next) => {
   try {
-    const replay = /^\/v1\/operations\/([a-f0-9]{64})\/retry$/.exec(req.path);
+    // The id is any one segment, as the router matches a parameter, read as every route reads an id (pathId): an
+    // empty or over-long one is a 400 naming id, and one no journal entry has is not found (404), as for a cancel.
+    const replay = /^\/v1\/operations\/([^/]+)\/retry$/.exec(req.path);
     if (req.method === "POST" && replay) {
       // A retry repeats a request with its key: however it ends, it is answered for that key.
       markKeyed(req);
       const { merchantId } = lenderQuery(req);
+      const id = pathId(decodeURIComponent(replay[1]!));
       const stored = await inWorkspace(
         req,
         res,
-        (ctx) => readOperation(ctx, merchantId, replay[1]!),
+        (ctx) => readOperation(ctx, merchantId, id),
         "read",
       );
       if (

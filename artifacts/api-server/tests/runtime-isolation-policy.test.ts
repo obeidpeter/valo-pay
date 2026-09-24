@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { expectedRuntimeDefinition, normaliseRuntimeDefinition, reviewedRuntimeHelpers, reviewedRuntimePolicies, reviewedRuntimeTrigger, runtimeHelperDifferences, runtimePolicyDifferences, type RuntimeHelperRow, type RuntimePolicyRow, type RuntimeTriggerRow } from "../src/lib/runtime-isolation-policy.js";
+import { expectedRuntimeDefinition, normaliseRuntimeDefinition, reviewedRuntimeGrants, reviewedRuntimeHelpers, reviewedRuntimePolicies, reviewedRuntimeTrigger, runtimeGrantDifferences, runtimeHelperDifferences, runtimePolicyDifferences, runtimeRoleDifferences, type RuntimeGrantRow, type RuntimeHelperRow, type RuntimePolicyRow, type RuntimeTriggerRow } from "../src/lib/runtime-isolation-policy.js";
 
 // The comparison the isolation self-check runs in every staff transaction,
 // without a database: rows shaped as the restricted login reads the catalogue.
@@ -66,6 +66,28 @@ eq(runtimeHelperDifferences(helper("valopay_runtime_guard_workspace", { source: 
 eq(runtimeHelperDifferences(helper("valopay_runtime_guard_workspace", { source: qualify(reviewedRuntimeHelpers.valopay_runtime_guard_workspace!.source) }), scope), ["valopay_runtime_guard_workspace: body differs"], "a guard that watches the placeholder instead of the login is refused");
 // Even a login named after the placeholder, which the configuration refuses, would not make such a guard pass.
 eq(runtimeHelperDifferences(helper("valopay_runtime_guard_workspace", { source: qualify(reviewedRuntimeHelpers.valopay_runtime_guard_workspace!.source) }), { ...scope, role: "{role}" }), ["valopay_runtime_guard_workspace: body differs"], "live text holding the placeholder is refused whatever the login is called");
+
+// The connection itself: the runtime login, with no attribute that bypasses or administers security and no membership (23 September audit, security item 4).
+const login = { current_name: scope.role, session_name: scope.role, attributes: [] as string[], memberships: [] as string[], creates: false };
+eq(runtimeRoleDifferences(login, scope), [], "the runtime login as 005 creates it passes");
+eq(runtimeRoleDifferences({ ...login, attributes: ["REPLICATION"] }, scope), ["the login holds REPLICATION"], "REPLICATION is refused");
+eq(runtimeRoleDifferences({ ...login, memberships: ["pg_execute_server_program", "pg_read_server_files"] }, scope), ["the login is a member of pg_execute_server_program", "the login is a member of pg_read_server_files"], "a server-program or server-file role is refused");
+eq(runtimeRoleDifferences({ ...login, memberships: ["pg_read_all_data"] }, scope), ["the login is a member of pg_read_all_data"], "any membership is refused, since the login could take up its privileges");
+eq(runtimeRoleDifferences({ ...login, creates: true }, scope), ["the login can create objects in the runtime schema"], "CREATE on the runtime schema is refused");
+eq(runtimeRoleDifferences({ ...login, current_name: "postgres", session_name: "postgres", attributes: ["SUPERUSER"] }, scope), ["connected as postgres (current role postgres) instead of the runtime login", "the login holds SUPERUSER"], "another role is refused, naming what it holds");
+
+// Privileges: exactly what 005 grants, on a table or a column, and nothing beside the ten tables.
+const grantRow = (key: string, schema = scope.schema): RuntimeGrantRow => { const [name, privilege] = key.split(":") as [string, string]; const [relation, column] = name.split(".") as [string, string | undefined]; return { schema, relation, column: column ?? null, privilege, grantable: false }; };
+const grants = () => reviewedRuntimeGrants.map(key => grantRow(key));
+eq(reviewedRuntimeGrants.filter(key => key.endsWith(":SELECT")).length, 10, "the login reads each of the ten tables");
+eq(runtimeGrantDifferences(grants(), [], scope), [], "the reviewed privileges pass");
+eq(runtimeGrantDifferences([...grants(), grantRow("valopay_records:TRUNCATE")], [], scope), ["valopay_records:TRUNCATE: not in the reviewed set"], "TRUNCATE is refused");
+eq(runtimeGrantDifferences([...grants(), grantRow("valopay_records.merchant_id:UPDATE")], [], scope), ["valopay_records.merchant_id:UPDATE: not in the reviewed set"], "a column the login may not change is refused");
+eq(runtimeGrantDifferences([...grants(), grantRow("valopay_records:UPDATE")], [], scope), ["valopay_records:UPDATE: not in the reviewed set"], "UPDATE on a whole table is refused");
+eq(runtimeGrantDifferences(grants().map(row => row.relation === "valopay_teams" ? { ...row, grantable: true } : row), [], scope), ["valopay_teams:SELECT with grant option: not in the reviewed set", "valopay_teams:SELECT: missing"], "a privilege the login may pass on is refused");
+eq(runtimeGrantDifferences([...grants(), grantRow("valopay_records:SELECT", "public")], [], scope), ["public.valopay_records:SELECT: not in the reviewed set"], "another schema's copy of a table is named with its schema and refused");
+eq(runtimeGrantDifferences(grants().filter(row => row.relation !== "valopay_staff_events" || row.privilege !== "INSERT"), [], scope), ["valopay_staff_events:INSERT: missing"], "a missing privilege is named");
+eq(runtimeGrantDifferences(grants(), [{ name: "valopay_all_records", kind: "v" }, { name: "valopay_dump()", kind: "function" }], scope), ["valopay_all_records: a view the reviewed set does not have", "valopay_dump(): a function the reviewed set does not have"], "a view or function beside the reviewed set is refused");
 
 // Normalisation: only the runtime schema's qualifier and white space; {role} is spelt out in the reviewed text alone.
 eq(normaliseRuntimeDefinition(null, scope), null, "an absent expression stays absent");

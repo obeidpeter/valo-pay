@@ -1,4 +1,4 @@
-import { WAT_OFFSET_MS, closeRules, closeTimeOf, isOpenException, nextCloseInstant, paymentAwaitsAllocation, paymentUnappliedKobo, type CloseReport } from "@workspace/valopay-schema";
+import { WAT_OFFSET_MS, closeRules, closeTimeOf, deadlinePassed, isOpenException, nextCloseInstant, paymentAwaitsAllocation, paymentUnappliedKobo, type CloseReport } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { allocationConfirmedAt, paymentObservedAt } from "./reconciliation";
@@ -297,7 +297,7 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
     exceptions: {
       opened: { count: opened.length, byType: byType(opened) }, closed: { count: closed.length, byType: byType(closed) },
       openAtClose: exceptions.filter((item) => isOpenException(item.status)).length,
-      overdueAtClose: exceptions.filter((item) => isOpenException(item.status) && Date.parse(String(item.data.dueBy)) < Date.parse(to)).length,
+      overdueAtClose: exceptions.filter((item) => isOpenException(item.status) && deadlinePassed(item.data.dueBy, to)).length,
     },
     retryDecisions: { recorded: Number(reconciled.retryDecisionsRecorded || 0), finalAttempts: Number(reconciled.finalAttemptExceptions || 0), disputesFrozen: Number(reconciled.disputesFrozen || 0), noticesNotEvidenced: Number(reconciled.noticesNotEvidenced || 0) },
     customerPositionsChanged: positionsChanged,

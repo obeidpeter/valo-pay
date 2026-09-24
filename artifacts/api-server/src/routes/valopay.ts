@@ -3,13 +3,13 @@ import { listReconciliation, listCloseHistory, getCloseDetail, loadReportsView }
 import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
 import { z } from "zod";
-import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, roles, fail, appendAudit, verifyAudit, listMerchants, findIdempotency, saveIdempotency, receiptOf, changeRole, type StoreContext } from "../lib/valopay-store";
+import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, auditObject, roles, fail, appendAudit, verifyAudit, listMerchants, findIdempotency, saveIdempotency, receiptOf, changeRole, type StoreContext } from "../lib/valopay-store";
 import { requestFingerprint } from "../lib/digests";
 import { amendDueItem, customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction, type TypedRecord } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
 import { bindCloseReviewBasis } from '../domain/close-review';
 import { assertNoDirectImportedCorrection } from '../domain/import-corrections';
-import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, isCloseTime, recordKinds } from "@workspace/valopay-schema";
+import { ABSOLUTE_TICKET_FLOOR_KOBO, authorisationModes, closeTimeOf, defaultStatus, executionWindow, handBackOwners, instantInputSchema, isCloseTime, pathId, recordKinds } from "@workspace/valopay-schema";
 import type { DomainState, ValopayRecord } from "../domain/types";
 import { getGates } from "../lib/valopay-readiness";
 import { importCsv } from "../lib/valopay-import";
@@ -25,7 +25,15 @@ import { routerOptions } from './router-options';
 
 const router:IRouter=Router(routerOptions);
 const kinds=new Set<string>(recordKinds);
-function safeKind(value:unknown):string { const kind=z.string().parse(value);if(!kinds.has(kind))fail("Unknown resource.",404);return kind; }
+/** A list's query: an incremental sync's watermark is an RFC 3339 instant with Z or an offset, refused (400, naming updatedSince) otherwise. */
+const listRecordsQuery=S.ListRecordsQueryParams.extend({updatedSince:instantInputSchema.optional()});
+function safeKind(value:unknown):string { const kind=z.string().parse(value,{path:["kind"]});if(!kinds.has(kind))fail("Unknown resource.",404);return kind; }
+/**
+ * What a write's audit entry takes from its request, as the route's schema
+ * parsed it: the action a route runs by name, the record its body names and
+ * the reason. A route passes only fields its schema has.
+ */
+export type AuditInput = { action?: string; recordId?: string; reason?: string };
 /**
  * One lender's state for a route: read under a share lock, or written under the
  * exclusive lock with an audit entry and, when the request carries an
@@ -36,8 +44,13 @@ function safeKind(value:unknown):string { const kind=z.string().parse(value);if(
  * given without fields the contract no longer lists, or as a 500 that says the
  * request was saved (replayedAnswer, lib/contract.ts). A receipt is kept where
  * receiptOf says, and a read is never fingerprinted.
+ *
+ * A write's audit entry takes nothing from the raw body: its action is the
+ * route's (or the action the route parsed), its object comes from the route or
+ * the record the write changed (auditObject), and its summary is the reason
+ * the route's own schema carries, passed in `audit`, or the default.
  */
-export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>unknown,mutating:boolean,responseSchema:S):Promise<z.output<S>>{
+export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response,operation:(state:DomainState,context:StoreContext)=>unknown,mutating:boolean,responseSchema:S,audit:AuditInput={}):Promise<z.output<S>>{
  const {merchantId}=lenderQuery(req);
  // A write's key is checked by name before anything runs; a read ignores one, and nothing of a read is fingerprinted.
  const key=mutating?optionalKey(req):undefined;
@@ -61,9 +74,9 @@ export async function withState<S extends z.ZodTypeAny>(req:Request,res:Response
    // Validate before committing: an invalid response must not leave durable writes.
    const result=contractAnswer(responseSchema,rawResult);
   if(mutating){
-   // An action may add what it established to the reason, such as the payer Finance identified.
-   const reason=req.body.reason||"Synthetic workspace operation",auditNote=(rawResult as {data?:{auditNote?:unknown}}|undefined)?.data?.auditNote;
-   appendAudit(state,ctx,req.path.includes("/actions")?String(req.body.action):`${req.method.toLowerCase()}.${req.path.split("/").slice(2).join(".")}`,req.body.recordId||String(req.params.id||"workspace"),typeof auditNote==="string"&&auditNote?`${reason}${/[.!?]$/.test(reason)?"":"."} ${auditNote}`:reason,changes);
+   // A domain action may add what it established to the reason, such as the payer Finance identified: server-built text in its answer.
+   const reason=audit.reason?.trim()||"Synthetic workspace operation",auditNote=audit.action===undefined?undefined:(rawResult as {data?:{auditNote?:unknown}}|undefined)?.data?.auditNote;
+   appendAudit(state,ctx,audit.action??`${req.method.toLowerCase()}.${req.path.split("/").slice(2).join(".")}`,auditObject(ctx,state,{path:req.params.id,body:audit.recordId,answer:rawResult},"workspace"),typeof auditNote==="string"&&auditNote?`${reason}${/[.!?]$/.test(reason)?"":"."} ${auditNote}`:reason,changes);
     await saveState(ctx,state);
     if(receipt)await saveIdempotency(ctx,receipt.id,fingerprint,result);
   }
@@ -81,7 +94,7 @@ router.get("/v1/overview",async(req,res)=>{
 });
 router.get("/v1/records/:kind",async(req,res)=>{
  lenderQuery(req);
- const kind=safeKind(req.params.kind),query=S.ListRecordsQueryParams.parse(req.query);
+ const kind=safeKind(req.params.kind),query=listRecordsQuery.parse(req.query);
  res.json(await inWorkspace(req,res,async ctx=>{
   const page=await listRecords(ctx,query.merchantId,kind,query);
   // Never leak internal storage location through collection APIs.
@@ -139,7 +152,7 @@ router.post("/v1/actions",async(req,res)=>{
   if(body.action==="verify_audit")return {message:"Audit log check complete.",data:verifyAudit(state)};
   if(body.action==="mark_pack_used")fail("Synthetic packs cannot be recorded as evidence used in a real case.",403);
   return executeAction(state,ctx,body);
-  },true,S.PerformActionResponse);
+  },true,S.PerformActionResponse,{action:body.action,recordId:body.recordId,reason:body.reason});
  res.json(result);
 });
 router.post("/v1/imports",async(req,res)=>{
@@ -220,9 +233,9 @@ router.post("/v1/exports",async(req,res)=>{
 });
 /** An export of the request's lender, read in the tenant transaction and handed to `use` there, with the transaction clock. A download also needs the role its kind requires (export_sensitive). */
 async function authorisedExport<T>(req:Request,res:Response,use:(record:ValopayRecord,now:string)=>T,download=false){
- const {merchantId}=lenderQuery(req);
+ const {merchantId}=lenderQuery(req),id=pathId(req.params.id);
  return inWorkspace(req,res,async ctx=>{
-  const page=await listRecords(ctx,merchantId,'exports',{id:String(req.params.id),limit:1});
+  const page=await listRecords(ctx,merchantId,'exports',{id,limit:1});
   if(!page.items[0])fail('Export not found in this lender.',404);
   if(download)assertExportPermitted(ctx.role,page.items[0].data.kind);
   // The transaction clock decides whether the export is stalled or its lease expired.
@@ -234,8 +247,9 @@ router.get('/v1/exports/:id',async(req,res)=>{
  res.json(await authorisedExport(req,res,(record,now)=>contractAnswer(S.GetExportJobResponse,exportJobView(record,now))));
 });
 router.post('/v1/exports/:id/retry',async(req,res)=>{
+ const id=pathId(req.params.id);
  req.body={};
- res.json(await withState(req,res,(state,ctx)=>retryExport(state,ctx,String(req.params.id)),true,S.RetryExportJobResponse));
+ res.json(await withState(req,res,(state,ctx)=>retryExport(state,ctx,id),true,S.RetryExportJobResponse));
 });
 router.get("/v1/exports/:id/download",async(req,res)=>{
  const cancellation=new AbortController();

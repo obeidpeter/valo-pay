@@ -73,13 +73,15 @@ const optionalKey = (detail = "") => journal({ name: "Idempotency-Key", in: "hea
 /** A new lender's key: it names the lender, and the journal does not record the request. */
 const lenderKey = { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", minLength: 8, maxLength: 200 }, description: "Required: a request without one is refused (400, naming the header). 8 to 200 characters, one per new lender. The key names the lender it creates: a repeat returns that lender, and the same key with different details is refused (409). The request is not recorded in Operations, so a request refused before the lender was created (by the caller's role, or at the sandbox's five-lender limit) may be sent again with the same key once the refusal no longer applies." };
 const pathDescriptions = { kind: "Record kind: one of the shared schema's recordKinds (customers, mandates, due-items, attempts, observations, payments, ...).", id: "The record's id.", provider: "Provider name; this generic address refuses every provider (the Paystack test ingress has its own address)." };
-const pathParam = (name) => ({name,in:"path",required:true,schema:str,description:pathDescriptions[name]});
+/** The id an address names: 1 to 100 characters, refused (400, naming id) otherwise, as every route checks it (pathIdSchema). */
+const idSchema = { type: "string", minLength: 1, maxLength: 100 };
+const pathParam = (name) => ({name,in:"path",required:true,schema:name==="id"?idSchema:str,description:pathDescriptions[name]});
 const merchant = {name:"merchantId",in:"query",required:true,schema:{type:"string",minLength:1,maxLength:100},description:"The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation."};
-const search = {name:"search",in:"query",schema:str,description:"Text matched, ignoring case and accents, against the name, reference, status and data."};
+const search = {name:"search",in:"query",schema:str,description:"Text matched, ignoring case and accents, against the record's name, its reference and the text and number values in its data, nested ones included; never a field's name, true, false or null."};
 const status = {name:"status",in:"query",schema:str,description:"Only records in this status; omitted or \"all\" for every status."};
-const limit = {name:"limit",in:"query",schema:{type:"integer",minimum:1,maximum:500},description:"Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views."};
+const limit = {name:"limit",in:"query",schema:{type:"integer",minimum:1,maximum:500},description:"Page size, from 1 to 500; a value outside that range is refused (400). Omitted returns the complete filtered kind for existing relationship and balance views."};
 const offset = {name:"offset",in:"query",schema:{type:"integer",minimum:0},description:"Rows to skip in the newest-first order."};
-const updatedSince = {name:"updatedSince",in:"query",schema:str,description:"ISO timestamp; only records updated at or after it (incremental sync)."};
+const updatedSince = {name:"updatedSince",in:"query",schema:str,description:"An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00; only records updated at or after that instant (incremental sync). A number, a date without a time, a time without Z or an offset, or a year outside 0001 to 9999 is refused (400, naming updatedSince)."};
 const customerId = {name:"customerId",in:"query",schema:str,description:"Only records directly linked to this customer, in the selected lender."};
 const recordId = {name:"id",in:"query",schema:str,description:"Only this exact record ID, in the selected kind and lender."};
 add("/healthz","get","healthCheck","HealthStatus");
@@ -106,7 +108,7 @@ paths["/v1/openapi.json"]={get:{operationId:"getOpenApiDocument",tags:["valopay"
 paths["/v1/webhooks/{provider}"]={post:{operationId:"disabledProviderWebhook",tags:["valopay"],parameters:[pathParam("provider")],responses:{"403":{description:"Disabled until a provider-specific signed adapter is configured. No events are processed."}}}};
 describe("/healthz","get","Liveness: the process answers, with its build, uptime and scheduler state","Never touches the database, so a database outage does not read as a dead process. Needs no sandbox or sign-in, and answers whether or not Clerk is configured. At most 120 health checks a minute per client network, both health addresses together (an IPv6 client's network is its /64).");
 describe("/readyz","get","Readiness: one bounded round trip to the database, which also checks its schema","Answers 503 with status degraded while the database does not answer within the check's time limit, or lacks a table, column, unique index or check constraint this build needs. A missing read index leaves the answer ready, with checks.schema.status indexes_missing, since every request still works, only slower. The log names what is missing and where it comes from, and any connection error; the answer does not. Probes share one check: while it runs every probe waits for it, and its answer is reused for a second after it finishes, so a burst makes one database round trip. Needs no sandbox or sign-in, and answers whether or not Clerk is configured. At most 120 health checks a minute per client network, both health addresses together.");
-describe("/v1/workspace","get","The caller's workspace: its lenders, roles and actor","On a first visit an anonymous caller gets a new synthetic sandbox with two lenders; a signed-in person gets their own workspace. New sandboxes are limited per client network (20 an hour; an IPv6 client's network is its /64, and a /48 starts at most 60) and per server (300 an hour). A browser that sends two different sandbox cookies is refused (400) rather than guessed between.");
+describe("/v1/workspace","get","The caller's workspace: its lenders, roles and actor","On a first visit an anonymous caller gets a new synthetic sandbox with two lenders, and the sandbox cookie that names it on every later request (components.securitySchemes.sandboxCookie); a signed-in person gets their own workspace. New sandboxes are limited per client network (20 an hour; an IPv6 client's network is its /64, and a /48 starts at most 60) and per server (300 an hour). A browser that sends two different sandbox cookies is refused (400) rather than guessed between.");
 describe("/v1/overview","get","The operations overview for one lender","Metrics, queues, recent activity, upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02).");
 describe("/v1/records/{kind}","get","Records of one kind for one lender, newest first","Filtered by status and by a search that ignores case and accents; paged with limit and offset; updatedSince for incremental sync.");
 describe("/v1/records/{kind}","post","Create a record of an editable kind","Validated against the kind's data schema; a status only a domain action may set is refused.");
@@ -133,8 +135,8 @@ const schemaDescriptions = {
   ReadinessStatus: "The readiness answer: ok, or degraded while the database does not answer or lacks a table, column, unique index or check constraint this build needs.",
   RecordData: "A record's data: the fields the kind's schema declares, and anything else a caller stored.",
   ValopayRecord: "A stored record of any kind, with its lender, status, reference, amount in kobo and data.",
-  RecordInput: "A new record: only the name is required; the kind's default status applies when none is given.",
-  RecordUpdate: "The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed.",
+  RecordInput: "A new record: only the name is required, and it cannot be empty; the kind's default status applies when none is given. A status is at most 100 characters, a reference 200 and a customerId 100.",
+  RecordUpdate: "The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed. A name cannot be empty, and a status, reference or customerId is bounded as a new record's is.",
   Merchant: "A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags.",
   Workspace: "The caller's workspace: who is acting, in which role, whether they signed in, and the lenders and roles available.",
   Metric: "A named measurement with its unit and the basis it was derived from.",
@@ -214,7 +216,7 @@ schemas.QueuePage = {
       "type": "string"
     }
   },
-  "description": "A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states."
+  "description": "A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states: a deadline written as a day alone (YYYY-MM-DD) is due all that West Africa Time day and overdue once it ends, one with a time passes at that instant, and one that is not a real date is no deadline."
 };
 paths["/v1/queues/{queue}"] = {
   "get": {
@@ -349,7 +351,7 @@ schemas.CloseHistoryPage = obj({items:arr('ValopayRecord'),total:num,allTotal:nu
 schemas.CloseHistoryPage.description = 'Paged close summaries and first/latest closing positions for the entire WAT date range; full REC-07 evidence is fetched separately.';
 add('/v1/close-history','get','listCloseHistory','CloseHistoryPage',null,[merchant,...['from','to'].map(name=>({name,in:'query',schema:{type:'string',maxLength:10},description:'Inclusive date in YYYY-MM-DD format, in West Africa Time.'})),...pageParams]);
 describe('/v1/close-history','get','Page recorded daily closes','Newest first, with complete range counts and whole-range comparison endpoints. Missing historical measures remain absent. Invalid dates or reversed ranges are rejected.');
-add('/v1/close-history/{id}','get','getCloseDetail','ValopayRecord',null,[merchant,{name:'id',in:'path',required:true,schema:str,description:'Close record in the active lender.'}]);
+add('/v1/close-history/{id}','get','getCloseDetail','ValopayRecord',null,[merchant,{name:'id',in:'path',required:true,schema:idSchema,description:'Close record in the active lender.'}]);
 describe('/v1/close-history/{id}','get','Read the evidence for one recorded close','Returns the full immutable close report on demand within the current lender.');
 paths['/v1/reports'].get.parameters.push({name:'includeCloses',in:'query',schema:{type:'string',enum:['true','false']},description:'Default true for compatibility. The console passes false and loads paged close summaries separately.'});
 
@@ -359,7 +361,7 @@ schemas.CustomerHistoryCounts=obj(Object.fromEntries(historySections.map(key=>[k
 schemas.CustomerHistoryCounts.description='Complete counts or actual offsets for the four customer-history sections.';
 schemas.CustomerHistory=obj({...schemas.Timeline.properties,totals:ref('CustomerHistoryCounts'),offsets:ref('CustomerHistoryCounts'),focusedRecord:ref('ValopayRecord')},[...schemas.Timeline.required,'totals','offsets']);
 schemas.CustomerHistory.description='Bounded pages of customer records with balances derived from every related record, full section counts and an optional lender-scoped selected record.';
-add('/v1/customers/{id}/history','get','getCustomerHistory','CustomerHistory',null,[merchant,{name:'id',in:'path',required:true,schema:str,description:'Customer in the active lender.'},{name:'record',in:'query',schema:{type:'string',maxLength:200},description:'Optional selected history record; must belong to this customer and lender.'},...historySections.flatMap(section=>pageParams.map(p=>({...p,name:section+p.name[0].toUpperCase()+p.name.slice(1)})))]);
+add('/v1/customers/{id}/history','get','getCustomerHistory','CustomerHistory',null,[merchant,{name:'id',in:'path',required:true,schema:idSchema,description:'Customer in the active lender.'},{name:'record',in:'query',schema:{type:'string',maxLength:200},description:'Optional selected history record; must belong to this customer and lender.'},...historySections.flatMap(section=>pageParams.map(p=>({...p,name:section+p.name[0].toUpperCase()+p.name.slice(1)})))]);
 describe('/v1/customers/{id}/history','get','Page a customer history with complete balances','Each section is independently paged in SQL, newest first with stable ID ordering. Counts and monetary aggregates are calculated before paging; no partial state may be written. Unknown customers return 404. The existing timeline endpoint retains its full-history contract.');
 // ---- Console-facing operations: shapes from the shared zod definitions ----
 // Their request and response shapes are the shared zod definitions in lib/valopay-schema,
@@ -474,6 +476,11 @@ twin("ImportResult", shared.importResultSchema);
 twin("EffectiveCloseSchedule", shared.effectiveCloseScheduleSchema);
 twin("Settings", shared.settingsViewSchema);
 twin("ExportResult", shared.exportResultSchema);
+// A record's name is never empty, and its indexed text is bounded (recordTextLimits): an over-long value is refused, naming its field, before anything is saved.
+for (const name of ["RecordInput", "RecordUpdate"]) {
+  schemas[name].properties.name = { type: "string", minLength: 1 };
+  for (const field of ["status", "reference", "customerId"]) schemas[name].properties[field] = { type: "string", maxLength: shared.recordTextLimits[field] };
+}
 const journalOffset = { name: "offset", in: "query", schema: { type: "integer", minimum: 0, maximum: 100000 }, description: "Rows to skip in the newest-first order; pages hold 25 rows." };
 const operation = (path, method, id, response, body, params, summary, description) => { add(path, method, id, response, body, params); describe(path, method, summary, description); };
 
@@ -618,11 +625,11 @@ operation("/v1/sources/events/{id}/replay", "post", "replayProviderEvent", "Prov
 described("PaystackTestEvent", obj({ event: str, data: { type: "object", additionalProperties: {}, description: "The event's payload as Paystack sent it." } }), "A Paystack test event exactly as Paystack signed it. The signature covers these bytes, so the body is authenticated before it is parsed. charge.success and the two direct-debit authorisation events are recorded; any other signed event is acknowledged and recorded as ignored.");
 described("PaystackDeliveryReceipt", obj({ accepted: { type: "boolean", const: true }, duplicate: bool }), "The acknowledgement Paystack receives: the signed event is saved in the mapped lender's inbox, or recognised as a repeat delivery of one already saved.");
 const connectionIdParam = { name: "connectionId", in: "path", required: true, schema: { type: "string", pattern: "^[a-f0-9]{64}$" }, description: "The opaque ID an operator mapped to one synthetic lender in VALOPAY_PAYSTACK_CONNECTIONS; it alone selects the lender, and it is not a credential." };
-const paystackSignature = { name: "x-paystack-signature", in: "header", required: true, schema: { type: "string", pattern: "^[a-fA-F0-9]{128}$" }, description: "HMAC-SHA512 of the exact request bytes under the configured test secret key, in hexadecimal." };
-operation("/v1/providers/paystack/{connectionId}/events", "post", "receivePaystackTestEvent", "PaystackDeliveryReceipt", "PaystackTestEvent", [connectionIdParam, paystackSignature], "Receive a signed Paystack test event", "The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the raw bytes before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key. At most 120 deliveries a minute per client network and, once signed, 60 a minute per connection. A repeat of a saved event is acknowledged without an audit entry, and its delivery count is written at most once a minute.");
+const paystackSignature = { name: "x-paystack-signature", in: "header", required: true, schema: { type: "string", pattern: "^[a-fA-F0-9]{128}$" }, description: "HMAC-SHA512, under the configured test secret key and in hexadecimal, of the body's exact bytes: the JSON as sent, or, for a body sent with Content-Encoding gzip, deflate or br, the JSON bytes after decompression (not the compressed bytes); any other encoding is refused (415)." };
+operation("/v1/providers/paystack/{connectionId}/events", "post", "receivePaystackTestEvent", "PaystackDeliveryReceipt", "PaystackTestEvent", [connectionIdParam, paystackSignature], "Receive a signed Paystack test event", "The address to register as the webhook URL of a Paystack test account. Off unless the host sets VALOPAY_PAYSTACK_INGRESS to test. The signature is checked on the body's bytes, decompressed first when its Content-Encoding is gzip, deflate or br, before any lender is locked or read, so a forged or tampered delivery gets 401 and nothing else. A verified event is saved as test-mode evidence only: it creates no payment, allocation, debit or mandate authority, and still needs independent verification. Not a console call: no sandbox, sign-in or Idempotency-Key. At most 120 deliveries a minute per client network and, once signed, 60 a minute per connection. A repeat of a saved event is acknowledged without an audit entry, and its delivery count is written at most once a minute.");
 Object.assign(paths["/v1/providers/paystack/{connectionId}/events"].post.responses, {
   "400": { description: "The body is not JSON bytes, the connection ID is malformed, or the signed event is inconsistent or from live mode" },
-  "401": { description: "The signature does not match the exact bytes under the configured test key; nothing was locked, read or saved" },
+  "401": { description: "The signature does not match the body's bytes (decompressed first, when the body is compressed) under the configured test key; nothing was locked, read or saved" },
   "403": { description: "With the lender locked, the mapping names another workspace, or the lender is not a synthetic lender in sandbox or observation mode with its kill switch on" },
   "404": { description: "No lender is mapped to this connection ID, or, when the lender cannot be locked, it is not in the mapped workspace (removed, or the mapping names the wrong lender or workspace); correct the connection mapping, since delivering again will not help" },
   "413": { description: "The body is larger than 256 KiB" },
@@ -668,7 +675,7 @@ const failures = {
   400: "Refused: a parameter, header or body field failed validation (details names at most 20 of them, detailCount how many there were), the path's percent-encoding cannot be decoded, the body is not valid JSON, cannot be decompressed, is nested more than 32 levels deep or holds a NUL character or an unpaired surrogate, or a rule refused the request in its own words. Nothing was saved.",
   401: "Sign-in required: a staff host answers only a signed-in pilot staff session.",
   403: "Refused: another origin, or the caller's role, membership, lender access, recent MFA or a readiness gate does not allow it.",
-  404: "Not found in the caller's workspace: the lender, or what the path names.",
+  404: "Not found in the caller's workspace: the lender, or a record the path or the body names (an action's recordId, a customerId, a linked record, an export's close review, a retention run).",
   409: "Conflict: what the request names changed since it was read, its Idempotency-Key belongs to another request or its journal entry is cancelled, or the change conflicts with saved records. Nothing was saved.",
   410: "Gone: a request with this Idempotency-Key already completed, and the lender's retention policy has since removed its stored result, so it cannot run again. Its entry in Operations remains.",
   413: "The body is larger than 2 MB.",
@@ -680,6 +687,9 @@ const failures = {
   504: "Private storage did not answer in time; nothing was sent.",
 };
 const retryAfter = (description) => ({ "Retry-After": { description, schema: { type: "integer", minimum: 1 } } });
+/** The journal entry a keyed request is recorded under, on every answer once the entry exists (lib/operation-recovery.ts); each answer refers to the one component. */
+const headers = { "X-Valopay-Operation": { description: "The id of this request's entry in the operations journal: GET /v1/operations lists it, and POST /v1/operations/{id}/retry and /cancel take it. Sent on every answer, success, refusal or failure, to a request whose Idempotency-Key the journal records, once the entry exists; absent without a key, when the key itself is refused, and for a demo role switch, which the journal does not record.", schema: { type: "string" } } };
+const operationHeader = { "X-Valopay-Operation": { $ref: "#/components/headers/X-Valopay-Operation" } };
 const outsideWorkspace = new Set(["GET /healthz", "GET /readyz", "GET /v1/openapi.json", "POST /v1/webhooks/{provider}", "POST /v1/team/verify", "POST /v1/team/accept", "POST /v1/providers/paystack/{connectionId}/events"]);
 /** Statuses a route answers beyond what its traits imply. */
 const ownStatuses = {
@@ -732,8 +742,14 @@ function listErrorAnswers(path, method, op) {
     if (status === 429) answer.headers = retryAfter429(name);
     if (status === 503) answer.headers = retryAfter("Seconds to wait before trying again: sent when a database limit turned the request away, the same request is still running, or private storage or the identity provider could not be reached or said it is unavailable; absent when a service it needs is not configured, or the key service cannot open protected data.");
   }
+  // A journaled request names its journal entry on every answer; a retry re-enters the entry it names.
+  if (params.some((item) => journaled.has(item)) || name === "POST /v1/operations/{id}/retry") for (const answer of Object.values(op.responses)) answer.headers = { ...(answer.headers ?? {}), ...operationHeader };
   op.responses = Object.fromEntries(Object.entries(op.responses).sort(([a], [b]) => Number(a) - Number(b)));
 }
 for (const [path, methods] of Object.entries(paths)) for (const [method, op] of Object.entries(methods)) listErrorAnswers(path, method, op);
 
-fs.writeFileSync("lib/api-spec/openapi.json",JSON.stringify({openapi:"3.1.0",info:{title:"Valo Pay sandbox API",version:"1.1.0",description:"Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules."},servers:[{url:"/api"}],paths,components:{schemas}},null,2));
+// How a caller is identified: an anonymous sandbox by its cookie, which the service sets on the first visit and renews on every answer; a staff host by a signed-in session instead.
+const securitySchemes = {
+  sandboxCookie: { type: "apiKey", in: "cookie", name: "__Host-valopay_sandbox", description: "The anonymous sandbox's cookie: a 32-byte random token in hexadecimal that the service sets on the first visit (GET /v1/workspace) and renews on every answer, HttpOnly, SameSite=Lax and lasting 30 days from the last visit. Behind TLS it is __Host-valopay_sandbox (Secure, Path=/, no Domain); on a plain-HTTP local run it is valopay_sandbox. A missing or malformed token starts a new sandbox; two different tokens are refused (400). The sandbox is found by the token's digest, never by the token, which is never stored or logged. A staff host identifies a signed-in session instead." },
+};
+fs.writeFileSync("lib/api-spec/openapi.json",JSON.stringify({openapi:"3.1.0",info:{title:"Valo Pay sandbox API",version:"1.1.0",description:"Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules."},servers:[{url:"/api"}],paths,components:{schemas,headers,securitySchemes}},null,2));

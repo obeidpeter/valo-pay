@@ -128,7 +128,8 @@ export function closeReviewList(state: DomainState) {
 }
 export function reviewedCloseEvidence(state: DomainState, id: string, requireCurrent = false) {
   const review = ofKind(state, 'close-reviews').find(r => r.id === id);
-  if (!review || review.status !== 'approved') refuse('Choose an approved Finance close review in this lender.', 409);
+  if (!review) refuse('Close review not found in this lender.', 404);
+  if (review.status !== 'approved') refuse('Choose an approved Finance close review in this lender.', 409);
   if (!review.data.snapshot || digest(review.data.snapshot) !== review.data.snapshotDigest) refuse('The reviewed close snapshot failed its integrity check.', 409);
   if (requireCurrent && !reviewIsCurrent(state, review)) refuse('This review is no longer current. Prepare and approve the latest close before exporting its evidence.', 409);
   return structuredClone(review);

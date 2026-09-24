@@ -43,6 +43,7 @@ const steps = [
   [tsx, ["artifacts/api-server/tests/runtime-isolation-policy.test.ts"]],
   [tsx, ["artifacts/api-server/tests/paystack.test.ts"]],
   [tsx, ["artifacts/api-server/tests/validation-golden.test.ts"]],
+  [tsx, ["artifacts/api-server/tests/input-semantics.test.ts"]],
   [tsx, ["artifacts/api-server/tests/retry-engine-golden.test.ts"]],
   [tsx, ["artifacts/api-server/tests/reconciliation-golden.test.ts"]],
   [tsx, ["artifacts/api-server/tests/measurement-golden.test.ts"]],
