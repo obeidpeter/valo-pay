@@ -32,6 +32,8 @@ it("names what each request asked and the record it names, never more", async ()
     entry("pending-change", "pending", { summary: { action: "Change a record", targetKind: "customers", targetId: "cus-1", details: [{ name: "Status", value: "inactive" }] } }),
     entry("pending-action", "pending", { summary: { action: "Mandate suspend", targetKind: "mandates", targetId: "mnd-1", details: [] } }),
     entry("pending-revoke", "pending", { summary: { action: "Connected banking: consent.revoke", targetKind: "connected-consents", targetId: "cst-1", details: [] } }),
+    entry("pending-export", "pending", { summary: { action: "Retry an export", targetKind: "exports", targetId: "exp-1", details: [] } }),
+    entry("pending-run", "pending", { summary: { action: "Approve a retention run", targetKind: "retention-runs", targetId: "run-1", details: [] } }),
     entry("sealed", "pending"),
   ]);
   renderApp("/operations");
@@ -43,6 +45,9 @@ it("names what each request asked and the record it names, never more", async ()
   const action = card("Mandate suspend");
   expect(within(action).getByRole("link", { name: "Open the record" }).getAttribute("href")).toBe(`/mandates?record=mnd-1&lender=${api.merchantIds[0]}#record-mnd-1`);
   expect(within(card("Connected banking: consent.revoke")).getByRole("link", { name: "Open the record" }).getAttribute("href")).toBe("/connections");
+  // The export or run itself, not the newest one its page lists.
+  expect(within(card("Retry an export")).getByRole("link", { name: "Open the record" }).getAttribute("href")).toBe("/exports?job=exp-1");
+  expect(within(card("Approve a retention run")).getByRole("link", { name: "Open the record" }).getAttribute("href")).toBe("/lifecycle?run=run-1");
   // A sealed request has no summary: its label stands in.
   expect(card("Save sealed").textContent).not.toContain("Open the record");
 });
@@ -56,7 +61,8 @@ it("opens the saved result of every record kind that has a page", async () => {
     ["due-items", `/reconciliation?dueItem=r-due-items&lender=${lender}#record-r-due-items`],
     ["import-batches", "/imports?batch=r-import-batches"],
     ["import-corrections", "/imports"],
-    ["exports", "/exports"],
+    // Saved exports and Data retention open one export or run by its ID; their lists begin with the newest.
+    ["exports", "/exports?job=r-exports"],
     ["closes", "/reports?view=operations#daily-closes"],
     ["close-reviews", "/close-review"],
     ["payments", "/reconciliation"],
@@ -67,7 +73,7 @@ it("opens the saved result of every record kind that has a page", async () => {
     ["evidence", "/evidence"],
     ["source-profiles", "/sources"],
     ["provider-events", "/sources"],
-    ["retention-runs", "/lifecycle"],
+    ["retention-runs", "/lifecycle?run=r-retention-runs"],
     ["work-events", "/work"],
     // Connected-banking permissions are granted and revoked on Permissions & readiness, not on Pay-by-bank.
     ["connected-consents", "/connections"],

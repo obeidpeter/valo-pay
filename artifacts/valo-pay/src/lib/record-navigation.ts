@@ -45,15 +45,18 @@ const recordPages: Record<string, (id: string, lender: string) => string> = {
   mandates: (id, lender) => `/mandates?${new URLSearchParams({ record: id, lender })}#record-${encodeURIComponent(id)}`,
   'due-items': (id, lender) => `/reconciliation?${new URLSearchParams({ dueItem: id, lender })}#record-${encodeURIComponent(id)}`,
   'import-batches': (id) => `/imports?${new URLSearchParams({ batch: id })}`,
+  // Without its ID, Saved exports selects the newest export and Data retention lists only the ten newest runs.
+  exports: (id) => `/exports?${new URLSearchParams({ job: id })}`,
+  'retention-runs': (id) => `/lifecycle?${new URLSearchParams({ run: id })}`,
 };
 /** Kinds whose page lists them, without opening one. */
 const listPages: Record<string, string> = {
-  'import-corrections': '/imports', exports: '/exports', closes: '/reports?view=operations#daily-closes', 'close-reviews': '/close-review',
+  'import-corrections': '/imports', closes: '/reports?view=operations#daily-closes', 'close-reviews': '/close-review',
   payments: '/reconciliation', allocations: '/reconciliation', 'settlement-batches': '/reconciliation', observations: '/reconciliation',
   attempts: '/collections', policies: '/policies', templates: '/policies', reviews: '/evidence', evidence: '/evidence', commercial: '/evidence',
   experiments: '/reports', invoices: '/reports', cutovers: '/settings', 'work-events': '/work',
   'source-profiles': '/sources', 'source-manifests': '/sources', 'provider-events': '/sources',
-  'retention-policies': '/lifecycle', 'retention-holds': '/lifecycle', 'retention-runs': '/lifecycle',
+  'retention-policies': '/lifecycle', 'retention-holds': '/lifecycle',
   'connected-consents': '/connections', 'connected-intents': '/pay-by-bank', 'connected-credit-assessments': '/credit-desk', 'connected-credit-reviews': '/credit-desk',
   'connected-cash-workspace': '/cash-desk', 'connected-cash-forecasts': '/cash-desk', 'connected-cash-erp': '/cash-desk', 'connected-cash-vat': '/cash-desk', 'connected-cash-payroll': '/cash-desk',
 };
