@@ -1073,6 +1073,11 @@ section("a counted-twice report an earlier build carried only in its notes", () 
   close(resolved.state, "2027-07-03T08:00:00");
   close(resolved.state, "2027-07-04T08:00:00");
   equal(exceptionsFor(resolved.state, resolved.b2.id, "settlement_variance").map((item) => [item.status, item.data.condition]), [["resolved", live(resolved.state, resolved.carrier).data.condition]], "a report Finance resolved with the exception that carried it is not raised again after the upgrade");
+  // The provider lists X1 in B2 once more: that line is reported on its own, and its report never takes the settled one.
+  const third = addObservation(resolved.state, { reference: "PSK-X1", amountKobo: resolved.again.amountKobo, grossAmountKobo: resolved.again.data.grossAmountKobo, feeKobo: resolved.again.data.feeKobo, batchReference: "B2", source: "settlement", customerId: resolved.again.customerId, eventId: "s-x1-third", occurredAt: wat("2027-07-04T07:00:00") });
+  close(resolved.state, "2027-07-05T08:00:00");
+  close(resolved.state, "2027-07-06T08:00:00");
+  equal(exceptionsFor(resolved.state, resolved.b2.id, "settlement_variance").filter(isOpen).map((item) => [item.data.condition, item.data.countedTwice]), [[`settlement_variance:${resolved.b2.id}:line:${third.id}`, undefined]], "a later line of the same collection is reported on its own, carrying nothing it did not raise");
   // Still open at the upgrade: the first reconciliation lists the report in countedTwice, as this build carries one.
   const open = earlier("notes-open");
   close(open.state, "2027-07-02T10:00:00");
