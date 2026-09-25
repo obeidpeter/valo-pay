@@ -1,5 +1,5 @@
 import type { OtherCurrencies } from '@workspace/api-client-react';
-import { currencyMinorUnit, smallestUnitText } from '@workspace/valopay-schema';
+import { currencyMinorUnit, importFieldsOf, smallestUnitText } from '@workspace/valopay-schema';
 import { MARKET_LOCALE, formatCount, formatKobo, formatNumber } from './formatters';
 
 /**
@@ -48,9 +48,13 @@ export function formatMinor(amount: number, currency: string): string {
     .join('');
 }
 
-/** A record's money in the currency it names (a payment and its evidence can be in another than naira), naira otherwise. */
-export function formatRecordMoney(record: { data?: { currency?: unknown } | null } | null | undefined, amount: number): string {
-  return formatMinor(amount, String(record?.data?.currency || 'NGN'));
+/**
+ * A record's money in the currency it names when its kind has a currency field (a payment and its evidence, a settlement
+ * batch, an exception about money in another currency), naira otherwise: a currency column imported with instalments,
+ * mandates or attempts is kept as detail, and their amounts are read and held in kobo whatever it says.
+ */
+export function formatRecordMoney(record: { kind: string; data?: { currency?: unknown } | null } | null | undefined, amount: number): string {
+  return formatMinor(amount, String((record && importFieldsOf(record.kind).includes('currency') && record.data?.currency) || 'NGN'));
 }
 
 /**

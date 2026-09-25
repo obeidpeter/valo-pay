@@ -5,6 +5,7 @@ import { saveSourceManifest, sourceCompleteness, sourceFileId, watBusinessDate }
 import { saveImportBatch, commitImportBatch } from "../src/domain/pilot-workflow";
 import { bindCloseReviewBasis, prepareCloseReview, closeReviewIssues, decideCloseReview, reviewIsCurrent, closeReviewCurrentProblem } from "../src/domain/close-review";
 import type { DomainState } from "../src/domain/types";
+import { sourceCompletenessSchema } from "@workspace/valopay-schema";
 
 const ctx = { actor:"Clerk:operator",principalId:"operator",role:"Operations",now:"2026-09-23T09:00:00.000Z" }, finance={...ctx,actor:"Clerk:finance",principalId:"finance",role:"Finance"};
 const date="2026-09-22", file={source:"loan-system",sourceBatchId:"customers-2026-09-22",kind:"customers" as const,expectedRows:1,expectedAmountKobo:0};
@@ -71,6 +72,23 @@ assert.equal(watBusinessDate("2026-09-21T23:30:00.000Z"),date);
   makeRecord(state,"source-profiles",{status:"active",data:{source:"future-feed",kind:"payments",firstExpectedAt:"2026-09-25T08:00:00.000Z"}});
   assert.equal(sourceCompleteness(state,date).issues.some(issue=>/future-feed/.test(issue.label)),false,"A profile expecting its first delivery after this business date has nothing to declare for it.");
   assert.equal(sourceCompleteness(state,"2026-09-25").issues.some(issue=>/future-feed/.test(issue.label)),true);
+}
+{
+  // Integration fix: a declared total is in naira, so it is compared with the file's naira rows only, and a file with
+  // rows in another currency says so and lists them beside what it received, never adding them to the naira total.
+  const state=fresh(), evidence={source:"card-feed",sourceBatchId:"cards-2026-09-22",kind:"observations" as const,expectedRows:3,expectedAmountKobo:1000};
+  saveSourceManifest(state,ctx,{...declaration,files:[evidence]});
+  const quality={profileId:null,profileVersion:null,sourceRows:3,sourceAmountKobo:1000,importedRows:3,importedAmountKobo:1000,duplicateRows:0,conflictRows:0,invalidRows:0,status:"checked" as const,issues:[]};
+  const batch=makeRecord(state,"import-batches",{status:"committed",data:{...evidence,businessDate:date,sourceExpectationId:sourceFileId(date,evidence),sourceQuality:quality}});
+  const naira=sourceCompleteness(state,date);
+  assert.equal(naira.files[0].status,"complete");
+  assert.equal("receivedOtherCurrencies" in naira.files[0],false,"a file in naira alone lists no other currency, so the evidence a close recorded before this is unchanged");
+  batch.data.sourceQuality={...quality,sourceOtherCurrencies:{JPY:{count:1,amount:1000},USD:{count:1,amount:1000}}};
+  const mixed=sourceCompleteness(state,date);
+  assert.deepEqual([mixed.files[0].status,mixed.files[0].receivedAmountKobo,mixed.files[0].receivedOtherCurrencies],["incomplete",1000,{JPY:{count:1,amount:1000},USD:{count:1,amount:1000}}]);
+  assert.deepEqual(mixed.files[0].problems,["The declared total is in naira, so it is compared with the naira rows only; this file also has JPY 1,000 and USD 10.00 in other currencies, which no declared total covers."]);
+  assert.notEqual(mixed.basisDigest,naira.basisDigest);
+  assert.equal(sourceCompletenessSchema.safeParse(mixed).success,true);
 }
 {
   const state=fresh();saveSourceManifest(state,ctx,{...declaration,files:[],noFilesExpected:true});

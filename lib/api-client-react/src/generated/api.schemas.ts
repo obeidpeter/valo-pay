@@ -129,7 +129,7 @@ export interface ReadinessStatus {
 export interface RecordData {[key: string]: unknown}
 
 /**
- * A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency's minor units (cents for USD).
+ * A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency's minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount's currency: that amount is in kobo.
  */
 export interface ValopayRecord {
   id: string;
@@ -3079,6 +3079,19 @@ export const SourceCompletenessFilesItemKind = {
   observations: 'observations',
 } as const;
 
+export type SourceCompletenessFilesItemReceivedOtherCurrencies = {[key: string]: {
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  count: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  amount: number;
+}};
+
 export type SourceCompletenessFilesItemStatus = typeof SourceCompletenessFilesItemStatus[keyof typeof SourceCompletenessFilesItemStatus];
 
 
@@ -3130,6 +3143,7 @@ export type SourceCompletenessFilesItem = {
      * @nullable
      */
   receivedAmountKobo: number | null;
+  receivedOtherCurrencies?: SourceCompletenessFilesItemReceivedOtherCurrencies;
   status: SourceCompletenessFilesItemStatus;
   problems: string[];
 };
@@ -3164,7 +3178,7 @@ export type SourceCompletenessIssuesItem = {
 };
 
 /**
- * Whether the declared source files for a business date arrived complete, with each file's state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer.
+ * Whether the declared source files for a business date arrived complete, with each file's state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer. A declared total is in naira and is compared with the file's naira rows (receivedAmountKobo); money in other currencies is listed beside it (receivedOtherCurrencies, only when there is some), never added to it, and leaves the file incomplete. A file whose batch was committed before 25 September 2026 is compared with the total it was committed with, which may add rows in other currencies.
  */
 export interface SourceCompleteness {
   /** @pattern ^\d{4}-\d{2}-\d{2}$ */
@@ -3190,6 +3204,32 @@ export interface SourceCompleteness {
   completeFiles: number;
 }
 
+export type SourceBatchQualitySourceOtherCurrencies = {[key: string]: {
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  count: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  amount: number;
+}};
+
+export type SourceBatchQualityImportedOtherCurrencies = {[key: string]: {
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  count: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  amount: number;
+}};
+
 export type SourceBatchQualityStatus = typeof SourceBatchQualityStatus[keyof typeof SourceBatchQualityStatus];
 
 
@@ -3200,7 +3240,7 @@ export const SourceBatchQualityStatus = {
 } as const;
 
 /**
- * The original committed totals and checks of a source batch.
+ * The original committed totals and checks of a source batch. sourceAmountKobo and importedAmountKobo sum the naira rows only (a row that names no currency is naira); money in other currencies is listed beside each (sourceOtherCurrencies, importedOtherCurrencies: by code, the rows and their amount in that currency's minor unit, only when there are some), never added to it. A batch committed before 25 September 2026 keeps the totals it was committed with, which may add rows in other currencies.
  */
 export interface SourceBatchQuality {
   /** @nullable */
@@ -3218,6 +3258,7 @@ export interface SourceBatchQuality {
      * @nullable
      */
   sourceAmountKobo: number | null;
+  sourceOtherCurrencies?: SourceBatchQualitySourceOtherCurrencies;
   /**
      * @minimum 0
      * @maximum 9007199254740991
@@ -3229,6 +3270,7 @@ export interface SourceBatchQuality {
      * @nullable
      */
   importedAmountKobo: number | null;
+  importedOtherCurrencies?: SourceBatchQualityImportedOtherCurrencies;
   /**
      * @minimum 0
      * @maximum 9007199254740991

@@ -128,7 +128,7 @@ export const GetOverviewResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "upcoming": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -141,7 +141,7 @@ export const GetOverviewResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "mode": zod.string(),
   "environment": zod.string(),
   "lastClose": zod.string(),
@@ -221,7 +221,7 @@ export const ListRecordsResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "total": zod.number().int(),
   "nextOffset": zod.number().int().optional()
 }).describe('One page of records with the filtered total; nextOffset is present while more rows remain.')
@@ -284,7 +284,7 @@ export const CreateRecordResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')
 
 
 /**
@@ -351,7 +351,7 @@ export const UpdateRecordResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')
 
 
 /**
@@ -397,7 +397,7 @@ export const PerformActionResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).optional().describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).'),
+}).optional().describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.'),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
 }).describe('What an action did, in words, with the record it produced or changed and any data it returns.')
 
@@ -491,7 +491,7 @@ export const GetCustomerTimelineResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).'),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.'),
   "position": zod.object({
   "obligationsKobo": zod.number().int(),
   "allocatedKobo": zod.number().int(),
@@ -515,7 +515,7 @@ export const GetCustomerTimelineResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "mandates": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -528,7 +528,7 @@ export const GetCustomerTimelineResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "dueItems": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -541,7 +541,7 @@ export const GetCustomerTimelineResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "payments": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -554,7 +554,7 @@ export const GetCustomerTimelineResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).'))
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.'))
 }).describe('A customer, their derived position, and every related event, mandate, due item and payment.')
 
 
@@ -594,7 +594,7 @@ export const GetReportsResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).'))
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.'))
 }).describe('The reports: metrics, billing, the experiment, operational measurement and the daily closes.')
 
 
@@ -673,7 +673,7 @@ export const GetSettingsResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "members": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -686,7 +686,7 @@ export const GetSettingsResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "calendar": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -699,7 +699,7 @@ export const GetSettingsResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "closeSchedule": zod.object({
   "time": zod.string(),
   "enabled": zod.boolean(),
@@ -789,7 +789,7 @@ export const UpdateSettingsResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "members": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -802,7 +802,7 @@ export const UpdateSettingsResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "calendar": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -815,7 +815,7 @@ export const UpdateSettingsResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "closeSchedule": zod.object({
   "time": zod.string(),
   "enabled": zod.boolean(),
@@ -1090,7 +1090,7 @@ export const ListQueueResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "related": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -1103,7 +1103,7 @@ export const ListQueueResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "total": zod.number().int().min(listQueueResponseTotalMin),
   "offset": zod.number().int().min(listQueueResponseOffsetMin),
   "counts": zod.record(zod.string(), zod.number().int().min(listQueueResponseCountsMinOne)),
@@ -1155,7 +1155,7 @@ export const ListReconciliationResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "related": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -1168,7 +1168,7 @@ export const ListReconciliationResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "total": zod.number().int(),
   "offset": zod.number().int(),
   "asOf": zod.string(),
@@ -1214,7 +1214,7 @@ export const ListCloseHistoryResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "total": zod.number().int(),
   "allTotal": zod.number().int(),
   "offset": zod.number().int(),
@@ -1230,7 +1230,7 @@ export const ListCloseHistoryResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).optional().describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).'),
+}).optional().describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.'),
   "latest": zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -1243,7 +1243,7 @@ export const ListCloseHistoryResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).optional().describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')
+}).optional().describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')
 }).describe('Paged close summaries and first/latest closing positions for the entire WAT date range; full REC-07 evidence is fetched separately.')
 
 
@@ -1279,7 +1279,7 @@ export const GetCloseDetailResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')
 
 
 /**
@@ -1346,7 +1346,7 @@ export const GetCustomerHistoryResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).'),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.'),
   "position": zod.object({
   "obligationsKobo": zod.number().int(),
   "allocatedKobo": zod.number().int(),
@@ -1370,7 +1370,7 @@ export const GetCustomerHistoryResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "mandates": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -1383,7 +1383,7 @@ export const GetCustomerHistoryResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "dueItems": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -1396,7 +1396,7 @@ export const GetCustomerHistoryResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "payments": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -1409,7 +1409,7 @@ export const GetCustomerHistoryResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "totals": zod.object({
   "events": zod.number().int(),
   "mandates": zod.number().int(),
@@ -1434,7 +1434,7 @@ export const GetCustomerHistoryResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).optional().describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')
+}).optional().describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')
 }).describe('Bounded pages of customer records with balances derived from every related record, full section counts and an optional lender-scoped selected record.')
 
 
@@ -1501,7 +1501,7 @@ export const GetConnectedWorkspaceResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).').and(zod.object({
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.').and(zod.object({
   "effectiveStatus": zod.enum(['active', 'revoked', 'expired'])
 }))),
   "purposes": zod.array(zod.object({
@@ -1528,7 +1528,7 @@ export const GetConnectedWorkspaceResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "dues": zod.array(zod.object({
   "id": zod.string(),
   "name": zod.string(),
@@ -2110,7 +2110,7 @@ export const PerformConnectedActionResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).'),zod.object({
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.'),zod.object({
   "message": zod.string(),
   "record": zod.object({
   "id": zod.string(),
@@ -2124,7 +2124,7 @@ export const PerformConnectedActionResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).optional().describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).'),
+}).optional().describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.'),
   "data": zod.object({
   "manifest": zod.union([zod.object({
   "schema": zod.literal("valo.erp.review-export.v1"),
@@ -2465,7 +2465,7 @@ export const ListImportBatchesResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')).max(listImportBatchesResponseItemsMax),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')).max(listImportBatchesResponseItemsMax),
   "total": zod.number().int().min(listImportBatchesResponseTotalMin),
   "offset": zod.number().int().min(listImportBatchesResponseOffsetMin)
 }).describe('Import batches newest first, 25 a page, with their source identity, quality totals and check counts but not their rows. A batch saved before check summaries were stored is listed without check counts while the key service cannot open its check.')
@@ -2536,7 +2536,7 @@ export const SaveImportBatchResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')
 
 
 /**
@@ -2572,7 +2572,7 @@ export const GetImportBatchResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).'),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.'),
   "revisions": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -2585,7 +2585,7 @@ export const GetImportBatchResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).'))
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.'))
 }).describe('One batch with its source rows (import operator roles only) and every saved revision.')
 
 
@@ -2662,7 +2662,7 @@ export const SaveImportBatchRevisionResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')
 
 
 /**
@@ -2710,7 +2710,7 @@ export const CommitImportBatchResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')
 
 
 /**
@@ -2746,7 +2746,7 @@ export const GetCaseResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).'),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.'),
   "assignees": zod.array(zod.object({
   "actor": zod.string(),
   "name": zod.string(),
@@ -2764,7 +2764,7 @@ export const GetCaseResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')),
   "evidence": zod.array(zod.object({
   "id": zod.string(),
   "name": zod.string(),
@@ -2840,7 +2840,7 @@ export const CoordinateCaseResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')
 
 
 /**
@@ -3277,7 +3277,7 @@ export const ListCloseReviewsResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).'),
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.'),
   "issues": zod.array(zod.object({
   "id": zod.string(),
   "label": zod.string(),
@@ -3298,7 +3298,7 @@ export const ListCloseReviewsResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).').and(zod.object({
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.').and(zod.object({
   "current": zod.boolean()
 })).describe('A close review record with whether its snapshot still matches the close and its source evidence.'))
 }).describe('One close with the discrepancies a reviewer must answer, why it cannot be reviewed now (if so), pending financial corrections and its reviews.')).max(listCloseReviewsResponseClosesMax),
@@ -3378,7 +3378,7 @@ export const PrepareCloseReviewResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')
 
 
 /**
@@ -3449,7 +3449,7 @@ export const DecideCloseReviewResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')
 
 
 /**
@@ -3842,6 +3842,12 @@ export const getSourcesResponseCompletenessFilesItemReceivedRowsMax = 9007199254
 export const getSourcesResponseCompletenessFilesItemReceivedAmountKoboMin = 0;
 export const getSourcesResponseCompletenessFilesItemReceivedAmountKoboMax = 9007199254740991;
 
+export const getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesCountMin = 0;
+export const getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesCountMax = 9007199254740991;
+
+export const getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesAmountMin = 0;
+export const getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesAmountMax = 9007199254740991;
+
 export const getSourcesResponseCompletenessBasisDigestRegExp = new RegExp('^[a-f0-9]{64}$');
 export const getSourcesResponseCompletenessExpectedFilesMin = 0;
 export const getSourcesResponseCompletenessExpectedFilesMax = 9007199254740991;
@@ -3858,11 +3864,23 @@ export const getSourcesResponseBatchesItemQualitySourceRowsMax = 900719925474099
 export const getSourcesResponseBatchesItemQualitySourceAmountKoboMin = 0;
 export const getSourcesResponseBatchesItemQualitySourceAmountKoboMax = 9007199254740991;
 
+export const getSourcesResponseBatchesItemQualitySourceOtherCurrenciesCountMin = 0;
+export const getSourcesResponseBatchesItemQualitySourceOtherCurrenciesCountMax = 9007199254740991;
+
+export const getSourcesResponseBatchesItemQualitySourceOtherCurrenciesAmountMin = 0;
+export const getSourcesResponseBatchesItemQualitySourceOtherCurrenciesAmountMax = 9007199254740991;
+
 export const getSourcesResponseBatchesItemQualityImportedRowsMin = 0;
 export const getSourcesResponseBatchesItemQualityImportedRowsMax = 9007199254740991;
 
 export const getSourcesResponseBatchesItemQualityImportedAmountKoboMin = 0;
 export const getSourcesResponseBatchesItemQualityImportedAmountKoboMax = 9007199254740991;
+
+export const getSourcesResponseBatchesItemQualityImportedOtherCurrenciesCountMin = 0;
+export const getSourcesResponseBatchesItemQualityImportedOtherCurrenciesCountMax = 9007199254740991;
+
+export const getSourcesResponseBatchesItemQualityImportedOtherCurrenciesAmountMin = 0;
+export const getSourcesResponseBatchesItemQualityImportedOtherCurrenciesAmountMax = 9007199254740991;
 
 export const getSourcesResponseBatchesItemQualityDuplicateRowsMin = 0;
 export const getSourcesResponseBatchesItemQualityDuplicateRowsMax = 9007199254740991;
@@ -3927,6 +3945,10 @@ export const GetSourcesResponse = zod.object({
   "businessDate": zod.string().regex(getSourcesResponseCompletenessFilesItemBusinessDateRegExp).nullable(),
   "receivedRows": zod.number().int().min(getSourcesResponseCompletenessFilesItemReceivedRowsMin).max(getSourcesResponseCompletenessFilesItemReceivedRowsMax).nullable(),
   "receivedAmountKobo": zod.number().int().min(getSourcesResponseCompletenessFilesItemReceivedAmountKoboMin).max(getSourcesResponseCompletenessFilesItemReceivedAmountKoboMax).nullable(),
+  "receivedOtherCurrencies": zod.record(zod.string(), zod.object({
+  "count": zod.number().int().min(getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesCountMin).max(getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesCountMax),
+  "amount": zod.number().int().min(getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesAmountMin).max(getSourcesResponseCompletenessFilesItemReceivedOtherCurrenciesAmountMax)
+})).optional(),
   "status": zod.enum(['complete', 'incomplete']),
   "problems": zod.array(zod.string())
 })),
@@ -3952,7 +3974,7 @@ export const GetSourcesResponse = zod.object({
   "basisDigest": zod.string().regex(getSourcesResponseCompletenessBasisDigestRegExp),
   "expectedFiles": zod.number().int().min(getSourcesResponseCompletenessExpectedFilesMin).max(getSourcesResponseCompletenessExpectedFilesMax),
   "completeFiles": zod.number().int().min(getSourcesResponseCompletenessCompleteFilesMin).max(getSourcesResponseCompletenessCompleteFilesMax)
-}).describe('Whether the declared source files for a business date arrived complete, with each file\'s state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer.'),
+}).describe('Whether the declared source files for a business date arrived complete, with each file\'s state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer. A declared total is in naira and is compared with the file\'s naira rows (receivedAmountKobo); money in other currencies is listed beside it (receivedOtherCurrencies, only when there is some), never added to it, and leaves the file incomplete. A file whose batch was committed before 25 September 2026 is compared with the total it was committed with, which may add rows in other currencies.'),
   "profiles": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -3965,7 +3987,7 @@ export const GetSourcesResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).').and(zod.object({
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.').and(zod.object({
   "delivery": zod.object({
   "status": zod.enum(['paused', 'late', 'on_schedule', 'awaiting_first_delivery']),
   "missedDeliveries": zod.number().int().min(getSourcesResponseProfilesItemTwoDeliveryMissedDeliveriesMin).max(getSourcesResponseProfilesItemTwoDeliveryMissedDeliveriesMax),
@@ -3987,14 +4009,22 @@ export const GetSourcesResponse = zod.object({
   "profileVersion": zod.string().nullable(),
   "sourceRows": zod.number().int().min(getSourcesResponseBatchesItemQualitySourceRowsMin).max(getSourcesResponseBatchesItemQualitySourceRowsMax),
   "sourceAmountKobo": zod.number().int().min(getSourcesResponseBatchesItemQualitySourceAmountKoboMin).max(getSourcesResponseBatchesItemQualitySourceAmountKoboMax).nullable(),
+  "sourceOtherCurrencies": zod.record(zod.string(), zod.object({
+  "count": zod.number().int().min(getSourcesResponseBatchesItemQualitySourceOtherCurrenciesCountMin).max(getSourcesResponseBatchesItemQualitySourceOtherCurrenciesCountMax),
+  "amount": zod.number().int().min(getSourcesResponseBatchesItemQualitySourceOtherCurrenciesAmountMin).max(getSourcesResponseBatchesItemQualitySourceOtherCurrenciesAmountMax)
+})).optional(),
   "importedRows": zod.number().int().min(getSourcesResponseBatchesItemQualityImportedRowsMin).max(getSourcesResponseBatchesItemQualityImportedRowsMax),
   "importedAmountKobo": zod.number().int().min(getSourcesResponseBatchesItemQualityImportedAmountKoboMin).max(getSourcesResponseBatchesItemQualityImportedAmountKoboMax).nullable(),
+  "importedOtherCurrencies": zod.record(zod.string(), zod.object({
+  "count": zod.number().int().min(getSourcesResponseBatchesItemQualityImportedOtherCurrenciesCountMin).max(getSourcesResponseBatchesItemQualityImportedOtherCurrenciesCountMax),
+  "amount": zod.number().int().min(getSourcesResponseBatchesItemQualityImportedOtherCurrenciesAmountMin).max(getSourcesResponseBatchesItemQualityImportedOtherCurrenciesAmountMax)
+})).optional(),
   "duplicateRows": zod.number().int().min(getSourcesResponseBatchesItemQualityDuplicateRowsMin).max(getSourcesResponseBatchesItemQualityDuplicateRowsMax),
   "conflictRows": zod.number().int().min(getSourcesResponseBatchesItemQualityConflictRowsMin).max(getSourcesResponseBatchesItemQualityConflictRowsMax),
   "invalidRows": zod.number().int().min(getSourcesResponseBatchesItemQualityInvalidRowsMin).max(getSourcesResponseBatchesItemQualityInvalidRowsMax),
   "status": zod.enum(['checked', 'needs_review', 'unavailable']),
   "issues": zod.array(zod.string())
-}).describe('The original committed totals and checks of a source batch.')
+}).describe('The original committed totals and checks of a source batch. sourceAmountKobo and importedAmountKobo sum the naira rows only (a row that names no currency is naira); money in other currencies is listed beside each (sourceOtherCurrencies, importedOtherCurrencies: by code, the rows and their amount in that currency\'s minor unit, only when there are some), never added to it. A batch committed before 25 September 2026 keeps the totals it was committed with, which may add rows in other currencies.')
 }).describe('A batch as the sources page lists it, with its original quality totals.')),
   "summary": zod.object({
   "lateSources": zod.number().int().min(getSourcesResponseSummaryLateSourcesMin).max(getSourcesResponseSummaryLateSourcesMax),
@@ -4104,7 +4134,7 @@ export const CreateSourceProfileResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')
 
 
 /**
@@ -4190,7 +4220,7 @@ export const SaveSourceProfileResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')
 
 
 /**
@@ -4266,7 +4296,7 @@ export const SaveSourceManifestResponse = zod.object({
   "createdAt": zod.string(),
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
-}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency\'s minor units (cents for USD).')
+}).describe('A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency\'s minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount\'s currency: that amount is in kobo.')
 
 
 /**

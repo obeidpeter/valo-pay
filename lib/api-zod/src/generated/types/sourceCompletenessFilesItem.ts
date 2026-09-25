@@ -6,6 +6,7 @@
  * OpenAPI spec version: 1.1.0
  */
 import type { SourceCompletenessFilesItemKind } from './sourceCompletenessFilesItemKind';
+import type { SourceCompletenessFilesItemReceivedOtherCurrencies } from './sourceCompletenessFilesItemReceivedOtherCurrencies';
 import type { SourceCompletenessFilesItemStatus } from './sourceCompletenessFilesItemStatus';
 
 export type SourceCompletenessFilesItem = {
@@ -51,6 +52,7 @@ export type SourceCompletenessFilesItem = {
      * @nullable
      */
   receivedAmountKobo: number | null;
+  receivedOtherCurrencies?: SourceCompletenessFilesItemReceivedOtherCurrencies;
   status: SourceCompletenessFilesItemStatus;
   problems: string[];
 };

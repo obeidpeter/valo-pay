@@ -3,6 +3,8 @@ import { instantInputSchema, valopayRecordSchema } from "./api";
 import { importKinds } from "./kinds";
 
 const safeCount = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+/** Source money in currencies other than naira, by code: how many rows and their amount in that currency's minor unit, never added to a naira total. */
+const otherCurrencies = z.record(z.object({ count: safeCount, amount: safeCount }));
 /** A real calendar date, interpreted as the lender's WAT business date. */
 export const businessDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => { const date = new Date(`${value}T00:00:00.000Z`); return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value; }, "Use a valid business date.");
 /** An expected original source file, independently declared for one business date. */
@@ -14,7 +16,7 @@ export type SourceManifestInput = z.infer<typeof sourceManifestInputSchema>;
 /** Date-specific completeness evidence exposed to operators and frozen in a close. */
 export const sourceCompletenessSchema = z.object({
   businessDate: businessDateSchema, manifest: z.object({ id: z.string(), updatedAt: z.string().datetime(), data: z.record(z.unknown()) }).nullable(),
-  files: z.array(expectedSourceFileSchema.extend({ id: z.string(), batchId: z.string().nullable(), batchStatus: z.string(), businessDate: businessDateSchema.nullable(), receivedRows: safeCount.nullable(), receivedAmountKobo: safeCount.nullable(), status: z.enum(["complete", "incomplete"]), problems: z.array(z.string()) })),
+  files: z.array(expectedSourceFileSchema.extend({ id: z.string(), batchId: z.string().nullable(), batchStatus: z.string(), businessDate: businessDateSchema.nullable(), receivedRows: safeCount.nullable(), receivedAmountKobo: safeCount.nullable(), receivedOtherCurrencies: otherCurrencies.optional(), status: z.enum(["complete", "incomplete"]), problems: z.array(z.string()) })),
   activeProfiles: z.array(z.object({ id: z.string(), source: z.string(), kind: z.string() })),
   undeclared: z.array(z.object({ id: z.string(), name: z.string(), status: z.string(), source: z.string(), sourceBatchId: z.string(), kind: z.string() })),
   status: z.enum(["complete", "incomplete"]), issues: z.array(z.object({ id: z.string(), label: z.string(), detail: z.string() })), basisDigest: z.string().regex(/^[a-f0-9]{64}$/), expectedFiles: safeCount, completeFiles: safeCount,
@@ -38,11 +40,14 @@ export const sourceProfileInputSchema = z.object({
 }).strict();
 /** Validated reusable mapping and delivery expectation. */
 export type SourceProfileInput = z.infer<typeof sourceProfileInputSchema>;
-/** Quality totals preserve the distinction between source rows and newly imported rows. */
+/**
+ * Quality totals preserve the distinction between source rows and newly imported rows. Each amount total sums naira
+ * only (a row that names no currency is naira); money in another currency is listed beside it, present only when there is some.
+ */
 export const sourceBatchQualitySchema = z.object({
   profileId: z.string().nullable(), profileVersion: z.string().nullable(),
-  sourceRows: safeCount, sourceAmountKobo: safeCount.nullable(),
-  importedRows: safeCount, importedAmountKobo: safeCount.nullable(),
+  sourceRows: safeCount, sourceAmountKobo: safeCount.nullable(), sourceOtherCurrencies: otherCurrencies.optional(),
+  importedRows: safeCount, importedAmountKobo: safeCount.nullable(), importedOtherCurrencies: otherCurrencies.optional(),
   duplicateRows: safeCount, conflictRows: safeCount, invalidRows: safeCount,
   status: z.enum(["checked", "needs_review", "unavailable"]),
   issues: z.array(z.string()),

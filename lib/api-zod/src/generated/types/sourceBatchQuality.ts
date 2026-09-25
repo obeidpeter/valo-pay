@@ -5,10 +5,12 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
+import type { SourceBatchQualityImportedOtherCurrencies } from './sourceBatchQualityImportedOtherCurrencies';
+import type { SourceBatchQualitySourceOtherCurrencies } from './sourceBatchQualitySourceOtherCurrencies';
 import type { SourceBatchQualityStatus } from './sourceBatchQualityStatus';
 
 /**
- * The original committed totals and checks of a source batch.
+ * The original committed totals and checks of a source batch. sourceAmountKobo and importedAmountKobo sum the naira rows only (a row that names no currency is naira); money in other currencies is listed beside each (sourceOtherCurrencies, importedOtherCurrencies: by code, the rows and their amount in that currency's minor unit, only when there are some), never added to it. A batch committed before 25 September 2026 keeps the totals it was committed with, which may add rows in other currencies.
  */
 export interface SourceBatchQuality {
   /** @nullable */
@@ -26,6 +28,7 @@ export interface SourceBatchQuality {
      * @nullable
      */
   sourceAmountKobo: number | null;
+  sourceOtherCurrencies?: SourceBatchQualitySourceOtherCurrencies;
   /**
      * @minimum 0
      * @maximum 9007199254740991
@@ -37,6 +40,7 @@ export interface SourceBatchQuality {
      * @nullable
      */
   importedAmountKobo: number | null;
+  importedOtherCurrencies?: SourceBatchQualityImportedOtherCurrencies;
   /**
      * @minimum 0
      * @maximum 9007199254740991
