@@ -159,6 +159,32 @@ it("returns focus to the kept confirmation once Revoke access is confirmed and a
   await waitFor(() => expect(document.activeElement).toBe(said));
 });
 
+// Third review of the audit fixes, finding 7: a revocation the service refused, or whose answer was lost, left focus on the
+// page's main region while its problem notice sat unfocused in the member's card.
+for (const how of ["refused", "lost"] as const) it(`moves focus to the member's problem notice when Revoke access is ${how}`, async () => {
+  const user = userEvent.setup();
+  liveTeam();
+  const send = globalThis.fetch;
+  globalThis.fetch = async (input, options) => {
+    const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+    if (new URL(url, "http://localhost").pathname !== "/api/v1/team/members/m-ops" || options?.method !== "PATCH") return send(input, options);
+    if (how === "lost") throw new TypeError("Failed to fetch");
+    return new Response(JSON.stringify({ error: "This membership changed after you opened it. Refresh Team & access and review it before changing it again.", requestId: "fix59-409" }), { status: 409, headers: { "Content-Type": "application/json" } });
+  };
+  renderApp("/team");
+  await screen.findByRole("heading", { name: "Chidi Ops" });
+  await user.selectOptions(within(card("Chidi Ops")).getByLabelText("Access for Chidi Ops"), "revoked");
+  await user.type(within(card("Chidi Ops")).getByLabelText("Reason for changing Chidi Ops"), "Left the pilot team this week");
+  within(card("Chidi Ops")).getByRole("button", { name: "Save access change" }).focus();
+  await user.keyboard("{Enter}");
+  within(await screen.findByRole("dialog")).getByRole("button", { name: "Revoke access" }).focus();
+  await user.keyboard("{Enter}");
+  // The notice itself; a lost answer's holds the service's words in an alert of their own.
+  const notice = (await within(card("Chidi Ops")).findAllByRole("alert"))[0]!;
+  expect(notice.textContent).toContain(how === "refused" ? "This membership changed after you opened it." : "Outcome not confirmed");
+  await waitFor(() => expect(document.activeElement).toBe(notice));
+});
+
 it("keeps the confirmation of saved lender access, which gives the membership a new version", async () => {
   const user = userEvent.setup();
   liveTeam();

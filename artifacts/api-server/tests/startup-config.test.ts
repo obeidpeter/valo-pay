@@ -2,13 +2,16 @@
 // bad value ends the process with one structured fatal line naming the
 // setting, never its value; the close scheduler's switch takes on, off or
 // external in any case and refuses anything else instead of failing open;
-// Clerk's JWT key is checked as Clerk reads it, and a staff host needs it; and
-// the export worker slows down while its queue cannot be read, logging the
-// outage once and the recovery once instead of an error at every poll.
-// Offline: the processes this starts use an unusable loopback database.
+// Clerk's JWT key is checked as Clerk reads it, so the check passes exactly the
+// forms with which Clerk's own verifier signs a genuine session in, and a staff
+// host needs it; and the export worker slows down while its queue cannot be
+// read, logging the outage once and the recovery once instead of an error at
+// every poll. Offline: the processes this starts use an unusable loopback
+// database, and Clerk verifies with the key alone, with no network call.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { generateKeyPairSync } from "node:crypto";
+import { createPublicKey, createSign, generateKeyPairSync, type KeyObject } from "node:crypto";
+import { verifyToken } from "@clerk/express";
 import { once } from "node:events";
 import { createServer } from "node:net";
 import path from "node:path";
@@ -99,17 +102,32 @@ const { CLERK_SECRET_KEY: _clerk, ...staffWithoutClerk } = staffWithoutJwtKey;
 assert.deepEqual(problems(staffWithoutClerk, "close-pass"), []);
 checks += 3;
 // CLERK_JWT_KEY is checked as Clerk reads it (the review of 4edd897, finding 2): with a value Clerk cannot use every
-// session would be refused, and the process would still start and read as ready. It must parse as an RSA public key,
-// and Clerk, which takes the modulus after a 2048-bit key's fixed opening bytes, must read that key's. Outside staff
-// mode it may be left unset.
+// session would be refused, and the process would still start and read as ready. The check derives the key as Clerk's
+// loader does and confirms it is a 2048-bit RSA public key, the one the value holds (the review of 8267b99, findings 3
+// and 4): Clerk reads joined lines, spaces, lone carriage returns, indentation, the body alone and quotes, so those
+// start; it misreads a character such as U+202F as part of the key, so that is refused, naming it. Outside staff mode
+// the key may be left unset.
 const escaped = "CLERK_JWT_KEY holds \\n in place of its line breaks, which Clerk cannot read: give the PEM public key with real line breaks, as Clerk shows it, from -----BEGIN PUBLIC KEY----- to -----END PUBLIC KEY-----.";
-const unusable = "CLERK_JWT_KEY must be the Clerk instance's JWT public key as Clerk shows it with the instance's API keys: a 2048-bit RSA public key in PEM form, from -----BEGIN PUBLIC KEY----- to -----END PUBLIC KEY----- on lines of their own.";
+const unusable = "CLERK_JWT_KEY must be the Clerk instance's JWT public key as Clerk shows it with the instance's API keys: a 2048-bit RSA public key in PEM form, from -----BEGIN PUBLIC KEY----- to -----END PUBLIC KEY-----.";
+const misread = (characters: string, several = false) => `CLERK_JWT_KEY holds ${characters}, which Clerk misreads as part of the key, so it would refuse every session: remove ${several ? "them" : "it"}, or paste the PEM public key again as Clerk shows it.`;
+const lines = jwtKey.trim().split("\n"), body = instanceKey.export({ type: "spki", format: "der" }).toString("base64");
+const endingLine = (character: string) => [lines[0], `${lines[1]}${character}`, ...lines.slice(2)].join("\n");
 const jwtKeys: Array<[string, string, string | undefined]> = [
   ["as Clerk shows it", jwtKey, undefined],
   ["without its final line break", jwtKey.trim(), undefined],
   ["with Windows line breaks and a trailing space", `${jwtKey.replaceAll("\n", "\r\n")} `, undefined],
+  ["with spaces for its line breaks, which Clerk reads", jwtKey.trim().replaceAll("\n", " "), undefined],
+  ["with its lines joined, which Clerk reads", jwtKey.trim().replaceAll("\n", ""), undefined],
+  ["with carriage returns alone for its line breaks, which Clerk reads", jwtKey.replaceAll("\n", "\r"), undefined],
+  ["indented, which Clerk reads", lines.map((line) => `  ${line}`).join("\n"), undefined],
+  ["as its body alone, which Clerk reads", body, undefined],
+  ["in double quotes, which Clerk reads", `"${jwtKey.trim()}"`, undefined],
+  ["with a no-break space after its first line, which Clerk skips", jwtKey.replace("-----\n", "-----\u00a0\n"), undefined],
+  ["with a narrow no-break space ending a line, which Clerk misreads", endingLine("\u202f"), misread("U+202F (a narrow no-break space)")],
+  ["with a medium mathematical space ending a line, which Clerk misreads", endingLine("\u205f"), misread("U+205F (a medium mathematical space)")],
+  ["with both, which Clerk misreads", endingLine("\u205f\u202f"), misread("U+205F (a medium mathematical space) and U+202F (a narrow no-break space)", true)],
   ["on one line with \\n escapes", jwtKey.trim().replaceAll("\n", "\\n"), escaped],
-  ["with spaces for its line breaks", jwtKey.trim().replaceAll("\n", " "), unusable],
+  ["with a comment line before it, which Clerk reads as part of the key", `# staging\n${jwtKey}`, unusable],
   ["as PKCS#1", instanceKey.export({ type: "pkcs1", format: "pem" }).toString(), unusable],
   ["the private key", instancePrivateKey.export({ type: "pkcs8", format: "pem" }).toString(), unusable],
   ["a 4,096-bit key", generateKeyPairSync("rsa", { modulusLength: 4096 }).publicKey.export({ type: "spki", format: "pem" }).toString(), unusable],
@@ -123,6 +141,71 @@ for (const [form, value, problem] of jwtKeys) {
   assert.ok(!/synthetic-secret|MII/.test(found.join(" ")), "a value is never repeated");
   checks += 3;
 }
+// A key whose base64 holds IDAQAB, the closing bytes Clerk removes, before its end (one key in about 200 million):
+// Clerk removes that one instead and reads another key. node:crypto takes any modulus as a JWK, so one is made here.
+const instanceModulus = instanceKey.export({ format: "jwk" }).n!;
+const closingEarly = createPublicKey({ key: { kty: "RSA", n: `${instanceModulus.slice(0, 120)}IDAQAB${instanceModulus.slice(126)}`, e: "AQAB" }, format: "jwk" }).export({ type: "spki", format: "pem" }).toString();
+assert.deepEqual(problems({ ...base, CLERK_JWT_KEY: closingEarly }), ["CLERK_JWT_KEY holds a key Clerk reads as another: its base64 holds IDAQAB, the key's closing bytes, before its end, and Clerk removes the first IDAQAB it finds, so it would refuse every session. Have Clerk rotate the instance's signing key."]);
+checks += 1;
+// The check agrees with Clerk on every form (the review of 8267b99, findings 3 and 4). A genuine session token signed
+// with the instance's key is verified by Clerk's own verifier (verifyToken with the key, as clerkMiddleware does) with
+// each form of the key, and the check passes exactly the forms with which Clerk signs the session in: the forms an
+// operator might paste, for three keys; each white-space character at the start, the end and every line end; and
+// 3,000 values with up to four of them put anywhere.
+const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url"), issued = Math.floor(Date.now() / 1000);
+function sessionToken(privateKey: KeyObject) {
+  const signed = `${encode({ alg: "RS256", typ: "JWT", kid: "ins_synthetic" })}.${encode({ sub: "user_synthetic", sid: "sess_synthetic", azp: "https://pilot.example", iat: issued - 5, nbf: issued - 5, exp: issued + 600 })}`;
+  return `${signed}.${createSign("RSA-SHA256").update(signed).sign(privateKey).toString("base64url")}`;
+}
+const clerkSignsIn = async (token: string, value: string) => { try { return (await verifyToken(token, { jwtKey: value, authorizedParties: ["https://pilot.example"] })).sub === "user_synthetic"; } catch { return false; } };
+let agreed = 0, signedIn = 0;
+async function agrees(token: string, value: string, form: string) {
+  const clerk = await clerkSignsIn(token, value), passes = problems({ ...base, CLERK_JWT_KEY: value }).length === 0;
+  assert.equal(passes, clerk, `CLERK_JWT_KEY ${form}: the check ${passes ? "passes" : "refuses"} it, and Clerk ${clerk ? "signs the session in" : "cannot"} with it`);
+  agreed += 1; if (clerk) signedIn += 1;
+}
+const forms: Array<[string, (pem: string, der: string) => string]> = [
+  ["as Node exports it (64-character lines, final line break)", (pem) => pem],
+  ["without its final line break", (pem) => pem.trim()],
+  ["with CRLF line ends", (pem) => pem.replaceAll("\n", "\r\n")],
+  ["with CR line ends", (pem) => pem.replaceAll("\n", "\r")],
+  ["with a trailing space on every line", (pem) => pem.trim().split("\n").map((line) => `${line} `).join("\n")],
+  ["indented by two spaces", (pem) => pem.trim().split("\n").map((line) => `  ${line}`).join("\n")],
+  ["with its body lines indented by a tab", (pem) => pem.trim().split("\n").map((line, index, all) => (index && index < all.length - 1 ? `\t${line}` : line)).join("\n")],
+  ["with a blank line after its first", (pem) => pem.replace("-----\n", "-----\n\n")],
+  ["between blank lines", (pem) => `\n\n${pem}\n\n`],
+  ["after a space", (pem) => ` ${pem}`],
+  ["with 76-character body lines", (_pem, der) => `-----BEGIN PUBLIC KEY-----\n${der.match(/.{1,76}/g)!.join("\n")}\n-----END PUBLIC KEY-----\n`],
+  ["with its body on one line between the armour's", (_pem, der) => `-----BEGIN PUBLIC KEY-----\n${der}\n-----END PUBLIC KEY-----\n`],
+  ["on one line", (_pem, der) => `-----BEGIN PUBLIC KEY-----${der}-----END PUBLIC KEY-----`],
+  ["on one line with spaces", (_pem, der) => `-----BEGIN PUBLIC KEY----- ${der} -----END PUBLIC KEY-----`],
+  ["with spaces for its line breaks", (pem) => pem.trim().replaceAll("\n", " ")],
+  ["as its body alone", (_pem, der) => der],
+  ["with \\n escapes", (pem) => pem.trim().replaceAll("\n", "\\n")],
+  ["with \\r\\n escapes", (pem) => pem.trim().replaceAll("\n", "\\r\\n")],
+  ["in double quotes", (pem) => `"${pem.trim()}"`],
+  ["with a no-break space after its first line", (pem) => pem.replace("-----\n", "-----\u00a0\n")],
+  ["after a comment line", (pem) => `# staging\n${pem}`],
+];
+for (let run = 0; run < 3; run++) {
+  const pair = generateKeyPairSync("rsa", { modulusLength: 2048 }), token = sessionToken(pair.privateKey);
+  const pem = pair.publicKey.export({ type: "spki", format: "pem" }).toString(), der = pair.publicKey.export({ type: "spki", format: "der" }).toString("base64");
+  for (const [form, make] of forms) await agrees(token, make(pem, der), form);
+}
+const spaces = [" ", "\t", "\v", "\f", "\u00a0", "\u1680", "\u2000", "\u2007", "\u2028", "\u2029", "\u202f", "\u205f", "\u3000", "\ufeff", "\r", "\n", "\r\n"];
+const named = (text: string) => [...text].map((character) => `U+${character.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`).join(" ");
+const instanceToken = sessionToken(instancePrivateKey);
+const spots = new Set([0, lines[0]!.length, lines[0]!.length + 1, jwtKey.lastIndexOf("-----END"), jwtKey.trimEnd().length, jwtKey.length, 30, 100, 200, 300, ...[...jwtKey].flatMap((character, index) => (character === "\n" ? [index] : []))]);
+for (const space of spaces) for (const at of spots) await agrees(instanceToken, jwtKey.slice(0, at) + space + jwtKey.slice(at), `with ${named(space)} at ${at}`);
+let seed = 7;
+const random = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+for (let variant = 0; variant < 3000; variant++) {
+  let value = jwtKey;
+  for (let added = 0; added < 1 + Math.floor(random() * 4); added++) { const at = Math.floor(random() * (value.length + 1)); value = value.slice(0, at) + spaces[Math.floor(random() * spaces.length)] + value.slice(at); }
+  await agrees(instanceToken, value, `with white space put in (${JSON.stringify(value)})`);
+}
+assert.ok(signedIn > 1000 && agreed - signedIn > 100, `both outcomes are exercised: ${signedIn} of ${agreed} forms sign in`);
+checks += agreed + 1;
 assert.deepEqual(problems({ DATABASE_URL: database, CLERK_JWT_KEY: "synthetic-secret" }, "close-pass"), [], "the close pass signs no one in and leaves the key alone");
 checks += 1;
 assert.deepEqual(problems({ ...staff, VALOPAY_STAFF_ORIGINS: "http://valopay.example.test" }), ["VALOPAY_STAFF_ORIGINS must list one or more HTTPS origins, separated by commas, when VALOPAY_STAFF_ACCESS is staging."]);

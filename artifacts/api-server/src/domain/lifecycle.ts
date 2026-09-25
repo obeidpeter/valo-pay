@@ -87,10 +87,39 @@ export function lifecycleCandidates(state: DomainState, external: LifecycleExter
   const raw: LifecycleCandidate[] = batches.filter(record => record.status === 'committed' && typeof record.data.csv === 'string' && record.data.csv.length > 0 && typeof record.data.committedAt === 'string').map(record => contractAnswer(lifecycleCandidateSchema, { kind: 'raw_csv', merchantId: state.merchant.id, sourceId: record.id, version: record.updatedAt, createdAt: storedInstant(record.data.committedAt), label: 'Committed import source CSV', digest: hash({ id: record.id, version: record.updatedAt, csv: record.data.csv, preview: record.data.check?.preview || null }), status: 'committed' }));
   return [...raw, ...validateExternal(state, external)].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || candidateKey(a).localeCompare(candidateKey(b)));
 }
+/**
+ * The latest retention start, in milliseconds, at which a source of the category is old enough to delete, or null
+ * while the policy keeps the category. A policy saved before the minimum existed, or under the sandbox's shorter one,
+ * never deletes sooner than this workspace's minimum.
+ */
+function oldEnoughAt(rules: Rules, category: keyof RetentionMinimum): number | null {
+  const days = rules.policy[category];
+  return days === null ? null : rules.now - Math.max(days, rules.minimum[category]) * DAY;
+}
 function eligible(rules: Rules, candidate: LifecycleCandidate) {
-  const key = candidate.kind === 'raw_csv' ? 'rawCsvDays' : candidate.kind === 'journal_payload' ? 'journalPayloadDays' : 'exportFileDays', days = rules.policy[key];
-  // A policy saved before the minimum existed, or under the sandbox's shorter one, never deletes sooner than this workspace's minimum.
-  return days !== null && Date.parse(candidate.createdAt) + Math.max(days, rules.minimum[key]) * DAY <= rules.now && !rules.held.has(candidateKey(candidate)) && !evidenceFor(rules, candidate).length;
+  const cutoff = oldEnoughAt(rules, candidate.kind === 'raw_csv' ? 'rawCsvDays' : candidate.kind === 'journal_payload' ? 'journalPayloadDays' : 'exportFileDays');
+  return cutoff !== null && Date.parse(candidate.createdAt) <= cutoff && !rules.held.has(candidateKey(candidate)) && !evidenceFor(rules, candidate).length;
+}
+/**
+ * A window of a lender's journal payloads, which the store lists instead of all of them (lifecycleInventory): the
+ * listed ones follow the first `skipped` in the inventory's order, among `total` retained, of which `eligible` are
+ * old enough and not held (journalPayloadRule). So a retention request costs the same however many requests a
+ * lender's people have made. A view's window starts at its page less the lender's import batches and exports (which
+ * bound its other sources) and holds that many and 100; a preview's holds the first 100 and one for each held request.
+ */
+export interface JournalWindow { total: number; eligible: number; skipped: number }
+/**
+ * How the store counts the journal payloads it does not list, as `eligible` decides for those it does: old enough when
+ * retained since `oldEnough` or before (null while the policy keeps them), and not among `held`.
+ */
+export function journalPayloadRule(state: DomainState, ctx: Context): { oldEnough: string | null; held: string[] } {
+  const rules = rulesOf(state, ctx), cutoff = oldEnoughAt(rules, 'journalPayloadDays'), prefix = 'journal_payload:';
+  return { oldEnough: cutoff === null ? null : new Date(cutoff).toISOString(), held: [...rules.held].filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length)) };
+}
+/** The journal payloads a window leaves out, and how many of them are eligible: the store's counts less those listed. */
+function unlistedJournal(listed: LifecycleCandidate[], rules: Rules, journal: JournalWindow) {
+  const payloads = listed.filter(candidate => candidate.kind === 'journal_payload');
+  return { total: journal.total - payloads.length, eligible: journal.eligible - payloads.filter(candidate => eligible(rules, candidate)).length };
 }
 function runOf(state: DomainState, id: string) { return rows(state, 'retention-runs').find(record => record.id === id) || refuse('Retention run not found in this lender.', 404); }
 /** The latest receipt for each source of each run, from one pass over the lender's receipts. */
@@ -111,11 +140,14 @@ function runView(state: DomainState, run: ValopayRecord, latest: Map<string, Val
   return contractAnswer(lifecycleRunViewSchema, { id: run.id, merchantId: state.merchant.id, status: run.status, updatedAt: run.updatedAt, createdAt: run.createdAt, expiresAt: storedInstant(run.data.expiresAt), previewDigest: run.data.previewDigest, policyRevision: run.data.policyRevision, candidates: candidates.map(storedCandidate), candidateCount: candidates.length, moreEligible: run.data.moreEligible || 0, preparedBy: typeof run.data.preparedBy === 'string' ? run.data.preparedBy : null, approvedBy: run.data.approvedBy || null, approvedAt: run.data.approvedAt ? storedInstant(run.data.approvedAt) : null, receipts: receipts.map(receipt => ({ id: receipt.id, kind: receipt.data.kind, sourceId: receipt.data.sourceId, status: receipt.data.result, at: receipt.createdAt, detail: receipt.data.detail, actor: receipt.data.actor })), successful, remaining: candidates.length - successful, auditRetained: true, financialRecordsRetained: true, syntheticOnly: true });
 }
 export function lifecycleRunView(state: DomainState, run: ValopayRecord) { return runView(state, run, latestReceipts(state, run.id)); }
-export function lifecycleView(state: DomainState, ctx: Context, external: LifecycleExternalCandidate[] = [], targetOffset = 0) {
+export function lifecycleView(state: DomainState, ctx: Context, external: LifecycleExternalCandidate[] = [], targetOffset = 0, journal?: JournalWindow) {
   admin(ctx);
   if (!Number.isInteger(targetOffset) || targetOffset < 0 || targetOffset > 100000) refuse('Choose a valid retention inventory page.', 400);
   const { policy, revision } = lifecyclePolicy(state), holds = lifecycleHolds(state), candidates = lifecycleCandidates(state, external), rules = rulesOf(state, ctx, policy, holds), receipts = receiptsByRun(state);
-  return contractAnswer(lifecycleViewSchema, { merchantId: state.merchant.id, lenderName: state.merchant.name, actor: ctx.actor, asOf: ctx.now, policy, minimumDays: minimumOf(ctx), secondApprover: ctx.accessMode === 'staff', policyRevision: revision, holdRevision: holds.revision, eligibleCount: candidates.filter(candidate => eligible(rules, candidate)).length, evidenceTotal: candidates.filter(candidate => evidenceFor(rules, candidate).length).length, targets: candidates.slice(targetOffset, targetOffset + 100).map(candidate => ({ ...candidate, held: rules.held.has(candidateKey(candidate)), evidence: evidenceFor(rules, candidate) })), targetTotal: candidates.length, targetOffset, holds: holds.active.slice(0, 100).map(record => ({ kind: record.data.kind, sourceId: record.data.sourceId, reason: record.data.reason, actor: record.data.actor, at: record.createdAt })), holdTotal: holds.active.length, runs: rows(state, 'retention-runs').sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)).slice(0, 10).map(run => runView(state, run, receipts.get(run.id) ?? new Map())), auditRetained: true, financialRecordsRetained: true, syntheticOnly: true });
+  // With a window of the journal, the payloads it leaves out are counted, and the page starts that many in.
+  const unlisted = journal ? unlistedJournal(candidates, rules, journal) : { total: 0, eligible: 0 }, start = targetOffset - (journal?.skipped ?? 0);
+  if (start < 0) throw new Error('The journal window starts after the page it lists.');
+  return contractAnswer(lifecycleViewSchema, { merchantId: state.merchant.id, lenderName: state.merchant.name, actor: ctx.actor, asOf: ctx.now, policy, minimumDays: minimumOf(ctx), secondApprover: ctx.accessMode === 'staff', policyRevision: revision, holdRevision: holds.revision, eligibleCount: candidates.filter(candidate => eligible(rules, candidate)).length + unlisted.eligible, evidenceTotal: candidates.filter(candidate => evidenceFor(rules, candidate).length).length, targets: candidates.slice(start, start + 100).map(candidate => ({ ...candidate, held: rules.held.has(candidateKey(candidate)), evidence: evidenceFor(rules, candidate) })), targetTotal: candidates.length + unlisted.total, targetOffset, holds: holds.active.slice(0, 100).map(record => ({ kind: record.data.kind, sourceId: record.data.sourceId, reason: record.data.reason, actor: record.data.actor, at: record.createdAt })), holdTotal: holds.active.length, runs: rows(state, 'retention-runs').sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)).slice(0, 10).map(run => runView(state, run, receipts.get(run.id) ?? new Map())), auditRetained: true, financialRecordsRetained: true, syntheticOnly: true });
 }
 export function saveLifecyclePolicy(state: DomainState, ctx: Context, raw: unknown) {
   admin(ctx); const input = retentionPolicyInputSchema.parse(raw), minimum = minimumOf(ctx);
@@ -136,13 +168,14 @@ export function setLifecycleHold(state: DomainState, ctx: Context, raw: unknown,
   makeRecord(state, 'retention-holds', { name: input.held ? 'Retention hold placed' : 'Retention hold released', status: 'recorded', createdAt: ctx.now, updatedAt: ctx.now, data: { ...input, actor: ctx.actor, sequence: nextSequence(state, 'retention-holds'), synthetic: true } });
   return lifecycleHolds(state);
 }
-export function lifecyclePreview(state: DomainState, ctx: Context, raw: unknown, external: LifecycleExternalCandidate[] = []) {
+export function lifecyclePreview(state: DomainState, ctx: Context, raw: unknown, external: LifecycleExternalCandidate[] = [], journal?: JournalWindow) {
   admin(ctx); const input = lifecyclePreviewInputSchema.parse(raw), policy = lifecyclePolicy(state);
   if (input.expectedPolicyRevision !== policy.revision) refuse('The retention policy changed. Refresh before preparing a deletion preview.');
-  const rules = rulesOf(state, ctx, policy.policy), all = lifecycleCandidates(state, external).filter(candidate => eligible(rules, candidate));
+  const rules = rulesOf(state, ctx, policy.policy), listed = lifecycleCandidates(state, external), all = listed.filter(candidate => eligible(rules, candidate));
   if (!all.length) refuse('No retained sources currently meet the enabled policy and hold rules.', 400);
   const candidates = all.slice(0, 100), previewDigest = hash({ merchantId: state.merchant.id, policyRevision: policy.revision, candidates });
-  const run = makeRecord(state, 'retention-runs', { name: 'Retention deletion preview', status: 'preview', createdAt: ctx.now, updatedAt: ctx.now, data: { candidates, previewDigest, policyRevision: policy.revision, moreEligible: all.length - candidates.length, expiresAt: new Date(Date.parse(ctx.now) + 15 * 60 * 1000).toISOString(), preparedBy: ctx.actor, synthetic: true } });
+  const moreEligible = all.length + (journal ? unlistedJournal(listed, rules, journal).eligible : 0) - candidates.length;
+  const run = makeRecord(state, 'retention-runs', { name: 'Retention deletion preview', status: 'preview', createdAt: ctx.now, updatedAt: ctx.now, data: { candidates, previewDigest, policyRevision: policy.revision, moreEligible, expiresAt: new Date(Date.parse(ctx.now) + 15 * 60 * 1000).toISOString(), preparedBy: ctx.actor, synthetic: true } });
   return lifecycleRunView(state, run);
 }
 export function approveLifecycleRun(state: DomainState, ctx: Context, id: string, raw: unknown, external: LifecycleExternalCandidate[] = []) {

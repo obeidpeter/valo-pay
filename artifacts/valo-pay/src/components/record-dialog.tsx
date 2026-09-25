@@ -52,9 +52,11 @@ type RecordDialogProps = {
   validate?: (values: Record<string, any>) => Record<string, string>;
   /** The service's answer to a confirmed write, given before the dialog closes so the page can announce the result. */
   onDone?: (response: any) => void;
+  /** Where the page shows that answer: focus goes there when the dialog closes and the control that opened it has gone. */
+  answer?: () => HTMLElement | null | undefined;
 };
 
-export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourceFields, title, defaultValues = {}, actionMutation, actionRecordId, context, validate, onDone }: RecordDialogProps) {
+export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourceFields, title, defaultValues = {}, actionMutation, actionRecordId, context, validate, onDone, answer }: RecordDialogProps) {
   const isMoney = (field: FieldDef) => field.type === 'number' && /Kobo$/.test(field.name);
   const fields = sourceFields.map(field => isMoney(field) ? { ...field, label: moneyFieldLabel(field.label) } : field);
   const { merchantId, workspace } = useWorkspace();
@@ -72,7 +74,7 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
   const currentScope = useRef('');
   const originalRecord = useRef(record);
   const pendingErrorFocus = useRef<string | null>(null);
-  const restoreOpenerFocus = useDialogFocusReturn(isOpen);
+  const restoreOpenerFocus = useDialogFocusReturn(isOpen, answer);
   const dialogTitle = useRef<HTMLHeadingElement | null>(null);
   const [initialForm, setInitialForm] = useState('');
   const scope = JSON.stringify([merchantId, kind, record?.id, actionMutation, actionRecordId, isOpen]);

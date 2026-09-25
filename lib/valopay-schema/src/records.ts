@@ -399,6 +399,13 @@ export const recordDataSchemas = {
     linkedKind: z.string().optional(),
     /** Set when the platform closed the exception because its condition cleared (resolutionCode condition_cleared): when, in whose action and why. */
     conditionCleared: z.object({ at: isoDateOrTimestamp, by: z.string(), reason: z.string() }).optional(),
+    /**
+     * The currency of amountKobo when it is not naira: the ISO 4217 code, in capitals, of the money the exception is
+     * about (a payment or payment evidence in another currency), whose minor units amountKobo then holds. Absent for naira.
+     */
+    currency: z.string().optional(),
+    /** On a settlement_variance: the conditions of the reports of a collection counted in two batches it carries beside its own; its resolution settles them too. */
+    countedTwice: z.array(z.string()).optional(),
   }).passthrough(),
   policies: z.object({
     ...common,

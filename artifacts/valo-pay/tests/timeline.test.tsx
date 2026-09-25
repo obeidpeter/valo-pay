@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
-import { renderApp, screen, userEvent, waitFor } from "./harness";
+import { renderApp, screen, userEvent, waitFor, within } from "./harness";
 import { queryClient, queryDefaults } from "@/App";
+import { customerTimeline } from "../../api-server/src/domain/timeline";
+import { makeRecord } from "../../api-server/src/domain/records";
+import { reconcile } from "../../api-server/src/domain/reconciliation";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -27,6 +30,62 @@ describe("customer timeline", () => {
     await waitFor(() => expect(opened).toHaveBeenCalledWith(`/api/v1/exports/${record.id}/download?merchantId=${api.merchantIds[0]}`, "_blank"));
     // Radix also announces a new notice through a hidden copy for a moment, so the text may be present twice.
     expect(screen.getAllByText(new RegExp(`SHA-256 checksum: ${String(record.data.checksum).slice(0, 16)}`)).length).toBeGreaterThanOrEqual(1);
+  });
+
+  // Third review of the audit fixes: the customer's positions list money in another currency beside the naira credit
+  // (unallocatedOtherCurrencies, shaped like a close's otherCurrencies), which the page shows as close evidence does.
+  it("shows the customer's unapplied money in another currency beside the naira credit, and a payment in its own currency", async () => {
+    const ada = api.state().records.find((record) => record.kind === "customers" && record.name === "Ada Okonkwo")!;
+    api.mutate((state) => {
+      const payment = state.records.find((record) => record.kind === "payments" && record.customerId === ada.id)!;
+      const unapplied = (id: string, reference: string, amountKobo: number, currency: string) => state.records.push({ ...structuredClone(payment), id, reference, status: "unallocated", amountKobo, createdAt: api.now, data: { ...structuredClone(payment.data), currency, channel: "card", allocatedKobo: 0 } });
+      unapplied("usd-card-payment", "SBX-USD-CARD", 100_000, "USD");
+      unapplied("eur-card-payment-1", "SBX-EUR-CARD-1", 2_000, "EUR");
+      unapplied("eur-card-payment-2", "SBX-EUR-CARD-2", 3_000, "EUR");
+    });
+    renderApp(`/customers/${ada.id}`);
+    const position = (await screen.findByText("Customer position")).parentElement!;
+    expect(position.textContent).toContain("Unapplied credit");
+    // The service derives the money beside the naira (the position the fake API serves is the domain's), and the page shows it as it comes.
+    expect(customerTimeline(api.state(), ada.id).position.unallocatedOtherCurrencies).toEqual({ EUR: { count: 2, amount: 5_000 }, USD: { count: 1, amount: 100_000 } });
+    // Each currency is an item of its own under the label, by code, as close evidence writes it.
+    const others = screen.getByRole("list", { name: "Unapplied in other currencies" });
+    expect(within(others).getAllByRole("listitem").map((item) => item.textContent!.replace(/\u00a0/g, " "))).toEqual(["EUR 50.00 (2 payments)", "USD 1,000.00 (1 payment)"]);
+    // The payment itself is listed in its own currency, never as naira.
+    const listed = (await screen.findByRole("heading", { name: "Payments" })).closest("section")!;
+    expect(listed.textContent!.replace(/\u00a0/g, " ")).toContain("SBX-USD-CARDUSD 1,000.00");
+    expect(listed.textContent).not.toContain("₦1,000.00");
+  });
+
+  // Third review, a residual: an exception raised for money in another currency holds that money's minor units, and the
+  // customer's history and the case page showed them as naira (₦20.00 for EUR 20.00, ₦1,000.00 for USD 1,000.00).
+  it("shows an exception about money in another currency in that currency in the customer's history", async () => {
+    const ada = api.state().records.find((record) => record.kind === "customers" && record.name === "Ada Okonkwo")!;
+    const [euros, dollars] = api.mutate((state, ctx) => {
+      const card = (reference: string, amountKobo: number, currency: string) => makeRecord(state, "observations", { name: `${currency} card`, status: "unresolved", reference, amountKobo, customerId: ada.id, data: { source: "card", eventId: reference, provider: "Sandbox Rail", currency } });
+      const eur = card("CARD-EUR-1", 2_000, "EUR"), usd = card("CARD-USD-1", 100_000, "USD");
+      reconcile(state, { ...ctx, actor: "Sandbox Finance", role: "Finance" });
+      return [eur, usd].map((evidence) => state.records.find((record) => record.kind === "exceptions" && record.data.linkedRecordId === evidence.data.paymentId)!);
+    });
+    renderApp(`/customers/${ada.id}`);
+    await screen.findByRole("heading", { name: "Customer history" });
+    const events = document.querySelectorAll("main ol > li");
+    const eventOf = (exception: { id: string }) => [...events].find((item) => item.querySelector(`[title="${exception.id}"]`))!;
+    expect([eventOf(euros), eventOf(dollars)].map((item) => item.textContent!.replace(/ /g, " ").match(/Unallocated payment(.*?)Open/)?.[1])).toEqual(["EUR 20.00", "USD 1,000.00"]);
+    expect(eventOf(euros).textContent).not.toContain("₦20.00");
+  });
+
+  it("shows a case's amount in the currency of the money it is about", async () => {
+    const exception = api.mutate((state, ctx) => {
+      const ada = state.records.find((record) => record.kind === "customers" && record.name === "Ada Okonkwo")!;
+      const card = makeRecord(state, "observations", { name: "USD card", status: "unresolved", reference: "CARD-USD-2", amountKobo: 100_000, customerId: ada.id, data: { source: "card", eventId: "usd-2", provider: "Sandbox Rail", currency: "USD" } });
+      reconcile(state, { ...ctx, actor: "Sandbox Finance", role: "Finance" });
+      return state.records.find((record) => record.kind === "exceptions" && record.data.linkedRecordId === card.data.paymentId)!;
+    });
+    renderApp(`/cases/${exception.id}`);
+    const panel = (await screen.findByRole("heading", { name: "Unallocated payment" })).closest("section")!;
+    expect(panel.textContent!.replace(/ /g, " ")).toContain("USD 1,000.00");
+    expect(panel.textContent).not.toContain("₦1,000.00");
   });
 
   it("says when the lender has no customer with the reference, inside the console", async () => {

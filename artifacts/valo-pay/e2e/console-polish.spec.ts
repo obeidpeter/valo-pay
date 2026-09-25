@@ -332,6 +332,50 @@ test("paging either picker by keyboard keeps the focus on the pager control pres
   }
 });
 
+test("paging either picker with its form complete, or pressing Enter in its search, sends nothing", async ({ page, request }) => {
+  // Third review of the audit fixes, finding 1: Previous and Next were submit buttons of the picker's dialog form, so paging
+  // a complete form sent the allocation or created the mandate.
+  const lender = (await (await request.get("/api/v1/workspace")).json()).merchants[0].id;
+  const rows = Array.from({ length: 60 }, (_, i) => `Picker customer ${String(i).padStart(2, "0")},E2E-PICKER-${i},Synthetic consent,Sandbox Bank,•••• 0001`);
+  expect((await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "customers", csv: "name,reference,consentProvenance,bankName,accountMasked\n" + rows.join("\n"), mapping: {}, syntheticOnly: true, commit: true } })).ok()).toBeTruthy();
+  const writes: string[] = [];
+  page.on("request", (sent) => { if (sent.method() !== "GET" && sent.url().includes("/api/v1/")) writes.push(`${sent.method()} ${new URL(sent.url()).pathname}`); });
+  /** Next by keyboard and Previous by pointer, then Enter in the search: the page of choices changes and nothing is sent. */
+  async function lookFurther(dialog: ReturnType<Page["getByRole"]>, label: string, search: string, term: string) {
+    await dialog.getByRole("button", { name: `Next page of ${label}` }).focus();
+    await page.keyboard.press("Enter");
+    await expect(dialog.getByText(new RegExp(`^26–50 of [\\d,]+ ${label}$`))).toBeVisible();
+    await dialog.getByRole("button", { name: `Previous page of ${label}` }).click();
+    await expect(dialog.getByText(new RegExp(`^1–25 of [\\d,]+ ${label}$`))).toBeVisible();
+    await dialog.getByRole("searchbox", { name: search }).fill(term);
+    await page.keyboard.press("Enter");
+    await expect(dialog.getByText(new RegExp(`^1–\\d+ of \\d+ ${label}$`))).toBeVisible();
+    await page.waitForTimeout(500);
+    expect(writes).toEqual([]);
+    await expect(dialog).toBeVisible();
+  }
+  await page.goto("/reconciliation");
+  await page.getByRole("row").filter({ hasText: "SBX-UNIDENTIFIED-001" }).getByRole("button", { name: "Allocate", exact: true }).click();
+  const allocation = page.getByRole("dialog", { name: "Allocate payment" });
+  await expect(allocation.getByText(/^1–25 of [\d,]+ instalment choices$/)).toBeVisible();
+  await allocation.getByLabel(/^Instalment/).selectOption({ index: 1 });
+  await allocation.getByLabel(/^Amount to allocate/).fill("100.00");
+  await allocation.getByLabel(/^Reason/).fill("Looking further through the choices");
+  await lookFurther(allocation, "instalment choices", "Find an instalment", "BROWSER-DUE-1");
+
+  await page.goto("/mandates");
+  await page.getByRole("button", { name: "Create synthetic mandate" }).first().click();
+  const mandate = page.getByRole("dialog", { name: "Create synthetic mandate" });
+  await expect(mandate.getByText(/^1–25 of [\d,]+ customer choices$/)).toBeVisible();
+  await mandate.locator("#mandate-customerId").selectOption({ index: 1 });
+  await mandate.getByLabel(/Mandate name/).fill("Mandate made by paging");
+  await mandate.getByLabel(/Debit limit/).fill("500.00");
+  await mandate.getByLabel(/Provider reference/).fill("E2E-PAGER-MANDATE");
+  await mandate.getByLabel(/Consent evidence reference/).fill("E2E-PAGER-CONSENT");
+  await mandate.locator("#mandate-policyId").selectOption({ index: 1 });
+  await lookFurther(mandate, "customer choices", "Search customers", "Picker customer 1");
+});
+
 test("Discard original request moves focus back to the control that sent the request", async ({ page }) => {
   await staffAdministrator(page);
   // Another administrator asked to lift the stop; the approval never reaches the service, so the request still waits.

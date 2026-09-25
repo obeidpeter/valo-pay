@@ -6,12 +6,17 @@
 // and 14), and what the review of those fixes found: evidence through another
 // connection name, a payer identified through a wrong match, a net line applied
 // before the debit's gross, a gross below the amount received, money in another
-// currency and a line an earlier build counted in two batches. Every request
-// runs as the store runs it: on a copy, with the repository's final-state
-// check, and rolled back when it is refused.
+// currency and a line an earlier build counted in two batches, and what the
+// third review found: Finance's resolutions of evidence deciding first, holds
+// offered as they stand now, counted-twice reports kept, a batch an earlier
+// build counted, amounts in their own currency, other currencies beside a
+// customer's position, a payer the payment's evidence names and exceptions that
+// name the currency of the money they are about. Every request runs as the
+// store runs it: on a copy, with the repository's final-state check, and rolled
+// back when it is refused.
 import assert from "node:assert/strict";
 import { HOUR, addAttempt, addObservation, ctxAt, liveFixture, outstandingOf, wat } from "./helpers.js";
-import { allocatePayment, allocationPayer, amendDueItem, paymentObservedAt, reconcile, supersedeAllocation } from "../src/domain/reconciliation.js";
+import { allocatePayment, allocationPayer, amendDueItem, paymentObservedAt, raiseException, reconcile, supersedeAllocation } from "../src/domain/reconciliation.js";
 import { executeAction } from "../src/domain/actions.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
 import { validateRecord } from "../src/domain/validation.js";
@@ -23,6 +28,11 @@ import { allocatableOnly, allocationChoices, pageRecords } from "../src/lib/valo
 import { billableCollection } from "../src/domain/billing.js";
 import { buildReports } from "../src/domain/reports.js";
 import { buildAlerts } from "../src/domain/alerts.js";
+import { customerTimeline } from "../src/domain/timeline.js";
+import { buildDisputePack } from "../src/lib/valopay-packs.js";
+import { pageQueue } from "../src/lib/valopay-queues.js";
+import { pageCustomerHistory } from "../src/lib/customer-history.js";
+import { bindCloseReviewBasis } from "../src/domain/close-review.js";
 import { canTakeAllocation, paymentAwaitsAllocation, paymentRefundedKobo, paymentUnappliedKobo, resolutionCodesForException } from "@workspace/valopay-schema";
 import type { DomainState, TypedRecord, ValopayRecord } from "../src/domain/types.js";
 
@@ -794,6 +804,344 @@ section("the allocation picker's choices for one payment", () => {
   check((() => { try { allocatableOnly("due-items", { paymentId: named.p.id }); return false; } catch (error) { return (error as { status?: number }).status === 400; } })(), "paymentId without allocatable=true is refused");
 });
 
+// ---------- Third review finding 1: Finance's resolution of evidence decides first, whatever arrives when ----------
+/** A record as it now stands: a refused request puts back a copy of the records it started from. */
+const live = <T extends ValopayRecord>(state: DomainState, record: T): T => state.records.find((item) => item.id === record.id) as T;
+const isOpen = (item: ValopayRecord) => ["open", "assigned", "in_progress"].includes(item.status);
+section("a waiting reversal Finance resolved before its payment arrived", () => {
+  const run = (label: string, code: string, closeBetween: boolean, debitThrough = "Sandbox Rail") => {
+    const { state, due } = liveFixture({ withFailure: false, merchantId: `unseen-resolved-${label}` });
+    addAttempt(state, due, { status: "succeeded", occurredAt: wat("2027-07-01T06:30:00"), providerReference: "PSK-UNSEEN-1" });
+    const reversal = addObservation(state, { reference: "PSK-UNSEEN-1", amountKobo: due.amountKobo, source: "webhook", customerId: due.customerId, eventId: "rev-1", reversed: true, occurredAt: wat("2027-07-01T07:00:00"), provider: "Sandbox Rail" } as any);
+    close(state, "2027-07-02T08:00:00");
+    const [unseen] = exceptionsFor(state, reversal.id, "provider_status_mismatch");
+    const answer = request(state, () => executeAction(state, finance(wat("2027-07-02T09:00:00")), { action: "resolve_exception", recordId: unseen!.id, reason: "Checked with the provider.", data: { resolutionCode: code } }));
+    if (closeBetween) close(state, "2027-07-02T10:00:00");
+    const waiting = live(state, reversal);
+    const waited = [waiting.status, waiting.data.resolutionKey ?? null, exceptionsFor(state, reversal.id).filter(isOpen).length];
+    // The debit's own evidence arrives, before or after a reconciliation has read Finance's resolution.
+    addObservation(state, { reference: "PSK-UNSEEN-1", amountKobo: due.amountKobo, source: "webhook", customerId: due.customerId, eventId: "debit-1", occurredAt: wat("2027-07-01T06:30:00"), provider: debitThrough } as any);
+    close(state, "2027-07-03T08:00:00");
+    close(state, "2027-07-04T08:00:00");
+    const [debit] = payment(state, "PSK-UNSEEN-1"), after = live(state, reversal), instalment = live(state, due);
+    return {
+      unseen: live(state, unseen!), answer, waited,
+      reversal: [after.status, after.data.resolutionKey ?? null, after.data.paymentId === debit?.id],
+      debit: [debit?.data.providerConnection, debit?.status, debit?.data.reversalStatus],
+      due: [instalment.status, outstandingOf(instalment)],
+      raised: exceptionsFor(state, reversal.id).filter((item) => item.id !== unseen!.id).map((item) => item.data.type),
+    };
+  };
+  const collected = { debit: ["Sandbox Rail", "allocated", "none"], due: ["paid", 0] }, reversed = { debit: ["Sandbox Rail", "returned", "reversed"], due: ["scheduled", 2_500_000] };
+  // Platform state confirmed: set aside for good, with or without a reconciliation before the debit.
+  for (const [label, closeBetween] of [["confirmed-close-between", true], ["confirmed-debit-first", false]] as const) {
+    const outcome = run(label, "platform_state_confirmed", closeBetween);
+    check(outcome.answer.ok && /set aside at the next reconciliation: it reverses nothing, even if its payment arrives later/.test(outcome.answer.value.message), `the answer says what the resolution does (${outcome.answer.ok && outcome.answer.value.message})`);
+    equal([outcome.reversal, outcome.debit, outcome.due, outcome.raised], [["resolved", "reversal_set_aside_after_review", false], collected.debit, collected.due, []], `${label}: the reversal is set aside and the collection stands`);
+  }
+  // The debit through another spelling of the connection before the next reconciliation: still set aside, never held again.
+  const spelled = run("confirmed-other-spelling", "platform_state_confirmed", false, "Sandbox Rail Settlements");
+  equal([spelled.reversal, spelled.debit[0], spelled.debit[2], spelled.raised], [["resolved", "reversal_set_aside_after_review", false], "Sandbox Rail Settlements", "none", []], "a debit through another spelling does not hold the set-aside reversal again");
+  // Provider state adopted: the reversal keeps waiting with no new exception, and reverses its payment when it arrives.
+  const adopted = run("adopted", "provider_state_adopted", true);
+  check(adopted.answer.ok && /keeps waiting for its payment, with no new exception/.test(adopted.answer.value.message), `the answer says it keeps waiting (${adopted.answer.ok && adopted.answer.value.message})`);
+  equal([adopted.waited, adopted.reversal, adopted.debit, adopted.due, adopted.raised], [["unresolved", null, 0], ["resolved", "canonical_provider_reference", true], reversed.debit, reversed.due, []], "an adopted reversal waits, then reverses its payment");
+  const adoptedElsewhere = run("adopted-other-spelling", "provider_state_adopted", true, "Sandbox Rail Settlements");
+  equal([adoptedElsewhere.reversal, adoptedElsewhere.debit, adoptedElsewhere.raised], [["resolved", "adopted_after_review", true], ["Sandbox Rail Settlements", "returned", "reversed"], []], "and reverses it through another spelling of the connection too, with no new exception");
+  // Escalated to the provider is not offered: the exception stays open while it is checked, and the payment then applies it.
+  const escalated = run("escalated", "escalated_to_provider", true);
+  check(!escalated.answer.ok && /Resolution code must be one of: provider_state_adopted, platform_state_confirmed\./.test(escalated.answer.message), `escalated_to_provider is refused (${!escalated.answer.ok && escalated.answer.message})`);
+  equal([escalated.unseen.status, escalated.unseen.data.resolutionCode, escalated.reversal, escalated.debit], ["closed", "condition_cleared", ["resolved", "canonical_provider_reference", true], reversed.debit], "the open exception closes when the payment arrives, which the reversal reverses");
+  equal(resolutionCodesForException(adopted.unseen), ["provider_state_adopted", "platform_state_confirmed"], "the waiting reversal's exception offers only the two codes that decide it");
+  // A resolution replaces the notes with its reason: the text the exception was raised with is read on the one left open.
+  const notes = String(escalated.unseen.data.notes);
+  check(/Resolve it as platform state confirmed if .*: the next reconciliation sets the reversal aside, and it reverses nothing, even if its payment arrives later/.test(notes) && /Resolve it as provider state adopted if .*: it keeps waiting for its payment with no new exception, and the reconciliation that records that payment reverses it/.test(notes) && /Leave this exception open while you check/.test(notes), `the exception says what each resolution does (${notes})`);
+});
+
+section("held evidence Finance resolved in one sitting", () => {
+  const run = (label: string, chargebackCode: string, closeBetween: boolean) => {
+    const { state, due } = liveFixture({ withFailure: false, merchantId: `one-sitting-${label}` });
+    addAttempt(state, due, { status: "succeeded", occurredAt: wat("2027-07-01T06:30:00"), providerReference: "PSK-FILE-1" });
+    addObservation(state, { reference: "PSK-FILE-1", amountKobo: due.amountKobo, source: "webhook", customerId: due.customerId, eventId: "w1", occurredAt: wat("2027-07-01T06:30:00") });
+    close(state, "2027-07-01T07:30:00");
+    // The provider's settlement file spells the connection its own way: the collection's line, and a chargeback row for it.
+    const line = addObservation(state, { reference: "PSK-FILE-1", amountKobo: due.amountKobo - 12_500, grossAmountKobo: due.amountKobo, feeKobo: 12_500, batchReference: "B-FILE", source: "settlement", customerId: due.customerId, eventId: "s1", occurredAt: wat("2027-07-02T06:00:00"), provider: "Sandbox Rail Settlements" } as any);
+    const chargeback = addObservation(state, { reference: "PSK-FILE-1", amountKobo: due.amountKobo, source: "settlement", customerId: due.customerId, eventId: "s1-rev", reversed: true, occurredAt: wat("2027-07-02T06:00:00"), provider: "Sandbox Rail Settlements" } as any);
+    close(state, "2027-07-02T07:30:00");
+    const resolve = (evidence: ValopayRecord, code: string, at: string) => accepted(request(state, () => executeAction(state, finance(wat(at)), { action: "resolve_exception", recordId: exceptionsFor(state, evidence.id, "suspected_duplicate")[0]!.id, reason: "Checked with the provider.", data: { resolutionCode: code } })), `${label}: ${code}`).message;
+    const answer = resolve(chargeback, chargebackCode, "2027-07-02T09:00:00");
+    if (closeBetween) close(state, "2027-07-02T10:00:00");
+    resolve(line, "same_payment", "2027-07-02T11:00:00");
+    close(state, "2027-07-03T07:30:00");
+    const [collected] = payment(state, "PSK-FILE-1"), instalment = live(state, due);
+    return { answer, chargeback: [chargeback.status, chargeback.data.resolutionKey, chargeback.data.paymentId ?? null], line: [line.status, line.data.resolutionKey], collected: [collected!.status, collected!.data.reversalStatus, collected!.data.settlementStatus], due: [instalment.status, outstandingOf(instalment)] };
+  };
+  for (const [label, code, closeBetween] of [["not-money", "not_money", false], ["distinct", "distinct_payments", false], ["close-between", "not_money", true]] as const) {
+    const outcome = run(label, code, closeBetween);
+    check(/set aside at the next reconciliation: no payment is made from it only to be reversed, and it reverses nothing, even if its payment is found later/.test(outcome.answer), `${label}: the answer says so (${outcome.answer})`);
+    equal([outcome.chargeback, outcome.line, outcome.collected, outcome.due], [["resolved", "reversal_set_aside_after_review", null], ["resolved", "joined_after_review"], ["allocated", "none", "settled"], ["paid", 0]], `${label}: the chargeback Finance set aside reverses nothing, though the joined line keys the payment under its spelling`);
+  }
+  // Payment evidence in the same file: set aside as not money, or a payment of its own, whatever the join keys.
+  const copies = (label: string, code: string) => {
+    const { state, due } = liveFixture({ withFailure: false, merchantId: `one-sitting-copy-${label}` });
+    addObservation(state, { reference: "PSK-FILE-2", amountKobo: due.amountKobo, source: "webhook", customerId: due.customerId, eventId: "w2", occurredAt: wat("2027-07-01T06:30:00") });
+    close(state, "2027-07-01T07:30:00");
+    const first = addObservation(state, { reference: "PSK-FILE-2", amountKobo: due.amountKobo, source: "webhook", customerId: due.customerId, eventId: "c1", occurredAt: wat("2027-07-02T06:00:00"), provider: "Sandbox Rail Settlements" } as any);
+    const second = addObservation(state, { reference: "PSK-FILE-2", amountKobo: due.amountKobo, source: "webhook", customerId: due.customerId, eventId: "c2", occurredAt: wat("2027-07-02T06:00:00"), provider: "Sandbox Rail Settlements" } as any);
+    close(state, "2027-07-02T07:30:00");
+    for (const [evidence, resolution] of [[first, "same_payment"], [second, code]] as const) accepted(request(state, () => executeAction(state, finance(wat("2027-07-02T09:00:00")), { action: "resolve_exception", recordId: exceptionsFor(state, evidence.id, "suspected_duplicate")[0]!.id, reason: "Checked.", data: { resolutionCode: resolution } })), `${label}: ${resolution}`);
+    close(state, "2027-07-03T07:30:00");
+    return { first: first.data.resolutionKey, second: [second.status, second.data.resolutionKey], payments: payment(state, "PSK-FILE-2").map((item) => item.data.providerConnection) };
+  };
+  equal(copies("not-money", "not_money"), { first: "joined_after_review", second: ["resolved", "set_aside_after_review"], payments: ["Sandbox Rail"] }, "evidence Finance said is not money is set aside, never merged into the payment the join keyed under its spelling");
+  equal(copies("distinct", "distinct_payments"), { first: "joined_after_review", second: ["resolved", "separate_payment_after_review"], payments: ["Sandbox Rail", "Sandbox Rail Settlements"] }, "evidence Finance said is money of its own becomes a payment of its own");
+});
+
+// ---------- Third review upgrade note: the join is offered only while the hold, as it stands now, is for the connection alone ----------
+section("the same payment offered as the hold stands now", () => {
+  const { state, due } = liveFixture({ withFailure: false, merchantId: "hold-as-it-stands" });
+  const other = recordsOf(state, "due-items").find((item) => item.customerId !== due.customerId && item.status === "scheduled")!;
+  addAttempt(state, due, { status: "succeeded", occurredAt: wat("2027-07-01T06:00:00"), providerReference: "PSK-OLD-1" });
+  addObservation(state, { reference: "PSK-OLD-1", amountKobo: due.amountKobo, source: "webhook", customerId: due.customerId, eventId: "w1", occurredAt: wat("2027-07-01T06:00:00") });
+  accepted(request(state, () => reconcile(state, finance(wat("2027-07-01T07:00:00")))), "the debit");
+  const clash = addObservation(state, { reference: "PSK-OLD-1", amountKobo: due.amountKobo, source: "webhook", customerId: other.customerId, eventId: "w2", occurredAt: wat("2027-07-01T08:00:00"), provider: "Sandbox Rail Disputes" } as any);
+  accepted(request(state, () => reconcile(state, finance(wat("2027-07-01T09:00:00")))), "the other payer's evidence");
+  const [debit] = payment(state, "PSK-OLD-1");
+  const [held] = exceptionsFor(state, clash.id, "suspected_duplicate");
+  // An earlier build stored a hold through another connection as one for the connection alone, whatever else the evidence said.
+  held!.data.condition = `suspected_duplicate:${clash.id}:connection:${debit!.id}`;
+  const conflictCodes = ["confirmed_duplicate_refund", "distinct_payments", "applied_to_next", "not_money"];
+  const copy = structuredClone(state);
+  const refused = request(copy, () => executeAction(copy, finance(wat("2027-07-01T10:00:00")), { action: "resolve_exception", recordId: held!.id, reason: "Same payment?", data: { resolutionCode: "same_payment" } }));
+  check(!refused.ok && refused.message === `Resolution code must be one of: ${conflictCodes.join(", ")}.`, `resolving it reads the hold as it stands now and refuses the join (${!refused.ok && refused.message})`);
+  accepted(request(state, () => reconcile(state, finance(wat("2027-07-01T11:00:00")))), "the next reconciliation");
+  const stood = live(state, held!);
+  equal([stood.status, stood.data.condition, resolutionCodesForException(stood)], ["open", `suspected_duplicate:${clash.id}:${debit!.id}`, conflictCodes], "the reconciliation re-derives the stored condition, so the join is no longer offered");
+  check(/Update on .*: the hold now stands as follows\. .*and it names another payer\./.test(String(stood.data.notes)), `its notes say where the hold now stands (${stood.data.notes})`);
+  // A hold for the connection alone that stops being one when its payment's payer is identified as another customer.
+  const { state: payerless, due: owed } = liveFixture({ withFailure: false, merchantId: "hold-stops-being-connection" });
+  const third = recordsOf(payerless, "due-items").find((item) => item.customerId !== owed.customerId && item.status === "scheduled")!;
+  addObservation(payerless, { reference: "TRF-NOPAYER-5", amountKobo: 1_000_000, source: "transfer", eventId: "t1", occurredAt: wat("2027-07-01T07:00:00") });
+  const named = addObservation(payerless, { reference: "TRF-NOPAYER-5", amountKobo: 1_000_000, source: "transfer", customerId: owed.customerId, eventId: "t2", occurredAt: wat("2027-07-01T07:30:00"), provider: "Bank Statement Feed" } as any);
+  accepted(request(payerless, () => reconcile(payerless, finance(wat("2027-07-01T08:00:00")))), "the transfer and its bank report");
+  const [transfer] = payment(payerless, "TRF-NOPAYER-5");
+  const [hold] = exceptionsFor(payerless, named.id, "suspected_duplicate");
+  equal([hold?.data.condition, resolutionCodesForException(hold).includes("same_payment")], [`suspected_duplicate:${named.id}:connection:${transfer!.id}`, true], "the report naming a payer is held for its connection alone while the transfer has none");
+  accepted(request(payerless, () => executeAction(payerless, finance(wat("2027-07-01T09:00:00")), { action: "manual_allocate", recordId: transfer!.id, reason: "The narration names this customer.", data: { dueItemId: third.id, amountKobo: 1_000_000 } })), "Finance identifying another customer as the payer");
+  const moved = live(payerless, hold!);
+  equal([moved.data.condition, resolutionCodesForException(moved).includes("same_payment")], [`suspected_duplicate:${named.id}:${transfer!.id}`, false], "the allocation that identified another payer re-derives the hold, so the join is no longer offered");
+  // Evidence that also agrees with a payment Finance made from other evidence under its own spelling: the join to the payment
+  // its exception names is offered only while it still agrees with that payment.
+  const { state: beside, due: owner } = liveFixture({ withFailure: false, merchantId: "hold-beside-its-own-key" });
+  const another = recordsOf(beside, "due-items").find((item) => item.customerId !== owner.customerId && item.status === "scheduled")!;
+  addObservation(beside, { reference: "TRF-NOPAYER-6", amountKobo: 1_000_000, source: "transfer", eventId: "t1", occurredAt: wat("2027-07-01T07:00:00") });
+  const first = addObservation(beside, { reference: "TRF-NOPAYER-6", amountKobo: 1_000_000, source: "transfer", customerId: owner.customerId, eventId: "t2", occurredAt: wat("2027-07-01T07:30:00"), provider: "Bank Statement Feed" } as any);
+  const second = addObservation(beside, { reference: "TRF-NOPAYER-6", amountKobo: 1_000_000, source: "transfer", customerId: owner.customerId, eventId: "t3", occurredAt: wat("2027-07-01T07:40:00"), provider: "Bank Statement Feed" } as any);
+  accepted(request(beside, () => reconcile(beside, finance(wat("2027-07-01T08:00:00")))), "the transfer and the bank's two reports");
+  accepted(request(beside, () => executeAction(beside, finance(wat("2027-07-01T08:30:00")), { action: "resolve_exception", recordId: exceptionsFor(beside, second.id, "suspected_duplicate")[0]!.id, reason: "A second transfer of the customer's.", data: { resolutionCode: "distinct_payments" } })), "the second report as money of its own");
+  accepted(request(beside, () => reconcile(beside, finance(wat("2027-07-01T09:00:00")))), "the reconciliation that records it");
+  const [unnamed, ownKey] = payment(beside, "TRF-NOPAYER-6");
+  const [firstHold] = exceptionsFor(beside, first.id, "suspected_duplicate");
+  equal([first.status, ownKey?.data.providerConnection, resolutionCodesForException(live(beside, firstHold!)).includes("same_payment")], ["unresolved", "Bank Statement Feed", true], "the first report still offers the join while it agrees with the transfer");
+  accepted(request(beside, () => executeAction(beside, finance(wat("2027-07-01T09:30:00")), { action: "manual_allocate", recordId: unnamed!.id, reason: "The narration names this customer.", data: { dueItemId: another.id, amountKobo: 1_000_000 } })), "Finance identifying another customer as the transfer's payer");
+  const downgraded = live(beside, firstHold!);
+  equal([downgraded.data.condition, resolutionCodesForException(downgraded).includes("same_payment")], [`suspected_duplicate:${first.id}:${unnamed!.id}`, false], "once it no longer agrees with the transfer, the join is no longer offered");
+  check(/no longer agrees with payment TRF-NOPAYER-6: it names another payer, so it cannot be joined to it\. The next reconciliation resolves it to payment TRF-NOPAYER-6, which has its reference through Bank Statement Feed/.test(String(downgraded.data.notes)), `its notes say so (${downgraded.data.notes})`);
+  const joinCopy = structuredClone(beside);
+  check(!request(joinCopy, () => executeAction(joinCopy, finance(wat("2027-07-01T10:00:00")), { action: "resolve_exception", recordId: firstHold!.id, reason: "Same payment?", data: { resolutionCode: "same_payment" } })).ok, "and resolving it as the same payment is refused");
+});
+
+// ---------- Third review finding 2: a collection counted in two batches stays reported until Finance resolves it ----------
+section("a collection in two batches stays reported when its batch leaves variance", () => {
+  const run = (label: string, clearBy: "second credit" | "fee corrected") => {
+    const { state } = liveFixture({ withFailure: false, merchantId: `counted-twice-${label}` });
+    const [d1, d2] = recordsOf(state, "due-items").filter((item) => item.status === "scheduled");
+    const fee = (gross: number) => Math.min(100_000, Math.floor((gross * 50) / 10_000));
+    for (const [d, ref] of [[d1!, "PSK-X1"], [d2!, "PSK-X2"]] as const) {
+      addAttempt(state, d, { status: "succeeded", occurredAt: wat("2027-07-01T06:00:00"), providerReference: ref });
+      addObservation(state, { reference: ref, amountKobo: d.amountKobo, source: "webhook", customerId: d.customerId, eventId: `w-${ref}`, occurredAt: wat("2027-07-01T06:00:00") });
+    }
+    addObservation(state, { reference: "PSK-X1", amountKobo: d1!.amountKobo - fee(d1!.amountKobo), grossAmountKobo: d1!.amountKobo, feeKobo: fee(d1!.amountKobo), batchReference: "B1", source: "settlement", customerId: d1!.customerId, eventId: "s-x1", occurredAt: wat("2027-07-01T07:00:00") });
+    const statedFee = clearBy === "fee corrected" ? fee(d2!.amountKobo) + 50_000 : fee(d2!.amountKobo), net2 = d2!.amountKobo - statedFee;
+    addObservation(state, { reference: "PSK-X2", amountKobo: net2, grossAmountKobo: d2!.amountKobo, feeKobo: statedFee, batchReference: "B2", source: "settlement", customerId: d2!.customerId, eventId: "s-x2", occurredAt: wat("2027-07-01T07:00:00") });
+    addObservation(state, { reference: "STMT-B1", amountKobo: d1!.amountKobo - fee(d1!.amountKobo), batchReference: "B1", source: "statement", eventId: "st-b1", occurredAt: wat("2027-07-01T09:00:00") });
+    // B2's statement credit arrives in two parts, or B2's fee differs from the schedule: either way B2 is in variance.
+    if (clearBy === "second credit") addObservation(state, { reference: "STMT-B2-PART1", amountKobo: net2 - 1_000_000, batchReference: "B2", source: "statement", eventId: "st-b2-1", occurredAt: wat("2027-07-01T09:00:00") });
+    close(state, "2027-07-01T10:00:00");
+    const b2 = recordsOf(state, "settlement-batches").find((item) => item.reference === "B2")!;
+    // The provider's next file lists collection X1, which B1 counts, again in B2: reported on B2's open exception.
+    const again = addObservation(state, { reference: "PSK-X1", amountKobo: d1!.amountKobo - fee(d1!.amountKobo), grossAmountKobo: d1!.amountKobo, feeKobo: fee(d1!.amountKobo), batchReference: "B2", source: "settlement", customerId: d1!.customerId, eventId: "s-x1-again", occurredAt: wat("2027-07-02T07:00:00") });
+    close(state, "2027-07-02T08:00:00");
+    const [carrier] = exceptionsFor(state, b2.id, "settlement_variance");
+    check(carrier?.status === "open" && String(carrier.data.notes).includes("Settlement line PSK-X1 (NGN 18,000.00) is already counted in settlement batch B1") && ((carrier.data.countedTwice ?? []) as string[]).includes(`settlement_variance:${b2.id}:line:${again.id}`), `${label}: B2's open exception carries the report (${carrier?.data.notes})`);
+    // B2 then leaves variance: the rest of its credit arrives, or Finance corrects the fee it typed.
+    if (clearBy === "second credit") addObservation(state, { reference: "STMT-B2-PART2", amountKobo: 1_000_000, batchReference: "B2", source: "statement", eventId: "st-b2-2", occurredAt: wat("2027-07-02T09:00:00") });
+    else accepted(request(state, () => { b2.data.feeKobo = Number(b2.data.expectedFeeKobo); b2.data.netKobo = Number(b2.data.grossKobo) - Number(b2.data.feeKobo); }), "Finance correcting B2's fee");
+    close(state, "2027-07-03T08:00:00");
+    close(state, "2027-07-04T08:00:00");
+    return { state, b2, carrier: live(state, carrier!) };
+  };
+  for (const [label, clearBy, status] of [["second-credit", "second credit", "reconciled"], ["fee-corrected", "fee corrected", "pending"]] as const) {
+    const { state, b2, carrier } = run(label, clearBy);
+    equal([b2.status, carrier.status, exceptionsFor(state, b2.id, "settlement_variance").length], [status, "open", 1], `${label}: B2 leaves variance, and its exception stays open for the collection counted twice`);
+    check(/the batch is now .*It stays open for the collection the provider reports in two batches: resolve it once you have checked both payouts with the provider\./.test(String(carrier.data.notes)), `${label}: its notes say why it stays open (${carrier.data.notes})`);
+    accepted(request(state, () => executeAction(state, finance(wat("2027-07-04T09:00:00")), { action: "resolve_exception", recordId: carrier.id, reason: "The provider recovered the second payout.", data: { resolutionCode: "provider_corrected" } })), `${label}: Finance's resolution`);
+    close(state, "2027-07-05T08:00:00");
+    equal(exceptionsFor(state, b2.id, "settlement_variance").map((item) => item.status), ["resolved"], `${label}: Finance's resolution settles it, and nothing is raised again`);
+  }
+  // A report an earlier build closed with its batch's statement exception is raised again, on its own.
+  const { state, b2, carrier } = run("lost-by-earlier-build", "second credit");
+  Object.assign(carrier, { status: "closed" }); Object.assign(carrier.data, { resolutionCode: "condition_cleared" }); delete carrier.data.countedTwice;
+  close(state, "2027-07-05T08:00:00");
+  const again = recordsOf(state, "observations").find((item) => item.data.eventId === "s-x1-again")!;
+  const raised = exceptionsFor(state, b2.id, "settlement_variance").filter(isOpen);
+  equal(raised.map((item) => item.data.condition), [`settlement_variance:${b2.id}:line:${again.id}`], "the report the earlier build closed is raised again, once");
+  close(state, "2027-07-06T08:00:00");
+  equal(exceptionsFor(state, b2.id, "settlement_variance").filter(isOpen).length, 1, "and not again at the next close");
+});
+
+// ---------- Third review finding 3: a batch an earlier build counted wrongly is corrected ----------
+section("a batch an earlier build counted before the gross arrived", () => {
+  const earlier = (label: string) => {
+    const { state, due } = liveFixture({ withFailure: false, merchantId: `recount-${label}` });
+    addAttempt(state, due, { status: "succeeded", occurredAt: wat("2027-07-01T06:30:00"), providerReference: "PSK-NET-9" });
+    const line = addObservation(state, { reference: "PSK-NET-9", amountKobo: 2_487_500, batchReference: "B-NET-9", source: "settlement", customerId: due.customerId, eventId: "n1", occurredAt: wat("2027-07-01T07:00:00") });
+    addObservation(state, { reference: "STMT-B-NET-9", amountKobo: 2_487_500, batchReference: "B-NET-9", source: "statement", eventId: "st1", occurredAt: wat("2027-07-01T07:30:00") });
+    close(state, "2027-07-01T08:00:00");
+    const batch = recordsOf(state, "settlement-batches").find((item) => item.reference === "B-NET-9")!;
+    const [collected] = payment(state, "PSK-NET-9");
+    // What the earlier build left: the payout counted as the gross with the schedule's fee taken off it, the batch in variance
+    // with an exception, and the debit's gross raising the payment only.
+    Object.assign(batch, { status: "variance" });
+    Object.assign(batch.data, { grossKobo: 2_487_500, feeKobo: 12_437, expectedFeeKobo: 12_437, netKobo: 2_475_063, feeVarianceKobo: 0, explanation: "Statement credit differs from gross settlement lines less recorded fees." });
+    Object.assign(line.data, { assumedFeeKobo: 12_437, expectedFeeKobo: 12_437 }); delete line.data.countedGrossKobo;
+    const variance = raiseException(state, finance(wat("2027-07-01T08:00:00")), "settlement_variance", { linkedRecordId: batch.id, notes: "Statement credit differs from gross settlement lines less recorded fees.", condition: `settlement_variance:${batch.id}:statement:2487500:2475063:12437` });
+    const webhook = addObservation(state, { reference: "PSK-NET-9", amountKobo: 2_500_000, source: "webhook", customerId: due.customerId, eventId: "w1", occurredAt: wat("2027-07-01T09:00:00") });
+    collected!.amountKobo = 2_500_000; delete collected!.data.grossUnstated;
+    Object.assign(webhook, { status: "resolved" }); Object.assign(webhook.data, { paymentId: collected!.id, resolutionKey: "canonical_provider_reference" });
+    return { state, batch, line, variance };
+  };
+  const totals = (batch: ValopayRecord) => [batch.status, batch.data.grossKobo, batch.data.feeKobo, batch.data.expectedFeeKobo, batch.data.netKobo];
+  const { state, batch, line, variance } = earlier("corrected");
+  const completed = closeAnswer(state, "2027-07-02T08:00:00");
+  equal([totals(batch), completed.record!.data.report.variances.count], [["reconciled", 2_500_000, 12_500, 12_500, 2_487_500], 0], "the next close counts the line again with its payment's gross, and the batch reconciles");
+  equal([line.data.countedGrossKobo, line.data.assumedFeeKobo, line.data.expectedFeeKobo], [2_500_000, 12_500, 12_500], "the line records what it now adds");
+  equal([variance.status, variance.data.resolutionCode], ["closed", "condition_cleared"], "and the batch's exception closes as its condition cleared");
+  check(/settlement variance: settlement batch B-NET-9 is now reconciled/.test(String(completed.data.auditNote)), `the close's audit entry names it (${completed.data.auditNote})`);
+  const before = JSON.stringify(recordsOf(state, "settlement-batches"));
+  close(state, "2027-07-03T08:00:00");
+  equal(JSON.stringify(recordsOf(state, "settlement-batches")), before, "a later close counts it no further");
+  // A batch Finance already corrected by hand is left as Finance set it.
+  const { state: byHand, batch: handBatch } = earlier("corrected-by-hand");
+  Object.assign(handBatch.data, { grossKobo: 2_500_000, feeKobo: 12_500, netKobo: 2_487_500 });
+  close(byHand, "2027-07-02T08:00:00");
+  equal(totals(handBatch), ["reconciled", 2_500_000, 12_500, 12_437, 2_487_500], "the totals Finance typed are not corrected again");
+});
+
+// ---------- Third review finding 4: amounts in the payment's own currency ----------
+section("amounts written in the payment's own currency", () => {
+  const { state, due } = liveFixture({ withFailure: false, merchantId: "own-currency-text" });
+  addObservation(state, { reference: "CARD-USD-9", amountKobo: 100_000, source: "card", customerId: due.customerId, eventId: "usd-9", occurredAt: wat("2027-07-01T09:00:00"), currency: "USD" } as any);
+  addObservation(state, { reference: "PSK-USD-9", amountKobo: 99_500, grossAmountKobo: 100_000, feeKobo: 500, batchReference: "B-U1", source: "settlement", customerId: due.customerId, eventId: "usd-line-1", occurredAt: wat("2027-07-01T09:00:00"), currency: "USD" } as any);
+  addObservation(state, { reference: "PSK-USD-9", amountKobo: 99_500, grossAmountKobo: 100_000, feeKobo: 500, batchReference: "B-U2", source: "settlement", customerId: due.customerId, eventId: "usd-line-2", occurredAt: wat("2027-07-02T09:00:00"), currency: "USD" } as any);
+  close(state, "2027-07-02T10:00:00");
+  const [card] = payment(state, "CARD-USD-9");
+  const refund = accepted(request(state, () => executeAction(state, finance(wat("2027-07-02T11:00:00")), { action: "record_refund", recordId: card!.id, reason: "Card refund made outside Valo Pay.", data: { reference: "RF-***9" } })), "the USD refund");
+  equal([refund.message, refund.data.refundedKobo], ["External refund of USD 1,000.00 recorded: the money this payment had not applied. Valo Pay did not move funds.", 100_000], "the refund's answer writes its amount in dollars");
+  const two = recordsOf(state, "settlement-batches").find((item) => item.reference === "B-U2")!;
+  check(exceptionsFor(state, two.id, "settlement_variance").some((item) => String(item.data.notes).includes("Settlement line PSK-USD-9 (USD 1,000.00) is already counted in settlement batch B-U1")), "a USD line counted in two batches is reported in dollars");
+});
+
+// ---------- Third review finding 5: the customer's positions list money in another currency beside the naira ----------
+section("the customer timeline's position beside the dispute pack's", () => {
+  const { state, due } = liveFixture({ withFailure: false, merchantId: "timeline-currencies" });
+  equal("unallocatedOtherCurrencies" in customerTimeline(state, due.customerId).position, false, "a position with naira alone lists no other currency");
+  addObservation(state, { reference: "CARD-USD-8", amountKobo: 100_000, source: "card", customerId: due.customerId, eventId: "usd-8", occurredAt: wat("2027-07-01T09:00:00"), currency: "USD" } as any);
+  close(state, "2027-07-02T10:00:00");
+  const position = customerTimeline(state, due.customerId).position;
+  const pack = buildDisputePack(state, finance(wat("2027-07-02T11:00:00")), due.customerId);
+  equal([position.unallocatedKobo, position.unallocatedOtherCurrencies], [pack.position.unallocatedKobo, { USD: { count: 1, amount: 100_000 } }], "the timeline lists the USD payment beside its naira credit");
+  equal(position.unallocatedOtherCurrencies, pack.position.unallocatedOtherCurrencies, "as the dispute pack does");
+});
+
+// ---------- Third review, a residual: an exception about money in another currency names that currency ----------
+section("exceptions about money in another currency", () => {
+  const { state, due } = liveFixture({ withFailure: false, merchantId: "exception-currencies" });
+  const t0 = wat("2027-07-01T09:00:00");
+  // A USD and a EUR card payment, a USD reversal of a payment no connection has seen, a naira transfer and a USD settlement line.
+  addObservation(state, { reference: "CARD-USD-7", amountKobo: 100_000, source: "card", customerId: due.customerId, eventId: "usd-7", occurredAt: t0, currency: "USD" } as any);
+  addObservation(state, { reference: "CARD-EUR-7", amountKobo: 2_000, source: "card", customerId: due.customerId, eventId: "eur-7", occurredAt: t0, currency: "eur " } as any);
+  addObservation(state, { reference: "PSK-UNSEEN-7", amountKobo: 7_000, source: "webhook", customerId: due.customerId, eventId: "rev-7", reversed: true, occurredAt: wat("2027-06-28T09:00:00"), currency: "USD" } as any);
+  addObservation(state, { reference: "TRF-NGN-7", amountKobo: 500_000, source: "transfer", customerId: due.customerId, eventId: "ngn-7", occurredAt: t0 });
+  addObservation(state, { reference: "PSK-USD-7", amountKobo: 99_500, grossAmountKobo: 100_000, feeKobo: 500, batchReference: "B-U7", source: "settlement", customerId: due.customerId, eventId: "usd-line-7a", occurredAt: t0, currency: "USD" } as any);
+  accepted(request(state, () => reconcile(state, finance(wat("2027-07-01T10:00:00")))), "the first reconciliation");
+  // Evidence in EUR under the naira transfer's reference is held for Finance, and the USD line comes again in another batch.
+  const held = addObservation(state, { reference: "TRF-NGN-7", amountKobo: 300_000, source: "transfer", customerId: due.customerId, eventId: "eur-held-7", occurredAt: t0, currency: "EUR" } as any);
+  addObservation(state, { reference: "PSK-USD-7", amountKobo: 99_500, grossAmountKobo: 100_000, feeKobo: 500, batchReference: "B-U8", source: "settlement", customerId: due.customerId, eventId: "usd-line-7b", occurredAt: wat("2027-07-02T09:00:00"), currency: "USD" } as any);
+  accepted(request(state, () => reconcile(state, finance(wat("2027-07-02T10:00:00")))), "the second reconciliation");
+  const [usd] = payment(state, "CARD-USD-7"), [eur] = payment(state, "CARD-EUR-7"), [line] = payment(state, "PSK-USD-7");
+  const reversal = recordsOf(state, "observations").find((item) => item.data.eventId === "rev-7")!;
+  const second = recordsOf(state, "settlement-batches").find((item) => item.reference === "B-U8")!;
+  const raised = [exceptionsFor(state, usd!.id, "unallocated_payment")[0], exceptionsFor(state, eur!.id, "unallocated_payment")[0], exceptionsFor(state, line!.id, "unallocated_payment")[0],
+    exceptionsFor(state, reversal.id, "provider_status_mismatch")[0], exceptionsFor(state, held.id, "suspected_duplicate")[0], exceptionsFor(state, second.id, "settlement_variance")[0]];
+  equal(raised.map((item) => item && [item.amountKobo, item.data.currency]), [[100_000, "USD"], [2_000, "EUR"], [100_000, "USD"], [7_000, "USD"], [300_000, "EUR"], [100_000, "USD"]],
+    "each exception raised for money in another currency names that currency beside its minor units: a payment held for Finance, a reversal waiting for its payment, held evidence and a line counted in two batches");
+  check(recordsOf(state, "exceptions").filter((item) => !raised.includes(item)).every((item) => !("currency" in item.data)), "an exception about naira names none");
+  // What the console reads carries it: the Exceptions queue, the customer's history and the dispute pack.
+  const queued = pageQueue(state.records, "exceptions", { view: "open", limit: 100 } as any, wat("2027-07-02T11:00:00")).items.find((item) => item.id === raised[0]!.id);
+  const history = pageCustomerHistory(state, due.customerId, { eventsLimit: 100 } as any).events.find((item) => item.id === raised[1]!.id);
+  const pack = buildDisputePack(state, finance(wat("2027-07-02T11:00:00")), due.customerId).timeline.find((item) => item.recordId === raised[3]!.id);
+  equal([queued?.data.currency, history?.data.currency, pack?.currency], ["USD", "EUR", "USD"], "the queue, the history and the dispute pack read it");
+  // A close's review basis lists what remains open with the currency of each amount, as the reviewed close's export prints it.
+  const unresolved = bindCloseReviewBasis(state, close(state, "2027-07-02T11:00:00")).data.reviewBasis.unresolved as { id: string; kind: string; currency?: string }[];
+  equal([raised[0]!.id, raised[3]!.id, held.id].map((id) => unresolved.find((item) => item.id === id)?.currency), ["USD", "USD", "EUR"], "a close's unresolved items name the currency of their amounts: exceptions and evidence");
+  check(unresolved.filter((item) => item.kind === "exceptions" && !raised.some((exception) => exception!.id === item.id)).every((item) => !("currency" in item)), "and a naira item names none");
+
+  // A batch an earlier build left counting the USD collection that B-U7 counts: the report of it names the currency too.
+  const earlier = makeRecord(state, "settlement-batches", { name: "Settlement batch B-U9", status: "pending", reference: "B-U9", data: { ...structuredClone(recordsOf(state, "settlement-batches").find((item) => item.reference === "B-U7")!.data), batchReference: "B-U9", lineObservationIds: [], linePaymentIds: [line!.id] } } as any);
+  accepted(request(state, () => reconcile(state, finance(wat("2027-07-02T11:30:00")))), "the reconciliation of the earlier build's batch");
+  const [counted] = exceptionsFor(state, earlier.id, "settlement_variance");
+  equal([counted?.data.condition, counted?.amountKobo, counted?.data.currency], [`settlement_variance:${earlier.id}:counted:${line!.id}`, 100_000, "USD"], "a batch that counts a USD collection another batch counts is reported in dollars");
+
+  // What an earlier build left: the same exceptions with no currency, one of them already resolved.
+  accepted(request(state, () => executeAction(state, finance(wat("2027-07-02T12:00:00")), { action: "resolve_exception", recordId: raised[1]!.id, reason: "Held as credit in euros.", data: { resolutionCode: "held_credit" } })), "Finance resolving the EUR payment's exception");
+  const legacy = [...raised, counted];
+  for (const item of legacy) delete item!.data.currency;
+  const stamps = legacy.map((item) => item!.updatedAt);
+  check(buildDisputePack(state, finance(wat("2027-07-03T07:00:00")), due.customerId).timeline.find((item) => item.recordId === raised[3]!.id)?.currency === "USD", "the dispute pack reads such an exception in its money's currency even before it is corrected");
+  const corrected = accepted(request(state, () => reconcile(state, finance(wat("2027-07-03T08:00:00")))), "the reconciliation after the upgrade");
+  equal([legacy.map((item) => item!.data.currency), corrected.data.exceptionCurrenciesRecorded], [["USD", "EUR", "USD", "USD", "EUR", "USD", "USD"], 7], "the next reconciliation gives each the currency of the money it is about, the resolved one and both kinds of counted-twice report included, and counts them");
+  check(legacy.every((item, index) => item!.updatedAt !== stamps[index]), "each corrected exception is written");
+  const written = legacy.map((item) => item!.updatedAt);
+  const again = accepted(request(state, () => reconcile(state, finance(wat("2027-07-03T09:00:00")))), "a later reconciliation");
+  equal([legacy.map((item) => item!.updatedAt), "exceptionCurrenciesRecorded" in again.data], [written, false], "once: a later reconciliation writes none of them again and counts nothing");
+  // A currency an exception names already is kept.
+  raised[0]!.data.currency = "GBP";
+  reconcile(state, finance(wat("2027-07-03T10:00:00")));
+  equal(raised[0]!.data.currency, "GBP", "a currency the exception names is never replaced");
+  equal(buildDisputePack(state, finance(wat("2027-07-03T11:00:00")), due.customerId).timeline.find((item) => item.recordId === raised[0]!.id)?.currency, "GBP", "and the dispute pack reads it as the exception names it, as the console does");
+});
+
+// ---------- Third review finding 6: a payer its payment's evidence names is not withdrawn ----------
+section("a withdrawn identification the payment's evidence confirms", () => {
+  const { state } = liveFixture({ withFailure: false, merchantId: "payer-named-after-identification" });
+  const dues = recordsOf(state, "due-items").filter((item) => item.status === "scheduled");
+  const d1 = dues[0]!, d2 = dues.find((item) => item.customerId !== d1.customerId)!;
+  addObservation(state, { reference: "TRF-NOPAYER-1", amountKobo: 1_000_000, source: "transfer", eventId: "t1", occurredAt: wat("2027-07-01T07:00:00") });
+  accepted(request(state, () => reconcile(state, finance(wat("2027-07-01T07:05:00")))), "the payer-less transfer");
+  const [transfer] = payment(state, "TRF-NOPAYER-1");
+  accepted(request(state, () => executeAction(state, finance(wat("2027-07-01T08:00:00")), { action: "manual_allocate", recordId: transfer!.id, reason: "Bank narration names the customer.", data: { dueItemId: d1.id, amountKobo: 1_000_000 } })), "Finance identifying the payer");
+  // The bank's own report of the same transfer then names that customer, and merges into the payment.
+  const named = addObservation(state, { reference: "TRF-NOPAYER-1", amountKobo: 1_000_000, source: "transfer", customerId: d1.customerId, eventId: "t2", occurredAt: wat("2027-07-01T09:00:00") });
+  accepted(request(state, () => reconcile(state, finance(wat("2027-07-01T09:05:00")))), "the bank's report");
+  equal([named.status, named.data.paymentId], ["resolved", transfer!.id], "the report naming the payer is evidence of the payment");
+  const identifying = allocationsOf(state, transfer!.id).find((item) => item.status === "confirmed")!;
+  const reviewed = accepted(request(state, () => executeAction(state, finance(wat("2027-07-02T08:00:00")), { action: "review_allocation", recordId: identifying.id, reason: "Wrong instalment.", data: { correct: false } })), "the review marking the identifying match wrong");
+  equal([transfer!.customerId, transfer!.data.payerIdentification?.customerId, transfer!.status, /withdrawn/.test(reviewed.message)], [d1.customerId, d1.customerId, "unallocated", false], "the payer stays: the payment's own evidence names it");
+  const refused = request(state, () => executeAction(state, finance(wat("2027-07-02T09:00:00")), { action: "manual_allocate", recordId: transfer!.id, reason: "Another customer.", data: { dueItemId: d2.id, amountKobo: 1_000_000 } }));
+  check(!refused.ok && refused.status === 409, `another customer's instalment is refused (${!refused.ok && refused.message})`);
+});
+
 // ---------- One inconsistent record never stops the lender's close ----------
 section("conflicting evidence beside ordinary evidence", () => {
   const { state, due } = liveFixture({ withFailure: false, merchantId: "contained" });
@@ -862,6 +1210,16 @@ function invariants(state: DomainState): string[] {
     const sum = credits.reduce((total, item) => total + item.amountKobo, 0);
     if (sum !== batch.data.statementNetKobo) problems.push(`batch ${batch.reference}: statement total ${batch.data.statementNetKobo} is not its credits ${sum}`);
   }
+  // An exception names the currency of the money it is about (the payment or evidence it links to, or the payment a
+  // report of a collection counted in two batches names), and one about naira names none.
+  for (const e of recordsOf(state, "exceptions")) {
+    const linked = byId.get(String(e.data.linkedRecordId ?? ""));
+    const [, , report, named] = String(e.data.condition ?? "").split(":");
+    const line = report === "line" ? byId.get(String(named)) : undefined;
+    const money = linked?.kind === "payments" || linked?.kind === "observations" ? linked : linked?.kind === "settlement-batches" ? byId.get(report === "counted" ? String(named) : String(line?.data.paymentId ?? "")) : undefined;
+    const currency = String(money?.data.currency || "NGN").trim().toUpperCase();
+    if (e.data.currency !== (currency === "NGN" ? undefined : currency)) problems.push(`exception ${e.data.type} on ${linked?.reference}: currency ${e.data.currency} is not its money's ${currency}`);
+  }
   return problems;
 }
 
@@ -924,4 +1282,4 @@ if (failures.length) {
   console.error(failures.join("\n"));
   assert.fail(`${failures.length} payment evidence section(s) failed`);
 }
-console.log(`Payment evidence golden tests passed (${checks} checks): evidence with no payer and Finance's payer identification, evidence that shares a reference, R1's currency and connection, R4's narration references, statement credits and lines across settlement batches, the rest of a partly allocated payment, distinct payments, evidence and reversals through another connection name, a withdrawn payer, a net line applied before the gross, a gross below the amount, money in another currency, a line an earlier build counted twice, a close that contains a conflict and the conservation property run (${propertyRuns}).`);
+console.log(`Payment evidence golden tests passed (${checks} checks): evidence with no payer and Finance's payer identification, evidence that shares a reference, R1's currency and connection, R4's narration references, statement credits and lines across settlement batches, the rest of a partly allocated payment, distinct payments, evidence and reversals through another connection name, a withdrawn payer, a net line applied before the gross, a gross below the amount, money in another currency, a line an earlier build counted twice, Finance's resolutions deciding first, holds offered as they stand now, counted-twice reports kept, a batch an earlier build counted, amounts in their own currency, other currencies beside a customer's position, a payer its evidence names, exceptions in their money's currency, a close that contains a conflict and the conservation property run (${propertyRuns}).`);

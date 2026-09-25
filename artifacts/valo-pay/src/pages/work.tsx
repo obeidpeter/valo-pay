@@ -35,7 +35,7 @@ function WorkQueue() {
   const focusPage = useRef(false);
   // Paging keeps the work shown, and so the page buttons and the one pressed, until the next page arrives.
   const workKey = ['personal-work', merchantId, workspace?.actor, workspace?.role, scope, filter, { offset }];
-  const query = useQuery({ queryKey: workKey, enabled: !!merchantId && !!workspace, refetchInterval: 60000, placeholderData: keepRowsWhilePaging(workKey),
+  const query = useQuery({ queryKey: workKey, enabled: !!merchantId && !!workspace, refetchInterval: 60000, placeholderData: keepRowsWhilePaging(workKey, cache),
     queryFn: async ({ signal }) => {
       const result = await pilotRequest(lenderPath(`/work?scope=${scope}&filter=${filter}&offset=${offset}&limit=25`, merchantId), personalWorkViewSchema, { signal });
       if (result.merchantId !== merchantId || result.actor !== workspace?.actor || result.scope !== scope) throw new Error('The service returned work for a different context. Refresh the selected lender.');

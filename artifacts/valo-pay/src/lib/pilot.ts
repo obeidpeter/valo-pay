@@ -56,11 +56,11 @@ export function lenderPath(
  */
 export function usePilotQuery<S extends ZodTypeAny>(path: string, schema: S, lender = true) {
   const { merchantId, workspace } = useWorkspace();
-  const queryKey = ["pilot", workspace?.actor, merchantId, path];
+  const queryKey = ["pilot", workspace?.actor, merchantId, path], client = useQueryClient();
   return useQuery<z.output<S>>({
     queryKey,
     enabled: Boolean(workspace) && (!lender || !!merchantId),
-    placeholderData: keepRowsWhilePaging(queryKey),
+    placeholderData: keepRowsWhilePaging(queryKey, client),
     queryFn: ({ signal }) =>
       pilotRequest(lender ? lenderPath(path, merchantId) : path, schema, { signal }),
   });

@@ -232,6 +232,39 @@ if (!REPORT) {
   for (const order of [[entry, second, fork], [fork, entry, second]]) assert.deepEqual(verifyAuditChain(order.map((data) => ({ data }))), { valid: false, count: 3, headHash: entry.hash }, "a fork breaks the chain before its sequence");
   assert.deepEqual(walkAuditChain([{ data: second }, { data: fork }], { sequence: 1, hash: entry.hash }).verified, { sequence: 1, hash: entry.hash }, "a walk from a verified place stays before the fork");
   {
+    // An entry whose sequence is not a whole number from 1 (null, a word, a fraction, a missing key, text, zero) is
+    // itself a break where the walk meets it: whole-number sequences go in order and every other entry after them,
+    // whatever order the entries come in. So the walk stops at the place the damaged entry left in the chain, never
+    // at entry 1, and never past a bad entry.
+    const chain: Array<Record<string, any>> = [];
+    for (let sequence = 1; sequence <= 7; sequence++) chain.push(auditEntryData({ sequence, actor: "System", action: "shape", objectId: `rec-${sequence}`, summary: "Shape", previousHash: chain.at(-1)?.hash, timestamp: `2026-01-01T00:00:0${sequence}.000Z` }));
+    const orders = <T>(items: T[], damaged: T) => [items, [...items].reverse(), [damaged, ...items.filter((item) => item !== damaged)], [...items.filter((item) => item !== damaged), damaged], [...items.slice(2), ...items.slice(0, 2)]];
+    const shapes: Array<[string, (sequence: number) => unknown]> = [["null", () => null], ["a word", () => "abc"], ["a fraction", (sequence) => sequence + 0.5], ["a missing key", () => undefined], ["text", (sequence) => String(sequence)], ["zero", () => 0], ["a negative number", (sequence) => -sequence]];
+    for (const [label, value] of shapes) for (const place of [3, 7]) {
+      const damaged: Record<string, any> = { ...chain[place - 1]!, sequence: value(place) };
+      if (damaged.sequence === undefined) delete damaged.sequence;
+      const entries = chain.map((data, index) => ({ data: index === place - 1 ? damaged : data }));
+      for (const order of orders(entries, entries[place - 1]!)) {
+        checks += 1;
+        const walked = walkAuditChain(order);
+        assert.deepEqual([walked.valid, walked.verified, walked.count], [false, { sequence: place - 1, hash: chain[place - 2]!.hash }, 7], `a sequence of ${label} at entry ${place} breaks the chain there`);
+      }
+    }
+    // A damaged entry stored between two entries at one sequence (a fork) does not keep them apart: the walk from the
+    // entry before them stops before the fork, as it does without the damaged entry.
+    const forked = auditEntryData({ sequence: 6, actor: "System", action: "fork", objectId: "fork", summary: "Fork", previousHash: chain[4]!.hash, timestamp: "2026-01-01T00:00:09.000Z" });
+    const word = { ...auditEntryData({ sequence: 0, actor: "Damaged", action: "damaged", objectId: "x", summary: "Damaged", previousHash: chain[5]!.hash, timestamp: "2026-01-01T00:00:08.000Z" }), sequence: "abc" };
+    const window = [{ data: chain[5]! }, { data: word }, { data: forked }];
+    for (const order of orders(window, window[1]!)) {
+      checks += 1;
+      assert.deepEqual(walkAuditChain(order, { sequence: 5, hash: chain[4]!.hash }).verified, { sequence: 5, hash: chain[4]!.hash }, "a damaged entry beside a fork does not hide it");
+    }
+    // Text that names a whole number is not that number: after a whole chain it is a break of its own, never a fork.
+    const text = { ...auditEntryData({ sequence: 8, actor: "Damaged", action: "damaged", objectId: "y", summary: "Damaged", previousHash: chain[6]!.hash, timestamp: "2026-01-01T00:00:08.000Z" }), sequence: "7" };
+    checks += 1;
+    assert.deepEqual(walkAuditChain([text, ...chain].map((data) => ({ data }))).verified, { sequence: 7, hash: chain[6]!.hash }, "a whole chain followed by a damaged entry verifies to its end");
+  }
+  {
     // A chain written before this change verifies: a store-built entry, its keys in JSONB order.
     const state = seedMerchant("canonical-json");
     appendAudit(state, { actor: "System", role: "Admin", now: "2026-01-01T00:00:00.000Z" }, "test", "workspace", "Synthetic test", { Zeta: 1, ärende: 2 });

@@ -129,7 +129,7 @@ export interface ReadinessStatus {
 export interface RecordData {[key: string]: unknown}
 
 /**
- * A stored record of any kind, with its lender, status, reference, amount in kobo and data.
+ * A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency's minor units (cents for USD).
  */
 export interface ValopayRecord {
   id: string;
@@ -441,11 +441,31 @@ export interface Gates {
 }
 
 /**
+ * Money in currencies other than naira, by currency code: how many payments hold it and their amount in that currency's minor unit (cents for USD). It is never added to a naira total.
+ */
+export interface OtherCurrencies {[key: string]: {
+  count: number;
+  amount: number;
+}}
+
+/**
+ * A customer's position (REC-05), derived from every related record: the naira obligations, allocations, outstanding balance and unapplied credit (unallocatedKobo, naira only), and, only when the customer's payments in another currency hold unapplied money, that money by currency beside it (unallocatedOtherCurrencies), as the dispute pack lists it.
+ */
+export interface CustomerPosition {
+  obligationsKobo: number;
+  allocatedKobo: number;
+  outstandingKobo: number;
+  unallocatedKobo: number;
+  unallocatedOtherCurrencies?: OtherCurrencies;
+  note: string;
+}
+
+/**
  * A customer, their derived position, and every related event, mandate, due item and payment.
  */
 export interface Timeline {
   customer: ValopayRecord;
-  position: RecordData;
+  position: CustomerPosition;
   events: ValopayRecord[];
   mandates: ValopayRecord[];
   dueItems: ValopayRecord[];
@@ -608,7 +628,7 @@ export interface CustomerHistoryCounts {
  */
 export interface CustomerHistory {
   customer: ValopayRecord;
-  position: RecordData;
+  position: CustomerPosition;
   events: ValopayRecord[];
   mandates: ValopayRecord[];
   dueItems: ValopayRecord[];

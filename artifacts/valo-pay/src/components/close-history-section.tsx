@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "wouter";
 import {
   useListCloseHistory,
@@ -147,12 +148,13 @@ export function CloseHistorySection({ active }: { active: boolean }) {
     offset: pagination.offset,
   };
   const closesKey = getListCloseHistoryQueryKey(params);
+  const client = useQueryClient();
   const query = useListCloseHistory(params, {
     query: {
       enabled: !!merchantId && active && !validation.error,
       queryKey: closesKey,
       // Paging keeps the closes shown until the next page arrives, so the pager and the control pressed stay.
-      placeholderData: keepRowsWhilePaging(closesKey),
+      placeholderData: keepRowsWhilePaging(closesKey, client),
     },
   });
   useEffect(() => {

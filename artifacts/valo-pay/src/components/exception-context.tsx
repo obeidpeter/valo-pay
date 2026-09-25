@@ -1,8 +1,62 @@
 import { Link, useSearch } from 'wouter';
 import type { ValopayRecord } from '@workspace/api-client-react';
-import { resolveExceptionType } from '@workspace/valopay-schema';
-import { formatKobo, formatDate } from '@/lib/formatters';
+import { heldEvidenceCodes, heldEvidenceOf, resolveExceptionType, unseenReversalCodes, unseenReversalOf } from '@workspace/valopay-schema';
+import { formatDate, formatNumber } from '@/lib/formatters';
+import { formatRecordMoney } from '@/lib/currencies';
 import { readableLabel } from '@/components/record-label';
+
+/** A reversal waiting for a payment no connection has seen: a provider_status_mismatch whose condition names its evidence. */
+const waitingReversal = (exception: ValopayRecord | null | undefined) =>
+  resolveExceptionType(exception?.data?.type) === 'provider_status_mismatch' && unseenReversalOf(exception?.data?.condition) !== undefined;
+
+/**
+ * A resolution code's name for one exception. A reversal waiting for its payment offers two of the generic mismatch's
+ * codes, whose own names (about a mandate's or attempt's state) do not say what they do to it, so each also says that;
+ * every other code is named as everywhere else.
+ */
+export function resolutionLabel(exception: ValopayRecord | null | undefined, code: unknown): string {
+  if (waitingReversal(exception) && code === unseenReversalCodes.adopted) return 'Provider state adopted; reversal waits for its payment';
+  if (waitingReversal(exception) && code === unseenReversalCodes.setAside) return 'Platform state confirmed; reversal set aside for good';
+  return readableLabel(code);
+}
+
+/**
+ * What recording the chosen outcome does where the service acts on it: evidence held as a suspected duplicate, a payment
+ * held as one, and a reversal waiting for its payment, which the next reconciliation reads the resolution of before it
+ * looks for any payment. Undefined where resolving records the outcome and reason alone.
+ */
+export function resolutionEffect(exception: ValopayRecord, code: unknown): string | undefined {
+  const type = resolveExceptionType(exception.data?.type), chosen = String(code || '');
+  if (waitingReversal(exception)) {
+    // No code keeps it open for Finance to check (escalated_to_provider is not offered), so the box says to leave it open.
+    if (!chosen) return 'Leave this exception open while you check with the provider which collection the reversal reverses: if its payment arrives meanwhile, the reversal applies to it and this exception closes. Once the provider has answered, choose the outcome, and this box says what the next reconciliation does with it.';
+    return chosen === unseenReversalCodes.adopted
+      ? 'The reversal keeps waiting for its payment, with no new exception: the reconciliation that records that payment reverses it, or holds it for you if the payment names another payer, currency or amount. No money moves.'
+      : 'The next reconciliation sets the reversal aside for good: it reverses nothing, even if its payment arrives later. No money moves.';
+  }
+  if (type !== 'suspected_duplicate') return undefined;
+  if (!heldEvidenceOf(exception.data?.condition)) {
+    // A payment held as a suspected duplicate: only distinct payments changes it.
+    return chosen === 'distinct_payments' ? 'Distinct payments releases this payment from its duplicate hold at once: it is then matched like any other payment. No money moves.' : undefined;
+  }
+  if (!chosen) return 'Choose the outcome once you have checked the evidence. This box then says what the next reconciliation does with it.';
+  if (chosen === heldEvidenceCodes.samePayment) return 'The next reconciliation joins this evidence to the payment this exception names, while it is held for its connection alone: evidence of a payment becomes more evidence of it, with no second payment made, and evidence of a reversal reverses that payment. If the payment changes first so that the evidence no longer agrees with it, the evidence is held for you again. No money moves.';
+  if (chosen === heldEvidenceCodes.notMoney) return 'The next reconciliation sets this evidence aside for good: no payment is made from it, and it is joined to no payment. No money moves.';
+  return `The next reconciliation records this evidence as a payment of its own${chosen === 'confirmed_duplicate_refund' ? ', held until its refund is recorded' : ''}. Evidence of a reversal is set aside instead, since no payment is made only to be reversed. No money moves.`;
+}
+
+/**
+ * What any resolution also does to an exception that carries reports of a collection the provider counts in two
+ * settlement batches (data.countedTwice, reports the service added to it while it was open for their batch): it settles
+ * them, so none is raised again. Undefined for an exception that carries none.
+ */
+export function countedTwiceEffect(exception: ValopayRecord): string | undefined {
+  const reports = Array.isArray(exception.data?.countedTwice) ? exception.data.countedTwice.length : 0;
+  if (!reports) return undefined;
+  return reports === 1
+    ? 'This exception also carries the provider\'s report of a collection counted in two settlement batches. Resolving it settles that report too, whichever outcome you record: it is not raised again, so check both payouts with the provider first.'
+    : `This exception also carries ${formatNumber(reports)} of the provider's reports of collections counted in two settlement batches. Resolving it settles those reports too, whichever outcome you record: they are not raised again, so check both payouts of each with the provider first.`;
+}
 
 export function ExceptionContext({ exception, customer, resolutionCode, resolving }: { exception: ValopayRecord; customer?: ValopayRecord; resolutionCode?: unknown; resolving: boolean }) {
   const type = resolveExceptionType(exception.data?.type);
@@ -17,18 +71,20 @@ export function ExceptionContext({ exception, customer, resolutionCode, resolvin
   const financial = type && ['unallocated_payment', 'suspected_duplicate', 'overpayment', 'settlement_variance'].includes(type);
   const mandate = type && ['activation_expired', 'mandate_limit_exceeded', 'imported_consent_gap'].includes(type);
   const checkout = exception.data?.linkedKind === 'connected-intents';
-  // What recording the outcome does: a dispute's instalment and a pay-by-bank checkout's instalment follow the resolution.
+  // What recording the outcome does: a dispute's instalment and a pay-by-bank checkout's instalment follow the resolution,
+  // and so do held evidence, a held payment and a waiting reversal (resolutionEffect).
   const effect = checkout
     ? 'Confirmed successful records the pay-by-bank payment as received, with your evidence reference, and applies it to its instalment; Confirmed failed, or Provider confirmed no debit, records the checkout as failed. Either way the checkout no longer holds its instalment, so a new checkout or retry may follow. No money moves.'
     : type === 'customer_dispute'
       ? 'Not upheld takes the instalment out of dispute: its status then follows its balance, and collection and allocation resume. Upheld or mandate cancelled keeps it in dispute until Finance releases it from dispute on the Collections page. No money moves.'
-      : 'Resolving this exception records your outcome and reason. It does not allocate a payment, issue a refund, reissue a mandate or move money. Complete any required action in its workflow and include its evidence reference in your reason.';
+      : resolutionEffect(exception, resolutionCode) ?? 'Resolving this exception records your outcome and reason. It does not allocate a payment, issue a refund, reissue a mandate or move money. Complete any required action in its workflow and include its evidence reference in your reason.';
+  const carried = countedTwiceEffect(exception);
   return <section aria-label="Exception context" className="space-y-3 rounded-lg border bg-secondary/10 p-4 text-sm">
     <div><h3 className="font-semibold">{readableLabel(exception.data?.type)}</h3><p className="mt-1 font-mono text-xs">{exception.reference || exception.id}</p></div>
-    <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2"><dt className="text-muted-foreground">Customer</dt><dd className="min-w-0 break-words">{customer ? `${customer.name} · ${customer.reference}` : exception.customerId ? `Customer ${exception.customerId} (name unavailable)` : 'No customer linked'}</dd><dt className="text-muted-foreground">Amount</dt><dd className="font-semibold">{formatKobo(exception.amountKobo)}</dd><dt className="text-muted-foreground">Owner</dt><dd>{String(exception.data?.owner || 'Unassigned')}</dd>{Boolean(exception.data?.dueBy) && <><dt className="text-muted-foreground">Deadline</dt><dd>{formatDate(String(exception.data.dueBy))}</dd></>}</dl>
+    <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2"><dt className="text-muted-foreground">Customer</dt><dd className="min-w-0 break-words">{customer ? `${customer.name} · ${customer.reference}` : exception.customerId ? `Customer ${exception.customerId} (name unavailable)` : 'No customer linked'}</dd><dt className="text-muted-foreground">Amount</dt><dd className="font-semibold">{formatRecordMoney(exception, exception.amountKobo)}</dd><dt className="text-muted-foreground">Owner</dt><dd>{String(exception.data?.owner || 'Unassigned')}</dd>{Boolean(exception.data?.dueBy) && <><dt className="text-muted-foreground">Deadline</dt><dd>{formatDate(String(exception.data.dueBy))}</dd></>}</dl>
     <div className="rounded-md border bg-background p-3"><p className="font-medium">Recorded issue</p><p className="mt-1 whitespace-pre-wrap break-words">{String(exception.data?.notes || 'No notes have been recorded. Review the linked evidence before choosing an outcome.')}</p></div>
     {linkedId && <p className="break-all text-xs text-muted-foreground">Linked record: {linkedId}</p>}
     <div className="flex flex-wrap gap-x-4 gap-y-2">{exception.customerId && <Link className="min-h-6 text-primary underline" href={`/customers/${encodeURIComponent(exception.customerId)}?${customerParams}${linkedId ? `#record-${encodeURIComponent(linkedId)}` : ''}`}>Review customer history</Link>}{financial && <Link className="min-h-6 text-primary underline" href={`/reconciliation?${lender}`}>Review reconciliation</Link>}{mandate && <Link className="min-h-6 text-primary underline" href={`/mandates?${lender}`}>Review mandates</Link>}{checkout && <Link className="min-h-6 text-primary underline" href={`/pay-by-bank?${lender}`}>Review the pay-by-bank checkout</Link>}{!financial && !mandate && !checkout && <Link className="min-h-6 text-primary underline" href={`/collections?${lender}`}>Review collections</Link>}</div>
-    {resolving && <div className="rounded-md border bg-background p-3"><p className="font-medium">{resolutionCode ? `Record outcome: ${readableLabel(resolutionCode)}` : 'Record an outcome after reviewing the evidence.'}</p><p className="mt-1">{effect}</p></div>}
+    {resolving && <div className="rounded-md border bg-background p-3"><p className="font-medium">{resolutionCode ? `Record outcome: ${resolutionLabel(exception, resolutionCode)}` : 'Record an outcome after reviewing the evidence.'}</p><p className="mt-1">{effect}</p>{carried && <p className="mt-1">{carried}</p>}</div>}
   </section>;
 }

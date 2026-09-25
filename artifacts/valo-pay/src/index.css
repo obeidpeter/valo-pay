@@ -258,7 +258,7 @@
 .console-content { padding-bottom: 3rem; }
 .console-content h1 { font-size: clamp(1.6rem, 2.3vw, 2rem); line-height: 1.2; letter-spacing: -.045em; }
 .console-content h2 { letter-spacing: -.025em; }
-.console-content > div > header > p { font-size: .8125rem; line-height: 1.6; }
+.console-content > div > header > p, .console-content > [data-page-content] > div > header > p { font-size: .8125rem; line-height: 1.6; }
 .console-content .shadow-sm { box-shadow: 0 2px 5px hsl(var(--foreground) / .025); }
 .console-content table { font-size: .8125rem; }
 .console-content th { font-size: .6875rem; letter-spacing: .025em; font-weight: 600; color: hsl(var(--muted-foreground)); }

@@ -19,8 +19,9 @@ export const MAX_BODY_DEPTH = 32;
  * The most values a request body may hold, counting every object, list, text,
  * number, true, false and null in it, the body itself included. The largest
  * body the console sends, a Finance decision on a close review with its 500
- * source exceptions, holds about 2,000; editing a settlement batch sends its
- * lines back, two values a line. An import's CSV travels as one text.
+ * source exceptions, holds about 2,000; an edit sends only the fields its dialog
+ * shows, so a large settlement batch stays editable. An import's CSV travels as
+ * one text.
  */
 export const MAX_BODY_VALUES = 10_000;
 /** Whether text holds a UTF-16 surrogate without its pair, which PostgreSQL JSON refuses and text silently replaces (a native check; es2022's types do not name it). */

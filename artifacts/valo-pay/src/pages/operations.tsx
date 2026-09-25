@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { lenderPath, pilotRequest, usePilotMutation } from "@/lib/pilot";
 import { operationListSchema } from "@workspace/valopay-schema";
@@ -22,12 +22,12 @@ export default function OperationsPage() {
     setOffset(0);
     setMessage("");
   }, [merchantId, workspace?.actor]);
-  const listKey = ["pilot", "operations", workspace?.actor, merchantId, { offset }];
+  const listKey = ["pilot", "operations", workspace?.actor, merchantId, { offset }], client = useQueryClient();
   const list = useQuery({
     queryKey: listKey,
     enabled: !!merchantId,
     // Paging keeps the requests shown, and so the page buttons and the one pressed, until the next page arrives.
-    placeholderData: keepRowsWhilePaging(listKey),
+    placeholderData: keepRowsWhilePaging(listKey, client),
     refetchInterval: 15000,
     queryFn: ({ signal }) =>
       pilotRequest(lenderPath("/operations", merchantId, offset), operationListSchema, { signal }),

@@ -356,7 +356,7 @@
           }
         },
         "summary": "The operations overview for one lender",
-        "description": "Metrics, queues, recent activity (the eight latest audit entries), upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02), whose audit check covers the entries since the last one verified. The last one verified stays before the first entry that breaks the chain, so a break this check or verify_audit found stays in the feed until the chain is valid again."
+        "description": "Metrics, queues, recent activity (the eight latest audit entries), upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02), whose audit check covers the entries since the last one verified, or since the chain's head once the lender keeps a break. The last one verified stays before the first entry that breaks the chain, and a break this check or verify_audit found is kept, so it stays in the feed after any later write until verify_audit finds the chain valid again."
       }
     },
     "/v1/records/{kind}": {
@@ -14643,7 +14643,7 @@
           "updatedAt",
           "data"
         ],
-        "description": "A stored record of any kind, with its lender, status, reference, amount in kobo and data."
+        "description": "A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency's minor units (cents for USD)."
       },
       "RecordInput": {
         "type": "object",
@@ -15233,6 +15233,56 @@
         ],
         "description": "The prerequisites and decisions, the sandbox's limitations, and the cash and burn figures used for the funding decision."
       },
+      "OtherCurrencies": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "count": {
+              "type": "integer"
+            },
+            "amount": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "count",
+            "amount"
+          ]
+        },
+        "description": "Money in currencies other than naira, by currency code: how many payments hold it and their amount in that currency's minor unit (cents for USD). It is never added to a naira total."
+      },
+      "CustomerPosition": {
+        "type": "object",
+        "properties": {
+          "obligationsKobo": {
+            "type": "integer"
+          },
+          "allocatedKobo": {
+            "type": "integer"
+          },
+          "outstandingKobo": {
+            "type": "integer"
+          },
+          "unallocatedKobo": {
+            "type": "integer"
+          },
+          "unallocatedOtherCurrencies": {
+            "$ref": "#/components/schemas/OtherCurrencies"
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "obligationsKobo",
+          "allocatedKobo",
+          "outstandingKobo",
+          "unallocatedKobo",
+          "note"
+        ],
+        "description": "A customer's position (REC-05), derived from every related record: the naira obligations, allocations, outstanding balance and unapplied credit (unallocatedKobo, naira only), and, only when the customer's payments in another currency hold unapplied money, that money by currency beside it (unallocatedOtherCurrencies), as the dispute pack lists it."
+      },
       "Timeline": {
         "type": "object",
         "properties": {
@@ -15240,7 +15290,7 @@
             "$ref": "#/components/schemas/ValopayRecord"
           },
           "position": {
-            "$ref": "#/components/schemas/RecordData"
+            "$ref": "#/components/schemas/CustomerPosition"
           },
           "events": {
             "type": "array",
@@ -15742,7 +15792,7 @@
             "$ref": "#/components/schemas/ValopayRecord"
           },
           "position": {
-            "$ref": "#/components/schemas/RecordData"
+            "$ref": "#/components/schemas/CustomerPosition"
           },
           "events": {
             "type": "array",

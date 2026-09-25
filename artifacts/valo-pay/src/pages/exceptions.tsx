@@ -10,14 +10,16 @@ import { usePagedQueue } from '@/lib/use-paged-queue';
 import { SavedQueueViews } from '@/components/saved-queue-views';
 import { AlertTriangle, User, Calendar } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
-import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
+import { formatDate, formatNumber } from '@/lib/formatters';
+import { formatRecordMoney } from '@/lib/currencies';
 import { RecordDialog } from '@/components/record-dialog';
 import { exceptionSeverities, failureCodeList, resolutionCodesForException, resolveExceptionType } from '@workspace/valopay-schema';
 import { readableLabel, RecordLabel, StatusBadge } from '@/components/record-label';
 import { isDueToday, isOverdue, useQueueFilters } from '@/lib/queue-filters';
-import { RecordPagination } from '@/components/record-pagination';
-import { ExceptionContext } from '@/components/exception-context';
+import { RecordPagination, usePageProblemFocus } from '@/components/record-pagination';
+import { ExceptionContext, resolutionLabel } from '@/components/exception-context';
 import { useHashTarget } from '@/lib/use-hash-target';
+import { useFocusWhenLost } from '@/lib/focus';
 
 const exceptionViews = ['open', 'high', 'overdue', 'due-today', 'resolved'] as const;
 
@@ -36,9 +38,17 @@ export default function ExceptionsPage() {
   const [selectedEx, setSelectedEx] = useState<any>(null);
   const [actionKind, setActionKind] = useState<'update' | 'resolve' | ''>('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  // The service's answer to the last resolution: what the next reconciliation does with the exception's evidence, say.
+  const [resolved, setResolved] = useState<{ what: string; message: string } | null>(null);
+  const resolvedRef = useRef<HTMLElement>(null);
+  // A resolution takes its Resolve button away (the exception leaves the open queue), so reading continues from its answer.
+  useFocusWhenLost(resolvedRef, resolved);
   const { view: filter, owner, type, setView: setFilter, setOwner, setType } = useQueueFilters(exceptionViews, 'open');
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  useEffect(() => { setSelectedEx(null); setIsDialogOpen(false); }, [merchantId]);
+  // The queue's problem notice, which takes the pager's focus when a page press fails.
+  const listProblem = useRef<HTMLDivElement>(null);
+  usePageProblemFocus(listProblem);
+  useEffect(() => { setSelectedEx(null); setIsDialogOpen(false); setResolved(null); }, [merchantId]);
   /** WAI-ARIA tabs: one tab stop for the group, arrows and Home/End move the selection and the focus together. */
   const onTabKeyDown = (event: React.KeyboardEvent, index: number, keys: Array<typeof filter>) => {
     const moves: Record<string, number> = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: keys.length - 1 };
@@ -85,6 +95,11 @@ export default function ExceptionsPage() {
 
       <QueueFreshness key={merchantId} queries={[exceptionsQuery]} />
 
+      {resolved && <section ref={resolvedRef} role="status" aria-label="Resolution recorded" className="rounded-lg border border-success/30 bg-success/5 p-4 text-sm">
+        <p className="font-semibold">{resolved.what} resolved</p>
+        <p className="mt-1">{resolved.message}</p>
+      </section>}
+
       <QueueSearch /><SavedQueueViews queue="exceptions" views={exceptionViews} fallback="open" />
 
       <div className="bg-card border rounded-xl shadow-sm overflow-hidden flex flex-col">
@@ -116,7 +131,7 @@ export default function ExceptionsPage() {
         {isLoading ? (
           <Loading what="exceptions" />
         ) : error && !data ? (
-          <div role="alert" className="p-6 text-sm"><p>Exceptions could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => refetch()}>Try again</Button></div>
+          <div ref={listProblem} role="alert" className="p-6 text-sm"><p>Exceptions could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => refetch()}>Try again</Button></div>
         ) : targetId && items.length === 0 ? (
           <EmptyState title={wrongLender ? 'This exception link belongs to another lender' : 'The selected exception is unavailable'} action={<Button size="sm" variant="outline" onClick={leaveSelectedRecord}>View exception queue</Button>}>
             {wrongLender ? 'Switch to the lender you were reviewing to open this exception.' : 'It could not be found for the active lender. Open the exception queue to find it.'}
@@ -159,8 +174,9 @@ export default function ExceptionsPage() {
                     </td>
                     <td className="px-6 py-4">
                       <RecordLabel record={customerById.get(String(exception.customerId))} id={exception.customerId} customer />
+                      {/* In the currency of the money it is about: the service names one that is not naira (data.currency). */}
                       {exception.amountKobo > 0 && (
-                         <p className="font-mono font-medium mt-1">{formatKobo(exception.amountKobo)}</p>
+                         <p className="font-mono font-medium mt-1">{formatRecordMoney(exception, exception.amountKobo)}</p>
                       )}
                     </td>
                     <td className="px-6 py-4">
@@ -191,7 +207,7 @@ export default function ExceptionsPage() {
                           </Button>
                         </div>
                       ) : (
-                        <span className="text-muted-foreground text-xs">Resolution: {readableLabel(exception.data?.resolutionCode)}</span>
+                        <span className="text-muted-foreground text-xs">Resolution: {resolutionLabel(exception, exception.data?.resolutionCode)}</span>
                       )}
                     </td>
                   </tr>
@@ -211,6 +227,8 @@ export default function ExceptionsPage() {
         onOpenChange={setIsDialogOpen}
         title={actionKind === 'resolve' ? 'Resolve exception' : 'Edit exception'}
         actionMutation={actionKind === 'resolve' ? 'resolve_exception' : undefined}
+        answer={() => resolvedRef.current}
+        onDone={response => { if (actionKind === 'resolve' && selectedEx) setResolved({ what: `${readableLabel(selectedEx.data?.type || 'exception')}${selectedEx.reference ? ` ${selectedEx.reference}` : ''}`, message: String(response?.message || 'Exception resolution recorded.') }); }}
         context={selectedEx ? values => <ExceptionContext exception={selectedEx} customer={customerById.get(String(selectedEx.customerId))} resolving={actionKind === 'resolve'} resolutionCode={values.resolutionCode} /> : undefined}
         validate={actionKind === 'resolve' ? (values): Record<string, string> => checkoutOutcome
           ? values.resolutionCode === 'resolved_succeeded' && !String(values.evidenceReference || '').trim() ? { evidenceReference: 'Enter the masked reference of the evidence that the payment arrived.' }
@@ -218,7 +236,7 @@ export default function ExceptionsPage() {
           : values.confirmedFailureCode && values.resolutionCode !== 'resolved_failed' ? { confirmedFailureCode: 'Choose a failure code only when the provider confirmed that the debit failed.' } : {} : undefined}
         fields={
           actionKind === 'resolve' ? [
-            { name: 'resolutionCode', label: `How was this resolved? (${readableLabel(selectedEx?.data?.type || 'exception').toLowerCase()})`, type: 'select', isData: true, required: true, options: resolutionCodesForException(selectedEx).map(code => ({ label: readableLabel(code), value: code })) },
+            { name: 'resolutionCode', label: `How was this resolved? (${readableLabel(selectedEx?.data?.type || 'exception').toLowerCase()})`, type: 'select', isData: true, required: true, options: resolutionCodesForException(selectedEx).map(code => ({ label: resolutionLabel(selectedEx, code), value: code })) },
             ...(checkoutOutcome ? [{
               name: 'evidenceReference', label: 'Evidence reference', type: 'text' as const, isData: true,
               help: 'Only when the payment is confirmed as received: the masked reference of the evidence that the money arrived, such as a bank statement line (STMT-***4411).',

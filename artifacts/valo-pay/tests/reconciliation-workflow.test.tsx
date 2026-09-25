@@ -355,11 +355,85 @@ describe('payer confirmation', () => {
     const row = (await within(payments).findByText('TRF-NAMED-1')).closest('tr')!;
     await user.click(within(row).getByRole('button', { name: 'Allocate' }));
     const dialog = await screen.findByRole('dialog', { name: 'Allocate payment' });
-    expect(within(dialog).getByRole('region', { name: 'Allocation preview' }).textContent).toContain("Its evidence names an instalment, so only the instalments of that instalment's customer are offered.");
+    const customer = api.state().records.find(record => record.id === due.customerId)!;
+    expect(within(dialog).getByRole('region', { name: 'Allocation preview' }).textContent).toContain(`Its evidence names instalment DEMO-LOAN-1005 of ${customer.name}, so only that customer's instalments are offered.`);
     await waitFor(() => expect(within(dialog).queryByText('Loading instalment choices…')).toBeNull());
     const options = within(within(dialog).getByLabelText(/^Instalment/)).getAllByRole('option').filter(option => (option as HTMLOptionElement).value);
     const open = api.state().records.filter(record => record.kind === 'due-items' && record.customerId === due.customerId && canTakeAllocation(record as any));
     expect(options.map(option => (option as HTMLOptionElement).value).sort()).toEqual(open.map(record => record.id).sort());
+  });
+
+  // Third review of the audit fixes, finding 4: with nothing of that customer's allocatable, the picker said no instalment
+  // could take the payment, while other customers' instalments could.
+  it("names the customer whose instalments it offers when that customer has none a payment can take", async () => {
+    const user = userEvent.setup();
+    const due = api.state().records.find(record => record.kind === 'due-items' && record.reference === 'DEMO-LOAN-1005')!;
+    const customer = api.state().records.find(record => record.id === due.customerId)!;
+    api.mutate(state => {
+      makeRecord(state, 'observations', { name: 'Transfer', status: 'unresolved', reference: 'TRF-NAMED-2', amountKobo: 1_000_000, customerId: '', data: { source: 'transfer', eventId: 'named-2', provider: 'Sandbox Rail', dueItemId: due.id } });
+      reconcile(state, finance());
+      for (const record of state.records) if (record.kind === 'due-items' && record.customerId === due.customerId) record.status = 'closed';
+    });
+    expect(api.state().records.some(record => record.kind === 'due-items' && record.customerId !== due.customerId && canTakeAllocation(record as any))).toBe(true);
+    renderApp('/reconciliation');
+    const payments = (await screen.findByRole('heading', { name: 'Unallocated payments' })).parentElement!.parentElement!;
+    const row = (await within(payments).findByText('TRF-NAMED-2')).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: 'Allocate' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Allocate payment' });
+    expect(await within(dialog).findByText(`${customer.name}, whose instalment its evidence names, has no instalment that can take a payment.`)).toBeTruthy();
+    expect(within(dialog).queryByText('No instalment can take a payment.')).toBeNull();
+  });
+});
+
+// Third review of the audit fixes, finding 4: a payment in another currency was offered Allocate, whose picker then said
+// its payer had no instalment to take it and showed its dollars as naira, while the service refused it for its currency.
+describe('payments that cannot be allocated', () => {
+  const finance = { role: 'Finance', actor: 'Sandbox Finance' };
+  const serviceRefusal = (payment: { id: string }) => {
+    const due = api.state().records.find(record => record.kind === 'due-items' && canTakeAllocation(record as any))!;
+    try {
+      executeAction(structuredClone(api.state()), { ...finance, now: api.now }, { action: 'manual_allocate', recordId: payment.id, reason: 'Checking what the service says', data: { dueItemId: due.id, amountKobo: 100 } });
+    } catch (error) { return (error as Error).message; }
+    return 'accepted';
+  };
+
+  it('does not offer Allocate for a payment in another currency, says why in the service\'s words and shows its money in that currency', async () => {
+    const user = userEvent.setup();
+    const payment = api.mutate(state => {
+      const open = state.records.find(record => record.kind === 'payments' && record.status === 'unallocated')!;
+      const payer = state.records.find(record => record.kind === 'customers' && record.reference === 'DEMO-C1001')!;
+      const card = { ...structuredClone(open), id: randomUUID(), reference: 'SBX-USD-CARD', customerId: payer.id, amountKobo: 100_000, data: { ...structuredClone(open.data), currency: 'USD', channel: 'card', allocatedKobo: 0 } };
+      state.records.push(card);
+      return card;
+    });
+    renderApp('/reconciliation');
+    const payments = (await screen.findByRole('heading', { name: 'Unallocated payments' })).parentElement!.parentElement!;
+    const row = (await within(payments).findByText('SBX-USD-CARD')).closest('tr')!;
+    expect(row.textContent).toMatch(/USD\s1,000\.00/);
+    expect(row.textContent).not.toContain('₦1,000.00');
+    const allocate = within(row).getByRole('button', { name: 'Allocate' });
+    expect(allocate.getAttribute('aria-disabled')).toBe('true');
+    const reason = document.getElementById(allocate.getAttribute('aria-describedby') || '')?.textContent;
+    expect(reason).toBe('Payment SBX-USD-CARD is in USD. Instalments are owed in naira, so it cannot be applied to one. Record its refund or resolve it with Finance.');
+    expect(reason).toBe(serviceRefusal(payment));
+    await user.click(allocate);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // Its refund is recorded in its own currency too.
+    await user.click(within(row).getByRole('button', { name: 'Record external refund for SBX-USD-CARD' }));
+    const refund = await screen.findByRole('dialog', { name: 'Record external refund' });
+    expect(refund.textContent).toMatch(/This records a refund of USD\s1,000\.00, the money this payment has not applied\./);
+  });
+
+  it('gives the service\'s reason for a payment whose money went back', () => {
+    const [reversed, refunded, partly] = api.mutate(state => {
+      const open = state.records.find(record => record.kind === 'payments' && record.status === 'unallocated')!;
+      const copy = (reference: string, data: Record<string, unknown>) => { const record = { ...structuredClone(open), id: randomUUID(), reference, data: { ...structuredClone(open.data), allocatedKobo: 0, ...data } }; state.records.push(record); return record; };
+      return [copy('SBX-REVERSED-1', { reversalStatus: 'reversed' }), copy('SBX-REFUNDED-1', { refundStatus: 'refunded', refundedKobo: open.amountKobo }), copy('SBX-REFUNDED-PART', { refundStatus: 'refunded', refundedKobo: open.amountKobo - 1, allocatedKobo: 1 })];
+    });
+    expect(permissionReason(finance, { action: 'manual_allocate', record: reversed })).toBe('Payment SBX-REVERSED-1 was reversed by the provider. Its money went back, so it cannot be allocated to an instalment.');
+    expect(permissionReason(finance, { action: 'manual_allocate', record: refunded })).toBe('Payment SBX-REFUNDED-1 was refunded to the payer. Its money went back, so it cannot be allocated to an instalment.');
+    expect(permissionReason(finance, { action: 'manual_allocate', record: partly })).toMatch(/^Payment SBX-REFUNDED-PART was refunded to the payer in part: NGN [\d,.]+ went back, so nothing is left to allocate to an instalment\.$/);
+    for (const payment of [reversed, refunded, partly]) expect(permissionReason(finance, { action: 'manual_allocate', record: payment })).toBe(serviceRefusal(payment));
   });
 });
 

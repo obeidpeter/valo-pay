@@ -35,7 +35,10 @@ const empty = (id: string) => { const state = seedMerchant(id, true); state.reco
   assert.equal(detail["settlement-variance"], "1 difference was recorded.");
   assert.equal(detail.unallocated, "1 item totalling 500 kobo remains at this close.");
   assert.equal(detail.proposed, "2 items totalling 900 kobo remain at this close.");
-  checks += 3;
+  // Money in another currency is named beside the naira, in its own currency (the third review of the audit fixes).
+  const withDollars = makeRecord(state, "closes" as string, { status: "completed", name: "Close", data: { report: { unallocated: { count: 2, kobo: 500, otherCurrencies: { USD: { count: 1, amount: 100_000 } } } } } });
+  assert.equal(Object.fromEntries(closeReviewIssues(withDollars).map((issue) => [issue.id, issue.detail])).unallocated, "2 items totalling 500 kobo and USD 1,000.00 remain at this close.");
+  checks += 4;
 }
 
 // The pilot journey's evidence, one of everything.

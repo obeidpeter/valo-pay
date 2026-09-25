@@ -7,10 +7,10 @@
  */
 import PDFDocument from "pdfkit";
 import { VALO_PACK_SANS_BOLD, VALO_PACK_SANS_REGULAR } from "../fonts/valo-pack-sans";
-import { counted, moneyText, otherCurrenciesText, paymentUnappliedKobo, WAT_OFFSET_MS } from "@workspace/valopay-schema";
+import { counted, moneyText, otherCurrenciesText, WAT_OFFSET_MS } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
-import { inNaira, positionFor, type CustomerPosition, type OtherCurrencies } from "../domain/close";
-import { currencyOf } from "../domain/reconciliation";
+import { inNaira, positionFor, unallocatedOtherCurrencies, type CustomerPosition, type OtherCurrencies } from "../domain/close";
+import { currencyOf, exceptionCurrency } from "../domain/reconciliation";
 import { recordsOf } from "../domain/records";
 import { verifyAudit } from "./valopay-store";
 import { collectExportBytes } from './export-download';
@@ -24,7 +24,7 @@ export interface TimelineEvent {
   reference: string;
   /** In the minor unit of `currency`: kobo for naira. */
   amountKobo: number;
-  /** The currency of the amount: a payment's or evidence's own, and theirs for an exception about one; NGN for everything else. */
+  /** The currency of the amount: a payment's or evidence's own, and for an exception the one it names, else its money's (exceptionCurrency); NGN for everything else. */
   currency: string;
   detail: string;
   actor: string | null;
@@ -146,12 +146,12 @@ export function buildDisputePack(state: DomainState, ctx: Context, customerId: s
   const relatedIds = new Set(related.map((record) => record.id));
   const actions = recordsOf(state, "audit").filter((record) => relatedIds.has(String(record.data.objectId)) || record.data.objectId === customerId);
   const documents = governingDocuments(state);
-  // Every amount in its own currency: a payment's or evidence's, and theirs for an exception about one; anything else is naira.
+  // Every amount in its own currency: a payment's or evidence's, and an exception's as it names it or as its money is (one an
+  // earlier build raised names none until the next reconciliation); anything else is naira.
   const byId = new Map(state.records.map((record) => [record.id, record]));
-  const currencyFor = (record: ValopayRecord): string => {
-    const money = record.kind === "exceptions" ? byId.get(String(record.data.linkedRecordId ?? "")) : record;
-    return money && (money.kind === "payments" || money.kind === "observations") ? currencyOf(money) : "NGN";
-  };
+  const money = (kind: string, id: string) => { const found = byId.get(id); return found?.kind === kind ? found : undefined; };
+  const currencyFor = (record: ValopayRecord): string => record.kind === "exceptions" ? exceptionCurrency(record, money)
+    : record.kind === "payments" || record.kind === "observations" ? currencyOf(record) : "NGN";
   const timeline: TimelineEvent[] = [...related, ...actions].map((record) => {
     const at = eventTime(record);
     const { event, detail } = describe(record);
@@ -168,7 +168,7 @@ export function buildDisputePack(state: DomainState, ctx: Context, customerId: s
   const mandates = by("mandates"), dueItems = by("due-items"), attempts = by("attempts"), payments = by("payments"), exceptions = by("exceptions"), notifications = by("notifications");
   const consent = mandates.map((mandate) => ({ mandate: mandate.reference, evidence: text(mandate.data.consentEvidence), gaps: Array.isArray(mandate.data.consentGaps) ? mandate.data.consentGaps : [], provenance: text(customer.data.consentProvenance) }));
   // Naira totals as the close keeps them: money in another currency is listed beside them, never added in.
-  const unallocatedOther = inNaira(payments.filter((p) => paymentUnappliedKobo(p) > 0), (p) => paymentUnappliedKobo(p)).otherCurrencies;
+  const unallocatedOther = unallocatedOtherCurrencies(payments);
   return {
     kind: "dispute-pack", environment: "synthetic_sandbox",
     merchant: { id: state.merchant.id, name: state.merchant.name, provider: state.merchant.provider, mode: state.merchant.mode },

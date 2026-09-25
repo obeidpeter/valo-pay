@@ -139,6 +139,14 @@ for (const key of ["policyId", "experimentId", "proposedDueItemId", "noticeId", 
   const named = structuredClone(before); delete named.records.find((record) => record.id === payment)!.data.payerIdentification;
   const namedWithdrawn = structuredClone(named); Object.assign(namedWithdrawn.records.find((record) => record.id === payment)!, { customerId: "" });
   expectConflict(() => assertFinalState(named, namedWithdrawn, "merchant-a"));
+  // Nor is an identification withdrawn once evidence resolved to the payment names that customer (the third review of the audit fixes).
+  const confirmed = structuredClone(before), paymentRecord = confirmed.records.find((record) => record.id === payment)!;
+  confirmed.records.push({ ...structuredClone(paymentRecord), id: "evidence-naming-payer", kind: "observations", name: "transfer TRF-1", status: "resolved", reference: paymentRecord.reference, customerId: customer, data: { source: "transfer", paymentId: payment, resolutionKey: "canonical_provider_reference" } });
+  const confirmedWithdrawn = structuredClone(confirmed); withdraw(confirmedWithdrawn, payment);
+  expectConflict(() => assertFinalState(confirmed, confirmedWithdrawn, "merchant-a"));
+  const unnamed = structuredClone(confirmed); Object.assign(unnamed.records.find((record) => record.id === "evidence-naming-payer")!, { customerId: "" });
+  const unnamedWithdrawn = structuredClone(unnamed); withdraw(unnamedWithdrawn, payment);
+  assert.doesNotThrow(() => assertFinalState(unnamed, unnamedWithdrawn, "merchant-a"), "evidence that names no payer does not stop the withdrawal");
   // After the withdrawal, Finance identifies the real payer; the wrong match keeps the customer the history names, and no other.
   const reidentified = structuredClone(withdrawn); Object.assign(reidentified.records.find((record) => record.id === payment)!, { customerId: other });
   assert.doesNotThrow(() => assertFinalState(withdrawn, reidentified, "merchant-a"), "the real payer is recorded next");

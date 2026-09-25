@@ -154,6 +154,24 @@ test("a close's money in another currency is listed in that currency beside its 
     await expect(latest.locator("dt", { hasText: label }).locator("xpath=following-sibling::dd")).toContainText(/and USD\u00a01,000\.00 \(1 payment\)/);
   }
 });
+test("the API and the browser print a close's money in another currency with the same decimals", async ({ page, request }) => {
+  // Third review of the audit fixes, finding 2: the API took a currency's decimals from Node's copy of CLDR and the console
+  // from the browser's, which disagree for COP, HUF, IDR, PKR and RSD; both now take them from ISO 4217.
+  const lender = (await (await request.get("/api/v1/workspace")).json()).merchants[0].id;
+  const customer = (await (await request.get(`/api/v1/records/customers?merchantId=${lender}&limit=1`)).json()).items[0];
+  const csv = ["name,reference,customerId,amount,source,currency,channel", `COP card,E2E-COP-1,${customer.reference},100000,card,COP,card`, `HUF card,E2E-HUF-1,${customer.reference},123456,card,HUF,card`, `RSD card,E2E-RSD-1,${customer.reference},5000,card,RSD,card`].join("\n");
+  const imported = await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "observations", csv, mapping: {}, amountUnit: "kobo", syntheticOnly: true, commit: true } });
+  expect(imported.ok(), await imported.text()).toBeTruthy();
+  expect((await request.post(`/api/v1/actions?merchantId=${lender}`, { data: { action: "run_reconciliation" } })).ok()).toBeTruthy();
+  await page.goto("/reports");
+  await page.getByRole("button", { name: "Run daily close" }).click();
+  await expect(page.getByText("Daily close completed").first()).toBeVisible();
+  const latest = page.getByRole("list", { name: "Recorded daily closes" }).locator("li").filter({ hasNotText: "Recorded sample close" }).first();
+  // The close's own line, which the API wrote, and its details, which the browser writes.
+  await expect(latest).toContainText("including COP 1,000.00, HUF 1,234.56 and RSD 50.00 in other currencies");
+  await latest.getByText("View close details").click();
+  await expect(latest.locator("dt", { hasText: "Unmatched at close" }).locator("xpath=following-sibling::dd")).toContainText(/COP\u00a01,000\.00 \(1 payment\), HUF\u00a01,234\.56 \(1 payment\) and RSD\u00a050\.00 \(1 payment\)/);
+});
 test("arriving at the accuracy review scrolls there once; paging a table keeps the view on that table", async ({
   page,
 }) => {
