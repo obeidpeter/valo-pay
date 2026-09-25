@@ -6,8 +6,11 @@
 // without moving the head is followed, never forked, and the export worker's
 // claim reads the head only once it holds the lender. The overview checks the
 // chain from that point and shows the eight latest entries; verify_audit
-// checks it whole and records how far it held, and a break either finds (a
-// fork, a gap, a changed entry) stays reported until the chain is valid again.
+// checks it whole and records how far it held. A break either finds (a fork, a
+// gap, a changed entry, an entry whose sequence is not a whole number, which
+// is a break at its place and hides no fork) is kept for the lender, so it
+// stays reported until verify_audit finds the chain valid again, and each
+// later check reads only the entries since the head.
 // Every load has earlier closes as summaries, settings read only the latest
 // close, the records list has every close as its summary, and a list of a kind
 // that grows with history is capped when it names no limit.
@@ -265,13 +268,13 @@ try {
     // The claim's transaction reads before it takes the lender, as the isolation self-check's catalogue reads do
     // under runtime isolation. Meanwhile another process's worker appends an entry and lets the lender go without
     // changing its row, as recording an export ready does.
-    const patched: Array<{ client: any; query: unknown }> = [];
+    const patched: any[] = [];
     let reached!: () => void, release!: () => void;
     const atLock = new Promise<void>((resolve) => { reached = resolve; }), released = new Promise<void>((resolve) => { release = resolve; });
     let armed = true;
     const hold = (client: any) => {
       const query = client.query;
-      patched.push({ client, query });
+      patched.push(client);
       client.query = async (text: unknown, ...rest: unknown[]) => {
         if (armed && typeof text === "string" && text.includes("FOR UPDATE OF m SKIP LOCKED")) {
           armed = false;
@@ -303,7 +306,8 @@ try {
       assert.equal(verifyAuditChain(entries).valid, true, "one chain, no fork");
     } finally {
       pool.off("acquire", hold); release();
-      for (const { client, query } of patched) client.query = query;
+      // The prototype's query again, not an own copy of it that a later patch of the prototype would not reach.
+      for (const client of patched) delete client.query;
       if (directory === undefined) delete process.env.PRIVATE_OBJECT_DIR; else process.env.PRIVATE_OBJECT_DIR = directory;
       await removeWorkspaceOf(target);
     }
@@ -335,8 +339,12 @@ try {
       await write(forked, "Written on a forked chain");
       assert.equal(await overview(forked), true, "and neither verify_audit nor a later write hides it");
       await pool.query("DELETE FROM valopay_records WHERE id=$1", [forkId]);
-      assert.equal(await overview(forked), false, "once the chain is valid again, the overview says so");
+      assert.equal(await entryNamed(forked), head.data.sequence, "a repair leaves the break the lender knows of");
       await write(forked, "After the repair");
+      assert.equal(await entryNamed(forked), head.data.sequence, "and so does a later write: only verify_audit reads the whole chain again");
+      assert.equal((await verifyChain(forked)).valid, true, "verify_audit finds the chain valid again");
+      assert.deepEqual([await overview(forked), (await chainOf(forked))!.broken], [false, undefined], "which clears the break and the overview's alert");
+      await write(forked, "After the check");
       assert.equal((await chainOf(forked))!.verified.sequence, (await entriesOf(forked)).at(-2)!.data.sequence, "and the next write verifies on from there");
       // Before the last verified entry: the overview does not read it again, verify_audit finds it, and from then on
       // the overview shows it too.
@@ -352,7 +360,91 @@ try {
       assert.equal(await overview(earlier), true, "and a later write does not hide it");
       assert.equal(await entryNamed(earlier), 2, "naming the forked entry after the last verified one");
     } finally { await removeWorkspaceOf(forked); }
-    checks += 14;
+    checks += 17;
+  }
+
+  // ---- 12. An entry whose sequence is not a whole number is a break at its place in the chain, and hides no fork ----
+  {
+    const shapeCall = sandboxCaller();
+    const [damaged, forked] = ok(await shapeCall("/v1/workspace")).merchants.map((merchant: { id: string }) => merchant.id) as [string, string];
+    const at = (path: string, merchantId: string) => `${path}${path.includes("?") ? "&" : "?"}merchantId=${merchantId}`;
+    const entryNamed = async (merchantId: string) => brokenEntry(ok(await shapeCall(at("/v1/overview", merchantId))));
+    const write = async (merchantId: string, name: string) => ok(await shapeCall(at("/v1/records/customers", merchantId), "POST", customer(name), randomUUID()));
+    const verifyChain = async (merchantId: string) => ok(await shapeCall(at("/v1/actions", merchantId), "POST", { action: "verify_audit", reason: "Check the synthetic audit log" }, randomUUID())).data;
+    try {
+      // A null sequence, at the head and then at entry 3: verify_audit names that entry, and the lender records the
+      // entry before it, not entry 1 and the chain's start.
+      for (let index = 0; index < 6; index++) await write(damaged, `Damaged sequence customer ${index}`);
+      const entries = await entriesOf(damaged);
+      for (const target of [entries.at(-1)!, entries[2]!]) {
+        await pool.query("UPDATE valopay_records SET data=jsonb_set(data,'{sequence}','null') WHERE id=$1", [target.id]);
+        assert.equal((await verifyChain(damaged)).valid, false);
+        assert.deepEqual([await entryNamed(damaged), (await chainOf(damaged))!.verified.sequence], [target.data.sequence, target.data.sequence - 1], `a null sequence at entry ${target.data.sequence} is the break verify_audit records`);
+        await pool.query("UPDATE valopay_records SET data=$2 WHERE id=$1", [target.id, target.data]);
+        assert.equal((await verifyChain(damaged)).valid, true, "and once it is repaired the chain is valid again");
+      }
+      // A damaged entry stored after the head and before a second entry at the head's sequence (a fork): the fork is
+      // named at once, the lender's verified entry stays before it, and removing the damaged entry does not hide it.
+      for (let index = 0; index < 5; index++) await write(forked, `Word fork customer ${index}`);
+      const chain = await entriesOf(forked), head = chain.at(-1)!, prior = chain.at(-2)!;
+      const word = await insertEntry(forked, { ...auditEntryData({ sequence: 0, actor: "Damaged", action: "damaged.entry", objectId: "damaged", summary: "Damaged", previousHash: head.data.hash, timestamp: new Date().toISOString() }), sequence: "abc" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await insertEntry(forked, auditEntryData({ sequence: head.data.sequence, actor: "System · export worker", action: "export.started", objectId: "word-fork-export", summary: "A second writer took the same sequence.", previousHash: prior.data.hash, timestamp: new Date().toISOString() }));
+      assert.equal(await entryNamed(forked), head.data.sequence, "the overview names the sequence two entries claim, whatever lies between them");
+      await write(forked, "After the damage and the fork");
+      assert.deepEqual([await entryNamed(forked), (await chainOf(forked))!.verified.sequence], [head.data.sequence, prior.data.sequence], "a write keeps the lender's verified entry before the fork");
+      await pool.query("DELETE FROM valopay_records WHERE id=$1", [word]);
+      await write(forked, "After the damaged entry went");
+      assert.equal(await entryNamed(forked), head.data.sequence, "removing the damaged entry does not hide the fork");
+      const found = await verifyChain(forked);
+      assert.deepEqual([found.valid, found.headHash, await entryNamed(forked)], [false, prior.data.hash, head.data.sequence], "and verify_audit finds the same fork");
+    } finally { await removeWorkspaceOf(damaged); }
+    checks += 10;
+  }
+
+  // ---- 13. A chain known to be broken is checked on from its head: each save and overview reads what came since ----
+  {
+    const costCall = sandboxCaller();
+    const [target] = ok(await costCall("/v1/workspace")).merchants.map((merchant: { id: string }) => merchant.id) as [string];
+    const at = (path: string) => `${path}${path.includes("?") ? "&" : "?"}merchantId=${target}`;
+    const write = async (name: string) => ok(await costCall(at("/v1/records/customers"), "POST", customer(name), randomUUID()));
+    // How many entries each check of the chain reads (readAuditChain's query), in order.
+    const reads: number[] = [];
+    const probe = await pool.connect();
+    probe.release();
+    const clients = Object.getPrototypeOf(probe) as { query: (this: unknown, ...args: any[]) => any };
+    const query = clients.query;
+    clients.query = function (this: unknown, ...args: any[]) {
+      const result = query.apply(this, args);
+      if (typeof args[0] !== "string" || !/r\.kind='audit'/.test(args[0]) || !/make_interval\(mins =>/.test(args[0]) || typeof result?.then !== "function") return result;
+      return result.then((answer: { rows: unknown[] }) => { reads.push(answer.rows.length); return answer; });
+    };
+    try {
+      for (let index = 0; index < 4; index++) await write(`Known break customer ${index}`);
+      const [first] = await entriesOf(target);
+      await insertEntry(target, auditEntryData({ sequence: 2, actor: "System · export worker", action: "export.started", objectId: "known-break-export", summary: "A second writer took an early sequence.", previousHash: first!.data.hash, timestamp: new Date().toISOString() }));
+      assert.equal(ok(await costCall(at("/v1/actions"), "POST", { action: "verify_audit", reason: "Check the synthetic audit log" }, randomUUID())).data.valid, false);
+      assert.deepEqual([(await chainOf(target))!.broken, (await chainOf(target))!.verified.sequence], [{ sequence: 2 }, 1], "the lender keeps the break verify_audit found beside its last verified entry");
+      for (let index = 0; index < 40; index++) await write(`Written on a broken chain ${index}`);
+      reads.length = 0;
+      const overview = ok(await costCall(at("/v1/overview")));
+      assert.deepEqual([brokenAlert(overview), brokenEntry(overview)], [true, 2], "the overview's alert stays on from the known break");
+      await write("One more save");
+      assert.deepEqual(reads, [0, 0], "the overview and the save each read only the entries since the head, not the 40 written since the break");
+      // An entry appended without moving the stored head, as the export worker's are, is still read and followed.
+      const [latest] = (await entriesOf(target)).slice(-1);
+      const elsewhere = auditEntryData({ sequence: latest!.data.sequence + 1, actor: "System · export worker", action: "export.ready", objectId: "known-break-ready", summary: "Recorded without moving the stored head.", previousHash: latest!.data.hash, timestamp: new Date().toISOString() });
+      await insertEntry(target, elsewhere);
+      reads.length = 0;
+      await write("After an entry from elsewhere");
+      const [followed] = (await entriesOf(target)).slice(-1);
+      assert.deepEqual([reads, followed!.data.sequence, followed!.data.previousHash], [[1], elsewhere.sequence + 1, elsewhere.hash], "a save on a broken chain reads the new entry and follows it");
+      assert.deepEqual([(await chainOf(target))!.broken, (await chainOf(target))!.verified.sequence], [{ sequence: 2 }, 1], "and keeps the break and the verified entry before it");
+    } finally {
+      clients.query = query;
+      await removeWorkspaceOf(target);
+    }
+    checks += 6;
   }
 } finally {
   server.close();
@@ -364,4 +456,4 @@ try {
   }
   await pool.end();
 }
-console.log(`Lender history checks passed (${checks} checks): the audit chain stays out of every load and continues from the head kept on the lender, entries written elsewhere are followed, the overview checks from the last verified entry and verify_audit the whole chain, earlier closes load as summaries, settings read only the latest close, the records list has closes as summaries, history lists are capped, the export worker's entries follow the stored head and its claim reads the head once it holds the lender, and a fork stays reported until the chain is valid again.`);
+console.log(`Lender history checks passed (${checks} checks): the audit chain stays out of every load and continues from the head kept on the lender, entries written elsewhere are followed, the overview checks from the last verified entry and verify_audit the whole chain, earlier closes load as summaries, settings read only the latest close, the records list has closes as summaries, history lists are capped, the export worker's entries follow the stored head and its claim reads the head once it holds the lender, a break stays reported until verify_audit finds the chain valid again, a damaged sequence is a break at its place and hides no fork, and a known break costs a save or an overview only the entries since the head.`);
