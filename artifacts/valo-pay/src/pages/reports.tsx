@@ -20,6 +20,7 @@ import { LoadProblem, RefreshProblem } from '@/components/load-problem';
 import { notifyProblem, saidBy } from '@/lib/notify';
 import { useHashTarget } from '@/lib/use-hash-target';
 import { Input } from '@/components/ui/input';
+import { KEPT_IN_OPERATIONS, OpenOperations } from '@/components/pilot-ui';
 
 type Unknown = Record<string, unknown> | undefined;
 const isScalar = (value: unknown) => value === null || ['string', 'number', 'boolean'].includes(typeof value);
@@ -173,8 +174,8 @@ export default function ReportsPage() {
       <p className="text-sm text-muted-foreground">{view === 'operations' ? 'Current operational totals and recorded daily closes. Use the date range to compare past closing positions.' : view === 'billing' ? 'Current-period charges, issued invoices and adjustments. The billing export covers the current statement.' : 'Review the evidence needed to assess a pilot. Sample data cannot establish live performance.'}</p>
       {closeResult?.merchantId === merchantId && <div role={closeResult.failed ? 'alert' : 'status'} className={`rounded-lg border p-5 text-sm ${closeResult.failed ? 'border-destructive/30 bg-destructive/5' : 'bg-card'}`}>
         <p className="font-semibold">{closeResult.failed ? 'Daily close could not be confirmed' : 'Daily close completed'}</p>
-        <p className="mt-2 text-muted-foreground">{closeResult.message}</p>
-        {closeResult.failed ? <Button variant="outline" size="sm" className="mt-3" onClick={() => { void refetch(); void queryClient.invalidateQueries({ queryKey: ['/api/v1/close-history'] }); }} busy={fetchingReports} busyLabel="Refreshing…">Refresh close records</Button> : <Link href="/reports?view=operations#daily-closes" className="mt-3 inline-flex min-h-6 items-center font-medium text-primary underline">View close record</Link>}
+        <p className="mt-2 text-muted-foreground">{closeResult.message}{closeResult.failed && dailyClose.hasUnconfirmedOutcome && <> {KEPT_IN_OPERATIONS}</>}</p>
+        {closeResult.failed ? <div className="mt-3 flex flex-wrap items-center gap-3"><Button variant="outline" size="sm" onClick={() => { void refetch(); void queryClient.invalidateQueries({ queryKey: ['/api/v1/close-history'] }); }} busy={fetchingReports} busyLabel="Refreshing…">Refresh close records</Button>{dailyClose.hasUnconfirmedOutcome && <OpenOperations />}</div> : <Link href="/reports?view=operations#daily-closes" className="mt-3 inline-flex min-h-6 items-center font-medium text-primary underline">View close record</Link>}
       </div>}
 
       {isLoading ? (

@@ -62,7 +62,7 @@ Keep the workspace together: the frontend and API depend on shared packages.
 - **Lender**: a customer of Valo Pay; a merchant in the API, the database and the domain code (`merchantId`). The console says lender.
 - **Workspace**: one person's or one browser's set of lenders; a **sandbox** is a workspace of synthetic lenders, created on first visit for an anonymous browser. Nothing in any workspace is real.
 - **Persona**: a simulated role (Admin, Operations, Finance, Compliance reviewer, Read-only) a workspace can switch between to exercise separation of duties; not a real permission.
-- **Kobo and naira**: every amount is an integer in kobo (₦1 = 100 kobo); the console shows naira. **WAT** is West Africa Time, the zone every time is shown in.
+- **Kobo and naira**: every amount is an integer in kobo (₦1 = 100 kobo), or, for money in another currency (a payment, its evidence or a settlement batch in that currency), in that currency's smallest unit; the console shows naira, and other money in its own currency. **WAT** is West Africa Time, the zone every time is shown in.
 - **Customer, mandate, due item, attempt**: a lender's customer, the authority to debit them, an instalment that is due, and one try at collecting it.
 - **Observation, payment, allocation**: evidence of money received, the canonical payment it resolves to, and the matching of that payment to a due item.
 - **Exception**: a case the catalogue says a person must work, with an owner, a deadline and controlled resolution codes.

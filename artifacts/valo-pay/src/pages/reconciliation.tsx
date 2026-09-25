@@ -23,6 +23,7 @@ import { useUrlPagination } from '@/lib/use-url-pagination';
 import { keepRowsWhilePaging, searchWithoutSubmitting, useDebouncedSearch } from '@/lib/use-record-pagination';
 import { useReconciliationPage } from '@/lib/use-reconciliation-page';
 import { LoadProblem } from '@/components/load-problem';
+import { KEPT_IN_OPERATIONS, OpenOperations } from '@/components/pilot-ui';
 import { hasFeeSchedule, paymentUnappliedKobo } from '@workspace/valopay-schema';
 import { formatRecordMoney as moneyOf } from '@/lib/currencies';
 
@@ -194,7 +195,8 @@ export default function ReconciliationPage() {
 
       {runRecon.error && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm">
         <p className="font-semibold text-destructive">Reconciliation could not be completed</p>
-        <p className="mt-1">{saidBy(runRecon.error, 'The service could not finish this check.')} Run reconciliation again to retry.</p>
+        <p className="mt-1">{saidBy(runRecon.error, 'The service could not finish this check.')} Run reconciliation again to retry.{runRecon.hasUnconfirmedOutcome && <> {KEPT_IN_OPERATIONS}</>}</p>
+        {runRecon.hasUnconfirmedOutcome && <OpenOperations />}
       </div>}
       {runResult && <section role="status" aria-label="Reconciliation result" className="rounded-lg border border-success/30 bg-success/5 p-4 text-sm">
         <p className="font-semibold">Reconciliation complete</p>

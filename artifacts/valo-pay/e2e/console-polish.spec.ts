@@ -474,7 +474,7 @@ test("a failed page of the allocation picker moves focus to its own notice, insi
 test("Try again on a page of Customers that failed keeps the focus, whether the page fails again or arrives", async ({ page, request }) => {
   const lender = (await (await request.get("/api/v1/workspace")).json()).merchants[0].id;
   const rows = Array.from({ length: 60 }, (_, i) => `Pager customer ${String(i).padStart(2, "0")},E2E-RETRY-${i},Synthetic consent,Sandbox Bank,•••• 0001`);
-  expect((await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "customers", csv: "name,reference,consentProvenance,bankName,accountMasked\n" + rows.join("\n"), mapping: {}, syntheticOnly: true, commit: true } })).ok()).toBeTruthy();
+  expect((await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "customers", csv: "name,reference,consentProvenance,bankName,accountMasked\n" + rows.join("\n"), mapping: {}, identityColumn: "reference", syntheticOnly: true, commit: true } })).ok()).toBeTruthy();
   const answer = { failing: true };
   await page.route(/\/api\/v1\/records\/customers\?/, async (route) => {
     if (new URL(route.request().url()).searchParams.get("offset") !== "25") return route.fallback();

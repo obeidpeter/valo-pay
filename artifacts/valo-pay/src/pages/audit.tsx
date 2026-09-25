@@ -1,4 +1,4 @@
-import { useSafePerformAction as usePerformAction } from '@/lib/safe-mutations';
+import { outcomeIsUnconfirmed, useSafePerformAction as usePerformAction } from '@/lib/safe-mutations';
 import React, { useEffect, useRef, useState } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { useSearchShortcut } from '@/lib/focus';
@@ -14,6 +14,7 @@ import { Search, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatDate, formatCount } from '@/lib/formatters';
 import { notifyProblem, saidBy } from '@/lib/notify';
+import { KEPT_IN_OPERATIONS, OpenOperations } from '@/components/pilot-ui';
 
 export default function AuditPage() {
   const { merchantId, workspace } = useWorkspace();
@@ -54,7 +55,8 @@ export default function AuditPage() {
       setVerification({ merchantId, checkedAt: new Date().toISOString(), valid: res.data?.valid === true, count: Number(res.data?.count || 0), headHash: String(res.data?.headHash || '') });
     } catch (error) {
       if (currentMerchant.current === merchantId && verificationRequest.current === request) {
-        notifyProblem('Audit log could not be checked', `${saidBy(error, 'The service could not complete the check.')} The log is unchanged.`);
+        const words = `${saidBy(error, 'The service could not complete the check.')} The log is unchanged.`;
+        notifyProblem('Audit log could not be checked', outcomeIsUnconfirmed(error) ? <>{words} {KEPT_IN_OPERATIONS} <OpenOperations /></> : words);
       }
     }
   };
