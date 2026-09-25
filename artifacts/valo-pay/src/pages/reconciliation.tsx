@@ -20,7 +20,7 @@ import { useHashTarget } from '@/lib/use-hash-target';
 import { safeCollectionReturnTo } from '@/lib/record-navigation';
 import { RecordPagination } from '@/components/record-pagination';
 import { useUrlPagination } from '@/lib/use-url-pagination';
-import { keepRowsWhilePaging, useDebouncedSearch } from '@/lib/use-record-pagination';
+import { keepRowsWhilePaging, searchWithoutSubmitting, useDebouncedSearch } from '@/lib/use-record-pagination';
 import { useReconciliationPage } from '@/lib/use-reconciliation-page';
 import { LoadProblem } from '@/components/load-problem';
 import { paymentUnappliedKobo } from '@workspace/valopay-schema';
@@ -502,7 +502,7 @@ export default function ReconciliationPage() {
           let amount: number | null = null;
           try { amount = nairaToKobo(String(values.amountKobo ?? '')); } catch { /* The field reports incomplete or invalid input on submit. */ }
           return <section aria-label="Allocation preview" className="space-y-2 rounded-lg border bg-secondary/20 p-3 text-sm">
-            <label className="grid gap-1 text-xs">Find an instalment<input type="search" value={allocationSearch} onChange={event=>{setAllocationSearch(event.target.value);choicePage.resetPage();}} placeholder="Name or reference" className="min-h-10 rounded-md border bg-background px-3" /></label>
+            <label className="grid gap-1 text-xs">Find an instalment<input type="search" value={allocationSearch} onKeyDown={searchWithoutSubmitting} onChange={event=>{setAllocationSearch(event.target.value);choicePage.resetPage();}} placeholder="Name or reference" className="min-h-10 rounded-md border bg-background px-3" /></label>
             <p className="text-xs text-muted-foreground">Instalments that are paid, cancelled, closed or in dispute cannot take a payment and are not listed.</p>
             {choicesQuery.error ? <LoadProblem what="instalment choices" error={choicesQuery.error} retry={()=>{void choicesQuery.refetch();}} /> : <>
               {(choicesQuery.isFetching || allocationSearchPending) && <p role="status">Loading instalment choices…</p>}

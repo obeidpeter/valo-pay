@@ -49,7 +49,7 @@ export interface ButtonProps
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, busy = false, busyLabel, disabled, children, ...props }, ref) => {
+  ({ className, variant, size, asChild = false, busy = false, busyLabel, disabled, type, children, ...props }, ref) => {
     const Comp = asChild ? Slot : "button"
     const content = busy && !asChild
       ? <><Loader2 className="animate-spin motion-reduce:animate-none" aria-hidden="true" />{busyLabel ?? children}</>
@@ -60,6 +60,9 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         ref={ref}
         disabled={disabled || busy}
         aria-busy={busy || undefined}
+        // A button submits the form it is in only when it says so (type="submit"): a pager, a retry or any other
+        // control there never sends the form. With asChild the child, such as a link, is no button and keeps its own.
+        type={asChild ? type : type ?? "button"}
         {...props}
       >
         {content}

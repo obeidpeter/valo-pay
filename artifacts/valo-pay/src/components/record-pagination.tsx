@@ -95,9 +95,9 @@ export function PageButtons({ label, busy = false, atStart, atEnd, onPrevious, o
   const controls = usePagerFocus(label, busy);
   const go = (control: Control, change: () => void) => { if (busy) return; press(label, control); change(); };
   return <>
-    <Button ref={controls.previous} variant="outline" disabled={atStart} aria-disabled={busy || undefined} className="aria-disabled:opacity-50" onClick={() => go('previous', onPrevious)}>{previous}</Button>
+    <Button type="button" ref={controls.previous} variant="outline" disabled={atStart} aria-disabled={busy || undefined} className="aria-disabled:opacity-50" onClick={() => go('previous', onPrevious)}>{previous}</Button>
     {children}
-    <Button ref={controls.next} variant="outline" disabled={atEnd} aria-disabled={busy || undefined} className="aria-disabled:opacity-50" onClick={() => go('next', onNext)}>{next}</Button>
+    <Button type="button" ref={controls.next} variant="outline" disabled={atEnd} aria-disabled={busy || undefined} className="aria-disabled:opacity-50" onClick={() => go('next', onNext)}>{next}</Button>
   </>;
 }
 
@@ -119,9 +119,9 @@ export function RecordPagination({ pagination, total, busy = false, label = 'rec
             {RECORD_PAGE_SIZES.map(size => <option key={size} value={size}>{size}</option>)}
           </select>
         </label>
-        <Button ref={controls.previous} variant="outline" size="sm" disabled={page === 0} aria-disabled={busy || undefined} className="aria-disabled:opacity-50" onClick={() => go('previous', () => setPage(page - 1))} aria-label={`Previous page of ${label}`}>Previous</Button>
+        <Button type="button" ref={controls.previous} variant="outline" size="sm" disabled={page === 0} aria-disabled={busy || undefined} className="aria-disabled:opacity-50" onClick={() => go('previous', () => setPage(page - 1))} aria-label={`Previous page of ${label}`}>Previous</Button>
         <span className="tabular-nums">Page {formatNumber(page + 1)} of {formatNumber(pages)}</span>
-        <Button ref={controls.next} variant="outline" size="sm" disabled={offset + pageSize >= total} aria-disabled={busy || undefined} className="aria-disabled:opacity-50" onClick={() => go('next', () => setPage(page + 1))} aria-label={`Next page of ${label}`}>Next</Button>
+        <Button type="button" ref={controls.next} variant="outline" size="sm" disabled={offset + pageSize >= total} aria-disabled={busy || undefined} className="aria-disabled:opacity-50" onClick={() => go('next', () => setPage(page + 1))} aria-label={`Next page of ${label}`}>Next</Button>
       </div>
     </nav>
     <p className="hidden print:block border-t px-5 py-3 text-xs">{total ? `${formatNumber(Math.min(offset + 1, total))}–${formatNumber(Math.min(offset + pageSize, total))} of ${formatNumber(total)} ${label}` : `0 ${label}`} · Page {formatNumber(page + 1)} of {formatNumber(pages)}.{pages > 1 ? ' Current page only. Other pages are not included in this printout.' : ''}</p></>

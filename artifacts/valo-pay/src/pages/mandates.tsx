@@ -26,7 +26,7 @@ import { usePagedQueue } from '@/lib/use-paged-queue';
 import { SavedQueueViews } from '@/components/saved-queue-views';
 import { RecordPagination } from '@/components/record-pagination';
 import { DiscardOriginalRequest } from '@/components/discard-original-request';
-import { keepRowsWhilePaging, useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
+import { keepRowsWhilePaging, searchWithoutSubmitting, useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
 import { LoadProblem } from '@/components/load-problem';
 
 const mandateViews = ['all', 'awaiting-activation', 'overdue', 'due-today'] as const;
@@ -308,7 +308,7 @@ export default function MandatesPage() {
               )}
               <MandateField label="Mandate name" value={draft.name} id="mandate-name" error={fieldErrors.name} onChange={value => change('name', value)} required />
               <div className="space-y-2">
-                <label className="grid gap-1 text-sm font-medium">Search customers<input type="search" value={customerSearch} onChange={event => { setCustomerSearch(event.target.value); customerPage.setPage(0); }} placeholder="Name or reference" className={controlClass} /></label>
+                <label className="grid gap-1 text-sm font-medium">Search customers<input type="search" value={customerSearch} onKeyDown={searchWithoutSubmitting} onChange={event => { setCustomerSearch(event.target.value); customerPage.setPage(0); }} placeholder="Name or reference" className={controlClass} /></label>
                 <MandateSelect label="Customer" value={draft.customerId} id="mandate-customerId" error={fieldErrors.customerId} onChange={value => { change('customerId', value); setChosenCustomer(customerOptions.find(option => option.value === value) ?? null); }} required options={customerOptions} />
                 {customersError ? <LoadProblem what="customer choices" error={customersError} retry={() => { void retryCustomers(); }} busy={fetchingCustomers} /> : <>
                   {(fetchingCustomers || customerSearchPending) && <p role="status" className="text-xs text-muted-foreground">Loading customer choices…</p>}

@@ -1,6 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 
 export const RECORD_PAGE_SIZES = [25, 50, 100] as const;
+
+/**
+ * A picker's search sits in its dialog's form and looks as the person types, so Enter there does nothing more: it never
+ * submits the form around it, such as an allocation or a new mandate that happens to be complete.
+ */
+export function searchWithoutSubmitting(event: KeyboardEvent<HTMLInputElement>) {
+  if (event.key === 'Enter' && !event.nativeEvent.isComposing) event.preventDefault();
+}
 
 /** Wait for a pause in typing; changing lenders never reuses another lender's search. */
 export function useDebouncedSearch(value: string, scope: string | null | undefined, delay = 300) {
