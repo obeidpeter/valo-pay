@@ -1,4 +1,4 @@
-import { positionFor } from "./close";
+import { positionFor, unallocatedOtherCurrencies } from "./close";
 import { recordsOf } from "./records";
 import type { DomainState } from "./types";
 
@@ -8,11 +8,13 @@ export function customerTimeline(state: DomainState, id: string) {
   if (!customer) throw Object.assign(new Error("Customer not found."), { status: 404 });
   const related = state.records.filter((record) => record.customerId === id);
   const dueItems = related.filter((record) => record.kind === "due-items"), payments = related.filter((record) => record.kind === "payments");
-  // REC-05: one derivation of the position, shared with the daily close and the dispute pack.
+  // REC-05: one derivation of the position, shared with the daily close and the dispute pack; money in another currency is
+  // listed beside the naira credit, as the pack lists it, never added to it.
   const { obligationsKobo, allocatedKobo, outstandingKobo, unallocatedKobo } = positionFor(state, id);
+  const unallocatedOther = unallocatedOtherCurrencies(payments);
   return {
     customer,
-    position: { obligationsKobo, allocatedKobo, outstandingKobo, unallocatedKobo, note: "Calculated from instalments and payment records. Valo Pay does not hold these funds." },
+    position: { obligationsKobo, allocatedKobo, outstandingKobo, unallocatedKobo, ...(unallocatedOther ? { unallocatedOtherCurrencies: unallocatedOther } : {}), note: "Calculated from instalments and payment records. Valo Pay does not hold these funds." },
     events: related.sort((a, b) => b.createdAt.localeCompare(a.createdAt)), mandates: related.filter((record) => record.kind === "mandates"), dueItems, payments,
   };
 }

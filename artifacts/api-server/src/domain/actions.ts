@@ -1,14 +1,14 @@
 import {
   counted, businessDateSchema,
   DEFAULT_ACTIVATION_WINDOW_DAYS, PLATFORM_OWNER, activationReminderCaps, closeRules, failureCodeList, handBackFallbackOwner, isKnownFailureCode,
-  heldEvidenceCodes, heldEvidenceOf, nairaText, nextCloseInstant, normaliseFailureCode, otherCurrenciesText, passRuleText, paymentUnappliedKobo, resolutionCodesForException, resolveExceptionType, withinQuietHours, templateTextProblems,
+  heldEvidenceCodes, heldEvidenceOf, moneyText, nairaText, nextCloseInstant, normaliseFailureCode, otherCurrenciesText, passRuleText, paymentUnappliedKobo, resolutionCodesForException, resolveExceptionType, unseenReversalCodes, unseenReversalOf, withinQuietHours, templateTextProblems,
   type CloseTrigger,
 } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
 import {
   REVIEW_SUPERSESSION, allocatePayment, applyConfirmedAllocation, clearSettledExceptions, clearedExceptionsNote, confirmAttemptOutcome, dueStatusText, forgetRejectedMatch,
-  paymentRefunded, paymentReversed, reconcile, recordPaymentRefund, reinstateAllocation, releaseDispute, releaseDuplicateHold, rememberRejectedMatch, reportsReversal, settlePaymentStatus,
-  supersedeAllocation, supersededByReview, withdrawPayerIdentification,
+  currencyOf, paymentRefunded, paymentReversed, reconcile, recordPaymentRefund, refreshHeldEvidence, reinstateAllocation, releaseDispute, releaseDuplicateHold, rememberRejectedMatch, reportsReversal,
+  settlePaymentStatus, supersedeAllocation, supersededByReview, withdrawPayerIdentification,
 } from "./reconciliation";
 import { resolveUnknownCheckout } from "./connected";
 import { buildReports } from "./reports";
@@ -160,12 +160,14 @@ const settlingActions = new Set(["confirm_allocation", "manual_allocate", "revie
 /**
  * Runs a domain action. After one that moves money or a dispute, each open
  * exception whose condition cleared is closed, and the audit entry names them
- * (data.auditNote, added to the reason). A reconciliation or close does the
- * same itself.
+ * (data.auditNote, added to the reason); held evidence is re-derived as the
+ * payments it names now stand (refreshHeldEvidence). A reconciliation or close
+ * does the same itself.
  */
 export function executeAction(state: DomainState, ctx: Context, input: ActionInput): ActionResult {
   const answer = runAction(state, ctx, input);
   if (!settlingActions.has(input.action)) return answer;
+  refreshHeldEvidence(state, ctx);
   const note = clearedExceptionsNote(clearSettledExceptions(state, ctx));
   if (!note) return answer;
   return { ...answer, data: { ...answer.data, auditNote: [answer.data.auditNote, note].filter(Boolean).join(" ") } };
@@ -469,7 +471,9 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput): Action
     const item = findRecord(state, String(input.recordId), "exceptions");
     if (item.data.case?.assignee && item.data.case.assignee !== ctx.actor && ctx.role !== 'Admin') throw Object.assign(new Error('Ask the case assignee or an administrator to record the resolution. Financial review remains a separate action.'), { status: 409 });
     if (["resolved", "closed"].includes(item.status)) throw new Error("This exception is already resolved.");
-    // Codes that apply to this exception: joining held evidence to its payment only where it was held for its connection alone.
+    // Codes that apply to this exception as it stands now: held evidence is re-derived first, so joining it to its payment is
+    // accepted only while it is held for its connection alone, whatever condition an earlier state or build recorded.
+    if (resolveExceptionType(item.data.type) === "suspected_duplicate") refreshHeldEvidence(state, ctx, item);
     const allowed = resolutionCodesForException(item);
     if (!allowed.includes(String(data.resolutionCode))) throw new Error(`Resolution code must be one of: ${allowed.join(", ")}.`);
     const type = resolveExceptionType(item.data.type);
@@ -515,19 +519,22 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput): Action
     // An unknown outcome's resolution is what the provider confirmed, so the attempt takes that outcome.
     const outcome = type === "unknown_outcome" ? confirmAttemptOutcome(state, ctx, item) : undefined;
     if (outcome) return result(`Exception resolution recorded. The attempt is now recorded as ${outcome}.`, item, { attemptStatus: outcome });
-    // A suspected duplicate resolved as a separate payment leaves its hold. Held evidence joins the payment its exception names
-    // when Finance says it is the same payment, is set aside when Finance says it is not money, and otherwise becomes a payment
-    // of its own at the next reconciliation, except evidence of a reversal, which is set aside rather than made a payment and
-    // reversed. So is a reversal that waited for a payment no connection had seen, once Finance has checked it.
+    // A suspected duplicate resolved as a separate payment leaves its hold. For held evidence, and a reversal that waited for a
+    // payment no connection had seen, the next reconciliation reads Finance's resolution before it looks for any payment
+    // (financeDecision in reconciliation), and the answer says what that does.
     const released = type === "suspected_duplicate" ? releaseDuplicateHold(state, ctx, item) : undefined;
     if (released) return result(`Exception resolution recorded. Payment ${released.reference} is released from the duplicate hold and is matched like any other payment.`, item, { paymentStatus: released.status });
-    const evidence = type === "suspected_duplicate" || type === "provider_status_mismatch" ? recordsOf(state, "observations").find((record) => record.id === item.data.linkedRecordId && record.status === "unresolved") : undefined;
+    const decided = (type === "suspected_duplicate" && heldEvidenceOf(item.data.condition)?.observationId) || (type === "provider_status_mismatch" && unseenReversalOf(item.data.condition));
+    const evidence = decided ? recordsOf(state, "observations").find((record) => record.id === decided && record.status === "unresolved") : undefined;
+    if (evidence && type === "provider_status_mismatch") return result(data.resolutionCode === unseenReversalCodes.adopted
+      ? `Exception resolution recorded. This reversal evidence keeps waiting for its payment, with no new exception: the reconciliation that records payment ${evidence.reference} reverses it, whichever spelling of the connection the payment comes through, or holds it for you if that payment names another payer, currency or amount.`
+      : "Exception resolution recorded. This reversal evidence is set aside at the next reconciliation: it reverses nothing, even if its payment arrives later.", item);
     const joinedTo = evidence && data.resolutionCode === heldEvidenceCodes.samePayment ? recordsOf(state, "payments").find((record) => record.id === heldEvidenceOf(item.data.condition)?.paymentId) : undefined;
-    if (evidence && joinedTo) return result(reportsReversal(evidence)
+    if (evidence && joinedTo) return result(`${reportsReversal(evidence)
       ? `Exception resolution recorded. The next reconciliation applies this reversal evidence to payment ${joinedTo.reference}, which is reversed.`
-      : `Exception resolution recorded. The next reconciliation joins this payment evidence to payment ${joinedTo.reference} as more evidence of it: no second payment is made.`, item);
-    if (evidence && reportsReversal(evidence)) return result("Exception resolution recorded. This reversal evidence is set aside at the next reconciliation: no payment is made from it only to be reversed.", item);
-    if (evidence && data.resolutionCode === heldEvidenceCodes.notMoney) return result("Exception resolution recorded. This payment evidence is set aside at the next reconciliation: no payment is made from it.", item);
+      : `Exception resolution recorded. The next reconciliation joins this payment evidence to payment ${joinedTo.reference} as more evidence of it: no second payment is made.`} If payment ${joinedTo.reference} changes before then so that the evidence no longer agrees with it, the evidence is held for you again instead.`, item);
+    if (evidence && reportsReversal(evidence)) return result("Exception resolution recorded. This reversal evidence is set aside at the next reconciliation: no payment is made from it only to be reversed, and it reverses nothing, even if its payment is found later.", item);
+    if (evidence && data.resolutionCode === heldEvidenceCodes.notMoney) return result("Exception resolution recorded. This payment evidence is set aside at the next reconciliation: no payment is made from it, and it is merged into none.", item);
     if (evidence && type === "suspected_duplicate") return result(`Exception resolution recorded. The next reconciliation records this payment evidence as a payment of its own${data.resolutionCode === "confirmed_duplicate_refund" ? ", held until its refund is recorded" : ""}.`, item);
     return result("Exception resolution recorded.", item);
   }
@@ -542,7 +549,7 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput): Action
     if (paymentUnappliedKobo(payment) <= 0) throw Object.assign(new Error(`Payment ${payment.reference} has all of its money applied to instalments, so there is nothing unapplied to refund. A refund recorded here returns only money the payment has not applied.`), { status: 409 });
     payment.data.refundReference = String(data.reference); payment.data.refundRecordedAt = now; payment.data.refundRecordedExternally = true;
     const refundedKobo = recordPaymentRefund(state, ctx, payment, "Superseded: the payment was refunded outside Valo Pay.");
-    return result(`External refund of ${nairaText(refundedKobo)} recorded: the money this payment had not applied. Valo Pay did not move funds.`, payment, { refundedKobo });
+    return result(`External refund of ${moneyText(refundedKobo, currencyOf(payment))} recorded: the money this payment had not applied. Valo Pay did not move funds.`, payment, { refundedKobo });
   }
   if (input.action === "simulate_failure") {
     assertActionRole(ctx, ["Admin", "Operations"]);
