@@ -27,7 +27,9 @@ export interface Alert {
 /**
  * The overview's audit check: whether the chain holds, the entries it counted,
  * its head hash, and verifiedSequence, the last entry it verified, which is
- * always before the first entry that breaks the chain.
+ * always before the first entry that breaks the chain. A break a check found
+ * is kept for the lender, so the chain stays invalid here until verify_audit
+ * finds it valid again.
  */
 export interface AuditVerification { valid: boolean; count: number; headHash: string; verifiedSequence: number }
 
@@ -44,7 +46,8 @@ export function buildAlerts(state: DomainState, now: string, audit?: AuditVerifi
   if (stalledExports.length) alerts.push({ key: 'exports_stalled', severity: 'medium', title: 'Exports need a status check', detail: `${counted(stalledExports.length, 'saved export has', 'saved exports have')} stopped reporting progress or reached a recovery deadline. Open saved exports to check its stage and retry the same job when available. Do not create another export to replace an uncertain request.`, count: stalledExports.length, linkedRecordId: stalledExports[0]!.id, since: exportHealth(stalledExports[0]!, now).lastProgressAt });
   if (audit && !audit.valid) {
     // The chain holds up to the last verified entry, so the entry after it is the first that breaks it: changed, missing, out of order or claimed twice.
-    alerts.push({ key: "audit_chain_broken", severity: "critical", title: "Audit log verification failed", detail: `The check stopped at entry ${audit.verifiedSequence + 1}: it is missing, or its order or verification hash does not match. Ask an administrator to investigate.`, count: audit.count });
+    // The lender keeps the break once found, and only verify_audit (Check audit log) reads the whole chain again to clear it.
+    alerts.push({ key: "audit_chain_broken", severity: "critical", title: "Audit log verification failed", detail: `The check stopped at entry ${audit.verifiedSequence + 1}: it is missing, or its order or verification hash does not match. Ask an administrator to investigate. The alert stays until Check audit log, on the Audit log page, finds every entry intact.`, count: audit.count });
   }
   // An instruction dispatched in observation mode must never happen (NFR-OBS-02, DEB-10).
   if (state.merchant.mode !== "instruction") {

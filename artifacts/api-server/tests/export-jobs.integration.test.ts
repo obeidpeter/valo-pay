@@ -209,6 +209,43 @@ try{
  const {runExportPass}=await import('../src/lib/export-worker');
  assert.deepEqual(await runExportPass({repository:{...repository,candidates:async()=>pair},storage,generate:generateExportArtifact}),['ready','ready']);
 
+ // An audit entry whose sequence is not a whole number never stops the worker recording what it did: the head is the
+ // entry with the highest whole-number sequence, so a claim, a finish, a failure and a busy hand-back each follow it,
+ // with such an entry in the hour since the claim (a word, null) or beyond the head (a fraction).
+ const numbered=async()=>(await pool.query("SELECT id,data FROM valopay_records WHERE merchant_id=$1 AND kind='audit' AND jsonb_typeof(data->'sequence')='number' ORDER BY (data->>'sequence')::numeric DESC LIMIT 2",[merchantId])).rows as Array<{id:string;data:Record<string,any>}>;
+ const damage=(entry:{id:string},value:unknown)=>pool.query("UPDATE valopay_records SET data=jsonb_set(data,'{sequence}',$2::jsonb) WHERE id=$1",[entry.id,JSON.stringify(value)]);
+ const repair=(entry:{id:string;data:Record<string,any>})=>pool.query("UPDATE valopay_records SET data=$2 WHERE id=$1",[entry.id,entry.data]);
+ const readyArtifact=():ExportArtifact=>({checksum:'0'.repeat(64),contentType:'application/json',byteLength:2,generationMs:1,generatedAt:new Date().toISOString()});
+ const outcomes:Array<[string,(head:number)=>unknown,(claim:any)=>Promise<unknown>,string]>=[
+  ['a word',()=>'abc',claim=>repository.finish(claim,readyArtifact()),'export.ready'],
+  ['null',()=>null,claim=>repository.fail(claim,'Synthetic failure'),'export.failed'],
+  ['a fraction beyond the head',head=>head+0.5,claim=>repository.release(claim,'busy'),'export.released'],
+ ];
+ for(const [label,value,record,action] of outcomes){
+  const damagedJob=await api('/exports',{method:'POST',body:input,key:`damaged-sequence-${action}`});
+  const claim=(await repository.claim(merchantId,damagedJob.body.id))!;
+  const [started,before]=await numbered();
+  assert.equal(started!.data.action,'export.started');
+  await damage(before!,value(started!.data.sequence));
+  try{
+   assert.equal(await record(claim),'saved',`an entry whose sequence is ${label} does not stop ${action}`);
+   const [written]=await numbered();
+   assert.deepEqual([written!.data.action,written!.data.sequence,written!.data.previousHash],[action,started!.data.sequence+1,started!.data.hash],`${action} follows the highest whole-number sequence`);
+  }finally{await repair(before!);}
+ }
+ const damagedClaim=await api('/exports',{method:'POST',body:input,key:'damaged-sequence-claim'});
+ const [claimHead,claimBefore]=await numbered();
+ await damage(claimBefore!,claimHead!.data.sequence+0.5);
+ let fractionClaim;
+ try{
+  fractionClaim=await repository.claim(merchantId,damagedClaim.body.id);
+  assert.ok(fractionClaim,'a fraction beyond the head does not stop a claim');
+  const [started]=await numbered();
+  assert.deepEqual([started!.data.action,started!.data.sequence,started!.data.previousHash],['export.started',claimHead!.data.sequence+1,claimHead!.data.hash],'and its entry follows the highest whole-number sequence');
+ }finally{await repair(claimBefore!);}
+ assert.equal(await repository.finish(fractionClaim!,readyArtifact()),'saved');
+ state=await read();assert.equal(verifyAudit(state).valid,true,'repaired, the chain the worker continued is valid');
+
  // The audit chain's head is read from the entries since an hour before the job's claim, not from the whole
  // history: 5,000 older entries are left unread, the read examines only this hour's, and the chain stays valid.
  const tail=(await pool.query("SELECT data FROM valopay_records WHERE merchant_id=$1 AND kind='audit' ORDER BY (data->>'sequence')::bigint DESC LIMIT 1",[merchantId])).rows[0]!.data;
@@ -231,7 +268,7 @@ try{
  const probe=await pool.connect();probe.release();
  const clients=Object.getPrototypeOf(probe) as {query:(this:unknown,...args:any[])=>unknown};
  const query=clients.query;
- clients.query=function(this:unknown,...args:any[]){if(typeof args[0]==='string'&&/kind='audit'/.test(args[0])&&/ORDER BY \(r\.data->>'sequence'\)::bigint DESC LIMIT 1/.test(args[0]))headReads.push({text:args[0],values:args[1]});return query.apply(this,args);};
+ clients.query=function(this:unknown,...args:any[]){if(typeof args[0]==='string'&&/kind='audit'/.test(args[0])&&/DESC NULLS LAST LIMIT 1/.test(args[0]))headReads.push({text:args[0],values:args[1]});return query.apply(this,args);};
  try{assert.equal(await processExportJob(repository,storage,generateExportArtifact,{merchantId,id:bounded.body.id}),'ready');}
  finally{clients.query=query;}
  assert.equal(headReads.length,1,'the claim takes the head from the records it loads anyway; the completion reads it once');
