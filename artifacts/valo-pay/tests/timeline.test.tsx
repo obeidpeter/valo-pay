@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, waitFor } from "./harness";
 import { queryClient, queryDefaults } from "@/App";
+import { customerTimeline } from "../../api-server/src/domain/timeline";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -35,19 +36,16 @@ describe("customer timeline", () => {
     const ada = api.state().records.find((record) => record.kind === "customers" && record.name === "Ada Okonkwo")!;
     api.mutate((state) => {
       const payment = state.records.find((record) => record.kind === "payments" && record.customerId === ada.id)!;
-      state.records.push({ ...structuredClone(payment), id: "usd-card-payment", reference: "SBX-USD-CARD", status: "unallocated", amountKobo: 100_000, createdAt: api.now, data: { ...structuredClone(payment.data), currency: "USD", channel: "card", allocatedKobo: 0 } });
+      const unapplied = (id: string, reference: string, amountKobo: number, currency: string) => state.records.push({ ...structuredClone(payment), id, reference, status: "unallocated", amountKobo, createdAt: api.now, data: { ...structuredClone(payment.data), currency, channel: "card", allocatedKobo: 0 } });
+      unapplied("usd-card-payment", "SBX-USD-CARD", 100_000, "USD");
+      unapplied("eur-card-payment-1", "SBX-EUR-CARD-1", 2_000, "EUR");
+      unapplied("eur-card-payment-2", "SBX-EUR-CARD-2", 3_000, "EUR");
     });
-    const other = { USD: { count: 1, amount: 100_000 }, EUR: { count: 2, amount: 5_000 } };
-    const send = globalThis.fetch;
-    globalThis.fetch = async (input, options) => {
-      const response = await send(input, options);
-      if (!new URL(String(input), "http://localhost").pathname.endsWith(`/customers/${ada.id}/history`)) return response;
-      const body = await response.json();
-      return new Response(JSON.stringify({ ...body, position: { ...body.position, unallocatedOtherCurrencies: other } }), { status: response.status, headers: { "Content-Type": "application/json" } });
-    };
     renderApp(`/customers/${ada.id}`);
     const position = (await screen.findByText("Customer position")).parentElement!;
     expect(position.textContent).toContain("Unapplied credit");
+    // The service derives the money beside the naira (the position the fake API serves is the domain's), and the page shows it as it comes.
+    expect(customerTimeline(api.state(), ada.id).position.unallocatedOtherCurrencies).toEqual({ EUR: { count: 2, amount: 5_000 }, USD: { count: 1, amount: 100_000 } });
     const others = screen.getByText("Unapplied in other currencies").parentElement!;
     expect(others.textContent!.replace(/\u00a0/g, " ")).toContain("EUR 50.00 (2 payments)");
     expect(others.textContent!.replace(/\u00a0/g, " ")).toContain("USD 1,000.00 (1 payment)");
