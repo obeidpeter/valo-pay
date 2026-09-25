@@ -30,24 +30,49 @@ export function nairaText(kobo: number): string {
   return `NGN ${parts.join("")}`;
 }
 
-/** The decimal places of a currency's minor unit, as Intl knows it: 2 for USD, 0 for JPY; 2 for a code it cannot read. */
-function minorUnitDigits(currency: string): number {
-  try {
-    return new Intl.NumberFormat(MARKET_LOCALE, { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 2;
-  } catch {
-    return 2;
-  }
+/** Currency codes with the same number of decimal places, as a table's entries. */
+const withDecimals = (digits: number, codes: string) => codes.split(" ").map((code) => [code, digits] as const);
+/**
+ * The decimal places of each currency's minor unit, the unit a payment stores its
+ * amount in, as ISO 4217 List One gives them (current codes and a few recently
+ * withdrawn). One table for the API and the console: the runtime's own figures,
+ * from its copy of CLDR, differ between runtimes (Node 22 gave COP, HUF, IDR and
+ * PKR no decimals and RSD two, Chromium 141 the reverse), so the same payment was
+ * printed 100 times apart. Codes with no minor unit (gold, the SDR, the testing
+ * and no-currency codes) are left out, like any code ISO 4217 does not list.
+ */
+const minorUnits: ReadonlyMap<string, number> = new Map([
+  ...withDecimals(0, "BIF CLP DJF GNF ISK JPY KMF KRW PYG RWF UGX UYI VND VUV XAF XOF XPF"),
+  ...withDecimals(3, "BHD IQD JOD KWD LYD OMR TND"),
+  ...withDecimals(4, "CLF UYW"),
+  ...withDecimals(2, "AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BMD BND BOB BOV BRL BSD BTN BWP BYN BZD CAD CDF CHE CHF CHW CNY COP COU CRC CUC CUP CVE CZK DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS GIP GMD GTQ GYD HKD HNL HRK HTG HUF IDR ILS INR IRR JMD KES KGS KHR KPW KYD KZT LAK LBP LKR LRD LSL MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MXV MYR MZN NAD NGN NIO NOK NPR NZD PAB PEN PGK PHP PKR PLN QAR RON RSD RUB SAR SBD SCR SDG SEK SGD SHP SLE SLL SOS SRD SSP STN SVC SYP SZL THB TJS TMT TOP TRY TTD TWD TZS UAH USD USN UYU UZS VED VES WST XCD XCG YER ZAR ZMW ZWG ZWL"),
+]);
+/** The decimal places of a currency's minor unit by ISO 4217 (2 for USD, 0 for JPY, 3 for KWD), or undefined for a code it gives none. */
+export function currencyMinorUnit(currency: string): number | undefined {
+  return minorUnits.get(String(currency).trim().toUpperCase());
+}
+/**
+ * An amount in a currency whose minor unit is not known (a code ISO 4217 gives
+ * none), in that smallest unit rather than with guessed decimals: "100,000 in the
+ * smallest unit of XAU".
+ */
+export function smallestUnitText(amount: number, currency: string): string {
+  const code = String(currency).trim().toUpperCase();
+  return `${numberFormat.format(amount)} in the smallest unit of ${code || "an unnamed currency"}`;
 }
 /**
  * An amount in its currency's minor unit, as a payment stores it, written the
  * way the API's messages write money: naira as nairaText does ("NGN 25,000.00"),
- * any other currency by its code with its own decimals ("USD 1,000.00" for
- * 100,000 cents), with the same integer arithmetic.
+ * any other currency by its code with its ISO 4217 decimals ("USD 1,000.00" for
+ * 100,000 cents), with the same integer arithmetic, and a code without them as
+ * smallestUnitText does. The console's formatMinor prints the same figure.
  */
 export function moneyText(amount: number, currency = "NGN"): string {
   const code = String(currency || "NGN").trim().toUpperCase();
   if (code === "NGN") return nairaText(amount);
-  const digits = minorUnitDigits(code), layout = new Intl.NumberFormat(MARKET_LOCALE, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  const digits = currencyMinorUnit(code);
+  if (digits === undefined) return smallestUnitText(amount, code);
+  const layout = new Intl.NumberFormat(MARKET_LOCALE, { minimumFractionDigits: digits, maximumFractionDigits: digits });
   if (!Number.isSafeInteger(amount)) return `${code} ${layout.format(amount / 10 ** digits)}`;
   const minor = BigInt(amount), whole = minor < 0n ? -minor : minor, unit = 10n ** BigInt(digits);
   const parts = layout.formatToParts(minor < 0n ? -1 : 1)
