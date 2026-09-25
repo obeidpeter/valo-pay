@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "wouter";
 import type { SourceProfileInput } from "@workspace/valopay-schema";
 import { useWorkspace } from "@/lib/workspace-context";
 import { usePilotMutation, usePilotQuery } from "@/lib/pilot";
-import { sourcesViewSchema } from "@workspace/valopay-schema";
+import { amountUnitName, sourcesViewSchema } from "@workspace/valopay-schema";
 import { useUnsavedChanges, confirmUnsavedChanges } from "@/lib/unsaved-changes";
 import { PilotHeading, PilotPanel, PilotError, RecoveryNotice, pilotField } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
@@ -87,7 +87,7 @@ function ProfileEditor({ profile, onSaved, onNew }: { profile: any; onSaved(): v
       <label className="text-sm space-y-1">Source name<input className={pilotField} required maxLength={100} disabled={!!profile} value={input.source} onChange={e=>update({source:e.target.value})}/></label>
       <label className="text-sm space-y-1">Record type<select className={pilotField} disabled={!!profile} value={input.kind} onChange={e=>update({kind:e.target.value as SourceProfileInput["kind"]})}>{Object.entries(kinds).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
       <label className="text-sm space-y-1">Source row ID column<input className={pilotField} required value={input.identityColumn} onChange={e=>update({identityColumn:e.target.value})}/></label>
-      <label className="text-sm space-y-1">Source amounts<select className={pilotField} value={input.amountUnit} onChange={e=>update({amountUnit:e.target.value as "naira"|"kobo"})}><option value="naira">Naira</option><option value="kobo">Kobo</option></select></label>
+      <label className="text-sm space-y-1">Source amounts<select className={pilotField} value={input.amountUnit} onChange={e=>update({amountUnit:e.target.value as "naira"|"kobo"})}><option value="naira">{amountUnitName("naira", input.kind)}</option><option value="kobo">{amountUnitName("kobo", input.kind)}</option></select></label>
       <div className="text-sm space-y-1"><label htmlFor="source-first-delivery">First delivery expected (WAT)</label><input id="source-first-delivery" className={pilotField} required type="datetime-local" step="any" value={deliveryDraft} aria-invalid={deliveryInvalid || undefined} aria-describedby={deliveryInvalid ? "source-first-delivery-error" : undefined} onChange={e=>{setDeliveryDraft(e.target.value); setDirty(true); if (deliveryInvalid) setDeliveryInvalid(!deliveryInstant(e.target.value));}} onBlur={()=>setDeliveryInvalid(!deliveryInstant(deliveryDraft))} onInvalid={()=>setDeliveryInvalid(true)}/>{deliveryInvalid && <p id="source-first-delivery-error" role="alert" className="text-destructive">{deliveryError}</p>}</div>
       <label className="text-sm space-y-1">Delivery interval (hours)<input className={pilotField} type="number" min={1} max={8760} required value={input.cadenceHours} onChange={e=>update({cadenceHours:Number(e.target.value)})}/></label>
       <label className="text-sm space-y-1">Grace period (minutes)<input className={pilotField} type="number" min={0} max={10080} required value={input.graceMinutes} onChange={e=>update({graceMinutes:Number(e.target.value)})}/></label>

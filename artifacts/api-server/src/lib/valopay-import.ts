@@ -59,6 +59,8 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
   };
   const targets = columns.map(destination);
   if (new Set(targets.filter(Boolean)).size !== targets.filter(Boolean).length) fail('Map each destination field only once. Choose Skip column for unused columns.');
+  // Amounts in major units take the decimals of the row's own currency (ISO 4217), naira when the row names none.
+  const currencyColumn = columns.find((column) => destination(column) === 'currency');
   const working=structuredClone(state), rows:{row:number;status:string;message:string}[]=[];
   const amounts = new Map<number, number>();
   let valid=0,invalid=0,imported=0;
@@ -80,7 +82,7 @@ export function importCsv(state:DomainState,ctx:Context,input:{kind:string;csv:s
         }
         let decoded:unknown=value;
         if (numeric.has(target) && target.endsWith('Kobo')) {
-          decoded = csvAmountToKobo(value, amountUnit);
+          decoded = csvAmountToKobo(value, amountUnit, currencyColumn ? raw[currencyColumn] : undefined);
           if (target === 'amountKobo') amounts.set(index + 2, decoded as number);
         } else if(numeric.has(target))decoded=Number(value);
         if(boolean.has(target)) { if (!['true', 'false', ''].includes(value)) throw new Error(`${target} must be true or false.`); decoded=value==="true"; }
