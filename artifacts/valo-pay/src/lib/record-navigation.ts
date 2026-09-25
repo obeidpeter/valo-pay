@@ -54,7 +54,7 @@ const listPages: Record<string, string> = {
   experiments: '/reports', invoices: '/reports', cutovers: '/settings', 'work-events': '/work',
   'source-profiles': '/sources', 'source-manifests': '/sources', 'provider-events': '/sources',
   'retention-policies': '/lifecycle', 'retention-holds': '/lifecycle', 'retention-runs': '/lifecycle',
-  'connected-consents': '/pay-by-bank', 'connected-intents': '/pay-by-bank', 'connected-credit-assessments': '/credit-desk', 'connected-credit-reviews': '/credit-desk',
+  'connected-consents': '/connections', 'connected-intents': '/pay-by-bank', 'connected-credit-assessments': '/credit-desk', 'connected-credit-reviews': '/credit-desk',
   'connected-cash-workspace': '/cash-desk', 'connected-cash-forecasts': '/cash-desk', 'connected-cash-erp': '/cash-desk', 'connected-cash-vat': '/cash-desk', 'connected-cash-payroll': '/cash-desk',
 };
 /** Where a record of this kind is shown for this lender: the record itself where its page can open one, else the

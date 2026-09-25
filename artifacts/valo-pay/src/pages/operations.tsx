@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { lenderPath, pilotRequest, usePilotMutation } from "@/lib/pilot";
 import { operationListSchema, type OperationSummary } from "@workspace/valopay-schema";
+import { getCountPendingOperationsQueryKey } from "@workspace/api-client-react";
 import {
   PilotError,
   PilotHeading,
@@ -46,6 +47,14 @@ export default function OperationsPage() {
         "The original request has completed. Its records have been refreshed.",
     );
   });
+  // A refused check or cancel can settle the request for good (a check refused for good cancels it, and a cancel is
+  // refused once it completed), so the list and the count on the Operations link are read again at once. A saved
+  // one refreshes every read (usePilotMutation).
+  useEffect(() => {
+    if (!action.error) return;
+    void client.invalidateQueries({ queryKey: ["pilot", "operations"] });
+    void client.invalidateQueries({ queryKey: getCountPendingOperationsQueryKey() });
+  }, [action.error, client]);
   return (
     <div className="space-y-6">
       <PilotHeading title="Operations">
