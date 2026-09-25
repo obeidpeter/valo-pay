@@ -1,4 +1,4 @@
-import { counted, prepareCloseReviewSchema, decideCloseReviewSchema, legacyCollatedCompare, type PrepareCloseReviewInput, type DecideCloseReviewInput, type PilotProgressStep } from "@workspace/valopay-schema";
+import { counted, otherCurrenciesText, prepareCloseReviewSchema, decideCloseReviewSchema, legacyCollatedCompare, type PrepareCloseReviewInput, type DecideCloseReviewInput, type PilotProgressStep } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "./types";
 import { makeRecord, touch } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
@@ -56,7 +56,9 @@ export function closeReviewIssues(close: ValopayRecord): CloseReviewIssue[] {
   if (report.variances?.count && !report.variances.batches?.length) issues.push({ id: "settlement-variance", label: "Settlement differences", detail: `${counted(Number(report.variances.count), "difference was", "differences were")} recorded.`, unresolved: false });
   for (const mismatch of report.positionRebuild?.mismatches || []) issues.push({ id: `position:${mismatch.dueItemId}`, label: `Customer total difference · ${mismatch.reference || mismatch.dueItemId}`, detail: `Stored outstanding: ${mismatch.storedOutstandingKobo} kobo; rebuilt: ${mismatch.rebuiltOutstandingKobo} kobo.`, unresolved: false });
   for (const [key, label] of [["unallocated", "Unallocated payments"], ["proposed", "Payment matches awaiting confirmation"], ["possibleDuplicates", "Possible duplicate payments"]]) {
-    if (Number(report[key]?.count) > 0) issues.push({ id: key, label, detail: `${counted(Number(report[key].count), "item")} totalling ${report[key].kobo || 0} kobo ${Number(report[key].count) === 1 ? "remains" : "remain"} at this close.`, unresolved: true });
+    // The kobo is naira only; money in another currency is named beside it, in its own currency.
+    const elsewhere = Object.keys(report[key]?.otherCurrencies ?? {}).length ? ` and ${otherCurrenciesText(report[key].otherCurrencies)}` : "";
+    if (Number(report[key]?.count) > 0) issues.push({ id: key, label, detail: `${counted(Number(report[key].count), "item")} totalling ${report[key].kobo || 0} kobo${elsewhere} ${Number(report[key].count) === 1 ? "remains" : "remain"} at this close.`, unresolved: true });
   }
   for (const item of close.data.reviewBasis?.unresolved || []) issues.push({ id: `item:${item.id}`, label: `${item.kind === "exceptions" ? "Open exception" : item.kind === "payments" ? "Unapplied payment amount" : "Unresolved payment evidence"} · ${item.name || item.reference}`, detail: `${item.reference} · ${item.status}. Record the owner, next step and why the item may remain open.`, unresolved: true });
   for (const issue of close.data.reviewBasis?.sourceCompleteness?.issues || []) issues.push({ ...issue, unresolved: true });

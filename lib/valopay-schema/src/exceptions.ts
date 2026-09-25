@@ -90,14 +90,42 @@ export function heldEvidenceOf(condition: unknown): { observationId: string; pay
 }
 
 /**
+ * The condition a Finance-owned provider_status_mismatch is raised with for
+ * evidence of a reversal that has waited for a payment no connection has seen.
+ */
+export function unseenReversalCondition(observationId: string): string {
+  return `provider_status_mismatch:${observationId}:unseen`;
+}
+
+/** The evidence an unseen-payment condition (unseenReversalCondition) names; undefined for any other condition. */
+export function unseenReversalOf(condition: unknown): string | undefined {
+  const parts = String(condition ?? "").split(":");
+  return parts.length === 3 && parts[0] === "provider_status_mismatch" && parts[1] && parts[2] === "unseen" ? parts[1] : undefined;
+}
+
+/**
+ * Finance's resolutions of a reversal that waited for a payment no connection
+ * has seen: setAside (platform_state_confirmed) sets it aside for good, so it
+ * reverses nothing even if its payment arrives later; adopted
+ * (provider_state_adopted) keeps it waiting, with no new exception, and the
+ * reconciliation that records its payment reverses that payment. While Finance
+ * checks with the provider, the exception stays open.
+ */
+export const unseenReversalCodes = { setAside: "platform_state_confirmed", adopted: "provider_state_adopted" } as const;
+
+/**
  * The resolution codes one exception offers: its type's, less those that do
  * not apply to it. A suspected_duplicate offers same_payment only for payment
  * evidence held because it came through another connection alone, and
- * not_money only for held payment evidence, never for a held payment.
+ * not_money only for held payment evidence, never for a held payment. The
+ * provider_status_mismatch of a reversal waiting for a payment no connection
+ * has seen offers only the two codes that decide it (unseenReversalCodes).
  */
 export function resolutionCodesForException(exception: { data?: { type?: unknown; condition?: unknown } | null } | null | undefined): readonly string[] {
   const codes = resolutionCodesFor(exception?.data?.type);
-  if (resolveExceptionType(exception?.data?.type) !== "suspected_duplicate") return codes;
+  const type = resolveExceptionType(exception?.data?.type);
+  if (type === "provider_status_mismatch" && unseenReversalOf(exception?.data?.condition)) return codes.filter((code) => code === unseenReversalCodes.adopted || code === unseenReversalCodes.setAside);
+  if (type !== "suspected_duplicate") return codes;
   const held = heldEvidenceOf(exception?.data?.condition);
   return codes.filter((code) => code === heldEvidenceCodes.samePayment ? held?.connectionOnly === true : code === heldEvidenceCodes.notMoney ? held !== undefined : true);
 }

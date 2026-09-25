@@ -5,7 +5,7 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
-import type { RecordData } from './recordData';
+import type { CustomerPosition } from './customerPosition';
 import type { ValopayRecord } from './valopayRecord';
 
 /**
@@ -13,7 +13,7 @@ import type { ValopayRecord } from './valopayRecord';
  */
 export interface Timeline {
   customer: ValopayRecord;
-  position: RecordData;
+  position: CustomerPosition;
   events: ValopayRecord[];
   mandates: ValopayRecord[];
   dueItems: ValopayRecord[];

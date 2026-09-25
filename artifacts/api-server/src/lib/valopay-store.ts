@@ -1624,8 +1624,10 @@ const paymentRefundedSql = `(CASE WHEN coalesce(r.data->>'refundStatus','') IN (
 const paymentReturnedSql = `(coalesce(r.data->>'reversalStatus','')='reversed' OR (coalesce(r.data->>'refundStatus','') IN ('refunded','recorded_externally') AND ${paymentRefundedSql}>=r.amount_kobo))`;
 /** paymentUnappliedKobo in SQL: what a payment holds that is neither applied nor returned by a refund. */
 const paymentUnappliedSql = `CASE WHEN ${paymentReturnedSql} THEN 0 ELSE greatest(0,r.amount_kobo-coalesce((r.data->>'allocatedKobo')::numeric,0)-${paymentRefundedSql}) END`;
-/** currencyOf in SQL is naira: the currency a payment names, trimmed and in capitals, is NGN, or it names none. Money in another currency is no naira credit. */
-const paymentInNairaSql = `upper(btrim(coalesce(nullif(r.data->>'currency',''),'NGN'),E' \\t\\n\\r'))='NGN'`;
+/** currencyOf in SQL: the currency a payment names, trimmed and in capitals, or NGN when it names none. */
+const paymentCurrencySql = `upper(btrim(coalesce(nullif(r.data->>'currency',''),'NGN'),E' \\t\\n\\r'))`;
+/** The payment is in naira. Money in another currency is no naira credit. */
+const paymentInNairaSql = `${paymentCurrencySql}='NGN'`;
 
 /** Read-only customer cards and events are paged; balances aggregate every related record. */
 export async function getCustomerHistory(context: StoreContext, merchantId: string, id: string, query: CustomerHistoryQuery) {
@@ -1651,7 +1653,11 @@ export async function getCustomerHistory(context: StoreContext, merchantId: stri
   }
   const focusedRow = query.record ? (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${base} AND r.customer_id=$4 AND r.id=$5`,[...values,query.record])).rows[0] : undefined;
   const obligationsKobo = Number(totalsRow.obligations), allocatedKobo = Number(totalsRow.allocated);
-  return {customer:rowToRecord(customerRow),position:{obligationsKobo,allocatedKobo,outstandingKobo:Math.max(0,obligationsKobo-allocatedKobo),unallocatedKobo:Number(totalsRow.credit),note:positionNote},...pages,totals,offsets,...(focusedRow?{focusedRecord:rowToRecord(focusedRow)}:{})};
+  // Money in another currency that the customer's payments hold unapplied, by currency, beside the naira credit (unallocatedOtherCurrencies).
+  const elsewhere = (await session.client.query<{currency:string;count:string;amount:string}>(`SELECT ${paymentCurrencySql} AS currency,count(*) AS count,sum(${paymentUnappliedSql}) AS amount
+    ${base} AND r.customer_id=$4 AND r.kind='payments' AND NOT ${paymentInNairaSql} AND ${paymentUnappliedSql}>0 GROUP BY 1`,values)).rows.sort((a,b)=>a.currency<b.currency?-1:a.currency>b.currency?1:0);
+  const unallocatedOtherCurrencies = elsewhere.length ? Object.fromEntries(elsewhere.map(row=>[row.currency,{count:Number(row.count),amount:Number(row.amount)}])) : undefined;
+  return {customer:rowToRecord(customerRow),position:{obligationsKobo,allocatedKobo,outstandingKobo:Math.max(0,obligationsKobo-allocatedKobo),unallocatedKobo:Number(totalsRow.credit),...(unallocatedOtherCurrencies?{unallocatedOtherCurrencies}:{}),note:positionNote},...pages,totals,offsets,...(focusedRow?{focusedRecord:rowToRecord(focusedRow)}:{})};
 }
 
 /** Complete customer history and balances without every other customer's data.
@@ -1776,14 +1782,18 @@ function isExportRetry(before: ValopayRecord, after: ValopayRecord, now?: string
  * The one change of a recorded payer the repository accepts: Finance's
  * identification withdrawn, back to no payer, while nothing of the payment is
  * applied and with the identification kept in its history
- * (withdrawPayerIdentification). A payer the evidence named never changes.
+ * (withdrawPayerIdentification). A payer the evidence named never changes,
+ * including one that evidence resolved to the payment since names.
  */
 function payerWithdrawn(before: ValopayRecord, after: ValopayRecord, final: ReadonlyMap<string, ValopayRecord>): boolean {
   const identification = before.data.payerIdentification;
   if (after.customerId !== "" || !identification || identification.customerId !== before.customerId || after.data.payerIdentification !== undefined || Number(after.data.allocatedKobo || 0) !== 0) return false;
   const history: unknown[] = Array.isArray(after.data.payerIdentificationHistory) ? after.data.payerIdentificationHistory : [];
   if (!history.some((entry: any) => entry?.customerId === identification.customerId && entry?.allocationId === identification.allocationId)) return false;
-  for (const record of final.values()) if (record.kind === "allocations" && record.status === "confirmed" && record.data.paymentId === after.id) return false;
+  for (const record of final.values()) {
+    if (record.kind === "allocations" && record.status === "confirmed" && record.data.paymentId === after.id) return false;
+    if (record.kind === "observations" && record.status === "resolved" && record.data.paymentId === after.id && record.customerId === identification.customerId) return false;
+  }
   return true;
 }
 /** A match taken out of use keeps the payer it was applied for once the payment's history shows that identification withdrawn. */

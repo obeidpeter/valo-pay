@@ -237,6 +237,16 @@ export function inNaira(items: readonly ValopayRecord[], amount: (item: ValopayR
   }
   return { count: items.length, kobo, ...(other.size ? { otherCurrencies: Object.fromEntries([...other].sort(([a], [b]) => (a < b ? -1 : 1))) } : {}) };
 }
+/**
+ * What a customer's payments in currencies other than naira hold unapplied, by
+ * currency (how many payments and their amount in that currency's minor
+ * unit), which the customer's positions list beside the naira credit
+ * (unallocatedKobo), never in it: the dispute pack, the customer timeline and
+ * the customer history. Undefined when there is none.
+ */
+export function unallocatedOtherCurrencies(payments: readonly ValopayRecord[]): OtherCurrencies | undefined {
+  return inNaira(payments.filter((payment) => paymentUnappliedKobo(payment) > 0), (payment) => paymentUnappliedKobo(payment)).otherCurrencies;
+}
 /** Payments waiting for Finance (paymentAwaitsAllocation) by the money they hold: the unapplied rest of one applied in part is waiting, what a refund of part of one returned is not. */
 const heldOf = (items: TypedRecord<"payments">[]) => inNaira(items, (item) => paymentUnappliedKobo(item));
 const inPeriod = (at: string | undefined, from: string | null, to: string) => Boolean(at) && (from === null || String(at) > from) && String(at) <= to;

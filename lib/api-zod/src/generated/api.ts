@@ -485,7 +485,17 @@ export const GetCustomerTimelineResponse = zod.object({
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
 }).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'),
-  "position": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
+  "position": zod.object({
+  "obligationsKobo": zod.number().int(),
+  "allocatedKobo": zod.number().int(),
+  "outstandingKobo": zod.number().int(),
+  "unallocatedKobo": zod.number().int(),
+  "unallocatedOtherCurrencies": zod.record(zod.string(), zod.object({
+  "count": zod.number().int(),
+  "amount": zod.number().int()
+})).optional().describe('Money in currencies other than naira, by currency code: how many payments hold it and their amount in that currency\'s minor unit (cents for USD). It is never added to a naira total.'),
+  "note": zod.string()
+}).describe('A customer\'s position (REC-05), derived from every related record: the naira obligations, allocations, outstanding balance and unapplied credit (unallocatedKobo, naira only), and, only when the customer\'s payments in another currency hold unapplied money, that money by currency beside it (unallocatedOtherCurrencies), as the dispute pack lists it.'),
   "events": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -1324,7 +1334,17 @@ export const GetCustomerHistoryResponse = zod.object({
   "updatedAt": zod.string(),
   "data": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.')
 }).describe('A stored record of any kind, with its lender, status, reference, amount in kobo and data.'),
-  "position": zod.record(zod.string(), zod.unknown()).describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
+  "position": zod.object({
+  "obligationsKobo": zod.number().int(),
+  "allocatedKobo": zod.number().int(),
+  "outstandingKobo": zod.number().int(),
+  "unallocatedKobo": zod.number().int(),
+  "unallocatedOtherCurrencies": zod.record(zod.string(), zod.object({
+  "count": zod.number().int(),
+  "amount": zod.number().int()
+})).optional().describe('Money in currencies other than naira, by currency code: how many payments hold it and their amount in that currency\'s minor unit (cents for USD). It is never added to a naira total.'),
+  "note": zod.string()
+}).describe('A customer\'s position (REC-05), derived from every related record: the naira obligations, allocations, outstanding balance and unapplied credit (unallocatedKobo, naira only), and, only when the customer\'s payments in another currency hold unapplied money, that money by currency beside it (unallocatedOtherCurrencies), as the dispute pack lists it.'),
   "events": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
