@@ -30,6 +30,24 @@ export interface BackgroundOptions {
 }
 /** What the thread posts to the main thread: a log line to write, or a change of the scheduler's state. */
 export type BackgroundMessage = LogLineMessage | { type: "scheduler"; event: SchedulerEvent };
+/** What the main thread posts to the thread: stop, or run a lender's daily audit check after a person's close. */
+export type BackgroundRequest = { type: "stop" } | { type: "audit_check"; merchantId: string };
+
+/** The thread now running, which a person's close asks for the lender's daily audit check. */
+let running: Worker | undefined;
+/**
+ * Asks the background worker thread to check the lender's whole audit chain,
+ * as it does after a scheduled close, once a person's close has committed:
+ * the day's check runs on the thread, never on the thread that answers
+ * requests. Nothing is asked while no thread runs (a process that runs none,
+ * or one waiting to start again after a crash): the lender's next close asks
+ * again. Returns whether the thread was asked.
+ */
+export function requestDailyAuditCheck(merchantId: string): boolean {
+  if (!running) return false;
+  running.postMessage({ type: "audit_check", merchantId } satisfies BackgroundRequest);
+  return true;
+}
 
 /** The running thread, as the process's shutdown sees it. */
 export interface BackgroundWorker {
@@ -105,7 +123,7 @@ export function startBackgroundWorker(options: BackgroundOptions & { log: Logger
     // A thread Node refuses to start (an execArgv flag threads do not take, say) is a crash like any other.
     try { worker = sourceWorker(entry, settings) ?? new Worker(entry, settings); }
     catch (error) { crashed(error, undefined, startedAt); return; }
-    current = worker;
+    current = running = worker;
     worker.on("message", (message: BackgroundMessage) => {
       if (message?.type === "log") writeLogLine(message.line);
       else if (message?.type === "scheduler") applySchedulerEvent(message.event);
@@ -114,6 +132,7 @@ export function startBackgroundWorker(options: BackgroundOptions & { log: Logger
     worker.on("error", (error) => { failure = error; });
     worker.on("exit", (exitCode) => {
       current = undefined;
+      if (running === worker) running = undefined;
       const err = failure ?? (exitCode ? new Error(`The background worker thread exited with status ${exitCode}.`) : new Error("The background worker thread ended without being asked to stop."));
       if (!stopping) return crashed(err, exitCode, startedAt);
       if (failure || exitCode) log.error({ event: "background.crashed", err, exitCode, durationMs: Date.now() - startedAt }, "The background worker thread failed while it stopped");
@@ -128,7 +147,8 @@ export function startBackgroundWorker(options: BackgroundOptions & { log: Logger
     stop() {
       if (stopping) return;
       stopping = true;
-      if (current) { current.postMessage({ type: "stop" }); return; }
+      if (running === current) running = undefined;
+      if (current) { current.postMessage({ type: "stop" } satisfies BackgroundRequest); return; }
       // Waiting to start again after a crash: nothing runs, so nothing is left to stop.
       clearTimeout(restart);
       if (options.closes) applySchedulerEvent({ type: "stopped" });

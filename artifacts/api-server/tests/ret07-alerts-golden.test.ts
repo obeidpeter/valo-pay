@@ -3,7 +3,7 @@
 // NFR-OBS-02 alerts feed.
 import assert from "node:assert/strict";
 import { DAY, addAttempt, addNotice, ctxAt, liveFixture, wat } from "./helpers.js";
-import { executeAction } from "../src/domain/actions.js";
+import { executeAction, runDailyClose } from "../src/domain/actions.js";
 import { evaluateRetry, policySummary, samePolicyLineage } from "../src/domain/policy-engine.js";
 import { validateRecord } from "../src/domain/validation.js";
 import { buildAlerts } from "../src/domain/alerts.js";
@@ -13,6 +13,9 @@ import { findRecord, makeRecord, recordsOf } from "../src/domain/records.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
 
 let checks = 0;
+// The audit_chain_broken detail for entry 4: once the lender has recorded the break, and while only a check has found it.
+const keptBreak = "The check stopped at entry 4: it is missing, or its order or verification hash does not match. Ask an administrator to investigate. The lender has recorded this break, so the alert stays until a check of the whole audit log finds every entry intact: Check audit log, on the Audit log page, or the daily check after the lender's daily close.";
+const foundBreak = "The check stopped at entry 4: it is missing, or its order or verification hash does not match. Ask an administrator to investigate. The next completed change, Check audit log or the daily check after the lender's daily close records the break for the lender, and the alert then stays until a check of the whole audit log finds every entry intact. Until then it clears if the chain is repaired.";
 const admin = (now: string) => ctxAt(now, "Admin");
 const reviewer = (now: string) => ctxAt(now, "Compliance reviewer");
 
@@ -152,12 +155,14 @@ const reviewer = (now: string) => ctxAt(now, "Compliance reviewer");
   due.data.outstandingKobo = 1;
   state.settings.unallocatedAlertThreshold = 0;
   // Seven entries counted, the chain held to entry 3: entry 4 is the first that breaks it, not the entry after the last one counted.
-  const alerts = buildAlerts(state, later, { valid: false, count: 7, headHash: "y", verifiedSequence: 3 });
+  const alerts = buildAlerts(state, later, { valid: false, count: 7, headHash: "y", verifiedSequence: 3, kept: true });
   assert.deepEqual(keys(alerts), ["audit_chain_broken", "close_missed", "position_drift", "unallocated_over_threshold", "close_overdue"], "severity order: critical, high, medium");
   assert.equal(alerts[2]!.linkedRecordId, due.id);
-  assert.equal(alerts[0]!.detail, "The check stopped at entry 4: it is missing, or its order or verification hash does not match. Ask an administrator to investigate. The alert stays until Check audit log, on the Audit log page, finds every entry intact.", "the alert names the entry after the last verified one, and what clears it");
+  assert.equal(alerts[0]!.detail, keptBreak, "the alert names the entry after the last verified one, and what clears a break the lender has recorded");
   assert.equal(alerts[0]!.count, 7);
-  checks += 2;
+  // A break only this check has seen (the overview's, before a completed change or a check of the whole log records it) is not kept.
+  assert.equal(buildAlerts(state, later, { valid: false, count: 7, headHash: "y", verifiedSequence: 3 }).find((item) => item.key === "audit_chain_broken")!.detail, foundBreak, "and says what records a break it has only found");
+  checks += 3;
   state.merchant.mode = "observation";
   addAttempt(state, due, { status: "sent", occurredAt: wat("2027-07-02T06:16:00"), source: "valo" });
   const critical = buildAlerts(state, later);
@@ -181,7 +186,14 @@ const reviewer = (now: string) => ctxAt(now, "Compliance reviewer");
   assert.equal(overview.alerts.length, critical.length);
   const closed = executeAction(state, ctxAt(later, "Finance"), { action: "daily_close" }).record!;
   assert.ok(Array.isArray(closed.data.report.alerts) && closed.data.report.alerts.some((item: any) => item.key === "instruction_in_observation_mode"), "the close report freezes the alerts at close time");
-  checks += 11;
+  // Every daily close lists a broken audit chain with the lender's audit state, as its write found it, naming the same entry as the overview.
+  const chainBroken = (close: { data: Record<string, any> }) => close.data.report.alerts.find((item: any) => item.key === "audit_chain_broken");
+  const brokenAtClose = executeAction(state, ctxAt(later, "Finance"), { action: "daily_close" }, { audit: { valid: false, count: 7, headHash: "y", verifiedSequence: 3, kept: true } }).record!;
+  assert.deepEqual([chainBroken(brokenAtClose)?.severity, chainBroken(brokenAtClose)?.detail], ["critical", keptBreak], "a person's close freezes the broken chain, naming the entry after the last verified one");
+  assert.equal(chainBroken(executeAction(state, ctxAt(later, "Finance"), { action: "daily_close" }, { audit: { valid: true, count: 9, headHash: "z", verifiedSequence: 8 } }).record!), undefined, "and a close on a chain that holds lists none");
+  const scheduled = runDailyClose(state, ctxAt(wat("2027-07-04T07:00:00"), "Operations"), "scheduled", undefined, { valid: false, count: 7, headHash: "y", verifiedSequence: 3, kept: true }).record!;
+  assert.equal(chainBroken(scheduled)?.detail, keptBreak, "as does a scheduled close");
+  checks += 14;
 }
 
 // ---------- NFR-OBS-02: message cost per collection is for the WAT month, and counts a direct debit that settled without its webhook ----------

@@ -18,7 +18,7 @@ import { issueInvoice } from "./billing";
 import type { ActionInput, ActionResult, Context, DomainState, TypedRecord, ValopayRecord } from "./types";
 import { assertActionRole } from "./validation";
 import { countedAttempts, evaluateRetry, policyIdFor, policyLineage, policySummary, policyVersionOf, preregisterSample, samePolicyLineage } from "./policy-engine";
-import { buildAlerts } from "./alerts";
+import { buildAlerts, type AuditVerification } from "./alerts";
 
 const requiresReason = new Set([
   "kill_switch", "approve_kill_switch_off", "mandate_suspend", "mandate_cancel", "mandate_reinstate", "mandate_reissue", "activation_reminder",
@@ -111,8 +111,10 @@ function dueItemsUnderMandate(state: DomainState, mandateId: string): Set<string
  * first, and the lender stays due until none is owed.  Any close ends a retry
  * the scheduler recorded for failed attempts; a close that starts more than
  * closeRules.lateAfterMinutes after the time it covers is recorded as late.
+ * Its alerts take `audit`, the lender's audit chain as the close's write
+ * checked it, so a broken chain is listed, naming the entry the overview does.
  */
-export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTrigger, sourceBusinessDate?: string): ActionResult {
+export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTrigger, sourceBusinessDate?: string, audit?: AuditVerification | null): ActionResult {
   const now = ctx.now;
   const schedule = closeSchedule(state, now);
   const cursor = storedCloseCursor(state);
@@ -127,7 +129,7 @@ export function runDailyClose(state: DomainState, ctx: Context, trigger: CloseTr
   const opening = openingSnapshot(state);
   const reconciled = reconcile(state, ctx);
   const report = buildCloseReport(state, ctx, opening, reconciled.data);
-  report.alerts = buildAlerts(state, now);
+  report.alerts = buildAlerts(state, now, audit);
   const reports = buildReports(state, now);
   if (scheduledFor) state.settings.nextCloseAt = followingCloseInstant(scheduledFor, schedule.time);
   else if (!cursor) state.settings.nextCloseAt = nextCloseInstant(now, schedule.time);
@@ -162,10 +164,11 @@ const settlingActions = new Set(["confirm_allocation", "manual_allocate", "revie
  * exception whose condition cleared is closed, and the audit entry names them
  * (data.auditNote, added to the reason); held evidence is re-derived as the
  * payments it names now stand (refreshHeldEvidence). A reconciliation or close
- * does the same itself.
+ * does the same itself. `audit` is the lender's audit chain as the write
+ * checked it, which a daily close lists among its alerts.
  */
-export function executeAction(state: DomainState, ctx: Context, input: ActionInput): ActionResult {
-  const answer = runAction(state, ctx, input);
+export function executeAction(state: DomainState, ctx: Context, input: ActionInput, options: { audit?: AuditVerification | null } = {}): ActionResult {
+  const answer = runAction(state, ctx, input, options.audit);
   if (!settlingActions.has(input.action)) return answer;
   refreshHeldEvidence(state, ctx);
   const note = clearedExceptionsNote(clearSettledExceptions(state, ctx));
@@ -183,7 +186,7 @@ function releasedAnswer(record: ValopayRecord, due: TypedRecord<"due-items">, vi
   });
 }
 
-function runAction(state: DomainState, ctx: Context, input: ActionInput): ActionResult {
+function runAction(state: DomainState, ctx: Context, input: ActionInput, audit?: AuditVerification | null): ActionResult {
   if (!input.action) throw new Error("action is required.");
   if (requiresReason.has(input.action)) reason(input);
   const data = input.data || {};
@@ -377,7 +380,7 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput): Action
     assertActionRole(ctx, ["Admin", "Operations", "Finance"]);
     const sourceDate = data.sourceBusinessDate === undefined ? undefined : businessDateSchema.parse(data.sourceBusinessDate);
     if (sourceDate && sourceDate > watDate(Date.parse(ctx.now))) throw new Error('Choose today or an earlier source business date. Future source coverage cannot be closed.');
-    return runDailyClose(state, ctx, "manual", sourceDate);
+    return runDailyClose(state, ctx, "manual", sourceDate, audit);
   }
   if (["confirm_allocation", "reject_allocation", "manual_allocate"].includes(input.action)) {
     assertActionRole(ctx, ["Admin", "Finance"]);

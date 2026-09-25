@@ -3,7 +3,7 @@ import { listReconciliation, listCloseHistory, getCloseDetail, loadReportsView }
 import { Router, type Request, type Response, type IRouter } from "express";
 import * as S from "@workspace/api-zod";
 import { z } from "zod";
-import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, auditObject, roles, fail, appendAudit, auditOverview, verifyAuditTrail, listMerchants, findIdempotency, findStoredAnswer, saveIdempotency, receiptOf, changeRole, type StoreContext } from "../lib/valopay-store";
+import { inWorkspace, loadState, loadCustomerView, loadSettingsView, listRecords, saveState, settleChanges, addedRecords, auditObject, roles, fail, appendAudit, auditOverview, verifyAuditTrail, listMerchants, findIdempotency, findStoredAnswer, saveIdempotency, receiptOf, changeRole, dailyAuditCheckDue, writeAuditCheck, type StoreContext } from "../lib/valopay-store";
 import { requestFingerprint } from "../lib/digests";
 import { amendDueItem, customerTimeline, makeRecord, rescheduleAfterSettings, validateRecord, executeAction, withAuditNote, type TypedRecord } from "../domain";
 import { enrolEligibleFailures } from "../domain/policy-engine";
@@ -17,6 +17,7 @@ import { exportDescriptorForRecord, exportKinds, readExport } from "../lib/valop
 import { assertExportPermitted, exportJobView, publicExportRecord, queueExport, retryExport } from '../lib/export-jobs';
 import { assertRecordVersion, assertSettingsVersion, mergeData } from "../lib/edit-versions";
 import { schedulerStatus } from "../lib/close-scheduler";
+import { requestDailyAuditCheck } from "../lib/background-worker";
 import { buildConsoleOverview, buildConsoleReports, buildConsoleSettings } from "../lib/valopay-close-views";
 import { listQueue } from '../lib/valopay-store';
 import { completeOperation, viewerScope } from '../lib/valopay-store';
@@ -140,8 +141,10 @@ router.patch("/v1/records/:kind/:id",async(req,res)=>{
  res.json(result);
 });
 router.post("/v1/actions",async(req,res)=>{
- lenderQuery(req);
+ const {merchantId}=lenderQuery(req);
  const body=S.PerformActionBody.parse(req.body);
+ // A person's first close of the day: once it commits, the background worker checks the lender's whole audit chain.
+ let auditCheckDue=false;
  const result=await withState(req,res,async(state,ctx)=>{
   if (body.action === 'resolve_exception' && state.records.find(r=>r.id===body.recordId)?.data.case && !body.expectedUpdatedAt) fail('Refresh this coordinated case before resolving it.',409);
   if(body.expectedUpdatedAt!==undefined){
@@ -156,8 +159,12 @@ router.post("/v1/actions",async(req,res)=>{
   // The whole chain, from its first entry, as the lender's database holds it.
   if(body.action==="verify_audit")return {message:"Audit log check complete.",data:await verifyAuditTrail(ctx,state)};
   if(body.action==="mark_pack_used")fail("Synthetic packs cannot be recorded as evidence used in a real case.",403);
-  return executeAction(state,ctx,body);
+  // A daily close lists a broken audit chain as this write checked it.
+  const answer=executeAction(state,ctx,body,{audit:writeAuditCheck(ctx,state)});
+  auditCheckDue=body.action==="daily_close"&&dailyAuditCheckDue(state.settings,ctx.now);
+  return answer;
   },true,S.PerformActionResponse,{action:body.action,recordId:body.recordId,reason:body.reason});
+ if(auditCheckDue)requestDailyAuditCheck(merchantId);
  res.json(result);
 });
 router.post("/v1/imports",async(req,res)=>{

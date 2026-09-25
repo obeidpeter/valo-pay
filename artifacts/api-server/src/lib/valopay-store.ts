@@ -16,6 +16,8 @@ import { recordChanged, nextRecordVersion } from "./edit-versions";
 import { contractAnswer } from './contract';
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
 import { recordsOf } from "../domain/records";
+import { watDate } from "../domain/calendar";
+import type { AuditVerification } from "../domain/alerts";
 import { nextCloseRetry, type CloseRetry } from "../domain/close";
 import { seedMerchant } from "./valopay-seed";
 import { createSandboxCreationLimits, creationRefusalMessage, WORKSPACE_CREATION_RETRY_AFTER_SECONDS } from "./creation-limit";
@@ -97,6 +99,8 @@ type Session = {
   snapshotRead?: boolean;
   /** Where the loaded lender's audit chain stands, as its write found it (loadState); appendAudit continues from it. */
   auditChain?: AuditChain;
+  /** That check of the chain, which a daily close lists among its alerts (writeAuditCheck). */
+  auditCheck?: AuditVerification;
 };
 
 /**
@@ -1117,7 +1121,7 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
   } finally {
     if (context) {
       const session = sessions.get(context);
-      if (session) { session.active = false; session.snapshot = undefined; session.summarised = undefined; session.auditChain = undefined; session.lockedMerchantId = undefined; }
+      if (session) { session.active = false; session.snapshot = undefined; session.summarised = undefined; session.auditChain = undefined; session.auditCheck = undefined; session.lockedMerchantId = undefined; }
     }
     guard?.release();
     leave?.();
@@ -1183,8 +1187,9 @@ const FULL_CLOSE_DAYS = 7;
  * Where a lender's audit chain stands, kept in its settings (`auditChain`) as
  * the close cursor is: the head, which the next entry follows, `verified`,
  * the last entry read back from the database and verified, and `broken` once
- * a check has found the chain broken: the entry it stopped at, the one after
- * `verified`. `at` is an entry's creation time. The entries stay in
+ * a completed write, verify_audit or the daily check has recorded a break:
+ * the entry it stopped at, the one after `verified` (a read such as the
+ * overview stores nothing). `at` is an entry's creation time. The entries stay in
  * valopay_records (kind `audit`) and are not part of a loaded state:
  * appendAudit needs only the head.
  */
@@ -1237,8 +1242,8 @@ const CHAIN_MARGIN_MINUTES = 5;
  * appended, so the overview's alert stays on at the recorded entry after any
  * later write, and a save or an overview costs what it costs on a valid
  * chain however many entries follow the break. Only the walk of the whole
- * chain (`full`, verify_audit's) reads every entry again: it records the
- * break it finds, or none once the chain is valid again.
+ * chain (`full`, verify_audit's and the daily check's) reads every entry
+ * again: it records the break it finds, or none once the chain is valid again.
  */
 async function readAuditChain(session: Session, merchantId: string, settings: Record<string, any>, full = false) {
   const stored = storedChain(settings), known = full ? undefined : stored?.broken;
@@ -1293,7 +1298,10 @@ export async function loadState(context: StoreContext, merchantId: string, lock:
   // head once the lender keeps a break, and takes the head from them, so an entry written without moving the stored
   // head is followed, never forked. The position is kept aside until an entry is appended: the lender's settings stay
   // as a read sees them.
-  session.auditChain = lock === "update" ? (await readAuditChain(session, merchantId, state.settings)).chain : undefined;
+  const checked = lock === "update" ? await readAuditChain(session, merchantId, state.settings) : undefined;
+  session.auditChain = checked?.chain;
+  // The write records a break it found with its entry, so the lender keeps it once the write commits.
+  session.auditCheck = checked && { ...checked.verification, verifiedSequence: checked.chain.verified.sequence, kept: !checked.verification.valid };
   // A shared load is read-only, even in an otherwise write-capable context.
   // Avoid serialising the entire history just to serve a dashboard or export lookup.
   session.snapshot = lock === "update" ? snapshotOf(state) : undefined;
@@ -1305,7 +1313,9 @@ export async function loadState(context: StoreContext, merchantId: string, lock:
  * The overview's view of the audit chain, from the same snapshot as its load:
  * the entries after the last verified one checked (incrementally, as each
  * write checks them, and from the head while the lender keeps a break), and
- * the eight most recent entries, newest first.
+ * the eight most recent entries, newest first. A read stores nothing: a break
+ * it finds is kept only once a completed write, verify_audit or the daily
+ * check records it, and until then it clears if the chain is repaired.
  */
 export async function auditOverview(context: StoreContext, state: DomainState) {
   const session = sessionFor(context), merchantId = state.merchant.id;
@@ -1314,7 +1324,17 @@ export async function auditOverview(context: StoreContext, state: DomainState) {
   const recent = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='audit' ORDER BY r.created_at DESC,r.id LIMIT 8`,
     [merchantId, session.workspace.id, session.principal])).rows.map(rowToRecord);
   // The alert names the entry after the last verified one: the break the lender keeps, or the one this check found.
-  return { verification: { ...verification, verifiedSequence: chain.verified.sequence }, recent };
+  return { verification: { ...verification, verifiedSequence: chain.verified.sequence, kept: Boolean(storedChain(state.settings)?.broken) }, recent };
+}
+
+/**
+ * The lender's audit chain as this write checked it when it loaded the lender
+ * (loadState), for a daily close's alerts: a break it found is recorded with
+ * the write's entry, so the lender keeps it once the write commits.
+ */
+export function writeAuditCheck(context: StoreContext, state: DomainState): AuditVerification | undefined {
+  const session = sessionFor(context);
+  return session.lockedMerchantId === state.merchant.id ? session.auditCheck : undefined;
 }
 
 /**
@@ -1322,7 +1342,8 @@ export async function auditOverview(context: StoreContext, state: DomainState) {
  * lender's position records how far it held and the break it found, or none
  * once the chain is valid again (readAuditChain), and the entry verify_audit
  * appends stores it. So a break found here, however early in the chain, is
- * what the overview reports from then on, and only this check clears it.
+ * what the overview reports from then on, and only a walk of the whole chain,
+ * this or the daily check (checkAuditChainDaily), clears it.
  */
 export async function verifyAuditTrail(context: StoreContext, state: DomainState) {
   const session = sessionFor(context), merchantId = lockedMerchant(session);
@@ -1330,6 +1351,85 @@ export async function verifyAuditTrail(context: StoreContext, state: DomainState
   const { chain, verification } = await readAuditChain(session, merchantId, state.settings, true);
   session.auditChain = chain;
   return verification;
+}
+
+/** Whether the daily check of the lender's whole audit chain is still to run on the WAT day of `now` (settings.dailyAuditCheckAt). */
+export function dailyAuditCheckDue(settings: Record<string, any>, now: string): boolean {
+  const at = typeof settings.dailyAuditCheckAt === "string" ? Date.parse(settings.dailyAuditCheckAt) : Number.NaN;
+  return !Number.isFinite(at) || watDate(at) !== watDate(Date.parse(now));
+}
+
+/** What the daily check found: the chain valid or not, its entries, the last verified entry, the entry it stopped at, and whether it cleared a recorded break. */
+export interface DailyAuditCheck { valid: boolean; entries: number; verifiedSequence: number; brokenAt?: number; cleared: boolean; walkMs: number }
+
+/**
+ * The daily check of a lender's whole audit chain, which the background
+ * worker runs right after the lender's first daily close of each WAT day
+ * (close-scheduler.ts). It walks every entry from the first, as verify_audit
+ * does, on one snapshot that takes no lock, so no write waits for the walk.
+ * Then, holding the lender for a moment, it checks the entries appended since
+ * from where the walk verified to (readAuditChain, as a write does) and stores
+ * what it found as verify_audit does: the last verified entry and the break,
+ * or none once the chain is valid again, which clears a recorded break. A
+ * break a write recorded after the snapshot, at an entry the walk read
+ * intact, is newer than the walk and stays. `dailyAuditCheckAt` records the
+ * check, and undefined means none ran: the day's check had already run, or
+ * the lender is gone.
+ */
+export async function checkAuditChainDaily(merchantId: string): Promise<DailyAuditCheck | undefined> {
+  const started = Date.now();
+  const walked = await lenderTransaction(merchantId, false, async (session, settings, now) => {
+    if (!dailyAuditCheckDue(settings, now)) return undefined;
+    return { ...(await readAuditChain(session, merchantId, settings, true)), recorded: storedChain(settings)?.broken?.sequence };
+  });
+  if (!walked) return undefined;
+  const walkMs = Date.now() - started;
+  return lenderTransaction(merchantId, true, async (session, settings, now) => {
+    if (!dailyAuditCheckDue(settings, now)) return undefined;
+    const stored = storedChain(settings), found = walked.chain;
+    const newer = stored?.broken && stored.broken.sequence !== walked.recorded && stored.broken.sequence <= found.verified.sequence;
+    let chain = stored!;
+    if (!newer) {
+      // The later head of the two, so an entry missing since the snapshot is still a break and its sequence never issued again.
+      const { sequence, hash, at } = stored && stored.sequence > found.sequence ? stored : found;
+      ({ chain } = await readAuditChain(session, merchantId, { auditChain: { sequence, hash, at, verified: found.verified, ...(found.broken ? { broken: found.broken } : {}) } }));
+    }
+    await session.client.query("UPDATE valopay_merchants SET settings = settings || jsonb_build_object('auditChain', $2::jsonb, 'dailyAuditCheckAt', $3::text) WHERE id=$1", [merchantId, JSON.stringify(chain), now]);
+    return { valid: !chain.broken, entries: walked.verification.count, verifiedSequence: chain.verified.sequence, ...(chain.broken ? { brokenAt: chain.broken.sequence } : {}), cleared: Boolean(stored?.broken && !chain.broken), walkMs };
+  });
+}
+
+/**
+ * One system transaction on a lender for a background job, with the system
+ * limits and, under runtime isolation, the service identity. With `lock` it
+ * holds the lender until it commits, waiting up to the lock limit for a write
+ * that holds it; without, it reads one snapshot and takes no lock. Undefined
+ * when the lender no longer exists.
+ */
+async function lenderTransaction<T>(merchantId: string, lock: boolean, fn: (session: Session, settings: Record<string, any>, now: string) => Promise<T>): Promise<T | undefined> {
+  const guard = await checkOut(() => pool.connect()), client = guard.client;
+  let committing = false;
+  try {
+    await client.query(beginStatement(databaseLimits().system, lock ? undefined : "ISOLATION LEVEL REPEATABLE READ"));
+    await bindRuntimeService(client);
+    const scope = (await client.query<{ workspace_id: string; principal_hash: string; role: string; settings: Record<string, any> | null; now: Date }>(
+      `SELECT m.workspace_id,w.principal_hash,w.role,m.settings,now() AS now FROM valopay_merchants m JOIN valopay_workspaces w ON w.id=m.workspace_id
+       WHERE m.id=$1${lock ? " FOR UPDATE OF m" : ""}`,
+      [merchantId],
+    )).rows[0];
+    if (!scope) { await client.query("ROLLBACK"); return undefined; }
+    const session: Session = { client, workspace: { id: scope.workspace_id, principal_hash: scope.principal_hash, role: scope.role }, principal: scope.principal_hash, active: true, access: lock ? "write" : "read" };
+    const result = await fn(session, scope.settings ?? {}, scope.now.toISOString());
+    committing = true;
+    const committed = await client.query("COMMIT");
+    if (committed.command !== "COMMIT") throw new Error("The system transaction was rolled back.");
+    return result;
+  } catch (error) {
+    try { await client.query("ROLLBACK"); } catch { /* transaction is already closed */ }
+    throw failedTransaction(error, { committing, lost: guard.lost(), write: lock });
+  } finally {
+    guard.release();
+  }
 }
 
 /**
@@ -2284,7 +2384,7 @@ export async function inMerchantAsSystem<T>(merchantId: string, actor: string, f
   } finally {
     if (context) {
       const session = sessions.get(context);
-      if (session) { session.active = false; session.snapshot = undefined; session.summarised = undefined; session.auditChain = undefined; session.lockedMerchantId = undefined; }
+      if (session) { session.active = false; session.snapshot = undefined; session.summarised = undefined; session.auditChain = undefined; session.auditCheck = undefined; session.lockedMerchantId = undefined; }
     }
     guard.release();
   }
