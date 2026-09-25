@@ -90,7 +90,7 @@ export const GetWorkspaceResponse = zod.object({
 
 
 /**
- * Metrics, queues, recent activity (the eight latest audit entries), upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02), whose audit check covers the entries since the last one verified. The last one verified stays before the first entry that breaks the chain, so a break this check or verify_audit found stays in the feed until the chain is valid again.
+ * Metrics, queues, recent activity (the eight latest audit entries), upcoming due items, the last and next daily close, and the alerts feed (NFR-OBS-02), whose audit check covers the entries since the last one verified, or since the chain's head once the lender keeps a break. The last one verified stays before the first entry that breaks the chain, and a break this check or verify_audit found is kept, so it stays in the feed after any later write until verify_audit finds the chain valid again.
  * @summary The operations overview for one lender
  */
 export const getOverviewQueryMerchantIdMax = 100;

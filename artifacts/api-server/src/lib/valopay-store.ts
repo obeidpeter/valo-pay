@@ -11,7 +11,7 @@ import type { VerifiedClerkSession } from './pilot-access';
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
 import { approvalRoles, closeTimeOf, definitiveRefusalStatuses, grantNeedsApproval, invitationAcceptedSchema, nextCloseInstant, sameJson } from "@workspace/valopay-schema";
-import { sha256Hex, canonicalDigest, requestFingerprint, auditEntryData, verifyAuditChain, walkAuditChain, AUDIT_GENESIS, type AuditPoint } from "./digests";
+import { sha256Hex, canonicalDigest, requestFingerprint, auditEntryData, verifyAuditChain, walkAuditChain, chainSequence, AUDIT_GENESIS, type AuditPoint } from "./digests";
 import { recordChanged, nextRecordVersion } from "./edit-versions";
 import { contractAnswer } from './contract';
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
@@ -1166,13 +1166,15 @@ const FULL_CLOSE_DAYS = 7;
 
 /**
  * Where a lender's audit chain stands, kept in its settings (`auditChain`) as
- * the close cursor is: the head, which the next entry follows, and `verified`,
- * the last entry read back from the database and verified. `at` is an entry's
- * creation time. The entries stay in valopay_records (kind `audit`) and are
- * not part of a loaded state: appendAudit needs only the head.
+ * the close cursor is: the head, which the next entry follows, `verified`,
+ * the last entry read back from the database and verified, and `broken` once
+ * a check has found the chain broken: the entry it stopped at, the one after
+ * `verified`. `at` is an entry's creation time. The entries stay in
+ * valopay_records (kind `audit`) and are not part of a loaded state:
+ * appendAudit needs only the head.
  */
 type ChainPoint = AuditPoint & { at?: string };
-type AuditChain = ChainPoint & { verified: ChainPoint };
+type AuditChain = ChainPoint & { verified: ChainPoint; broken?: { sequence: number } };
 function chainPoint(value: unknown): ChainPoint | undefined {
   if (!value || typeof value !== "object") return undefined;
   const { sequence, hash, at } = value as Record<string, unknown>;
@@ -1183,8 +1185,18 @@ function chainPoint(value: unknown): ChainPoint | undefined {
 /** The stored chain position, or undefined for a lender that has none yet (created before it was kept) or a state built in memory. */
 function storedChain(settings: Record<string, any>): AuditChain | undefined {
   const head = chainPoint(settings.auditChain), verified = chainPoint(settings.auditChain?.verified);
-  return head && verified && verified.sequence <= head.sequence ? { ...head, verified } : undefined;
+  if (!head || !verified || verified.sequence > head.sequence) return undefined;
+  // A break is kept as a check records it, at the entry after the verified one.
+  const broken = settings.auditChain.broken?.sequence === verified.sequence + 1;
+  return { ...head, verified, ...(broken ? { broken: { sequence: verified.sequence + 1 } } : {}) };
 }
+/**
+ * An entry's sequence when it is a whole number from 1, as chainSequence
+ * reads it, else NULL: the sequence of a damaged entry (text, null, a
+ * fraction) is never cast. The entry is `r`.
+ */
+export const chainSequenceSql = `CASE WHEN jsonb_typeof(r.data->'sequence')='number' THEN CASE WHEN (r.data->>'sequence')::numeric BETWEEN 1 AND ${Number.MAX_SAFE_INTEGER}
+  AND trunc((r.data->>'sequence')::numeric)=(r.data->>'sequence')::numeric THEN (r.data->>'sequence')::numeric END END`;
 /**
  * How much earlier than the verified entry a later entry may be stamped. An
  * entry carries its transaction's start time, and a transaction appends only
@@ -1192,36 +1204,48 @@ function storedChain(settings: Record<string, any>): AuditChain | undefined {
  */
 const CHAIN_MARGIN_MINUTES = 5;
 /**
- * Reads the lender's audit entries after the verified entry (all of them with
- * `full`, or for a lender with no stored position) and walks them from it.
- * The head is the last entry by sequence, whoever wrote it: the export worker
- * and an earlier build append without moving the stored head. A stored head
- * further on than any entry means entries went missing: the chain is broken
- * and that sequence is never issued again.
+ * Reads the lender's audit entries after the verified entry, or after the head
+ * while the lender keeps a break (all of them with `full`, or for a lender
+ * with no stored position), and walks them from there. The head is the last
+ * entry by sequence, whoever wrote it: the export worker and an earlier build
+ * append without moving the stored head. A stored head further on than any
+ * entry means entries went missing: the chain is broken and that sequence is
+ * never issued again. Each read also takes in the entries of its time range
+ * whose sequence is not a whole number, whatever that holds (only a whole
+ * number can be the head), and the walk finds each one a break.
  *
  * The verified entry it returns, which the next entry appended records, is
  * always before the first entry that breaks the chain: a changed entry, a
- * missing one, a sequence two entries claim (a fork), or an entry whose
- * sequence is not a number, which every read after the verified entry takes
- * in (only a whole number can be the head). So a break found here, or by
- * verify_audit's walk of the whole chain, is read again and reported by every
- * later check, the overview's included, until the chain is valid again.
+ * missing one, a sequence two entries claim (a fork) or a damaged one; and
+ * the break is recorded with it. While the lender keeps a break, a check
+ * reads only the entries after the head, still following what other writers
+ * appended, so the overview's alert stays on at the recorded entry after any
+ * later write, and a save or an overview costs what it costs on a valid
+ * chain however many entries follow the break. Only the walk of the whole
+ * chain (`full`, verify_audit's) reads every entry again: it records the
+ * break it finds, or none once the chain is valid again.
  */
 async function readAuditChain(session: Session, merchantId: string, settings: Record<string, any>, full = false) {
-  const stored = storedChain(settings), from: ChainPoint = !full && stored ? stored.verified : AUDIT_GENESIS;
+  const stored = storedChain(settings), known = full ? undefined : stored?.broken;
+  const storedHead: ChainPoint | undefined = stored && { sequence: stored.sequence, hash: stored.hash, ...(stored.at ? { at: stored.at } : {}) };
+  const from: ChainPoint = full || !stored ? AUDIT_GENESIS : known ? storedHead! : stored.verified;
   const rows = (await session.client.query<{ id: string; data: Record<string, any>; created_at: Date }>(
     `SELECT r.id,r.data,r.created_at ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='audit'
        AND ($4::timestamptz IS NULL OR r.created_at >= $4::timestamptz - make_interval(mins => ${CHAIN_MARGIN_MINUTES}))
-       AND ($5::bigint = 0 OR CASE WHEN jsonb_typeof(r.data->'sequence')='number' THEN (r.data->>'sequence')::numeric > $5::bigint ELSE true END)
+       AND ($5::bigint = 0 OR COALESCE(${chainSequenceSql} > $5::bigint, true))
      ORDER BY r.created_at,r.id`,
     [merchantId, session.workspace.id, session.principal, from.sequence ? from.at ?? null : null, from.sequence],
   )).rows;
   const walk = walkAuditChain(rows, from);
   let head: ChainPoint = from, valid = walk.valid;
-  for (const row of rows) if (Number.isSafeInteger(row.data.sequence) && row.data.sequence > head.sequence) head = { sequence: row.data.sequence, hash: String(row.data.hash), at: row.created_at.toISOString() };
-  if (stored && stored.sequence > head.sequence) { head = { sequence: stored.sequence, hash: stored.hash, ...(stored.at ? { at: stored.at } : {}) }; valid = false; }
+  for (const row of rows) {
+    const sequence = chainSequence(row.data.sequence);
+    if (sequence !== undefined && sequence > head.sequence) head = { sequence, hash: String(row.data.hash), at: row.created_at.toISOString() };
+  }
+  if (storedHead && storedHead.sequence > head.sequence) { head = storedHead; valid = false; }
+  if (known) return { chain: { ...head, verified: stored!.verified, broken: known } as AuditChain, verification: { valid: false, count: walk.count, headHash: walk.headHash } };
   const verified: ChainPoint = walk.entry ? { ...walk.verified, at: walk.entry.created_at.toISOString() } : from;
-  return { chain: { ...head, verified } as AuditChain, verification: { valid, count: walk.count, headHash: walk.headHash } };
+  return { chain: { ...head, verified, ...(valid ? {} : { broken: { sequence: verified.sequence + 1 } }) } as AuditChain, verification: { valid, count: walk.count, headHash: walk.headHash } };
 }
 
 export async function loadState(context: StoreContext, merchantId: string, lock: Exclude<MerchantLock, "none"> = "update", options: { wholeCloses?: number } = {}): Promise<DomainState> {
@@ -1250,9 +1274,10 @@ export async function loadState(context: StoreContext, merchantId: string, lock:
   // Protected source rows stay sealed: only the views that show or use them open them (revealImportPayloads).
   const state: DomainState = { merchant: merchant.info, settings: merchant.settings, records: rows.map(rowToRecord) };
   if (state.merchant.id !== merchantId) conflict("Lender identity does not match its stored scope.");
-  // A write verifies the entries appended since the last verified one (usually the previous write's) and takes the
-  // head from them, so an entry written without moving the stored head is followed, never forked. The position is
-  // kept aside until an entry is appended: the lender's settings stay as a read sees them.
+  // A write verifies the entries appended since the last verified one (usually the previous write's), or since the
+  // head once the lender keeps a break, and takes the head from them, so an entry written without moving the stored
+  // head is followed, never forked. The position is kept aside until an entry is appended: the lender's settings stay
+  // as a read sees them.
   session.auditChain = lock === "update" ? (await readAuditChain(session, merchantId, state.settings)).chain : undefined;
   // A shared load is read-only, even in an otherwise write-capable context.
   // Avoid serialising the entire history just to serve a dashboard or export lookup.
@@ -1264,7 +1289,8 @@ export async function loadState(context: StoreContext, merchantId: string, lock:
 /**
  * The overview's view of the audit chain, from the same snapshot as its load:
  * the entries after the last verified one checked (incrementally, as each
- * write checks them), and the eight most recent entries, newest first.
+ * write checks them, and from the head while the lender keeps a break), and
+ * the eight most recent entries, newest first.
  */
 export async function auditOverview(context: StoreContext, state: DomainState) {
   const session = sessionFor(context), merchantId = state.merchant.id;
@@ -1272,15 +1298,16 @@ export async function auditOverview(context: StoreContext, state: DomainState) {
   const { chain, verification } = await readAuditChain(session, merchantId, state.settings);
   const recent = (await session.client.query<RecordRow>(`SELECT ${recordColumns} ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='audit' ORDER BY r.created_at DESC,r.id LIMIT 8`,
     [merchantId, session.workspace.id, session.principal])).rows.map(rowToRecord);
-  // The alert names the entry after the last verified one, the first that breaks the chain.
+  // The alert names the entry after the last verified one: the break the lender keeps, or the one this check found.
   return { verification: { ...verification, verifiedSequence: chain.verified.sequence }, recent };
 }
 
 /**
  * The whole audit chain verified from its first entry (verify_audit): the
- * lender's position records how far it held (readAuditChain), and the entry
- * verify_audit appends stores it, so a break found here, however early in the
- * chain, is also what the overview reports from then on.
+ * lender's position records how far it held and the break it found, or none
+ * once the chain is valid again (readAuditChain), and the entry verify_audit
+ * appends stores it. So a break found here, however early in the chain, is
+ * what the overview reports from then on, and only this check clears it.
  */
 export async function verifyAuditTrail(context: StoreContext, state: DomainState) {
   const session = sessionFor(context), merchantId = lockedMerchant(session);
@@ -2489,7 +2516,7 @@ export function appendAudit(state: DomainState, ctx: Context, action: string, ob
   const data = auditEntryData({ sequence: head.sequence + 1, actor: ctx.actor, action, objectId, summary, changes, previousHash: head.hash, timestamp: ctx.now });
   const record: ValopayRecord = { id: randomUUID(), merchantId: state.merchant.id, kind: "audit", name: action, status: "recorded", reference: "", amountKobo: 0, customerId: state.records.find((item) => item.id === objectId)?.customerId || "", createdAt: ctx.now, updatedAt: ctx.now, data };
   state.records.push(record);
-  const chain: AuditChain = { sequence: data.sequence, hash: data.hash, at: ctx.now, verified: head.verified };
+  const chain: AuditChain = { sequence: data.sequence, hash: data.hash, at: ctx.now, verified: head.verified, ...(head.broken ? { broken: head.broken } : {}) };
   state.settings.auditChain = chain;
   if (loaded) session!.auditChain = chain;
   return record;
