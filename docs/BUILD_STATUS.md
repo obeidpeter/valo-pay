@@ -1,5 +1,9 @@
 # Valo Pay — build status
 
+## Backlog and fourth review fixes · September 2026
+
+The open items of the usability backlog (`docs/usability/audit.md`) that this sandbox can close, the owner's decisions on the questions it left open, and the findings of the fourth review, of the fixes merged on 25 September, are fixed and covered by tests:
+
 ## Audit fixes, 23 September audit · September 2026
 
 The findings of the 23 September 2026 audit are fixed and covered by tests:
