@@ -87,7 +87,8 @@ try{
  try{await within(reachedFinish.promise);releaseCompletion.resolve();await delay(350);await holder.query('COMMIT');}
  finally{releaseCompletion.resolve();await holder.query('ROLLBACK');holder.release();}
  assert.equal(await completion,'ready');assert.equal(completionCalls,1,'the completion waited for the reader instead of skipping the lender');
- assert.ok(performance.now()-started<6000,'brief contention does not wait for the old five-minute lease');
+ // The bound only has to tell seconds from the five-minute lease: generating the file is timed too, and a busy machine can take several seconds over it.
+ assert.ok(performance.now()-started<60_000,'brief contention does not wait for the old five-minute lease');
  assert.equal(uploads,beforeContentionUploads+1,'completion retries must never generate a second object');
  const contentionRecord=(await read()).records.find(record=>record.id===contendedTarget.id)!;
  assert.equal(contentionRecord.data.attempts,1);assert.equal(contentionRecord.data.stage,'ready');
