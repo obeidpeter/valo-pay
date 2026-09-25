@@ -510,7 +510,9 @@ function keepLinesCountedTwiceReported(state: DomainState, ctx: Context): void {
     const condition = lineCountedTwiceCondition(batchId, line.id);
     const reports = recordsWhere(state, "exceptions", "data.linkedRecordId", batchId).filter((item) => resolveExceptionType(item.data.type) === "settlement_variance"
       && (item.data.condition === condition || countedTwiceReports(item).includes(condition) || String(item.data.notes ?? "").includes(`Settlement line ${line.reference} (`)));
-    const carrier = reports.find((item) => isOpenException(item.status) && item.data.condition !== condition && !countedTwiceReports(item).includes(condition));
+    // An earlier build's carrier holds the report as a dated line; one this build raised for another line names it in its own text.
+    const listed = reports.some((item) => item.data.condition === condition || countedTwiceReports(item).includes(condition));
+    const carrier = listed ? undefined : reports.find((item) => isOpenException(item.status) && String(item.data.notes ?? "").includes(`(WAT): Settlement line ${line.reference} (`));
     if (carrier) { carrier.data.countedTwice = [...countedTwiceReports(carrier), condition]; touch(carrier, ctx.now); }
     if (!reports.length || reports.some((item) => isOpenException(item.status) || item.data.resolutionCode !== conditionClearedCode)) continue;
     const batch = recordsWhere(state, "settlement-batches", "id", batchId)[0], counted = recordsWhere(state, "settlement-batches", "id", countedIn)[0];
