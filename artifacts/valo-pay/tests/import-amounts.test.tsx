@@ -99,6 +99,22 @@ describe('CSV amount units', () => {
     expect([minor.imported, stored('CSV-JPY-MINOR').amountKobo]).toEqual([1, 1000]);
   });
 
+  // The preview is where the conversion is checked before importing, so each amount shows in its row's currency.
+  it('previews each converted amount in its row\'s currency', async () => {
+    const user = userEvent.setup(); renderApp('/collections');
+    await user.click(await screen.findByRole('button', { name: 'Import sample data' }));
+    await user.selectOptions(screen.getByLabelText('Import as'), 'observations');
+    await user.type(screen.getByLabelText('CSV content'), 'name,reference,amount,source,currency\nYen,CSV-JPY,1000,card,JPY\nDollars,CSV-USD,10.00,card,usd\nNaira,CSV-NGN,18000.50,card,');
+    await user.selectOptions(screen.getByLabelText('Amounts in your CSV *'), 'naira');
+    await user.click(screen.getByRole('button', { name: 'Check data' }));
+    await screen.findByText('Checked and ready. Review the preview, then select Import data.');
+    const preview = screen.getByRole('heading', { name: /Parsed preview/ }).parentElement!;
+    expect(within(preview).getByRole('columnheader', { name: 'Amount to import' })).toBeTruthy();
+    expect(within(preview).getAllByRole('row').slice(1).map(row => row.lastElementChild?.textContent)).toEqual(['JPY\u00a01,000', 'USD\u00a010.00', '₦18,000.50']);
+    expect(document.getElementById('import-unit-help')?.textContent).toMatch(/The preview shows each converted amount in its currency\.$/);
+    expect(within(preview).getByText(/^Source amounts: Major units \(₦, or the row's currency\)\./)).toBeTruthy();
+  });
+
   it('reads and writes a form amount in its currency\'s major unit exactly', () => {
     expect([majorToMinor('1,000', 'JPY'), majorToMinor('1.5', 'kwd'), majorToMinor('1,000.50', 'USD'), majorToMinor('1,000.50'), majorToMinor('90071992547409.91', 'USD')]).toEqual([1000, 1500, 100050, 100050, Number.MAX_SAFE_INTEGER]);
     for (const [value, currency] of [['1.5', 'JPY'], ['1.2345', 'KWD'], ['1.234', 'USD'], ['1', 'XAU'], ['-1', 'USD'], ['9007199254740992', 'JPY']]) expect(() => majorToMinor(value!, currency)).toThrow();
