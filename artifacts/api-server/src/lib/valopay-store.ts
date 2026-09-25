@@ -21,7 +21,7 @@ import { seedMerchant } from "./valopay-seed";
 import { createSandboxCreationLimits, creationRefusalMessage, WORKSPACE_CREATION_RETRY_AFTER_SECONDS } from "./creation-limit";
 import { readSandboxCookie, sandboxPrincipal, secureRequest, writeSandboxCookie } from "./sandbox-cookie";
 import { rememberSandbox } from "./request-limits";
-import { allocatableOnly, allocationChoices, foldForSearch, listLimit, LIST_PAGE_CEILING, matchesSearch, updatedSinceInstant, type ListQuery } from "./valopay-list";
+import { allocatableOnly, allocationChoices, EXPIRED_EXPORT_STATUS, foldForSearch, listLimit, LIST_PAGE_CEILING, matchesSearch, updatedSinceInstant, type ListQuery } from "./valopay-list";
 import { allocationPayer } from "../domain/reconciliation";
 import { publicExportRecord } from "./export-jobs";
 import { queueView, queueViews, type QueueName, type QueueQuery } from './valopay-queues';
@@ -991,6 +991,8 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
   const leave = lanes ? await enterGate(lanes, write) : undefined;
   let guard: Checkout<PoolClient> | undefined;
   let context: StoreContext | undefined, committing = false, isolationVerified = false, snapshotRead = access === "read";
+  // Export files of sandboxes this bootstrap swept, and of those, the ones whose deletion committed (removeSweptExportFiles).
+  let swept: SweptExportFile[] = [], sweptAndCommitted: SweptExportFile[] = [];
   try {
     guard = await checkOut(() => pool.connect(), write);
     const client = guard.client;
@@ -1077,11 +1079,12 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
         if (!identity.authenticated && expiredWorkspaceCleanupEnabled(process.env["VALOPAY_EXPIRED_WORKSPACE_CLEANUP"])) {
           await client.query("SAVEPOINT expired_workspace_sweep");
           try {
-            await sweepExpiredWorkspaces(client, SWEEP_BATCH);
+            const { files } = await sweepExpiredWorkspaces(client, SWEEP_BATCH);
             await client.query("RELEASE SAVEPOINT expired_workspace_sweep");
+            swept = files;
           } catch (error) {
             try { await client.query("ROLLBACK TO SAVEPOINT expired_workspace_sweep"); } catch { throw error; }
-            (req as { log?: { warn?(fields: object, message: string): void } }).log?.warn?.({ event: "workspace.sweep_failed", err: error }, "Expired sandboxes were left for a later sweep");
+            (req as { log?: SweepLog }).log?.warn?.({ event: "workspace.sweep_failed", err: error }, "Expired sandboxes were left for a later sweep");
           }
         }
       }
@@ -1100,6 +1103,7 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
     // PostgreSQL accepts COMMIT after a caught statement error by returning
     // ROLLBACK.  Do not let a caller that swallowed that error observe success.
     if (committed.command !== "COMMIT") throw markRolledBack(new Error("The workspace transaction was rolled back."));
+    sweptAndCommitted = swept;
     // The sandbox exists now: requests that name it are limited as it, not as their network (request-limits.ts).
     if (!staff && !identity.authenticated) rememberSandbox(identity.principal);
     return result;
@@ -1121,6 +1125,8 @@ export async function inWorkspace<T>(req: Request, res: Response, fn: (context: 
     }
     guard?.release();
     leave?.();
+    // Private storage, with the connection and the lender share already given back; it never fails this request.
+    if (sweptAndCommitted.length) await removeSweptExportFiles(sweptAndCommitted, (req as { log?: SweepLog }).log);
   }
 }
 
@@ -1433,7 +1439,13 @@ export async function listRecords(context: StoreContext, merchantId: string, kin
   const params: unknown[] = [merchantId, session.workspace.id, session.principal, kind];
   let where = `${scopedRecordsWhere} AND r.kind=$4`;
   const filter = (column: string, value: unknown) => { params.push(value); where += ` AND ${column}=$${params.length}`; };
-  if (query.status && query.status !== "all") filter("r.status", query.status);
+  if (query.status && query.status !== "all") {
+    // inListStatus: a saved export whose file retention removed is listed as expired, never under its job's status.
+    const removed = "coalesce(r.data->>'fileDeletedAt','') <> ''";
+    if (kind !== "exports") filter("r.status", query.status);
+    else if (query.status === EXPIRED_EXPORT_STATUS) where += ` AND ${removed}`;
+    else { filter("r.status", query.status); where += ` AND NOT ${removed}`; }
+  }
   if (query.customerId) filter("r.customer_id", query.customerId);
   if (query.id) filter("r.id", query.id);
   // canTakeAllocation in SQL: something still owed (the outstanding balance when it is a whole number, else the amount) and a status that takes one.
@@ -2189,8 +2201,12 @@ export async function executeLifecycleRun(context:StoreContext,state:DomainState
  * lender deadlocked with a close that saved it. Each sandbox is locked in a
  * savepoint of its own and a busy one is undone at once, so its free lenders
  * and its row are not held for the rest of the caller's transaction.
+ *
+ * Answers the swept sandboxes' export files, read before their records go:
+ * private storage is not part of the transaction, so the caller removes them
+ * once the deletion has committed (removeSweptExportFiles).
  */
-export async function sweepExpiredWorkspaces(client: PoolClient, limit: number): Promise<number> {
+export async function sweepExpiredWorkspaces(client: PoolClient, limit: number): Promise<{ workspaces: number; files: SweptExportFile[] }> {
   const staleness = `w.created_at < now() - make_interval(days => $1)
        AND EXISTS (SELECT 1 FROM valopay_merchants m WHERE m.workspace_id=w.id AND m.settings->>'anonymousWorkspace'='true')
        AND NOT EXISTS (SELECT 1 FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id
@@ -2211,12 +2227,53 @@ export async function sweepExpiredWorkspaces(client: PoolClient, limit: number):
     if (still && locked === lenders) { await client.query("RELEASE SAVEPOINT expired_workspace"); expired.push(id); }
     else await client.query("ROLLBACK TO SAVEPOINT expired_workspace");
   }
-  if (!expired.length) return 0;
+  if (!expired.length) return { workspaces: 0, files: [] };
+  // Every export that names a stored file, whatever its status; one an approved retention run removed is gone already.
+  const files = (await client.query<{ merchant_id: string; id: string; bucket: string; object_name: string; checksum: string | null }>(
+    `SELECT r.merchant_id, r.id, r.data->>'bucket' AS bucket, r.data->>'objectName' AS object_name, r.data->>'checksum' AS checksum
+     FROM valopay_records r JOIN valopay_merchants m ON m.id=r.merchant_id
+     WHERE m.workspace_id = ANY($1::text[]) AND r.kind='exports' AND coalesce(r.data->>'bucket','') <> '' AND coalesce(r.data->>'objectName','') <> ''
+       AND coalesce(r.data->>'fileDeletedAt','') = '' ORDER BY r.merchant_id, r.id`, [expired],
+  )).rows.map((row): SweptExportFile => ({ merchantId: row.merchant_id, exportId: row.id, bucket: row.bucket, objectName: row.object_name, ...(row.checksum ? { checksum: row.checksum } : {}) }));
   await client.query("DELETE FROM valopay_idempotency WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id = ANY($1::text[]))", [expired]);
   await client.query("DELETE FROM valopay_records WHERE merchant_id IN (SELECT id FROM valopay_merchants WHERE workspace_id = ANY($1::text[]))", [expired]);
   await client.query("DELETE FROM valopay_merchants WHERE workspace_id = ANY($1::text[])", [expired]);
   await client.query("DELETE FROM valopay_workspaces WHERE id = ANY($1::text[])", [expired]);
-  return expired.length;
+  return { workspaces: expired.length, files };
+}
+
+/** An export file a swept sandbox's lender wrote to private storage: where it is and, once ready, its checksum. */
+export interface SweptExportFile { merchantId: string; exportId: string; bucket: string; objectName: string; checksum?: string }
+type SweepLog = { warn?(fields: object, message: string): void };
+/** How long one bootstrap goes on starting removals of swept export files, so a new visitor never waits long for private storage. */
+const SWEPT_FILE_BUDGET_MS = 5_000;
+/** Removes one swept export's file: only the generation whose metadata names this export and lender, and its checksum once ready (deleteRetainedExport). */
+let removeSweptFile = (file: SweptExportFile) => deleteRetainedExport(objectStorageClient.bucket(file.bucket).file(file.objectName), { id: file.exportId, merchantId: file.merchantId, ...(file.checksum ? { checksum: file.checksum } : {}) });
+/** For tests only: replaces how a swept export's file is removed from private storage, and returns what restores it. */
+export function overrideSweptExportRemoval(remove: typeof removeSweptFile): () => void {
+  const previous = removeSweptFile;
+  removeSweptFile = remove;
+  return () => { removeSweptFile = previous; };
+}
+/**
+ * Removes the export files of the sandboxes a sweep deleted, one at a time.
+ * inWorkspace calls it once that deletion has committed, so a sweep that was
+ * undone keeps its files with its records. It never throws, so it never fails
+ * the request or undoes the sweep: a file private storage could not remove, or
+ * one not reached within the budget, is named in the log
+ * (`workspace.sweep_file_left`, with its bucket and object name) so that an
+ * operator can remove it, since nothing else refers to it any more.
+ */
+export async function removeSweptExportFiles(files: SweptExportFile[], log?: SweepLog, budgetMs = SWEPT_FILE_BUDGET_MS): Promise<void> {
+  const started = performance.now();
+  for (const file of files) {
+    let problem: { reason: "failed"; err: unknown } | { reason: "time_limit" } | undefined;
+    if (performance.now() - started >= budgetMs) problem = { reason: "time_limit" };
+    else try { await removeSweptFile(file); } catch (error) { problem = { reason: "failed", err: error }; }
+    if (!problem) continue;
+    const { checksum: _checksum, ...named } = file;
+    try { log?.warn?.({ event: "workspace.sweep_file_left", ...named, ...problem }, "A swept sandbox's export file was left in private storage"); } catch { /* a log that fails never fails the request */ }
+  }
 }
 
 async function seedWorkspace(client: PoolClient, workspace: WorkspaceRow, principal: string, anonymous: boolean, now: string) {

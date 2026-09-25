@@ -33,7 +33,7 @@ export interface ExportArtifact {
 }
 export type ExportJobStatus = 'queued' | 'running' | 'ready' | 'failed';
 export interface ExportJobView {
-  expiredAt?: string;
+  expiredAt?: string; retentionRunId?: string;
   id: string; status: ExportJobStatus; kind: string; format: string; customerId: string; requestedAt: string;
   attempts: number; downloadUrl: string; checksum?: string; generatedAt?: string; byteLength?: number; generationMs?: number; error?: string;
   stage: ExportStage; lastProgressAt: string; stalled: boolean; retryAllowed: boolean; recoveryAt?: string;
@@ -65,7 +65,8 @@ export function exportJobView(record: ValopayRecord, now = new Date().toISOStrin
     requestedAt: record.createdAt, attempts: Number(record.data.attempts || 0),
     stage: ['queued','ready','failed'].includes(record.status) ? record.status as ExportStage : ['checking','rendering','uploading','confirming'].includes(record.data.stage) ? record.data.stage : 'checking',
     ...exportHealth(record, now),
-    ...(record.data.fileDeletedAt ? {expiredAt:String(record.data.fileDeletedAt)} : {}),
+    // The retention run that deleted the file, which holds its deletion receipt.
+    ...(record.data.fileDeletedAt ? {expiredAt:String(record.data.fileDeletedAt), ...(record.data.fileRetentionRunId ? {retentionRunId:String(record.data.fileRetentionRunId)} : {})} : {}),
     downloadUrl: `/api/v1/exports/${record.id}/download?merchantId=${encodeURIComponent(record.merchantId)}`,
     ...(ready ? { checksum: String(record.data.checksum), generatedAt: String(record.data.generatedAt || record.createdAt), byteLength: Number(record.data.byteLength || 0), generationMs: Number(record.data.generationMs || 0) } : {}),
     ...(record.status === 'failed' ? { error: String(record.data.lastError || 'Export generation could not finish. Retry this export.') } : {}),

@@ -4,6 +4,7 @@ import { renderApp, screen, userEvent, waitFor } from './harness';
 import { makeRecord } from '../../api-server/src/domain/records';
 import { bindCloseReviewBasis, closeReviewIssues, prepareCloseReview, decideCloseReview } from '../../api-server/src/domain/close-review';
 import { queueExport } from '../../api-server/src/lib/export-jobs';
+import { formatDate } from '@/lib/formatters';
 
 let api: FakeApi, reviewId: string, closeId: string;
 beforeEach(() => {
@@ -71,14 +72,32 @@ it('keeps a malformed committed receipt uncertain and replays the original revie
   expect(api.state().records.filter(record => record.kind === 'exports')).toHaveLength(1);
 });
 
-it('shows a retained receipt for an expired reviewed-close file without offering its deleted download', async () => {
+const removedAt = '2026-09-25T08:30:00.000Z';
+it('shows when an expired reviewed-close file was removed, its retained checksum and where its receipt is, without offering its deleted download', async () => {
   const job = api.mutate((state, ctx) => queueExport(state, ctx, { kind: 'reviewed-close', closeReviewId: reviewId, format: 'pdf' }, 'sample/private'));
-  api.mutate(state => { const saved = state.records.find(record => record.id === job.id)!; saved.status = 'ready'; Object.assign(saved.data, { checksum: 'c'.repeat(64), generatedAt: api.now, fileDeletedAt: api.now, byteLength: 123 }); });
-  renderApp(page());
+  api.mutate(state => { const saved = state.records.find(record => record.id === job.id)!; saved.status = 'ready'; Object.assign(saved.data, { checksum: 'c'.repeat(64), generatedAt: api.now, fileDeletedAt: removedAt, fileRetentionRunId: 'retention-run-1', byteLength: 123 }); });
+  api.role = 'Finance'; renderApp(page());
   await screen.findByText('Reviewed close evidence file has expired');
   expect(screen.queryByRole('link', { name: 'Open reviewed close evidence' })).toBeNull();
   expect(window.open).not.toHaveBeenCalled();
-  expect(screen.getByText(/Its checksum and deletion receipt remain available/)).toBeTruthy();
+  expect(screen.getByText(`Removed on ${formatDate(removedAt)} by an approved retention run under the lender’s retention policy. Create a new export for current evidence.`)).toBeTruthy();
+  expect(screen.getByText(`SHA-256 of the removed file: ${'c'.repeat(64)}`)).toBeTruthy();
+  // Only an administrator can open retention runs: anyone else is told who can, and which run holds the receipt.
+  expect(screen.getByText('Its deletion receipt is saved with the retention run that removed it. An administrator sees a link to it on this export.')).toBeTruthy();
+  expect(screen.getByText('Retention run: retention-run-1')).toBeTruthy();
+  expect(screen.queryByRole('link', { name: 'Open its deletion receipt' })).toBeNull();
+});
+
+it('says a removed file of an export that never finished has no checksum, and offers no retry', async () => {
+  const job = api.mutate((state, ctx) => queueExport(state, ctx, { kind: 'reviewed-close', closeReviewId: reviewId, format: 'pdf' }, 'sample/private'));
+  api.mutate(state => { const saved = state.records.find(record => record.id === job.id)!; saved.status = 'failed'; Object.assign(saved.data, { lastError: 'Generation could not finish.', fileDeletedAt: removedAt, fileRetentionRunId: 'retention-run-1' }); });
+  renderApp(page());
+  await screen.findByText('Reviewed close evidence file has expired');
+  expect(screen.getByText(`Removed on ${formatDate(removedAt)} by an approved retention run under the lender’s retention policy. This export did not finish, so it has no checksum to keep. Create a new export for current evidence.`)).toBeTruthy();
+  expect(screen.queryByText(/SHA-256 of the removed file/)).toBeNull();
+  expect(screen.getByText('Its deletion receipt is saved with the retention run that removed it.')).toBeTruthy();
+  expect(screen.getByRole('link', { name: 'Open its deletion receipt' }).getAttribute('href')).toBe('/lifecycle?run=retention-run-1');
+  expect(screen.queryByRole('button', { name: 'Retry export' })).toBeNull();
 });
 
 for (const status of ['ready', 'failed']) it(`lets a read-only reviewer inspect a ${status} export while blocking new generation and retry`, async () => {

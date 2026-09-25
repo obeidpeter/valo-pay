@@ -42,6 +42,20 @@ export function matchesSearch(record: { name: string; reference: string; data: u
 
 export interface ListQuery { status?: string; search?: string; limit?: number; offset?: number; updatedSince?: string; customerId?: string; id?: string; allocatable?: "true" | "false"; paymentId?: string }
 
+/** The status a list of saved exports gives a job whose file an approved retention run removed (fileDeletedAt). */
+export const EXPIRED_EXPORT_STATUS = "expired";
+/**
+ * Whether a record is in the status a list asks for. A saved export whose file
+ * an approved retention run removed is `expired` whatever its job's status, so
+ * `ready` (Completed) and `failed` (Needs retry) list only exports whose file
+ * remains; any other record is in its own status. listRecords applies the same
+ * rule in SQL.
+ */
+export function inListStatus(record: ValopayRecord, status: string): boolean {
+  if (record.kind === "exports" && record.data.fileDeletedAt) return status === EXPIRED_EXPORT_STATUS;
+  return record.status === status;
+}
+
 /**
  * True when a list asks only for instalments that can take an allocation
  * (`canTakeAllocation`); asked of another kind, it is refused. `paymentId`
@@ -85,7 +99,7 @@ export function updatedSinceInstant(value: string): number {
 }
 
 /**
- * Filter, order and page a kind's records: status and search as before,
+ * Filter, order and page a kind's records: status (inListStatus) and search as before,
  * whether an instalment can take an allocation (`allocatable`; the caller
  * checks the kind with allocatableOnly), an `updatedSince` watermark for
  * incremental sync (Appendix B updated_since), newest first, then `offset` and
@@ -94,7 +108,8 @@ export function updatedSinceInstant(value: string): number {
  */
 export function pageRecords(records: ValopayRecord[], query: ListQuery, kind?: string): { items: ValopayRecord[]; total: number; nextOffset?: number } {
   let items = records;
-  if (query.status && query.status !== "all") items = items.filter((record) => record.status === query.status);
+  const status = query.status;
+  if (status && status !== "all") items = items.filter((record) => inListStatus(record, status));
   if (query.customerId) items = items.filter((record) => record.customerId === query.customerId);
   if (query.id) items = items.filter((record) => record.id === query.id);
   if (query.allocatable === "true") items = items.filter(canTakeAllocation);

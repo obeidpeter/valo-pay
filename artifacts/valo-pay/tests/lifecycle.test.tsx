@@ -213,10 +213,18 @@ it('moves focus from a discarded run request back to the run, never to the Sandb
 });
 
 it('keeps retention details and controls unavailable to non-administrators', async () => {
-  api.role = 'Finance'; renderApp('/lifecycle');
+  api.role = 'Finance'; renderApp('/lifecycle?run=retention-run-1');
   await screen.findByText(/Only a currently authorised administrator can inspect or change retention controls/);
   expect(screen.queryByRole('button', { name: 'Save retention policy' })).toBeNull();
-  expect(api.calls.filter(call => call.path === '/v1/lifecycle')).toHaveLength(0);
+  expect(api.calls.filter(call => call.path.startsWith('/v1/lifecycle'))).toHaveLength(0);
+});
+
+it('says when the retention run the address names is not in this lender, and keeps the page usable', async () => {
+  renderApp('/lifecycle?run=retention-run-elsewhere');
+  await screen.findByText('Retention run not found in this lender.');
+  expect(api.calls.some(call => call.method === 'GET' && call.path === '/v1/lifecycle/runs/retention-run-elsewhere')).toBe(true);
+  expect(screen.getByRole('button', { name: 'Prepare deletion preview' })).toBeTruthy();
+  expect(screen.queryByRole('heading', { name: 'Approved deletion run' })).toBeNull();
 });
 
 it('lets an administrator place an exact artifact hold with an accountable reason', async () => {

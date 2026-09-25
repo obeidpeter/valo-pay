@@ -19,7 +19,7 @@ merchantId: string;
  */
 search?: string;
 /**
- * Only records in this status; omitted or "all" for every status.
+ * Only records in this status; omitted or "all" for every status. Saved exports (kind exports) also take "expired", which is derived rather than stored: the exports whose file an approved retention run removed (fileDeletedAt), whatever their job's status. "ready" and "failed" then list only the exports whose file remains.
  */
 status?: string;
 /**

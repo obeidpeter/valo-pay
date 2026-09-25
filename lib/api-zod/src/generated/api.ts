@@ -198,7 +198,7 @@ export const listRecordsQueryPaymentIdMax = 100;
 export const ListRecordsQueryParams = zod.object({
   "merchantId": zod.string().min(1).max(listRecordsQueryMerchantIdMax).describe('The lender (a merchant in the API) the request is scoped to; one of the caller\'s workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.'),
   "search": zod.string().optional().describe('Text matched, ignoring case and accents, against the record\'s name, its reference and the text and number values in its data, nested ones included; never a field\'s name, true, false or null.'),
-  "status": zod.string().optional().describe('Only records in this status; omitted or "all" for every status.'),
+  "status": zod.string().optional().describe('Only records in this status; omitted or "all" for every status. Saved exports (kind exports) also take "expired", which is derived rather than stored: the exports whose file an approved retention run removed (fileDeletedAt), whatever their job\'s status. "ready" and "failed" then list only the exports whose file remains.'),
   "limit": zod.coerce.number().int().min(1).max(listRecordsQueryLimitMax).optional().describe('Page size, from 1 to 500; a value outside that range is refused (400). Omitted, a kind that grows with history (audit, closes, exports, notifications, retry-decisions) returns its newest 500 with nextOffset to page on, and any other kind its whole filtered set, for existing relationship and balance views.'),
   "offset": zod.coerce.number().int().min(listRecordsQueryOffsetMin).optional().describe('Rows to skip in the newest-first order.'),
   "updatedSince": zod.string().optional().describe('An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00; only records updated at or after that instant (incremental sync). A number, a date without a time, a time without Z or an offset, or a year outside 0001 to 9999 is refused (400, naming updatedSince).'),
@@ -866,6 +866,7 @@ export const CreateExportResponse = zod.object({
   "retryAllowed": zod.boolean().optional(),
   "recoveryAt": zod.string().optional(),
   "expiredAt": zod.string().optional(),
+  "retentionRunId": zod.string().optional(),
   "kind": zod.string().optional(),
   "format": zod.string().optional(),
   "customerId": zod.string().optional(),
@@ -876,7 +877,7 @@ export const CreateExportResponse = zod.object({
   "byteLength": zod.number().int().optional(),
   "generationMs": zod.number().int().optional(),
   "error": zod.string().optional()
-}).describe('Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.')
+}).describe('Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. expiredAt appears only after an approved retention run deleted the job\'s file, and is the time of that deletion, not a scheduled expiry: the download and the retry then answer 410, and a ready job keeps its checksum. retentionRunId names that run, whose deletion receipt an administrator opens with GET /v1/lifecycle/runs/{id}. No answer gives a ready file an expiry date, because a file is removed only by an approved retention run, apart from an idle anonymous sandbox, which the expiry sweep deletes whole with its files (docs/deployment.md); a hold or an evidence link can keep a file for longer than the lender\'s retention period. Optional status retains compatibility with older immediate-export responses.')
 
 
 /**
@@ -909,6 +910,7 @@ export const GetExportJobResponse = zod.object({
   "retryAllowed": zod.boolean().optional(),
   "recoveryAt": zod.string().optional(),
   "expiredAt": zod.string().optional(),
+  "retentionRunId": zod.string().optional(),
   "kind": zod.string().optional(),
   "format": zod.string().optional(),
   "customerId": zod.string().optional(),
@@ -919,7 +921,7 @@ export const GetExportJobResponse = zod.object({
   "byteLength": zod.number().int().optional(),
   "generationMs": zod.number().int().optional(),
   "error": zod.string().optional()
-}).describe('Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.')
+}).describe('Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. expiredAt appears only after an approved retention run deleted the job\'s file, and is the time of that deletion, not a scheduled expiry: the download and the retry then answer 410, and a ready job keeps its checksum. retentionRunId names that run, whose deletion receipt an administrator opens with GET /v1/lifecycle/runs/{id}. No answer gives a ready file an expiry date, because a file is removed only by an approved retention run, apart from an idle anonymous sandbox, which the expiry sweep deletes whole with its files (docs/deployment.md); a hold or an evidence link can keep a file for longer than the lender\'s retention period. Optional status retains compatibility with older immediate-export responses.')
 
 
 /**
@@ -961,6 +963,7 @@ export const RetryExportJobResponse = zod.object({
   "retryAllowed": zod.boolean().optional(),
   "recoveryAt": zod.string().optional(),
   "expiredAt": zod.string().optional(),
+  "retentionRunId": zod.string().optional(),
   "kind": zod.string().optional(),
   "format": zod.string().optional(),
   "customerId": zod.string().optional(),
@@ -971,7 +974,7 @@ export const RetryExportJobResponse = zod.object({
   "byteLength": zod.number().int().optional(),
   "generationMs": zod.number().int().optional(),
   "error": zod.string().optional()
-}).describe('Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.')
+}).describe('Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. expiredAt appears only after an approved retention run deleted the job\'s file, and is the time of that deletion, not a scheduled expiry: the download and the retry then answer 410, and a ready job keeps its checksum. retentionRunId names that run, whose deletion receipt an administrator opens with GET /v1/lifecycle/runs/{id}. No answer gives a ready file an expiry date, because a file is removed only by an approved retention run, apart from an idle anonymous sandbox, which the expiry sweep deletes whole with its files (docs/deployment.md); a hold or an evidence link can keep a file for longer than the lender\'s retention period. Optional status retains compatibility with older immediate-export responses.')
 
 
 /**

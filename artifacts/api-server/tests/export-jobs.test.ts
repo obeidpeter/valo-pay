@@ -85,6 +85,11 @@ assert.equal(uploads, 1); assert.equal(generations, 1); checks += 2;
 const checksum = exportJobView(state.records.find(record => record.id === job.id)!).checksum;
 assert.equal(checksum, createHash('sha256').update([...objects.values()][0]!.bytes).digest('hex')); checks++;
 assert.equal(await processExportJob(repository, storage, generate, target), 'skipped'); checks++;
+// A file an approved retention run removed says when, keeps its checksum and names the run that holds its deletion receipt.
+const removedRow = structuredClone(state.records.find(record => record.id === job.id)!);
+Object.assign(removedRow.data, { fileDeletedAt: '2026-09-01T09:00:00.000Z', fileRetentionRunId: 'retention-run-1' });
+assert.deepEqual((({ expiredAt, retentionRunId, checksum: kept }) => ({ expiredAt, retentionRunId, kept }))(exportJobView(removedRow)), { expiredAt: '2026-09-01T09:00:00.000Z', retentionRunId: 'retention-run-1', kept: checksum }); checks++;
+assert.equal('retentionRunId' in exportJobView(state.records.find(record => record.id === job.id)!), false); checks++;
 
 // Upload succeeded but final database commit failed. Retry adopts the same immutable bytes and key.
 const second = queueExport(state, ctx, { kind: 'customers', format: 'csv' }, '/private/test');

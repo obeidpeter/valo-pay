@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type Ref } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'wouter';
 import { Archive, LockKeyhole, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react';
 import { lifecycleViewSchema, lifecycleRunViewSchema, type LifecycleRunView, type LifecycleView, type RetentionPolicy, type LifecycleCandidate } from '@workspace/valopay-schema';
 import { useWorkspace } from '@/lib/workspace-context';
@@ -46,6 +47,18 @@ function LifecycleControls() {
     if (data.merchantId !== merchantId || data.actor !== workspace?.actor) throw new Error('The response did not match this lender and administrator. Refresh the page.');
     return data;
   } });
+  // The run the address names (an expired export links to the run that removed its file) opens however many newer runs the list shows.
+  const [params] = useSearchParams(), linkedRun = params.get('run') || '', opened = useRef('');
+  const linked = useQuery({ queryKey: ['lifecycle-run', merchantId, workspace?.actor, linkedRun], enabled: !!merchantId && workspace?.role === 'Admin' && !!linkedRun, queryFn: async ({ signal }) => {
+    const run = await pilotRequest(lenderPath(`/lifecycle/runs/${encodeURIComponent(linkedRun)}`, merchantId), lifecycleRunViewSchema, { signal });
+    if (run.merchantId !== merchantId || run.id !== linkedRun) throw new Error('The response named a different retention run. Refresh the page.');
+    return run;
+  } });
+  useEffect(() => {
+    if (!linked.data || opened.current === linked.data.id) return;
+    opened.current = linked.data.id; setSelected(linked.data);
+    setMessage(`Retention run ${linked.data.id} is open below${linked.data.receipts.length ? ' with its saved deletion receipts' : ''}.`);
+  }, [linked.data]);
   const mutation = useSafeMutation(async (variables: Variables, options) => {
     const request = { ...options, method: 'POST', body: JSON.stringify(variables.data) };
     const result: LifecycleRunView | LifecycleView = variables.response === 'run' ? await pilotRequest(lenderPath(variables.path, merchantId), lifecycleRunViewSchema, request, INCOMPLETE_CONFIRMATION) : await pilotRequest(lenderPath(variables.path, merchantId), lifecycleViewSchema, request, INCOMPLETE_CONFIRMATION);
@@ -107,6 +120,7 @@ function LifecycleControls() {
     <PilotHeading title="Data retention">Control how long sample source files and completed request payloads remain available. Deletion requires an exact preview and administrator approval. Financial records and the audit trail are retained.</PilotHeading>
     {workspace?.role !== 'Admin' ? <p role="status" className="rounded-xl border bg-card p-5">Only a currently authorised administrator can inspect or change retention controls. Ask your administrator about holds and approved deletion runs.</p> : <>
       <PilotError error={query.error} retry={() => { void query.refetch(); }} />
+      <PilotError error={linked.error} retry={() => { void linked.refetch(); }} />
       {query.isLoading && <p role="status">Loading retention policy and saved runs…</p>}
       <RecoveryNotice mutation={mutation} next={() => runSent.current ? executeButton.current : sentFrom.current} />
       {message && <p ref={messageRef} role="status" className="rounded-lg border bg-secondary/20 p-4 text-sm">{message}</p>}

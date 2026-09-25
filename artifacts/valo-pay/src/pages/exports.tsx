@@ -24,7 +24,7 @@ export default function ExportsPage() {
 }
 function SavedExports() {
   const { merchantId } = useWorkspace(), [params, setParams] = useSearchParams();
-  const requested = params.get('job') || '', status = ['queued','running','ready','failed'].includes(params.get('status') || '') ? params.get('status')! : 'all';
+  const requested = params.get('job') || '', status = Object.keys(exportStatusLabels).includes(params.get('status') || '') ? params.get('status')! : 'all';
   const parsedOffset = Number(params.get('offset') || 0), offset = Number.isSafeInteger(parsedOffset) && parsedOffset >= 0 ? parsedOffset : 0;
   const query = { merchantId: merchantId!, status, offset, limit: 25 };
   // Paging keeps the jobs shown, and so the page buttons and the one pressed, until the next page arrives.
