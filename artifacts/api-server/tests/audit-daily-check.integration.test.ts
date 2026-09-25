@@ -6,8 +6,9 @@
 // as verify_audit does, and stores what it found in the same way: the last
 // verified entry and the break, or none, which clears a repaired break. A
 // catch-up pass that closes several missed business dates walks it once. The
-// walk holds no lock, so a write to the lender never waits for it, and a break
-// a write recorded after the walk read the chain stays. A person's close asks
+// walk holds no lock, so a write to the lender never waits for it; a break a
+// write recorded after the walk read the chain stays, and so does what
+// verify_audit recorded from a walk that began after it. A person's close asks
 // the background worker thread for the check. The overview's alert says
 // whether the lender has recorded the break or only this check has found it.
 import assert from "node:assert/strict";
@@ -83,7 +84,7 @@ const sandbox = async () => {
 const lenders: string[] = [];
 
 // The walk of a whole chain is the audit read from the chain's start ($5 = 0). `walks` counts them; `pause`, when set, holds
-// the pass after a walk has read its entries until it resolves, and `reached` says it got there.
+// the next walk after it has read its entries until it resolves (a walk after that one runs on), and `reached` says it got there.
 let walks = 0, pause: Promise<void> | undefined, reached: (() => void) | undefined;
 const probe = await pool.connect();
 probe.release();
@@ -94,6 +95,7 @@ clients.query = function (this: unknown, ...args: any[]) {
   if (typeof args[0] !== "string" || !/r\.kind='audit'/.test(args[0]) || !/make_interval\(mins =>/.test(args[0]) || args[1]?.[4] !== 0 || typeof result?.then !== "function") return result;
   walks += 1;
   const held = pause;
+  pause = undefined;
   return held ? result.then(async (answer: unknown) => { reached?.(); await held; return answer; }) : result;
 };
 
@@ -207,7 +209,41 @@ try {
     } finally { pause = undefined; reached = undefined; release?.(); await passing.catch(() => undefined); }
   }
 
-  // ---- 6. A person's close asks the background worker thread for the day's check ----
+  // ---- 6. What verify_audit records after the walk began reading stands, whichever way it went ----
+  for (const recorded of [false, true]) {
+    const { lender, overview, write, verify } = await sandbox();
+    for (let index = 0; index < 3; index++) await write(`Later walk customer ${index}`);
+    const second = (await entriesOf(lender))[1]!;
+    const repair = () => pool.query("UPDATE valopay_records SET data=$2 WHERE id=$1", [second.id, second.data]);
+    await changeSummary(second.id, "Rewritten before the walk");
+    // Recorded: the lender keeps the break verify_audit found, and the entry is repaired before the walk reads it.
+    if (recorded) { assert.equal((await verify()).valid, false); await repair(); }
+    await setCursor(lender, new Date((await databaseNow()) - 60 * 60 * 1000).toISOString());
+    let release!: () => void;
+    const atWalk = new Promise<void>((resolve) => { reached = resolve; });
+    pause = new Promise<void>((resolve) => { release = resolve; });
+    const passing = runDueCloses({ batchSize: 5, onlyMerchantIds: [lender] });
+    try {
+      await Promise.race([atWalk, new Promise((_, reject) => setTimeout(() => reject(new Error("the pass never walked the chain")), 20_000))]);
+      // While the walk that read entry 2 (changed, or repaired) runs, the entry is repaired (or changed again) and a person checks the whole chain.
+      if (recorded) await changeSummary(second.id, "Rewritten again while the check ran"); else await repair();
+      assert.equal((await verify()).valid, !recorded);
+      const later = await chainOf(lender);
+      assert.deepEqual(later.broken, recorded ? { sequence: 2 } : undefined, "verify_audit records what it found");
+      release();
+      assert.equal((await passing).closed.length, 1);
+      const stored = await chainOf(lender);
+      assert.deepEqual([stored.broken, stored.verified], [later.broken, later.verified],
+        recorded ? "the check, which read entry 2 before it changed again, leaves the break verify_audit recorded since" : "the check, which read entry 2 before its repair, leaves the break verify_audit cleared since");
+      assert.deepEqual([typeof stored.walkedAt, stored.walkedAt, typeof (await settingsOf(lender)).dailyAuditCheckAt], ["string", later.walkedAt, "string"], "the lender keeps when verify_audit walked the chain, and that the day's check ran");
+      if (recorded) await write("Written after the check");
+      const alert = chainAlert((await overview()).alerts);
+      assert.deepEqual([namedEntry(alert), kept(alert)], recorded ? [2, true] : [Number.NaN, false], recorded ? "so the overview still names the entry, after a later write too" : "so the overview shows no alert");
+      checks += 6;
+    } finally { pause = undefined; reached = undefined; release?.(); await passing.catch(() => undefined); }
+  }
+
+  // ---- 7. A person's close asks the background worker thread for the day's check ----
   for (const closes of [null, { intervalMs: 3_600_000, firstDelayMs: 3_600_000, onlyMerchantIds: [] as string[] }]) {
     const { lender, write, close } = await sandbox();
     for (let index = 0; index < 3; index++) await write(`Background check customer ${index}`);
@@ -244,4 +280,4 @@ try {
   await pool.end();
   rmSync(logFile, { force: true });
 }
-console.log(`Daily audit check tests passed (${checks} checks): a daily close lists the break the lender knows of, naming the overview's entry; the check of the whole chain after a lender's first close of the day records what verify_audit would, once a day however many missed dates a catch-up closes, and clears a repaired break the next day; its walk holds no lock and leaves a break recorded since; and a person's close asks the background worker thread for it.`);
+console.log(`Daily audit check tests passed (${checks} checks): a daily close lists the break the lender knows of, naming the overview's entry; the check of the whole chain after a lender's first close of the day records what verify_audit would, once a day however many missed dates a catch-up closes, and clears a repaired break the next day; its walk holds no lock and leaves a break recorded since, and what verify_audit recorded since; and a person's close asks the background worker thread for it.`);

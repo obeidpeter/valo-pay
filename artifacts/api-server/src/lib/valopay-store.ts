@@ -1189,12 +1189,13 @@ const FULL_CLOSE_DAYS = 7;
  * the last entry read back from the database and verified, and `broken` once
  * a completed write, verify_audit or the daily check has recorded a break:
  * the entry it stopped at, the one after `verified` (a read such as the
- * overview stores nothing). `at` is an entry's creation time. The entries stay in
- * valopay_records (kind `audit`) and are not part of a loaded state:
- * appendAudit needs only the head.
+ * overview stores nothing). `at` is an entry's creation time, and `walkedAt`
+ * when the last walk of the whole chain that recorded its result began reading
+ * (readAuditChain). The entries stay in valopay_records (kind `audit`) and are
+ * not part of a loaded state: appendAudit needs only the head.
  */
 type ChainPoint = AuditPoint & { at?: string };
-type AuditChain = ChainPoint & { verified: ChainPoint; broken?: { sequence: number } };
+type AuditChain = ChainPoint & { verified: ChainPoint; broken?: { sequence: number }; walkedAt?: string };
 function chainPoint(value: unknown): ChainPoint | undefined {
   if (!value || typeof value !== "object") return undefined;
   const { sequence, hash, at } = value as Record<string, unknown>;
@@ -1207,8 +1208,8 @@ function storedChain(settings: Record<string, any>): AuditChain | undefined {
   const head = chainPoint(settings.auditChain), verified = chainPoint(settings.auditChain?.verified);
   if (!head || !verified || verified.sequence > head.sequence) return undefined;
   // A break is kept as a check records it, at the entry after the verified one.
-  const broken = settings.auditChain.broken?.sequence === verified.sequence + 1;
-  return { ...head, verified, ...(broken ? { broken: { sequence: verified.sequence + 1 } } : {}) };
+  const broken = settings.auditChain.broken?.sequence === verified.sequence + 1, walkedAt = settings.auditChain.walkedAt;
+  return { ...head, verified, ...(broken ? { broken: { sequence: verified.sequence + 1 } } : {}), ...(typeof walkedAt === "string" && Number.isFinite(Date.parse(walkedAt)) ? { walkedAt } : {}) };
 }
 /**
  * An entry's sequence when it is a whole number from 1, as chainSequence
@@ -1243,10 +1244,15 @@ const CHAIN_MARGIN_MINUTES = 5;
  * later write, and a save or an overview costs what it costs on a valid
  * chain however many entries follow the break. Only the walk of the whole
  * chain (`full`, verify_audit's and the daily check's) reads every entry
- * again: it records the break it finds, or none once the chain is valid again.
+ * again: it records the break it finds, or none once the chain is valid again,
+ * and `walkedAt`, the database's time as it began reading: before the
+ * snapshot of verify_audit's read, and after that of the daily check's, which
+ * its transaction took with its first statement (checkAuditChainDaily).
  */
 async function readAuditChain(session: Session, merchantId: string, settings: Record<string, any>, full = false) {
   const stored = storedChain(settings), known = full ? undefined : stored?.broken;
+  const walkedAt = full ? (await session.client.query<{ at: Date }>("SELECT statement_timestamp() AS at")).rows[0]!.at.toISOString() : stored?.walkedAt;
+  const stamp = walkedAt ? { walkedAt } : {};
   const storedHead: ChainPoint | undefined = stored && { sequence: stored.sequence, hash: stored.hash, ...(stored.at ? { at: stored.at } : {}) };
   const from: ChainPoint = full || !stored ? AUDIT_GENESIS : known ? storedHead! : stored.verified;
   const rows = (await session.client.query<{ id: string; data: Record<string, any>; created_at: Date }>(
@@ -1263,9 +1269,9 @@ async function readAuditChain(session: Session, merchantId: string, settings: Re
     if (sequence !== undefined && sequence > head.sequence) head = { sequence, hash: String(row.data.hash), at: row.created_at.toISOString() };
   }
   if (storedHead && storedHead.sequence > head.sequence) { head = storedHead; valid = false; }
-  if (known) return { chain: { ...head, verified: stored!.verified, broken: known } as AuditChain, verification: { valid: false, count: walk.count, headHash: walk.headHash } };
+  if (known) return { chain: { ...head, verified: stored!.verified, broken: known, ...stamp } as AuditChain, verification: { valid: false, count: walk.count, headHash: walk.headHash } };
   const verified: ChainPoint = walk.entry ? { ...walk.verified, at: walk.entry.created_at.toISOString() } : from;
-  return { chain: { ...head, verified, ...(valid ? {} : { broken: { sequence: verified.sequence + 1 } }) } as AuditChain, verification: { valid, count: walk.count, headHash: walk.headHash } };
+  return { chain: { ...head, verified, ...(valid ? {} : { broken: { sequence: verified.sequence + 1 } }), ...stamp } as AuditChain, verification: { valid, count: walk.count, headHash: walk.headHash } };
 }
 
 export async function loadState(context: StoreContext, merchantId: string, lock: Exclude<MerchantLock, "none"> = "update", options: { wholeCloses?: number } = {}): Promise<DomainState> {
@@ -1364,17 +1370,18 @@ export interface DailyAuditCheck { valid: boolean; entries: number; verifiedSequ
 
 /**
  * The daily check of a lender's whole audit chain, which the background
- * worker runs right after the lender's first daily close of each WAT day
- * (close-scheduler.ts). It walks every entry from the first, as verify_audit
- * does, on one snapshot that takes no lock, so no write waits for the walk.
- * Then, holding the lender for a moment, it checks the entries appended since
- * from where the walk verified to (readAuditChain, as a write does) and stores
- * what it found as verify_audit does: the last verified entry and the break,
- * or none once the chain is valid again, which clears a recorded break. A
- * break a write recorded after the snapshot, at an entry the walk read
- * intact, is newer than the walk and stays. `dailyAuditCheckAt` records the
- * check, and undefined means none ran: the day's check had already run, or
- * the lender is gone.
+ * worker runs once the lender's first daily close of each WAT day has
+ * committed (close-scheduler.ts). It walks every entry from the first, as
+ * verify_audit does, on one snapshot that takes no lock, so no write waits
+ * for the walk. Then, holding the lender for a moment, it checks the entries
+ * appended since from where the walk verified to (readAuditChain, as a write
+ * does) and stores what it found as verify_audit does: the last verified
+ * entry and the break, or none once the chain is valid again, which clears a
+ * recorded break. What is newer than the walk stays: the result of a walk of
+ * the whole chain that began reading after this one did (verify_audit's, by
+ * `walkedAt`), and a break a write recorded after the snapshot at an entry
+ * the walk read intact. `dailyAuditCheckAt` records the check, and undefined
+ * means none ran: the day's check had already run, or the lender is gone.
  */
 export async function checkAuditChainDaily(merchantId: string): Promise<DailyAuditCheck | undefined> {
   const started = Date.now();
@@ -1387,12 +1394,13 @@ export async function checkAuditChainDaily(merchantId: string): Promise<DailyAud
   return lenderTransaction(merchantId, true, async (session, settings, now) => {
     if (!dailyAuditCheckDue(settings, now)) return undefined;
     const stored = storedChain(settings), found = walked.chain;
-    const newer = stored?.broken && stored.broken.sequence !== walked.recorded && stored.broken.sequence <= found.verified.sequence;
+    const newer = (stored?.walkedAt !== undefined && Date.parse(stored.walkedAt) > Date.parse(found.walkedAt!))
+      || (stored?.broken && stored.broken.sequence !== walked.recorded && stored.broken.sequence <= found.verified.sequence);
     let chain = stored!;
     if (!newer) {
       // The later head of the two, so an entry missing since the snapshot is still a break and its sequence never issued again.
       const { sequence, hash, at } = stored && stored.sequence > found.sequence ? stored : found;
-      ({ chain } = await readAuditChain(session, merchantId, { auditChain: { sequence, hash, at, verified: found.verified, ...(found.broken ? { broken: found.broken } : {}) } }));
+      ({ chain } = await readAuditChain(session, merchantId, { auditChain: { sequence, hash, at, verified: found.verified, ...(found.broken ? { broken: found.broken } : {}), walkedAt: found.walkedAt } }));
     }
     await session.client.query("UPDATE valopay_merchants SET settings = settings || jsonb_build_object('auditChain', $2::jsonb, 'dailyAuditCheckAt', $3::text) WHERE id=$1", [merchantId, JSON.stringify(chain), now]);
     return { valid: !chain.broken, entries: walked.verification.count, verifiedSequence: chain.verified.sequence, ...(chain.broken ? { brokenAt: chain.broken.sequence } : {}), cleared: Boolean(stored?.broken && !chain.broken), walkMs };
@@ -2690,7 +2698,7 @@ export function appendAudit(state: DomainState, ctx: Context, action: string, ob
   const data = auditEntryData({ sequence: head.sequence + 1, actor: ctx.actor, action, objectId, summary, changes, previousHash: head.hash, timestamp: ctx.now });
   const record: ValopayRecord = { id: randomUUID(), merchantId: state.merchant.id, kind: "audit", name: action, status: "recorded", reference: "", amountKobo: 0, customerId: state.records.find((item) => item.id === objectId)?.customerId || "", createdAt: ctx.now, updatedAt: ctx.now, data };
   state.records.push(record);
-  const chain: AuditChain = { sequence: data.sequence, hash: data.hash, at: ctx.now, verified: head.verified, ...(head.broken ? { broken: head.broken } : {}) };
+  const chain: AuditChain = { sequence: data.sequence, hash: data.hash, at: ctx.now, verified: head.verified, ...(head.broken ? { broken: head.broken } : {}), ...(head.walkedAt ? { walkedAt: head.walkedAt } : {}) };
   state.settings.auditChain = chain;
   if (loaded) session!.auditChain = chain;
   return record;
