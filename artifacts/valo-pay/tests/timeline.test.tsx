@@ -3,6 +3,8 @@ import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, waitFor, within } from "./harness";
 import { queryClient, queryDefaults } from "@/App";
 import { customerTimeline } from "../../api-server/src/domain/timeline";
+import { makeRecord } from "../../api-server/src/domain/records";
+import { reconcile } from "../../api-server/src/domain/reconciliation";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -53,6 +55,37 @@ describe("customer timeline", () => {
     const listed = (await screen.findByRole("heading", { name: "Payments" })).closest("section")!;
     expect(listed.textContent!.replace(/\u00a0/g, " ")).toContain("SBX-USD-CARDUSD 1,000.00");
     expect(listed.textContent).not.toContain("₦1,000.00");
+  });
+
+  // Third review, a residual: an exception raised for money in another currency holds that money's minor units, and the
+  // customer's history and the case page showed them as naira (₦20.00 for EUR 20.00, ₦1,000.00 for USD 1,000.00).
+  it("shows an exception about money in another currency in that currency in the customer's history", async () => {
+    const ada = api.state().records.find((record) => record.kind === "customers" && record.name === "Ada Okonkwo")!;
+    const [euros, dollars] = api.mutate((state, ctx) => {
+      const card = (reference: string, amountKobo: number, currency: string) => makeRecord(state, "observations", { name: `${currency} card`, status: "unresolved", reference, amountKobo, customerId: ada.id, data: { source: "card", eventId: reference, provider: "Sandbox Rail", currency } });
+      const eur = card("CARD-EUR-1", 2_000, "EUR"), usd = card("CARD-USD-1", 100_000, "USD");
+      reconcile(state, { ...ctx, actor: "Sandbox Finance", role: "Finance" });
+      return [eur, usd].map((evidence) => state.records.find((record) => record.kind === "exceptions" && record.data.linkedRecordId === evidence.data.paymentId)!);
+    });
+    renderApp(`/customers/${ada.id}`);
+    await screen.findByRole("heading", { name: "Customer history" });
+    const events = document.querySelectorAll("main ol > li");
+    const eventOf = (exception: { id: string }) => [...events].find((item) => item.querySelector(`[title="${exception.id}"]`))!;
+    expect([eventOf(euros), eventOf(dollars)].map((item) => item.textContent!.replace(/ /g, " ").match(/Unallocated payment(.*?)Open/)?.[1])).toEqual(["EUR 20.00", "USD 1,000.00"]);
+    expect(eventOf(euros).textContent).not.toContain("₦20.00");
+  });
+
+  it("shows a case's amount in the currency of the money it is about", async () => {
+    const exception = api.mutate((state, ctx) => {
+      const ada = state.records.find((record) => record.kind === "customers" && record.name === "Ada Okonkwo")!;
+      const card = makeRecord(state, "observations", { name: "USD card", status: "unresolved", reference: "CARD-USD-2", amountKobo: 100_000, customerId: ada.id, data: { source: "card", eventId: "usd-2", provider: "Sandbox Rail", currency: "USD" } });
+      reconcile(state, { ...ctx, actor: "Sandbox Finance", role: "Finance" });
+      return state.records.find((record) => record.kind === "exceptions" && record.data.linkedRecordId === card.data.paymentId)!;
+    });
+    renderApp(`/cases/${exception.id}`);
+    const panel = (await screen.findByRole("heading", { name: "Unallocated payment" })).closest("section")!;
+    expect(panel.textContent!.replace(/ /g, " ")).toContain("USD 1,000.00");
+    expect(panel.textContent).not.toContain("₦1,000.00");
   });
 
   it("says when the lender has no customer with the reference, inside the console", async () => {

@@ -10,9 +10,10 @@
 // third review found: Finance's resolutions of evidence deciding first, holds
 // offered as they stand now, counted-twice reports kept, a batch an earlier
 // build counted, amounts in their own currency, other currencies beside a
-// customer's position and a payer the payment's evidence names. Every request
-// runs as the store runs it: on a copy, with the repository's final-state
-// check, and rolled back when it is refused.
+// customer's position, a payer the payment's evidence names and exceptions that
+// name the currency of the money they are about. Every request runs as the
+// store runs it: on a copy, with the repository's final-state check, and rolled
+// back when it is refused.
 import assert from "node:assert/strict";
 import { HOUR, addAttempt, addObservation, ctxAt, liveFixture, outstandingOf, wat } from "./helpers.js";
 import { allocatePayment, allocationPayer, amendDueItem, paymentObservedAt, raiseException, reconcile, supersedeAllocation } from "../src/domain/reconciliation.js";
@@ -29,6 +30,9 @@ import { buildReports } from "../src/domain/reports.js";
 import { buildAlerts } from "../src/domain/alerts.js";
 import { customerTimeline } from "../src/domain/timeline.js";
 import { buildDisputePack } from "../src/lib/valopay-packs.js";
+import { pageQueue } from "../src/lib/valopay-queues.js";
+import { pageCustomerHistory } from "../src/lib/customer-history.js";
+import { bindCloseReviewBasis } from "../src/domain/close-review.js";
 import { canTakeAllocation, paymentAwaitsAllocation, paymentRefundedKobo, paymentUnappliedKobo, resolutionCodesForException } from "@workspace/valopay-schema";
 import type { DomainState, TypedRecord, ValopayRecord } from "../src/domain/types.js";
 
@@ -1060,6 +1064,64 @@ section("the customer timeline's position beside the dispute pack's", () => {
   equal(position.unallocatedOtherCurrencies, pack.position.unallocatedOtherCurrencies, "as the dispute pack does");
 });
 
+// ---------- Third review, a residual: an exception about money in another currency names that currency ----------
+section("exceptions about money in another currency", () => {
+  const { state, due } = liveFixture({ withFailure: false, merchantId: "exception-currencies" });
+  const t0 = wat("2027-07-01T09:00:00");
+  // A USD and a EUR card payment, a USD reversal of a payment no connection has seen, a naira transfer and a USD settlement line.
+  addObservation(state, { reference: "CARD-USD-7", amountKobo: 100_000, source: "card", customerId: due.customerId, eventId: "usd-7", occurredAt: t0, currency: "USD" } as any);
+  addObservation(state, { reference: "CARD-EUR-7", amountKobo: 2_000, source: "card", customerId: due.customerId, eventId: "eur-7", occurredAt: t0, currency: "eur " } as any);
+  addObservation(state, { reference: "PSK-UNSEEN-7", amountKobo: 7_000, source: "webhook", customerId: due.customerId, eventId: "rev-7", reversed: true, occurredAt: wat("2027-06-28T09:00:00"), currency: "USD" } as any);
+  addObservation(state, { reference: "TRF-NGN-7", amountKobo: 500_000, source: "transfer", customerId: due.customerId, eventId: "ngn-7", occurredAt: t0 });
+  addObservation(state, { reference: "PSK-USD-7", amountKobo: 99_500, grossAmountKobo: 100_000, feeKobo: 500, batchReference: "B-U7", source: "settlement", customerId: due.customerId, eventId: "usd-line-7a", occurredAt: t0, currency: "USD" } as any);
+  accepted(request(state, () => reconcile(state, finance(wat("2027-07-01T10:00:00")))), "the first reconciliation");
+  // Evidence in EUR under the naira transfer's reference is held for Finance, and the USD line comes again in another batch.
+  const held = addObservation(state, { reference: "TRF-NGN-7", amountKobo: 300_000, source: "transfer", customerId: due.customerId, eventId: "eur-held-7", occurredAt: t0, currency: "EUR" } as any);
+  addObservation(state, { reference: "PSK-USD-7", amountKobo: 99_500, grossAmountKobo: 100_000, feeKobo: 500, batchReference: "B-U8", source: "settlement", customerId: due.customerId, eventId: "usd-line-7b", occurredAt: wat("2027-07-02T09:00:00"), currency: "USD" } as any);
+  accepted(request(state, () => reconcile(state, finance(wat("2027-07-02T10:00:00")))), "the second reconciliation");
+  const [usd] = payment(state, "CARD-USD-7"), [eur] = payment(state, "CARD-EUR-7"), [line] = payment(state, "PSK-USD-7");
+  const reversal = recordsOf(state, "observations").find((item) => item.data.eventId === "rev-7")!;
+  const second = recordsOf(state, "settlement-batches").find((item) => item.reference === "B-U8")!;
+  const raised = [exceptionsFor(state, usd!.id, "unallocated_payment")[0], exceptionsFor(state, eur!.id, "unallocated_payment")[0], exceptionsFor(state, line!.id, "unallocated_payment")[0],
+    exceptionsFor(state, reversal.id, "provider_status_mismatch")[0], exceptionsFor(state, held.id, "suspected_duplicate")[0], exceptionsFor(state, second.id, "settlement_variance")[0]];
+  equal(raised.map((item) => item && [item.amountKobo, item.data.currency]), [[100_000, "USD"], [2_000, "EUR"], [100_000, "USD"], [7_000, "USD"], [300_000, "EUR"], [100_000, "USD"]],
+    "each exception raised for money in another currency names that currency beside its minor units: a payment held for Finance, a reversal waiting for its payment, held evidence and a line counted in two batches");
+  check(recordsOf(state, "exceptions").filter((item) => !raised.includes(item)).every((item) => !("currency" in item.data)), "an exception about naira names none");
+  // What the console reads carries it: the Exceptions queue, the customer's history and the dispute pack.
+  const queued = pageQueue(state.records, "exceptions", { view: "open", limit: 100 } as any, wat("2027-07-02T11:00:00")).items.find((item) => item.id === raised[0]!.id);
+  const history = pageCustomerHistory(state, due.customerId, { eventsLimit: 100 } as any).events.find((item) => item.id === raised[1]!.id);
+  const pack = buildDisputePack(state, finance(wat("2027-07-02T11:00:00")), due.customerId).timeline.find((item) => item.recordId === raised[3]!.id);
+  equal([queued?.data.currency, history?.data.currency, pack?.currency], ["USD", "EUR", "USD"], "the queue, the history and the dispute pack read it");
+  // A close's review basis lists what remains open with the currency of each amount, as the reviewed close's export prints it.
+  const unresolved = bindCloseReviewBasis(state, close(state, "2027-07-02T11:00:00")).data.reviewBasis.unresolved as { id: string; kind: string; currency?: string }[];
+  equal([raised[0]!.id, raised[3]!.id, held.id].map((id) => unresolved.find((item) => item.id === id)?.currency), ["USD", "USD", "EUR"], "a close's unresolved items name the currency of their amounts: exceptions and evidence");
+  check(unresolved.filter((item) => item.kind === "exceptions" && !raised.some((exception) => exception!.id === item.id)).every((item) => !("currency" in item)), "and a naira item names none");
+
+  // A batch an earlier build left counting the USD collection that B-U7 counts: the report of it names the currency too.
+  const earlier = makeRecord(state, "settlement-batches", { name: "Settlement batch B-U9", status: "pending", reference: "B-U9", data: { ...structuredClone(recordsOf(state, "settlement-batches").find((item) => item.reference === "B-U7")!.data), batchReference: "B-U9", lineObservationIds: [], linePaymentIds: [line!.id] } } as any);
+  accepted(request(state, () => reconcile(state, finance(wat("2027-07-02T11:30:00")))), "the reconciliation of the earlier build's batch");
+  const [counted] = exceptionsFor(state, earlier.id, "settlement_variance");
+  equal([counted?.data.condition, counted?.amountKobo, counted?.data.currency], [`settlement_variance:${earlier.id}:counted:${line!.id}`, 100_000, "USD"], "a batch that counts a USD collection another batch counts is reported in dollars");
+
+  // What an earlier build left: the same exceptions with no currency, one of them already resolved.
+  accepted(request(state, () => executeAction(state, finance(wat("2027-07-02T12:00:00")), { action: "resolve_exception", recordId: raised[1]!.id, reason: "Held as credit in euros.", data: { resolutionCode: "held_credit" } })), "Finance resolving the EUR payment's exception");
+  const legacy = [...raised, counted];
+  for (const item of legacy) delete item!.data.currency;
+  const stamps = legacy.map((item) => item!.updatedAt);
+  check(buildDisputePack(state, finance(wat("2027-07-03T07:00:00")), due.customerId).timeline.find((item) => item.recordId === raised[3]!.id)?.currency === "USD", "the dispute pack reads such an exception in its money's currency even before it is corrected");
+  const corrected = accepted(request(state, () => reconcile(state, finance(wat("2027-07-03T08:00:00")))), "the reconciliation after the upgrade");
+  equal([legacy.map((item) => item!.data.currency), corrected.data.exceptionCurrenciesRecorded], [["USD", "EUR", "USD", "USD", "EUR", "USD", "USD"], 7], "the next reconciliation gives each the currency of the money it is about, the resolved one and both kinds of counted-twice report included, and counts them");
+  check(legacy.every((item, index) => item!.updatedAt !== stamps[index]), "each corrected exception is written");
+  const written = legacy.map((item) => item!.updatedAt);
+  const again = accepted(request(state, () => reconcile(state, finance(wat("2027-07-03T09:00:00")))), "a later reconciliation");
+  equal([legacy.map((item) => item!.updatedAt), "exceptionCurrenciesRecorded" in again.data], [written, false], "once: a later reconciliation writes none of them again and counts nothing");
+  // A currency an exception names already is kept.
+  raised[0]!.data.currency = "GBP";
+  reconcile(state, finance(wat("2027-07-03T10:00:00")));
+  equal(raised[0]!.data.currency, "GBP", "a currency the exception names is never replaced");
+  equal(buildDisputePack(state, finance(wat("2027-07-03T11:00:00")), due.customerId).timeline.find((item) => item.recordId === raised[0]!.id)?.currency, "GBP", "and the dispute pack reads it as the exception names it, as the console does");
+});
+
 // ---------- Third review finding 6: a payer its payment's evidence names is not withdrawn ----------
 section("a withdrawn identification the payment's evidence confirms", () => {
   const { state } = liveFixture({ withFailure: false, merchantId: "payer-named-after-identification" });
@@ -1148,6 +1210,16 @@ function invariants(state: DomainState): string[] {
     const sum = credits.reduce((total, item) => total + item.amountKobo, 0);
     if (sum !== batch.data.statementNetKobo) problems.push(`batch ${batch.reference}: statement total ${batch.data.statementNetKobo} is not its credits ${sum}`);
   }
+  // An exception names the currency of the money it is about (the payment or evidence it links to, or the payment a
+  // report of a collection counted in two batches names), and one about naira names none.
+  for (const e of recordsOf(state, "exceptions")) {
+    const linked = byId.get(String(e.data.linkedRecordId ?? ""));
+    const [, , report, named] = String(e.data.condition ?? "").split(":");
+    const line = report === "line" ? byId.get(String(named)) : undefined;
+    const money = linked?.kind === "payments" || linked?.kind === "observations" ? linked : linked?.kind === "settlement-batches" ? byId.get(report === "counted" ? String(named) : String(line?.data.paymentId ?? "")) : undefined;
+    const currency = String(money?.data.currency || "NGN").trim().toUpperCase();
+    if (e.data.currency !== (currency === "NGN" ? undefined : currency)) problems.push(`exception ${e.data.type} on ${linked?.reference}: currency ${e.data.currency} is not its money's ${currency}`);
+  }
   return problems;
 }
 
@@ -1210,4 +1282,4 @@ if (failures.length) {
   console.error(failures.join("\n"));
   assert.fail(`${failures.length} payment evidence section(s) failed`);
 }
-console.log(`Payment evidence golden tests passed (${checks} checks): evidence with no payer and Finance's payer identification, evidence that shares a reference, R1's currency and connection, R4's narration references, statement credits and lines across settlement batches, the rest of a partly allocated payment, distinct payments, evidence and reversals through another connection name, a withdrawn payer, a net line applied before the gross, a gross below the amount, money in another currency, a line an earlier build counted twice, Finance's resolutions deciding first, holds offered as they stand now, counted-twice reports kept, a batch an earlier build counted, amounts in their own currency, other currencies beside a customer's position, a payer its evidence names, a close that contains a conflict and the conservation property run (${propertyRuns}).`);
+console.log(`Payment evidence golden tests passed (${checks} checks): evidence with no payer and Finance's payer identification, evidence that shares a reference, R1's currency and connection, R4's narration references, statement credits and lines across settlement batches, the rest of a partly allocated payment, distinct payments, evidence and reversals through another connection name, a withdrawn payer, a net line applied before the gross, a gross below the amount, money in another currency, a line an earlier build counted twice, Finance's resolutions deciding first, holds offered as they stand now, counted-twice reports kept, a batch an earlier build counted, amounts in their own currency, other currencies beside a customer's position, a payer its evidence names, exceptions in their money's currency, a close that contains a conflict and the conservation property run (${propertyRuns}).`);

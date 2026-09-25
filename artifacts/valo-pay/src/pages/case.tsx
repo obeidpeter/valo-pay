@@ -13,7 +13,8 @@ import {
 } from "@/components/pilot-ui";
 import { Button } from "@/components/ui/button";
 import { FieldError, FormAlert, attentionTitle, focusField, invalidProps } from "@/components/form-field";
-import { formatDate, formatKobo } from "@/lib/formatters";
+import { formatDate } from "@/lib/formatters";
+import { formatRecordMoney } from "@/lib/currencies";
 import { readableLabel } from "@/components/record-label";
 import { LookedFor } from "@/components/notice";
 import { NotFoundNotice } from "@/pages/not-found";
@@ -186,7 +187,7 @@ function CaseWork({ data, refresh }: { data: any; refresh(): Promise<any> }) {
       <div className="grid gap-5 lg:grid-cols-[1fr_1.4fr]">
         <PilotPanel title={readableLabel(record.data.type)}>
           <p className="text-2xl font-semibold tabular-nums">
-            {formatKobo(record.amountKobo)}
+            {formatRecordMoney(record, record.amountKobo)}
           </p>
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-3 text-sm">
             <dt className="text-muted-foreground">Status</dt>

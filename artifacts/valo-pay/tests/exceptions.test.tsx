@@ -167,6 +167,27 @@ describe("exceptions", () => {
     expect(within(dialog).getByText(/^Record outcome:/).parentElement!.textContent).toContain('It does not allocate a payment, issue a refund, reissue a mandate or move money.');
   });
 
+  // Third review, a residual: an exception raised for money in another currency holds that money's minor units, and the
+  // row and the resolve dialog showed them as naira (₦1,000.00 for a USD 1,000.00 payment).
+  it('shows an exception about money in another currency in that currency, in its row and its resolve dialog', async () => {
+    const user = userEvent.setup();
+    const exception = api.mutate((state, ctx) => {
+      const ada = state.records.find(record => record.kind === 'customers' && record.name === 'Ada Okonkwo')!;
+      const card = makeRecord(state, 'observations', { name: 'USD card', status: 'unresolved', reference: 'CARD-USD-1', amountKobo: 100_000, customerId: ada.id, data: { source: 'card', eventId: 'usd-1', provider: 'Sandbox Rail', currency: 'USD' } });
+      reconcile(state, { ...ctx, actor: 'Sandbox Finance', role: 'Finance' });
+      return state.records.find(record => record.kind === 'exceptions' && record.data.linkedRecordId === card.data.paymentId)!;
+    });
+    expect([exception.amountKobo, exception.data.currency]).toEqual([100_000, 'USD']);
+    renderApp(`/exceptions?record=${exception.id}`);
+    const row = (await screen.findByRole('button', { name: 'Resolve' })).closest('tr')!;
+    const shown = (element: Element) => element.textContent!.replace(/ /g, ' ');
+    expect(shown(row)).toContain('USD 1,000.00');
+    expect(shown(row)).not.toContain('₦1,000.00');
+    await user.click(within(row).getByRole('button', { name: 'Resolve' }));
+    const context = within(await screen.findByRole('dialog', { name: 'Resolve exception' })).getByRole('region', { name: 'Exception context' });
+    expect(shown(within(context).getByText('Amount').nextElementSibling!)).toBe('USD 1,000.00');
+  });
+
   it('shows a stored exception without a severity as having none, never as low', async () => {
     // An earlier edit could clear it; the queue then ranks it below low and the High filter leaves it out.
     const exception = api.mutate((state) => {

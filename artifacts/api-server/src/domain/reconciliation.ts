@@ -56,6 +56,58 @@ export function feeScheduleFor(state: DomainState, provider: unknown): ProviderF
 /** The condition an exception type raises for when it names only its record: the record itself. */
 const identityCondition = (type: ExceptionType, linkedRecordId: string): string => `${type}:${linkedRecordId}`;
 
+/** Looks up a payment or payment evidence by id: the kinds whose money may be in another currency than naira. */
+export type MoneyLookup = (kind: "payments" | "observations", id: string) => ValopayRecord | undefined;
+/** The lender's payments and payment evidence by id, through the pass's index when there is one. */
+const moneyIn = (state: DomainState): MoneyLookup => (kind, id) => recordsWhere(state, kind, "id", id)[0];
+
+/**
+ * The money an exception is about, whose currency its amountKobo is in: the payment or payment evidence it links to,
+ * or, for a report of a collection counted in two settlement batches (linked to the batch that reports it), the
+ * payment its condition names, itself (settlement_variance:<batch>:counted:<payment>) or through the settlement line
+ * (settlement_variance:<batch>:line:<line>). Undefined for an exception about anything else, whose amount is naira.
+ */
+function exceptionMoney(data: { linkedRecordId?: unknown; condition?: unknown }, find: MoneyLookup): ValopayRecord | undefined {
+  const linked = String(data.linkedRecordId ?? "");
+  const own = linked ? find("payments", linked) ?? find("observations", linked) : undefined;
+  if (own) return own;
+  const [type, batchId, report, id] = String(data.condition ?? "").split(":");
+  if (type !== "settlement_variance" || !linked || batchId !== linked || !id) return undefined;
+  if (report === "counted") return find("payments", id);
+  const line = report === "line" ? find("observations", id) : undefined;
+  return line && find("payments", String(line.data.paymentId ?? ""));
+}
+/** The currency of the money an exception is about (exceptionMoney), in capitals: naira when it is about none. */
+function moneyCurrency(data: { linkedRecordId?: unknown; condition?: unknown }, find: MoneyLookup): string {
+  const money = exceptionMoney(data, find);
+  return money ? currencyOf(money) : "NGN";
+}
+
+/** The currency an exception's amountKobo is in, in capitals: the one it names (data.currency), else that of the money it is about (exceptionMoney). */
+export function exceptionCurrency(exception: ValopayRecord, find: MoneyLookup): string {
+  return exception.data.currency ? currencyOf(exception) : moneyCurrency(exception.data, find);
+}
+
+/**
+ * Decision on exceptions an earlier build raised for money in another currency: it stored that money's minor units in
+ * amountKobo and no currency, so they read as naira. Each reconciliation gives an exception that names no currency the
+ * currency of the money it is about (exceptionMoney), when that is not naira, so each is written once, resolved or
+ * not; every read then finds it stored. Returns how many it gave one.
+ */
+function recordExceptionCurrencies(state: DomainState, ctx: Context): number {
+  const find = moneyIn(state);
+  let recorded = 0;
+  for (const exception of recordsOfKind(state, "exceptions")) {
+    if (exception.data.currency) continue;
+    const currency = moneyCurrency(exception.data, find);
+    if (currency === "NGN") continue;
+    exception.data.currency = currency;
+    touch(exception, ctx.now);
+    recorded += 1;
+  }
+  return recorded;
+}
+
 /**
  * Appendix A: one open exception per (type, linked record), with the
  * catalogue's owner, severity and business-day SLA.
@@ -72,9 +124,13 @@ const identityCondition = (type: ExceptionType, linkedRecordId: string): string 
  * back later is new work. `owner` replaces the catalogue's owner and
  * `linkedKind` names the linked record's kind where the type does not. The
  * reports of a collection counted in two batches that an exception carries
- * (countedTwiceReports) are settled by its resolution too.
+ * (countedTwiceReports) are settled by its resolution too. An exception about
+ * money in another currency than naira (exceptionMoney), whose amountKobo is
+ * that money's minor units, names that currency (data.currency); `currency`
+ * names it where the money is not yet linked, as for a settlement line reported
+ * before it records its payment.
  */
-export function raiseException(state: DomainState, ctx: Context, type: ExceptionType, options: { linkedRecordId?: string; customerId?: string; amountKobo?: number; notes: string; condition?: string; settledBy?: readonly string[]; owner?: string; linkedKind?: string }): TypedRecord<"exceptions"> {
+export function raiseException(state: DomainState, ctx: Context, type: ExceptionType, options: { linkedRecordId?: string; customerId?: string; amountKobo?: number; notes: string; condition?: string; settledBy?: readonly string[]; owner?: string; linkedKind?: string; currency?: string }): TypedRecord<"exceptions"> {
   const definition = exceptionCatalogue[type];
   const linkedRecordId = options.linkedRecordId || "";
   const linked = recordsWhere(state, "exceptions", "data.linkedRecordId", linkedRecordId);
@@ -87,11 +143,13 @@ export function raiseException(state: DomainState, ctx: Context, type: Exception
     const settled = linked.find((item) => sameType(item) && item.data.resolutionCode !== conditionClearedCode && settles(item));
     if (settled) return settled;
   }
+  const currency = options.currency ?? moneyCurrency({ linkedRecordId, condition: options.condition }, moneyIn(state));
   return makeRecord(state, "exceptions", {
     name: definition.title, status: "open", customerId: options.customerId || "", amountKobo: options.amountKobo || 0, createdAt: ctx.now,
     data: {
       type, severity: definition.severity, owner: options.owner ?? definition.owner, slaBusinessDays: definition.slaBusinessDays, dueBy: addBusinessDays(state, ctx.now, definition.slaBusinessDays), notes: options.notes, linkedRecordId,
       ...(options.condition !== undefined ? { condition: options.condition } : {}), ...(options.linkedKind ? { linkedKind: options.linkedKind } : {}),
+      ...(currency !== "NGN" ? { currency } : {}),
     },
   });
 }
@@ -428,7 +486,7 @@ const lineCountedTwiceCondition = (batchId: string, lineId: string): string => `
 function reportLineCountedTwice(state: DomainState, ctx: Context, batch: TypedRecord<"settlement-batches">, line: TypedRecord<"observations">, counted: ValopayRecord, payment: TypedRecord<"payments">): void {
   const notes = `Settlement line ${line.reference} (${moneyText(payment.amountKobo, currencyOf(payment))}) is already counted in settlement batch ${counted.reference}: the provider reports the same collection in two batches. It is not counted again in ${batch.reference}. Check both payouts with the provider.`;
   const condition = lineCountedTwiceCondition(batch.id, line.id);
-  const raised = raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, amountKobo: payment.amountKobo, notes, condition });
+  const raised = raiseException(state, ctx, "settlement_variance", { linkedRecordId: batch.id, amountKobo: payment.amountKobo, notes, condition, currency: currencyOf(payment) });
   if (isOpenException(raised.status)) carryCountedTwice(raised, ctx, condition, notes);
 }
 
@@ -1660,6 +1718,8 @@ export function reconcile(state: DomainState, ctx: Context): { message: string; 
 function reconcileRecords(state: DomainState, ctx: Context): { message: string; data: Record<string, any> } {
   const observations = recordsOf(state, "observations").filter((item) => item.status === "unresolved");
   const exceptionsBefore = recordsOf(state, "exceptions").length;
+  // Exceptions an earlier build raised for money in another currency name it from now on.
+  const currenciesRecorded = recordExceptionCurrencies(state, ctx);
   const canonicalPayments = new CanonicalPaymentIndex(state), settlementLines = new SettlementLines(state);
   // Evidence of a reversal is read after every other piece of evidence, so the payment it reverses, arriving in the same
   // import or close, is recorded first whatever order the evidence arrived in.
@@ -1740,6 +1800,7 @@ function reconcileRecords(state: DomainState, ctx: Context): { message: string; 
       possibleDuplicates: recordsOf(state, "payments").filter((item) => item.status === "possible_duplicate").length,
       agedUnallocated: aged.length, finalAttemptExceptions: giveUps.finalFailures, disputesFrozen: giveUps.disputes, noticesNotEvidenced: giveUps.deferred, retryDecisionsRecorded: giveUps.decisionsRecorded, unknownOutcomes: unknownOutcomes.length,
       checkoutOutcomesUnknown: checkoutsUnknown, exceptionsOpened: recordsOf(state, "exceptions").length - exceptionsBefore, exceptionsCleared: cleared.length,
+      ...(currenciesRecorded ? { exceptionCurrenciesRecorded: currenciesRecorded } : {}),
       ...(cleared.length ? { auditNote: clearedExceptionsNote(cleared) } : {}),
     },
   };
