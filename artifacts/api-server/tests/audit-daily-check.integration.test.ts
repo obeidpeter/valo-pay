@@ -9,8 +9,8 @@
 // pass runs its checks after all its closes, while its budget lasts. The walk
 // holds no lock, so a write to the lender never waits for it; a break a write
 // recorded after the walk read the chain stays, and so does what verify_audit
-// recorded from a walk that began after it. A person's close asks the
-// background worker thread for the check. The overview's alert says
+// recorded from a walk that began after it. A person's first close of the day
+// asks the background worker thread for the check. The overview's alert says
 // whether the lender has recorded the break or only this check has found it.
 import assert from "node:assert/strict";
 import express from "express";
@@ -19,6 +19,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 
 if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
   console.log("Set VALOPAY_RUN_INTEGRATION=1 to check the daily audit check against a disposable PostgreSQL database.");
@@ -34,6 +35,7 @@ const { nextCloseInstant } = await import("@workspace/valopay-schema");
 const { default: router } = await import("../src/routes/index");
 const { errorHandler } = await import("../src/lib/error-handler");
 const { runClosePassOnce, runDueCloses } = await import("../src/lib/close-scheduler");
+const { checkAuditChainDaily } = await import("../src/lib/valopay-store");
 const { startBackgroundWorker } = await import("../src/lib/background-worker");
 const { logger } = await import("../src/lib/logger");
 const { watDate } = await import("../src/domain/calendar");
@@ -100,6 +102,14 @@ clients.query = function (this: unknown, ...args: any[]) {
   return held ? result.then(async (answer: unknown) => { reached?.(); await held; return answer; }) : result;
 };
 
+// The lenders a person's close asked the background worker thread to check (requestDailyAuditCheck).
+const asked: string[] = [];
+const post = Worker.prototype.postMessage;
+Worker.prototype.postMessage = function (this: Worker, message: any, ...rest: any[]) {
+  if (message?.type === "audit_check") asked.push(message.merchantId);
+  return (post as (...args: any[]) => void).call(this, message, ...rest);
+};
+
 let checks = 0;
 try {
   // ---- 1. A daily close lists the break the lender knows of, naming the entry the overview names ----
@@ -162,7 +172,10 @@ try {
     await close();
     assert.equal(walks, 0, "none of them walks the chain again the same day");
     assert.equal((await settingsOf(lender)).dailyAuditCheckAt, checkedAt, "the day's check stands");
-    checks += 4;
+    // The check itself, asked again the same day (the thread may be asked twice before the first check records), walks nothing.
+    assert.equal(await checkAuditChainDaily(lender), undefined);
+    assert.equal(walks, 0, "a check asked again the same day walks nothing");
+    checks += 6;
   }
 
   // ---- 4. The next day's check clears a repaired break, as verify_audit does (here from the one-shot close pass) ----
@@ -244,7 +257,7 @@ try {
     } finally { pause = undefined; reached = undefined; release?.(); await passing.catch(() => undefined); }
   }
 
-  // ---- 7. A person's close asks the background worker thread for the day's check ----
+  // ---- 7. A person's first close of the day asks the background worker thread for the day's check ----
   for (const closes of [null, { intervalMs: 3_600_000, firstDelayMs: 3_600_000, onlyMerchantIds: [] as string[] }]) {
     const { lender, write, close } = await sandbox();
     for (let index = 0; index < 3; index++) await write(`Background check customer ${index}`);
@@ -259,13 +272,16 @@ try {
         settings = await settingsOf(lender);
       }
       assert.deepEqual([settings.auditChain.broken, settings.auditChain.verified.sequence], [{ sequence: 2 }, 1], `the thread${closes ? "'s scheduler" : ""} walked the chain after the close and recorded the break`);
+      // Another close by a person the same day does not ask the thread again.
+      await close();
+      assert.equal(asked.filter((id) => id === lender).length, 1, "the day's first close by a person asks for the check, and a later one that day does not");
     } finally {
       worker.stop();
       await worker.settle();
     }
     const line = readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((text) => JSON.parse(text)).find((entry) => entry.event === "audit.daily_check" && entry.merchantId === lender);
     assert.deepEqual([line?.valid, line?.brokenAt, line?.thread, line?.level], [false, 2, "background", 50], "and logged it as a broken chain");
-    checks += 2;
+    checks += 3;
   }
 
   // ---- 8. A pass checks after all its closes, while its budget lasts; the checks it leaves wait for its next pass ----
@@ -302,6 +318,7 @@ try {
   }
 } finally {
   clients.query = query;
+  Worker.prototype.postMessage = post;
   server.close();
   await once(server, "close");
   for (const lender of lenders) {
@@ -314,4 +331,4 @@ try {
   await pool.end();
   rmSync(logFile, { force: true });
 }
-console.log(`Daily audit check tests passed (${checks} checks): a daily close lists the break the lender knows of, naming the overview's entry; the check of the whole chain after a lender's first close of the day records what verify_audit would, once a day however many missed dates a catch-up closes, and clears a repaired break the next day; its walk holds no lock and leaves a break recorded since, and what verify_audit recorded since; a person's close asks the background worker thread for it; and a pass checks after all its closes, while its budget lasts.`);
+console.log(`Daily audit check tests passed (${checks} checks): a daily close lists the break the lender knows of, naming the overview's entry; the check of the whole chain after a lender's first close of the day records what verify_audit would, once a day however many missed dates a catch-up closes, and clears a repaired break the next day; its walk holds no lock and leaves a break recorded since, and what verify_audit recorded since; a person's first close of the day asks the background worker thread for it; and a pass checks after all its closes, while its budget lasts.`);
