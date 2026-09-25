@@ -19,7 +19,11 @@ import { canonicalJson, type CanonicalJsonForm } from "@workspace/valopay-schema
  *   `legacy-en-us-omit`;
  * - retry-decision fingerprints and close review input and snapshot digests:
  *   `canonical`, whose text is byte for byte what their earlier helpers wrote
- *   for any value read back from the database.
+ *   for any value read back from the database;
+ * - a retained request payload's retention digest (its request fingerprint,
+ *   key, outcome and version): `canonical`; runs prepared before it hold the
+ *   earlier digest, of the stored request and receipt, in `legacy-en-us-null`,
+ *   which approving or executing such a run computes again.
  *
  * Digests of bytes (export checksums, recovery backups) and of plain strings
  * (record and journal IDs, principals) involve no JSON form. A Paystack test
