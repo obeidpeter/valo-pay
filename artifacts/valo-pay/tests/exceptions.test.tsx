@@ -77,6 +77,76 @@ describe("exceptions", () => {
     expect(conflictCodes).not.toContain('Same payment; evidence joined to it');
   });
 
+  // Third review of the audit fixes, finding 3: the dialog said resolving only records an outcome, whatever the
+  // reconciliation then did with the evidence, and the page never showed the service's answer or moved focus to it.
+  it('says what each resolution of held evidence does, then shows the service\'s answer and moves focus to it', async () => {
+    const user = userEvent.setup();
+    const finance = () => ({ actor: 'Sandbox Finance', role: 'Finance', now: api.now });
+    const line = api.mutate(state => {
+      const due = state.records.find(record => record.kind === 'due-items' && record.reference === 'DEMO-LOAN-1005')!;
+      makeRecord(state, 'observations', { name: 'Webhook', status: 'unresolved', reference: 'PSK-SET-1', amountKobo: 2_500_000, customerId: due.customerId, data: { source: 'webhook', eventId: 'w1', provider: 'Sandbox Rail' } });
+      reconcile(state, finance());
+      const held = makeRecord(state, 'observations', { name: 'Settlement line', status: 'unresolved', reference: 'PSK-SET-1', amountKobo: 2_487_500, customerId: due.customerId, data: { source: 'settlement', eventId: 's1', provider: 'Sandbox Rail Settlements', grossAmountKobo: 2_500_000, feeKobo: 12_500, batchReference: 'B-1' } });
+      reconcile(state, finance());
+      return held;
+    });
+    const exception = api.state().records.find(record => record.kind === 'exceptions' && record.data.linkedRecordId === line.id)!;
+    renderApp('/exceptions?view=open&type=suspected_duplicate');
+    const row = (await screen.findByText(String(exception.data.notes))).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: 'Resolve' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Resolve exception' });
+    const code = within(dialog).getByLabelText(/How was this resolved/);
+    const outcome = () => within(dialog).getByText(/^Record outcome:/).parentElement!.textContent!;
+    const generic = 'It does not allocate a payment, issue a refund, reissue a mandate or move money.';
+    await user.selectOptions(code, 'same_payment');
+    expect(outcome()).toContain('The next reconciliation joins this evidence to the payment this exception names');
+    expect(outcome()).not.toContain(generic);
+    await user.selectOptions(code, 'not_money');
+    expect(outcome()).toContain('The next reconciliation sets this evidence aside for good');
+    await user.selectOptions(code, 'distinct_payments');
+    expect(outcome()).toContain('The next reconciliation records this evidence as a payment of its own.');
+    await user.selectOptions(code, 'confirmed_duplicate_refund');
+    expect(outcome()).toContain('The next reconciliation records this evidence as a payment of its own, held until its refund is recorded.');
+    expect(outcome()).not.toContain(generic);
+
+    await user.selectOptions(code, 'same_payment');
+    await user.type(within(dialog).getByLabelText(/^Reason/), 'The settlement file names the same collection.');
+    await user.click(within(dialog).getByRole('button', { name: 'Resolve exception' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Resolve exception' })).toBeNull());
+    const answer = await screen.findByRole('status', { name: 'Resolution recorded' });
+    expect(answer.textContent).toContain('Exception resolution recorded. The next reconciliation joins this payment evidence to payment PSK-SET-1 as more evidence of it: no second payment is made.');
+    // The resolved exception leaves the open queue with its Resolve button, so reading continues from the answer.
+    await waitFor(() => expect(screen.queryByText(String(exception.data.notes))).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(answer));
+  });
+
+  it('says what each resolution of a reversal waiting for its payment does, and shows the answer', async () => {
+    const user = userEvent.setup();
+    const reversal = api.mutate((state, ctx) => {
+      const waiting = makeRecord(state, 'observations', { name: 'Unseen reversal', status: 'unresolved', reference: 'NEVER-SEEN-1', amountKobo: 500_000, customerId: '', data: { source: 'webhook', eventId: 'r1', provider: 'Sandbox Rail', reversed: true, occurredAt: new Date(Date.parse(api.now) - 3 * 86_400_000).toISOString() } });
+      reconcile(state, { ...ctx, actor: 'Sandbox Finance', role: 'Finance' });
+      return waiting;
+    });
+    const exception = api.state().records.find(record => record.kind === 'exceptions' && record.data.linkedRecordId === reversal.id)!;
+    expect(exception.data.type).toBe('provider_status_mismatch');
+    renderApp(`/exceptions?record=${exception.id}`);
+    await user.click(await screen.findByRole('button', { name: 'Resolve' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Resolve exception' });
+    const code = within(dialog).getByLabelText(/How was this resolved/);
+    const outcome = () => within(dialog).getByText(/^Record outcome:/).parentElement!.textContent!;
+    await user.selectOptions(code, 'provider_state_adopted');
+    expect(outcome()).toContain('Provider state adopted keeps the reversal waiting for its payment, with no new exception');
+    await user.selectOptions(code, 'platform_state_confirmed');
+    expect(outcome()).toContain('The next reconciliation sets the reversal aside for good: it reverses nothing, even if its payment arrives later.');
+    expect(outcome()).not.toContain('It does not allocate a payment');
+    await user.type(within(dialog).getByLabelText(/^Reason/), 'The provider confirmed no such collection.');
+    await user.click(within(dialog).getByRole('button', { name: 'Resolve exception' }));
+    const answer = await screen.findByRole('status', { name: 'Resolution recorded' });
+    expect(answer.textContent).toMatch(/Exception resolution recorded\. This reversal evidence is set aside at the next reconciliation/);
+    // Its Resolve button goes with the resolution, so focus moves to the answer.
+    await waitFor(() => expect(document.activeElement).toBe(answer));
+  });
+
   it('shows a stored exception without a severity as having none, never as low', async () => {
     // An earlier edit could clear it; the queue then ranks it below low and the High filter leaves it out.
     const exception = api.mutate((state) => {

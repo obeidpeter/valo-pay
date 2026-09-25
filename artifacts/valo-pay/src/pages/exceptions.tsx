@@ -18,6 +18,7 @@ import { isDueToday, isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { RecordPagination } from '@/components/record-pagination';
 import { ExceptionContext } from '@/components/exception-context';
 import { useHashTarget } from '@/lib/use-hash-target';
+import { useFocusWhenLost } from '@/lib/focus';
 
 const exceptionViews = ['open', 'high', 'overdue', 'due-today', 'resolved'] as const;
 
@@ -36,9 +37,14 @@ export default function ExceptionsPage() {
   const [selectedEx, setSelectedEx] = useState<any>(null);
   const [actionKind, setActionKind] = useState<'update' | 'resolve' | ''>('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  // The service's answer to the last resolution: what the next reconciliation does with the exception's evidence, say.
+  const [resolved, setResolved] = useState<{ what: string; message: string } | null>(null);
+  const resolvedRef = useRef<HTMLElement>(null);
+  // A resolution takes its Resolve button away (the exception leaves the open queue), so reading continues from its answer.
+  useFocusWhenLost(resolvedRef, resolved);
   const { view: filter, owner, type, setView: setFilter, setOwner, setType } = useQueueFilters(exceptionViews, 'open');
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  useEffect(() => { setSelectedEx(null); setIsDialogOpen(false); }, [merchantId]);
+  useEffect(() => { setSelectedEx(null); setIsDialogOpen(false); setResolved(null); }, [merchantId]);
   /** WAI-ARIA tabs: one tab stop for the group, arrows and Home/End move the selection and the focus together. */
   const onTabKeyDown = (event: React.KeyboardEvent, index: number, keys: Array<typeof filter>) => {
     const moves: Record<string, number> = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: keys.length - 1 };
@@ -84,6 +90,11 @@ export default function ExceptionsPage() {
       </header>
 
       <QueueFreshness key={merchantId} queries={[exceptionsQuery]} />
+
+      {resolved && <section ref={resolvedRef} role="status" aria-label="Resolution recorded" className="rounded-lg border border-success/30 bg-success/5 p-4 text-sm">
+        <p className="font-semibold">{resolved.what} resolved</p>
+        <p className="mt-1">{resolved.message}</p>
+      </section>}
 
       <QueueSearch /><SavedQueueViews queue="exceptions" views={exceptionViews} fallback="open" />
 
@@ -211,6 +222,8 @@ export default function ExceptionsPage() {
         onOpenChange={setIsDialogOpen}
         title={actionKind === 'resolve' ? 'Resolve exception' : 'Edit exception'}
         actionMutation={actionKind === 'resolve' ? 'resolve_exception' : undefined}
+        answer={() => resolvedRef.current}
+        onDone={response => { if (actionKind === 'resolve' && selectedEx) setResolved({ what: `${readableLabel(selectedEx.data?.type || 'exception')}${selectedEx.reference ? ` ${selectedEx.reference}` : ''}`, message: String(response?.message || 'Exception resolution recorded.') }); }}
         context={selectedEx ? values => <ExceptionContext exception={selectedEx} customer={customerById.get(String(selectedEx.customerId))} resolving={actionKind === 'resolve'} resolutionCode={values.resolutionCode} /> : undefined}
         validate={actionKind === 'resolve' ? (values): Record<string, string> => checkoutOutcome
           ? values.resolutionCode === 'resolved_succeeded' && !String(values.evidenceReference || '').trim() ? { evidenceReference: 'Enter the masked reference of the evidence that the payment arrived.' }
