@@ -7,7 +7,9 @@
 // claim reads the head only once it holds the lender. The overview checks the
 // chain from that point and shows the eight latest entries; verify_audit
 // checks it whole and records how far it held, and a break either finds (a
-// fork, a gap, a changed entry) stays reported until the chain is valid again.
+// fork, a gap, a changed entry, an entry whose sequence is not a whole number,
+// which is a break at its place and hides no fork) stays reported until the
+// chain is valid again.
 // Every load has earlier closes as summaries, settings read only the latest
 // close, the records list has every close as its summary, and a list of a kind
 // that grows with history is capped when it names no limit.
@@ -354,6 +356,45 @@ try {
     } finally { await removeWorkspaceOf(forked); }
     checks += 14;
   }
+
+  // ---- 12. An entry whose sequence is not a whole number is a break at its place in the chain, and hides no fork ----
+  {
+    const shapeCall = sandboxCaller();
+    const [damaged, forked] = ok(await shapeCall("/v1/workspace")).merchants.map((merchant: { id: string }) => merchant.id) as [string, string];
+    const at = (path: string, merchantId: string) => `${path}${path.includes("?") ? "&" : "?"}merchantId=${merchantId}`;
+    const entryNamed = async (merchantId: string) => brokenEntry(ok(await shapeCall(at("/v1/overview", merchantId))));
+    const write = async (merchantId: string, name: string) => ok(await shapeCall(at("/v1/records/customers", merchantId), "POST", customer(name), randomUUID()));
+    const verifyChain = async (merchantId: string) => ok(await shapeCall(at("/v1/actions", merchantId), "POST", { action: "verify_audit", reason: "Check the synthetic audit log" }, randomUUID())).data;
+    try {
+      // A null sequence, at the head and then at entry 3: verify_audit names that entry, and the lender records the
+      // entry before it, not entry 1 and the chain's start.
+      for (let index = 0; index < 6; index++) await write(damaged, `Damaged sequence customer ${index}`);
+      const entries = await entriesOf(damaged);
+      for (const target of [entries.at(-1)!, entries[2]!]) {
+        await pool.query("UPDATE valopay_records SET data=jsonb_set(data,'{sequence}','null') WHERE id=$1", [target.id]);
+        assert.equal((await verifyChain(damaged)).valid, false);
+        assert.deepEqual([await entryNamed(damaged), (await chainOf(damaged))!.verified.sequence], [target.data.sequence, target.data.sequence - 1], `a null sequence at entry ${target.data.sequence} is the break verify_audit records`);
+        await pool.query("UPDATE valopay_records SET data=$2 WHERE id=$1", [target.id, target.data]);
+        assert.equal((await verifyChain(damaged)).valid, true, "and once it is repaired the chain is valid again");
+      }
+      // A damaged entry stored after the head and before a second entry at the head's sequence (a fork): the fork is
+      // named at once, the lender's verified entry stays before it, and removing the damaged entry does not hide it.
+      for (let index = 0; index < 5; index++) await write(forked, `Word fork customer ${index}`);
+      const chain = await entriesOf(forked), head = chain.at(-1)!, prior = chain.at(-2)!;
+      const word = await insertEntry(forked, { ...auditEntryData({ sequence: 0, actor: "Damaged", action: "damaged.entry", objectId: "damaged", summary: "Damaged", previousHash: head.data.hash, timestamp: new Date().toISOString() }), sequence: "abc" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await insertEntry(forked, auditEntryData({ sequence: head.data.sequence, actor: "System · export worker", action: "export.started", objectId: "word-fork-export", summary: "A second writer took the same sequence.", previousHash: prior.data.hash, timestamp: new Date().toISOString() }));
+      assert.equal(await entryNamed(forked), head.data.sequence, "the overview names the sequence two entries claim, whatever lies between them");
+      await write(forked, "After the damage and the fork");
+      assert.deepEqual([await entryNamed(forked), (await chainOf(forked))!.verified.sequence], [head.data.sequence, prior.data.sequence], "a write keeps the lender's verified entry before the fork");
+      await pool.query("DELETE FROM valopay_records WHERE id=$1", [word]);
+      await write(forked, "After the damaged entry went");
+      assert.equal(await entryNamed(forked), head.data.sequence, "removing the damaged entry does not hide the fork");
+      const found = await verifyChain(forked);
+      assert.deepEqual([found.valid, found.headHash, await entryNamed(forked)], [false, prior.data.hash, head.data.sequence], "and verify_audit finds the same fork");
+    } finally { await removeWorkspaceOf(damaged); }
+    checks += 10;
+  }
 } finally {
   server.close();
   await once(server, "close");
@@ -364,4 +405,4 @@ try {
   }
   await pool.end();
 }
-console.log(`Lender history checks passed (${checks} checks): the audit chain stays out of every load and continues from the head kept on the lender, entries written elsewhere are followed, the overview checks from the last verified entry and verify_audit the whole chain, earlier closes load as summaries, settings read only the latest close, the records list has closes as summaries, history lists are capped, the export worker's entries follow the stored head and its claim reads the head once it holds the lender, and a fork stays reported until the chain is valid again.`);
+console.log(`Lender history checks passed (${checks} checks): the audit chain stays out of every load and continues from the head kept on the lender, entries written elsewhere are followed, the overview checks from the last verified entry and verify_audit the whole chain, earlier closes load as summaries, settings read only the latest close, the records list has closes as summaries, history lists are capped, the export worker's entries follow the stored head and its claim reads the head once it holds the lender, a fork stays reported until the chain is valid again, and a damaged sequence is a break at its place and hides no fork.`);

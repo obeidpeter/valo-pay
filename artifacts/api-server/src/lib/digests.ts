@@ -90,21 +90,36 @@ export interface AuditPoint { sequence: number; hash: string }
 export const AUDIT_GENESIS: Readonly<AuditPoint> = Object.freeze({ sequence: 0, hash: "GENESIS" });
 
 /**
+ * An entry's stored sequence when it is one the chain can hold, a whole number
+ * from 1, else undefined: null, text (even the text of a number), a fraction,
+ * zero or a missing key marks a damaged entry, which can never be the head.
+ */
+export function chainSequence(sequence: unknown): number | undefined {
+  return Number.isSafeInteger(sequence) && (sequence as number) >= 1 ? sequence as number : undefined;
+}
+
+/**
  * Walks audit entries in sequence order from `from` (the chain's start unless
  * given): valid when every entry's sequence follows the one before, its
- * previous hash is that entry's hash and its own hash is its body's. A
- * sequence two entries claim (a fork, as two writers that each took the next
- * sequence leave) breaks the chain before it: neither entry is verified.
- * Returns the count, the entries before `from` included, the hash where the
- * walk ended, and the last place it verified with its entry, which is always
- * before the first entry that breaks the chain.
+ * previous hash is that entry's hash and its own hash is its body's. The
+ * order is the same whatever a stored sequence holds: whole-number sequences
+ * by value, then every other entry, so a damaged entry is itself a break
+ * where the walk reaches it, after every whole-number entry, and the entries
+ * of one sequence stay side by side. A sequence two entries claim (a fork, as
+ * two writers that each took the next sequence leave) breaks the chain before
+ * it: neither entry is verified. Returns the count, the entries before `from`
+ * included, the hash where the walk ended, and the last place it verified
+ * with its entry, which is always before the first entry that breaks the
+ * chain.
  */
 export function walkAuditChain<E extends { data: Record<string, any> }>(entries: ReadonlyArray<E>, from: AuditPoint = AUDIT_GENESIS): { valid: boolean; count: number; headHash: string; verified: AuditPoint; entry?: E } {
-  const chain = [...entries].sort((a, b) => Number(a.data.sequence) - Number(b.data.sequence));
+  // Compared with < and >, never subtracted: every damaged entry has the same place, so the order is consistent.
+  const chain = entries.map((entry) => ({ entry, place: chainSequence(entry.data.sequence) ?? Infinity }))
+    .sort((a, b) => a.place < b.place ? -1 : a.place > b.place ? 1 : 0);
   let hash = from.hash, valid = true, sequence = from.sequence, entry: E | undefined;
-  for (const [index, next] of chain.entries()) {
+  for (const [index, { entry: next }] of chain.entries()) {
     const { hash: recorded, ...body } = next.data;
-    if (body.sequence !== sequence + 1 || Number(chain[index + 1]?.data.sequence) === body.sequence || body.previousHash !== hash || auditEntryHash(body) !== recorded) { valid = false; break; }
+    if (body.sequence !== sequence + 1 || chain[index + 1]?.place === body.sequence || body.previousHash !== hash || auditEntryHash(body) !== recorded) { valid = false; break; }
     sequence += 1; hash = String(recorded); entry = next;
   }
   return { valid, count: from.sequence + chain.length, headHash: hash, verified: { sequence, hash }, ...(entry ? { entry } : {}) };

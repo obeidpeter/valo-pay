@@ -1,8 +1,8 @@
 import { pool, type PoolClient } from '@workspace/db';
 import { randomUUID } from 'node:crypto';
 import type { Context, DomainState, ValopayRecord } from '../domain/types';
-import { SYSTEM_ACTOR_PREFIX } from './valopay-store';
-import { auditEntryData } from './digests';
+import { SYSTEM_ACTOR_PREFIX, chainSequenceSql } from './valopay-store';
+import { auditEntryData, chainSequence } from './digests';
 import { EXPORT_LEASE_MS, EXPORT_CONFIRM_LEASE_MS, exportIsClaimable, returnExportToQueue, type ClaimedExport, type ExportArtifact, type ExportJobRepository, type ExportWriteResult } from './export-jobs';
 import { bindRuntimeService, runtimeExportRequesterAllowed } from './runtime-isolation';
 import { beginStatement, checkOut, databaseLimits } from './database-limits';
@@ -66,18 +66,30 @@ async function transaction<T>(merchantId: string, lock: 'skip' | 'wait', work: (
 }
 
 const headRead = (since: boolean) => `SELECT r.* FROM valopay_records r WHERE r.merchant_id=$1 AND r.kind='audit'${since ? " AND r.created_at >= $4::timestamptz - interval '1 hour'" : ''} AND ${ownership}
-  ORDER BY (r.data->>'sequence')::bigint DESC LIMIT 1`;
+  ORDER BY ${chainSequenceSql} DESC NULLS LAST LIMIT 1`;
+/** Of these entries, the one with the highest whole-number sequence, as a place in the chain. */
+function highest(entries: ReadonlyArray<{ data: Record<string, any> }>): { sequence: number; hash: string } | undefined {
+  let head: { sequence: number; hash: string } | undefined;
+  for (const entry of entries) {
+    const sequence = chainSequence(entry.data.sequence);
+    if (sequence !== undefined && (!head || sequence > head.sequence)) head = { sequence, hash: String(entry.data.hash) };
+  }
+  return head;
+}
 /**
  * The head of the lender's audit chain, which the next entry follows: the
- * entry with the highest sequence, read after the lender's lock (transaction).
- * A claim finds it among the records it loads for the export anyway. A later
- * write to the claimed job reads it from the entries since an hour before the
- * claim (`since`, the job's startedAt), a range the lender-kind index serves:
- * the claim wrote an entry then, and every entry after it comes from a
+ * entry with the highest whole-number sequence, read after the lender's lock
+ * (transaction). An entry whose sequence is anything else (text, null, a
+ * fraction), which only damage leaves, is never the head and is never cast,
+ * so it cannot stop the worker recording what it did. A claim finds the head
+ * among the records it loads for the export anyway. A later write to the
+ * claimed job reads it from the entries since an hour before the claim
+ * (`since`, the job's startedAt), a range the lender-kind index serves: the
+ * claim wrote an entry then, and every entry after it comes from a
  * transaction that took the lender after the claim, stamped with its own
  * start, at most a few lock waits earlier. So the read follows the lender's
  * recent work, not its whole history. Without a start to go by, or with no
- * entry in that hour, it reads the whole chain.
+ * whole-number entry in that hour, it reads the whole chain.
  *
  * The lender's settings keep the head its requests last appended (auditChain,
  * lib/valopay-store.ts), which this worker's own entries do not move. When
@@ -88,18 +100,18 @@ const headRead = (since: boolean) => `SELECT r.* FROM valopay_records r WHERE r.
  * last verified entry before the first entry that breaks the chain.
  */
 async function auditHead(client: PoolClient, scope: Scope, from: { records: ValopayRecord[] } | { since: unknown }): Promise<{ sequence: number; hash: string } | undefined> {
-  let head: ValopayRecord | undefined;
-  if ('records' in from) {
-    for (const record of from.records) if (record.kind === 'audit' && (!head || Number(record.data.sequence) > Number(head.data.sequence))) head = record;
-  } else {
+  let head: { sequence: number; hash: string } | undefined;
+  if ('records' in from) head = highest(from.records.filter(record => record.kind === 'audit'));
+  else {
     const scoped = [scope.id, scope.workspace_id, scope.principal_hash];
     const since = typeof from.since === 'string' && Number.isFinite(Date.parse(from.since)) ? from.since : undefined;
-    const row = (since ? (await client.query<Row>(headRead(true), [...scoped, since])).rows[0] : undefined) ?? (await client.query<Row>(headRead(false), scoped)).rows[0];
-    head = row && recordOf(row);
+    // Damaged entries come last: the row read is a damaged one only when the range holds nothing else.
+    if (since) head = highest((await client.query<Row>(headRead(true), [...scoped, since])).rows);
+    head ??= highest((await client.query<Row>(headRead(false), scoped)).rows);
   }
   const stored = (scope.settings as { auditChain?: { sequence?: unknown; hash?: unknown } } | null)?.auditChain;
-  if (stored && Number.isSafeInteger(stored.sequence) && typeof stored.hash === 'string' && stored.hash && (stored.sequence as number) > Number(head?.data.sequence ?? 0)) return { sequence: stored.sequence as number, hash: stored.hash };
-  return head && { sequence: Number(head.data.sequence), hash: String(head.data.hash) };
+  if (stored && Number.isSafeInteger(stored.sequence) && typeof stored.hash === 'string' && stored.hash && (stored.sequence as number) > (head?.sequence ?? 0)) return { sequence: stored.sequence as number, hash: stored.hash };
+  return head;
 }
 /** Appends the job's entry after `previous`, the chain's head; returns it as stored. */
 async function audit(client: PoolClient, scope: Scope, job: ValopayRecord, action: string, summary: string, previous: { sequence: number; hash: string } | undefined): Promise<ValopayRecord | undefined> {

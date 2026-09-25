@@ -11,7 +11,7 @@ import type { VerifiedClerkSession } from './pilot-access';
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
 import { approvalRoles, closeTimeOf, definitiveRefusalStatuses, grantNeedsApproval, invitationAcceptedSchema, nextCloseInstant, sameJson } from "@workspace/valopay-schema";
-import { sha256Hex, canonicalDigest, requestFingerprint, auditEntryData, verifyAuditChain, walkAuditChain, AUDIT_GENESIS, type AuditPoint } from "./digests";
+import { sha256Hex, canonicalDigest, requestFingerprint, auditEntryData, verifyAuditChain, walkAuditChain, chainSequence, AUDIT_GENESIS, type AuditPoint } from "./digests";
 import { recordChanged, nextRecordVersion } from "./edit-versions";
 import { contractAnswer } from './contract';
 import type { Context, DomainState, ValopayRecord } from "../domain/types";
@@ -1186,6 +1186,13 @@ function storedChain(settings: Record<string, any>): AuditChain | undefined {
   return head && verified && verified.sequence <= head.sequence ? { ...head, verified } : undefined;
 }
 /**
+ * An entry's sequence when it is a whole number from 1, as chainSequence
+ * reads it, else NULL: the sequence of a damaged entry (text, null, a
+ * fraction) is never cast. The entry is `r`.
+ */
+export const chainSequenceSql = `CASE WHEN jsonb_typeof(r.data->'sequence')='number' THEN CASE WHEN (r.data->>'sequence')::numeric BETWEEN 1 AND ${Number.MAX_SAFE_INTEGER}
+  AND trunc((r.data->>'sequence')::numeric)=(r.data->>'sequence')::numeric THEN (r.data->>'sequence')::numeric END END`;
+/**
  * How much earlier than the verified entry a later entry may be stamped. An
  * entry carries its transaction's start time, and a transaction appends only
  * once it holds the lender, after waits each bounded by the lock limit.
@@ -1197,28 +1204,33 @@ const CHAIN_MARGIN_MINUTES = 5;
  * The head is the last entry by sequence, whoever wrote it: the export worker
  * and an earlier build append without moving the stored head. A stored head
  * further on than any entry means entries went missing: the chain is broken
- * and that sequence is never issued again.
+ * and that sequence is never issued again. Each read also takes in the
+ * entries of its time range whose sequence is not a whole number, whatever
+ * that holds (only a whole number can be the head), and the walk finds each
+ * one a break.
  *
  * The verified entry it returns, which the next entry appended records, is
  * always before the first entry that breaks the chain: a changed entry, a
- * missing one, a sequence two entries claim (a fork), or an entry whose
- * sequence is not a number, which every read after the verified entry takes
- * in (only a whole number can be the head). So a break found here, or by
- * verify_audit's walk of the whole chain, is read again and reported by every
- * later check, the overview's included, until the chain is valid again.
+ * missing one, a sequence two entries claim (a fork) or a damaged one. So a
+ * break found here, or by verify_audit's walk of the whole chain, is read
+ * again and reported by every later check, the overview's included, until the
+ * chain is valid again.
  */
 async function readAuditChain(session: Session, merchantId: string, settings: Record<string, any>, full = false) {
   const stored = storedChain(settings), from: ChainPoint = !full && stored ? stored.verified : AUDIT_GENESIS;
   const rows = (await session.client.query<{ id: string; data: Record<string, any>; created_at: Date }>(
     `SELECT r.id,r.data,r.created_at ${scopedRecordsFrom} WHERE ${scopedRecordsWhere} AND r.kind='audit'
        AND ($4::timestamptz IS NULL OR r.created_at >= $4::timestamptz - make_interval(mins => ${CHAIN_MARGIN_MINUTES}))
-       AND ($5::bigint = 0 OR CASE WHEN jsonb_typeof(r.data->'sequence')='number' THEN (r.data->>'sequence')::numeric > $5::bigint ELSE true END)
+       AND ($5::bigint = 0 OR COALESCE(${chainSequenceSql} > $5::bigint, true))
      ORDER BY r.created_at,r.id`,
     [merchantId, session.workspace.id, session.principal, from.sequence ? from.at ?? null : null, from.sequence],
   )).rows;
   const walk = walkAuditChain(rows, from);
   let head: ChainPoint = from, valid = walk.valid;
-  for (const row of rows) if (Number.isSafeInteger(row.data.sequence) && row.data.sequence > head.sequence) head = { sequence: row.data.sequence, hash: String(row.data.hash), at: row.created_at.toISOString() };
+  for (const row of rows) {
+    const sequence = chainSequence(row.data.sequence);
+    if (sequence !== undefined && sequence > head.sequence) head = { sequence, hash: String(row.data.hash), at: row.created_at.toISOString() };
+  }
   if (stored && stored.sequence > head.sequence) { head = { sequence: stored.sequence, hash: stored.hash, ...(stored.at ? { at: stored.at } : {}) }; valid = false; }
   const verified: ChainPoint = walk.entry ? { ...walk.verified, at: walk.entry.created_at.toISOString() } : from;
   return { chain: { ...head, verified } as AuditChain, verification: { valid, count: walk.count, headHash: walk.headHash } };
