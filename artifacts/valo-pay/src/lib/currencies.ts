@@ -47,17 +47,29 @@ export function formatMinor(amount: number, currency: string): string {
     .join('');
 }
 
+/** A record's money in the currency it names (a payment and its evidence can be in another than naira), naira otherwise. */
+export function formatRecordMoney(record: { data?: { currency?: unknown } | null } | null | undefined, amount: number): string {
+  return formatMinor(amount, String(record?.data?.currency || 'NGN'));
+}
+
 /**
- * A naira total with the money held beside it in other currencies, which is
- * never added to it: `otherCurrencies` as the API lists it (by currency code,
- * a count and an amount in that currency's minor unit), each in its own
- * currency with what it counts: "₦32,000.00 and USD 1,000.00 (1 payment)".
- * With none, the naira total alone.
+ * Money held in other currencies than naira, `otherCurrencies` as the API
+ * lists it (by currency code, a count and an amount in that currency's minor
+ * unit), each in its own currency with what it counts, by code:
+ * "USD 1,000.00 (1 payment)". Empty with none.
  */
-export function formatWithOtherCurrencies(kobo: number, otherCurrencies: unknown, singular: string, pluralForm?: string): string {
-  const others = Object.entries(otherCurrencies && typeof otherCurrencies === 'object' ? otherCurrencies as Record<string, { count?: unknown; amount?: unknown } | null> : {})
+export function otherCurrencyAmounts(otherCurrencies: unknown, singular: string, pluralForm?: string): string[] {
+  return Object.entries(otherCurrencies && typeof otherCurrencies === 'object' ? otherCurrencies as Record<string, { count?: unknown; amount?: unknown } | null> : {})
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([code, entry]) => `${formatMinor(Number(entry?.amount ?? 0), code)} (${formatCount(Number(entry?.count ?? 0), singular, pluralForm)})`);
-  const amounts = [formatKobo(kobo), ...others];
+}
+
+/**
+ * A naira total with the money held beside it in other currencies, which is
+ * never added to it, each as otherCurrencyAmounts writes it:
+ * "₦32,000.00 and USD 1,000.00 (1 payment)". With none, the naira total alone.
+ */
+export function formatWithOtherCurrencies(kobo: number, otherCurrencies: unknown, singular: string, pluralForm?: string): string {
+  const amounts = [formatKobo(kobo), ...otherCurrencyAmounts(otherCurrencies, singular, pluralForm)];
   return amounts.length === 1 ? amounts[0]! : `${amounts.slice(0, -1).join(', ')} and ${amounts.at(-1)}`;
 }

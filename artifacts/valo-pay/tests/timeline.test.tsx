@@ -29,6 +29,34 @@ describe("customer timeline", () => {
     expect(screen.getAllByText(new RegExp(`SHA-256 checksum: ${String(record.data.checksum).slice(0, 16)}`)).length).toBeGreaterThanOrEqual(1);
   });
 
+  // Third review of the audit fixes: the customer's positions list money in another currency beside the naira credit
+  // (unallocatedOtherCurrencies, shaped like a close's otherCurrencies), which the page shows as close evidence does.
+  it("shows the customer's unapplied money in another currency beside the naira credit, and a payment in its own currency", async () => {
+    const ada = api.state().records.find((record) => record.kind === "customers" && record.name === "Ada Okonkwo")!;
+    api.mutate((state) => {
+      const payment = state.records.find((record) => record.kind === "payments" && record.customerId === ada.id)!;
+      state.records.push({ ...structuredClone(payment), id: "usd-card-payment", reference: "SBX-USD-CARD", status: "unallocated", amountKobo: 100_000, createdAt: api.now, data: { ...structuredClone(payment.data), currency: "USD", channel: "card", allocatedKobo: 0 } });
+    });
+    const other = { USD: { count: 1, amount: 100_000 }, EUR: { count: 2, amount: 5_000 } };
+    const send = globalThis.fetch;
+    globalThis.fetch = async (input, options) => {
+      const response = await send(input, options);
+      if (!new URL(String(input), "http://localhost").pathname.endsWith(`/customers/${ada.id}/history`)) return response;
+      const body = await response.json();
+      return new Response(JSON.stringify({ ...body, position: { ...body.position, unallocatedOtherCurrencies: other } }), { status: response.status, headers: { "Content-Type": "application/json" } });
+    };
+    renderApp(`/customers/${ada.id}`);
+    const position = (await screen.findByText("Customer position")).parentElement!;
+    expect(position.textContent).toContain("Unapplied credit");
+    const others = screen.getByText("Unapplied in other currencies").parentElement!;
+    expect(others.textContent!.replace(/\u00a0/g, " ")).toContain("EUR 50.00 (2 payments)");
+    expect(others.textContent!.replace(/\u00a0/g, " ")).toContain("USD 1,000.00 (1 payment)");
+    // The payment itself is listed in its own currency, never as naira.
+    const listed = (await screen.findByRole("heading", { name: "Payments" })).closest("section")!;
+    expect(listed.textContent!.replace(/\u00a0/g, " ")).toContain("SBX-USD-CARDUSD 1,000.00");
+    expect(listed.textContent).not.toContain("₦1,000.00");
+  });
+
   it("says when the lender has no customer with the reference, inside the console", async () => {
     renderApp("/customers/not-a-customer");
     expect(await screen.findByRole("heading", { level: 1, name: "Customer not found" })).toBeTruthy();

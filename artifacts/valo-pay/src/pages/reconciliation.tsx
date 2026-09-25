@@ -24,11 +24,9 @@ import { keepRowsWhilePaging, searchWithoutSubmitting, useDebouncedSearch } from
 import { useReconciliationPage } from '@/lib/use-reconciliation-page';
 import { LoadProblem } from '@/components/load-problem';
 import { paymentUnappliedKobo } from '@workspace/valopay-schema';
-import { formatMinor } from '@/lib/currencies';
+import { formatRecordMoney as moneyOf } from '@/lib/currencies';
 
 const paymentAvailable = (record: any): number => paymentUnappliedKobo(record);
-/** Money a payment or its evidence holds, in its own currency: a USD card payment's cents are never shown as kobo. */
-const moneyOf = (record: any, amount: number): string => formatMinor(amount, String(record?.data?.currency || 'NGN'));
 const instalmentOutstanding = (record: any): number => Math.max(0, Number(record?.data?.outstandingKobo ?? record?.amountKobo ?? 0));
 
 /** A table whose rows could not be loaded (Refresh queue tries again); after a page press it takes the pager's focus. */
