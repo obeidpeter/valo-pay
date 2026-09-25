@@ -96,8 +96,8 @@ function highest(entries: ReadonlyArray<{ data: Record<string, any> }>): { seque
  * that head is further on than any entry, an entry has gone missing: the next
  * entry follows the stored head, as a request's does, so the missing sequence
  * is never issued again. The gap then stays in the chain, and the overview
- * reports it until the chain is valid again: every check keeps the lender's
- * last verified entry before the first entry that breaks the chain.
+ * reports it once a check has found it, until verify_audit finds the chain
+ * valid again: the lender keeps the break it found.
  */
 async function auditHead(client: PoolClient, scope: Scope, from: { records: ValopayRecord[] } | { since: unknown }): Promise<{ sequence: number; hash: string } | undefined> {
   let head: { sequence: number; hash: string } | undefined;

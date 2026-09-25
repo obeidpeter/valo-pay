@@ -155,7 +155,7 @@ const reviewer = (now: string) => ctxAt(now, "Compliance reviewer");
   const alerts = buildAlerts(state, later, { valid: false, count: 7, headHash: "y", verifiedSequence: 3 });
   assert.deepEqual(keys(alerts), ["audit_chain_broken", "close_missed", "position_drift", "unallocated_over_threshold", "close_overdue"], "severity order: critical, high, medium");
   assert.equal(alerts[2]!.linkedRecordId, due.id);
-  assert.equal(alerts[0]!.detail, "The check stopped at entry 4: it is missing, or its order or verification hash does not match. Ask an administrator to investigate.", "the alert names the entry after the last verified one");
+  assert.equal(alerts[0]!.detail, "The check stopped at entry 4: it is missing, or its order or verification hash does not match. Ask an administrator to investigate. The alert stays until Check audit log, on the Audit log page, finds every entry intact.", "the alert names the entry after the last verified one, and what clears it");
   assert.equal(alerts[0]!.count, 7);
   checks += 2;
   state.merchant.mode = "observation";
