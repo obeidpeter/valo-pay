@@ -10,7 +10,8 @@ import { usePagedQueue } from '@/lib/use-paged-queue';
 import { SavedQueueViews } from '@/components/saved-queue-views';
 import { AlertTriangle, User, Calendar } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
-import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
+import { formatDate, formatNumber } from '@/lib/formatters';
+import { formatRecordMoney } from '@/lib/currencies';
 import { RecordDialog } from '@/components/record-dialog';
 import { exceptionSeverities, failureCodeList, resolutionCodesForException, resolveExceptionType } from '@workspace/valopay-schema';
 import { readableLabel, RecordLabel, StatusBadge } from '@/components/record-label';
@@ -173,8 +174,9 @@ export default function ExceptionsPage() {
                     </td>
                     <td className="px-6 py-4">
                       <RecordLabel record={customerById.get(String(exception.customerId))} id={exception.customerId} customer />
+                      {/* In the currency of the money it is about: the service names one that is not naira (data.currency). */}
                       {exception.amountKobo > 0 && (
-                         <p className="font-mono font-medium mt-1">{formatKobo(exception.amountKobo)}</p>
+                         <p className="font-mono font-medium mt-1">{formatRecordMoney(exception, exception.amountKobo)}</p>
                       )}
                     </td>
                     <td className="px-6 py-4">

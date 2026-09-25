@@ -3,6 +3,7 @@ import type { Context, DomainState, ValopayRecord } from "./types";
 import { makeRecord, touch } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
 import { sourceCompleteness, watBusinessDate } from "./source-completeness";
+import { currencyOf } from "./reconciliation";
 import { canonicalDigest } from "../lib/digests";
 
 function refuse(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
@@ -46,7 +47,8 @@ export function bindCloseReviewBasis(state: DomainState, close: ValopayRecord) {
     sequence: close.data.reviewBasis?.sequence || Math.max(0, ...ofKind(state, "closes").filter(record => record.id !== close.id).map(record => Number(record.data.reviewBasis?.sequence || 0))) + 1,
     inputDigest: closeReviewBasis(state),
     sourceCompleteness: completeness,
-    unresolved: state.records.filter(r => (r.kind === "exceptions" && open(r)) || (r.kind === "observations" && r.status !== "resolved") || (r.kind === "payments" && ["partial", "overpaid"].includes(r.status))).map(r => ({ id: r.id, kind: r.kind, name: r.name, reference: r.reference, status: r.status, amountKobo: r.amountKobo })),
+    // Each amount with the currency of its minor units when that is not naira, as the record names it.
+    unresolved: state.records.filter(r => (r.kind === "exceptions" && open(r)) || (r.kind === "observations" && r.status !== "resolved") || (r.kind === "payments" && ["partial", "overpaid"].includes(r.status))).map(r => ({ id: r.id, kind: r.kind, name: r.name, reference: r.reference, status: r.status, amountKobo: r.amountKobo, ...(currencyOf(r) !== "NGN" ? { currency: currencyOf(r) } : {}) })),
   };
   return close;
 }

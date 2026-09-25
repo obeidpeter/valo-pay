@@ -139,7 +139,7 @@ const schemaDescriptions = {
   SchemaCheck: "Whether the database holds every table, column, unique index, check constraint and read index this build needs: ok, indexes_missing (ready, some reads slower), incomplete (not ready) or unchecked while the database does not answer. The server log, not the answer, names what is missing.",
   ReadinessStatus: "The readiness answer: ok, or degraded while the database does not answer or lacks a table, column, unique index or check constraint this build needs.",
   RecordData: "A record's data: the fields the kind's schema declares, and anything else a caller stored.",
-  ValopayRecord: "A stored record of any kind, with its lender, status, reference, amount in kobo and data.",
+  ValopayRecord: "A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency's minor units (cents for USD).",
   RecordInput: "A new record: only the name is required, and it cannot be empty; the kind's default status applies when none is given. A status is at most 100 characters, a reference 200 and a customerId 100.",
   RecordUpdate: "The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed. A name cannot be empty, and a status, reference or customerId is bounded as a new record's is.",
   Merchant: "A lender: its mode (observation or instruction), provider, volume, kill switch and readiness flags.",

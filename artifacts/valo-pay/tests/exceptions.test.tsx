@@ -3,6 +3,8 @@ import { installFakeApi, type FakeApi } from "./fake-api";
 import { renderApp, screen, userEvent, waitFor, within } from "./harness";
 import { makeRecord } from "../../api-server/src/domain/records";
 import { raiseException, reconcile } from "../../api-server/src/domain/reconciliation";
+import { providerFeeKobo } from "@workspace/valopay-schema";
+import { countedTwiceEffect } from "@/components/exception-context";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -165,6 +167,60 @@ describe("exceptions", () => {
     await user.selectOptions(code, 'provider_state_adopted');
     expect(within(dialog).getByText(/^Record outcome:/).textContent).toBe('Record outcome: Provider state adopted');
     expect(within(dialog).getByText(/^Record outcome:/).parentElement!.textContent).toContain('It does not allocate a payment, issue a refund, reissue a mandate or move money.');
+  });
+
+  // Third review, a residual: an exception raised for money in another currency holds that money's minor units, and the
+  // row and the resolve dialog showed them as naira (₦1,000.00 for a USD 1,000.00 payment).
+  it('shows an exception about money in another currency in that currency, in its row and its resolve dialog', async () => {
+    const user = userEvent.setup();
+    const exception = api.mutate((state, ctx) => {
+      const ada = state.records.find(record => record.kind === 'customers' && record.name === 'Ada Okonkwo')!;
+      const card = makeRecord(state, 'observations', { name: 'USD card', status: 'unresolved', reference: 'CARD-USD-1', amountKobo: 100_000, customerId: ada.id, data: { source: 'card', eventId: 'usd-1', provider: 'Sandbox Rail', currency: 'USD' } });
+      reconcile(state, { ...ctx, actor: 'Sandbox Finance', role: 'Finance' });
+      return state.records.find(record => record.kind === 'exceptions' && record.data.linkedRecordId === card.data.paymentId)!;
+    });
+    expect([exception.amountKobo, exception.data.currency]).toEqual([100_000, 'USD']);
+    renderApp(`/exceptions?record=${exception.id}`);
+    const row = (await screen.findByRole('button', { name: 'Resolve' })).closest('tr')!;
+    const shown = (element: Element) => element.textContent!.replace(/ /g, ' ');
+    expect(shown(row)).toContain('USD 1,000.00');
+    expect(shown(row)).not.toContain('₦1,000.00');
+    await user.click(within(row).getByRole('button', { name: 'Resolve' }));
+    const context = within(await screen.findByRole('dialog', { name: 'Resolve exception' })).getByRole('region', { name: 'Exception context' });
+    expect(shown(within(context).getByText('Amount').nextElementSibling!)).toBe('USD 1,000.00');
+  });
+
+  // Third review, a residual: a Finance resolution of an exception that carries a report of a collection counted in two
+  // settlement batches (countedTwice) settles that report too, and the dialog said only that it records the outcome.
+  it('says that resolving an exception that carries a counted-twice report settles that report too', async () => {
+    const user = userEvent.setup();
+    const carrier = api.mutate((state, ctx) => {
+      const finance = { ...ctx, actor: 'Sandbox Finance', role: 'Finance' };
+      const [first, second] = state.records.filter(record => record.kind === 'due-items' && record.status === 'scheduled');
+      const line = (due: typeof first, reference: string, batchReference: string, eventId: string, feeKobo: number) => makeRecord(state, 'observations', { name: 'Settlement line', status: 'unresolved', reference, amountKobo: due!.amountKobo - feeKobo, customerId: due!.customerId, data: { source: 'settlement', eventId, provider: 'Sandbox Rail', batchReference, grossAmountKobo: due!.amountKobo, feeKobo } });
+      line(first, 'PSK-X1', 'B-1', 'x1', providerFeeKobo(first!.amountKobo));
+      // B-2's fees differ from the schedule, so it is in variance with an exception open for it.
+      line(second, 'PSK-X2', 'B-2', 'x2', providerFeeKobo(second!.amountKobo) + 50_000);
+      reconcile(state, finance);
+      // The provider lists collection PSK-X1, which B-1 counts, again in B-2: B-2's open exception carries the report.
+      line(first, 'PSK-X1', 'B-2', 'x1-again', providerFeeKobo(first!.amountKobo));
+      reconcile(state, finance);
+      const batch = state.records.find(record => record.kind === 'settlement-batches' && record.reference === 'B-2')!;
+      return state.records.find(record => record.kind === 'exceptions' && record.data.linkedRecordId === batch.id)!;
+    });
+    expect((carrier.data.countedTwice as string[]).length).toBe(1);
+    renderApp(`/exceptions?record=${carrier.id}`);
+    await user.click(await screen.findByRole('button', { name: 'Resolve' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Resolve exception' });
+    const settles = 'This exception also carries the provider\'s report of a collection counted in two settlement batches. Resolving it settles that report too, whichever outcome you record: it is not raised again, so check both payouts with the provider first.';
+    expect(within(dialog).getByText('Record an outcome after reviewing the evidence.').parentElement!.textContent).toContain(settles);
+    await user.selectOptions(within(dialog).getByLabelText(/How was this resolved/), 'provider_corrected');
+    const outcome = within(dialog).getByText(/^Record outcome:/).parentElement!.textContent!;
+    expect(outcome).toContain(settles);
+    expect(outcome).toContain('It does not allocate a payment, issue a refund, reissue a mandate or move money.');
+    // An exception that carries no such report says nothing of one, and one that carries several names how many.
+    expect(countedTwiceEffect({ ...carrier, data: { ...carrier.data, countedTwice: [] } })).toBeUndefined();
+    expect(countedTwiceEffect({ ...carrier, data: { ...carrier.data, countedTwice: ['a', 'b'] } })).toContain('carries 2 of the provider\'s reports of collections counted in two settlement batches. Resolving it settles those reports too');
   });
 
   it('shows a stored exception without a severity as having none, never as low', async () => {
