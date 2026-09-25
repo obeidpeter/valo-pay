@@ -178,11 +178,11 @@ describe('CSV amount units', () => {
     const row = (await screen.findByRole('link', { name: 'Older currency rows' })).closest('tr')!;
     expect([...row.querySelectorAll('td')].slice(1, 3).map(cell => cell.textContent)).toEqual(['3₦30.00', '3₦30.00']);
     const totals = within(screen.getByRole('heading', { name: 'Source totals & import evidence' }).closest('section')!).getByText(/^Source totals include/).textContent!;
-    expect(totals).toContain('never added to it. A batch committed before 25 September 2026 keeps the totals it was committed with, which may add rows in other currencies.');
+    expect(totals).toContain('never added to it. A batch committed by an earlier build keeps the totals it was committed with, which may add rows in other currencies.');
     view.unmount();
     const file = { id: 'f1', source: 'Card processor', sourceBatchId: 'older-001', kind: 'observations', expectedRows: 3, expectedAmountKobo: 3_000, batchId: null, batchStatus: 'committed', businessDate: '2026-09-01', receivedRows: 3, receivedAmountKobo: 3_000, status: 'complete', problems: [] };
     render(<Router hook={memoryLocation({ path: '/sources' }).hook}><SourceCompletenessPanel completeness={{ businessDate: '2026-09-01', completeFiles: 1, expectedFiles: 1, status: 'complete', issues: [], files: [file], manifest: null }} /></Router>);
-    expect(screen.getByText(/^A file counts only when/).textContent).toContain('stays incomplete for Finance to review. A file whose batch was committed before 25 September 2026 is compared with the total it was committed with, which may add rows in other currencies.');
+    expect(screen.getByText(/^A file counts only when/).textContent).toContain('stays incomplete for Finance to review. A file whose batch was committed by an earlier build is compared with the total it was committed with, which may add rows in other currencies.');
   });
 
   it('reads and writes a form amount in its currency\'s major unit exactly', () => {

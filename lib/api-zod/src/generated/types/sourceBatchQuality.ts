@@ -10,7 +10,7 @@ import type { SourceBatchQualitySourceOtherCurrencies } from './sourceBatchQuali
 import type { SourceBatchQualityStatus } from './sourceBatchQualityStatus';
 
 /**
- * The original committed totals and checks of a source batch. sourceAmountKobo and importedAmountKobo sum the naira rows only (a row that names no currency is naira); money in other currencies is listed beside each (sourceOtherCurrencies, importedOtherCurrencies: by code, the rows and their amount in that currency's minor unit, only when there are some), never added to it. A batch committed before 25 September 2026 keeps the totals it was committed with, which may add rows in other currencies.
+ * The original committed totals and checks of a source batch. sourceAmountKobo and importedAmountKobo sum the naira rows only (a row that names no currency is naira); money in other currencies is listed beside each (sourceOtherCurrencies, importedOtherCurrencies: by code, the rows and their amount in that currency's minor unit, only when there are some), never added to it. A batch committed by an earlier build keeps the totals it was committed with, which may add rows in other currencies.
  */
 export interface SourceBatchQuality {
   /** @nullable */

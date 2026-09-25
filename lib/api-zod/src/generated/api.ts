@@ -3974,7 +3974,7 @@ export const GetSourcesResponse = zod.object({
   "basisDigest": zod.string().regex(getSourcesResponseCompletenessBasisDigestRegExp),
   "expectedFiles": zod.number().int().min(getSourcesResponseCompletenessExpectedFilesMin).max(getSourcesResponseCompletenessExpectedFilesMax),
   "completeFiles": zod.number().int().min(getSourcesResponseCompletenessCompleteFilesMin).max(getSourcesResponseCompletenessCompleteFilesMax)
-}).describe('Whether the declared source files for a business date arrived complete, with each file\'s state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer. A declared total is in naira and is compared with the file\'s naira rows (receivedAmountKobo); money in other currencies is listed beside it (receivedOtherCurrencies, only when there is some), never added to it, and leaves the file incomplete. A file whose batch was committed before 25 September 2026 is compared with the total it was committed with, which may add rows in other currencies.'),
+}).describe('Whether the declared source files for a business date arrived complete, with each file\'s state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer. A declared total is in naira and is compared with the file\'s naira rows (receivedAmountKobo); money in other currencies is listed beside it (receivedOtherCurrencies, only when there is some), never added to it, and leaves the file incomplete. A file whose batch was committed by an earlier build is compared with the total it was committed with, which may add rows in other currencies.'),
   "profiles": zod.array(zod.object({
   "id": zod.string(),
   "merchantId": zod.string(),
@@ -4024,7 +4024,7 @@ export const GetSourcesResponse = zod.object({
   "invalidRows": zod.number().int().min(getSourcesResponseBatchesItemQualityInvalidRowsMin).max(getSourcesResponseBatchesItemQualityInvalidRowsMax),
   "status": zod.enum(['checked', 'needs_review', 'unavailable']),
   "issues": zod.array(zod.string())
-}).describe('The original committed totals and checks of a source batch. sourceAmountKobo and importedAmountKobo sum the naira rows only (a row that names no currency is naira); money in other currencies is listed beside each (sourceOtherCurrencies, importedOtherCurrencies: by code, the rows and their amount in that currency\'s minor unit, only when there are some), never added to it. A batch committed before 25 September 2026 keeps the totals it was committed with, which may add rows in other currencies.')
+}).describe('The original committed totals and checks of a source batch. sourceAmountKobo and importedAmountKobo sum the naira rows only (a row that names no currency is naira); money in other currencies is listed beside each (sourceOtherCurrencies, importedOtherCurrencies: by code, the rows and their amount in that currency\'s minor unit, only when there are some), never added to it. A batch committed by an earlier build keeps the totals it was committed with, which may add rows in other currencies.')
 }).describe('A batch as the sources page lists it, with its original quality totals.')),
   "summary": zod.object({
   "lateSources": zod.number().int().min(getSourcesResponseSummaryLateSourcesMin).max(getSourcesResponseSummaryLateSourcesMax),
