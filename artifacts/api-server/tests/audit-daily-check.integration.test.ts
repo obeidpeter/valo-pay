@@ -1,15 +1,16 @@
 // Database-backed test for the daily check of each lender's whole audit chain
 // and the audit alert in every daily close (backlog item SWEEP-18, decisions 1
 // and 2 of the backlog round). A daily close lists a broken chain the lender
-// knows of, naming the entry the overview names. Right after a lender's first
-// close of the WAT day commits, the background worker walks its whole chain,
+// knows of, naming the entry the overview names. Once a lender's first close
+// of the WAT day has committed, the background worker walks its whole chain,
 // as verify_audit does, and stores what it found in the same way: the last
 // verified entry and the break, or none, which clears a repaired break. A
-// catch-up pass that closes several missed business dates walks it once. The
-// walk holds no lock, so a write to the lender never waits for it; a break a
-// write recorded after the walk read the chain stays, and so does what
-// verify_audit recorded from a walk that began after it. A person's close asks
-// the background worker thread for the check. The overview's alert says
+// catch-up pass that closes several missed business dates walks it once, and a
+// pass runs its checks after all its closes, while its budget lasts. The walk
+// holds no lock, so a write to the lender never waits for it; a break a write
+// recorded after the walk read the chain stays, and so does what verify_audit
+// recorded from a walk that began after it. A person's close asks the
+// background worker thread for the check. The overview's alert says
 // whether the lender has recorded the break or only this check has found it.
 import assert from "node:assert/strict";
 import express from "express";
@@ -119,7 +120,7 @@ try {
     checks += 5;
   }
 
-  // ---- 2. The scheduled close's check of the whole chain, right after it commits, stores what verify_audit would ----
+  // ---- 2. The scheduled close's check of the whole chain, after the pass's closes, stores what verify_audit would ----
   const catchUp = await sandbox();
   let changed: Entry | undefined;
   {
@@ -266,6 +267,39 @@ try {
     assert.deepEqual([line?.valid, line?.brokenAt, line?.thread, line?.level], [false, 2, "background", 50], "and logged it as a broken chain");
     checks += 2;
   }
+
+  // ---- 8. A pass checks after all its closes, while its budget lasts; the checks it leaves wait for its next pass ----
+  {
+    const pair = [await sandbox(), await sandbox()], ids = pair.map(({ lender }) => lender);
+    for (const { write } of pair) await write("Budget customer");
+    const closedBefore = await Promise.all(ids.map(async (lender) => (await closesOf(lender)).length));
+    const due = new Date((await databaseNow()) - 60 * 60 * 1000).toISOString();
+    for (const lender of ids) await setCursor(lender, due);
+    const queued = new Set<string>(), budgetMs = 6_000;
+    let release!: () => void;
+    const atWalk = new Promise<void>((resolve) => { reached = resolve; });
+    pause = new Promise<void>((resolve) => { release = resolve; });
+    const passing = runDueCloses({ batchSize: 5, budgetMs, onlyMerchantIds: ids, auditChecks: queued, log: logger });
+    const started = Date.now();
+    try {
+      await Promise.race([atWalk, new Promise((_, reject) => setTimeout(() => reject(new Error("the pass never walked a chain")), 20_000))]);
+      const closed = await Promise.all(ids.map(async (lender) => (await closesOf(lender)).length));
+      assert.deepEqual(closed, closedBefore.map((count) => count + 1), "both lenders' closes committed before the first check walked a chain");
+      // The first check outlasts the pass's budget, so the pass starts no other.
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, budgetMs + 200 - (Date.now() - started))));
+      release();
+      const run = await passing;
+      assert.equal(run.closed.length, 2);
+      const checkedAt = await Promise.all(ids.map(async (lender) => (await settingsOf(lender)).dailyAuditCheckAt));
+      const left = ids.filter((_, index) => checkedAt[index] === undefined);
+      assert.deepEqual([checkedAt.filter(Boolean).length, [...queued]], [1, left], "the pass ran one check and left the other in the set");
+      const summary = readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((text) => JSON.parse(text)).find((entry) => entry.event === "close.run" && entry.runId === run.runId);
+      assert.deepEqual([summary?.closed, summary?.auditChecksLeft], [2, 1], "and its close.run line says so");
+      const next = await runDueCloses({ batchSize: 5, onlyMerchantIds: ids, auditChecks: queued });
+      assert.deepEqual([next.examined, queued.size, typeof (await settingsOf(left[0]!)).dailyAuditCheckAt], [0, 0, "string"], "the next pass, with nothing to close, runs it");
+      checks += 5;
+    } finally { pause = undefined; reached = undefined; release?.(); await passing.catch(() => undefined); }
+  }
 } finally {
   clients.query = query;
   server.close();
@@ -280,4 +314,4 @@ try {
   await pool.end();
   rmSync(logFile, { force: true });
 }
-console.log(`Daily audit check tests passed (${checks} checks): a daily close lists the break the lender knows of, naming the overview's entry; the check of the whole chain after a lender's first close of the day records what verify_audit would, once a day however many missed dates a catch-up closes, and clears a repaired break the next day; its walk holds no lock and leaves a break recorded since, and what verify_audit recorded since; and a person's close asks the background worker thread for it.`);
+console.log(`Daily audit check tests passed (${checks} checks): a daily close lists the break the lender knows of, naming the overview's entry; the check of the whole chain after a lender's first close of the day records what verify_audit would, once a day however many missed dates a catch-up closes, and clears a repaired break the next day; its walk holds no lock and leaves a break recorded since, and what verify_audit recorded since; a person's close asks the background worker thread for it; and a pass checks after all its closes, while its budget lasts.`);
