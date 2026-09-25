@@ -1,5 +1,5 @@
 import {
-  ABSOLUTE_TICKET_FLOOR_KOBO, PLATFORM_OWNER, activationWorkflows, defaultStatus, describeIssues,
+  ABSOLUTE_TICKET_FLOOR_KOBO, PLATFORM_OWNER, activationWorkflows, currencyMinorUnit, defaultStatus, describeIssues,
   editableKinds, exceptionCatalogue, exceptionTransitions, executionOwners, experimentRules, isActionOnlyStatus, mandateTransitions, normaliseFailureCode,
   normaliseOwner, policyGuardrails, recordDataSchemas, recordStatuses, recordTextLimits, resolveExceptionType, roles, isKnownFailureCode, isRealDate, templateTextProblems,
 } from "@workspace/valopay-schema";
@@ -169,6 +169,8 @@ export function validateRecord(
   for (const field of ['case', 'importIdentity']) {
     if (JSON.stringify(data[field]) !== JSON.stringify(existing?.data[field])) refuse(field, `Use the dedicated workflow to change ${field === 'case' ? 'case coordination' : 'import provenance'}.`);
   }
+  // The rules a resolution follows are resolve_exception's to record (resolutionRuleVersion).
+  if (kind === "exceptions" && data.resolutionRuleVersion !== existing?.data.resolutionRuleVersion) throw new Error("An exception's resolution rule version is recorded by Resolve exception and cannot be changed here.");
   if (isUpdate && !existing) throw new Error("An update requires the existing record id.");
   if (existing?.status === "approved" && (kind === "policies" || kind === "templates")) {
     throw new Error("Approved versions cannot be edited. Create a new draft version instead.");
@@ -373,9 +375,19 @@ export function validateRecord(
     for (const key of ["grossKobo", "feeKobo", "netKobo"]) positiveInteger(data[key], key, true);
     if (data.grossKobo - data.feeKobo !== data.netKobo) throw new Error("The net settlement amount must equal the gross amount minus fees.");
     if (!isUpdate && input.status !== (defaultStatus["settlement-batches"] ?? "pending")) throw new Error("New settlement batches must start as pending. Reconciliation updates their status.");
+    // Decision on currencies: a batch holds one currency, naira unless given, and its amounts are in its smallest unit.
+    // One the provider's lines build takes its first line's, which reconciliation records.
+    if (data.currency === undefined || data.currency === null || data.currency === "") data.currency = isUpdate ? existing?.data.currency : "NGN";
+    if (data.currency === undefined) delete data.currency;
+    else {
+      const code = typeof data.currency === "string" ? data.currency.trim().toUpperCase() : "";
+      if (currencyMinorUnit(code) === undefined) throw new Error("Enter the batch currency as an ISO 4217 code with a minor unit, such as NGN or USD.");
+      data.currency = code;
+      if (Array.isArray(existing?.data.lineObservationIds) && code !== String(existing!.data.currency || "NGN").toUpperCase()) throw new Error("A settlement batch built from the provider's lines is in its first line's currency, which reconciliation records; it cannot be changed here.");
+    }
     // Reconciliation copies these from the provider's lines, the fee schedule and the linked statement credit, and derives the status from them.
     // Compared by value: jsonb returns enteredTotals' keys in its own order.
-    for (const key of ["statementObservationId", "statementNetKobo", "lineObservationIds", "linePaymentIds", "expectedFeeKobo", "feeVarianceKobo", "enteredTotals"]) {
+    for (const key of ["statementObservationId", "statementNetKobo", "statementOtherCurrencies", "lineObservationIds", "linePaymentIds", "otherCurrencyLineIds", "expectedFeeKobo", "feeVarianceKobo", "enteredTotals"]) {
       if (!isDeepStrictEqual(data[key], existing?.data[key])) throw new Error(`Settlement batch ${key} is recorded by reconciliation and cannot be changed here.`);
     }
   }

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearch } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { csvHeader, importBatchDetailSchema, importBatchListSchema, importFieldLabel, importFieldsOf, importKindLabels, sourcesViewSchema, suggestImportField, type BatchInput } from "@workspace/valopay-schema";
+import { amountUnitName, csvHeader, importBatchDetailSchema, importBatchListSchema, importFieldLabel, importFieldsOf, importKindLabels, sourcesViewSchema, suggestImportField, type BatchInput } from "@workspace/valopay-schema";
 import { useWorkspace } from "@/lib/workspace-context";
 import {
   lenderPath,
@@ -687,8 +687,8 @@ function BatchEditor({
                 set("amountUnit", e.target.value as "naira" | "kobo")
               }
             >
-              <option value="naira">Naira (₦) — 1,000.50</option>
-              <option value="kobo">Kobo — 100050</option>
+              <option value="naira">{amountUnitName("naira", form.kind)} — 1,000.50</option>
+              <option value="kobo">{amountUnitName("kobo", form.kind)} — 100050</option>
             </select>
           </label>
         </fieldset>

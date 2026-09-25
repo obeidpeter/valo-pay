@@ -10,7 +10,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useWorkspace } from '@/lib/workspace-context';
 import { readableLabel } from './record-label';
 import { formatDate } from '@/lib/formatters';
-import { koboToNaira, moneyFieldLabel, nairaToKobo } from '@/lib/money-input';
+import { majorToMinor, minorToMajor, moneyFieldLabel } from '@/lib/money-input';
+import { currencyMinorUnit } from '@workspace/valopay-schema';
 import { permissionReason } from '@/lib/permissions';
 import { referenceOf } from '@/lib/notify';
 import { KEPT_IN_OPERATIONS, OpenOperations } from './pilot-ui';
@@ -56,17 +57,26 @@ type RecordDialogProps = {
   onDone?: (response: any) => void;
   /** Where the page shows that answer: focus goes there when the dialog closes and the control that opened it has gone. */
   answer?: () => HTMLElement | null | undefined;
+  /**
+   * The data field holding the ISO 4217 code the money fields are in, such as a settlement batch's currency: they are
+   * entered and shown in that currency's major unit with its decimals. Taken from the form when it is one of the
+   * fields, else from the record; naira without it.
+   */
+  currencyField?: string;
 };
 
-export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourceFields, title, defaultValues = {}, actionMutation, actionRecordId, context, validate, onDone, answer }: RecordDialogProps) {
+export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourceFields, title, defaultValues = {}, actionMutation, actionRecordId, context, validate, onDone, answer, currencyField }: RecordDialogProps) {
   const isMoney = (field: FieldDef) => field.type === 'number' && /Kobo$/.test(field.name);
-  const fields = sourceFields.map(field => isMoney(field) ? { ...field, label: moneyFieldLabel(field.label) } : field);
+  const [formData, setFormData] = useState<any>({});
+  // The currency the money fields are in: the form's currency field, else the record's, else naira.
+  const currencyIn = (values: Record<string, any>) => String((currencyField && (sourceFields.some(f => f.name === currencyField) ? values[currencyField] : record?.data?.[currencyField])) || 'NGN').trim().toUpperCase();
+  const moneyCurrency = currencyIn(formData);
+  const fields = sourceFields.map(field => isMoney(field) ? { ...field, label: moneyFieldLabel(field.label, currencyMinorUnit(moneyCurrency) === undefined ? 'NGN' : moneyCurrency) } : field);
   const { merchantId, workspace } = useWorkspace();
   // A batch-imported record changes only through a reviewed correction; a quick import's stays editable (fromImportBatch).
   const importedEdit = !actionMutation && fromImportBatch(record) ? record!.data.importIdentity as { batchId: string } : undefined;
   const blockedReason = permissionReason(workspace, { action: actionMutation, kind, record }) || (importedEdit ? 'Imported source records cannot be edited directly. Use a reviewed correction for supported fields, or the dedicated workflow action for other changes.' : undefined);
   const queryClient = useQueryClient();
-  const [formData, setFormData] = useState<any>({});
   const [result,setResult]=useState<any>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formErrors, setFormErrors] = useState<string[]>([]);
@@ -125,8 +135,9 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
           }
         });
       }
+      const stored = String(record?.data?.[currencyField ?? ''] || 'NGN'), storedCurrency = currencyMinorUnit(stored) === undefined ? 'NGN' : stored;
       fields.forEach(field => {
-        if (isMoney(field) && initial[field.name] !== undefined && initial[field.name] !== '') initial[field.name] = koboToNaira(Number(initial[field.name]));
+        if (isMoney(field) && initial[field.name] !== undefined && initial[field.name] !== '') initial[field.name] = minorToMajor(Number(initial[field.name]), currencyField ? storedCurrency : 'NGN');
       });
       setFormData(initial);
       setInitialForm(submissionFingerprint(initial));
@@ -187,8 +198,9 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
       const empty = value === undefined || value === null || String(value).trim() === '';
       if (f.required && f.type === 'checkbox' && value !== true) errors[f.name] = `Confirm ${f.label.toLowerCase()} before saving.`;
       else if (f.required && empty) errors[f.name] = missingMessage(f.label, f.type);
-      else if (isMoney(f) && !empty) {
-        try { nairaToKobo(String(value)); } catch (error) { errors[f.name] = (error as Error).message; }
+      else if (f.name === currencyField && !empty && currencyMinorUnit(String(value)) === undefined) errors[f.name] = 'Enter an ISO 4217 currency code with a minor unit, such as NGN or USD.';
+      else if (isMoney(f) && !empty && currencyMinorUnit(moneyCurrency) !== undefined) {
+        try { majorToMinor(String(value), moneyCurrency); } catch (error) { errors[f.name] = (error as Error).message; }
       }
       else if (f.type === 'number' && !empty && !Number.isFinite(Number(value))) errors[f.name] = `Enter ${f.label} as a number.`;
     });
@@ -214,7 +226,8 @@ export function RecordDialog({ kind, record, isOpen, onOpenChange, fields: sourc
         payload.data[f.name] = null;
         return;
       }
-      if (isMoney(f)) val = nairaToKobo(String(val));
+      if (isMoney(f)) val = majorToMinor(String(val), moneyCurrency);
+      else if (f.name === currencyField) val = String(val).trim().toUpperCase();
       else if (f.type === 'number') val = Number(val);
       if(['consentGaps','linePaymentIds','confirmedJobs'].includes(f.name)&&typeof val==='string')val=val.split(/[|,]/).map(s=>s.trim()).filter(Boolean);
       if(f.name==='correct'&&typeof val==='string')val=val==='true';

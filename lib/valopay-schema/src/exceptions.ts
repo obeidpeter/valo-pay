@@ -114,6 +114,17 @@ export function unseenReversalOf(condition: unknown): string | undefined {
 export const unseenReversalCodes = { setAside: "platform_state_confirmed", adopted: "provider_state_adopted" } as const;
 
 /**
+ * Decision on what a resolution means: it keeps the meaning Finance was shown
+ * when it was recorded. resolve_exception records the rules it was recorded
+ * under on the exception (data.resolutionRuleVersion); a resolution without it
+ * was recorded by an earlier build. That build told Finance that any resolution
+ * of a reversal waiting for a payment no connection had seen sets the reversal
+ * aside at the next reconciliation, so such a resolution still does, whatever
+ * its code; only one that records a rule version follows unseenReversalCodes.
+ */
+export const resolutionRuleVersion = 1;
+
+/**
  * The resolution codes one exception offers: its type's, less those that do
  * not apply to it. A suspected_duplicate offers same_payment only for payment
  * evidence held because it came through another connection alone, and

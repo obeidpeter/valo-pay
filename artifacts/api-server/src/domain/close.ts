@@ -219,11 +219,12 @@ const sumOf = (items: ValopayRecord[]) => ({ count: items.length, kobo: items.re
 /** Money in another currency than naira, by currency code: how many payments and their amount in that currency's minor unit, as the payment stores it. */
 export type OtherCurrencies = Record<string, { count: number; amount: number }>;
 /**
- * Payments by the money each holds (`amount`), by one rule: the count takes
- * every payment, whatever its currency, since each is work for Finance; the
- * kobo sums naira only, and money in any other currency is listed beside it
- * by its code (otherCurrencies, only when there is some: how many payments and
- * their amount in that currency's minor unit), never added to a naira total.
+ * Payments, or settlement batches, by the money each holds (`amount`), by one
+ * rule: the count takes every one, whatever its currency, since each is work
+ * for Finance; the kobo sums naira only, and money in any other currency is
+ * listed beside it by its code (otherCurrencies, only when there is some: how
+ * many and their amount in that currency's minor unit), never added to a naira
+ * total.
  */
 export function inNaira(items: readonly ValopayRecord[], amount: (item: ValopayRecord) => number): { count: number; kobo: number; otherCurrencies?: OtherCurrencies } {
   let kobo = 0;
@@ -297,10 +298,13 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
   }
 
   const unallocated = payments.filter(paymentAwaitsAllocation);
-  const variances = recordsOf(state, "settlement-batches").filter((item) => item.status === "variance").map((batch) => ({
-    batchId: batch.id, reference: batch.reference, feeVarianceKobo: Number(batch.data.feeVarianceKobo || 0), netKobo: Number(batch.data.netKobo || 0),
+  // Each batch in its own currency, whose smallest unit its amounts are in; their fee variance is summed in naira only.
+  const varianceBatches = recordsOf(state, "settlement-batches").filter((item) => item.status === "variance");
+  const variances = varianceBatches.map((batch) => ({
+    batchId: batch.id, reference: batch.reference, currency: currencyOf(batch), feeVarianceKobo: Number(batch.data.feeVarianceKobo || 0), netKobo: Number(batch.data.netKobo || 0),
     statementNetKobo: batch.data.statementNetKobo ?? null, explanation: batch.data.explanation ?? null,
   }));
+  const varianceTotals = inNaira(varianceBatches, (batch) => Number(batch.data.feeVarianceKobo || 0));
 
   const exceptions = recordsOf(state, "exceptions");
   const opened = exceptions.filter((item) => inPeriod(item.createdAt, from, to));
@@ -325,7 +329,7 @@ export function buildCloseReport(state: DomainState, ctx: Context, opening: Open
     proposed: sumOf(payments.filter((item) => item.status === "proposed")),
     unallocated: { ...heldOf(unallocated), olderThan24Hours: unallocated.filter((item) => Date.parse(to) - paymentObservedAt(item) >= DAY_MS).length },
     possibleDuplicates: inNaira(payments.filter((item) => item.status === "possible_duplicate"), (item) => item.amountKobo),
-    variances: { count: variances.length, feeVarianceKobo: variances.reduce((sum, item) => sum + item.feeVarianceKobo, 0), batches: variances },
+    variances: { count: variances.length, feeVarianceKobo: varianceTotals.kobo, ...(varianceTotals.otherCurrencies ? { otherCurrencies: varianceTotals.otherCurrencies } : {}), batches: variances },
     exceptions: {
       opened: { count: opened.length, byType: byType(opened) }, closed: { count: closed.length, byType: byType(closed) },
       openAtClose: exceptions.filter((item) => isOpenException(item.status)).length,

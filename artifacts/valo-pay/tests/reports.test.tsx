@@ -94,6 +94,24 @@ describe("reports", () => {
     expect(measure("Unmatched at close")).toBe(usd("1 · ₦0.00 and USD 1,000.00 (1 payment) · 1 older than 24 hours"));
   });
 
+  // Decision on currencies in settlement batches: a close sums the naira batches' fee differences only, and lists a batch
+  // in another currency apart, whose fees are not checked while no fee schedule exists for its currency.
+  it("lists a settlement batch in another currency apart from the naira fee differences", async () => {
+    const user = userEvent.setup();
+    api.mutate(state => {
+      const customerId = state.records.find(record => record.kind === "customers")!.id;
+      makeRecord(state, "observations", { name: "Settlement line", status: "unresolved", reference: "PSK-USD-9", amountKobo: 99_500, customerId, data: { provider: state.merchant.provider, source: "settlement", grossAmountKobo: 100_000, feeKobo: 500, batchReference: "B-USD-9", eventId: "usd-line-9", occurredAt: api.now, currency: "USD" } });
+      makeRecord(state, "observations", { name: "Statement credit", status: "unresolved", reference: "STMT-USD-9", amountKobo: 1_000, data: { provider: state.merchant.provider, source: "statement", batchReference: "B-USD-9", eventId: "usd-credit-9", occurredAt: api.now, currency: "USD" } });
+    });
+    renderApp("/reports");
+    await user.click(await screen.findByRole("button", { name: "Run daily close" }));
+    await screen.findByText("Daily close completed");
+    const variances = api.state().records.find(record => record.kind === "closes")!.data.report.variances;
+    expect([variances.count, variances.otherCurrencies, variances.batches[0].currency]).toEqual([1, { USD: { count: 1, amount: 0 } }, "USD"]);
+    const measure = await closeDetails(user);
+    expect(measure("Settlement differences")).toBe(`1 · ${formatKobo(0)} and 1 batch in USD, fees not checked`);
+  });
+
   it("lists receipts in another currency beside a payment method's naira value", async () => {
     const user = userEvent.setup();
     const baseFetch = globalThis.fetch;

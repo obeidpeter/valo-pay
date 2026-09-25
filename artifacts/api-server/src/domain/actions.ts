@@ -1,7 +1,7 @@
 import {
   allocationDecisionDataSchema, counted, businessDateSchema,
   DEFAULT_ACTIVATION_WINDOW_DAYS, PLATFORM_OWNER, activationReminderCaps, closeRules, failureCodeList, handBackFallbackOwner, isKnownFailureCode,
-  heldEvidenceCodes, heldEvidenceOf, moneyText, nairaText, nextCloseInstant, normaliseFailureCode, otherCurrenciesText, passRuleText, paymentUnappliedKobo, resolutionCodesForException, resolveExceptionType, unseenReversalCodes, unseenReversalOf, withinQuietHours, templateTextProblems,
+  heldEvidenceCodes, heldEvidenceOf, moneyText, nairaText, nextCloseInstant, normaliseFailureCode, otherCurrenciesText, passRuleText, paymentUnappliedKobo, resolutionCodesForException, resolutionRuleVersion, resolveExceptionType, unseenReversalCodes, unseenReversalOf, withinQuietHours, templateTextProblems,
   type CloseTrigger,
 } from "@workspace/valopay-schema";
 import { findRecord, makeRecord, recordsOf, touch } from "./records";
@@ -495,7 +495,8 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput, audit?:
       if (type !== "unknown_outcome" || data.resolutionCode !== "resolved_failed") throw new Error("A confirmed failure code is recorded only when an unknown outcome is resolved as failed.");
       if (!isKnownFailureCode(confirmedCode) || normaliseFailureCode(confirmedCode) === "TIMEOUT_UNKNOWN") throw new Error(`Choose the failure code the provider confirmed: ${failureCodeList.filter((code) => code !== "TIMEOUT_UNKNOWN").join(", ")}.`);
     }
-    item.status = "resolved"; item.data.resolutionCode = data.resolutionCode; item.data.notes = reason(input); item.data.resolvedBy = ctx.actor; item.data.resolvedAt = now;
+    // The rules the resolution follows, so it keeps the meaning its answer gives it whatever a later build changes.
+    item.status = "resolved"; item.data.resolutionCode = data.resolutionCode; item.data.notes = reason(input); item.data.resolvedBy = ctx.actor; item.data.resolvedAt = now; item.data.resolutionRuleVersion = resolutionRuleVersion;
     if (confirmedCode !== undefined) item.data.confirmedFailureCode = normaliseFailureCode(confirmedCode);
     if (!type) item.data.legacyType = true;
     touch(item, now);

@@ -23,7 +23,7 @@ import { useUrlPagination } from '@/lib/use-url-pagination';
 import { keepRowsWhilePaging, searchWithoutSubmitting, useDebouncedSearch } from '@/lib/use-record-pagination';
 import { useReconciliationPage } from '@/lib/use-reconciliation-page';
 import { LoadProblem } from '@/components/load-problem';
-import { paymentUnappliedKobo } from '@workspace/valopay-schema';
+import { hasFeeSchedule, paymentUnappliedKobo } from '@workspace/valopay-schema';
 import { formatRecordMoney as moneyOf } from '@/lib/currencies';
 
 const paymentAvailable = (record: any): number => paymentUnappliedKobo(record);
@@ -465,16 +465,18 @@ export default function ReconciliationPage() {
                 ) : !batches || batches.items.length === 0 ? (
                   <EmptyRow colSpan={6} title={q ? 'No results match your search' : "No settlement batches"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>A batch groups payments in one provider settlement report. Add a synthetic batch or import a settlement report to see it here.</>}</EmptyRow>
                 ) : (
-                  batches.items.map(b => (
-                    <tr key={b.id} className="hover:bg-secondary/10">
+                  batches.items.map(b => {
+                    // Each batch in its own currency; fees are checked only where a fee schedule exists for it.
+                    const currency = String(b.data?.currency || 'NGN'), apart = Array.isArray(b.data?.otherCurrencyLineIds) ? b.data.otherCurrencyLineIds.length : 0;
+                    return <tr key={b.id} className="hover:bg-secondary/10">
                       <td className="px-4 py-2 font-medium">{String(b.data?.provider || '-')}</td>
-                      <td className="px-4 py-2"><Button variant="link" type="button" className="min-h-9 font-mono text-xs underline underline-offset-4 hover:text-primary" action="edit_batch" record={b} onClick={() => handleAction(b, 'edit_batch')} aria-label={`Edit settlement batch ${String(b.data?.batchReference || b.reference)}`}>{String(b.data?.batchReference || b.reference)}</Button><span className="hidden print:inline font-mono text-xs">{String(b.data?.batchReference || b.reference)}</span></td>
-                      <td className="px-4 py-2 text-right font-mono text-xs">{formatKobo(Number(b.data?.grossKobo || 0))}</td>
-                      <td className="px-4 py-2 text-right font-mono text-xs text-destructive">{formatKobo(Number(b.data?.feeKobo || 0))}</td>
-                      <td className="px-4 py-2 text-right font-mono font-medium">{formatKobo(Number(b.data?.netKobo || 0))}</td>
+                      <td className="px-4 py-2"><Button variant="link" type="button" className="min-h-9 font-mono text-xs underline underline-offset-4 hover:text-primary" action="edit_batch" record={b} onClick={() => handleAction(b, 'edit_batch')} aria-label={`Edit settlement batch ${String(b.data?.batchReference || b.reference)}`}>{String(b.data?.batchReference || b.reference)}</Button><span className="hidden print:inline font-mono text-xs">{String(b.data?.batchReference || b.reference)}</span>{apart > 0 && <span className="block text-xs text-muted-foreground">{formatCount(apart, 'line')} in another currency, not counted</span>}</td>
+                      <td className="px-4 py-2 text-right font-mono text-xs">{moneyOf(b, Number(b.data?.grossKobo || 0))}</td>
+                      <td className="px-4 py-2 text-right font-mono text-xs text-destructive">{moneyOf(b, Number(b.data?.feeKobo || 0))}{!hasFeeSchedule(currency) && <span className="block font-sans text-muted-foreground">Not checked: no fee schedule for {currency}</span>}</td>
+                      <td className="px-4 py-2 text-right font-mono font-medium">{moneyOf(b, Number(b.data?.netKobo || 0))}</td>
                       <td className="px-4 py-2 text-right"><StatusBadge status={b.status} /></td>
-                    </tr>
-                  ))
+                    </tr>;
+                  })
                 )}
               </tbody>
             </table>
@@ -507,7 +509,8 @@ export default function ReconciliationPage() {
         actionMutation={actionKind === 'create_batch' || actionKind === 'edit_batch' ? undefined : actionKind}
         actionRecordId={isProposalDecision ? selectedRecord?.data?.paymentId : undefined}
         onDone={response => { if (response?.data?.payerCustomerId) notifyDone('Payer recorded', String(response.message)); }}
-        defaultValues={isProposalDecision ? { data: { proposalId: selectedRecord?.id, proposalUpdatedAt: selectedRecord?.updatedAt } } : actionKind === 'review_allocation' ? { correct: reviewCorrect } : actionKind === 'manual_allocate' ? { amountKobo: paymentAvailable(selectedRecord) } : {}}
+        defaultValues={isProposalDecision ? { data: { proposalId: selectedRecord?.id, proposalUpdatedAt: selectedRecord?.updatedAt } } : actionKind === 'review_allocation' ? { correct: reviewCorrect } : actionKind === 'manual_allocate' ? { amountKobo: paymentAvailable(selectedRecord) } : actionKind === 'create_batch' ? { currency: 'NGN' } : actionKind === 'edit_batch' ? { currency: String(selectedRecord?.data?.currency || 'NGN') } : {}}
+        currencyField={actionKind === 'create_batch' || actionKind === 'edit_batch' ? 'currency' : undefined}
         context={isProposalDecision && selectedRecord ? <MatchEvidence allocation={selectedRecord} payment={selectedPayment} instalment={selectedInstalment} customer={customerById.get(String(selectedRecord.customerId || selectedInstalment?.customerId))} decision={actionKind} /> : isAllocationReview && selectedRecord ? values => <MatchEvidence allocation={selectedRecord} payment={selectedPayment} instalment={selectedInstalment} customer={customerById.get(String(selectedRecord.customerId))} decision={values.correct ? 'review_correct' : 'review_incorrect'} /> : actionKind === 'manual_allocate' ? values => {
           const due = dueItemById.get(String(values.dueItemId));
           const available = paymentAvailable(selectedRecord), outstanding = instalmentOutstanding(due);
@@ -558,6 +561,8 @@ export default function ReconciliationPage() {
             { name: 'name', label: 'Name', type: 'text', required: true },
             { name: 'reference', label: 'Batch reference (reconciliation sets the status)', type: 'text', required: true },
             { name: 'provider', label: 'Provider', type: 'text', isData: true, required: true },
+            // A batch the provider's lines build is in its first line's currency, which reconciliation records.
+            ...(actionKind === 'create_batch' || !Array.isArray(selectedRecord?.data?.lineObservationIds) ? [{ name: 'currency', label: 'Currency', type: 'text' as const, isData: true, required: true, help: 'The ISO 4217 code of the batch\'s money, NGN unless the provider paid it out in another currency. Enter the amounts in this currency.' }] : []),
             { name: 'grossKobo', label: 'Amount before fees (₦)', type: 'number', isData: true, required: true },
             { name: 'feeKobo', label: 'Fee (₦)', type: 'number', isData: true, required: true },
             { name: 'netKobo', label: 'Amount after fees (₦)', type: 'number', isData: true, required: true }

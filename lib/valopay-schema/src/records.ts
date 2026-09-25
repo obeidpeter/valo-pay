@@ -87,8 +87,8 @@ export const closeReportSchema = z.object({
   unallocated: money.extend({ olderThan24Hours: z.number().int().min(0) }),
   possibleDuplicates: money,
   variances: z.object({
-    count: z.number().int().min(0), feeVarianceKobo: z.number().int(),
-    batches: z.array(z.object({ batchId: z.string(), reference: z.string(), feeVarianceKobo: z.number().int(), netKobo: z.number().int(), statementNetKobo: z.number().int().nullable(), explanation: z.string().nullable() })),
+    count: z.number().int().min(0), feeVarianceKobo: z.number().int(), otherCurrencies: otherCurrencies.optional(),
+    batches: z.array(z.object({ batchId: z.string(), reference: z.string(), currency: z.string().optional(), feeVarianceKobo: z.number().int(), netKobo: z.number().int(), statementNetKobo: z.number().int().nullable(), explanation: z.string().nullable() })),
   }),
   exceptions: z.object({
     opened: z.object({ count: z.number().int(), byType: z.record(z.number().int()) }),
@@ -256,6 +256,10 @@ export const recordDataSchemas = {
     duplicateSettlementLine: z.boolean().optional(),
     /** A settlement line for a collection another batch already counts: the batch it is counted in. */
     countedInBatchId: z.string().optional(),
+    /** A settlement line in another currency than its batch (settlementBatchId): linked to it as evidence, never added to its totals. */
+    otherCurrencyLine: z.boolean().optional(),
+    /** A statement credit in another currency than the batch it names: linked to it, never matched to its net total. */
+    otherCurrencyCredit: z.boolean().optional(),
     /** A statement credit repeating one already counted for its batch (same reference and amount): it adds nothing. */
     duplicateStatementCredit: z.boolean().optional(),
     reversalApplied: z.boolean().optional(),
@@ -358,24 +362,34 @@ export const recordDataSchemas = {
     reason: z.string().optional(),
     simulated: z.boolean().optional(),
   }).passthrough(),
+  /**
+   * A settlement batch holds one currency (currency): its gross, fee, net, expected fee, fee variance and statement
+   * total are in that currency's smallest unit, whatever their Kobo names say.
+   */
   "settlement-batches": z.object({
     ...common,
     provider: z.string().optional(),
     batchReference: z.string().min(1),
+    /** The ISO 4217 code, in capitals, of the batch's money: its first counted line's, or what Finance entered (naira unless given). A batch an earlier build saved without one is in naira. */
+    currency: z.string().optional(),
     grossKobo: kobo,
     feeKobo: kobo,
     netKobo: kobo,
     lineObservationIds: z.array(z.string()).optional(),
     linePaymentIds: z.array(z.string()).optional(),
+    /** Settlement lines in another currency than the batch: linked to it as evidence and reported, never in its totals. */
+    otherCurrencyLineIds: z.array(z.string()).optional(),
     expectedFeeKobo: z.number().int().optional(),
     assumedFeeKobo: z.number().int().optional(),
     feeVarianceKobo: z.number().int().optional(),
     statementNetKobo: z.number().int().nullable().optional(),
     statementObservationId: z.string().optional(),
+    /** Statement credits that name the batch in another currency than its own, by currency: never matched to its net total. */
+    statementOtherCurrencies: otherCurrencies.optional(),
     explanation: z.string().nullable().optional(),
     reconciledAt: isoDateOrTimestamp.optional(),
-    /** Totals Finance typed for a hand-entered batch, kept when the provider's lines rebuilt them. */
-    enteredTotals: z.object({ grossKobo: kobo, feeKobo: kobo, netKobo: kobo }).optional(),
+    /** Totals Finance typed for a hand-entered batch, and their currency, kept when the provider's lines rebuilt them. */
+    enteredTotals: z.object({ grossKobo: kobo, feeKobo: kobo, netKobo: kobo, currency: z.string().optional() }).optional(),
   }).passthrough(),
   exceptions: z.object({
     ...common,
@@ -406,6 +420,10 @@ export const recordDataSchemas = {
     currency: z.string().optional(),
     /** On a settlement_variance: the conditions of the reports of a collection counted in two batches it carries beside its own; its resolution settles them too. */
     countedTwice: z.array(z.string()).optional(),
+    /** On a settlement_variance: the conditions of the reports of a settlement line in another currency than its batch it carries beside its own; its resolution settles them too. */
+    otherCurrencyLines: z.array(z.string()).optional(),
+    /** The rules the resolution was recorded under (resolutionRuleVersion), which resolve_exception records; absent on one an earlier build recorded. */
+    resolutionRuleVersion: z.number().int().optional(),
   }).passthrough(),
   policies: z.object({
     ...common,

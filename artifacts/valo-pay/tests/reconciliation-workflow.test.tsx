@@ -468,4 +468,65 @@ describe('settlement batch edits', () => {
     expect(saved.data.linePaymentIds).toHaveLength(6000);
     expect(saved.data.batchReference).toBe('LARGE-BATCH-1');
   });
+
+  // Decision on currencies in settlement batches: a batch holds one currency, and Finance enters one by hand in its own.
+  it('adds a batch in its own currency and shows each batch in its currency', async () => {
+    const user = userEvent.setup();
+    renderApp('/reconciliation');
+    await user.click(await screen.findByRole('button', { name: 'Add batch' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add settlement batch' });
+    const currency = within(dialog).getByLabelText(/^Currency/) as HTMLInputElement;
+    expect(currency.value).toBe('NGN');
+    expect(within(dialog).getByText(/^Amount before fees \(₦\)/)).toBeTruthy();
+    await user.type(within(dialog).getByLabelText(/^Name/), 'Yen batch');
+    await user.type(within(dialog).getByLabelText(/^Batch reference/), 'B-JPY-1');
+    await user.type(within(dialog).getByLabelText(/^Provider/), 'Sandbox Rail');
+    await user.clear(currency);
+    await user.type(currency, 'xyz');
+    await user.type(within(dialog).getByLabelText(/^Amount before fees/), '1000.5');
+    await user.type(within(dialog).getByLabelText(/^Fee/), '5');
+    await user.type(within(dialog).getByLabelText(/^Amount after fees/), '995');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByText('Enter an ISO 4217 currency code with a minor unit, such as NGN or USD.')).toBeTruthy();
+    // In yen the amounts are whole: the field names the currency and refuses a decimal.
+    await user.clear(currency);
+    await user.type(currency, 'jpy');
+    expect(within(dialog).getByText(/^Amount before fees \(JPY\)/)).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByText('Enter an amount in JPY with no decimal places, for example 1,000.')).toBeTruthy();
+    const gross = within(dialog).getByLabelText(/^Amount before fees/);
+    await user.clear(gross);
+    await user.type(gross, '1,000');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add settlement batch' })).toBeNull());
+    const sent = api.calls.find(call => call.method === 'POST' && call.path === '/v1/records/settlement-batches')!;
+    expect(sent.status).toBe(200);
+    expect((sent.body as { data: Record<string, unknown> }).data).toMatchObject({ currency: 'JPY', grossKobo: 1000, feeKobo: 5, netKobo: 995 });
+    // The table shows it in yen, with fees that are not checked; its edit shows the amounts in yen again.
+    const row = (await screen.findByRole('button', { name: 'Edit settlement batch B-JPY-1' })).closest('tr')!;
+    expect(row.textContent).toContain('JPY\u00a01,000');
+    expect(row.textContent).toContain('Not checked: no fee schedule for JPY');
+    await user.click(within(row).getByRole('button', { name: 'Edit settlement batch B-JPY-1' }));
+    const edit = await screen.findByRole('dialog', { name: 'Edit settlement batch' });
+    expect([(within(edit).getByLabelText(/^Currency/) as HTMLInputElement).value, (within(edit).getByLabelText(/^Amount before fees/) as HTMLInputElement).value]).toEqual(['JPY', '1000']);
+  });
+
+  it('shows a batch the provider built in dollars in dollars, with the line it does not count', async () => {
+    const user = userEvent.setup();
+    api.mutate((state, ctx) => {
+      const [due] = state.records.filter(record => record.kind === 'due-items' && record.status === 'scheduled');
+      const line = (reference: string, eventId: string, amountKobo: number, grossAmountKobo: number, feeKobo: number, currency?: string) => makeRecord(state, 'observations', { name: 'Settlement line', status: 'unresolved', reference, amountKobo, customerId: due!.customerId, data: { provider: state.merchant.provider, source: 'settlement', grossAmountKobo, feeKobo, batchReference: 'B-USD-1', eventId, occurredAt: api.now, ...(currency ? { currency } : {}) } });
+      line('PSK-USD-1', 'usd-1', 99_500, 100_000, 500, 'USD');
+      line('PSK-NGN-1', 'ngn-1', due!.amountKobo - 12_500, due!.amountKobo, 12_500);
+      reconcile(state, { ...ctx, actor: 'Sandbox Finance', role: 'Finance' });
+    });
+    renderApp('/reconciliation');
+    const row = (await screen.findByRole('button', { name: 'Edit settlement batch B-USD-1' })).closest('tr')!;
+    for (const text of ['USD\u00a01,000.00', 'USD\u00a05.00', 'USD\u00a0995.00', 'Not checked: no fee schedule for USD', '1 line in another currency, not counted']) expect(row.textContent).toContain(text);
+    // Its currency is its first line's: the edit enters amounts in dollars and does not offer to change it.
+    await user.click(within(row).getByRole('button', { name: 'Edit settlement batch B-USD-1' }));
+    const edit = await screen.findByRole('dialog', { name: 'Edit settlement batch' });
+    expect(within(edit).queryByLabelText(/^Currency/)).toBeNull();
+    expect((within(edit).getByLabelText(/^Amount before fees \(USD\)/) as HTMLInputElement).value).toBe('1000.00');
+  });
 });

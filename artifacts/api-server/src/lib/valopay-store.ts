@@ -2100,6 +2100,10 @@ export function assertFinalState(snapshot: DomainState, state: DomainState, merc
       if (!Array.isArray(record.data.lineObservationIds)) conflict("Settlement batch observation IDs must be an array.");
       for (const id of record.data.lineObservationIds) reference(record, id, "observations", "Settlement batch observation", final);
     }
+    if (record.data.otherCurrencyLineIds !== undefined && changed(record, "otherCurrencyLineIds")) {
+      if (!Array.isArray(record.data.otherCurrencyLineIds)) conflict("Settlement batch lines in another currency must be an array.");
+      for (const id of record.data.otherCurrencyLineIds) reference(record, id, "observations", "Settlement batch line in another currency", final);
+    }
     if (record.kind === "due-items") {
       if (record.reference) { if (dueReferences.has(record.reference)) conflict("Due-item reference already exists."); dueReferences.add(record.reference); }
       const mandate = optionalReference(record, "mandateId", "mandates", "Due-item mandate")
