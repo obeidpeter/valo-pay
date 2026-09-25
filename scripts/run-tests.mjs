@@ -57,6 +57,7 @@ const steps = [
   [tsx, ["artifacts/api-server/tests/close-schedule-golden.test.ts"]],
   [tsx, ["artifacts/api-server/tests/payment-lifecycle-golden.test.ts"]],
   [tsx, ["artifacts/api-server/tests/payment-evidence-golden.test.ts"]],
+  [tsx, ["artifacts/api-server/tests/settlement-currency-golden.test.ts"]],
   [tsx, ["artifacts/api-server/tests/reconciliation-scale-golden.test.ts"]],
   [tsx, ["artifacts/api-server/tests/dispute-lifecycle-golden.test.ts"]],
   [tsx, ["artifacts/api-server/tests/workflow-performance.test.ts"]],

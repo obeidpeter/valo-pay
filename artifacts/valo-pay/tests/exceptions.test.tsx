@@ -4,7 +4,7 @@ import { renderApp, screen, userEvent, waitFor, within } from "./harness";
 import { makeRecord } from "../../api-server/src/domain/records";
 import { raiseException, reconcile } from "../../api-server/src/domain/reconciliation";
 import { providerFeeKobo } from "@workspace/valopay-schema";
-import { countedTwiceEffect } from "@/components/exception-context";
+import { countedTwiceEffect, otherCurrencyLinesEffect } from "@/components/exception-context";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -221,6 +221,31 @@ describe("exceptions", () => {
     // An exception that carries no such report says nothing of one, and one that carries several names how many.
     expect(countedTwiceEffect({ ...carrier, data: { ...carrier.data, countedTwice: [] } })).toBeUndefined();
     expect(countedTwiceEffect({ ...carrier, data: { ...carrier.data, countedTwice: ['a', 'b'] } })).toContain('carries 2 of the provider\'s reports of collections counted in two settlement batches. Resolving it settles those reports too');
+  });
+
+  // Decision on currencies in settlement batches: a line in another currency than its batch is reported, and an
+  // exception already open for the batch carries the report (otherCurrencyLines) and settles it when resolved.
+  it('says that resolving an exception that carries a line in another currency settles that report too', async () => {
+    const user = userEvent.setup();
+    const carrier = api.mutate((state, ctx) => {
+      const finance = { ...ctx, actor: 'Sandbox Finance', role: 'Finance' };
+      const [due] = state.records.filter(record => record.kind === 'due-items' && record.status === 'scheduled');
+      // B-3's fees differ from the schedule, so it is in variance with an exception open for it; then a dollar line names it.
+      makeRecord(state, 'observations', { name: 'Settlement line', status: 'unresolved', reference: 'PSK-N3', amountKobo: due!.amountKobo - providerFeeKobo(due!.amountKobo) - 50_000, customerId: due!.customerId, data: { provider: state.merchant.provider, source: 'settlement', grossAmountKobo: due!.amountKobo, feeKobo: providerFeeKobo(due!.amountKobo) + 50_000, batchReference: 'B-3', eventId: 'n3', occurredAt: api.now } });
+      reconcile(state, finance);
+      makeRecord(state, 'observations', { name: 'Settlement line', status: 'unresolved', reference: 'PSK-U3', amountKobo: 99_500, customerId: due!.customerId, data: { provider: state.merchant.provider, source: 'settlement', grossAmountKobo: 100_000, feeKobo: 500, batchReference: 'B-3', eventId: 'u3', occurredAt: api.now, currency: 'USD' } });
+      reconcile(state, finance);
+      const batch = state.records.find(record => record.kind === 'settlement-batches' && record.reference === 'B-3')!;
+      return state.records.find(record => record.kind === 'exceptions' && record.data.linkedRecordId === batch.id)!;
+    });
+    expect((carrier.data.otherCurrencyLines as string[]).length).toBe(1);
+    renderApp(`/exceptions?record=${carrier.id}`);
+    await user.click(await screen.findByRole('button', { name: 'Resolve' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Resolve exception' });
+    const settles = 'This exception also carries the report of a settlement line in another currency than its batch, which the batch does not count. Resolving it settles that report too, whichever outcome you record: it is not raised again, so check with the provider which batch pays the line out first.';
+    expect(within(dialog).getByText('Record an outcome after reviewing the evidence.').parentElement!.textContent).toContain(settles);
+    expect(otherCurrencyLinesEffect({ ...carrier, data: { ...carrier.data, otherCurrencyLines: [] } })).toBeUndefined();
+    expect(otherCurrencyLinesEffect({ ...carrier, data: { ...carrier.data, otherCurrencyLines: ['a', 'b'] } })).toContain('carries 2 reports of settlement lines in another currency than their batch');
   });
 
   it('shows a stored exception without a severity as having none, never as low', async () => {

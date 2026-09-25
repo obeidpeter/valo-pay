@@ -1293,16 +1293,31 @@ function invariants(state: DomainState): string[] {
     counted.set(id, batch.id);
   }
   for (const batch of recordsOf(state, "settlement-batches").filter((item) => item.data.statementObservationId)) {
-    const credits = recordsOf(state, "observations").filter((item) => item.data.resolvedTo === `batch:${batch.id}` && !item.data.duplicateStatementCredit);
+    const credits = recordsOf(state, "observations").filter((item) => item.data.resolvedTo === `batch:${batch.id}` && !item.data.duplicateStatementCredit && !item.data.otherCurrencyCredit);
     const sum = credits.reduce((total, item) => total + item.amountKobo, 0);
     if (sum !== batch.data.statementNetKobo) problems.push(`batch ${batch.reference}: statement total ${batch.data.statementNetKobo} is not its credits ${sum}`);
   }
+  // A batch holds one currency: it counts its lines in that currency alone, its totals are what they add, and its fees
+  // are checked only in naira; a line in another is linked to it, never counted, and reported.
+  const currency = (record: ValopayRecord | undefined) => String(record?.data.currency || "NGN").trim().toUpperCase();
+  for (const batch of recordsOf(state, "settlement-batches").filter((item) => Array.isArray(item.data.lineObservationIds))) {
+    const lines = (batch.data.lineObservationIds as string[]).map((id) => byId.get(id)!);
+    if (lines.some((line) => currency(line) !== currency(batch))) problems.push(`batch ${batch.reference}: counts a line in another currency than its ${currency(batch)}`);
+    const sum = (key: string) => lines.reduce((total, line) => total + Number(line.data[key] ?? 0), 0);
+    if (batch.data.grossKobo !== sum("countedGrossKobo") || batch.data.feeKobo !== sum("assumedFeeKobo") || batch.data.netKobo !== Number(batch.data.grossKobo) - Number(batch.data.feeKobo)) problems.push(`batch ${batch.reference}: its totals are not what its lines add`);
+    if (currency(batch) === "NGN" ? batch.data.expectedFeeKobo !== sum("expectedFeeKobo") : batch.data.expectedFeeKobo !== undefined || batch.data.feeVarianceKobo !== undefined) problems.push(`batch ${batch.reference}: its expected fee does not follow its currency's fee schedule`);
+    for (const id of (batch.data.otherCurrencyLineIds ?? []) as string[]) {
+      const line = byId.get(id);
+      if (!line || currency(line) === currency(batch) || line.data.otherCurrencyLine !== true || line.data.settlementBatchId !== batch.id) problems.push(`batch ${batch.reference}: line ${line?.reference} is kept apart but is not a line in another currency`);
+      if (!recordsOf(state, "exceptions").some((item) => item.data.condition === `settlement_variance:${batch.id}:currency:${id}` || ((item.data.otherCurrencyLines ?? []) as string[]).includes(`settlement_variance:${batch.id}:currency:${id}`))) problems.push(`batch ${batch.reference}: line ${line?.reference} in another currency was not reported`);
+    }
+  }
   // An exception names the currency of the money it is about (the payment or evidence it links to, or the payment a
-  // report of a collection counted in two batches names), and one about naira names none.
+  // report of a collection counted in two batches, or of a line in another currency, names), and one about naira names none.
   for (const e of recordsOf(state, "exceptions")) {
     const linked = byId.get(String(e.data.linkedRecordId ?? ""));
     const [, , report, named] = String(e.data.condition ?? "").split(":");
-    const line = report === "line" ? byId.get(String(named)) : undefined;
+    const line = report === "line" || report === "currency" ? byId.get(String(named)) : undefined;
     const money = linked?.kind === "payments" || linked?.kind === "observations" ? linked : linked?.kind === "settlement-batches" ? byId.get(report === "counted" ? String(named) : String(line?.data.paymentId ?? "")) : undefined;
     const currency = String(money?.data.currency || "NGN").trim().toUpperCase();
     if (e.data.currency !== (currency === "NGN" ? undefined : currency)) problems.push(`exception ${e.data.type} on ${linked?.reference}: currency ${e.data.currency} is not its money's ${currency}`);
@@ -1326,8 +1341,9 @@ function propertyRun(seeds: number, steps: number) {
       transfer: () => { const due = pick(dues())!; counter++; addObservation(state, { reference: rand() < 0.2 && payments().length ? pick(payments())!.reference : `T-${seed}-${counter}`, amountKobo: rand() < 0.5 ? due.amountKobo : Math.max(1, Math.floor(due.amountKobo * (0.3 + rand()))), source: rand() < 0.7 ? "transfer" : "card", customerId: rand() < 0.85 ? due.customerId : "", eventId: `e-${counter}`, occurredAt: at(), narration: rand() < 0.5 ? `pay ${due.reference}` : undefined }); },
       foreign: () => { const due = pick(dues())!; counter++; addObservation(state, { reference: rand() < 0.5 && payments().length ? pick(payments())!.reference : `F-${seed}-${counter}`, amountKobo: due.amountKobo, source: "card", customerId: due.customerId, eventId: `e-${counter}`, occurredAt: at(), ...(rand() < 0.5 ? { provider: "Other Rail" } : { currency: "USD" }) } as any); },
       settlement: () => { const target = pick(payments().filter((item) => item.data.channel === "direct_debit")); counter++; const due = pick(dues())!; const gross = target && rand() < 0.7 ? target.amountKobo : due.amountKobo; const fee = Math.min(100_000, Math.floor(gross * 50 / 10_000)); addObservation(state, { reference: target && gross === target.amountKobo ? target.reference : `S-${seed}-${counter}`, amountKobo: gross - fee, grossAmountKobo: gross, feeKobo: fee, batchReference: `B-${seed}-${Math.floor(counter / 4) - (rand() < 0.2 ? 1 : 0)}`, source: "settlement", customerId: rand() < 0.7 ? target?.customerId ?? due.customerId : "", eventId: `e-${counter}`, occurredAt: at() }); },
+      foreignLine: () => { const usd = payments().filter((item) => item.data.currency === "USD"); const due = pick(dues())!; counter++; const target = rand() < 0.5 ? pick(usd) : undefined; const gross = target?.amountKobo ?? due.amountKobo, fee = Math.min(100_000, Math.floor(gross * 50 / 10_000)); addObservation(state, { reference: target?.reference ?? `SU-${seed}-${counter}`, amountKobo: gross - fee, grossAmountKobo: gross, feeKobo: fee, batchReference: `B-${seed}-${Math.floor(counter / 4) - (rand() < 0.3 ? 1 : 0)}`, source: "settlement", customerId: target?.customerId || due.customerId, eventId: `e-${counter}`, occurredAt: at(), currency: "USD" } as any); },
       noPayerLine: () => { const attempt = pick(recordsOf(state, "attempts").filter((item) => item.data.providerReference)); if (!attempt) return; counter++; const gross = attempt.amountKobo, fee = Math.min(100_000, Math.floor(gross * 50 / 10_000)); addObservation(state, { reference: String(attempt.data.providerReference), amountKobo: gross - fee, grossAmountKobo: gross, feeKobo: fee, batchReference: `BN-${seed}-${Math.floor(counter / 3)}`, source: "settlement", customerId: "", eventId: `e-${counter}`, occurredAt: at() }); },
-      statement: () => { const batch = pick(recordsOf(state, "settlement-batches")); if (!batch) return; counter++; addObservation(state, { reference: rand() < 0.3 ? `ST-${batch.reference}` : `ST-${seed}-${counter}`, amountKobo: Math.max(1, rand() < 0.6 ? Number(batch.data.netKobo || 1) : Math.floor(Number(batch.data.netKobo || 2) / 2)), batchReference: batch.reference, source: "statement", eventId: `e-${counter}`, occurredAt: at() }); },
+      statement: () => { const batch = pick(recordsOf(state, "settlement-batches")); if (!batch) return; counter++; addObservation(state, { reference: rand() < 0.3 ? `ST-${batch.reference}` : `ST-${seed}-${counter}`, amountKobo: Math.max(1, rand() < 0.6 ? Number(batch.data.netKobo || 1) : Math.floor(Number(batch.data.netKobo || 2) / 2)), batchReference: batch.reference, source: "statement", eventId: `e-${counter}`, occurredAt: at(), ...(rand() < 0.15 ? { currency: batch.data.currency === "USD" ? "NGN" : "USD" } : batch.data.currency === "USD" ? { currency: "USD" } : {}) } as any); },
       reversal: () => { const target = pick(payments().filter((item) => item.data.canonical)); if (!target) return; counter++; addObservation(state, { reference: target.reference, amountKobo: target.amountKobo, source: "webhook", customerId: target.customerId, eventId: `rev-${counter}`, reversed: true, occurredAt: at(), provider: String(target.data.providerConnection || "Sandbox Rail"), currency: String(target.data.currency || "NGN") } as any); },
       reconcile: () => { reconcile(state, finance(at())); },
       close: () => { executeAction(state, finance(at()), { action: "daily_close" }); },
@@ -1341,7 +1357,7 @@ function propertyRun(seeds: number, steps: number) {
       a2a: () => { const due = pick(dues())!; const owed = outstandingOf(due); if (owed <= 0) return; const ops = ctxAt(at(), "Operations"); const intent = runConnectedAction(state, ops, { action: "payment.create", reason: "Pay by bank.", expectedRevision: connectedRevision(state), data: { dueItemId: due.id, amountKobo: Math.max(1, Math.floor(owed * (rand() < 0.6 ? 1 : rand()))) } } as any) as ValopayRecord; runConnectedAction(state, ops, { action: "payment.authorise", recordId: intent.id, reason: "Authorised.", expectedRevision: connectedRevision(state), data: {} } as any); runConnectedAction(state, ops, { action: "payment.outcome", recordId: intent.id, reason: "Confirmed.", expectedRevision: connectedRevision(state), data: { outcome: "confirmed" } } as any); },
       attempt: () => { const due = pick(dues().filter((d) => !recordsOf(state, "attempts").some((a) => a.data.dueItemId === d.id && ["scheduled", "sent", "unknown"].includes(a.status)))); if (!due) return; counter++; addAttempt(state, due, { status: rand() < 0.5 ? "unknown" : "sent", occurredAt: at(), providerReference: `PR-${seed}-${counter}` }); },
     };
-    const weights: [string, number][] = [["webhook", 5], ["transfer", 5], ["foreign", 2], ["settlement", 3], ["noPayerLine", 2], ["statement", 2], ["reversal", 1], ["reconcile", 6], ["close", 2], ["confirm", 3], ["reject", 1], ["manual", 4], ["refund", 2], ["review", 2], ["amend", 1], ["resolve", 3], ["a2a", 1], ["attempt", 2]];
+    const weights: [string, number][] = [["webhook", 5], ["transfer", 5], ["foreign", 2], ["settlement", 3], ["foreignLine", 2], ["noPayerLine", 2], ["statement", 2], ["reversal", 1], ["reconcile", 6], ["close", 2], ["confirm", 3], ["reject", 1], ["manual", 4], ["refund", 2], ["review", 2], ["amend", 1], ["resolve", 3], ["a2a", 1], ["attempt", 2]];
     const total = weights.reduce((sum, [, weight]) => sum + weight, 0);
     for (let step = 0; step < steps; step++) {
       clock += Math.floor(rand() * 6 * HOUR) + 60_000;

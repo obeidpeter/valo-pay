@@ -58,6 +58,19 @@ export function countedTwiceEffect(exception: ValopayRecord): string | undefined
     : `This exception also carries ${formatNumber(reports)} of the provider's reports of collections counted in two settlement batches. Resolving it settles those reports too, whichever outcome you record: they are not raised again, so check both payouts of each with the provider first.`;
 }
 
+/**
+ * What any resolution also does to an exception that carries reports of settlement lines in another currency than their
+ * batch (data.otherCurrencyLines, reports the service added to it while it was open for their batch): it settles them,
+ * so none is raised again. Undefined for an exception that carries none.
+ */
+export function otherCurrencyLinesEffect(exception: ValopayRecord): string | undefined {
+  const reports = Array.isArray(exception.data?.otherCurrencyLines) ? exception.data.otherCurrencyLines.length : 0;
+  if (!reports) return undefined;
+  return reports === 1
+    ? 'This exception also carries the report of a settlement line in another currency than its batch, which the batch does not count. Resolving it settles that report too, whichever outcome you record: it is not raised again, so check with the provider which batch pays the line out first.'
+    : `This exception also carries ${formatNumber(reports)} reports of settlement lines in another currency than their batch, which the batch does not count. Resolving it settles those reports too, whichever outcome you record: they are not raised again, so check with the provider which batch pays each line out first.`;
+}
+
 export function ExceptionContext({ exception, customer, resolutionCode, resolving }: { exception: ValopayRecord; customer?: ValopayRecord; resolutionCode?: unknown; resolving: boolean }) {
   const type = resolveExceptionType(exception.data?.type);
   const lender = new URLSearchParams({ lender: exception.merchantId });
@@ -78,7 +91,7 @@ export function ExceptionContext({ exception, customer, resolutionCode, resolvin
     : type === 'customer_dispute'
       ? 'Not upheld takes the instalment out of dispute: its status then follows its balance, and collection and allocation resume. Upheld or mandate cancelled keeps it in dispute until Finance releases it from dispute on the Collections page. No money moves.'
       : resolutionEffect(exception, resolutionCode) ?? 'Resolving this exception records your outcome and reason. It does not allocate a payment, issue a refund, reissue a mandate or move money. Complete any required action in its workflow and include its evidence reference in your reason.';
-  const carried = countedTwiceEffect(exception);
+  const carried = [countedTwiceEffect(exception), otherCurrencyLinesEffect(exception)].filter(Boolean).join(' ') || undefined;
   return <section aria-label="Exception context" className="space-y-3 rounded-lg border bg-secondary/10 p-4 text-sm">
     <div><h3 className="font-semibold">{readableLabel(exception.data?.type)}</h3><p className="mt-1 font-mono text-xs">{exception.reference || exception.id}</p></div>
     <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2"><dt className="text-muted-foreground">Customer</dt><dd className="min-w-0 break-words">{customer ? `${customer.name} · ${customer.reference}` : exception.customerId ? `Customer ${exception.customerId} (name unavailable)` : 'No customer linked'}</dd><dt className="text-muted-foreground">Amount</dt><dd className="font-semibold">{formatRecordMoney(exception, exception.amountKobo)}</dd><dt className="text-muted-foreground">Owner</dt><dd>{String(exception.data?.owner || 'Unassigned')}</dd>{Boolean(exception.data?.dueBy) && <><dt className="text-muted-foreground">Deadline</dt><dd>{formatDate(String(exception.data.dueBy))}</dd></>}</dl>

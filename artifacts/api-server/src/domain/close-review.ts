@@ -1,4 +1,4 @@
-import { counted, otherCurrenciesText, prepareCloseReviewSchema, decideCloseReviewSchema, legacyCollatedCompare, type PrepareCloseReviewInput, type DecideCloseReviewInput, type PilotProgressStep } from "@workspace/valopay-schema";
+import { counted, hasFeeSchedule, moneyText, otherCurrenciesText, prepareCloseReviewSchema, decideCloseReviewSchema, legacyCollatedCompare, type PrepareCloseReviewInput, type DecideCloseReviewInput, type PilotProgressStep } from "@workspace/valopay-schema";
 import type { Context, DomainState, ValopayRecord } from "./types";
 import { makeRecord, touch } from "./records";
 import { assertRecordVersion } from "../lib/edit-versions";
@@ -54,7 +54,8 @@ export function bindCloseReviewBasis(state: DomainState, close: ValopayRecord) {
 }
 export function closeReviewIssues(close: ValopayRecord): CloseReviewIssue[] {
   const report = close.data.report || {}, issues: CloseReviewIssue[] = [];
-  for (const batch of report.variances?.batches || []) issues.push({ id: `variance:${batch.batchId}`, label: `Settlement difference · ${batch.reference || batch.batchId}`, detail: `Fee difference: ${batch.feeVarianceKobo || 0} kobo. Compare the provider and statement totals.`, unresolved: false });
+  // Each batch in its own currency (a close before currencies were kept lists naira batches only); fees are checked in naira alone.
+  for (const batch of report.variances?.batches || []) issues.push({ id: `variance:${batch.batchId}`, label: `Settlement difference · ${batch.reference || batch.batchId}`, detail: `${hasFeeSchedule(batch.currency || "NGN") ? `Fee difference: ${batch.feeVarianceKobo || 0} kobo.` : `Fees not checked: there is no fee schedule for ${batch.currency}. Net total: ${moneyText(Number(batch.netKobo || 0), batch.currency)}.`} Compare the provider and statement totals.`, unresolved: false });
   if (report.variances?.count && !report.variances.batches?.length) issues.push({ id: "settlement-variance", label: "Settlement differences", detail: `${counted(Number(report.variances.count), "difference was", "differences were")} recorded.`, unresolved: false });
   for (const mismatch of report.positionRebuild?.mismatches || []) issues.push({ id: `position:${mismatch.dueItemId}`, label: `Customer total difference · ${mismatch.reference || mismatch.dueItemId}`, detail: `Stored outstanding: ${mismatch.storedOutstandingKobo} kobo; rebuilt: ${mismatch.rebuiltOutstandingKobo} kobo.`, unresolved: false });
   for (const [key, label] of [["unallocated", "Unallocated payments"], ["proposed", "Payment matches awaiting confirmation"], ["possibleDuplicates", "Possible duplicate payments"]]) {

@@ -18,7 +18,8 @@ import {
   formatKobo,
   formatNumber,
 } from "@/lib/formatters";
-import { formatWithOtherCurrencies } from "@/lib/currencies";
+import { formatWithOtherCurrencies, otherCurrencyEntries } from "@/lib/currencies";
+import { hasFeeSchedule } from "@workspace/valopay-schema";
 import { Button } from "./ui/button";
 import { RecordPagination } from "./record-pagination";
 import { LoadProblem, RefreshProblem } from "./load-problem";
@@ -39,6 +40,12 @@ function CloseEvidence({ close }: { close: ValopayRecord }) {
   // The payments the report counts, their naira, and any money in another currency in that currency, never added to the naira.
   const money = (value: any) =>
     `${count(value?.count)} · ${formatWithOtherCurrencies(Number(value?.kobo || 0), value?.otherCurrencies, "payment")}`;
+  // The batches in variance and the fee differences of the naira ones; a batch in another currency is listed apart, in its
+  // currency, and where no fee schedule exists for that currency its fees were not checked, so it has no fee difference.
+  const differences = (value: any) => {
+    const amounts = [formatKobo(Number(value?.feeVarianceKobo || 0)), ...otherCurrencyEntries(value?.otherCurrencies, "batch", "batches").map(({ code, money, counted }) => hasFeeSchedule(code) ? `${money} (${counted})` : `${counted} in ${code}, fees not checked`)];
+    return `${count(value?.count)} · ${amounts.length === 1 ? amounts[0] : `${amounts.slice(0, -1).join(", ")} and ${amounts.at(-1)}`}`;
+  };
   const measures = report
     ? [
         ["Unmatched at start", money(report.openingUnallocated)],
@@ -66,10 +73,7 @@ function CloseEvidence({ close }: { close: ValopayRecord }) {
           "Unmatched at close",
           `${money(report.unallocated)} · ${count(report.unallocated?.olderThan24Hours)} older than 24 hours`,
         ],
-        [
-          "Settlement differences",
-          `${count(report.variances?.count)} · ${formatKobo(Number(report.variances?.feeVarianceKobo || 0))}`,
-        ],
+        ["Settlement differences", differences(report.variances)],
         [
           "Exceptions",
           `${count(report.exceptions?.opened?.count)} opened · ${count(report.exceptions?.closed?.count)} closed · ${count(report.exceptions?.openAtClose)} open`,

@@ -234,7 +234,7 @@ function assertOnePayment(state: DomainState, due: ValopayRecord, label: string)
   addObservation(state, { reference: "HAND-L1", amountKobo: NET, grossAmountKobo: GROSS, feeKobo: FEE, batchReference: "B-HAND", source: "settlement", customerId: due.customerId, dueItemId: due.id, eventId: "hand-l1", occurredAt: wat("2027-07-01T07:00:00") });
   assert.doesNotThrow(() => executeAction(state, finance(wat("2027-07-01T09:00:00")), { action: "daily_close" }), "the provider's line does not stop the close");
   assert.deepEqual([batch.status, batch.data.lineObservationIds?.length, batch.data.grossKobo, batch.data.feeKobo, batch.data.netKobo, batch.data.expectedFeeKobo], ["reconciled", 1, GROSS, FEE, NET, FEE], "the provider's lines rebuild the totals");
-  assert.deepEqual(batch.data.enteredTotals, typed, "and the totals Finance typed are kept beside them");
+  assert.deepEqual(batch.data.enteredTotals, { ...typed, currency: "NGN" }, "and the totals Finance typed are kept beside them, with their currency");
   assert.equal(due.status, "paid", "the line's payment is matched as usual");
   // PostgreSQL's jsonb returns the typed totals' keys in its own order; an edit that leaves them as stored is still accepted.
   const { grossKobo, feeKobo, netKobo } = batch.data.enteredTotals!;
