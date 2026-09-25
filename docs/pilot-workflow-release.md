@@ -4,7 +4,7 @@ This release connects lender setup, saved import batches, reconciliation, coordi
 
 ## Design decisions
 
-- Keep original mutation requests and atomic completion receipts in a lender- and user-scoped server journal. A reload can discover received requests and retry the exact stored request. No request bodies or credentials are written to browser storage. A pending journal entry means completion is not confirmed; it does not mean a payment failed.
+- Keep original mutation requests and atomic completion receipts in a lender- and user-scoped server journal. A reload can discover received requests in Operations, which summarises what each asked and links to its record, and retry the exact stored request; the navigation's Operations link counts the pending ones. Recovery stays manual: a reloaded form does not look up its own request. No request bodies or credentials are written to browser storage. A pending journal entry means completion is not confirmed; it does not mean a payment failed.
 - Save imports as versioned batches, including their source namespace, immutable source-row identities, mapping, amount unit, checks and committed record links. Corrections require the current batch version. Commit remains all-or-nothing. Similar rows with different source identities remain separate records.
 - Coordinate existing exceptions using a named assignee, next action, deadline, linked evidence and append-only handover history. Case handling cannot replace Finance allocation or policy approval. Concurrent updates require the version the operator reviewed.
 - In staging staff mode, resolve the organisation and active membership on the server for every transaction, hold membership/organisation locks through commit, require a verified Clerk session and both MFA factors, and use the stable user identity in approval checks. Demo role switching is unavailable. Invitations are manually shared, expire, and require a verified matching email. No email is sent by this release.
@@ -16,7 +16,7 @@ Create an empty synthetic lender → save/check/correct an import batch → comm
 
 ## Deployment boundary
 
-Apply the additive schema to a disposable database first. Verify the code and migration before applying them to the existing synthetic development preview. Keep the pull request draft. Production, live financial operations, external email, real customer ingestion and real Clerk/provider acceptance are separate gates.
+Apply the additive schema to a disposable database first. Verify the code and migration before applying them to the existing synthetic development preview. The code reaches main in one pull request from the development branch, codex/investor-presentation, which supersedes the stack of open draft pull requests #48 to #51 and #53. Production, live financial operations, external email, real customer ingestion and real Clerk/provider acceptance are separate gates.
 
 The forced-RLS rehearsal of the time, since removed, was independent of this application repository. This release must not claim forced row security protects the default runtime. Staff access supplements the repository's explicit workspace/lender predicates and requires an independent security review before real data.
 
@@ -64,8 +64,9 @@ All paths below are beneath `/api/v1`. Lender paths require `merchantId`; paged 
 | Endpoint | Contract and permissions |
 | --- | --- |
 | `GET /pilot/journey` | Saved lender counts, synthetic-only marker and access mode |
-| `POST /pilot/lenders` | Admin (a staff host also requires recent MFA); name and segment; required idempotency key; creates an empty synthetic lender with automatic close disabled; a sandbox workspace holds at most five lenders (409 beyond) |
-| `GET /operations` | This caller's request summaries and receipts, without stored bodies |
+| `POST /pilot/lenders` | Admin (a staff host also requires recent MFA); name and segment; required idempotency key; creates an empty synthetic lender with automatic close disabled; a sandbox workspace holds at most five lenders (409 beyond); a name that matches a lender already in the workspace, ignoring letter case and surrounding or repeated spaces, is refused with 409 naming that lender. Not journaled: the page asks before it is left or reloaded while a creation is being sent or unconfirmed |
+| `GET /operations` | This caller's requests, 25 to a page, each with its `summary` (the action or route in words, the record it names and at most three short fields), status and receipt, without stored bodies; a request sealed by payload encryption has no summary |
+| `GET /operations/pending` | The number of this caller's pending requests in the lender, which the navigation shows beside Operations |
 | `POST /operations/:id/retry` | Uses the exact saved request and key; requires the original actor and role plus current permission |
 | `POST /operations/:id/cancel` | Serialises with the lender transaction; refuses completed work and blocks future execution |
 | `GET /pilot/batches` | Paged summaries without CSV or row previews |
@@ -85,7 +86,7 @@ All paths below are beneath `/api/v1`. Lender paths require `merchantId`; paged 
 | `POST /team/accept` | Verified matching email and organisation, fresh MFA and an unused invitation token; an Admin, Finance or Compliance reviewer invitation must be approved first |
 | `POST /team/verify` | Clerk reverification challenge; does not grant membership or execute a financial request |
 
-Journal entries survive reload and restart once received by the server. Anonymous history still depends on its sandbox cookie and existing workspace expiry; signed-in history follows the account. Requests that never reached the service cannot be recovered. Pending entries can be retried or cancelled; a cancelled entry never completes afterwards, even if an attempt with its key was already running. Validation failures do not prove a financial transaction occurred. At most 100 unfinished requests per caller/lender may be retained. Completed journal payloads currently follow workspace retention; review a separate retention policy before any real-data pilot.
+Journal entries survive reload and restart once received by the server. Only a keyed write is journaled; every console write carries a key. Team, access and lender set-up and the demo role switch are not journaled. Anonymous history still depends on its sandbox cookie and existing workspace expiry; signed-in history follows the account. Requests that never reached the service cannot be recovered. Pending entries can be retried or cancelled; a cancelled entry never completes afterwards, even if an attempt with its key was already running. Validation failures do not prove a financial transaction occurred. At most 100 unfinished requests per caller/lender may be retained. Completed journal payloads currently follow workspace retention; review a separate retention policy before any real-data pilot.
 
 Staff membership changes take the organisation lock before the member lock. Financial writes retain a shared organisation lock through commit, so revocation waits for already-authorised work and blocks later work. This does not claim to cancel a transaction that had already started.
 
