@@ -170,6 +170,7 @@ function LenderImports() {
       <PilotPanel title="Saved batches">
         <PilotError
           error={list.error}
+          pager="import batches"
           retry={() => {
             void list.refetch();
           }}

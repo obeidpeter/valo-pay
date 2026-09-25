@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
 
 // Focus, headings and the presentation guide in a real browser (audit of 23
@@ -431,3 +431,57 @@ test("confirming Revoke access moves focus to what the revocation did once it is
   await expect(card.getByText(/^Operations · revoked/)).toBeVisible();
   await expect.poll(() => focused(page)).toMatchObject({ tag: "p", text: expect.stringMatching(/^Chidi Ops’s access is revoked\./) });
 });
+
+// Fourth review of the audit fixes, findings 1 and 2: a failed page sent focus to whichever problem notice rendered first,
+// here the proposed matches' behind the allocation dialog, and Try again on a failed page dropped focus to the page body.
+const badGateway = { status: 502, contentType: "text/html", body: "<html>Bad gateway</html>" };
+/**
+ * With the second page's answer failing, pages by keyboard and presses the notice's Try again twice: while the service
+ * still fails, the notice goes as the page loads and then takes the focus back; once it answers, the page arrives and
+ * the pager control pressed takes the focus back. A 5xx is tried three times, over about three seconds, before it shows.
+ */
+async function tryAgainKeepsFocus(page: Page, scope: Page | Locator, label: string, answer: { failing: boolean }) {
+  await scope.getByRole("button", { name: `Next page of ${label}` }).focus();
+  await page.keyboard.press("Enter");
+  const retry = scope.getByRole("alert").filter({ hasText: `Unable to load ${label}` }).getByRole("button", { name: "Try again" });
+  await expect(retry).toBeFocused({ timeout: 15_000 });
+  await page.keyboard.press("Enter");
+  await expect(retry).toHaveCount(0);
+  await expect(retry).toBeFocused({ timeout: 15_000 });
+  answer.failing = false;
+  await page.keyboard.press("Enter");
+  await expect(scope.getByText(new RegExp(`^26–50 of [\\d,]+ ${label}$`))).toBeVisible();
+  await expect(scope.getByRole("button", { name: `Next page of ${label}` })).toBeFocused();
+}
+
+test("a failed page of the allocation picker moves focus to its own notice, inside its dialog, and Try again keeps it", async ({ page }) => {
+  // The proposed matches cannot be read at all, so their table behind the dialog shows its problem notice.
+  await page.route(/\/api\/v1\/reconciliation\/proposals\?/, (route) => route.fulfill(badGateway));
+  const answer = { failing: true };
+  await page.route(/\/api\/v1\/records\/due-items\?.*allocatable=true/, async (route) => {
+    if (new URL(route.request().url()).searchParams.get("offset") !== "25") return route.fallback();
+    return answer.failing ? route.fulfill(badGateway) : route.fallback();
+  });
+  await page.goto("/reconciliation");
+  await expect(page.getByText(/^Proposed matches could not be loaded/)).toBeVisible();
+  await page.getByRole("row").filter({ hasText: "SBX-UNIDENTIFIED-001" }).getByRole("button", { name: "Allocate", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Allocate payment" });
+  await expect(dialog.getByText(/^1–25 of [\d,]+ instalment choices$/)).toBeVisible();
+  await tryAgainKeepsFocus(page, dialog, "instalment choices", answer);
+  expect(await dialog.evaluate((node) => node.contains(document.activeElement))).toBe(true);
+});
+
+test("Try again on a page of Customers that failed keeps the focus, whether the page fails again or arrives", async ({ page, request }) => {
+  const lender = (await (await request.get("/api/v1/workspace")).json()).merchants[0].id;
+  const rows = Array.from({ length: 60 }, (_, i) => `Pager customer ${String(i).padStart(2, "0")},E2E-RETRY-${i},Synthetic consent,Sandbox Bank,•••• 0001`);
+  expect((await request.post(`/api/v1/imports?merchantId=${lender}`, { data: { kind: "customers", csv: "name,reference,consentProvenance,bankName,accountMasked\n" + rows.join("\n"), mapping: {}, syntheticOnly: true, commit: true } })).ok()).toBeTruthy();
+  const answer = { failing: true };
+  await page.route(/\/api\/v1\/records\/customers\?/, async (route) => {
+    if (new URL(route.request().url()).searchParams.get("offset") !== "25") return route.fallback();
+    return answer.failing ? route.fulfill(badGateway) : route.fallback();
+  });
+  await page.goto("/customers");
+  await expect(page.getByText(/^1–25 of [\d,]+ customers$/)).toBeVisible();
+  await tryAgainKeepsFocus(page, page, "customers", answer);
+});
+

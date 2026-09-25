@@ -30,10 +30,10 @@ export default function CollectionsPage() {
   const { merchantId } = useWorkspace();
   const [importOpen, setImportOpen] = useState(false);
   const [actionError, setActionError] = useState('');
-  // The queue's problem notice, which takes the pager's focus when a page press fails.
-  const listProblem = useRef<HTMLDivElement>(null);
-  usePageProblemFocus(listProblem);
   const { view, owner, setView, setOwner } = useQueueFilters(collectionViews, 'all');
+  // The queue's problem notice, which takes the pager's focus when a page press fails.
+  const listProblem = useRef<HTMLDivElement>(null), listLabel = view === 'failed' ? 'failed attempts' : 'instalments';
+  const listAgain = usePageProblemFocus(listProblem, listLabel);
   const [search] = useSearchParams();
   const targetHash = useLocationProperty(() => window.location.hash);
   
@@ -165,7 +165,7 @@ export default function CollectionsPage() {
                   {isLoadingDue || isLoadingAttempts ? (
                     <LoadingRow colSpan={7} what="collections" />
                   ) : dueError && !data ? (
-                    <tr><td colSpan={7} className="p-6"><div ref={listProblem} role="alert"><p>Collections could not be loaded completely.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => { refetchDue(); refetchAttempts(); }}>Try again</Button></div></td></tr>
+                    <tr><td colSpan={7} className="p-6"><div ref={listProblem} role="alert"><p>Collections could not be loaded completely.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => { listAgain(); refetchDue(); refetchAttempts(); }}>Try again</Button></div></td></tr>
                   ) : displayed.length === 0 ? (
                     <EmptyRow colSpan={7} title={search.get('q')?.trim() ? 'No results match your search' : view === 'all' && !owner ? 'No instalments recorded' : 'No collections match these filters'}>{search.get('q')?.trim() ? 'Try another name or reference, or clear the search. Your status and owner filters will stay selected.' : view === 'all' && !owner ? 'Open Import sample data to add synthetic instalments using a sample CSV.' : 'Choose All instalments and All owners to see the full list.'}</EmptyRow>
                   ) : (
@@ -188,7 +188,7 @@ export default function CollectionsPage() {
                 </tbody>
               </table>
             </ScrollFrame>
-            {!isLoadingDue && !isLoadingAttempts && !dueError && !attemptsError && <RecordPagination pagination={pagination} total={data?.total || 0} busy={queue.isPlaceholderData} label={view === 'failed' ? 'failed attempts' : 'instalments'} />}
+            {!isLoadingDue && !isLoadingAttempts && !dueError && !attemptsError && <RecordPagination pagination={pagination} total={data?.total || 0} busy={queue.isPlaceholderData} label={listLabel} />}
           </section>
         </div>
       </div>

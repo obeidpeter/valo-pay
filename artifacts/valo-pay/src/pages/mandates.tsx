@@ -49,7 +49,7 @@ export default function MandatesPage() {
   const pendingErrorFocus = useRef<string | null>(null);
   // The queue's problem notice, which takes the pager's focus when a page press fails.
   const listProblem = useRef<HTMLDivElement>(null);
-  usePageProblemFocus(listProblem);
+  const listAgain = usePageProblemFocus(listProblem, 'mandates');
   const { view, setView } = useQueueFilters(mandateViews, 'all');
   const [search, setSearch] = useSearchParams();
   const targetId = search.get('record');
@@ -211,7 +211,7 @@ export default function MandatesPage() {
         {isLoading ? (
           <Loading what="mandates" />
         ) : error ? (
-          <div ref={listProblem} role="alert" className="p-6 text-sm"><p>Mandates could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => refetch()}>Try again</Button></div>
+          <div ref={listProblem} role="alert" className="p-6 text-sm"><p>Mandates could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => { listAgain(); void refetch(); }}>Try again</Button></div>
         ) : targetId && shown.length === 0 ? (
           <EmptyState title={wrongLender ? 'This mandate link belongs to another lender' : 'The selected mandate is unavailable'} action={<Button size="sm" variant="outline" onClick={leaveSelectedRecord}>View mandate queue</Button>}>
             {wrongLender ? 'Switch to the lender you were reviewing to open this record.' : 'The record could not be found for the active lender. Return to collections to check its linked mandate.'}
@@ -313,7 +313,7 @@ export default function MandatesPage() {
               <div className="space-y-2">
                 <label className="grid gap-1 text-sm font-medium">Search customers<input type="search" value={customerSearch} onKeyDown={searchWithoutSubmitting} onChange={event => { setCustomerSearch(event.target.value); customerPage.setPage(0); }} placeholder="Name or reference" className={controlClass} /></label>
                 <MandateSelect label="Customer" value={draft.customerId} id="mandate-customerId" error={fieldErrors.customerId} onChange={value => { change('customerId', value); setChosenCustomer(customerOptions.find(option => option.value === value) ?? null); }} required options={customerOptions} />
-                {customersError ? <LoadProblem what="customer choices" error={customersError} retry={() => { void retryCustomers(); }} busy={fetchingCustomers} /> : <>
+                {customersError ? <LoadProblem what="customer choices" pager="customer choices" error={customersError} retry={() => { void retryCustomers(); }} busy={fetchingCustomers} /> : <>
                   {(fetchingCustomers || customerSearchPending) && <p role="status" className="text-xs text-muted-foreground">Loading customer choices…</p>}
                   {customers && !customerSearchPending && <RecordPagination pagination={customerPage} total={customers.total} busy={fetchingCustomers} label="customer choices" />}
                 </>}

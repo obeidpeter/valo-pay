@@ -47,7 +47,7 @@ export default function ExceptionsPage() {
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   // The queue's problem notice, which takes the pager's focus when a page press fails.
   const listProblem = useRef<HTMLDivElement>(null);
-  usePageProblemFocus(listProblem);
+  const listAgain = usePageProblemFocus(listProblem, 'exceptions');
   useEffect(() => { setSelectedEx(null); setIsDialogOpen(false); setResolved(null); }, [merchantId]);
   /** WAI-ARIA tabs: one tab stop for the group, arrows and Home/End move the selection and the focus together. */
   const onTabKeyDown = (event: React.KeyboardEvent, index: number, keys: Array<typeof filter>) => {
@@ -131,7 +131,7 @@ export default function ExceptionsPage() {
         {isLoading ? (
           <Loading what="exceptions" />
         ) : error && !data ? (
-          <div ref={listProblem} role="alert" className="p-6 text-sm"><p>Exceptions could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => refetch()}>Try again</Button></div>
+          <div ref={listProblem} role="alert" className="p-6 text-sm"><p>Exceptions could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => { listAgain(); void refetch(); }}>Try again</Button></div>
         ) : targetId && items.length === 0 ? (
           <EmptyState title={wrongLender ? 'This exception link belongs to another lender' : 'The selected exception is unavailable'} action={<Button size="sm" variant="outline" onClick={leaveSelectedRecord}>View exception queue</Button>}>
             {wrongLender ? 'Switch to the lender you were reviewing to open this exception.' : 'It could not be found for the active lender. Open the exception queue to find it.'}

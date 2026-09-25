@@ -54,22 +54,26 @@ export const UNJOURNALED_WRITE_PROBLEM =
  * different fallbacks: a failed read changed nothing and is simply tried
  * again, while a change may have been saved and is checked where it is
  * recorded (`READ_PROBLEM` by default). A read's problem that took the place
- * of its list's page buttons after a page press takes their focus.
+ * of its list's page buttons after a page press takes their focus, where
+ * `pager` names them (usePageProblemFocus).
  */
 export function PilotError({
   error,
   retry,
   fallback = READ_PROBLEM,
   noticeRef,
+  pager,
 }: {
   error: unknown;
   retry?: () => void;
   fallback?: string;
   /** The notice, for a page that moves focus to it. */
   noticeRef?: RefObject<HTMLDivElement | null>;
+  /** The label of the list's page buttons that this notice takes the place of when a page fails. */
+  pager?: string;
 }) {
   const notice = useRef<HTMLDivElement>(null);
-  usePageProblemFocus(notice);
+  const again = usePageProblemFocus(notice, pager);
   return error ? (
     <div
       ref={(element) => {
@@ -81,7 +85,14 @@ export function PilotError({
     >
       <p>{saidBy(error, fallback)}</p>
       {retry && (
-        <Button className="mt-3" variant="outline" onClick={retry}>
+        <Button
+          className="mt-3"
+          variant="outline"
+          onClick={() => {
+            again();
+            retry();
+          }}
+        >
           Try again
         </Button>
       )}

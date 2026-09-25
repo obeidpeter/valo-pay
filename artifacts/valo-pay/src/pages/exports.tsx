@@ -37,7 +37,7 @@ function SavedExports() {
   const statusOptions = [['all','All exports'],...Object.entries(exportStatusLabels)];
   return <div className="space-y-6">
     <PilotHeading title="Saved exports">Check file preparation, recover stalled jobs and download verified evidence for the selected lender. Retrying keeps the original job and file identity.</PilotHeading>
-    <PilotError error={list.error || focused.error} retry={() => { void list.refetch(); if(requested)void focused.refetch(); }} />
+    <PilotError error={list.error || focused.error} pager="saved exports" retry={() => { void list.refetch(); if(requested)void focused.refetch(); }} />
     <div className="flex flex-wrap items-end justify-between gap-3"><label className="space-y-2 text-sm font-medium">Export status<select className={pilotField} value={status} onChange={event => change(event.target.value, 0)}>{statusOptions.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><Button variant="outline" onClick={() => { void list.refetch(); if(requested)void focused.refetch(); }}>Refresh saved exports</Button></div>
     {list.isLoading && <p role="status">Loading saved export jobs…</p>}
     <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(16rem,1fr)_minmax(0,1.5fr)]">

@@ -241,6 +241,7 @@ export function CloseHistorySection({ active }: { active: boolean }) {
         ) : query.error && !query.data ? (
           <LoadProblem
             what="daily close history"
+            pager="recorded closes"
             error={query.error}
             retry={() => {
               void query.refetch();

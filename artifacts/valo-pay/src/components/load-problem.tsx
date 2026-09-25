@@ -4,15 +4,18 @@ import { usePageProblemFocus } from '@/components/record-pagination';
 import { formatDate } from '@/lib/formatters';
 import { saidBy } from '@/lib/notify';
 
-/** A failed request is never presented as an empty list; one that took a list's pager after a page press takes its focus. */
-export function LoadProblem({ what, error, retry, busy = false }: { what: string; error: unknown; retry: () => void; busy?: boolean }) {
+/**
+ * A failed request is never presented as an empty list. One that took the place of a list's pager after a page press
+ * takes its focus: `pager` names that pager (usePageProblemFocus).
+ */
+export function LoadProblem({ what, error, retry, busy = false, pager }: { what: string; error: unknown; retry: () => void; busy?: boolean; pager?: string | readonly string[] }) {
   const notice = useRef<HTMLDivElement>(null);
-  usePageProblemFocus(notice);
+  const again = usePageProblemFocus(notice, pager);
   return (
     <div ref={notice} role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-5 text-sm">
       <p className="font-semibold">Unable to load {what}</p>
       <p className="mt-2 text-muted-foreground">{saidBy(error, 'The service could not be reached. Check your connection and try again.')}</p>
-      <Button variant="outline" size="sm" className="mt-3" onClick={retry} busy={busy} busyLabel="Trying again…">Try again</Button>
+      <Button variant="outline" size="sm" className="mt-3" onClick={() => { again(); retry(); }} busy={busy} busyLabel="Trying again…">Try again</Button>
     </div>
   );
 }

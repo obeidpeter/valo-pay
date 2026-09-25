@@ -113,7 +113,7 @@ export default function AuditPage() {
         ) : isLoading ? (
           <Loading what="the audit log" />
         ) : error ? (
-          <LoadProblem what="the audit log" error={error} retry={() => { void refetch(); }} busy={isFetching} />
+          <LoadProblem what="the audit log" pager="audit entries" error={error} retry={() => { void refetch(); }} busy={isFetching} />
         ) : !data || data.items.length === 0 ? (
           search.trim() ? (
             <EmptyState filtered title={`No entries match “${search.trim()}”`}>Try a shorter term, or search for an action, person or summary.</EmptyState>

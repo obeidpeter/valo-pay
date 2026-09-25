@@ -106,7 +106,7 @@ function LifecycleControls() {
   return <div className="space-y-6">
     <PilotHeading title="Data retention">Control how long sample source files and completed request payloads remain available. Deletion requires an exact preview and administrator approval. Financial records and the audit trail are retained.</PilotHeading>
     {workspace?.role !== 'Admin' ? <p role="status" className="rounded-xl border bg-card p-5">Only a currently authorised administrator can inspect or change retention controls. Ask your administrator about holds and approved deletion runs.</p> : <>
-      <PilotError error={query.error} retry={() => { void query.refetch(); }} />
+      <PilotError error={query.error} pager="retained sources" retry={() => { void query.refetch(); }} />
       {query.isLoading && <p role="status">Loading retention policy and saved runs…</p>}
       <RecoveryNotice mutation={mutation} next={() => runSent.current ? executeButton.current : sentFrom.current} />
       {message && <p ref={messageRef} role="status" className="rounded-lg border bg-secondary/20 p-4 text-sm">{message}</p>}

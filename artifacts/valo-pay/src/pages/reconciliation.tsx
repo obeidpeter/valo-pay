@@ -29,10 +29,10 @@ import { formatRecordMoney as moneyOf } from '@/lib/currencies';
 const paymentAvailable = (record: any): number => paymentUnappliedKobo(record);
 const instalmentOutstanding = (record: any): number => Math.max(0, Number(record?.data?.outstandingKobo ?? record?.amountKobo ?? 0));
 
-/** A table whose rows could not be loaded (Refresh queue tries again); after a page press it takes the pager's focus. */
-function TableProblem({ colSpan, children }: { colSpan: number; children: ReactNode }) {
+/** A table whose rows could not be loaded (Refresh queue tries again); after a press of its pager, `pager`, it takes the pager's focus. */
+function TableProblem({ colSpan, pager, children }: { colSpan: number; pager: string; children: ReactNode }) {
   const notice = useRef<HTMLParagraphElement>(null);
-  usePageProblemFocus(notice);
+  usePageProblemFocus(notice, pager);
   return <tr><td colSpan={colSpan} className="p-5"><p ref={notice} role="alert" className="text-sm text-destructive">{children}</p></td></tr>;
 }
 
@@ -243,7 +243,7 @@ export default function ReconciliationPage() {
                 {isLoadingProposals ? (
                   <LoadingRow colSpan={6} what="proposed matches" />
                 ) : proposalsError && !proposals ? (
-                  <TableProblem colSpan={6}>Proposed matches could not be loaded. Use Refresh queue above to try again.</TableProblem>
+                  <TableProblem colSpan={6} pager="proposed matches">Proposed matches could not be loaded. Use Refresh queue above to try again.</TableProblem>
                 ) : proposalRows.length === 0 ? (
                   <EmptyRow colSpan={6} title={q ? 'No results match your search' : "No proposed matches to review"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Possible payment matches appear here when they need Finance to confirm them. Run reconciliation to check for new matches.</>}</EmptyRow>
                 ) : (
@@ -284,7 +284,7 @@ export default function ReconciliationPage() {
           <div className="border-b p-4"><h2 className="font-semibold">Possible duplicate payments</h2><p className="mt-1 text-xs text-muted-foreground">These payments are held for Finance review and are never allocated automatically.</p></div>
           <ScrollFrame label="Possible duplicate payments table" className="overflow-x-auto [overflow-anchor:none]">
             <table className="min-w-[650px] w-full text-left text-sm"><thead className="border-b bg-secondary/30 text-muted-foreground"><tr><th className="p-4 font-medium">Payment</th><th className="p-4 font-medium">Customer</th><th className="p-4 font-medium">Reason for review</th><th className="p-4 text-right font-medium">Amount</th><th className="p-4 text-right font-medium">Next step</th></tr></thead>
-              <tbody className="divide-y">{isLoadingAllPayments ? <LoadingRow colSpan={5} what="possible duplicate payments" /> : allPaymentsError && !allPayments ? <TableProblem colSpan={5}>Possible duplicate payments could not be loaded. Use Refresh queue above to try again.</TableProblem> : duplicates.length === 0 ? <EmptyRow colSpan={5} title={q ? 'No results match your search' : "No possible duplicates"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Payments needing a duplicate check will appear here.</>}</EmptyRow> : duplicates.map(payment => <tr key={payment.id}>
+              <tbody className="divide-y">{isLoadingAllPayments ? <LoadingRow colSpan={5} what="possible duplicate payments" /> : allPaymentsError && !allPayments ? <TableProblem colSpan={5} pager="duplicate payments">Possible duplicate payments could not be loaded. Use Refresh queue above to try again.</TableProblem> : duplicates.length === 0 ? <EmptyRow colSpan={5} title={q ? 'No results match your search' : "No possible duplicates"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Payments needing a duplicate check will appear here.</>}</EmptyRow> : duplicates.map(payment => <tr key={payment.id}>
                 <td className="p-4"><RecordLabel record={payment} id={payment.id} /></td><td className="p-4"><RecordLabel record={customerById.get(String(payment.customerId))} id={payment.customerId} customer /></td>
                 <td className="p-4 text-xs text-muted-foreground">{String(payment.data?.explanation || 'Check the provider references and recorded evidence before deciding whether this is a separate payment.')}</td>
                 <td className="p-4 text-right font-mono">{moneyOf(payment, payment.amountKobo)}</td><td className="p-4 text-right"><Link className="inline-flex min-h-9 items-center text-xs font-medium underline underline-offset-4" href="/exceptions?type=suspected_duplicate">Review exceptions</Link></td>
@@ -318,7 +318,7 @@ export default function ReconciliationPage() {
                 {isLoadingPayments ? (
                   <LoadingRow colSpan={3} what="unallocated payments" />
                 ) : paymentsError && !payments ? (
-                  <TableProblem colSpan={3}>Unallocated payments could not be loaded. Use Refresh queue above to try again.</TableProblem>
+                  <TableProblem colSpan={3} pager="unallocated payments">Unallocated payments could not be loaded. Use Refresh queue above to try again.</TableProblem>
                 ) : paymentRows.length === 0 ? (
                   <EmptyRow colSpan={3} title={q ? 'No results match your search' : "No unallocated payments"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Payments appear here while they hold money no instalment has: unallocated payments, and the rest of a payment allocated in part. There are none waiting in this list.</>}</EmptyRow>
                 ) : (
@@ -366,7 +366,7 @@ export default function ReconciliationPage() {
                 {isLoadingObs ? (
                   <LoadingRow colSpan={3} what="unresolved payment evidence" />
                 ) : observationsError && !observations ? (
-                  <TableProblem colSpan={3}>Payment evidence could not be loaded. Use Refresh queue above to try again.</TableProblem>
+                  <TableProblem colSpan={3} pager="payment evidence">Payment evidence could not be loaded. Use Refresh queue above to try again.</TableProblem>
                 ) : observationRows.length === 0 ? (
                   <EmptyRow colSpan={3} title={q ? 'No results match your search' : "No unresolved payment evidence"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Provider records and bank statement entries appear here when they cannot be linked to a payment or settlement batch.</>}</EmptyRow>
                 ) : (
@@ -412,7 +412,7 @@ export default function ReconciliationPage() {
                 {isLoadingAudit ? (
                   <LoadingRow colSpan={7} what="the match review sample" />
                 ) : auditError && !confirmedAllocations ? (
-                  <TableProblem colSpan={7}>The match review sample could not be loaded. Use Refresh queue above to try again.</TableProblem>
+                  <TableProblem colSpan={7} pager="sampled matches">The match review sample could not be loaded. Use Refresh queue above to try again.</TableProblem>
                 ) : auditSample.length === 0 ? (
                   <EmptyRow colSpan={7} title={q ? 'No results match your search' : "No automatic matches to review yet"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>A daily close selects a sample from the last completed month's automatic matches rated certain. Finance can then check whether those matches are correct.</>}</EmptyRow>
                 ) : (
@@ -461,7 +461,7 @@ export default function ReconciliationPage() {
                 {isLoadingBatches ? (
                   <LoadingRow colSpan={6} what="settlement batches" />
                 ) : batchesError && !batches ? (
-                  <TableProblem colSpan={6}>Settlement batches could not be loaded. Use Refresh queue above to try again.</TableProblem>
+                  <TableProblem colSpan={6} pager="settlement batches">Settlement batches could not be loaded. Use Refresh queue above to try again.</TableProblem>
                 ) : !batches || batches.items.length === 0 ? (
                   <EmptyRow colSpan={6} title={q ? 'No results match your search' : "No settlement batches"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>A batch groups payments in one provider settlement report. Add a synthetic batch or import a settlement report to see it here.</>}</EmptyRow>
                 ) : (
@@ -516,7 +516,7 @@ export default function ReconciliationPage() {
           return <section aria-label="Allocation preview" className="space-y-2 rounded-lg border bg-secondary/20 p-3 text-sm">
             <label className="grid gap-1 text-xs">Find an instalment<input type="search" value={allocationSearch} onKeyDown={searchWithoutSubmitting} onChange={event=>{setAllocationSearch(event.target.value);choicePage.resetPage();}} placeholder="Name or reference" className="min-h-10 rounded-md border bg-background px-3" /></label>
             <p className="text-xs text-muted-foreground">Instalments that are paid, cancelled, closed or in dispute cannot take a payment and are not listed.</p>
-            {choicesQuery.error ? <LoadProblem what="instalment choices" error={choicesQuery.error} retry={()=>{void choicesQuery.refetch();}} /> : <>
+            {choicesQuery.error ? <LoadProblem what="instalment choices" pager="instalment choices" error={choicesQuery.error} retry={()=>{void choicesQuery.refetch();}} /> : <>
               {(choicesQuery.isFetching || allocationSearchPending) && <p role="status">Loading instalment choices…</p>}
               {!allocationSearchPending && choicesQuery.data && (choicesQuery.data.total === 0 ? !choicesQuery.isFetching && <p role="status">{allocationTerm ? 'No instalment that can take a payment matches this search.' : selectedRecord?.customerId ? 'This payer has no instalment that can take a payment.' : namedInstalment ? `${namedCustomer?.name ? `${namedCustomer.name}, whose instalment its evidence names,` : `The customer of instalment ${namedInstalment.reference}, which its evidence names,`} has no instalment that can take a payment.` : 'No instalment can take a payment.'}</p> : <RecordPagination pagination={choicePage} total={choicesQuery.data.total} busy={choicesQuery.isFetching} label="instalment choices" />)}
             </>}
