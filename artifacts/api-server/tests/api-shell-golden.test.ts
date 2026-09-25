@@ -1,7 +1,7 @@
 // Offline tests for the API shell helpers: list paging with an updatedSince
 // watermark, and the sandbox creation limiter.
 import assert from "node:assert/strict";
-import { pageRecords, LIST_PAGE_CEILING } from "../src/lib/valopay-list.js";
+import { allocatableOnly, allocationChoices, pageRecords, LIST_PAGE_CEILING } from "../src/lib/valopay-list.js";
 import { createCreationLimiter } from "../src/lib/creation-limit.js";
 import type { ValopayRecord } from "../src/domain/types.js";
 
@@ -27,8 +27,41 @@ const records = Array.from({ length: 1200 }, (_, i) => record(i, i % 3 ? "open" 
   assert.equal(filtered.items.length, 10);
   const since = pageRecords(records, { updatedSince: new Date(Date.UTC(2027, 0, 2, 0, 1190)).toISOString() });
   assert.equal(since.total, 10, "updatedSince is inclusive of the watermark");
-  assert.throws(() => pageRecords(records, { updatedSince: "yesterday" }), /ISO timestamp/);
+  assert.throws(() => pageRecords(records, { updatedSince: "yesterday" }), /RFC 3339 date and time/);
   checks += 16;
+}
+
+{
+  // The allocation picker's list: only instalments a manual allocation accepts, counted as the choices it offers.
+  const due = (i: number, status: string, amountKobo: number, outstandingKobo?: unknown): ValopayRecord => ({ ...record(i, status), kind: "due-items", amountKobo, data: outstandingKobo === undefined ? {} : { outstandingKobo } });
+  const dues = [due(1, "scheduled", 5000, 5000), due(2, "paid", 5000, 0), due(3, "partially_paid", 5000, 2000), due(4, "cancelled", 5000, 5000), due(5, "closed", 5000, 5000), due(6, "in_dispute", 5000, 5000), due(7, "unpaid_final", 5000, 5000), due(8, "scheduled", 5000), due(9, "in_collection", 5000, 1.5), due(10, "scheduled", 0, 0)];
+  const open = pageRecords(dues, { allocatable: "true", limit: 2 });
+  assert.deepEqual([open.total, open.items.map((item) => item.id), open.nextOffset], [5, ["r009", "r008"], 2], "owed and not cancelled, closed or in dispute; an outstanding balance that is not whole reads as the amount");
+  assert.deepEqual(pageRecords(dues, { allocatable: "true" }).items.map((item) => item.id), ["r009", "r008", "r007", "r003", "r001"]);
+  assert.equal(pageRecords(dues, { allocatable: "false" }).total, 10, "false, like leaving it out, lists every instalment");
+  assert.equal(allocatableOnly("due-items", { allocatable: "true" }), true);
+  assert.equal(allocatableOnly("payments", { allocatable: "false" }), false);
+  assert.throws(() => allocatableOnly("payments", { allocatable: "true" }), (error: any) => error.status === 400 && /instalments only/.test(error.message), "asked of another kind, it is refused");
+  // One payment's choices (paymentId): the payer rule of its manual allocation becomes the customer filter.
+  assert.throws(() => allocatableOnly("due-items", { paymentId: "p1" }), (error: any) => error.status === 400 && /Use it with allocatable=true/.test(error.message), "paymentId without allocatable=true is refused");
+  assert.equal(allocatableOnly("due-items", { allocatable: "true", paymentId: "p1" }), true);
+  const query = { allocatable: "true" as const, paymentId: "p1" };
+  assert.deepEqual([allocationChoices(query, { customerId: "c1" }), allocationChoices(query, {}), allocationChoices(query, null), allocationChoices({ ...query, customerId: "c2" }, { customerId: "c1" }), allocationChoices({ ...query, customerId: "c1" }, { customerId: "c1" })],
+    [{ ...query, customerId: "c1" }, query, undefined, undefined, { ...query, customerId: "c1" }], "its payer's instalments, any customer's, none, none for another customer's list, and the payer's list as asked");
+  checks += 8;
+}
+
+{
+  // Saved exports: a file an approved retention run removed is listed as expired (derived from fileDeletedAt), never as completed or needing a retry.
+  const job = (i: number, status: string, removed = false): ValopayRecord => ({ ...record(i, status), kind: "exports", data: removed ? { fileDeletedAt: "2027-02-01T00:00:00.000Z" } : {} });
+  const jobs = [job(1, "ready"), job(2, "ready", true), job(3, "failed"), job(4, "failed", true), job(5, "queued"), job(6, "running")];
+  const listed = (status: string) => pageRecords(jobs, { status }, "exports").items.map((item) => item.id);
+  assert.deepEqual(listed("ready"), ["r001"], "Completed lists only exports whose file remains");
+  assert.deepEqual(listed("failed"), ["r003"], "Needs retry lists only failed exports whose file remains");
+  assert.deepEqual(listed("expired"), ["r004", "r002"], "expired lists ready and failed exports whose file was removed");
+  assert.deepEqual([listed("queued"), listed("running"), listed("all").length], [["r005"], ["r006"], 6]);
+  assert.deepEqual(pageRecords([record(1, "expired")], { status: "expired" }).items.map((item) => item.id), ["r001"], "another kind's status named expired is its own status");
+  checks += 5;
 }
 
 {
@@ -42,4 +75,4 @@ const records = Array.from({ length: 1200 }, (_, i) => record(i, i % 3 ? "open" 
   checks += 8;
 }
 
-console.log(`API shell tests passed (${checks} checks): paging, watermark, ceiling, filtered totals, creation limiter.`);
+console.log(`API shell tests passed (${checks} checks): paging, watermark, ceiling, filtered totals, expired exports, creation limiter.`);

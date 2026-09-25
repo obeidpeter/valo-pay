@@ -50,6 +50,18 @@ export function providerFeeKobo(grossKobo: number, schedule: ProviderFeeSchedule
   return Math.min(fee, schedule.capKobo);
 }
 
+/**
+ * Decision on settlement batches in another currency: a fee schedule is in
+ * naira (basis points with a cap in kobo), whether configured per connection
+ * (providerFeeSchedule), the legacy providerFeeBps or the plan's default, so
+ * only a batch in naira has one. A batch in another currency has no expected
+ * fee and no fee variance: its fees are not checked, and only its statement
+ * credit is.
+ */
+export const FEE_SCHEDULE_CURRENCY = "NGN";
+/** Whether a fee schedule exists for money in this currency (FEE_SCHEDULE_CURRENCY), so its fees are checked. */
+export const hasFeeSchedule = (currency: string): boolean => String(currency || FEE_SCHEDULE_CURRENCY).trim().toUpperCase() === FEE_SCHEDULE_CURRENCY;
+
 /** ING-07 tolerances: ₦0 per item, ₦100 per batch by default. */
 export const SETTLEMENT_ITEM_TOLERANCE_KOBO = 0;
 /** How far a batch's net may differ from gross minus fees before it is a variance: ₦100. */

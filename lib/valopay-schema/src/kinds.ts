@@ -9,8 +9,31 @@ export const recordKinds = [
   "closes", "exports", "commercial", "reviews", "evidence", "experiments", "costs", "calendar",
   "integrations", "members", "retry-decisions", "invoices",
 ] as const;
-/** A record kind, as stored and as addressed in the API's path. */
-export type RecordKind = (typeof recordKinds)[number];
+/** A record kind the generic record API addresses in its path (`/v1/records/:kind`). */
+export type ApiRecordKind = (typeof recordKinds)[number];
+
+/**
+ * Kinds only the platform writes, through its own workflows: pilot imports,
+ * source controls, close review, work and case history, retention, Paystack
+ * test evidence and connected banking. The generic record API neither lists,
+ * creates nor edits them; their data is typed in records.ts like every other
+ * kind's.
+ */
+export const domainRecordKinds = [
+  "import-batches", "import-revisions", "import-corrections", "import-correction-events",
+  "source-profiles", "source-manifests", "provider-events",
+  "close-reviews", "close-review-events", "case-events", "work-events",
+  "retention-policies", "retention-holds", "retention-runs", "retention-receipts",
+  "connected-consents", "connected-intents", "connected-credit-assessments", "connected-credit-reviews",
+  "connected-cash-workspace", "connected-cash-forecasts", "connected-cash-erp", "connected-cash-vat", "connected-cash-payroll",
+] as const;
+/** A kind only the platform writes. */
+export type DomainRecordKind = (typeof domainRecordKinds)[number];
+
+/** Every kind stored in valopay_records: the record API's kinds and the platform's own. */
+export const storedRecordKinds = [...recordKinds, ...domainRecordKinds] as const;
+/** A record kind as stored; `TypedRecord` and `RecordDataOf` type a record of any of them. */
+export type RecordKind = (typeof storedRecordKinds)[number];
 
 /** Kinds a merchant user may create or edit through the generic record API. */
 export const editableKinds = [
@@ -31,7 +54,7 @@ export const recordStatuses = {
   attempts: ["scheduled", "sent", "succeeded", "failed", "unknown", "cancelled", "reversed"],
   observations: ["unresolved", "resolved"],
   "settlement-batches": ["pending", "reconciled", "variance"],
-  payments: ["unallocated", "proposed", "allocated", "partial", "overpaid", "possible_duplicate"],
+  payments: ["unallocated", "proposed", "allocated", "partial", "overpaid", "possible_duplicate", "returned"],
   allocations: ["proposed", "confirmed", "superseded"],
   exceptions: ["open", "assigned", "in_progress", "resolved", "closed"],
   policies: ["draft", "submitted", "approved", "rejected"],
@@ -44,6 +67,26 @@ export const recordStatuses = {
   closes: ["completed"],
   exports: ["queued", "running", "ready", "failed"],
   invoices: ["issued"],
+  // Kinds only the platform writes: their workflows set these, and the record API never does.
+  "import-batches": ["draft", "ready", "needs_correction", "committed"],
+  "import-revisions": ["recorded"],
+  "import-corrections": ["recorded"],
+  "import-correction-events": ["recorded"],
+  "source-profiles": ["active", "paused"],
+  "source-manifests": ["declared"],
+  "provider-events": ["recorded", "awaiting_verification", "quarantined", "ignored", "ignored_stale", "rejected_fixture"],
+  "close-reviews": ["awaiting_review", "approved", "changes_requested"],
+  "close-review-events": ["recorded"],
+  "case-events": ["recorded"],
+  "work-events": ["recorded"],
+  "retention-policies": ["recorded"],
+  "retention-holds": ["recorded"],
+  "retention-runs": ["preview", "approved", "running", "attention", "completed"],
+  "retention-receipts": ["recorded"],
+  "connected-consents": ["active", "revoked"],
+  "connected-intents": ["created", "authorised", "pending", "unknown", "failed", "confirmed", "cancelled", "refunded", "reversed"],
+  "connected-credit-assessments": ["review_pending", "insufficient_evidence", "blocked"],
+  "connected-credit-reviews": ["recorded"],
 } as const satisfies Partial<Record<RecordKind, readonly string[]>>;
 /** The status union of a kind with a controlled vocabulary. */
 export type StatusOf<K extends keyof typeof recordStatuses> = (typeof recordStatuses)[K][number];
@@ -76,7 +119,8 @@ export const mandateTransitions: Record<MandateStatus, readonly MandateStatus[]>
 
 /**
  * TRD 4.2 exception machine.  "resolved" is reached only through the
- * resolve action with a controlled code (EXC-03); "closed" follows resolution.
+ * resolve action with a controlled code (EXC-03); "closed" follows resolution,
+ * or the platform closes an open exception whose condition cleared.
  */
 export const exceptionTransitions: Record<ExceptionStatus, readonly ExceptionStatus[]> = {
   open: ["assigned", "in_progress"],

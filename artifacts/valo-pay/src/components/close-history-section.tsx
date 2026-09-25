@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "wouter";
+import { useQueryClient } from "@tanstack/react-query";
+import { Link, useSearchParams } from "wouter";
 import {
   useListCloseHistory,
   getListCloseHistoryQueryKey,
@@ -9,6 +10,7 @@ import {
 } from "@workspace/api-client-react";
 import { useWorkspace } from "@/lib/workspace-context";
 import { useUrlPagination } from "@/lib/use-url-pagination";
+import { keepRowsWhilePaging } from "@/lib/use-record-pagination";
 import { closeHistory } from "@/lib/close-history";
 import {
   formatCount,
@@ -16,9 +18,11 @@ import {
   formatKobo,
   formatNumber,
 } from "@/lib/formatters";
+import { formatWithOtherCurrencies, otherCurrencyEntries } from "@/lib/currencies";
+import { hasFeeSchedule } from "@workspace/valopay-schema";
 import { Button } from "./ui/button";
 import { RecordPagination } from "./record-pagination";
-import { LoadProblem } from "./load-problem";
+import { LoadProblem, RefreshProblem } from "./load-problem";
 
 function CloseEvidence({ close }: { close: ValopayRecord }) {
   const { merchantId } = useWorkspace();
@@ -31,50 +35,56 @@ function CloseEvidence({ close }: { close: ValopayRecord }) {
     },
   });
   const report = query.data?.data?.report as Record<string, any> | undefined;
+  // A count from the recorded report, grouped the market's way; one the report left out is 0.
+  const count = (value: unknown) => formatNumber(Number(value ?? 0));
+  // The payments the report counts, their naira, and any money in another currency in that currency, never added to the naira.
   const money = (value: any) =>
-    `${value?.count ?? 0} · ${formatKobo(Number(value?.kobo || 0))}`;
+    `${count(value?.count)} · ${formatWithOtherCurrencies(Number(value?.kobo || 0), value?.otherCurrencies, "payment")}`;
+  // The batches in variance and the fee differences of the naira ones; a batch in another currency is listed apart, in its
+  // currency, and where no fee schedule exists for that currency its fees were not checked, so it has no fee difference.
+  const differences = (value: any) => {
+    const amounts = [formatKobo(Number(value?.feeVarianceKobo || 0)), ...otherCurrencyEntries(value?.otherCurrencies, "batch", "batches").map(({ code, money, counted }) => hasFeeSchedule(code) ? `${money} (${counted})` : `${counted} in ${code}, fees not checked`)];
+    return `${count(value?.count)} · ${amounts.length === 1 ? amounts[0] : `${amounts.slice(0, -1).join(", ")} and ${amounts.at(-1)}`}`;
+  };
   const measures = report
     ? [
         ["Unmatched at start", money(report.openingUnallocated)],
         [
           "Payment records received",
-          String(report.observations?.received ?? 0),
+          count(report.observations?.received),
         ],
         [
           "Payment records by source",
           Object.entries(report.observations?.bySource || {})
             .map(
               ([key, v]: [string, any]) =>
-                `${key}: ${v.received} records linked to ${formatCount(v.paymentsResolvedTo, "payment")}`,
+                `${key}: ${formatCount(Number(v.received ?? 0), "record")} linked to ${formatCount(v.paymentsResolvedTo, "payment")}`,
             )
             .join("; ") || "None",
         ],
         [
           "Matches by rule",
           Object.entries(report.allocatedByRule || {})
-            .map(([key, v]: [string, any]) => `${key}: ${v.count}`)
+            .map(([key, v]: [string, any]) => `${key}: ${count(v.count)}`)
             .join("; ") || "None",
         ],
         ["Proposed matches", money(report.proposed)],
         [
           "Unmatched at close",
-          `${money(report.unallocated)} · ${report.unallocated?.olderThan24Hours ?? 0} older than 24 hours`,
+          `${money(report.unallocated)} · ${count(report.unallocated?.olderThan24Hours)} older than 24 hours`,
         ],
-        [
-          "Settlement differences",
-          `${report.variances?.count ?? 0} · ${formatKobo(Number(report.variances?.feeVarianceKobo || 0))}`,
-        ],
+        ["Settlement differences", differences(report.variances)],
         [
           "Exceptions",
-          `${report.exceptions?.opened?.count ?? 0} opened · ${report.exceptions?.closed?.count ?? 0} closed · ${report.exceptions?.openAtClose ?? 0} open`,
+          `${count(report.exceptions?.opened?.count)} opened · ${count(report.exceptions?.closed?.count)} closed · ${count(report.exceptions?.openAtClose)} open`,
         ],
         [
           "Customer totals changed",
-          String(report.customerPositionsChanged?.length ?? 0),
+          count(report.customerPositionsChanged?.length),
         ],
         [
           "Retry decisions",
-          `${report.retryDecisions?.recorded ?? 0} recorded · ${report.retryDecisions?.finalAttempts ?? 0} final attempts · ${report.retryDecisions?.noticesNotEvidenced ?? 0} deferred for missing notice evidence`,
+          `${count(report.retryDecisions?.recorded)} recorded · ${formatCount(Number(report.retryDecisions?.finalAttempts ?? 0), "final attempt")} · ${count(report.retryDecisions?.noticesNotEvidenced)} deferred for missing notice evidence`,
         ],
       ]
     : [];
@@ -117,7 +127,7 @@ function CloseEvidence({ close }: { close: ValopayRecord }) {
             <p>
               {String((query.data.data.schedule as any).trigger || "manual")}
               {(query.data.data.schedule as any).late
-                ? ` · ${(query.data.data.schedule as any).delayMinutes} min late`
+                ? ` · ${count((query.data.data.schedule as any).delayMinutes)} min late`
                 : ""}
             </p>
           )}
@@ -141,16 +151,21 @@ export function CloseHistorySection({ active }: { active: boolean }) {
     limit: pagination.pageSize,
     offset: pagination.offset,
   };
+  const closesKey = getListCloseHistoryQueryKey(params);
+  const client = useQueryClient();
   const query = useListCloseHistory(params, {
     query: {
       enabled: !!merchantId && active && !validation.error,
-      queryKey: getListCloseHistoryQueryKey(params),
+      queryKey: closesKey,
+      // Paging keeps the closes shown until the next page arrives, so the pager and the control pressed stay.
+      placeholderData: keepRowsWhilePaging(closesKey, client),
     },
   });
   useEffect(() => {
-    if (query.data && query.data.offset !== pagination.offset)
-      pagination.setPage(Math.floor(query.data.offset / pagination.pageSize));
-  }, [query.data, pagination.offset, pagination.pageSize]);
+    // The previous page's closes, shown while this one loads, say nothing of where this page is.
+    if (query.data && !query.isPlaceholderData && query.data.offset !== pagination.offset)
+      pagination.correctPage(Math.floor(query.data.offset / pagination.pageSize));
+  }, [query.data, query.isPlaceholderData, pagination.offset, pagination.pageSize]);
   const history = closeHistory(
     query.data?.first && query.data.latest
       ? query.data.first.id === query.data.latest.id
@@ -174,6 +189,7 @@ export function CloseHistorySection({ active }: { active: boolean }) {
   return (
     <>
       <div className="space-y-4 border-b p-5">
+        <Link href="/close-review" className="inline-flex min-h-11 items-center text-sm font-medium text-primary underline print:hidden">Prepare and review a close with Finance</Link>
         <form
           key={`${merchantId}:${from}:${to}`}
           className="flex flex-wrap items-end gap-3 print:hidden"
@@ -219,13 +235,17 @@ export function CloseHistorySection({ active }: { active: boolean }) {
               ? `Showing ${formatCount(query.data.total, "recorded close")}${from ? ` from ${from}` : ""}${to ? ` through ${to}` : ""}. Dates include the full day in West Africa Time. Current totals above are unchanged.`
               : "Loading recorded closes…")}
         </p>
+        {!validation.error && (
+          <RefreshProblem what="The close history" shown="closes" query={query} />
+        )}
         {validation.error ? (
           <p role="alert" className="text-sm text-destructive">
             The close history is hidden until the date range is corrected.
           </p>
-        ) : query.error ? (
+        ) : query.error && !query.data ? (
           <LoadProblem
             what="daily close history"
+            pager="recorded closes"
             error={query.error}
             retry={() => {
               void query.refetch();
@@ -247,7 +267,9 @@ export function CloseHistorySection({ active }: { active: boolean }) {
                   <p className="mt-2 text-xs text-muted-foreground">
                     First: {formatDate(history.first!.createdAt)} · Latest:{" "}
                     {formatDate(history.latest!.createdAt)}. These are closing
-                    positions, not money collected during the period.
+                    positions, not money collected during the period. Money in
+                    another currency is left out here; each close's details
+                    list it.
                   </p>
                   <div className="mt-4 grid gap-4 sm:grid-cols-2">
                     {history.metrics.map((metric) => (
@@ -274,7 +296,7 @@ export function CloseHistorySection({ active }: { active: boolean }) {
           )
         )}
       </div>
-      {!validation.error && !query.error && query.data && (
+      {!validation.error && query.data && (
         <>
           {!query.data.items.length ? (
             <div className="p-5">
@@ -305,10 +327,7 @@ export function CloseHistorySection({ active }: { active: boolean }) {
                   <p className="min-w-0 text-sm leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
                     {String(close.data.summary || "Recorded daily close")}
                   </p>
-                  <CloseEvidence
-                    key={`${merchantId}:${close.id}`}
-                    close={close}
-                  />
+                  <div className="min-w-0 space-y-2"><CloseEvidence key={`${merchantId}:${close.id}`} close={close} /><Link href={`/close-review?close=${encodeURIComponent(close.id)}`} className="inline-flex min-h-11 items-center text-sm text-primary underline print:hidden">View Finance review</Link></div>
                 </li>
               ))}
             </ol>

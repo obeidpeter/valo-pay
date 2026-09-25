@@ -1,9 +1,10 @@
 // Golden tests for the shared per-kind schema as enforced by the validator and actions.
 import assert from "node:assert/strict";
-import { completeCutover, ctxAt, liveFixture, wat } from "./helpers.js";
+import { addObservation, completeCutover, ctxAt, liveFixture, wat } from "./helpers.js";
 import { validateRecord } from "../src/domain/validation.js";
 import { executeAction } from "../src/domain/actions.js";
-import { makeRecord, recordsOf } from "../src/domain/records.js";
+import { assertNoRealBankDetails, makeRecord, recordsOf } from "../src/domain/records.js";
+import { reconcile } from "../src/domain/reconciliation.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
 import { exceptionCatalogue, recordStatuses } from "@workspace/valopay-schema";
 import { importCsv } from "../src/lib/valopay-import.js";
@@ -68,6 +69,55 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   assert.equal(aliased.data.owner, "valopay", "the TRD's owner spelling is accepted and normalised");
   assert.throws(() => validateRecord(state, admin, "cutovers", patch(cutover, { status: "handed_back" }), true), /Use Return collection ownership/);
   checks += 6;
+}
+
+// ---------- Hand-back (DEB-12, audit item 7): it ends every earlier contract; only a cutover recorded after it restores owner valo ----------
+{
+  const { state, due } = liveFixture({ merchantId: "hand-back-contract" });
+  const contract = recordsOf(state, "cutovers").find((item) => item.status === "ready")!;
+  contract.createdAt = contract.updatedAt = wat("2027-06-01T09:00:00");
+  const draft = makeRecord(state, "cutovers", { name: "Cohort 2 draft", status: "draft", createdAt: wat("2027-06-20T09:00:00"), data: { inventory: "LMS scheduler", fallbackOwner: "lms" } });
+  executeAction(state, ops, { action: "hand_back", reason: "Lender exit" });
+  assert.equal(due.data.owner, "lms");
+  const nextDay = ctxAt(wat("2027-07-02T09:00:00"), "Operations");
+  assert.throws(() => validateRecord(state, nextDay, "due-items", patch(due, { data: { owner: "valopay" } }), true), /recorded after the hand-back/, "the contract the hand-back ended no longer lets Valo Pay collect");
+  const flags = { incumbentDisabled: true, externalAttemptsImported: true, dualRunComplete: true, accountableUser: "Ops lead", confirmation: "Signed again" };
+  assert.throws(() => validateRecord(state, admin, "cutovers", patch(draft, { status: "ready", data: flags }), true), /ended with the hand-back/, "a contract drafted before the hand-back cannot be completed afterwards");
+  assert.doesNotThrow(() => validateRecord(state, admin, "cutovers", { name: "Cohort 2 cutover", status: "ready", data: { ...flags, fallbackOwner: "lms" } }), "a new contract can be recorded ready");
+  makeRecord(state, "cutovers", { name: "Cohort 2 cutover", status: "ready", createdAt: wat("2027-07-03T09:00:00"), data: { ...flags, fallbackOwner: "lms" } });
+  assert.doesNotThrow(() => validateRecord(state, ctxAt(wat("2027-07-03T10:00:00"), "Operations"), "due-items", patch(due, { data: { owner: "valopay" } }), true), "a cutover completed after the hand-back restores ownership");
+  checks += 5;
+}
+
+// ---------- Mandate limit (MAN-02, audit item 8): the consented limit changes only through a reissue with new consent ----------
+{
+  const { state, mandate } = liveFixture({ withFailure: false, merchantId: "mandate-limit" });
+  assert.throws(() => validateRecord(state, ops, "mandates", patch(mandate, { amountKobo: 10_000_000 }), true), /limit is part of the customer's consent/);
+  assert.throws(() => validateRecord(state, ops, "mandates", patch(mandate, { amountKobo: mandate.amountKobo - 1 }), true), /limit is part of the customer's consent/, "lowering it is refused too: the consent names one limit");
+  assert.doesNotThrow(() => validateRecord(state, ops, "mandates", patch(mandate, { name: "Renamed mandate" }), true), "other fields stay editable");
+  executeAction(state, ops, { action: "mandate_cancel", recordId: mandate.id, reason: "The customer agreed a higher limit" });
+  assert.throws(() => executeAction(state, ops, { action: "mandate_reissue", recordId: mandate.id, reason: "Higher limit", data: { consentEvidence: "CONSENT-LIMIT-2", amountKobo: 0 } }), /debit limit/);
+  const reissued = executeAction(state, ops, { action: "mandate_reissue", recordId: mandate.id, reason: "Higher limit", data: { consentEvidence: "CONSENT-LIMIT-2", amountKobo: 10_000_000 } }).record!;
+  assert.equal(reissued.amountKobo, 10_000_000, "the new consent carries the new limit");
+  assert.equal(mandate.amountKobo, 5_000_000, "the old mandate keeps the limit its consent covered");
+  const same = executeAction(state, ops, { action: "mandate_reissue", recordId: reissued.id, reason: "Consent captured again", data: { consentEvidence: "CONSENT-LIMIT-3" } }).record!;
+  assert.equal(same.amountKobo, 10_000_000, "without a new limit a reissue keeps the current one");
+  checks += 7;
+}
+
+// ---------- Policy review (RET-01, audit item 18): a submitted policy is frozen until a reviewer rejects it ----------
+{
+  const state = seedMerchant("policy-freeze");
+  const policy = recordsOf(state, "policies")[0]!;
+  const reviewer = ctxAt(admin.now, "Compliance reviewer");
+  const rules = (maxAttempts: number, spacingHours: number) => patch(policy, { data: { maxAttempts, spacingHours } });
+  assert.doesNotThrow(() => validateRecord(state, admin, "policies", rules(3, 48), true), "a draft is editable by its author");
+  executeAction(state, admin, { action: "submit_policy", recordId: policy.id, reason: "Ready for review" });
+  assert.throws(() => validateRecord(state, admin, "policies", rules(4, 24), true), /submitted policy cannot be edited/);
+  assert.throws(() => validateRecord(state, admin, "policies", patch(policy, { name: "Renamed while in review" }), true), /submitted policy cannot be edited/);
+  executeAction(state, reviewer, { action: "reject_policy", recordId: policy.id, reason: "Explain the spacing" });
+  assert.doesNotThrow(() => validateRecord(state, admin, "policies", rules(4, 24), true), "a rejected policy is editable again before it is resubmitted");
+  checks += 4;
 }
 
 // ---------- Attempts: failure codes are normalised to the 4.4 catalogue, raw codes kept for mapping ----------
@@ -147,7 +197,7 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   assert.throws(() => act('new_template_version', reviewer), /not permitted/);
   assert.throws(() => act('new_template_version', admin, second.id), /approved template/);
   second.status = 'submitted'; second.data.text = originalText + ' {{injected}}';
-  assert.throws(() => act('approve_template', reviewer, second.id), /Unknown placeholder/);
+  assert.throws(() => act('approve_template', reviewer, second.id), /Unknown placeholder \{\{injected\}\}\. Use only \{\{amount\}\}/);
   second.data.text = originalText; delete second.data.author;
   assert.throws(() => act('approve_template', reviewer, second.id), /other than its author/);
   checks += 23;
@@ -157,7 +207,7 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
 {
   const state = seedMerchant('guided-import');
   const before = structuredClone(state);
-  const input = { kind: 'customers', syntheticOnly: true, commit: false, csv: 'Full name,External ref,Consent,Unused\n"Sample, Person",SAMPLE-CSV-1,"Synthetic\nconsent",ignore', mapping: { 'Full name': 'name', 'External ref': 'reference', Consent: 'consentProvenance', Unused: '' } };
+  const input = { kind: 'customers', syntheticOnly: true, commit: false, csv: 'Full name,External ref,Consent,Unused\n"Sample, Person",SAMPLE-CSV-1,"Synthetic\nconsent",ignore', mapping: { 'Full name': 'name', 'External ref': 'reference', Consent: 'consentProvenance', Unused: '' }, identityColumn: 'External ref' };
   const preview = importCsv(state, admin, input);
   assert.equal(preview.valid, 1); assert.equal(preview.imported, 0); assert.equal(preview.skipped, 0);
   assert.deepEqual(preview.columns, ['Full name', 'External ref', 'Consent', 'Unused']);
@@ -170,7 +220,7 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   assert.equal(again.imported, 0); assert.equal(again.skipped, 1);
   assert.equal(state.records.find(record => record.reference === 'SAMPLE-CSV-1')?.data.Unused, undefined);
   const stableCount = state.records.length;
-  const invalid = importCsv(state, admin, { ...input, csv: 'name,reference,consentProvenance\nValid,SAMPLE-CSV-2,Synthetic\nInvalid,SAMPLE-CSV-3,', mapping: undefined, commit: true });
+  const invalid = importCsv(state, admin, { ...input, csv: 'name,reference,consentProvenance\nValid,SAMPLE-CSV-2,Synthetic\nInvalid,SAMPLE-CSV-3,', mapping: undefined, identityColumn: 'reference', commit: true });
   assert.equal(invalid.valid, 1); assert.equal(invalid.invalid, 1); assert.equal(invalid.imported, 0); assert.equal(state.records.length, stableCount);
   assert.match(invalid.rows[0]!.message, /Not imported/);
   assert.throws(() => importCsv(state, admin, { ...input, syntheticOnly: false }), /Only synthetic/);
@@ -185,4 +235,78 @@ const patch = (record: any, changes: any) => ({ ...record, ...changes, data: { .
   checks += 25;
 }
 
-console.log(`Validation golden tests passed (${checks} checks): state machines, exception codes, cutover contract, failure-code normalisation, batch/status vocabularies, template lifecycle and guided CSV imports.`);
+// CSV numbers: a blank optional number is absent, while a blank amount and a receipt of ₦0 are row errors.
+{
+  const state = seedMerchant("blank-numbers");
+  // Each file's reference is its row ID.
+  const rows = (kind: string, csv: string, extra: Partial<Parameters<typeof importCsv>[2]> = {}) => importCsv(state, admin, { kind, csv, syntheticOnly: true, commit: true, amountUnit: "kobo", identityColumn: "reference", ...extra });
+  const saved = (reference: string) => state.records.find((record) => record.reference === reference)!;
+  // Each row was refused before: a blank count read as 0 failed its minimum, and a blank fee failed the amount parser.
+  for (const [kind, csv] of [
+    ["customers", "name,reference,consentProvenance,payDay\nBlank pay day,IMP-C-BLANK,Synthetic consent,"],
+    ["due-items", "name,reference,customerId,amountKobo,dueDate,owner,outstandingKobo\nBlank outstanding,IMP-D-BLANK,DEMO-C1001,1000000,2028-12-01,lms,"],
+    ["attempts", "name,reference,customerId,amountKobo,dueItemId,number,failureCode,occurredAt\nBlank number,IMP-A-BLANK,DEMO-C1001,2500000,DEMO-LOAN-1001,,INSUFFICIENT_FUNDS,2028-12-02"],
+    ["observations", "name,reference,customerId,amountKobo,source,feeKobo,grossAmountKobo\nBlank fees,IMP-O-BLANK,DEMO-C1001,2500000,webhook,,"],
+  ] as const) { const result = rows(kind, csv); assert.equal(result.imported, 1, `${kind}: ${JSON.stringify(result.rows)}`); }
+  assert.equal(saved("IMP-C-BLANK").data.payDay, undefined, "a blank pay day is absent, not 0");
+  assert.equal(saved("IMP-D-BLANK").data.outstandingKobo, 1000000, "the whole instalment is outstanding");
+  assert.equal(saved("IMP-A-BLANK").data.number, 2, "a blank attempt number is worked out after the instalment's earlier attempt");
+  assert.deepEqual([saved("IMP-O-BLANK").data.feeKobo, saved("IMP-O-BLANK").data.grossAmountKobo], [undefined, undefined], "blank fees are absent, not ₦0");
+  // A quoted cell of spaces survives the parser's trim; it is blank all the same.
+  for (const [kind, csv] of [
+    ["customers", 'name,reference,consentProvenance,payDay\nSpaced pay day,IMP-C-SPACED,Synthetic consent," "'],
+    ["observations", 'name,reference,customerId,amountKobo,source,feeKobo,grossAmountKobo\nSpaced fees,IMP-O-SPACED,DEMO-C1001,2500000,webhook," ","\t"'],
+  ] as const) { const result = rows(kind, csv); assert.equal(result.imported, 1, `${kind} with quoted spaces: ${JSON.stringify(result.rows)}`); }
+  assert.equal(saved("IMP-C-SPACED").data.payDay, undefined, "a pay day of spaces is absent");
+  assert.deepEqual([saved("IMP-O-SPACED").data.feeKobo, saved("IMP-O-SPACED").data.grossAmountKobo], [undefined, undefined], "fees of spaces are absent");
+  // A blank count was read as 0, so such a row could be valid: its fingerprint is still the one the previous build stored.
+  const identities = { source: "blank-lms", batchId: "blank-batch", ids: ["row-1"] };
+  const mandate = "name,reference,customerId,amountKobo,workflow,consentEvidence,reminderCount\nBlank reminders,IMP-M-BLANK,DEMO-C1001,5000000,hosted_consent,SYNTHETIC-CONSENT-BLANK,";
+  assert.equal(rows("mandates", mandate, { identities }).imported, 1);
+  assert.equal(saved("IMP-M-BLANK").data.reminderCount, undefined);
+  assert.equal(saved("IMP-M-BLANK").data.importIdentity.fingerprint, "463d15b91cfdf3bc9a19ed3f974bcfb3deb73f0b46319e3989c9cd166372f3f0");
+  assert.equal(rows("mandates", mandate, { identities }).rows[0]!.status, "duplicate", "importing the same row again is recognised");
+  // The amount is still required wherever a kind has one, with the same row error.
+  const noAmount = "name,reference,customerId,amountKobo,dueDate,owner\nBlank amount,IMP-D-NOAMOUNT,DEMO-C1001,,2028-12-01,lms";
+  assert.match(rows("due-items", noAmount).rows[0]!.message, /Enter kobo as a whole number/);
+  assert.match(rows("due-items", noAmount, { amountUnit: "naira" }).rows[0]!.message, /Enter an amount in naira/);
+  // Payment evidence records money received: ₦0, or no amount at all, is refused by the import and the record API alike.
+  for (const [csv, message] of [
+    ["name,reference,customerId,amountKobo,source\nZero receipt,IMP-O-ZERO,DEMO-C1001,0,webhook", "Amount (column amountKobo): Enter the amount received. Payment evidence must be for more than ₦0."],
+    ["name,reference,customerId,source\nNo amount,IMP-O-NONE,DEMO-C1001,webhook", "No column is mapped to Amount. Map the column that holds it."],
+  ] as const) {
+    const refused = rows("observations", csv);
+    assert.deepEqual([refused.invalid, refused.imported, refused.rows[0]!.message, refused.rows[0]!.detail], [1, 0, message, "Enter the amount received. Payment evidence must be for more than ₦0."]);
+  }
+  assert.equal(state.records.some((record) => ["IMP-O-ZERO", "IMP-O-NONE", "IMP-D-NOAMOUNT"].includes(record.reference)), false);
+  const customerId = saved("IMP-C-BLANK").id;
+  assert.throws(() => validateRecord(state, ops, "observations", { name: "Zero", reference: "API-O-ZERO", customerId, amountKobo: 0, data: { source: "webhook" } }), /more than ₦0/);
+  assert.doesNotThrow(() => validateRecord(state, ops, "observations", { name: "One kobo", reference: "API-O-ONE", customerId, amountKobo: 1, data: { source: "webhook" } }));
+  checks += 19;
+}
+
+// ---------- The bank-detail screen refuses account and card numbers, not record IDs ----------
+{
+  for (const value of [{ accountId: "1234567890" }, { "Account number": "0123456789" }, { bank: "1234-5678-9012" }, { cardNumber: "4111111111111111" }, { virtualAccountCustomerId: "0123456789" }, { accounts: "0123456789" }, { payerCards: "4111 1111 1111 1111" }]) {
+    assert.throws(() => assertNoRealBankDetails(value), /Raw (financial identifiers|bank account details)/, `refused: ${JSON.stringify(value)}`);
+  }
+  // A UUID's digit groups are not an account number, and "company" or "accountable" are not financial words.
+  const digitHeavy = "12345678-1234-4123-8123-123456789012";
+  for (const value of [{ virtualAccountCustomerId: digitHeavy }, { companyId: "12345678901" }, { accountableUser: "12345678" }, { accountMasked: "•••• 1234" }, { accountRef: `batch ${digitHeavy} line` }]) {
+    assert.doesNotThrow(() => assertNoRealBankDetails(value), `accepted: ${JSON.stringify(value)}`);
+  }
+  // End to end: a customer whose ID has long digit groups carries a virtual-account link and R2 matches it.
+  const state = seedMerchant("virtual-account");
+  makeRecord(state, "customers", { id: digitHeavy, name: "Synthetic virtual-account customer", status: "active", data: { consentProvenance: "Synthetic imported consent" } });
+  const due = makeRecord(state, "due-items", { name: "Virtual account instalment", status: "scheduled", customerId: digitHeavy, amountKobo: 1_000_000, reference: "VA-LOAN-1", data: { dueDate: "2027-07-01", owner: "lms", outstandingKobo: 1_000_000 } });
+  addObservation(state, { reference: "VA-1", amountKobo: 1_000_000, source: "transfer", customerId: digitHeavy, virtualAccountCustomerId: digitHeavy, eventId: "va-1", occurredAt: wat("2027-07-01T09:00:00") });
+  reconcile(state, ctxAt(wat("2027-07-01T09:05:00"), "Finance"));
+  const payment = recordsOf(state, "payments").find((item) => item.reference === "VA-1")!;
+  assert.equal(payment.data.virtualAccountCustomerId, digitHeavy);
+  assert.equal(payment.status, "allocated");
+  assert.equal(recordsOf(state, "allocations").find((item) => item.data.paymentId === payment.id)!.data.rule, "R2");
+  assert.equal(due.status, "paid");
+  checks += 16;
+}
+
+console.log(`Validation golden tests passed (${checks} checks): state machines, exception codes, cutover contract and hand-back, mandate limits, submitted policies, failure-code normalisation, batch/status vocabularies, template lifecycle, guided CSV imports, blank CSV numbers and ₦0 receipts, and the bank-detail screen.`);

@@ -12,7 +12,7 @@ afterEach(() => api.uninstall());
 describe('console efficiency', () => {
   it('saves and restores a filter combination only for its own lender', async () => {
     const user = userEvent.setup();
-    renderApp('/exceptions?view=overdue&owner=Finance&type=unallocated_payment');
+    renderApp('/exceptions?view=overdue&owner=Finance&type=unallocated_payment&q=private-customer-search');
     await screen.findByRole('tab', { name: /All open \(\d+\)/ });
     await user.click(screen.getByText('Saved views'));
     await user.type(screen.getByLabelText('View name'), 'Finance follow-up');
@@ -22,7 +22,10 @@ describe('console efficiency', () => {
     await user.click(screen.getByRole('button', { name: 'Finance follow-up' }));
     await waitFor(() => expect((screen.getByLabelText('Filter exceptions by owner') as HTMLSelectElement).value).toBe('Finance'));
     expect(Object.fromEntries(new URLSearchParams(window.location.search))).toMatchObject({ view: 'overdue', owner: 'Finance', type: 'unallocated_payment' });
-    expect(localStorage.getItem(`valopay-queue-views-v1:${api.merchantIds[0]}:exceptions`)).not.toContain('customerId');
+    expect(JSON.parse(localStorage.getItem(`valopay-queue-views-v2:Sandbox Admin:${api.merchantIds[0]}:exceptions`) || 'null')).toEqual([
+      { name: 'Finance follow-up', view: 'overdue', owner: 'Finance', type: 'unallocated_payment' },
+    ]);
+    expect(new URLSearchParams(window.location.search).has('q')).toBe(false);
     await user.selectOptions(screen.getByLabelText('Active lender', { selector: '#lender-sidebar' }), api.merchantIds[1]!);
     await user.click(screen.getByText('Saved views'));
     expect(screen.queryByRole('button', { name: 'Finance follow-up' })).toBeNull();
@@ -31,6 +34,27 @@ describe('console efficiency', () => {
     await user.click(screen.getByRole('button', { name: 'Delete saved view Finance follow-up' }));
     expect(screen.queryByRole('button', { name: 'Finance follow-up' })).toBeNull();
     expect(api.calls.filter(call => call.method === 'POST')).toEqual([]);
+  });
+
+  // Backlog item UX-B06-X1: views saved before search text stopped being stored kept it under the v1 keys, which nothing
+  // read or removed; and a stored view's search was still applied when opened.
+  it('removes the views an earlier build saved with search text, and never applies a stored search', async () => {
+    const user = userEvent.setup();
+    const lender = api.merchantIds[0]!;
+    localStorage.setItem(`valopay-queue-views-v1:${lender}:exceptions`, JSON.stringify([{ name: 'Old', view: 'open', owner: '', type: '', q: 'Ada Okonkwo' }]));
+    localStorage.setItem(`valopay-queue-views-v1:${api.merchantIds[1]}:mandates`, '[]');
+    localStorage.setItem('valopay-theme', 'dark');
+    localStorage.setItem(`valopay-queue-views-v2:Sandbox Admin:${lender}:exceptions`, JSON.stringify([{ name: 'Edited by hand', view: 'overdue', owner: 'Finance', type: '', q: 'private-customer-search' }]));
+    renderApp('/exceptions');
+    await screen.findByRole('tab', { name: /All open \(\d+\)/ });
+    expect(Object.keys(localStorage).filter(key => key.startsWith('valopay-queue-views-v1:'))).toEqual([]);
+    expect(localStorage.getItem('valopay-theme')).toBe('dark');
+    await user.click(screen.getByText('Saved views'));
+    await user.click(screen.getByRole('button', { name: 'Edited by hand' }));
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('owner')).toBe('Finance'));
+    expect(new URLSearchParams(window.location.search).has('q')).toBe(false);
+    await user.click(screen.getByRole('button', { name: 'Delete saved view Edited by hand' }));
+    expect(localStorage.getItem(`valopay-queue-views-v2:Sandbox Admin:${lender}:exceptions`)).toBe('[]');
   });
 
   it('does not claim a view was saved when browser storage fails', async () => {
@@ -96,6 +120,8 @@ describe('recorded closing positions', () => {
     const result = closeHistory(rows, '2026-09-19', '2026-09-19');
     expect(result.items.map(row => row.id)).toEqual(['3', '2']);
     expect(result.metrics.map(metric => metric.change)).toEqual([-3000, -2]);
+    // The close list carries naira only, and the label says so: money in another currency is in each close's details.
+    expect(result.metrics[0]!.label).toBe('Unmatched value in naira at close');
   });
   it('does not invent missing measurements or compare a single snapshot', () => {
     const first = close('1', '2026-09-18T12:00:00Z');

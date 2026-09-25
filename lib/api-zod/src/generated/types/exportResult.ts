@@ -5,15 +5,23 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
+import type { ExportResultStage } from './exportResultStage';
 import type { ExportResultStatus } from './exportResultStatus';
 
 /**
- * Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.
+ * Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. expiredAt appears only after an approved retention run deleted the job's file, and is the time of that deletion, not a scheduled expiry: the download and the retry then answer 410, and a ready job keeps its checksum. retentionRunId names that run, whose deletion receipt an administrator opens with GET /v1/lifecycle/runs/{id}. No answer gives a ready file an expiry date, because a file is removed only by an approved retention run, apart from an idle anonymous sandbox, which the expiry sweep deletes whole with its files (docs/deployment.md); a hold or an evidence link can keep a file for longer than the lender's retention period. Optional status retains compatibility with older immediate-export responses.
  */
 export interface ExportResult {
   id: string;
   downloadUrl: string;
   status?: ExportResultStatus;
+  stage?: ExportResultStage;
+  lastProgressAt?: string;
+  stalled?: boolean;
+  retryAllowed?: boolean;
+  recoveryAt?: string;
+  expiredAt?: string;
+  retentionRunId?: string;
   kind?: string;
   format?: string;
   customerId?: string;

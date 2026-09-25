@@ -26,7 +26,7 @@ export function MandateActionContext({ mandate, customerName, customerReference,
     },
     mandate_reissue: {
       after: mandate.status === 'pending_activation' ? 'Existing mandate: Expired · New mandate: Awaiting activation' : `Existing mandate: ${current} · New mandate: Awaiting activation`,
-      consequence: 'A separate mandate and consent record will be created with this customer, debit limit and activation method. Existing instalments are not relinked automatically.',
+      consequence: 'A separate mandate and consent record will be created with this customer and activation method, for the debit limit entered below. A limit is part of the customer’s consent, so a new limit needs this reissue. Existing instalments are not relinked automatically.',
       recovery: 'The old mandate history is retained. If the new mandate is no longer needed, cancel it; reissuing does not reactivate the old mandate.',
     },
     activation_reminder: {

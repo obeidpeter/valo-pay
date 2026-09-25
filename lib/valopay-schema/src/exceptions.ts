@@ -12,14 +12,14 @@ export interface ExceptionDefinition {
 export const exceptionCatalogue = {
   activation_expired: { title: "Activation deadline passed", trigger: "Mandate passes its activation deadline", owner: "Operations", slaBusinessDays: 2, severity: "medium", resolutionCodes: ["reissued", "customer_declined", "wrong_number", "abandoned"] },
   unallocated_payment: { title: "Unallocated payment", trigger: "A payment is still unmatched after 24 hours", owner: "Finance", slaBusinessDays: 2, severity: "medium", resolutionCodes: ["allocated_manual", "refund_requested", "held_credit", "not_ours"] },
-  suspected_duplicate: { title: "Suspected duplicate", trigger: "A payment may be a duplicate of another payment", owner: "Finance", slaBusinessDays: 2, severity: "high", resolutionCodes: ["confirmed_duplicate_refund", "distinct_payments", "applied_to_next"] },
+  suspected_duplicate: { title: "Suspected duplicate", trigger: "A payment may be a duplicate of another payment", owner: "Finance", slaBusinessDays: 2, severity: "high", resolutionCodes: ["confirmed_duplicate_refund", "distinct_payments", "applied_to_next", "same_payment", "not_money"] },
   overpayment: { title: "Overpayment", trigger: "The allocated amount is more than the instalment due", owner: "Finance", slaBusinessDays: 2, severity: "medium", resolutionCodes: ["refund_requested", "held_credit", "applied_to_next"] },
   unpaid_after_final_attempt: { title: "Unpaid after final attempt", trigger: "The retry policy allows no further attempts", owner: "Operations", slaBusinessDays: 2, severity: "medium", resolutionCodes: ["paid_other_channel", "rescheduled_by_lms", "written_off_by_lms", "mandate_reissued"] },
   mandate_limit_exceeded: { title: "Mandate limit exceeded", trigger: "Due amount above the mandate limit", owner: "Operations", slaBusinessDays: 2, severity: "medium", resolutionCodes: ["limit_raised_new_mandate", "split_by_lms", "cancelled"] },
   settlement_variance: { title: "Settlement variance", trigger: "The net settlement amount does not match the gross amount minus fees", owner: "Finance", slaBusinessDays: 2, severity: "medium", resolutionCodes: ["fee_schedule_updated", "provider_corrected", "accepted_variance"] },
   provider_status_mismatch: { title: "Provider status mismatch", trigger: "Provider and platform disagree on mandate or attempt state", owner: "Operations", slaBusinessDays: 1, severity: "medium", resolutionCodes: ["provider_state_adopted", "platform_state_confirmed", "escalated_to_provider"] },
   customer_dispute: { title: "Customer dispute", trigger: "The provider reports a disputed debit, or the lender records a customer dispute", owner: "Operations", slaBusinessDays: 1, severity: "high", resolutionCodes: ["upheld_refund", "not_upheld", "mandate_cancelled"] },
-  unknown_outcome: { title: "Unknown outcome", trigger: "The debit outcome is still unknown after 24 hours", owner: "Operations", slaBusinessDays: 1, severity: "high", resolutionCodes: ["resolved_succeeded", "resolved_failed", "provider_confirmed_no_debit"] },
+  unknown_outcome: { title: "Unknown outcome", trigger: "A debit's outcome, or a pay-by-bank payment's, is still unknown after 24 hours", owner: "Operations", slaBusinessDays: 1, severity: "high", resolutionCodes: ["resolved_succeeded", "resolved_failed", "provider_confirmed_no_debit"] },
   notice_not_evidenced: { title: "Notice acceptance not confirmed", trigger: "There is no evidence that the provider accepted a required notice by its deadline", owner: "Operations", slaBusinessDays: 1, severity: "medium", resolutionCodes: ["number_corrected", "channel_restored", "deferred_executed", "customer_unreachable_cancelled"] },
   ownership_conflict: { title: "Ownership conflict", trigger: "Another system attempted collection for a group assigned to Valo Pay, or the group changed before the required ownership check", owner: "Admin", slaBusinessDays: 1, severity: "high", resolutionCodes: ["incumbent_disabled", "owner_reverted", "duplicate_refund_requested"] },
   imported_consent_gap: { title: "Missing consent evidence", trigger: "An imported mandate with missing consent evidence", owner: "Admin", slaBusinessDays: 2, severity: "high", resolutionCodes: ["gap_accepted_in_writing", "evidence_supplied", "mandate_reissued", "observation_only"] },
@@ -49,8 +49,94 @@ export function resolveExceptionType(raw: unknown): ExceptionType | undefined {
 /** Codes accepted for an exception whose type is not in the catalogue (legacy rows). */
 export const genericResolutionCodes = ["no_action_required", "customer_contacted", "evidence_received", "ownership_corrected", "refunded_externally", "allocated", "duplicate_confirmed", "mandate_reissued"] as const;
 
+/**
+ * The code the platform records when it closes an exception whose condition
+ * cleared: its payment was allocated in full, refunded or reversed, its
+ * instalment was paid or left dispute, or its outcome became known. It is
+ * never a person's resolution, so no type offers it.
+ */
+export const conditionClearedCode = "condition_cleared";
+
 /** The controlled resolution codes for an exception's type, or the generic list for a type outside the catalogue. */
 export function resolutionCodesFor(rawType: unknown): readonly string[] {
   const type = resolveExceptionType(rawType);
   return type ? exceptionCatalogue[type].resolutionCodes : genericResolutionCodes;
+}
+
+/**
+ * Finance's resolutions of payment evidence held for review (a
+ * suspected_duplicate linked to the evidence): same_payment joins it to the
+ * payment its exception names as more evidence of that payment, and not_money
+ * sets it aside, so no payment is made from it.
+ */
+export const heldEvidenceCodes = { samePayment: "same_payment", notMoney: "not_money" } as const;
+
+/**
+ * The condition a suspected_duplicate for held payment evidence is raised
+ * with: the evidence, the payment its exception names, and whether it was
+ * held only because it came through another connection than that payment.
+ */
+export function heldEvidenceCondition(observationId: string, paymentId: string, connectionOnly: boolean): string {
+  return connectionOnly ? `suspected_duplicate:${observationId}:connection:${paymentId}` : `suspected_duplicate:${observationId}:${paymentId}`;
+}
+
+/** What a held-evidence condition (heldEvidenceCondition) names; undefined for any other condition. */
+export function heldEvidenceOf(condition: unknown): { observationId: string; paymentId: string; connectionOnly: boolean } | undefined {
+  const parts = String(condition ?? "").split(":");
+  if (parts[0] !== "suspected_duplicate" || !parts[1]) return undefined;
+  if (parts.length === 4 && parts[2] === "connection" && parts[3]) return { observationId: parts[1], paymentId: parts[3], connectionOnly: true };
+  if (parts.length === 3 && parts[2]) return { observationId: parts[1], paymentId: parts[2], connectionOnly: false };
+  return undefined;
+}
+
+/**
+ * The condition a Finance-owned provider_status_mismatch is raised with for
+ * evidence of a reversal that has waited for a payment no connection has seen.
+ */
+export function unseenReversalCondition(observationId: string): string {
+  return `provider_status_mismatch:${observationId}:unseen`;
+}
+
+/** The evidence an unseen-payment condition (unseenReversalCondition) names; undefined for any other condition. */
+export function unseenReversalOf(condition: unknown): string | undefined {
+  const parts = String(condition ?? "").split(":");
+  return parts.length === 3 && parts[0] === "provider_status_mismatch" && parts[1] && parts[2] === "unseen" ? parts[1] : undefined;
+}
+
+/**
+ * Finance's resolutions of a reversal that waited for a payment no connection
+ * has seen: setAside (platform_state_confirmed) sets it aside for good, so it
+ * reverses nothing even if its payment arrives later; adopted
+ * (provider_state_adopted) keeps it waiting, with no new exception, and the
+ * reconciliation that records its payment reverses that payment. While Finance
+ * checks with the provider, the exception stays open.
+ */
+export const unseenReversalCodes = { setAside: "platform_state_confirmed", adopted: "provider_state_adopted" } as const;
+
+/**
+ * Decision on what a resolution means: it keeps the meaning Finance was shown
+ * when it was recorded. resolve_exception records the rules it was recorded
+ * under on the exception (data.resolutionRuleVersion); a resolution without it
+ * was recorded by an earlier build. That build told Finance that any resolution
+ * of a reversal waiting for a payment no connection had seen sets the reversal
+ * aside at the next reconciliation, so such a resolution still does, whatever
+ * its code; only one that records a rule version follows unseenReversalCodes.
+ */
+export const resolutionRuleVersion = 1;
+
+/**
+ * The resolution codes one exception offers: its type's, less those that do
+ * not apply to it. A suspected_duplicate offers same_payment only for payment
+ * evidence held because it came through another connection alone, and
+ * not_money only for held payment evidence, never for a held payment. The
+ * provider_status_mismatch of a reversal waiting for a payment no connection
+ * has seen offers only the two codes that decide it (unseenReversalCodes).
+ */
+export function resolutionCodesForException(exception: { data?: { type?: unknown; condition?: unknown } | null } | null | undefined): readonly string[] {
+  const codes = resolutionCodesFor(exception?.data?.type);
+  const type = resolveExceptionType(exception?.data?.type);
+  if (type === "provider_status_mismatch" && unseenReversalOf(exception?.data?.condition)) return codes.filter((code) => code === unseenReversalCodes.adopted || code === unseenReversalCodes.setAside);
+  if (type !== "suspected_duplicate") return codes;
+  const held = heldEvidenceOf(exception?.data?.condition);
+  return codes.filter((code) => code === heldEvidenceCodes.samePayment ? held?.connectionOnly === true : code === heldEvidenceCodes.notMoney ? held !== undefined : true);
 }

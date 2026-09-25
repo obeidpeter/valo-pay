@@ -61,8 +61,11 @@ export default defineConfig({
           // zod dependency, so orval >= 8.23 falls back to Zod 4 syntax while
           // the catalog installs zod 3. Pin to match the catalog.
           version: 3,
+          // Query strings are not coerced: a missing required value (merchantId)
+          // must be refused as missing, not turned into the text "undefined".
+          // Numbers still arrive as text and are coerced.
           coerce: {
-            query: ['boolean', 'number', 'string'],
+            query: ['boolean', 'number'],
             param: ['boolean', 'number', 'string'],
             body: ['bigint', 'date'],
             response: ['bigint', 'date'],

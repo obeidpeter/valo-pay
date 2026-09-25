@@ -1,13 +1,13 @@
 import { QueueSearch } from '@/components/queue-search';
 import { QueueFreshness } from '@/components/queue-freshness';
 import { useSafePerformAction as usePerformAction } from '@/lib/safe-mutations';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow } from '@/components/empty-state';
 import { LoadingRow } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
-import { formatKobo, formatDate, formatCount } from '@/lib/formatters';
+import { formatKobo, formatDate, formatCount, formatNumber, formatPercent } from '@/lib/formatters';
 import { CheckSquare, Info, ShieldAlert, CornerUpLeft, Plus, ClipboardCheck, RefreshCw } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { RecordDialog } from '@/components/record-dialog';
@@ -15,28 +15,43 @@ import { RecordLabel, StatusBadge, readableLabel } from '@/components/record-lab
 import { useQueryClient } from '@tanstack/react-query';
 import { Link, useSearch } from 'wouter';
 import { nairaToKobo } from '@/lib/money-input';
-import { saidBy } from '@/lib/notify';
+import { notifyDone, saidBy } from '@/lib/notify';
 import { useHashTarget } from '@/lib/use-hash-target';
 import { safeCollectionReturnTo } from '@/lib/record-navigation';
-import { RecordPagination } from '@/components/record-pagination';
+import { RecordPagination, usePageProblemFocus } from '@/components/record-pagination';
 import { useUrlPagination } from '@/lib/use-url-pagination';
+import { keepRowsWhilePaging, searchWithoutSubmitting, useDebouncedSearch } from '@/lib/use-record-pagination';
 import { useReconciliationPage } from '@/lib/use-reconciliation-page';
 import { LoadProblem } from '@/components/load-problem';
+import { KEPT_IN_OPERATIONS, OpenOperations } from '@/components/pilot-ui';
+import { hasFeeSchedule, paymentUnappliedKobo } from '@workspace/valopay-schema';
+import { formatRecordMoney as moneyOf } from '@/lib/currencies';
 
-const paymentAvailable = (record: any): number => Math.max(0, Number(record?.amountKobo || 0) - Number(record?.data?.allocatedKobo || 0));
+const paymentAvailable = (record: any): number => paymentUnappliedKobo(record);
 const instalmentOutstanding = (record: any): number => Math.max(0, Number(record?.data?.outstandingKobo ?? record?.amountKobo ?? 0));
 
-function MatchEvidence({ allocation, payment, instalment, decision }: { allocation: any; payment: any; instalment: any; decision: string }) {
+/** A table whose rows could not be loaded (Refresh queue tries again); after a press of its pager, `pager`, it takes the pager's focus. */
+function TableProblem({ colSpan, pager, children }: { colSpan: number; pager: string; children: ReactNode }) {
+  const notice = useRef<HTMLParagraphElement>(null);
+  usePageProblemFocus(notice, pager);
+  return <tr><td colSpan={colSpan} className="p-5"><p ref={notice} role="alert" className="text-sm text-destructive">{children}</p></td></tr>;
+}
+
+function MatchEvidence({ allocation, payment, instalment, customer, decision }: { allocation: any; payment: any; instalment: any; customer?: any; decision: string }) {
   const available = paymentAvailable(payment), outstanding = instalmentOutstanding(instalment);
+  const payerToConfirm = !!payment && !payment.customerId;
   return (
     <section aria-label="Match evidence" className="space-y-3 rounded-lg border bg-secondary/20 p-3 text-sm">
+      <div><p className="font-semibold">{customer?.name || 'Customer details unavailable'}</p><p className="mt-1 font-mono text-xs">{customer?.reference || 'Check the linked records before recording a decision.'}</p></div>
+      {payerToConfirm && <p className="rounded-md border border-warning-border bg-warning p-2 text-warning-foreground">The payment evidence names no payer. {decision === 'confirm_allocation' ? `Confirming records ${customer?.name || `the customer of instalment ${instalment?.reference || ''}`.trim()} as the payer, with your reason, in the same action.` : 'Rejecting leaves the payment unallocated, with no payer, for Finance to allocate.'}</p>}
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="rounded-md border bg-card p-3">
           <h3 className="font-semibold">Recorded payment</h3>
           <p className="mt-1 break-words font-mono text-xs">{payment?.reference || 'Payment details unavailable'}</p>
-          <p className="mt-2">Received: <strong>{payment ? formatKobo(payment.amountKobo) : 'Not available'}</strong></p>
+          <p className="mt-2">Received: <strong>{payment ? moneyOf(payment, payment.amountKobo) : 'Not available'}</strong></p>
           <p className="text-xs text-muted-foreground">{payment ? formatDate(String(payment.data?.observedAt || payment.createdAt)) : 'Reload to check this payment.'}</p>
-          <p className="mt-2">Available to allocate: {payment ? formatKobo(available) : 'Not available'}</p>
+          <p className="mt-2">Available to allocate: {payment ? moneyOf(payment, available) : 'Not available'}</p>
+          <dl className="mt-3 space-y-1 text-xs"><div><dt className="inline text-muted-foreground">Receipt status: </dt><dd className="inline">{payment?.data?.collectionStatus ? readableLabel(payment.data.collectionStatus) : 'Not recorded'}</dd></div><div><dt className="inline text-muted-foreground">Settlement: </dt><dd className="inline">{payment?.data?.settlementStatus ? readableLabel(payment.data.settlementStatus) : 'Not recorded'}</dd></div><div><dt className="inline text-muted-foreground">Provider reference: </dt><dd className="inline break-all">{String(payment?.data?.providerReference || payment?.reference || 'Not recorded')}</dd></div></dl>
         </div>
         <div className="rounded-md border bg-card p-3">
           <h3 className="font-semibold">Instalment</h3>
@@ -45,12 +60,13 @@ function MatchEvidence({ allocation, payment, instalment, decision }: { allocati
           <p className="text-xs text-muted-foreground">Due: {formatDate(String(instalment?.data?.dueDate || ''))}</p>
         </div>
       </div>
-      <p><strong>Why this match was suggested:</strong> {String(allocation.data?.explanation || 'No explanation was recorded. Review the source records before deciding.')}</p>
+      <p><strong>Matching evidence:</strong> {String(allocation.data?.explanation || 'No explanation was recorded. Review the source records before deciding.')}</p>
       <p className="text-xs text-muted-foreground">Rule {String(allocation.data?.rule || 'not recorded')} · {readableLabel(allocation.data?.confidence || 'not recorded')}</p>
+      <p className="text-xs text-muted-foreground">The allocation credits the payment amount to the instalment. Provider fees are reviewed separately in settlement batches; they do not reduce this credit.</p>
       {decision === 'confirm_allocation' ? <>
         <p>Confirming applies <strong>{formatKobo(allocation.amountKobo)}</strong> to this instalment.</p>
         {payment && instalment && allocation.amountKobo <= available && allocation.amountKobo <= outstanding && <p className="text-xs text-muted-foreground">After confirmation: {formatKobo(available - allocation.amountKobo)} unapplied payment; {formatKobo(outstanding - allocation.amountKobo)} still due.</p>}
-      </> : <p>Rejecting removes this proposed match. The payment remains available for Finance to review and allocate.</p>}
+      </> : decision === 'reject_allocation' ? <p>Rejecting removes this proposed match. The payment remains available for Finance to review and allocate.</p> : decision === 'review_correct' ? <p>Recording this match as correct keeps the allocation applied and saves your review and reason in the audit record.</p> : <div className="rounded-md border border-warning-border bg-warning p-3 text-warning-foreground"><p className="font-semibold">This corrects the recorded allocation</p><p className="mt-1">Marking it incorrect removes {formatKobo(allocation.amountKobo)} from the applied allocation and reopens the payment and instalment for review. This does not refund or move money.</p>{payment && instalment && <p className="mt-2">After correction: {formatKobo(Math.min(payment.amountKobo, available + allocation.amountKobo))} unapplied payment; {formatKobo(Math.min(instalment.amountKobo, outstanding + allocation.amountKobo))} still due.</p>}</div>}
     </section>
   );
 }
@@ -84,9 +100,17 @@ export default function ReconciliationPage() {
   const {data:confirmedAllocations,isLoading:isLoadingAudit,error:auditError,pagination:auditPage}=confirmedAllocationsQuery;
   const {data:batches,isLoading:isLoadingBatches,error:batchesError,pagination:batchPage}=batchesQuery;
   const [allocationSearch,setAllocationSearch]=useState('');
+  // Each opening of the picker starts from an empty search, never the last one typed.
+  const [allocationSession,setAllocationSession]=useState(0);
+  const {search:allocationTerm,searchPending:allocationSearchPending}=useDebouncedSearch(allocationSearch,`${merchantId}:${allocationSession}`);
   const choicePage=useUrlPagination(merchantId,'allocation-');
-  const choiceParams={merchantId:merchantId!,search:allocationSearch,limit:choicePage.pageSize,offset:choicePage.offset};
-  const choicesQuery=useListRecords('due-items',choiceParams,{query:{enabled:!!merchantId && isDialogOpen && actionKind==='manual_allocate',queryKey:getListRecordsQueryKey('due-items',choiceParams)}});
+  // The server lists only the instalments a manual allocation of this payment accepts (paymentId): its payer's, or, when its evidence names an
+  // instalment but no payer, that instalment's customer's; one that names neither offers every instalment, and choosing one identifies the payer.
+  // So the pager counts exactly the choices it offers.
+  const choiceParams={merchantId:merchantId!,search:allocationTerm,limit:choicePage.pageSize,offset:choicePage.offset,allocatable:'true' as const,...(actionKind==='manual_allocate'&&selectedRecord?.id?{paymentId:String(selectedRecord.id)}:{})};
+  // Paging keeps the choices shown, and so the pager and the control pressed, until the next page arrives.
+  const choicesKey=getListRecordsQueryKey('due-items',choiceParams);
+  const choicesQuery=useListRecords('due-items',choiceParams,{query:{enabled:!!merchantId && isDialogOpen && actionKind==='manual_allocate' && !allocationSearchPending,queryKey:choicesKey,placeholderData:keepRowsWhilePaging(choicesKey,queryClient)}});
   const rows=[...(proposals?.related||[]),...(payments?.related||[]),...(allPayments?.related||[]),...(observations?.related||[]),...(confirmedAllocations?.related||[])];
   const customerById=new Map(rows.filter(r=>r.kind==='customers').map(r=>[r.id,r]));
   const paymentById=new Map(rows.filter(r=>r.kind==='payments').map(r=>[r.id,r]));
@@ -114,6 +138,7 @@ export default function ReconciliationPage() {
   };
 
   const handleAction = (record: any, action: string) => {
+    if (action === 'manual_allocate') { setAllocationSearch(''); setAllocationSession(session => session + 1); choicePage.resetPage(); }
     setSelectedRecord(record);
     setActionKind(action);
     setIsDialogOpen(true);
@@ -128,8 +153,13 @@ export default function ReconciliationPage() {
 
   if (!merchantId) return null;
   const isProposalDecision = actionKind === 'confirm_allocation' || actionKind === 'reject_allocation';
-  const selectedPayment = isProposalDecision ? paymentById.get(String(selectedRecord?.data?.paymentId)) : selectedRecord;
-  const selectedInstalment = isProposalDecision ? dueItemById.get(String(selectedRecord?.data?.dueItemId)) : null;
+  const isAllocationReview = actionKind === 'review_allocation';
+  const selectedPayment = isProposalDecision || isAllocationReview ? paymentById.get(String(selectedRecord?.data?.paymentId)) : selectedRecord;
+  // A payment with no payer whose evidence names an instalment takes only that instalment's customer's instalments; the
+  // page has the instalment and its customer (a named instalment that does not exist leaves every customer's offered).
+  const namedInstalment = !selectedRecord?.customerId && selectedRecord?.data?.dueItemId ? dueItemById.get(String(selectedRecord.data.dueItemId)) : undefined;
+  const namedCustomer = namedInstalment ? customerById.get(String(namedInstalment.customerId)) : undefined;
+  const selectedInstalment = isProposalDecision || isAllocationReview ? dueItemById.get(String(selectedRecord?.data?.dueItemId)) : null;
 
   return (
     <div className="space-y-6">
@@ -165,7 +195,8 @@ export default function ReconciliationPage() {
 
       {runRecon.error && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm">
         <p className="font-semibold text-destructive">Reconciliation could not be completed</p>
-        <p className="mt-1">{saidBy(runRecon.error, 'The service could not finish this check.')} Run reconciliation again to retry.</p>
+        <p className="mt-1">{saidBy(runRecon.error, 'The service could not finish this check.')} Run reconciliation again to retry.{runRecon.hasUnconfirmedOutcome && <> {KEPT_IN_OPERATIONS}</>}</p>
+        {runRecon.hasUnconfirmedOutcome && <OpenOperations />}
       </div>}
       {runResult && <section role="status" aria-label="Reconciliation result" className="rounded-lg border border-success/30 bg-success/5 p-4 text-sm">
         <p className="font-semibold">Reconciliation complete</p>
@@ -174,7 +205,7 @@ export default function ReconciliationPage() {
           {[
             ['Evidence resolved', runResult.data?.observationsResolved], ['Awaiting review', runResult.data?.proposed],
             ['Unallocated payments', runResult.data?.unallocated], ['Possible duplicates', runResult.data?.possibleDuplicates],
-          ].map(([label, count]) => <div key={String(label)}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-lg font-semibold tabular-nums">{Number(count || 0)}</dd></div>)}
+          ].map(([label, count]) => <div key={String(label)}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-lg font-semibold tabular-nums">{formatNumber(Number(count || 0))}</dd></div>)}
         </dl>
       </section>}
 
@@ -186,6 +217,7 @@ export default function ReconciliationPage() {
         ].map(item => <Button key={item.key} asChild size="sm" variant={view === item.key ? 'default' : 'outline'}><Link href={searchHref(item.key)} aria-current={view === item.key ? 'page' : undefined}>{item.label}</Link></Button>)}
       </nav>
 
+      {/* Paging keeps each table's rows until the next page arrives; the frames never anchor the scroll, so the browser holds the pager in place when a page has fewer rows. */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {/* Allocations requiring review */}
         {view !== 'duplicates' && <div className="bg-card border rounded-xl shadow-sm flex flex-col xl:col-span-2">
@@ -193,11 +225,11 @@ export default function ReconciliationPage() {
             <CheckSquare className="h-5 w-5 text-warning-strong" />
             <h2 className="font-semibold">Proposed matches</h2>
             <span className="ml-auto bg-warning text-warning-foreground text-xs font-bold px-2 py-1 rounded-full">
-              {proposals?.total || 0} pending
+              {formatNumber(proposals?.total || 0)} pending
             </span>
           </div>
           
-          <ScrollFrame label="Proposed matches" className="p-0 overflow-x-auto">
+          <ScrollFrame label="Proposed matches" className="p-0 overflow-x-auto [overflow-anchor:none]">
             <table className="min-w-[780px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground">
                 <tr>
@@ -213,13 +245,13 @@ export default function ReconciliationPage() {
                 {isLoadingProposals ? (
                   <LoadingRow colSpan={6} what="proposed matches" />
                 ) : proposalsError && !proposals ? (
-                  <tr><td colSpan={6} className="p-5"><p role="alert" className="text-sm text-destructive">Proposed matches could not be loaded. Use Refresh queue above to try again.</p></td></tr>
+                  <TableProblem colSpan={6} pager="proposed matches">Proposed matches could not be loaded. Use Refresh queue above to try again.</TableProblem>
                 ) : proposalRows.length === 0 ? (
                   <EmptyRow colSpan={6} title={q ? 'No results match your search' : "No proposed matches to review"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Possible payment matches appear here when they need Finance to confirm them. Run reconciliation to check for new matches.</>}</EmptyRow>
                 ) : (
                   proposalRows.map(prop => (
                     <tr key={prop.id} className="hover:bg-secondary/10">
-                      <td className="px-4 py-4"><RecordLabel record={customerById.get(String(prop.customerId))} id={prop.customerId} customer /></td>
+                      <td className="px-4 py-4">{prop.customerId ? <RecordLabel record={customerById.get(String(prop.customerId))} id={prop.customerId} customer /> : <><RecordLabel record={customerById.get(String(dueItemById.get(String(prop.data?.dueItemId))?.customerId))} id={dueItemById.get(String(prop.data?.dueItemId))?.customerId} customer /><span className="mt-1 block text-xs text-muted-foreground">Payer to confirm</span></>}</td>
                       <td className="px-4 py-4 text-xs"><RecordLabel record={paymentById.get(String(prop.data?.paymentId))} id={prop.data?.paymentId} /></td>
                       <td className="px-4 py-4 text-xs"><RecordLabel record={dueItemById.get(String(prop.data?.dueItemId))} id={prop.data?.dueItemId} /></td>
                       <td className="px-4 py-3 text-right font-mono font-medium">{formatKobo(prop.amountKobo)}</td>
@@ -247,21 +279,21 @@ export default function ReconciliationPage() {
               </tbody>
             </table>
           </ScrollFrame>
-          {!isLoadingProposals && !proposalsError && (proposals?.total || 0) > 25 && <RecordPagination pagination={proposalPage} total={proposals?.total || 0} label="proposed matches" />}
+          {!isLoadingProposals && !proposalsError && (proposals?.total || 0) > 25 && <RecordPagination pagination={proposalPage} total={proposals?.total || 0} busy={proposalsQuery.isPlaceholderData} label="proposed matches" />}
         </div>}
 
         {view !== 'review' && <section aria-label="Possible duplicate payments" className="bg-card border rounded-xl shadow-sm overflow-hidden xl:col-span-2">
           <div className="border-b p-4"><h2 className="font-semibold">Possible duplicate payments</h2><p className="mt-1 text-xs text-muted-foreground">These payments are held for Finance review and are never allocated automatically.</p></div>
-          <ScrollFrame label="Possible duplicate payments" className="overflow-x-auto">
+          <ScrollFrame label="Possible duplicate payments table" className="overflow-x-auto [overflow-anchor:none]">
             <table className="min-w-[650px] w-full text-left text-sm"><thead className="border-b bg-secondary/30 text-muted-foreground"><tr><th className="p-4 font-medium">Payment</th><th className="p-4 font-medium">Customer</th><th className="p-4 font-medium">Reason for review</th><th className="p-4 text-right font-medium">Amount</th><th className="p-4 text-right font-medium">Next step</th></tr></thead>
-              <tbody className="divide-y">{isLoadingAllPayments ? <LoadingRow colSpan={5} what="possible duplicate payments" /> : allPaymentsError && !allPayments ? <tr><td colSpan={5} className="p-4"><p role="alert" className="text-destructive">Possible duplicate payments could not be loaded. Use Refresh queue above to try again.</p></td></tr> : duplicates.length === 0 ? <EmptyRow colSpan={5} title={q ? 'No results match your search' : "No possible duplicates"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Payments needing a duplicate check will appear here.</>}</EmptyRow> : duplicates.map(payment => <tr key={payment.id}>
+              <tbody className="divide-y">{isLoadingAllPayments ? <LoadingRow colSpan={5} what="possible duplicate payments" /> : allPaymentsError && !allPayments ? <TableProblem colSpan={5} pager="duplicate payments">Possible duplicate payments could not be loaded. Use Refresh queue above to try again.</TableProblem> : duplicates.length === 0 ? <EmptyRow colSpan={5} title={q ? 'No results match your search' : "No possible duplicates"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Payments needing a duplicate check will appear here.</>}</EmptyRow> : duplicates.map(payment => <tr key={payment.id}>
                 <td className="p-4"><RecordLabel record={payment} id={payment.id} /></td><td className="p-4"><RecordLabel record={customerById.get(String(payment.customerId))} id={payment.customerId} customer /></td>
                 <td className="p-4 text-xs text-muted-foreground">{String(payment.data?.explanation || 'Check the provider references and recorded evidence before deciding whether this is a separate payment.')}</td>
-                <td className="p-4 text-right font-mono">{formatKobo(payment.amountKobo)}</td><td className="p-4 text-right"><Link className="inline-flex min-h-9 items-center text-xs font-medium underline underline-offset-4" href="/exceptions?type=suspected_duplicate">Review exceptions</Link></td>
+                <td className="p-4 text-right font-mono">{moneyOf(payment, payment.amountKobo)}</td><td className="p-4 text-right"><Link className="inline-flex min-h-9 items-center text-xs font-medium underline underline-offset-4" href="/exceptions?type=suspected_duplicate">Review exceptions</Link></td>
               </tr>)}</tbody>
             </table>
           </ScrollFrame>
-          {!isLoadingAllPayments && !allPaymentsError && (allPayments?.total || 0) > 25 && <RecordPagination pagination={duplicatePage} total={allPayments?.total || 0} label="duplicate payments" />}
+          {!isLoadingAllPayments && !allPaymentsError && (allPayments?.total || 0) > 25 && <RecordPagination pagination={duplicatePage} total={allPayments?.total || 0} busy={allPaymentsQuery.isPlaceholderData} label="duplicate payments" />}
         </section>}
 
         {view === 'all' && <>
@@ -275,7 +307,7 @@ export default function ReconciliationPage() {
               {formatCount(payments?.total || 0, 'item')}
             </span>
           </div>
-          <ScrollFrame label="Unallocated payments" className="p-0 overflow-auto max-h-[400px]">
+          <ScrollFrame label="Unallocated payments" className="p-0 overflow-auto max-h-[400px] [overflow-anchor:none]">
             <table className="min-w-[460px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
@@ -288,9 +320,9 @@ export default function ReconciliationPage() {
                 {isLoadingPayments ? (
                   <LoadingRow colSpan={3} what="unallocated payments" />
                 ) : paymentsError && !payments ? (
-                  <tr><td colSpan={3} className="p-5"><p role="alert" className="text-sm text-destructive">Unallocated payments could not be loaded. Use Refresh queue above to try again.</p></td></tr>
+                  <TableProblem colSpan={3} pager="unallocated payments">Unallocated payments could not be loaded. Use Refresh queue above to try again.</TableProblem>
                 ) : paymentRows.length === 0 ? (
-                  <EmptyRow colSpan={3} title={q ? 'No results match your search' : "No unallocated payments"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Unallocated payments have not yet been assigned to an instalment. There are none waiting in this list.</>}</EmptyRow>
+                  <EmptyRow colSpan={3} title={q ? 'No results match your search' : "No unallocated payments"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Payments appear here while they hold money no instalment has: unallocated payments, and the rest of a payment allocated in part. There are none waiting in this list.</>}</EmptyRow>
                 ) : (
                   paymentRows.map(pay => (
                     <tr key={pay.id} className="hover:bg-secondary/10">
@@ -298,7 +330,7 @@ export default function ReconciliationPage() {
                         {pay.reference}
                         <div className="text-muted-foreground">{formatDate(pay.createdAt)}</div>
                       </td>
-                      <td className="px-4 py-2 text-right font-mono font-medium">{formatKobo(pay.amountKobo)}</td>
+                      <td className="px-4 py-2 text-right font-mono font-medium">{moneyOf(pay, pay.amountKobo)}{paymentAvailable(pay) !== pay.amountKobo && <div className="text-xs font-normal text-muted-foreground">{moneyOf(pay, paymentAvailable(pay))} left to allocate</div>}</td>
                       <td className="px-4 py-2 text-right space-x-2 flex justify-end items-center">
                         <Button size="sm" variant="outline" className="h-7 text-xs" action="manual_allocate" record={pay} onClick={() => handleAction(pay, 'manual_allocate')}>Allocate</Button>
                         <Button size="sm" variant="outline" className="h-8 text-xs" action="record_refund" record={pay} onClick={() => handleAction(pay, 'record_refund')} title="Record external refund" aria-label={`Record external refund for ${pay.reference}`}>
@@ -311,7 +343,7 @@ export default function ReconciliationPage() {
               </tbody>
             </table>
           </ScrollFrame>
-          {!isLoadingPayments && !paymentsError && (payments?.total || 0) > 25 && <RecordPagination pagination={paymentPage} total={payments?.total || 0} label="unallocated payments" />}
+          {!isLoadingPayments && !paymentsError && (payments?.total || 0) > 25 && <RecordPagination pagination={paymentPage} total={payments?.total || 0} busy={paymentsQuery.isPlaceholderData} label="unallocated payments" />}
         </div>
 
         {/* Unresolved Observations */}
@@ -323,7 +355,7 @@ export default function ReconciliationPage() {
               {formatCount(observations?.total || 0, 'item')}
             </span>
           </div>
-          <ScrollFrame label="Unresolved payment evidence" className="p-0 overflow-auto max-h-[400px]">
+          <ScrollFrame label="Unresolved payment evidence" className="p-0 overflow-auto max-h-[400px] [overflow-anchor:none]">
              <table className="min-w-[440px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
@@ -336,7 +368,7 @@ export default function ReconciliationPage() {
                 {isLoadingObs ? (
                   <LoadingRow colSpan={3} what="unresolved payment evidence" />
                 ) : observationsError && !observations ? (
-                  <tr><td colSpan={3} className="p-5"><p role="alert" className="text-sm text-destructive">Payment evidence could not be loaded. Use Refresh queue above to try again.</p></td></tr>
+                  <TableProblem colSpan={3} pager="payment evidence">Payment evidence could not be loaded. Use Refresh queue above to try again.</TableProblem>
                 ) : observationRows.length === 0 ? (
                   <EmptyRow colSpan={3} title={q ? 'No results match your search' : "No unresolved payment evidence"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Provider records and bank statement entries appear here when they cannot be linked to a payment or settlement batch.</>}</EmptyRow>
                 ) : (
@@ -346,14 +378,14 @@ export default function ReconciliationPage() {
                         <span className="px-1.5 py-0.5 bg-secondary text-xs rounded border">{readableLabel(obs.data?.source)}</span>
                       </td>
                       <td className="px-4 py-2 font-mono text-xs truncate max-w-[120px]" title={obs.reference}>{obs.reference}</td>
-                      <td className="px-4 py-2 text-right font-mono font-medium">{formatKobo(obs.amountKobo)}</td>
+                      <td className="px-4 py-2 text-right font-mono font-medium">{moneyOf(obs, obs.amountKobo)}</td>
                     </tr>
                   ))
                 )}
               </tbody>
             </table>
           </ScrollFrame>
-          {!isLoadingObs && !observationsError && (observations?.total || 0) > 25 && <RecordPagination pagination={observationPage} total={observations?.total || 0} label="payment evidence" />}
+          {!isLoadingObs && !observationsError && (observations?.total || 0) > 25 && <RecordPagination pagination={observationPage} total={observations?.total || 0} busy={observationsQuery.isPlaceholderData} label="payment evidence" />}
         </div>
         
         {/* Precision audit */}
@@ -363,9 +395,9 @@ export default function ReconciliationPage() {
             <ClipboardCheck className="h-5 w-5 text-primary" />
             <h2 className="font-semibold">Match accuracy review</h2>
             <p className="w-full text-xs leading-relaxed text-muted-foreground">Finance checks a sample of automatic matches from the last completed month. Marking a match incorrect stops counting that allocation and reopens the payment and instalment.</p>
-            <p className="text-xs font-medium">{precision?.reviewed || 0} of {precision?.sampleSize || 0} sampled matches reviewed{precision?.falseMatchRate !== null && precision?.falseMatchRate !== undefined ? ` · incorrect match rate ${(Number(precision.falseMatchRate) * 100).toFixed(1)}% (95% confidence interval: ${(Number(precision.interval?.low) * 100).toFixed(1)}% to ${(Number(precision.interval?.high) * 100).toFixed(1)}%)` : ''}.</p>
+            <p className="text-xs font-medium">{formatNumber(Number(precision?.reviewed || 0))} of {formatNumber(Number(precision?.sampleSize || 0))} sampled matches reviewed{precision?.falseMatchRate !== null && precision?.falseMatchRate !== undefined ? ` · incorrect match rate ${formatPercent(Number(precision.falseMatchRate), 1)} (95% confidence interval: ${formatPercent(Number(precision.interval?.low), 1)} to ${formatPercent(Number(precision.interval?.high), 1)})` : ''}.</p>
           </div>
-          <ScrollFrame label="Match accuracy review" className="p-0 overflow-x-auto max-h-[400px]">
+          <ScrollFrame label="Match accuracy review table" className="p-0 overflow-x-auto max-h-[400px] [overflow-anchor:none]">
             <table className="min-w-[780px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
@@ -382,7 +414,7 @@ export default function ReconciliationPage() {
                 {isLoadingAudit ? (
                   <LoadingRow colSpan={7} what="the match review sample" />
                 ) : auditError && !confirmedAllocations ? (
-                  <tr><td colSpan={7} className="p-5"><p role="alert" className="text-sm text-destructive">The match review sample could not be loaded. Use Refresh queue above to try again.</p></td></tr>
+                  <TableProblem colSpan={7} pager="sampled matches">The match review sample could not be loaded. Use Refresh queue above to try again.</TableProblem>
                 ) : auditSample.length === 0 ? (
                   <EmptyRow colSpan={7} title={q ? 'No results match your search' : "No automatic matches to review yet"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>A daily close selects a sample from the last completed month's automatic matches rated certain. Finance can then check whether those matches are correct.</>}</EmptyRow>
                 ) : (
@@ -406,7 +438,7 @@ export default function ReconciliationPage() {
               </tbody>
             </table>
           </ScrollFrame>
-          {!isLoadingAudit && !auditError && (confirmedAllocations?.total || 0) > 25 && <RecordPagination pagination={auditPage} total={confirmedAllocations?.total || 0} label="sampled matches" />}
+          {!isLoadingAudit && !auditError && (confirmedAllocations?.total || 0) > 25 && <RecordPagination pagination={auditPage} total={confirmedAllocations?.total || 0} busy={confirmedAllocationsQuery.isPlaceholderData} label="sampled matches" />}
         </div>
 
         {/* Settlement Batches */}
@@ -415,7 +447,7 @@ export default function ReconciliationPage() {
             <h2 className="font-semibold flex items-center gap-2"><Info className="h-5 w-5 text-primary" /> Settlement batches</h2>
             <Button size="sm" kind="settlement-batches" onClick={handleCreateBatch}><Plus className="h-4 w-4 mr-2" /> Add batch</Button>
           </div>
-          <ScrollFrame label="Settlement batches" className="p-0 overflow-x-auto max-h-[400px]">
+          <ScrollFrame label="Settlement batches" className="p-0 overflow-x-auto max-h-[400px] [overflow-anchor:none]">
              <table className="min-w-[650px] w-full text-sm text-left">
               <thead className="bg-secondary/30 border-b text-muted-foreground sticky top-0">
                 <tr>
@@ -431,25 +463,27 @@ export default function ReconciliationPage() {
                 {isLoadingBatches ? (
                   <LoadingRow colSpan={6} what="settlement batches" />
                 ) : batchesError && !batches ? (
-                  <tr><td colSpan={6} className="p-5"><p role="alert" className="text-sm text-destructive">Settlement batches could not be loaded. Use Refresh queue above to try again.</p></td></tr>
+                  <TableProblem colSpan={6} pager="settlement batches">Settlement batches could not be loaded. Use Refresh queue above to try again.</TableProblem>
                 ) : !batches || batches.items.length === 0 ? (
                   <EmptyRow colSpan={6} title={q ? 'No results match your search' : "No settlement batches"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>A batch groups payments in one provider settlement report. Add a synthetic batch or import a settlement report to see it here.</>}</EmptyRow>
                 ) : (
-                  batches.items.map(b => (
-                    <tr key={b.id} className="hover:bg-secondary/10">
+                  batches.items.map(b => {
+                    // Each batch in its own currency; fees are checked only where a fee schedule exists for it.
+                    const currency = String(b.data?.currency || 'NGN'), apart = Array.isArray(b.data?.otherCurrencyLineIds) ? b.data.otherCurrencyLineIds.length : 0;
+                    return <tr key={b.id} className="hover:bg-secondary/10">
                       <td className="px-4 py-2 font-medium">{String(b.data?.provider || '-')}</td>
-                      <td className="px-4 py-2"><Button variant="link" type="button" className="min-h-9 font-mono text-xs underline underline-offset-4 hover:text-primary" action="edit_batch" record={b} onClick={() => handleAction(b, 'edit_batch')} aria-label={`Edit settlement batch ${String(b.data?.batchReference || b.reference)}`}>{String(b.data?.batchReference || b.reference)}</Button><span className="hidden print:inline font-mono text-xs">{String(b.data?.batchReference || b.reference)}</span></td>
-                      <td className="px-4 py-2 text-right font-mono text-xs">{formatKobo(Number(b.data?.grossKobo || 0))}</td>
-                      <td className="px-4 py-2 text-right font-mono text-xs text-destructive">{formatKobo(Number(b.data?.feeKobo || 0))}</td>
-                      <td className="px-4 py-2 text-right font-mono font-medium">{formatKobo(Number(b.data?.netKobo || 0))}</td>
+                      <td className="px-4 py-2"><Button variant="link" type="button" className="min-h-9 font-mono text-xs underline underline-offset-4 hover:text-primary" action="edit_batch" record={b} onClick={() => handleAction(b, 'edit_batch')} aria-label={`Edit settlement batch ${String(b.data?.batchReference || b.reference)}`}>{String(b.data?.batchReference || b.reference)}</Button><span className="hidden print:inline font-mono text-xs">{String(b.data?.batchReference || b.reference)}</span>{apart > 0 && <span className="block text-xs text-muted-foreground">{formatCount(apart, 'line')} in another currency, not counted</span>}</td>
+                      <td className="px-4 py-2 text-right font-mono text-xs">{moneyOf(b, Number(b.data?.grossKobo || 0))}</td>
+                      <td className="px-4 py-2 text-right font-mono text-xs text-destructive">{moneyOf(b, Number(b.data?.feeKobo || 0))}{!hasFeeSchedule(currency) && <span className="block font-sans text-muted-foreground">Not checked: no fee schedule for {currency}</span>}</td>
+                      <td className="px-4 py-2 text-right font-mono font-medium">{moneyOf(b, Number(b.data?.netKobo || 0))}</td>
                       <td className="px-4 py-2 text-right"><StatusBadge status={b.status} /></td>
-                    </tr>
-                  ))
+                    </tr>;
+                  })
                 )}
               </tbody>
             </table>
           </ScrollFrame>
-          {!isLoadingBatches && !batchesError && batches && (batches?.total || 0) > 25 && <RecordPagination pagination={batchPage} total={batches?.total || 0} label="settlement batches" />}
+          {!isLoadingBatches && !batchesError && batches && (batches?.total || 0) > 25 && <RecordPagination pagination={batchPage} total={batches?.total || 0} busy={batchesQuery.isPlaceholderData} label="settlement batches" />}
         </div>
 
         </>}
@@ -476,23 +510,35 @@ export default function ReconciliationPage() {
         }
         actionMutation={actionKind === 'create_batch' || actionKind === 'edit_batch' ? undefined : actionKind}
         actionRecordId={isProposalDecision ? selectedRecord?.data?.paymentId : undefined}
-        defaultValues={actionKind === 'review_allocation' ? { correct: reviewCorrect } : actionKind === 'manual_allocate' ? { amountKobo: paymentAvailable(selectedRecord) } : {}}
-        context={isProposalDecision && selectedRecord ? <MatchEvidence allocation={selectedRecord} payment={selectedPayment} instalment={selectedInstalment} decision={actionKind} /> : actionKind === 'manual_allocate' ? values => {
+        onDone={response => { if (response?.data?.payerCustomerId) notifyDone('Payer recorded', String(response.message)); }}
+        defaultValues={isProposalDecision ? { data: { proposalId: selectedRecord?.id, proposalUpdatedAt: selectedRecord?.updatedAt } } : actionKind === 'review_allocation' ? { correct: reviewCorrect } : actionKind === 'manual_allocate' ? { amountKobo: paymentAvailable(selectedRecord) } : actionKind === 'create_batch' ? { currency: 'NGN' } : actionKind === 'edit_batch' ? { currency: String(selectedRecord?.data?.currency || 'NGN') } : {}}
+        currencyField={actionKind === 'create_batch' || actionKind === 'edit_batch' ? 'currency' : undefined}
+        context={isProposalDecision && selectedRecord ? <MatchEvidence allocation={selectedRecord} payment={selectedPayment} instalment={selectedInstalment} customer={customerById.get(String(selectedRecord.customerId || selectedInstalment?.customerId))} decision={actionKind} /> : isAllocationReview && selectedRecord ? values => <MatchEvidence allocation={selectedRecord} payment={selectedPayment} instalment={selectedInstalment} customer={customerById.get(String(selectedRecord.customerId))} decision={values.correct ? 'review_correct' : 'review_incorrect'} /> : actionKind === 'manual_allocate' ? values => {
           const due = dueItemById.get(String(values.dueItemId));
           const available = paymentAvailable(selectedRecord), outstanding = instalmentOutstanding(due);
           let amount: number | null = null;
           try { amount = nairaToKobo(String(values.amountKobo ?? '')); } catch { /* The field reports incomplete or invalid input on submit. */ }
           return <section aria-label="Allocation preview" className="space-y-2 rounded-lg border bg-secondary/20 p-3 text-sm">
-            <label className="grid gap-1 text-xs">Find an instalment<input type="search" value={allocationSearch} onChange={event=>{setAllocationSearch(event.target.value);choicePage.setPage(0);}} placeholder="Name or reference" className="min-h-10 rounded-md border bg-background px-3" /></label>
-            {choicesQuery.error ? <LoadProblem what="instalment choices" error={choicesQuery.error} retry={()=>{void choicesQuery.refetch();}} /> : choicesQuery.isFetching ? <p role="status">Loading instalment choices…</p> : <RecordPagination pagination={choicePage} total={choicesQuery.data?.total || 0} label="instalment choices" />}
+            <label className="grid gap-1 text-xs">Find an instalment<input type="search" value={allocationSearch} onKeyDown={searchWithoutSubmitting} onChange={event=>{setAllocationSearch(event.target.value);choicePage.resetPage();}} placeholder="Name or reference" className="min-h-10 rounded-md border bg-background px-3" /></label>
+            <p className="text-xs text-muted-foreground">Instalments that are paid, cancelled, closed or in dispute cannot take a payment and are not listed.</p>
+            {choicesQuery.error ? <LoadProblem what="instalment choices" pager="instalment choices" error={choicesQuery.error} retry={()=>{void choicesQuery.refetch();}} /> : <>
+              {(choicesQuery.isFetching || allocationSearchPending) && <p role="status">Loading instalment choices…</p>}
+              {!allocationSearchPending && choicesQuery.data && (choicesQuery.data.total === 0 ? !choicesQuery.isFetching && <p role="status">{allocationTerm ? 'No instalment that can take a payment matches this search.' : selectedRecord?.customerId ? 'This payer has no instalment that can take a payment.' : namedInstalment ? `${namedCustomer?.name ? `${namedCustomer.name}, whose instalment its evidence names,` : `The customer of instalment ${namedInstalment.reference}, which its evidence names,`} has no instalment that can take a payment.` : 'No instalment can take a payment.'}</p> : <RecordPagination pagination={choicePage} total={choicesQuery.data.total} busy={choicesQuery.isFetching} label="instalment choices" />)}
+            </>}
             <p className="font-semibold">Payment {selectedRecord?.reference}</p>
-            <p>Available to allocate: <strong>{formatKobo(available)}</strong></p>
+            <p>Recorded payer: <strong>{customerById.get(String(selectedRecord?.customerId))?.name || (selectedRecord?.customerId ? 'Customer name unavailable' : 'Not identified')}</strong></p>
+            {!selectedRecord?.customerId ? <>
+              <p className="text-xs text-muted-foreground">Confirm the payer from the payment evidence, then choose one of their instalments. Allocating records that customer as the payer, with your reason, in the same action.{namedInstalment ? ` Its evidence names instalment ${namedInstalment.reference}${namedCustomer?.name ? ` of ${namedCustomer.name}` : ''}, so only that customer's instalments are offered.` : ''}</p>
+              {due && <p>Payer to be recorded: <strong>{customerById.get(String(due.customerId))?.name || `the customer of instalment ${due.reference}`}</strong></p>}
+            </> : <p className="text-xs text-muted-foreground">Only this payer's instalments are offered.</p>}
+            <p>Available to allocate: <strong>{moneyOf(selectedRecord, available)}</strong></p>
             <p>Selected instalment outstanding: <strong>{due ? formatKobo(outstanding) : 'Choose an instalment'}</strong></p>
             {due && amount !== null && amount > 0 && amount <= available && amount <= outstanding && <p className="text-xs text-muted-foreground">After allocation: {formatKobo(available - amount)} unapplied payment; {formatKobo(outstanding - amount)} still due.</p>}
           </section>;
-        } : undefined}
+        } : actionKind === 'record_refund' && selectedRecord ? <p className="text-sm">This records a refund of <strong>{moneyOf(selectedRecord, paymentAvailable(selectedRecord))}</strong>, the money this payment has not applied. Valo Pay does not move money.</p> : undefined}
         validate={(values): Record<string, string> => {
-          if (isProposalDecision && (!selectedPayment || !selectedInstalment)) return { reason: 'Payment or instalment details are unavailable. Close this dialog and reload before deciding.' };
+          if ((isProposalDecision || isAllocationReview) && (!selectedPayment || !selectedInstalment)) return { reason: 'Payment or instalment details are unavailable. Close this dialog and reload before deciding.' };
+          if (actionKind === 'confirm_allocation' && (selectedRecord.amountKobo > paymentAvailable(selectedPayment) || selectedRecord.amountKobo > instalmentOutstanding(selectedInstalment))) return { reason: 'The proposed amount exceeds the payment available or instalment outstanding. Close this dialog, refresh the queue and review the changed balances.' };
           if (actionKind !== 'manual_allocate') return {};
           const due = dueItemById.get(String(values.dueItemId));
           if (!due) return { dueItemId: 'Choose an instalment from the current lender.' };
@@ -504,7 +550,7 @@ export default function ReconciliationPage() {
         }}
         fields={
           actionKind === 'manual_allocate' ? [
-            { name: 'dueItemId', label: 'Instalment', type: 'select', isData: true, required: true, options: (choicesQuery.data?.items || []).filter(item => instalmentOutstanding(item) > 0 && !['paid', 'closed', 'cancelled'].includes(item.status)).map(item => ({ value: item.id, label: `${customerById.get(String(item.customerId))?.name || item.name} · ${item.reference} · ${formatKobo(instalmentOutstanding(item))} due` })) },
+            { name: 'dueItemId', label: 'Instalment', type: 'select', isData: true, required: true, options: (choicesQuery.data?.items || []).map(item => ({ value: item.id, label: `${customerById.get(String(item.customerId))?.name || item.name} · ${item.reference} · ${formatKobo(instalmentOutstanding(item))} due` })) },
             { name: 'amountKobo', label: 'Amount to allocate (₦)', type: 'number', isData: true, required: true }
           ] : 
           actionKind === 'record_refund' ? [
@@ -517,6 +563,8 @@ export default function ReconciliationPage() {
             { name: 'name', label: 'Name', type: 'text', required: true },
             { name: 'reference', label: 'Batch reference (reconciliation sets the status)', type: 'text', required: true },
             { name: 'provider', label: 'Provider', type: 'text', isData: true, required: true },
+            // A batch the provider's lines build is in its first line's currency, which reconciliation records.
+            ...(actionKind === 'create_batch' || !Array.isArray(selectedRecord?.data?.lineObservationIds) ? [{ name: 'currency', label: 'Currency', type: 'text' as const, isData: true, required: true, help: 'The ISO 4217 code of the batch\'s money, NGN unless the provider paid it out in another currency. Enter the amounts in this currency.' }] : []),
             { name: 'grossKobo', label: 'Amount before fees (₦)', type: 'number', isData: true, required: true },
             { name: 'feeKobo', label: 'Fee (₦)', type: 'number', isData: true, required: true },
             { name: 'netKobo', label: 'Amount after fees (₦)', type: 'number', isData: true, required: true }

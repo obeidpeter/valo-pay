@@ -4,7 +4,10 @@ import type { DomainState, RecordInput, RecordOf, ValopayRecord } from "./types"
 /** Keys that name a raw financial identifier, matched on snake_case word boundaries so "accountableUser" is not an account number. */
 const forbiddenBankKey = /(^|_)(account_?(number|no|num)|bank_?account|nuban|iban|bvn|card_?(number|no|num)|pan)(_|$)/;
 const digitRun = /\d[\d -]{6,}\d/;
-const financialKey = /(bank|account|card|iban|bvn|nuban|pan)/;
+/** Keys with a financial word, singular or plural, on the same word boundaries: "companyId" and "cardinality" are not financial. */
+const financialKey = /(^|_)(bank|account|card|iban|bvn|nuban|pan)s?(_|$)/;
+/** Record IDs are UUIDs; their hyphenated digit groups are not account or card numbers. */
+const recordId = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 const snakeCase = (key: string): string => key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
 
 /** Rejecting raw financial identifiers keeps this synthetic sandbox non-sensitive. */
@@ -15,7 +18,8 @@ export function assertNoRealBankDetails(value: unknown, key = ""): void {
     if (forbiddenBankKey.test(name)) {
       throw new Error("Raw bank account details are not permitted; store a masked identifier only.");
     }
-    if (digitRun.test(value) && financialKey.test(name)) {
+    // Separators do not matter ("Account ID" is account_id), and record IDs are set aside before looking for a number.
+    if (financialKey.test(name.replace(/[^a-z0-9]+/g, "_")) && digitRun.test(value.replace(recordId, "#"))) {
       throw new Error("Raw financial identifiers are not permitted in this sandbox.");
     }
     return;
@@ -29,10 +33,15 @@ export function assertNoRealBankDetails(value: unknown, key = ""): void {
   }
 }
 
-/** A record by id, typed when the kind is a known literal; a kind given as a string yields the stored shape. */
+/**
+ * A record by id, typed when the kind is a known literal; a kind given as a
+ * string yields the stored shape. A record a request names that the lender
+ * does not have is a 404, whether the path, an action's recordId or a linked
+ * id in the body names it.
+ */
 export function findRecord<K extends string = string>(state: DomainState, id: string, kind?: K): RecordOf<K> {
   const record = state.records.find((item) => item.id === id && (!kind || item.kind === kind));
-  if (!record) throw new Error(`Record ${id} was not found.`);
+  if (!record) throw Object.assign(new Error(`Record ${id.length > 100 ? `${id.slice(0, 100)}…` : id} was not found in this lender.`), { status: 404 });
   return record as RecordOf<K>;
 }
 
@@ -70,4 +79,16 @@ export function makeRecord<K extends string>(state: DomainState, kind: K, input:
 
 export function masked(value: unknown): boolean {
   return typeof value === "string" && (/[*xX•]/.test(value) || value.length <= 4);
+}
+
+/** A payload still sealed as stored (the store's envelope); the domain never opens one itself. */
+export const isSealedPayload = (value: unknown): boolean => !!value && typeof value === "object" && "protectedPayload" in value;
+/**
+ * The store opens an import batch's protected source rows only for the views
+ * that show or use them. A view that needs them and finds them sealed is a
+ * route that forgot to open them: a server fault, never an empty or
+ * "unavailable" answer a person might act on.
+ */
+export function assertSourceOpened(batch: ValopayRecord, fields: readonly string[]): void {
+  if (fields.some((field) => isSealedPayload(batch.data[field]))) throw Object.assign(new Error("Protected source rows were not opened for this request."), { status: 500 });
 }

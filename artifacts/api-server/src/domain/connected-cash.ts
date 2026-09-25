@@ -1,4 +1,5 @@
-import { createHash } from "node:crypto";
+import { counted } from "@workspace/valopay-schema";
+import { canonicalDigest } from "../lib/digests";
 
 /** Synthetic/import planning domain. These functions never connect to a bank, post to an ERP,
  * file a return or pay an employee. All amounts are integer currency minor units. */
@@ -74,18 +75,10 @@ function unique(values: string[], label: string): void {
   if (new Set(values).size !== values.length)
     fail("duplicate_identity", `${label} must be unique.`);
 }
-function stable(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
-  if (value && typeof value === "object")
-    return `{${Object.entries(value)
-      .filter(([, v]) => v !== undefined)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([k, v]) => `${JSON.stringify(k)}:${stable(v)}`)
-      .join(",")}}`;
-  return JSON.stringify(value) ?? "null";
-}
+// Request, approval, frozen-plan and manifest hashes are stored and checked
+// again, so they keep the form they were first written in.
 export const cashEvidenceHash = (value: unknown): string =>
-  createHash("sha256").update(stable(value)).digest("hex");
+  canonicalDigest(value, "legacy-en-us-omit");
 const DAY = 86_400_000;
 
 export interface CashAccount extends CurrencyScope {
@@ -233,7 +226,7 @@ export function consolidateCashPositions(
     const omitted = all.filter((a) => !ids.has(a.id)).map((a) => a.id);
     if (omitted.length)
       warnings.push(
-        `${omitted.length} account(s) omitted: missing authority or not known at this as-of time.`,
+        `${counted(omitted.length, "account")} omitted: missing authority or not known at this as-of time.`,
       );
     if (
       usable.some(
@@ -327,7 +320,8 @@ export interface ForecastOptions {
   downsideDelayDays?: number;
   bufferMinor?: number;
 }
-/** CASH-06: historical evaluation excludes future knowledge; reserves are planning values only. */
+/** CASH-06: historical evaluation excludes future knowledge; reserves are planning values only.
+ * An approved outflow past its due date is still owed and counts as due now; an overdue receipt is left out. */
 export function forecastCash(
   scope: CurrencyScope,
   openingMinor: number,
@@ -364,12 +358,19 @@ export function forecastCash(
     instant(c.dueAt, "Due time");
     required(c.version, "Commitment version");
   });
+  // An approved outflow past its due date is still owed, so it counts as due
+  // now; a receipt past its due date is not counted on until it arrives.
   const eligible = commitments.filter(
     (c) =>
       c.approved &&
       instant(c.knownAt, "Known time") <= at &&
-      instant(c.dueAt, "Due time") >= at,
+      (c.direction === "outflow" || instant(c.dueAt, "Due time") >= at),
   );
+  const dueTime = (c: CashCommitment) =>
+    Math.max(instant(c.dueAt, "Due time"), at);
+  const overdueOutflows = eligible.filter(
+    (c) => instant(c.dueAt, "Due time") < at,
+  ).length;
   const points = Array.from({ length: Math.ceil(days / 7) }, (_, i) =>
     Math.min((i + 1) * 7, days),
   );
@@ -379,7 +380,7 @@ export function forecastCash(
       const until = at + day * DAY;
       const included = eligible.filter(
         (c) =>
-          instant(c.dueAt, "Due time") +
+          dueTime(c) +
             (name === "downside" && c.direction === "inflow"
               ? delay * DAY
               : 0) <=
@@ -433,7 +434,7 @@ export function forecastCash(
     planningBufferMinor: buffer,
     scenarios,
     includedCommitmentIds: eligible
-      .filter((c) => instant(c.dueAt, "Due time") <= at + days * DAY)
+      .filter((c) => dueTime(c) <= at + days * DAY)
       .map((c) => c.id),
     excludedCommitmentIds: commitments
       .filter((c) => !eligible.includes(c))
@@ -445,6 +446,13 @@ export function forecastCash(
         : [
             "Refresh or reconcile the opening balance before using funding readiness.",
           ]),
+      ...(overdueOutflows === 1
+        ? ["An approved outflow past its due date is included as due now."]
+        : overdueOutflows
+          ? [
+              `${overdueOutflows} approved outflows past their due dates are included as due now.`,
+            ]
+          : []),
     ],
   };
 }

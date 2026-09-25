@@ -21,5 +21,7 @@ export default defineConfig({
     // cold imports so a large machine's CPU count cannot overwhelm the runner.
     maxWorkers: 4,
     testTimeout: 20_000,
+    // The pilot enquiry address is host configuration; tests use a documentation-reserved address.
+    env: { VITE_PILOT_EMAIL: "pilots@example.test" },
   },
 });

@@ -8,7 +8,9 @@
 
 export type ListQueueParams = {
 /**
- * The active lender, belonging to the caller’s workspace.
+ * The active lender, belonging to the caller’s workspace. Missing or empty, the request is refused with 400 naming merchantId.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 /**

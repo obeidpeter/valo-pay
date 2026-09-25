@@ -1,16 +1,22 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ShieldCheck, LockKeyhole, Link2 } from "lucide-react";
 import {
   ConnectedFrame,
   ConnectedPanel,
   ConnectedStatus,
+  ConnectedRecovery,
+  ConnectedState,
 } from "@/components/connected-frame";
 import { Button } from "@/components/ui/button";
 import { Loading } from "@/components/loading";
 import { LoadProblem } from "@/components/load-problem";
 import { useConnected } from "@/lib/connected";
-import { formatDate } from "@/lib/formatters";
+import { formatDate, formatNumber } from "@/lib/formatters";
+import { useFormDraft } from "@/lib/unsaved-changes";
 import { useWorkspace } from "@/lib/workspace-context";
+const TITLE = "Permissions & readiness",
+  DESCRIPTION =
+    "Know what each connection may do, who authorised it, and when that permission ends.";
 export default function ConnectionsPage() {
   const api = useConnected(),
     { merchantId } = useWorkspace();
@@ -24,6 +30,12 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
     [failure, setFailure] = useState(""),
     [success, setSuccess] = useState(""),
     [revoke, setRevoke] = useState("");
+  const revokeTrigger = useRef<HTMLButtonElement | null>(null);
+  // A grant or revocation typed but not saved is a draft: leaving asks first.
+  const draft = useFormDraft({ purpose, subject, days, reason });
+  useEffect(() => {
+    if (revoke) document.getElementById("permission-reason")?.focus();
+  }, [revoke]);
   const sme = [
     "merchant_account_read",
     "erp_draft",
@@ -36,6 +48,9 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
   ) => {
     setFailure("");
     setSuccess("");
+    draft.sending(
+      action === "consent.grant" ? { purpose, subject, days, reason: "" } : null,
+    );
     try {
       await api.run(action, data, id, reason);
       setSuccess(
@@ -45,30 +60,53 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
       );
       setRevoke("");
       setReason("");
+      draft.saved();
     } catch (e) {
       setFailure((e as Error).message);
     }
   };
-  if (api.isLoading) return <Loading what="permissions" />;
-  if (api.error || !api.data)
+  if (api.isLoading) return <Loading what="permissions" heading />;
+  if (!api.data)
     return (
-      <LoadProblem
-        what="permissions"
-        error={api.error}
-        retry={() => void api.refetch()}
-      />
+      <ConnectedState title={TITLE} description={DESCRIPTION}>
+        <LoadProblem
+          what="permissions"
+          error={api.error}
+          retry={() => void api.refetch()}
+        />
+        <ConnectedRecovery recovery={api} />
+      </ConnectedState>
     );
   const data = api.data;
+  const canGrant = api.canWrite && ["Admin", "Operations"].includes(data.role);
+  const canRevoke =
+    api.canWrite &&
+    ["Admin", "Operations", "Compliance reviewer"].includes(data.role);
+  const selectedPermission = data.consents.find((c) => c.id === revoke);
+  const subjectName = (id: string) =>
+    id === "sme"
+      ? "Sample SME · separate legal entity"
+      : data.customers.find((c) => c.id === id)?.name || "Unknown subject";
   return (
     <ConnectedFrame
-      title="Permissions & readiness"
-      description="Know what each connection may do, who authorised it, and when that permission ends."
+      title={TITLE}
+      description={DESCRIPTION}
+      recovery={api}
+      onRecovered={() => {
+        setFailure("");
+        setRevoke("");
+        setReason("");
+        draft.saved();
+      }}
+      onReleased={() => setFailure("")}
     >
       <div className="connected-metrics">
         <div className="connected-metric">
           <span>Active sample permissions</span>
           <strong>
-            {data.consents.filter((c) => c.effectiveStatus === "active").length}
+            {formatNumber(
+              data.consents.filter((c) => c.effectiveStatus === "active").length,
+            )}
           </strong>
         </div>
         <div className="connected-metric">
@@ -86,7 +124,7 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
         account or authorise a live payment. Account reading, credit assessment,
         accounting and payroll each need separate authority.
       </p>
-      {failure && (
+      {failure && !api.hasUnconfirmedOutcome && (
         <p role="alert" className="connected-error">
           {failure}
         </p>
@@ -115,13 +153,31 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
                   ? {}
                   : {
                       purpose,
-                      subjectId: sme ? "sme" : subject || data.customers[0]?.id,
+                      subjectId: sme ? "sme" : subject,
                       days: Number(days),
                     },
                 revoke || undefined,
               );
             }}
           >
+            {selectedPermission && (
+              <div
+                className="connected-note"
+                role="region"
+                aria-label="Permission to revoke"
+              >
+                <p className="font-semibold text-foreground">
+                  {selectedPermission.name}
+                </p>
+                <p>{subjectName(selectedPermission.data.subjectId)}</p>
+                <p>Expires {formatDate(selectedPermission.data.expiresAt)}</p>
+                <p className="mt-2">
+                  Only this permission will end. Other purposes stay unchanged.
+                  New work depending on it will stop; existing evidence will
+                  remain.
+                </p>
+              </div>
+            )}
             {!revoke && (
               <>
                 <div>
@@ -142,9 +198,11 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
                   <label htmlFor="permission-subject">Subject</label>
                   <select
                     id="permission-subject"
-                    value={sme ? "sme" : subject || data.customers[0]?.id}
+                    value={sme ? "sme" : subject}
                     onChange={(e) => setSubject(e.target.value)}
+                    required
                   >
+                    {!sme && <option value="">Choose an applicant</option>}
                     {sme ? (
                       <option value="sme">
                         Sample SME · separate legal entity
@@ -188,7 +246,13 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
               />
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button disabled={api.pending || !api.canWrite} type="submit">
+              <Button
+                disabled={
+                  api.pending ||
+                  (revoke ? !canRevoke || !selectedPermission : !canGrant)
+                }
+                type="submit"
+              >
                 {api.pending
                   ? "Saving…"
                   : revoke
@@ -199,15 +263,21 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setRevoke("")}
+                  disabled={api.pending}
+                  onClick={() => {
+                    setRevoke("");
+                    setReason("");
+                    setFailure("");
+                    revokeTrigger.current?.focus();
+                  }}
                 >
                   Cancel
                 </Button>
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              Admin or Operations can grant permissions. Compliance reviewers
-              can also revoke them.
+              Your role: {data.role}. Admin or Operations can grant permissions.
+              Admin, Operations or Compliance reviewer can revoke them.
             </p>
           </form>
         </ConnectedPanel>
@@ -247,11 +317,13 @@ function ConnectionsContent({ api }: { api: ReturnType<typeof useConnected> }) {
                       size="sm"
                       variant="outline"
                       className="mt-3"
-                      disabled={api.pending || !api.canWrite}
-                      onClick={() => {
+                      disabled={api.pending || !canRevoke}
+                      onClick={(event) => {
+                        revokeTrigger.current = event.currentTarget;
                         setRevoke(c.id);
                         setReason("");
-                        document.getElementById("permission-reason")?.focus();
+                        setFailure("");
+                        setSuccess("");
                       }}
                     >
                       Review revocation

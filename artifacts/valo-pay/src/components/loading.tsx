@@ -10,11 +10,20 @@ import { cn } from '@/lib/utils';
  * take, and the same everywhere (Nielsen 1: visibility of system status;
  * Dix: responsiveness and observability; animation sparingly).
  */
-export function Loading({ what, className }: { what: string; className?: string }) {
+export function Loading({ what, className, heading = false }: { what: string; className?: string; heading?: boolean }) {
+  const line = <>
+    <Loader2 className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+    <span>Loading {what}…</span>
+  </>;
+  // A page that shows nothing but this line gives it as the page's heading, so the page is never without an h1.
+  if (heading) return (
+    <h1 className={cn('p-6 text-sm font-normal text-muted-foreground', className)}>
+      <span role="status" className="flex items-center gap-2">{line}</span>
+    </h1>
+  );
   return (
     <p role="status" className={cn('flex items-center gap-2 p-6 text-sm text-muted-foreground', className)}>
-      <Loader2 className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-      <span>Loading {what}…</span>
+      {line}
     </p>
   );
 }

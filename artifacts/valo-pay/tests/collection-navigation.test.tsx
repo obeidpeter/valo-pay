@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { renderApp, screen, userEvent, waitFor, within } from './harness';
 import { collectionReturnTo, recordDestination, safeCollectionReturnTo } from '@/lib/record-navigation';
+import { koboToNaira } from '@/lib/money-input';
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi({ now: '2026-09-18T11:00:00.000Z' }); });
@@ -153,10 +154,17 @@ describe('mandate change confirmations', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Reissue mandate' }));
     expect(consent.getAttribute('aria-invalid')).toBe('true');
     await user.type(consent, 'NEW-SYNTHETIC-CONSENT');
+    // A limit is part of the consent: the reissue starts from the current one and the new consent may cover another.
+    const limit = within(dialog).getByLabelText(/^Debit limit the new consent covers/) as HTMLInputElement;
+    expect(limit.value).toBe(koboToNaira(mandate.amountKobo));
+    await user.clear(limit);
+    await user.type(limit, '75000');
     await user.click(within(dialog).getByRole('button', { name: 'Reissue mandate' }));
     await waitFor(() => expect(api.state().records.find(record => record.data.reissuedFrom === mandate.id)?.data.consentEvidence).toBe('NEW-SYNTHETIC-CONSENT'));
     expect(api.state().records.find(record => record.id === mandate.id)?.status).toBe('expired');
     const fresh = api.state().records.find(record => record.data.reissuedFrom === mandate.id)!;
+    expect(fresh.amountKobo).toBe(7_500_000);
+    expect(api.state().records.find(record => record.id === mandate.id)?.amountKobo).toBe(mandate.amountKobo);
     const replacements = await screen.findByRole('region', { name: 'Reissued mandates' });
     await user.click(within(replacements).getByRole('link', { name: fresh.reference || fresh.name }));
     expect(await screen.findByText(fresh.reference)).toBeTruthy();

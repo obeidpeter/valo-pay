@@ -15,6 +15,23 @@ describe('effective daily-close status', () => {
     expect(api.state().settings.scheduledCloseEnabled).toBe(true);
   });
 
+  it.each(['/overview', '/reports', '/settings'])('says daily closes run from a scheduled job at %s instead of asking for manual closes', async (path) => {
+    api.scheduler.state = 'external';
+    renderApp(path);
+    expect(await screen.findByText('Daily closes run from a scheduled job.')).toBeTruthy();
+    expect(screen.queryByText(/Run closes manually/)).toBeNull();
+    expect(screen.queryByText(/^Next daily close:/)).toBeNull();
+  });
+
+  it('warns of a close the scheduled job has not run, with the missed-close alert', async () => {
+    api.scheduler.state = 'external';
+    api.mutate(state => { state.settings.nextCloseAt = new Date(Date.parse(api.now) - 45 * 60_000).toISOString(); });
+    renderApp('/overview');
+    expect(await screen.findByText(/^Scheduled close at \d\d:\d\d WAT missed: 45 minutes past its time\. Daily closes run from a scheduled job/)).toBeTruthy();
+    expect(screen.getByText('Scheduled daily close missed')).toBeTruthy();
+    expect(screen.getByText(/Business date still to close:/)).toBeTruthy();
+  });
+
   it('keeps saving a requested schedule distinct from starting the service', async () => {
     const user = userEvent.setup();
     api.scheduler.state = 'off';
@@ -48,5 +65,23 @@ describe('effective daily-close status', () => {
     renderApp('/overview');
     expect(await screen.findByText(/Daily close was due .+ Waiting for the automatic close service/)).toBeTruthy();
     expect(screen.queryByText(/^Next daily close:/)).toBeNull();
+  });
+
+  it('explains an automatic close paused because nobody changed the sandbox', async () => {
+    api.mutate(state => { state.settings.scheduledCloseEnabled = false; state.settings.closePausedForInactivityAt = api.now; });
+    renderApp('/settings');
+    expect(await screen.findByText(/Automatic daily close paused on .+ because nobody changed this sandbox for 7 days/)).toBeTruthy();
+    expect(screen.queryByText('Automatic daily close is off for this lender. Run closes manually.')).toBeNull();
+  });
+
+  it('shows a failing automatic close with its next attempt instead of only calling it missed', async () => {
+    api.mutate(state => {
+      const cursor = new Date(Date.parse(api.now) - 40 * 60_000).toISOString();
+      state.settings.nextCloseAt = cursor;
+      state.settings.closeRetry = { cursor, failures: 3, retryAt: new Date(Date.parse(api.now) + 8 * 60_000).toISOString(), lastFailedAt: api.now };
+    });
+    renderApp('/overview');
+    expect(await screen.findByText(/The automatic close for this lender failed 3 times\. Next attempt: .+ Run a daily close manually/)).toBeTruthy();
+    expect(screen.queryByText(/^Scheduled close at .+ missed/)).toBeNull();
   });
 });

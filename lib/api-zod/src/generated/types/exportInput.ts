@@ -13,5 +13,6 @@ import type { ExportInputFormat } from './exportInputFormat';
 export interface ExportInput {
   kind: string;
   customerId?: string;
+  closeReviewId?: string;
   format: ExportInputFormat;
 }

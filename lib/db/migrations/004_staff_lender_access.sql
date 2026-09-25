@@ -1,0 +1,24 @@
+-- Explicit grants for non-administrator staff. Existing worker memberships
+-- deliberately receive no automatic grants; Admin retains workspace oversight.
+-- Apply after 003_pilot_workflow.sql. Every constraint carries the name the
+-- Drizzle schema in lib/db gives it; earlier copies of this file gave the
+-- membership foreign key a name longer than PostgreSQL's 63 characters, which
+-- it cut short, and 008_export_queue_index_and_foreign_key_names.sql renames
+-- it. It is repeatable. Creating the table locks the membership and lender
+-- tables, and creating its index locks it even when the index exists, so an
+-- open write on one of those tables holds it back, and writes that come after
+-- it wait behind it. The lock wait is limited to 5 s and each statement to
+-- 60 s: if either limit is reached nothing changes, and it can be run again
+-- at a quieter moment.
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '60s';
+CREATE TABLE IF NOT EXISTS valopay_staff_lender_access (
+ membership_id text NOT NULL CONSTRAINT valopay_staff_lender_access_membership_id_fk REFERENCES valopay_staff_memberships(id) ON DELETE CASCADE,
+ merchant_id text NOT NULL CONSTRAINT valopay_staff_lender_access_merchant_id_valopay_merchants_id_fk REFERENCES valopay_merchants(id) ON DELETE CASCADE,
+ granted_by text NOT NULL,
+ granted_at timestamptz NOT NULL DEFAULT now(),
+ CONSTRAINT valopay_staff_lender_access_membership_id_merchant_id_pk PRIMARY KEY(membership_id,merchant_id)
+);
+CREATE INDEX IF NOT EXISTS valopay_staff_lender_access_lender ON valopay_staff_lender_access(merchant_id,membership_id);
+COMMIT;

@@ -1,11 +1,12 @@
-import { PLAN_GROSS_MARGIN, VARIABLE_COST_PER_COLLECTION_KOBO, experimentRules, isOpenException, measurementRules, type RecordKind } from "@workspace/valopay-schema";
+import { PLAN_GROSS_MARGIN, VARIABLE_COST_PER_COLLECTION_KOBO, counted, deadlinePassed, experimentRules, isOpenException, measurementRules, paymentAppliedKobo, paymentAwaitsAllocation, type RecordKind } from "@workspace/valopay-schema";
 import { recordsOf } from "./records";
 import type { DomainState, Metric, Report, TypedRecord, ValopayRecord } from "./types";
-import { paymentObservedAt, paymentRefunded, paymentReversed } from "./reconciliation";
-import { buildBillingStatement, monthOf, previousMonth } from "./billing";
+import { allocationConfirmedAt, paymentObservedAt, paymentReversed } from "./reconciliation";
+import { buildBillingStatement, monthOf, periodBounds, previousMonth } from "./billing";
 import { seededSample, wilsonInterval } from "./stats";
 import type { Alert } from "./alerts";
 import { closeSchedule } from "./close";
+import { watDate } from "./calendar";
 export { billableCollection, reversalWindowDays } from "./billing";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -22,7 +23,7 @@ export function buildOverview(state: DomainState, now: string, alerts: Alert[] =
   const schedule = closeSchedule(state, now);
   return {
     metrics: [
-      metric("settled", "Reconciled collections", settled.reduce((sum, item) => sum + Number(item.data.allocatedKobo || 0), 0), "kobo", "Settled payments matched to instalments, counted once. Sample data only."),
+      metric("settled", "Reconciled collections", settled.reduce((sum, item) => sum + paymentAppliedKobo(item), 0), "kobo", "Settled payments matched to instalments, counted once. Sample data only."),
       metric("outstanding", "Outstanding amount", outstanding, "kobo", "Amount still due on instalments. Valo Pay does not hold these funds."),
       metric("match_rate", "High-confidence match rate", settled.length ? Math.round((settled.filter((item) => certainPayments.has(item.id)).length / settled.length) * 100) : 0, "percent", "Share of settled payments with a confirmed, high-confidence match. Sample data only."),
       metric("exceptions", "Open exceptions", open.length, "count", "Unresolved issues that need someone to follow up."),
@@ -32,7 +33,7 @@ export function buildOverview(state: DomainState, now: string, alerts: Alert[] =
       metric("review", "Matches to review", by("allocations").filter((item) => item.status === "proposed").length, "count", "Proposed matches for the Finance team to confirm."),
       metric("duplicates", "Possible duplicates", by("payments").filter((item) => item.status === "possible_duplicate").length, "count", "Finance must review these before any payment is allocated."),
       metric("failures", "Failed collections", by("attempts").filter((item) => item.status === "failed").length, "count", "Failed debit attempts reported by an external collection system."),
-      metric("overdue", "Overdue exceptions", open.filter((item) => Date.parse(String(item.data.dueBy)) < Date.parse(now)).length, "count", "Ask the assigned owner to follow up on these overdue issues."),
+      metric("overdue", "Overdue exceptions", open.filter((item) => deadlinePassed(item.data.dueBy, now)).length, "count", "Ask the assigned owner to follow up on these overdue issues."),
     ],
     activity: by("audit").sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 8),
     upcoming: by("due-items").filter((item) => !["paid", "closed", "cancelled"].includes(item.status)).sort((a, b) => String(a.data.dueDate || '').localeCompare(String(b.data.dueDate || '')) || a.id.localeCompare(b.id)).slice(0, 6),
@@ -59,13 +60,17 @@ export interface ArmStatistics {
   varianceByCount: number | null;
 }
 
-/** 6.6: settlement of the due item by any channel within 30 days of the first failure, by value (partials count) and by count. */
+/**
+ * 6.6: settlement of the due item by any channel within 30 days of the first
+ * failure, by value (partials count) and by count. A payment counts while it
+ * has applied money that stands, so a refund of its excess keeps the recovery.
+ */
 function outcomeWithinWindow(state: DomainState, due: TypedRecord<"due-items">): ArmOutcome {
   const start = Date.parse(String(due.data.firstFailureAt || due.createdAt)), end = start + experimentRules.outcomeWindowDays * DAY_MS;
   const payments = recordsOf(state, "payments");
   const recovered = recordsOf(state, "allocations").filter((a) => a.status === "confirmed" && a.data.dueItemId === due.id).reduce((total, allocation) => {
     const payment = payments.find((p) => p.id === allocation.data.paymentId);
-    if (!payment || payment.data.settlementStatus !== "settled" || paymentReversed(payment) || paymentRefunded(payment)) return total;
+    if (!payment || payment.data.settlementStatus !== "settled" || paymentAppliedKobo(payment) <= 0) return total;
     const settled = Date.parse(String(payment.data.settledAt || payment.data.observedAt || payment.createdAt));
     return settled >= start && settled <= end ? total + allocation.amountKobo : total;
   }, 0);
@@ -105,6 +110,10 @@ export function upliftReport(state: DomainState, experiment: TypedRecord<"experi
   const engine = armStatistics(state, enrolled.filter((due) => due.data.experimentArm === "engine"), now);
   const holdout = armStatistics(state, enrolled.filter((due) => due.data.experimentArm === "holdout"), now);
   const minimumPerArm = Number(experiment.data.minPerArm || 0);
+  // RET-11: each arm meets its own pre-computed minimum; minPerArm is a floor for both.  With a comparison group
+  // under half, the retry group's minimum is the larger one.
+  const sample = experiment.data.sampleCalculation;
+  const minimumByArm = { engine: Math.max(minimumPerArm, Number(sample?.engineMinimum || 0)), holdout: Math.max(minimumPerArm, Number(sample?.holdoutMinimum || 0)) };
   const differenceByValue = round(engine.recoveryByValue - holdout.recoveryByValue);
   const differenceByCount = round(engine.recoveryByCount - holdout.recoveryByCount);
   const confidenceInterval90 = interval(differenceByValue, engine.varianceByValue, holdout.varianceByValue);
@@ -113,8 +122,9 @@ export function upliftReport(state: DomainState, experiment: TypedRecord<"experi
   const checks = {
     effectAtLeastEightPoints: differenceByValue >= experimentRules.effectPoints,
     intervalExcludesZero: confidenceInterval90 !== null && confidenceInterval90.low > 0,
-    sampleMet: engine.mature >= minimumPerArm && holdout.mature >= minimumPerArm && minimumPerArm > 0,
-    analysisDateReached: Boolean(analysisDate) && now.slice(0, 10) >= analysisDate.slice(0, 10),
+    sampleMet: minimumByArm.engine > 0 && minimumByArm.holdout > 0 && engine.mature >= minimumByArm.engine && holdout.mature >= minimumByArm.holdout,
+    // A WAT date: reached at midnight West Africa Time.
+    analysisDateReached: Boolean(analysisDate) && watDate(Date.parse(now)) >= analysisDate.slice(0, 10),
   };
   const failed = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name);
   const result = failed.length ? "not_proven" : "proven";
@@ -124,7 +134,7 @@ export function upliftReport(state: DomainState, experiment: TypedRecord<"experi
   return {
     experimentId: experiment.id, status: experiment.status, passRule: experiment.data.passRule ?? null, preregisteredAt: experiment.data.preregisteredAt ?? null,
     analysisDate: analysisDate || null, enrolmentClose: experiment.data.enrolmentClose ?? null, holdoutShare: Number(experiment.data.holdoutShare), seed: experiment.data.seed ?? null,
-    outcomeWindowDays: experimentRules.outcomeWindowDays, minimumPerArm,
+    outcomeWindowDays: experimentRules.outcomeWindowDays, minimumPerArm, minimumByArm,
     engine: { ...engine, recoveryByValue: round(engine.recoveryByValue), recoveryByCount: round(engine.recoveryByCount) },
     holdout: { ...holdout, recoveryByValue: round(holdout.recoveryByValue), recoveryByCount: round(holdout.recoveryByCount) },
     differenceByValue, differenceByCount, confidenceInterval90, confidenceInterval90ByCount, confidence: experimentRules.confidence,
@@ -135,13 +145,12 @@ export function upliftReport(state: DomainState, experiment: TypedRecord<"experi
   };
 }
 
-/** MEA-01 time to close: days from a month end to the first close with no unallocated Payment older than 24 hours. */
+/** MEA-01 time to close: days from a WAT month end to the first close with no unallocated Payment older than 24 hours. */
 export function timeToClose(state: DomainState, now: string): { month: string; days: number | null; closeId: string | null; closedAt: string | null } | null {
   const closes = recordsOf(state, "closes").filter((close) => close.data.report).sort((a, b) => String(a.data.closedAt).localeCompare(String(b.data.closedAt)));
   if (!closes.length) return null;
-  const current = new Date(now);
-  const monthEnd = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), 1)); // first instant of this month = end of last month
-  const month = new Date(monthEnd.getTime() - DAY_MS).toISOString().slice(0, 7);
+  const month = previousMonth(now);
+  const monthEnd = new Date(periodBounds(month).end); // midnight WAT on this month's 1st = end of last month
   const clean = closes.find((close) => String(close.data.closedAt) >= monthEnd.toISOString() && Number(close.data.report?.unallocated?.olderThan24Hours ?? 1) === 0);
   return { month, days: clean ? round((Date.parse(String(clean.data.closedAt)) - monthEnd.getTime()) / DAY_MS, 2) : null, closeId: clean?.id ?? null, closedAt: clean ? String(clean.data.closedAt) : null };
 }
@@ -150,11 +159,11 @@ export function timeToClose(state: DomainState, now: string): { month: string; d
  * REC-09: each month Finance reviews a seeded random sample of at least 200 of
  * the previous month's automatic "certain" allocations (or all of them if
  * fewer); the false-match rate is reported with its interval beside the
- * automatic match rate.  The audit month is the last completed month.
+ * automatic match rate.  The audit month is the last completed WAT month.
  */
 export function precisionAudit(state: DomainState, now: string) {
   const month = previousMonth(now);
-  const population = recordsOf(state, "allocations").filter((item) => item.data.automatic === true && item.data.confidence === "certain" && ["confirmed", "superseded"].includes(item.status) && monthOf(String(item.data.confirmedAt || item.createdAt)) === month);
+  const population = recordsOf(state, "allocations").filter((item) => item.data.automatic === true && item.data.confidence === "certain" && ["confirmed", "superseded"].includes(item.status) && monthOf(allocationConfirmedAt(item)) === month);
   const sampleIds = seededSample(population.map((item) => item.id), `${state.merchant.id}:${month}`, measurementRules.precisionSampleSize);
   const sampled = new Set(sampleIds);
   const reviewed = population.filter((item) => sampled.has(item.id) && typeof item.data.reviewed === "boolean");
@@ -195,7 +204,7 @@ export function test5Report(state: DomainState, now: string) {
     for (const review of reviews) { if (reviewAt(review) - previous > fortnightMs) { cadenceMet = false; break; } previous = reviewAt(review); }
   }
   const monthEnds = new Map<string, TypedRecord<"closes">>();
-  for (const close of closes) monthEnds.set(monthOf(String(close.data.closedAt || close.createdAt)), close); // the last close of each month wins
+  for (const close of closes) monthEnds.set(monthOf(String(close.data.closedAt || close.createdAt)), close); // the last close of each WAT month wins
   const overdueShareAtMonthEnds = [...monthEnds.entries()].filter(([month]) => month < monthOf(now)).map(([month, close]) => {
     const open = Number(close.data.report?.exceptions?.openAtClose ?? NaN), overdue = Number(close.data.report?.exceptions?.overdueAtClose ?? NaN);
     return { month, closeId: close.id, open: Number.isFinite(open) ? open : null, overdue: Number.isFinite(overdue) ? overdue : null, share: Number.isFinite(open) && Number.isFinite(overdue) ? (open ? overdue / open : 0) : null };
@@ -247,11 +256,12 @@ export function buildReports(state: DomainState, now: string): Report {
   const reviewed = automaticCertain.filter((item) => typeof item.data.reviewed === "boolean");
   const reviewedAll = allocations.filter((item) => typeof item.data.reviewed === "boolean");
   const precision = reviewedAll.length ? reviewedAll.filter((item) => item.data.reviewed === true).length / reviewedAll.length : 0;
-  const unallocated = payments.filter((item) => item.status === "unallocated");
+  // Money waiting for Finance, as the Finance queue, the alert and the daily close count it (paymentAwaitsAllocation).
+  const unallocated = payments.filter(paymentAwaitsAllocation);
   const openExceptions = exceptions.filter((item) => isOpenException(item.status));
   const metrics: Metric[] = [
-    metric("allocation_rate", "Allocation rate", allocationRate, "ratio", `${allocated.length} of ${payments.length} payments are fully or partly allocated, or exceed the amount due.`),
-    metric("allocation_precision", "Accuracy of reviewed allocations", precision, "ratio", reviewedAll.length ? `${reviewedAll.length} allocations reviewed. Unreviewed allocations are excluded from this accuracy measure.` : "No payment matches have been reviewed yet."),
+    metric("allocation_rate", "Allocation rate", allocationRate, "ratio", `${allocated.length} of ${counted(payments.length, "payment")} ${allocated.length === 1 ? "is" : "are"} fully or partly allocated, or ${allocated.length === 1 ? "exceeds" : "exceed"} the amount due.`),
+    metric("allocation_precision", "Accuracy of reviewed allocations", precision, "ratio", reviewedAll.length ? `${counted(reviewedAll.length, "allocation")} reviewed. Unreviewed allocations are excluded from this accuracy measure.` : "No payment matches have been reviewed yet."),
     metric("open_exceptions", "Open exceptions", openExceptions.length, "count", "Unresolved issues in this sample workspace."),
     metric("outstanding_kobo", "Outstanding amount", dueItems.reduce((sum, item) => sum + Number(item.data.outstandingKobo ?? item.amountKobo), 0), "kobo", "Amount still due on instalments. We never hold money."),
   ];
@@ -275,7 +285,7 @@ export function buildReports(state: DomainState, now: string): Report {
       allocationRate, precision,
       certainAutomaticRate: payments.length ? new Set(automaticCertain.map((a) => a.data.paymentId)).size / payments.length : 0,
       reviewedCount: reviewedAll.length, reviewedAutomaticCount: reviewed.length, falseMatchRate: audit.falseMatchRate, falseMatchInterval: audit.interval, requiredAuditSample: audit.requiredSample, precisionAudit: audit,
-      overdueExceptionRate: openExceptions.length ? openExceptions.filter((e) => Date.parse(String(e.data.dueBy)) < Date.parse(now)).length / openExceptions.length : 0,
+      overdueExceptionRate: openExceptions.length ? openExceptions.filter((e) => deadlinePassed(e.data.dueBy, now)).length / openExceptions.length : 0,
       liveDays: test5.liveDays, requiredLiveDays: test5.requiredLiveDays, liveSince: test5.liveSince,
       packsGenerated: test5.packsGenerated, disputePacksGenerated: recordsOf(state, "exports").filter((item) => item.status === "ready" && ["customer-pack", "dispute-pack"].includes(String(item.data.kind))).length,
       realCasesUsed: test5.realCasesUsed, requiredRealCases: test5.requiredRealCases,

@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   assessCredit,
   createSyntheticCreditInput,
+  monthsAfter,
   reviewCreditAssessment,
   syntheticCreditAccountId,
   type CreditAssessmentResult,
@@ -45,17 +46,28 @@ function context(state: DomainState, ctx: Context): CreditContext {
       ctx.actor.startsWith("Sandbox "),
   };
 }
-function currentGrants(state: DomainState, customerId: string): CreditGrant[] {
-  const latest = new Map<string, ValopayRecord>();
+/** Each applicant's latest account-read and credit-assessment consent by purpose, from one pass over the records. */
+type GrantIndex = Map<unknown, Map<string, ValopayRecord>>;
+function grantIndex(state: DomainState): GrantIndex {
+  const index: GrantIndex = new Map();
   for (const consent of own(state, "connected-consents")) {
     if (
-      consent.data.subjectId === customerId &&
-      consent.data.entityId === state.merchant.id &&
-      ["account_read", "credit_assessment"].includes(consent.data.purpose)
+      consent.data.entityId !== state.merchant.id ||
+      !["account_read", "credit_assessment"].includes(consent.data.purpose)
     )
-      latest.set(consent.data.purpose, consent);
+      continue;
+    const latest = index.get(consent.data.subjectId) ?? new Map();
+    latest.set(consent.data.purpose, consent);
+    index.set(consent.data.subjectId, latest);
   }
-  return [...latest.values()].map((consent) => ({
+  return index;
+}
+function currentGrants(
+  state: DomainState,
+  customerId: string,
+  grants = grantIndex(state),
+): CreditGrant[] {
+  return [...(grants.get(customerId)?.values() ?? [])].map((consent) => ({
     id: consent.id,
     tenantId: state.merchant.id,
     applicantId: customerId,
@@ -78,8 +90,9 @@ function permissionsAvailable(
   state: DomainState,
   customerId: string,
   now: string,
+  index = grantIndex(state),
 ) {
-  const grants = currentGrants(state, customerId);
+  const grants = currentGrants(state, customerId, index);
   const active = (purpose: CreditGrant["purpose"]) =>
     grants.some(
       (grant) =>
@@ -94,12 +107,25 @@ function permissionsAvailable(
   };
 }
 export function creditView(state: DomainState, ctx: Context) {
-  const customers = own(state, "customers").map((customer) => ({
-    id: customer.id,
-    name: customer.name,
-    reference: customer.reference,
-    permissions: permissionsAvailable(state, customer.id, ctx.now),
-  }));
+  // Built once for the view: the consents by applicant, the names and the reviews by assessment.
+  const grants = grantIndex(state);
+  const customers = own(state, "customers");
+  const names = new Map<string, string>();
+  for (const customer of customers)
+    if (!names.has(customer.id)) names.set(customer.id, customer.name);
+  const reviewsOf = new Map<unknown, ValopayRecord[]>();
+  for (const review of own(state, "connected-credit-reviews")) {
+    const list = reviewsOf.get(review.data.assessmentRecordId) ?? [];
+    list.push(review);
+    reviewsOf.set(review.data.assessmentRecordId, list);
+  }
+  // The workspace lists every customer once; the desk adds the permissions of those holding any.
+  const permissions = customers.flatMap((customer) => {
+    const held = permissionsAvailable(state, customer.id, ctx.now, grants);
+    return held.accountRead || held.creditAssessment
+      ? [{ customerId: customer.id, ...held }]
+      : [];
+  });
   const assessments = own(state, "connected-credit-assessments")
     .map((record) => {
       const result = record.data.result as CreditAssessmentResult;
@@ -107,8 +133,9 @@ export function creditView(state: DomainState, ctx: Context) {
         state,
         record.customerId,
         ctx.now,
+        grants,
       );
-      const current = currentGrants(state, record.customerId);
+      const current = currentGrants(state, record.customerId, grants);
       const authorityUnchanged = result.evidence.grantVersions.every((grant) =>
         current.some(
           (item) => item.id === grant.id && item.version === grant.version,
@@ -152,21 +179,17 @@ export function creditView(state: DomainState, ctx: Context) {
       return {
         id: record.id,
         customerId: record.customerId,
-        customerName:
-          customers.find((customer) => customer.id === record.customerId)
-            ?.name ?? "Sample applicant",
+        customerName: names.get(record.customerId) ?? "Sample applicant",
         scenario: String(record.data.scenario),
         createdAt: record.createdAt,
         createdBy: String(record.data.createdBy),
         permissionRestricted,
         result: visibleResult,
-        reviews: own(state, "connected-credit-reviews")
-          .filter((review) => review.data.assessmentRecordId === record.id)
-          .map((review) => ({
-            ...(review.data.review as CreditReviewRecord),
-            id: review.id,
-            authentication: "simulated_sandbox_review" as const,
-          })),
+        reviews: (reviewsOf.get(record.id) ?? []).map((review) => ({
+          ...(review.data.review as CreditReviewRecord),
+          id: review.id,
+          authentication: "simulated_sandbox_review" as const,
+        })),
       };
     })
     .sort(
@@ -180,7 +203,7 @@ export function creditView(state: DomainState, ctx: Context) {
     canAssess: assessor(ctx),
     canReview: reviewer(ctx),
     actor: ctx.actor,
-    customers,
+    permissions,
     assessments,
     scenarios,
     model: {
@@ -217,7 +240,7 @@ export function runCreditAction(
     reason: string;
     data: Record<string, unknown>;
   },
-) {
+): ValopayRecord {
   if (
     state.settings.environment !== "sandbox" ||
     !ctx.actor.startsWith("Sandbox ")
@@ -295,12 +318,11 @@ export function runCreditAction(
       )
         reject("Provide the principal, repayment amount and term together.");
       assessment.requestedPrincipalKobo = data.principalKobo!;
+      // One repayment a calendar month, not every 30 days, which would put two in some months.
       assessment.repaymentSchedule = Array.from(
         { length: data.termMonths! },
         (_, index) => ({
-          dueAt: new Date(
-            Date.parse(ctx.now) + (index + 1) * 30 * 86_400_000,
-          ).toISOString(),
+          dueAt: monthsAfter(ctx.now, index + 1),
           amountKobo: data.repaymentKobo!,
         }),
       );

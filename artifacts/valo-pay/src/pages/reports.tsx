@@ -10,14 +10,17 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { useGetReports, getGetReportsQueryKey, useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { BarChart3, FileText, CheckSquare, RefreshCcw, ChevronDown } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
-import { formatKobo, formatDate, formatCount, formatNumber } from '@/lib/formatters';
+import { formatKobo, formatDate, formatCount, formatNumber, formatPercent, formatPercentagePoints } from '@/lib/formatters';
+import { formatWithOtherCurrencies } from '@/lib/currencies';
 import { RecordDialog } from '@/components/record-dialog';
 import { readableLabel } from '@/components/record-label';
 import { Link, useSearchParams } from 'wouter';
 import { useQueryClient } from '@tanstack/react-query';
-import { LoadProblem } from '@/components/load-problem';
+import { LoadProblem, RefreshProblem } from '@/components/load-problem';
 import { notifyProblem, saidBy } from '@/lib/notify';
 import { useHashTarget } from '@/lib/use-hash-target';
+import { Input } from '@/components/ui/input';
+import { KEPT_IN_OPERATIONS, OpenOperations } from '@/components/pilot-ui';
 
 type Unknown = Record<string, unknown> | undefined;
 const isScalar = (value: unknown) => value === null || ['string', 'number', 'boolean'].includes(typeof value);
@@ -25,8 +28,10 @@ const scalarEntries = (record: Unknown): Array<[string, unknown]> => Object.entr
 const billingLines = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.lines) ? (record!.lines as Array<Record<string, any>>) : [];
 const experimentRows = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.results) ? (record!.results as Array<Record<string, any>>) : [];
 const labelOf = (key: string) => key.replace(/([A-Z])/g, ' $1').replace(/_/g, ' ').trim().toLowerCase().replace(/^./, first => first.toUpperCase());
-const percent = (value: unknown) => typeof value === 'number' ? `${(value * 100).toFixed(1)}%` : 'Not available';
-const percentagePoints = (value: unknown) => typeof value === 'number' ? `${(value * 100).toFixed(1)} percentage points` : 'Not available';
+const percent = (value: unknown) => typeof value === 'number' ? formatPercent(value, 1) : 'Not available';
+const percentagePoints = (value: unknown) => typeof value === 'number' ? formatPercentagePoints(value) : 'Not available';
+/** A count from the report's free-form data, grouped the market's way; one the report leaves out is 0. */
+const count = (value: unknown) => typeof value === 'number' ? formatNumber(value) : String(value ?? 0);
 const invoiceRows = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.invoices) ? (record!.invoices as Array<Record<string, any>>) : [];
 const adjustmentRows = (record: Unknown): Array<Record<string, any>> => Array.isArray(record?.pendingAdjustments) ? (record!.pendingAdjustments as Array<Record<string, any>>) : [];
 const billingSummaryKeys = new Set(['period', 'volumeTier', 'totalKobo', 'usageFeeKobo', 'successfulCollections', 'nextInvoicePeriod', 'pendingAdjustmentsKobo']);
@@ -70,9 +75,9 @@ function renderValue(key: string, value: unknown): string {
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if (typeof value === 'number') {
     if (/kobo$/i.test(key)) return formatKobo(value);
-    if (/bps$/i.test(key)) return `${value / 100}%`;
+    if (/bps$/i.test(key)) return formatPercent(value / 10000);
     if (/rate$|precision$|share$/i.test(key)) return percent(value);
-    return String(value);
+    return formatNumber(value);
   }
   return String(value);
 }
@@ -92,14 +97,16 @@ export default function ReportsPage() {
   const [experimentDialog, setExperimentDialog] = useState<'create' | 'edit' | 'preregister' | null>(null);
   const [selectedExperiment, setSelectedExperiment] = useState<any>(null);
   const [invoiceDialogOpen, setInvoiceDialogOpen] = useState(false);
+  const [sourceBusinessDate, setSourceBusinessDate] = useState('');
   const queryClient = useQueryClient();
   const [closeResult, setCloseResult] = useState<{ merchantId: string; message: string; failed: boolean } | null>(null);
-  useEffect(() => { setExperimentDialog(null); setInvoiceDialogOpen(false); }, [merchantId]);
+  useEffect(() => { setExperimentDialog(null); setInvoiceDialogOpen(false); setSourceBusinessDate(''); }, [merchantId]);
 
-  const { data: reports, isLoading, error: reportsError, isFetching: fetchingReports, refetch } = useGetReports(
+  const reportsQuery = useGetReports(
     { merchantId: merchantId!, includeCloses: 'false' as const },
     { query: { enabled: !!merchantId, refetchInterval: 60_000, queryKey: getGetReportsQueryKey({ merchantId: merchantId!, includeCloses: 'false' as const }) } }
   );
+  const { data: reports, isLoading, error: reportsError, isFetching: fetchingReports, refetch } = reportsQuery;
   useHashTarget('daily-closes', view === 'operations' && !!merchantId && !!reports && !isLoading && !reportsError);
 
   const dailyClose = usePerformAction({
@@ -147,14 +154,18 @@ export default function ReportsPage() {
           <Button variant="outline" className="gap-2" action="issue_invoice" onClick={() => setInvoiceDialogOpen(true)}>
             <FileText className="h-4 w-4" /> Issue invoice
           </Button></>}
-          {view === 'operations' && <Button
+          {view === 'operations' && <><div className="max-w-64 space-y-1">
+            <label htmlFor="close-source-date" className="text-xs font-medium">Source business date (optional)</label>
+            <Input id="close-source-date" type="date" value={sourceBusinessDate} onChange={event => setSourceBusinessDate(event.target.value)} disabled={dailyClose.isPending} aria-describedby="close-source-date-help" />
+            <p id="close-source-date-help" className="text-xs text-muted-foreground">Defaults to today in WAT or, while scheduled closes are missed, to the oldest missed business date, which this close then covers. Checks files for that date; financial totals reflect this run.</p>
+          </div><Button
             className="gap-2"
-            action="daily_close" onClick={() => dailyClose.mutate({ data: { action: 'daily_close' }, params: { merchantId } })}
+            action="daily_close" onClick={() => dailyClose.mutate({ data: { action: 'daily_close', ...(sourceBusinessDate ? { data: { sourceBusinessDate } } : {}) }, params: { merchantId } })}
             busy={dailyClose.isPending}
             busyLabel="Closing the day…"
           >
             <RefreshCcw className="h-4 w-4" /> Run daily close
-          </Button>}
+          </Button></>}
         </div>
       </header>
       <nav aria-label="Report views" className="flex flex-wrap gap-2 rounded-xl border bg-card p-2 print:hidden">
@@ -163,23 +174,24 @@ export default function ReportsPage() {
       <p className="text-sm text-muted-foreground">{view === 'operations' ? 'Current operational totals and recorded daily closes. Use the date range to compare past closing positions.' : view === 'billing' ? 'Current-period charges, issued invoices and adjustments. The billing export covers the current statement.' : 'Review the evidence needed to assess a pilot. Sample data cannot establish live performance.'}</p>
       {closeResult?.merchantId === merchantId && <div role={closeResult.failed ? 'alert' : 'status'} className={`rounded-lg border p-5 text-sm ${closeResult.failed ? 'border-destructive/30 bg-destructive/5' : 'bg-card'}`}>
         <p className="font-semibold">{closeResult.failed ? 'Daily close could not be confirmed' : 'Daily close completed'}</p>
-        <p className="mt-2 text-muted-foreground">{closeResult.message}</p>
-        {closeResult.failed ? <Button variant="outline" size="sm" className="mt-3" onClick={() => { void refetch(); void queryClient.invalidateQueries({ queryKey: ['/api/v1/close-history'] }); }} busy={fetchingReports} busyLabel="Refreshing…">Refresh close records</Button> : <Link href="/reports?view=operations#daily-closes" className="mt-3 inline-flex min-h-6 items-center font-medium text-primary underline">View close record</Link>}
+        <p className="mt-2 text-muted-foreground">{closeResult.message}{closeResult.failed && dailyClose.hasUnconfirmedOutcome && <> {KEPT_IN_OPERATIONS}</>}</p>
+        {closeResult.failed ? <div className="mt-3 flex flex-wrap items-center gap-3"><Button variant="outline" size="sm" onClick={() => { void refetch(); void queryClient.invalidateQueries({ queryKey: ['/api/v1/close-history'] }); }} busy={fetchingReports} busyLabel="Refreshing…">Refresh close records</Button>{dailyClose.hasUnconfirmedOutcome && <OpenOperations />}</div> : <Link href="/reports?view=operations#daily-closes" className="mt-3 inline-flex min-h-6 items-center font-medium text-primary underline">View close record</Link>}
       </div>}
 
       {isLoading ? (
         <Loading what="reports" />
-      ) : reportsError || !reports ? (
+      ) : !reports ? (
         <LoadProblem what="reports" error={reportsError} retry={() => { void refetch(); }} busy={fetchingReports} />
       ) : (
         <div className="space-y-6">
-          <p className="text-xs text-muted-foreground">{view === 'operations' ? `Current workspace totals${reports.operational?.asOf ? ` as at ${formatDate(String(reports.operational.asOf))}` : ''}.` : view === 'billing' ? `Billing period: ${String(reports.billing?.period || 'not available')}. Amounts are in Nigerian naira.` : `Accuracy sample: ${String((reports.operational?.precisionAudit as any)?.month || 'completed month')}.`} All figures use sample data.</p>
+          <RefreshProblem what="Reports" query={reportsQuery} />
+          <p className="text-xs text-muted-foreground">{view === 'operations' ? `Current workspace totals${reports.operational?.asOf ? ` as at ${formatDate(String(reports.operational.asOf))}` : ''}.` : view === 'billing' ? `Billing period: ${String(reports.billing?.period || 'not available')}. Amounts are in Nigerian naira unless another currency is named.` : `Accuracy sample: ${String((reports.operational?.precisionAudit as any)?.month || 'completed month')}.`} All figures use sample data.</p>
           <section hidden={view !== 'operations'} aria-label="Operational metrics" className={view === 'operations' ? 'grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4' : ''}>
             {reports.metrics.map(metric => (
               <div key={metric.key} className="min-w-0 rounded-xl border bg-card p-5 shadow-sm">
                 <p className="text-xs font-medium text-muted-foreground">{metric.label}</p>
                 <div className="mt-4 break-words text-[1.75rem] font-semibold leading-none tracking-tight tabular-nums">
-                  {metric.key === 'allocation_precision' && Number(reports.operational?.reviewedCount || 0) === 0 ? <span className="text-xl">Not measured yet</span> : metric.unit === 'kobo' ? formatKobo(metric.value) : metric.unit === 'ratio' ? percent(metric.value) : `${formatNumber(metric.value)}${metric.unit === 'percent' ? '%' : ''}`}
+                  {metric.key === 'allocation_precision' && Number(reports.operational?.reviewedCount || 0) === 0 ? <span className="text-xl">Not measured yet</span> : metric.unit === 'kobo' ? formatKobo(metric.value) : metric.unit === 'ratio' ? percent(metric.value) : metric.unit === 'percent' ? formatPercent(metric.value / 100) : formatNumber(metric.value)}
                   {!['kobo', 'ratio', 'percent', 'count'].includes(metric.unit) && <span className="ml-1 text-sm text-muted-foreground">{metric.unit}</span>}
                 </div>
                 {metric.detail && <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{metric.detail}</p>}
@@ -201,18 +213,18 @@ export default function ReportsPage() {
             </div>
             <div className="min-w-0">
                <p className="text-xs font-medium text-muted-foreground">Payment match accuracy</p>
-               <div className="mt-2 text-xl font-semibold tracking-tight tabular-nums">{String((reports.operational?.precisionAudit as any)?.reviewed ?? 0)} <span className="text-sm font-normal text-muted-foreground">/ {String(reports.operational?.requiredAuditSample || 0)} reviewed</span></div>
-               <p className="text-xs text-muted-foreground mt-2">{(() => { const audit = reports.operational?.precisionAudit as any; return audit?.falseMatchRate === null || audit?.falseMatchRate === undefined ? `Sample of ${String(audit?.sampleSize ?? 0)} of ${String(audit?.population ?? 0)} automatic high-confidence matches for ${String(audit?.month ?? 'the completed month')}. None reviewed yet.` : `Incorrect matches: ${percent(audit.falseMatchRate)}. The 95% confidence interval is ${percent(audit.interval?.low)} to ${percent(audit.interval?.high)}, based on ${String(audit.reviewed)} reviewed matches from a sample of ${String(audit.sampleSize)}.`; })()}</p>
+               <div className="mt-2 text-xl font-semibold tracking-tight tabular-nums">{count((reports.operational?.precisionAudit as any)?.reviewed)} <span className="text-sm font-normal text-muted-foreground">/ {count(reports.operational?.requiredAuditSample || 0)} reviewed</span></div>
+               <p className="text-xs text-muted-foreground mt-2">{(() => { const audit = reports.operational?.precisionAudit as any; return audit?.falseMatchRate === null || audit?.falseMatchRate === undefined ? `Sample of ${count(audit?.sampleSize)} of ${count(audit?.population)} automatic high-confidence matches for ${String(audit?.month ?? 'the completed month')}. None reviewed yet.` : `Incorrect matches: ${percent(audit.falseMatchRate)}. The 95% confidence interval is ${percent(audit.interval?.low)} to ${percent(audit.interval?.high)}, based on ${count(audit.reviewed)} reviewed matches from a sample of ${count(audit.sampleSize)}.`; })()}</p>
             </div>
             <div className="min-w-0">
                <p className="text-xs font-medium text-muted-foreground">Days since first close</p>
-               <div className="mt-2 text-xl font-semibold tracking-tight tabular-nums">{String(reports.operational?.liveDays || 0)} <span className="text-sm font-normal text-muted-foreground">/ {String(reports.operational?.requiredLiveDays || 60)} days</span></div>
+               <div className="mt-2 text-xl font-semibold tracking-tight tabular-nums">{count(reports.operational?.liveDays || 0)} <span className="text-sm font-normal text-muted-foreground">/ {count(reports.operational?.requiredLiveDays || 60)} days</span></div>
                <p className="text-xs text-muted-foreground mt-2">{reports.operational?.liveSince ? `Since the first daily close on ${formatDate(String(reports.operational.liveSince))}.` : 'Counts from the first daily close.'}</p>
             </div>
             <div className="min-w-0">
                <p className="text-xs font-medium text-muted-foreground">Real cases used</p>
                <div className="mt-2 text-xl font-semibold tracking-tight tabular-nums">
-                 {String(reports.operational?.realCasesUsed || 0)} <span className="text-sm font-normal text-muted-foreground">/ {String(reports.operational?.requiredRealCases || 5)} cases</span>
+                 {count(reports.operational?.realCasesUsed || 0)} <span className="text-sm font-normal text-muted-foreground">/ {count(reports.operational?.requiredRealCases || 5)} cases</span>
                </div>
                <p className="mt-2 text-xs text-muted-foreground">Exports from sample data do not count as real cases.</p>
             </div>
@@ -252,7 +264,7 @@ export default function ReportsPage() {
                     ))}
                   </dl>
                 </ReportDisclosure>
-                <ReportDisclosure title={`Statement lines · ${billingLines(reports.billing).length}`}>
+                <ReportDisclosure title={`Statement lines · ${formatNumber(billingLines(reports.billing).length)}`}>
                   {billingLines(reports.billing).length === 0 ? (
                     <p className="text-xs text-muted-foreground">No signed partner terms apply to this period, so there are no billable statement lines.</p>
                   ) : (
@@ -284,25 +296,25 @@ export default function ReportsPage() {
                       <thead className="text-muted-foreground border-b"><tr><th className="py-1 pr-2">Payment method</th><th className="py-1 pr-2 text-right">Receipts</th><th className="py-1 pr-2 text-right">Value</th><th className="py-1 pr-2 text-right">Billable</th></tr></thead>
                       <tbody className="divide-y">
                         {Object.entries((reports.billing?.channelBreakdown as Record<string, any>) || {}).map(([channel, row]) => (
-                          <tr key={channel}><td className="py-1 pr-2">{labelOf(channel)}</td><td className="py-1 pr-2 text-right">{String(row.count)}</td><td className="py-1 pr-2 text-right">{formatKobo(Number(row.kobo || 0))}</td><td className="py-1 pr-2 text-right">{String(row.billable)}</td></tr>
+                          <tr key={channel}><td className="py-1 pr-2">{labelOf(channel)}</td><td className="py-1 pr-2 text-right">{count(row.count)}</td><td className="py-1 pr-2 text-right">{formatWithOtherCurrencies(Number(row.kobo || 0), row.otherCurrencies, 'receipt')}</td><td className="py-1 pr-2 text-right">{count(row.billable)}</td></tr>
                         ))}
                         {Object.keys((reports.billing?.channelBreakdown as Record<string, any>) || {}).length === 0 && <tr><td colSpan={4} className="py-2 text-muted-foreground">No receipts in this period.</td></tr>}
                       </tbody>
                     </table>
                   </ScrollFrame>
-                  <p className="text-xs text-muted-foreground mt-2">Collections awaiting the end of the reversal period: {String(reports.billing?.withheldInsideReversalWindow ?? 0)} (eligible for a later statement).</p>
+                  <p className="text-xs text-muted-foreground mt-2">Collections awaiting the end of the reversal period: {count(reports.billing?.withheldInsideReversalWindow)} (eligible for a later statement).</p>
                 </ReportDisclosure>
                 <ReportDisclosure title="Revenue and costs">
                   {(() => { const e = reports.billing?.unitEconomics as Record<string, any> | undefined; if (!e) return <p className="text-xs text-muted-foreground">Not available.</p>; return (
                     <div className="text-xs tabular-nums space-y-1">
-                      <p>Successful collections: {String(e.successfulCollections)}. Usage fees: {formatKobo(Number(e.usageFeeKobo || 0))}. Licence fees: {formatKobo(Number(e.licenceKobo || 0))} ({String(e.volumeTier)} plan). Recurring revenue: {formatKobo(Number(e.recurringKobo || 0))}.</p>
+                      <p>Successful collections: {count(e.successfulCollections)}. Usage fees: {formatKobo(Number(e.usageFeeKobo || 0))}. Licence fees: {formatKobo(Number(e.licenceKobo || 0))} ({String(e.volumeTier)} plan). Recurring revenue: {formatKobo(Number(e.recurringKobo || 0))}.</p>
                       <p>Collection costs: {formatKobo(Number(e.variableCostKobo || 0))}{e.estimated ? ' (estimated at ₦15 per collection)' : ' (recorded)'}. Cost per collection: {e.costPerCollectionKobo === null ? 'not available' : formatKobo(Number(e.costPerCollectionKobo))}. Plan target: {formatKobo(Number(e.planCostPerCollectionKobo || 0))}.</p>
                       <p>Gross margin (share of revenue left after collection costs): {e.grossMargin === null ? 'not available' : percent(e.grossMargin)}. Plan target: {percent(e.planGrossMargin?.low)} to {percent(e.planGrossMargin?.high)}. Recurring revenue at an annual rate: {formatKobo(Number(e.annualisedRecurringRevenueKobo || 0))}, from licence and usage fees only.</p>
                       <p className="font-sans text-muted-foreground">{String(e.note || '')}</p>
                     </div>
                   ); })()}
                 </ReportDisclosure>
-                <ReportDisclosure title={`Issued invoices · ${invoiceRows(reports.billing).length}`}>
+                <ReportDisclosure title={`Issued invoices · ${formatNumber(invoiceRows(reports.billing).length)}`}>
                   {invoiceRows(reports.billing).length === 0 ? (
                     <p className="text-xs text-muted-foreground">No invoice has been issued. The next covers {String(reports.billing?.nextInvoicePeriod || 'the previous month')}. Issued invoices cannot be changed. VAT is listed separately.</p>
                   ) : (
@@ -314,8 +326,8 @@ export default function ReportsPage() {
                             <tr key={String(invoice.id)}>
                               <td className="py-1 pr-2">{String(invoice.reference)}{invoice.creditNote ? ' (credit note)' : ''}</td>
                               <td className="py-1 pr-2">{String(invoice.period)}</td>
-                              <td className="py-1 pr-2 text-right">{String(invoice.collectionsCounted ?? 0)}</td>
-                              <td className="py-1 pr-2 text-right">{String(invoice.adjustmentCount ?? 0)} · {formatKobo(Number(invoice.adjustmentsKobo || 0))}</td>
+                              <td className="py-1 pr-2 text-right">{count(invoice.collectionsCounted)}</td>
+                              <td className="py-1 pr-2 text-right">{count(invoice.adjustmentCount)} · {formatKobo(Number(invoice.adjustmentsKobo || 0))}</td>
                               <td className="py-1 pr-2 text-right">{formatKobo(Number(invoice.netKobo || 0))}</td>
                               <td className="py-1 pr-2 text-right">{formatKobo(Number(invoice.vatKobo || 0))}</td>
                               <td className="py-1 pr-2 text-right font-bold">{formatKobo(Number(invoice.totalKobo || 0))}</td>
@@ -326,7 +338,7 @@ export default function ReportsPage() {
                     </ScrollFrame>
                   )}
                 </ReportDisclosure>
-                <ReportDisclosure title={`Next invoice adjustments · ${adjustmentRows(reports.billing).length}`}>
+                <ReportDisclosure title={`Next invoice adjustments · ${formatNumber(adjustmentRows(reports.billing).length)}`}>
                   <p className="text-xs text-muted-foreground mb-2">If a billed collection is reversed, refunded, confirmed as a duplicate or has an allocation invalidated, the next invoice records a credit or debit. Each adjustment identifies the invoice it corrects. Issued invoices cannot be changed.</p>
                   {adjustmentRows(reports.billing).length === 0 ? (
                     <p className="text-xs text-muted-foreground">Nothing to adjust.</p>
@@ -384,8 +396,9 @@ export default function ReportsPage() {
                   {experimentRows(reports.experiment).map(row => (
                     <div key={String(row.experimentId)} className="border rounded-lg p-3 text-xs tabular-nums space-y-2">
                       <p className="text-muted-foreground truncate">Experiment {String(row.experimentId)} · {readableLabel(row.status)} · analysis date {String(row.analysisDate || 'not set')}</p>
-                      <p>Enrolled instalments: retry group {String(row.engine?.enrolled ?? 0)} · comparison group {String(row.holdout?.enrolled ?? 0)} · minimum per group {String(row.minimumPerArm)}</p>
-                      <p>Completed 30-day outcomes: retry group {String(row.engine?.mature ?? 0)} · comparison group {String(row.holdout?.mature ?? 0)}</p>
+                      <p>Enrolled instalments: retry group {count(row.engine?.enrolled)} · comparison group {count(row.holdout?.enrolled)}</p>
+                      <p>Minimum completed outcomes: retry group {count(row.minimumByArm?.engine ?? row.minimumPerArm)} · comparison group {count(row.minimumByArm?.holdout ?? row.minimumPerArm)}</p>
+                      <p>Completed 30-day outcomes: retry group {count(row.engine?.mature)} · comparison group {count(row.holdout?.mature)}</p>
                       <p>Amount recovered (primary measure): retry group {percent(row.engine?.recoveryByValue)} · comparison group {percent(row.holdout?.recoveryByValue)} · difference {percentagePoints(row.differenceByValue)}</p>
                       <p>Instalments settled in full: retry group {percent(row.engine?.recoveryByCount)} · comparison group {percent(row.holdout?.recoveryByCount)} · difference {percentagePoints(row.differenceByCount)}</p>
                       <p>90% confidence interval for the difference in amount recovered: {row.confidenceInterval90 ? `${percentagePoints(row.confidenceInterval90.low)} to ${percentagePoints(row.confidenceInterval90.high)}` : 'needs at least two completed 30-day outcomes in each group'}</p>
@@ -404,6 +417,7 @@ export default function ReportsPage() {
 
           {/* Daily Closes */}
           <section hidden={view !== 'operations'} id="daily-closes" tabIndex={-1} aria-label="Daily close records" className="scroll-mt-6 bg-card border rounded-xl shadow-sm overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4"><p className="text-sm text-muted-foreground">Export saved closing snapshots and their reconciliation evidence.</p><ExportJobControl kind="closes" formats={['json','csv']} label="Export close evidence" /></div>
             <div className="p-5 border-b flex flex-wrap gap-3 items-center justify-between">
               <div className="flex items-center gap-2">
                 <CheckSquare aria-hidden="true" className="h-4 w-4 text-muted-foreground" />
@@ -424,7 +438,7 @@ export default function ReportsPage() {
         title="Issue the monthly invoice"
         actionMutation="issue_invoice"
         fields={[
-          { name: 'period', label: 'Invoice month (YYYY-MM; leave blank for the previous month)', type: 'text', isData: true },
+          { name: 'period', label: 'Invoice month (YYYY-MM; leave blank for the previous month)', type: 'text', isData: true, help: `Months are invoiced in order, a month with nothing to bill for zero. The next invoice covers ${String(reports?.billing?.nextInvoicePeriod || 'the previous month')}.` },
         ]}
       />
       <RecordDialog

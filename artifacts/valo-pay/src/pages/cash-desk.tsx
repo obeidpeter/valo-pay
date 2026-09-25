@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -28,10 +28,17 @@ import {
 } from "@/components/ui/dialog";
 import { Loading } from "@/components/loading";
 import { LoadProblem } from "@/components/load-problem";
-import { ConnectedFrame } from "@/components/connected-frame";
+import {
+  ConnectedFrame,
+  ConnectedRecovery,
+  ConnectedState,
+} from "@/components/connected-frame";
 import { useConnected } from "@/lib/connected";
 import { useWorkspace } from "@/lib/workspace-context";
-import { formatCompactDate, formatDate, formatKobo } from "@/lib/formatters";
+import { useDialogFocusReturn } from "@/lib/focus";
+import { formatCompactDate, formatCount, formatDate, formatKobo, formatPercent } from "@/lib/formatters";
+import { nairaToKobo } from "@/lib/money-input";
+import { useFormDraft } from "@/lib/unsaved-changes";
 
 type Point = {
   day: number;
@@ -343,22 +350,40 @@ function ForecastChart({
     </svg>
   );
 }
+const TITLE = "Cash Desk",
+  DESCRIPTION = "A clearer view of business cash, commitments and the work ahead.";
 export default function CashDeskPage() {
-  const { data, isLoading, error, refetch, run, pending, canWrite } =
-    useConnected();
+  const api = useConnected();
+  const { data, isLoading, error, refetch, run, pending, canWrite } = api;
   const { workspace, merchantId } = useWorkspace();
   const cash = data?.cash as CashView | undefined;
   const [tab, setTab] = useState("cash");
   const [action, setAction] = useState<PendingAction | null>(null);
   const [reason, setReason] = useState("");
   const [problem, setProblem] = useState("");
+  const [success, setSuccess] = useState("");
+  const [forecastErrors, setForecastErrors] = useState<Record<string, string>>(
+    {},
+  );
   const [downside, setDownside] = useState("70");
   const [delay, setDelay] = useState("7");
   const [buffer, setBuffer] = useState("1500000");
+  // A confirmed step can remove or disable the button that opened its review, so focus then goes to the result.
+  const result = useRef<HTMLParagraphElement>(null);
+  const restoreFocus = useDialogFocusReturn(!!action, () => result.current);
+  // Planning inputs, or a review note, typed but not saved are a draft: leaving asks first.
+  const draft = useFormDraft({ downside, delay, buffer, reason: action ? reason : "" });
   useEffect(() => {
     setAction(null);
     setReason("");
     setProblem("");
+    setSuccess("");
+    setForecastErrors({});
+    setDownside("70");
+    setDelay("7");
+    setBuffer("1500000");
+    setTab("cash");
+    draft.reset({ downside: "70", delay: "7", buffer: "1500000", reason: "" });
   }, [merchantId]);
   const maker = ["Admin", "Operations"].includes(workspace?.role ?? "");
   const finance = workspace?.role === "Finance";
@@ -366,11 +391,48 @@ export default function CashDeskPage() {
     setAction(next);
     setReason("");
     setProblem("");
+    setSuccess("");
   };
   const act = async () => {
     if (!action) return;
+    draft.sending(
+      action.action === "cash.forecast"
+        ? { downside, delay, buffer, reason: "" }
+        : null,
+    );
     try {
       await run(action.action, action.data, action.recordId, reason);
+      draft.saved();
+      const message: Record<string, string> = {
+        "cash.initialize":
+          "Sample Cash Desk set up. Review the account timestamps and planning assumptions before preparing work.",
+        "cash.forecast":
+          "New sample forecast saved. Your source balances and commitments are unchanged.",
+        "cash.refresh_sample":
+          "Sample source timestamps refreshed. Review the updated balances before preparing new work.",
+        "cash.erp.prepare":
+          "Sample accounting draft prepared. A different Finance reviewer must check it before export.",
+        "cash.erp.review":
+          "Sample accounting review recorded. The draft can be prepared for export if its evidence is still current. Nothing has been posted.",
+        "cash.erp.export":
+          "Sample accounting export prepared. Download the review file below. Nothing has been posted to accounting software.",
+        "cash.vat.export":
+          "Sample VAT review schedule saved. Review its evidence gaps before use. No tax return was filed or paid.",
+        "cash.payroll.export":
+          "Sample payroll export prepared. Download the review file below. Payroll remains unpaid.",
+        "cash.payroll.prepare":
+          "Sample payroll funding plan prepared. A different Finance reviewer must check the funding and items before export. Payroll remains unpaid.",
+        "cash.payroll.refresh":
+          "New sample funding review saved. Previous approval and export readiness have ended; Finance must review again. Existing item outcomes remain recorded.",
+        "cash.payroll.approve":
+          "Sample funding approval recorded. An export still requires current funding and source checks. Payroll remains unpaid.",
+        "cash.payroll.reconcile":
+          "Sample payroll item evidence recorded. Review each item's status; unknown outcomes stay on hold and must not be exported again.",
+      };
+      setSuccess(
+        message[action.action] ??
+          `${action.title} completed. The sample record is saved; review its current status below. No live financial instruction was sent.`,
+      );
       setAction(null);
     } catch (err) {
       setProblem(
@@ -380,18 +442,57 @@ export default function CashDeskPage() {
       );
     }
   };
-  if (isLoading) return <Loading what="Cash Desk" />;
-  if (error)
+  const reviewForecast = () => {
+    const errors: Record<string, string> = {};
+    let bufferMinor = 0,
+      downsideInflowBps = 0;
+    try {
+      bufferMinor = nairaToKobo(buffer);
+    } catch (error) {
+      errors["cash-buffer"] = (error as Error).message;
+    }
+    if (!/^\d+(?:\.\d{1,2})?$/.test(downside) || Number(downside) > 100) {
+      errors["cash-receipts"] =
+        "Enter a percentage from 0 to 100 with no more than 2 decimal places.";
+    } else {
+      downsideInflowBps = nairaToKobo(downside);
+    }
+    if (!/^\d+$/.test(delay) || Number(delay) > 30)
+      errors["cash-delay"] = "Enter a whole number of days from 0 to 30.";
+    setForecastErrors(errors);
+    if (Object.keys(errors).length) {
+      const first = ["cash-receipts", "cash-delay", "cash-buffer"].find(
+        (id) => errors[id],
+      );
+      document.getElementById(first!)?.focus();
+      return;
+    }
+    ask({
+      action: "cash.forecast",
+      title: "Save forecast version",
+      detail: `Keep ${formatPercent(downsideInflowBps / 10000)} of expected receipts, delayed by ${formatCount(Number(delay), "day")}, with a ${formatKobo(bufferMinor)} planning buffer. The base case keeps approved amounts. No bank balance or commitment will be changed.`,
+      data: {
+        downsideInflowBps,
+        downsideDelayDays: Number(delay),
+        bufferMinor,
+      },
+    });
+  };
+  if (isLoading) return <Loading what="Cash Desk" heading />;
+  if (error && !cash)
     return (
-      <LoadProblem
-        what="Cash Desk"
-        error={error}
-        retry={() => {
-          void refetch();
-        }}
-      />
+      <ConnectedState title={TITLE} description={DESCRIPTION}>
+        <LoadProblem
+          what="Cash Desk"
+          error={error}
+          retry={() => {
+            void refetch();
+          }}
+        />
+        <ConnectedRecovery recovery={api} />
+      </ConnectedState>
     );
-  if (!cash) return <Loading what="Cash Desk" />;
+  if (!cash) return <Loading what="Cash Desk" heading />;
   const position = cash.positions.find((p) => p.currency === "NGN");
   const base =
     cash.forecast?.scenarios.find((s) => s.name === "base")?.points ?? [];
@@ -400,9 +501,22 @@ export default function CashDeskPage() {
   const canOperate = canWrite && cash.initialised && cash.permissions.read;
   return (
     <ConnectedFrame
-      title="Cash Desk"
-      description="A clearer view of business cash, commitments and the work ahead."
+      title={TITLE}
+      description={DESCRIPTION}
+      recovery={api}
+      onRecovered={() => {
+        setProblem("");
+        setAction(null);
+        setReason("");
+        draft.saved();
+      }}
+      onReleased={() => setProblem("")}
     >
+      {success && (
+        <p className="connected-note" role="status" ref={result}>
+          {success}
+        </p>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <p className="flex items-center gap-2 text-sm font-medium">
           <Building2 className="h-4 w-4" aria-hidden="true" />
@@ -473,7 +587,7 @@ export default function CashDeskPage() {
             <Metric
               title="Booked cash"
               value={amount(position?.bookedMinor)}
-              detail={`${position?.accountCount ?? 0} business accounts · own-account transfers excluded from income`}
+              detail={`${formatCount(position?.accountCount ?? 0, "business account")} · own-account transfers excluded from income`}
               accent
             />
             <Metric
@@ -592,11 +706,27 @@ export default function CashDeskPage() {
                       type="number"
                       min="0"
                       max="100"
+                      step="0.01"
+                      aria-invalid={!!forecastErrors["cash-receipts"]}
+                      aria-describedby={
+                        forecastErrors["cash-receipts"]
+                          ? "cash-receipts-error"
+                          : undefined
+                      }
                       value={downside}
                       onChange={(e) => setDownside(e.target.value)}
                     />
                     <span className="text-muted-foreground">%</span>
                   </span>
+                  {forecastErrors["cash-receipts"] && (
+                    <span
+                      id="cash-receipts-error"
+                      role="alert"
+                      className="block mt-2 text-xs text-destructive"
+                    >
+                      {forecastErrors["cash-receipts"]}
+                    </span>
+                  )}
                 </label>
                 <label
                   className="block text-sm font-medium"
@@ -610,11 +740,26 @@ export default function CashDeskPage() {
                       type="number"
                       min="0"
                       max="30"
+                      aria-invalid={!!forecastErrors["cash-delay"]}
+                      aria-describedby={
+                        forecastErrors["cash-delay"]
+                          ? "cash-delay-error"
+                          : undefined
+                      }
                       value={delay}
                       onChange={(e) => setDelay(e.target.value)}
                     />
                     <span className="text-muted-foreground">days</span>
                   </span>
+                  {forecastErrors["cash-delay"] && (
+                    <span
+                      id="cash-delay-error"
+                      role="alert"
+                      className="block mt-2 text-xs text-destructive"
+                    >
+                      {forecastErrors["cash-delay"]}
+                    </span>
+                  )}
                 </label>
                 <label
                   className="block text-sm font-medium"
@@ -624,12 +769,25 @@ export default function CashDeskPage() {
                   <input
                     id="cash-buffer"
                     className="mt-2 h-10 w-full rounded-lg border bg-background px-3"
-                    type="number"
-                    min="0"
-                    step="0.01"
+                    inputMode="decimal"
+                    aria-invalid={!!forecastErrors["cash-buffer"]}
+                    aria-describedby={
+                      forecastErrors["cash-buffer"]
+                        ? "cash-buffer-error"
+                        : undefined
+                    }
                     value={buffer}
                     onChange={(e) => setBuffer(e.target.value)}
                   />
+                  {forecastErrors["cash-buffer"] && (
+                    <span
+                      id="cash-buffer-error"
+                      role="alert"
+                      className="block mt-2 text-xs text-destructive"
+                    >
+                      {forecastErrors["cash-buffer"]}
+                    </span>
+                  )}
                 </label>
                 <Button
                   className="w-full"
@@ -638,30 +796,9 @@ export default function CashDeskPage() {
                     !["Admin", "Operations", "Finance"].includes(
                       workspace?.role ?? "",
                     ) ||
-                    pending ||
-                    !downside ||
-                    !delay ||
-                    !buffer ||
-                    Number(downside) < 0 ||
-                    Number(downside) > 100 ||
-                    !Number.isInteger(Number(delay)) ||
-                    Number(delay) < 0 ||
-                    Number(delay) > 30 ||
-                    Number(buffer) < 0
+                    pending
                   }
-                  onClick={() =>
-                    ask({
-                      action: "cash.forecast",
-                      title: "Save forecast version",
-                      detail:
-                        "The base case keeps approved amounts. The downside changes receipts only. No bank balance or commitment will be changed.",
-                      data: {
-                        downsideInflowBps: Math.round(Number(downside) * 100),
-                        downsideDelayDays: Number(delay),
-                        bufferMinor: Math.round(Number(buffer) * 100),
-                      },
-                    })
-                  }
+                  onClick={reviewForecast}
                 >
                   Save forecast
                   <ArrowRight />
@@ -669,7 +806,9 @@ export default function CashDeskPage() {
                 <p className="flex items-start gap-2 text-xs leading-relaxed text-muted-foreground">
                   <CircleHelp className="mt-0.5 h-4 w-4 shrink-0" />
                   Only information known at the forecast date is included. Draft
-                  commitments and future knowledge are excluded.
+                  commitments and future knowledge are excluded. An approved
+                  outflow past its due date counts as due now; an overdue
+                  receipt is left out.
                 </p>
               </div>
             </Section>
@@ -1158,7 +1297,7 @@ export default function CashDeskPage() {
                         Approved sample net-pay run
                       </h3>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        {r.summary.itemCount} items · planned for{" "}
+                        {formatCount(r.summary.itemCount, "item")} · planned for{" "}
                         {formatCompactDate(r.plan.paymentDate)} · source balance{" "}
                         {formatDate(r.plan.asOf)}
                       </p>
@@ -1449,18 +1588,32 @@ export default function CashDeskPage() {
       <Dialog
         open={!!action}
         onOpenChange={(open) => {
-          if (!open && !pending) setAction(null);
+          if (!open && !pending && !api.hasUnconfirmedOutcome) setAction(null);
         }}
       >
-        <DialogContent>
+        <DialogContent onCloseAutoFocus={restoreFocus}>
           <DialogHeader>
             <DialogTitle>{action?.title}</DialogTitle>
             <DialogDescription>{action?.detail}</DialogDescription>
           </DialogHeader>
+          <ConnectedRecovery
+            recovery={api}
+            onReleased={() => setProblem("")}
+            onRecovered={() => {
+              setProblem("");
+              setAction(null);
+              setReason("");
+              draft.saved();
+              setSuccess(
+                "Original sample request confirmed. Review the refreshed records below. No live financial instruction was sent.",
+              );
+            }}
+          />
           <label htmlFor="cash-action-reason" className="text-sm font-medium">
             Review note
             <textarea
               id="cash-action-reason"
+              disabled={pending || api.hasUnconfirmedOutcome}
               className="mt-2 min-h-24 w-full rounded-lg border bg-background p-3 text-sm"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
@@ -1468,7 +1621,7 @@ export default function CashDeskPage() {
               placeholder="Explain why you are taking this action (at least 8 characters)."
             />
           </label>
-          {problem && (
+          {problem && !api.hasUnconfirmedOutcome && (
             <p role="alert" className="text-sm text-destructive">
               {problem}
             </p>
@@ -1476,7 +1629,7 @@ export default function CashDeskPage() {
           <DialogFooter>
             <Button
               variant="outline"
-              disabled={pending}
+              disabled={pending || api.hasUnconfirmedOutcome}
               onClick={() => setAction(null)}
             >
               Cancel
@@ -1484,7 +1637,7 @@ export default function CashDeskPage() {
             <Button
               busy={pending}
               busyLabel="Saving…"
-              disabled={reason.trim().length < 8}
+              disabled={reason.trim().length < 8 || api.hasUnconfirmedOutcome}
               onClick={() => {
                 void act();
               }}

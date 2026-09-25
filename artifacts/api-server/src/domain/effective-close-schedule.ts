@@ -1,9 +1,12 @@
 import { closeSchedule } from "./close";
 import type { DomainState } from "./types";
 
-/** Only process health is exposed here; no other lender's runs or errors. */
+/**
+ * Only process health is exposed here; no other lender's runs or errors. `external`: this process runs no scheduled
+ * close because a separate scheduled job does (VALOPAY_CLOSE_SCHEDULER=external), which it cannot observe.
+ */
 export interface CloseRuntime {
-  state: "not_started" | "running" | "off" | "stopped";
+  state: "not_started" | "running" | "off" | "external" | "stopped";
   intervalMs: number | null;
   lastTickAt: string | null;
   lastSuccessAt?: string | null;
@@ -25,7 +28,10 @@ export function effectiveCloseSchedule(state: DomainState, now: string, runtime:
     runtimeState: runtime.state,
     automatic,
     nextAt: automatic ? schedule.nextAt : null,
-    // Preserve overdue work when the service is unhealthy, but not when scheduling is deliberately off.
+    // A retry time is a promise of an automatic attempt, so it is shown only while one can run.
+    retryAt: automatic ? schedule.retryAt : null,
+    // Preserve overdue work when the service is unhealthy or its closes run from a separate job, as for a running
+    // service, but not when scheduling is deliberately off: nobody runs automatic closes there.
     missed: schedule.missed && runtime.state !== "off",
     serviceIssue,
     lastCheckedAt: lastSuccessAt,

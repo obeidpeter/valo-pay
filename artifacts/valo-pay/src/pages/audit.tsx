@@ -1,4 +1,4 @@
-import { useSafePerformAction as usePerformAction } from '@/lib/safe-mutations';
+import { outcomeIsUnconfirmed, useSafePerformAction as usePerformAction } from '@/lib/safe-mutations';
 import React, { useEffect, useRef, useState } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { useSearchShortcut } from '@/lib/focus';
@@ -6,13 +6,15 @@ import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { LoadProblem } from '@/components/load-problem';
 import { RecordPagination } from '@/components/record-pagination';
-import { useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
+import { keepRowsWhilePaging, useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Search, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatDate, formatCount } from '@/lib/formatters';
 import { notifyProblem, saidBy } from '@/lib/notify';
+import { KEPT_IN_OPERATIONS, OpenOperations } from '@/components/pilot-ui';
 
 export default function AuditPage() {
   const { merchantId, workspace } = useWorkspace();
@@ -27,10 +29,11 @@ export default function AuditPage() {
   currentMerchant.current = merchantId;
   const verificationRequest = useRef(0);
 
+  const auditKey = getListRecordsQueryKey('audit', listParams), client = useQueryClient();
   const { data, isLoading, error, refetch, isFetching } = useListRecords(
     'audit',
     listParams,
-    { query: { enabled: !!merchantId, queryKey: getListRecordsQueryKey('audit', listParams) } }
+    { query: { enabled: !!merchantId, queryKey: auditKey, placeholderData: keepRowsWhilePaging(auditKey, client) } }
   );
 
   const verify = usePerformAction(undefined, merchantId);
@@ -52,7 +55,8 @@ export default function AuditPage() {
       setVerification({ merchantId, checkedAt: new Date().toISOString(), valid: res.data?.valid === true, count: Number(res.data?.count || 0), headHash: String(res.data?.headHash || '') });
     } catch (error) {
       if (currentMerchant.current === merchantId && verificationRequest.current === request) {
-        notifyProblem('Audit log could not be checked', `${saidBy(error, 'The service could not complete the check.')} The log is unchanged.`);
+        const words = `${saidBy(error, 'The service could not complete the check.')} The log is unchanged.`;
+        notifyProblem('Audit log could not be checked', outcomeIsUnconfirmed(error) ? <>{words} {KEPT_IN_OPERATIONS} <OpenOperations /></> : words);
       }
     }
   };
@@ -111,7 +115,7 @@ export default function AuditPage() {
         ) : isLoading ? (
           <Loading what="the audit log" />
         ) : error ? (
-          <LoadProblem what="the audit log" error={error} retry={() => { void refetch(); }} busy={isFetching} />
+          <LoadProblem what="the audit log" pager="audit entries" error={error} retry={() => { void refetch(); }} busy={isFetching} />
         ) : !data || data.items.length === 0 ? (
           search.trim() ? (
             <EmptyState filtered title={`No entries match “${search.trim()}”`}>Try a shorter term, or search for an action, person or summary.</EmptyState>

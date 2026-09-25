@@ -1,3 +1,4 @@
+import { watMonth } from "./calendar";
 import { makeRecord, touch } from "./records";
 import type {
   ActionResult,
@@ -55,14 +56,18 @@ function permission(
       Date.parse(String(r.data.expiresAt)) > Date.parse(now),
   );
 }
+/** A refusal the HTTP layer answers with its own status; a plain error would read as a 400. */
+const refusal = (message: string, status: number): Error =>
+  Object.assign(new Error(message), { status });
 function requirePermission(
   state: DomainState,
   purpose: Purpose,
   now: string,
 ): void {
   if (!permission(state, purpose, now))
-    throw new Error(
+    throw refusal(
       `Enable the SME ${purpose.replaceAll("_", " ")} permission in Connected Banking before continuing.`,
+      403,
     );
 }
 function ownRecords(state: DomainState, kind: string): ValopayRecord[] {
@@ -79,12 +84,12 @@ function ownRecord(
   id?: string,
 ): ValopayRecord {
   const record = ownRecords(state, kind).find((r) => r.id === id);
-  if (!record) throw new Error("This SME record was not found.");
+  if (!record) throw refusal("This SME record was not found.", 404);
   return record;
 }
 function requireRole(ctx: Context, roles: string[]): void {
   if (!roles.includes(ctx.role))
-    throw new Error(`This action requires ${roles.join(" or ")} access.`);
+    throw refusal(`This action requires ${roles.join(" or ")} access.`, 403);
 }
 function minor(value: unknown, fallback: number): number {
   if (value === undefined) return fallback;
@@ -266,7 +271,8 @@ function sample(state: DomainState, now: string) {
     ],
     source: "synthetic",
   };
-  const period = now.slice(0, 7);
+  // The tax period is the West Africa Time month: at 00:30 WAT on the 1st, UTC still says the month before.
+  const period = watMonth(now);
   const vatInvoices: VatInvoiceEvidence[] = [
     {
       ...scope,
@@ -489,8 +495,9 @@ export function runCashAction(
   },
 ): ActionResult {
   if (state.settings.environment !== "sandbox")
-    throw new Error(
+    throw refusal(
       "Cash Desk actions currently support synthetic sandbox workspaces only.",
+      403,
     );
   if (!input.reason?.trim())
     throw new Error(

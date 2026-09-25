@@ -9,7 +9,7 @@ export function templateTextProblems(value: unknown): string[] {
   const remainder = text.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_token, name: string) => {
     const field = name.trim();
     found.add(field);
-    if (!(templatePlaceholders as readonly string[]).includes(field)) problems.push(`Unknown placeholder {{${field}}. Use only {{amount}}, {{date}}, {{merchant}} and {{contact}}.`);
+    if (!(templatePlaceholders as readonly string[]).includes(field)) problems.push(`Unknown placeholder {{${field}}}. Use only {{amount}}, {{date}}, {{merchant}} and {{contact}}.`);
     return '';
   });
   if (/[{}]/.test(remainder)) problems.push('A placeholder has unmatched or malformed braces. Use two braces on each side, for example {{amount}}.');

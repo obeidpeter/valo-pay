@@ -1,17 +1,24 @@
-# Offline checks only: no database, no secrets, no Replit services, no real lender data.
+# No secrets, no Replit services, no real lender data. The source, browser and Node 22 jobs are offline; the
+# two database jobs use a PostgreSQL 16 service container that exists only for the job and is discarded with
+# the runner. A weekly run on main repeats every check, the two dependency audits included, so a new advisory
+# surfaces without waiting for a pull request.
 name: Source checks
 
 on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    # Mondays at 05:00 UTC (06:00 WAT).
+    - cron: "0 5 * * 1"
 
 permissions:
   contents: read
 
+# A newer push to a pull request cancels its running checks; a run for a push to main is never cancelled once started.
 concurrency:
   group: source-checks-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   source-checks:
@@ -22,18 +29,17 @@ jobs:
       CI: "true"
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
-          version: 10.26.1
           run_install: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -44,6 +50,14 @@ jobs:
       - name: Audit production dependencies for high or critical advisories
         run: pnpm audit --prod --audit-level=high
 
+      # The console declares its runtime packages (React, Clerk, Vite and the rest) as development
+      # dependencies, which --prod leaves out: this covers what ships to browsers and the build tools.
+      - name: Audit every dependency, the console's included, for high or critical advisories
+        run: pnpm audit --audit-level=high
+
+      - name: Check the committed contract and its generated packages match the generator
+        run: pnpm run check:contract
+
       - name: Check TypeScript
         run: pnpm run typecheck
 
@@ -52,6 +66,8 @@ jobs:
 
       - name: Run pure tests
         run: pnpm run test:pure
+      - name: Check pilot operations, evidence and retention controls
+        run: pnpm run test:operations
 
       - name: Rehearse operational incident and recovery delivery locally
         run: |
@@ -69,8 +85,52 @@ jobs:
       - name: Run console tests (pages in jsdom against the in-memory API)
         run: pnpm --filter @workspace/valopay run test
 
-      - name: Build API bundle
-        run: pnpm --filter @workspace/api-server run build
+      # The API bundle (the server and the one-shot close pass), the console and the mockup sandbox.
+      - name: Build every package
+        run: pnpm -r --if-present run build
+        env:
+          PORT: "5173"
+          BASE_PATH: "/"
+
+  # The browser workflows, one Playwright project a job, so each job has room under its timeout and a
+  # retry of a slow spec cannot push the source checks past theirs.
+  browser-checks:
+    name: Browser workflows (${{ matrix.project }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: desktop-chromium
+            browser: chromium
+          - project: mobile-chromium
+            browser: chromium
+          - project: desktop-firefox
+            browser: firefox
+          - project: mobile-webkit
+            browser: webkit
+    env:
+      CI: "true"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Build console
         run: pnpm --filter @workspace/valopay run build
@@ -78,21 +138,71 @@ jobs:
           PORT: "5173"
           BASE_PATH: "/"
 
-      - name: Install test browser
-        run: pnpm --filter @workspace/valopay exec playwright install --with-deps chromium firefox webkit
+      - name: Find the Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('./artifacts/valo-pay/package.json').devDependencies['@playwright/test']")" >> "$GITHUB_OUTPUT"
 
-      - name: Chromium, Firefox and WebKit browser workflows
-        run: pnpm --filter @workspace/valopay run test:browser
+      - name: Restore the test browser
+        id: browser-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-${{ matrix.browser }}
+
+      - name: Install the test browser
+        if: steps.browser-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @workspace/valopay exec playwright install --with-deps ${{ matrix.browser }}
+
+      - name: Install the test browser's system libraries
+        if: steps.browser-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @workspace/valopay exec playwright install-deps ${{ matrix.browser }}
+
+      - name: Browser workflows in ${{ matrix.project }}
+        run: pnpm --filter @workspace/valopay run test:browser --project=${{ matrix.project }}
 
       - name: Preserve browser failure evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: browser-failure-evidence
+          name: browser-failure-evidence-${{ matrix.project }}
           path: |
             artifacts/valo-pay/playwright-report
             artifacts/valo-pay/test-results
           retention-days: 7
+
+  # engines admits Node 22.22.2 and later 22 releases as well as 24: this job keeps that honest with the
+  # TypeScript check and every offline suite (pnpm test) on Node 22.
+  node-22-checks:
+    name: TypeScript and offline tests on Node 22
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: "true"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          run_install: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check TypeScript
+        run: pnpm run typecheck
+
+      - name: Run every offline suite
+        run: pnpm test
 
   # The database-backed suites run against a PostgreSQL 16 that exists only for
   # this job: the schema is created in it with the development push and the
@@ -105,7 +215,8 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:16
+        # postgres:16.15, pinned by the digest of its multi-platform index.
+        image: postgres:16.15@sha256:a3b7f434b2dc57ce85a67e171163eb8ab1a1ebcb39d27484661f26b1dfbe30d6
         env:
           POSTGRES_USER: postgres
           POSTGRES_DB: valopay
@@ -124,18 +235,17 @@ jobs:
       DATABASE_URL: postgres://postgres@127.0.0.1:5432/valopay
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
-          version: 10.26.1
           run_install: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -149,22 +259,22 @@ jobs:
       - name: Run the repository and scheduled-close suites
         run: pnpm run test:integration
 
-      - name: Rehearse pilot row-level isolation in an isolated schema
-        run: scripts/node_modules/.bin/tsx artifacts/api-server/tests/pilot-rls.integration.test.ts
-        env:
-          VALOPAY_RUN_PILOT_RLS: "1"
-
+      # Runs even when a suite above failed, so the recovery is still measured. Under CI it fails,
+      # rather than passing, when its opt-ins are missing, and a failed rehearsal leaves a report too.
       - name: Rehearse a measured synthetic backup and restore
+        if: ${{ !cancelled() }}
         run: scripts/node_modules/.bin/tsx artifacts/api-server/tests/recovery-rehearsal.integration.test.ts
         env:
           VALOPAY_RUN_RECOVERY: "1"
           VALOPAY_REHEARSAL_REPORT: recovery-evidence.json
 
       - name: Preserve synthetic recovery measurements
-        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: synthetic-recovery-evidence
           path: recovery-evidence.json
+          if-no-files-found: error
           retention-days: 14
 
   browser-database-checks:
@@ -173,7 +283,8 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:16
+        # postgres:16.15, pinned by the digest of its multi-platform index.
+        image: postgres:16.15@sha256:a3b7f434b2dc57ce85a67e171163eb8ab1a1ebcb39d27484661f26b1dfbe30d6
         env:
           POSTGRES_USER: postgres
           POSTGRES_DB: valopay_browser_test
@@ -188,14 +299,13 @@ jobs:
       CI: "true"
       DATABASE_URL: postgres://postgres@127.0.0.1:5432/valopay_browser_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
-          version: 10.26.1
           run_install: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -208,13 +318,26 @@ jobs:
         env:
           PORT: "5173"
           BASE_PATH: "/"
+      - name: Find the Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('./artifacts/valo-pay/package.json').devDependencies['@playwright/test']")" >> "$GITHUB_OUTPUT"
+      - name: Restore Chromium
+        id: browser-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
       - name: Install Chromium
+        if: steps.browser-cache.outputs.cache-hit != 'true'
         run: pnpm --filter @workspace/valopay exec playwright install --with-deps chromium
+      - name: Install Chromium's system libraries
+        if: steps.browser-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @workspace/valopay exec playwright install-deps chromium
       - name: Exercise real middleware, repositories and database persistence in a browser
         run: pnpm --filter @workspace/valopay run test:browser:database
       - name: Preserve browser database failure evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: browser-database-failure-evidence
           path: |

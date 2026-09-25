@@ -1,0 +1,18 @@
+import assert from "node:assert/strict";
+import { recoveryBytes, recoveryManifestSchema, verifyRecoveryManifest, type RecoveryConfiguration, type RecoveryObject } from "../src/lib/recovery-manifest";
+const config: RecoveryConfiguration = {schemaVersion:"004_staff_lender_access",runtimeDatabaseRole:"valopay_runtime",staffMode:"staging",issuer:"https://synthetic.clerk.accounts.dev",origins:["https://pilot.example.test"],encryptionKeyIds:["projects/synthetic/locations/global/keyRings/recovery/cryptoKeys/v1"],privateObjectAccess:"authenticated_lender_scoped",schedulerEnabled:false,liveOperationsEnabled:false};
+const database=Buffer.from("Synthetic logical database backup");
+const objects: RecoveryObject[]=[{lenderId:"lender-1",exportId:"export-1",storageKey:"exports/lender-1/export-1.json",private:true,...recoveryBytes(Buffer.from("Synthetic export"))}];
+const manifest=recoveryManifestSchema.parse({version:2,snapshotAt:"2026-09-22T10:00:00.000Z",database:recoveryBytes(database),configuration:config,objects});
+assert.equal(verifyRecoveryManifest(manifest,database,objects,config).verified,true);
+assert.throws(()=>verifyRecoveryManifest(manifest,Buffer.from("Changed backup"),objects,config),/database/);
+assert.throws(()=>verifyRecoveryManifest(manifest,database,[],config),/missing/);
+assert.throws(()=>verifyRecoveryManifest(manifest,database,[{...objects[0]!,checksum:"a".repeat(64)}],config),/changed/);
+assert.throws(()=>verifyRecoveryManifest(manifest,database,[{...objects[0]!,lenderId:"another-lender"}],config));
+assert.throws(()=>verifyRecoveryManifest(manifest,database,[{...objects[0]!,private:false} as any],config));
+assert.throws(()=>verifyRecoveryManifest(manifest,database,objects,{...config,encryptionKeyIds:["projects/synthetic/locations/global/keyRings/recovery/cryptoKeys/missing"]}),/configuration/);
+assert.throws(()=>verifyRecoveryManifest(manifest,database,objects,{...config,runtimeDatabaseRole:"postgres"}),/configuration/);
+assert.throws(()=>verifyRecoveryManifest(manifest,database,objects,{...config,origins:["https://unexpected.example.test"]}),/configuration/);
+assert.throws(()=>recoveryManifestSchema.parse({...manifest,configuration:{...config,secret:"not-allowed"}}));
+assert.throws(()=>recoveryManifestSchema.parse({...manifest,objects:[...objects,...objects]}));
+console.log("Recovery manifest checks passed: database integrity, private object completeness/isolation and reviewed access/key configuration.");

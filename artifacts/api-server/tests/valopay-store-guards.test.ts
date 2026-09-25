@@ -3,17 +3,46 @@ import assert from "node:assert/strict";
 // The pure guard does not connect, but the repository module verifies that a
 // database URL exists while it is loaded.
 process.env.DATABASE_URL ||= "postgres://unused:unused@127.0.0.1:1/unused";
-const { assertFinalState, canonical, appendAudit, expiredWorkspaceCleanupEnabled, verifyAudit } = await import("../src/lib/valopay-store.js");
+const { assertFinalState, appendAudit, expiredWorkspaceCleanupEnabled, verifyAudit, journalReceipt } = await import("../src/lib/valopay-store.js");
+const { canonicalJson } = await import("@workspace/valopay-schema");
 const { seedMerchant } = await import("../src/lib/valopay-seed.js");
 
 const seed = () => seedMerchant("merchant-a");
 const expectConflict = (run: () => void) => assert.throws(run, (error: any) => error?.status === 409);
 
-assert.equal(canonical({ b: 2, a: 1 }), '{"a":1,"b":2}', "Historical canonical bytes must not change.");
-assert.equal(canonical({ b: 2, a: 1 }), canonical({ a: 1, b: 2 }), "JSONB key reordering must not affect digests.");
+assert.equal(canonicalJson({ b: 2, a: 1 }, "legacy-en-us-null"), '{"a":1,"b":2}', "Historical canonical bytes must not change.");
+assert.equal(canonicalJson({ b: 2, a: 1 }, "legacy-en-us-null"), canonicalJson({ a: 1, b: 2 }, "legacy-en-us-null"), "JSONB key reordering must not affect digests.");
 assert.equal(expiredWorkspaceCleanupEnabled(undefined), false, "Automatic workspace cleanup must default off.");
 assert.equal(expiredWorkspaceCleanupEnabled("off"), false, "Only the explicit opt-in may enable cleanup.");
 assert.equal(expiredWorkspaceCleanupEnabled("on"), true, "The documented opt-in must enable cleanup.");
+// The journal keeps a reference to what a completed request saved; the whole answer is kept once, as the replay copy.
+assert.deepEqual(journalReceipt({ id: "record-1", kind: "customers", name: "Synthetic", data: { note: "x".repeat(1000) } }), { id: "record-1", kind: "customers" }, "A saved record is kept as its reference.");
+assert.deepEqual(journalReceipt({ message: "Daily close complete.", record: { id: "close-1", kind: "closes", data: { report: { rows: Array.from({ length: 500 }, () => "x") } } }, data: { closeId: "close-1" } }), { record: { id: "close-1", kind: "closes" } }, "An action keeps a reference to the record it saved, not the record.");
+assert.deepEqual(journalReceipt({ id: "run-1", status: "approved", candidates: [] }), { id: "run-1" }, "A result without a record kind keeps its ID.");
+for (const answer of [{ message: "Audit log check complete.", data: { valid: true } }, null, undefined, "text", [{ id: "x" }], { id: 7 }]) assert.deepEqual(journalReceipt(answer), {}, "An answer that names no record keeps nothing.");
+// An export job's answer names the kind of record it exports, not its own: its reference is to an export.
+assert.deepEqual(journalReceipt({ id: "export-1", kind: "customers", format: "csv", status: "queued", downloadUrl: "/api/v1/exports/export-1/download?merchantId=m" }), { id: "export-1", kind: "exports" }, "An export is kept as a reference to the export, not to a customer.");
+{
+  // Backlog item UX-B02-X3: what Operations says of an entry's request, from its method, path and a few short body fields.
+  const { summariseRequest } = await import("../src/lib/operation-summary.js");
+  const { recoverableRequest } = await import("../src/lib/operation-recovery.js");
+  const facts = (method: string, path: string, rest: Record<string, string | null> = {}) => ({ method, path, action: null, decision: null, status: null, kind: null, format: null, target: null, targetKind: null, ...rest });
+  assert.deepEqual(summariseRequest(facts("PATCH", "/v1/records/customers/cus%201", { status: "inactive" })), { summary: { action: "Change a record", targetKind: "customers", targetId: "cus 1", details: [{ name: "Status", value: "inactive" }] }, resultKind: "customers", resultOverrides: false }, "a record update names its record, from the path, and the status it sets");
+  assert.deepEqual(summariseRequest(facts("POST", "/v1/actions", { action: "mandate_suspend", target: "mnd-1", targetKind: "mandates" }))?.summary, { action: "Mandate suspend", targetKind: "mandates", targetId: "mnd-1", details: [] }, "an action is named in words, with the record its recordId names");
+  assert.deepEqual(summariseRequest(facts("POST", "/v1/exports", { kind: "customers", format: "csv" })), { summary: { action: "Request an export", targetKind: null, targetId: null, details: [{ name: "Kind", value: "customers" }, { name: "Format", value: "csv" }] }, resultKind: "exports", resultOverrides: true }, "an export's answer is an export, whatever kind it exports");
+  assert.deepEqual(summariseRequest(facts("POST", "/v1/pilot/cases/exc-1", { action: "claim" }))?.summary, { action: "Update a case", targetKind: "exceptions", targetId: "exc-1", details: [{ name: "Action", value: "claim" }] });
+  assert.equal(summariseRequest(facts("POST", "/v1/lifecycle/runs/run-1/approve"))?.resultKind, "retention-runs", "an answer that names no kind is the kind its route saves");
+  assert.equal(summariseRequest(facts("POST", "/v1/team/invitations")), null, "a route the journal does not record has no summary");
+  assert.equal(summariseRequest({ ...facts("POST", "/v1/actions"), method: null, path: null }), null, "nor has a sealed or purged request");
+  // Every route the journal records is named in words, whatever its ids.
+  const journaled = ["PATCH /v1/records/customers/x", "PATCH /v1/settings", "POST /v1/actions", "POST /v1/imports", "POST /v1/connected/actions", "POST /v1/records/customers", "POST /v1/exports", "POST /v1/exports/x/retry", "POST /v1/pilot/batches", "POST /v1/pilot/batches/x/save", "POST /v1/pilot/batches/x/commit", "POST /v1/pilot/cases/x", "POST /v1/pilot/import-corrections", "POST /v1/pilot/import-corrections/x/decision", "POST /v1/pilot/close-reviews/prepare", "POST /v1/pilot/close-reviews/x/decision", "POST /v1/sources/manifests", "POST /v1/sources/profiles", "POST /v1/sources/profiles/x/save", "POST /v1/sources/paystack/fixtures", "POST /v1/sources/events/x/replay", "POST /v1/work/notifications/read", "POST /v1/work/handovers/acknowledge", "POST /v1/lifecycle/policy", "POST /v1/lifecycle/holds", "POST /v1/lifecycle/runs", "POST /v1/lifecycle/runs/x/approve", "POST /v1/lifecycle/runs/x/execute"];
+  for (const route of journaled) {
+    const [method, path] = route.split(" ") as [string, string];
+    assert.ok(recoverableRequest(method, path, { commit: true, action: "daily_close" }), `${route} is journaled`);
+    const described = summariseRequest(facts(method, path, { action: "daily_close" }));
+    assert.ok(described && /^[A-Z][a-z]/.test(described.summary.action) && !described.summary.action.includes("/"), `${route} is named in words: ${described?.summary.action}`);
+  }
+}
 {
   const state = seed();
   appendAudit(state, { actor: "System", role: "Admin", now: "2026-01-01T00:00:00.000Z" }, "test", "workspace", "Synthetic test");
@@ -97,6 +126,56 @@ for (const key of ["policyId", "experimentId", "proposedDueItemId", "noticeId", 
   after.records.push(structuredClone(after.records[0]!));
   expectConflict(() => assertFinalState(before, after, "merchant-a"));
 }
+{
+  // A recorded payer never changes, except that Finance's identification is withdrawn, back to no payer, while nothing of
+  // the payment is applied and the identification is kept in its history (the review of the 23 September audit fixes).
+  const identified = () => {
+    const state = seed();
+    const payment = state.records.find((record) => record.reference === "SBX-UNIDENTIFIED-001")!;
+    const due = state.records.find((record) => record.kind === "due-items" && record.status === "scheduled")!;
+    const allocation = { ...structuredClone(payment), id: "allocation-identifying", kind: "allocations", name: "Allocation R7", status: "superseded", reference: "SYN-allocation", customerId: due.customerId, amountKobo: 1_000_000, data: { paymentId: payment.id, dueItemId: due.id, rule: "R7", confidence: "manual", automatic: false, supersededByReview: true } };
+    state.records.push(allocation);
+    payment.customerId = due.customerId;
+    payment.data.payerIdentification = { customerId: due.customerId, identifiedBy: "Sandbox Finance", identifiedAt: "2027-07-01T09:00:00.000Z", reason: "By phone.", dueItemId: due.id, allocationId: allocation.id };
+    return { state, payment: payment.id, allocation: allocation.id, customer: due.customerId };
+  };
+  const withdraw = (state: ReturnType<typeof seed>, id: string) => {
+    const payment = state.records.find((record) => record.id === id)!;
+    payment.data.payerIdentificationHistory = [{ ...payment.data.payerIdentification, withdrawnBy: "Sandbox Finance", withdrawnAt: "2027-07-02T09:00:00.000Z", withdrawnReason: "Wrong payer." }];
+    delete payment.data.payerIdentification;
+    payment.customerId = "";
+    return payment;
+  };
+  const { state: before, payment, allocation, customer } = identified();
+  const other = before.records.find((record) => record.kind === "customers" && record.id !== customer)!.id;
+  const withdrawn = structuredClone(before); withdraw(withdrawn, payment);
+  assert.doesNotThrow(() => assertFinalState(before, withdrawn, "merchant-a"), "a withdrawal that keeps its history while nothing is applied is accepted");
+  const forgotten = structuredClone(withdrawn); delete forgotten.records.find((record) => record.id === payment)!.data.payerIdentificationHistory;
+  expectConflict(() => assertFinalState(before, forgotten, "merchant-a"));
+  const applied = structuredClone(before);
+  Object.assign(applied.records.find((record) => record.id === allocation)!, { status: "confirmed" });
+  applied.records.find((record) => record.id === payment)!.data.allocatedKobo = 1_000_000;
+  const appliedWithdrawn = structuredClone(applied); withdraw(appliedWithdrawn, payment);
+  expectConflict(() => assertFinalState(applied, appliedWithdrawn, "merchant-a"));
+  const reassigned = structuredClone(before); reassigned.records.find((record) => record.id === payment)!.customerId = other;
+  expectConflict(() => assertFinalState(before, reassigned, "merchant-a"));
+  const named = structuredClone(before); delete named.records.find((record) => record.id === payment)!.data.payerIdentification;
+  const namedWithdrawn = structuredClone(named); Object.assign(namedWithdrawn.records.find((record) => record.id === payment)!, { customerId: "" });
+  expectConflict(() => assertFinalState(named, namedWithdrawn, "merchant-a"));
+  // Nor is an identification withdrawn once evidence resolved to the payment names that customer (the third review of the audit fixes).
+  const confirmed = structuredClone(before), paymentRecord = confirmed.records.find((record) => record.id === payment)!;
+  confirmed.records.push({ ...structuredClone(paymentRecord), id: "evidence-naming-payer", kind: "observations", name: "transfer TRF-1", status: "resolved", reference: paymentRecord.reference, customerId: customer, data: { source: "transfer", paymentId: payment, resolutionKey: "canonical_provider_reference" } });
+  const confirmedWithdrawn = structuredClone(confirmed); withdraw(confirmedWithdrawn, payment);
+  expectConflict(() => assertFinalState(confirmed, confirmedWithdrawn, "merchant-a"));
+  const unnamed = structuredClone(confirmed); Object.assign(unnamed.records.find((record) => record.id === "evidence-naming-payer")!, { customerId: "" });
+  const unnamedWithdrawn = structuredClone(unnamed); withdraw(unnamedWithdrawn, payment);
+  assert.doesNotThrow(() => assertFinalState(unnamed, unnamedWithdrawn, "merchant-a"), "evidence that names no payer does not stop the withdrawal");
+  // After the withdrawal, Finance identifies the real payer; the wrong match keeps the customer the history names, and no other.
+  const reidentified = structuredClone(withdrawn); Object.assign(reidentified.records.find((record) => record.id === payment)!, { customerId: other });
+  assert.doesNotThrow(() => assertFinalState(withdrawn, reidentified, "merchant-a"), "the real payer is recorded next");
+  const unrelated = structuredClone(reidentified); unrelated.records.find((record) => record.id === payment)!.data.payerIdentificationHistory[0].customerId = "someone-else";
+  expectConflict(() => assertFinalState(withdrawn, unrelated, "merchant-a"));
+}
 console.log("valopay repository pure guards passed");
 
 {
@@ -118,4 +197,18 @@ console.log("valopay repository pure guards passed");
     expectConflict(() => assertFinalState(ready, after, "merchant-a", context.now));
   }
   console.log("Export retry guards passed: failed/expired only, unchanged request and object identity, immutable ready evidence.");
+}
+{
+  // The guard query in docs/database-migrations.md, run by the owner before publishing, is built from the catalogue
+  // readiness checks: one row for each guard, in its order, with its kind, name, table and definition as SQL text.
+  // integrity-guards.integration.test.ts runs it against PostgreSQL.
+  const { readFileSync } = await import("node:fs");
+  const { integrityGuards } = await import("../src/lib/valopay-store.js");
+  const literal = (text: string) => `'${text.replaceAll("'", "''")}'`;
+  const rows = integrityGuards.map((guard) => `  (${[guard.type, guard.name, guard.table, guard.definition].map(literal).join(", ")})`).join(",\n");
+  const documented = readFileSync(new URL("../../../docs/database-migrations.md", import.meta.url), "utf8");
+  const query = [...documented.matchAll(/```sql\n([\s\S]*?)```/g)].map((match) => match[1]!);
+  assert.equal(query.length, 1, "docs/database-migrations.md holds one SQL block, the guard query");
+  assert.ok(query[0]!.includes(`FROM (VALUES\n${rows}\n) AS guard`), `The documented guard query must list exactly integrityGuards; its rows should read:\n${rows}`);
+  console.log(`Guard query rows passed: the query in docs/database-migrations.md lists the ${integrityGuards.length} integrity guards readiness checks, in order.`);
 }

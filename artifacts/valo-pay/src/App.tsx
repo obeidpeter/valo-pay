@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 
 import { Loading } from '@/components/loading';
 import { focusMain } from '@/lib/focus';
 import { installUnsavedNavigationGuard } from '@/lib/unsaved-changes';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, type DefaultOptions } from '@tanstack/react-query';
+import { retryQuery } from '@/lib/query-retry';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import NotFoundPage from '@/pages/not-found';
@@ -14,17 +15,21 @@ import {
   useRouter,
   Router as WouterRouter
 } from 'wouter';
-import { ClerkProvider } from '@clerk/react';
-import { authEnabled, clerkPublishableKey } from '@/lib/auth';
+import { AuthProvider } from '@/lib/auth';
 
 import { WorkspaceProvider } from '@/lib/workspace-context';
 import { Layout } from '@/components/layout';
+import { PresentationProvider } from '@/components/presentation-guide';
 
 // Public pages: no workspace, no sandbox. The landing page ships with the shell, since it is the
 // first thing a visitor sees; the sign-in pages bring Clerk's form and load only when someone goes there.
 import LandingPage from '@/pages/landing';
 const SignInPage: PageLoader = () => import('@/pages/sign-in').then((m) => ({ default: m.SignInPage }));
 const SignUpPage: PageLoader = () => import('@/pages/sign-in').then((m) => ({ default: m.SignUpPage }));
+
+// When the app loads, before the router first subscribes to the browser's location, so the
+// unsaved-changes guard hears Back and Forward before the router changes the page.
+installUnsavedNavigationGuard();
 
 // Console pages load on first visit, each in its own chunk, so the landing page does not carry the
 // console and the console does not carry every page at once (design rationale, Performance).
@@ -44,6 +49,18 @@ const PayByBankPage: PageLoader = () => import('@/pages/pay-by-bank');
 const CreditDeskPage: PageLoader = () => import('@/pages/credit-desk');
 const CashDeskPage: PageLoader = () => import('@/pages/cash-desk');
 const ConnectionsPage: PageLoader = () => import('@/pages/connections');
+const PilotPage: PageLoader = () => import('@/pages/pilot');
+const ImportsPage: PageLoader = () => import('@/pages/imports');
+const OperationsPage: PageLoader = () => import('@/pages/operations');
+const CasePage: PageLoader = () => import('@/pages/case');
+const TeamPage: PageLoader = () => import('@/pages/team');
+const TeamInvitePage: PageLoader = () => import('@/pages/team-invite');
+const CloseReviewPage: PageLoader = () => import('@/pages/close-review');
+const SourcesPage: PageLoader = () => import('@/pages/sources');
+const WorkPage: PageLoader = () => import('@/pages/work');
+const LifecyclePage: PageLoader = () => import('@/pages/lifecycle');
+const ExportsPage: PageLoader = () => import('@/pages/exports');
+const PresentationPage: PageLoader = () => import('@/pages/presentation');
 
 type PageLoader = () => Promise<{ default: ComponentType<any> }>;
 const loadedPages = new Map<PageLoader, ComponentType<any>>();
@@ -69,7 +86,7 @@ export function LazyPage({ load, ...props }: { load: PageLoader; [prop: string]:
     return () => { current = false; };
   }, [load]);
   if (failure) throw failure;
-  if (!Component) return <Loading what="the page" />;
+  if (!Component) return <Loading what="the page" heading />;
   return <Component {...props} />;
 }
 
@@ -98,18 +115,14 @@ function Prefetch({ pages }: { pages: PageLoader[] }) {
  * thirty seconds is shown at once when a page is returned to, instead of a
  * loading line and a repeated request; an action's invalidation still refetches
  * what it changed, and a tab that comes back after longer refetches on focus.
+ * A failed read is repeated, at most twice, only when no answer arrived or the
+ * service failed (retryQuery): a refusal such as a 403 or 404 shows at once.
  */
 export const QUERY_STALE_MS = 30_000;
-export const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: QUERY_STALE_MS } } });
+export const queryDefaults = { queries: { staleTime: QUERY_STALE_MS, retry: retryQuery } } satisfies DefaultOptions;
+export const queryClient = new QueryClient({ defaultOptions: queryDefaults });
 
-const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, "");
-
-function stripBase(path: string): string {
-  return basePath && path.startsWith(basePath)
-    ? path.slice(basePath.length) || "/"
-    : path;
-}
 
 /** Every address the console has a page for. Anything else is not found, and gets no workspace. */
 const consoleRoutes: Array<{ path: string; load: PageLoader }> = [
@@ -129,6 +142,17 @@ const consoleRoutes: Array<{ path: string; load: PageLoader }> = [
   { path: '/credit-desk', load: CreditDeskPage },
   { path: '/cash-desk', load: CashDeskPage },
   { path: '/connections', load: ConnectionsPage },
+  { path: '/pilot', load: PilotPage },
+  { path: '/imports', load: ImportsPage },
+  { path: '/operations', load: OperationsPage },
+  { path: '/cases/:id', load: CasePage },
+  { path: '/team', load: TeamPage },
+  { path: '/close-review', load: CloseReviewPage },
+  { path: '/sources', load: SourcesPage },
+  { path: '/work', load: WorkPage },
+  { path: '/lifecycle', load: LifecyclePage },
+  { path: '/exports', load: ExportsPage },
+  { path: '/presentation', load: PresentationPage },
 ];
 const consolePages = consoleRoutes.map((route) => route.load);
 const overviewOnly = [OverviewPage];
@@ -146,6 +170,7 @@ function Console() {
   if (!known) return <NotFoundPage />;
   return (
     <WorkspaceProvider>
+      <PresentationProvider>
       <Layout>
         {/* A page's code arrives on its first visit; the sidebar and the lender stay meanwhile, and the
             other pages are fetched while the browser is idle. */}
@@ -154,6 +179,7 @@ function Console() {
         </Switch>
         <Prefetch pages={consolePages} />
       </Layout>
+      </PresentationProvider>
     </WorkspaceProvider>
   );
 }
@@ -178,11 +204,12 @@ function RoutedErrorBoundary({ children }: { children: ReactNode }) {
   return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>;
 }
 
-function ClerkProviderWithRoutes() {
-  const [, setLocation] = useLocation();
-
-  const routes = (
-      <QueryClientProvider client={queryClient}>
+function App() {
+  // Sign-in, where it is wanted, loads beside the routes and never remounts them (lib/auth.tsx).
+  return (
+    <WouterRouter base={basePath}>
+      <AuthProvider>
+        <QueryClientProvider client={queryClient}>
           <RoutedErrorBoundary>
             <Switch>
               {/* The public pages sit outside the workspace provider: reading about the product or
@@ -192,35 +219,14 @@ function ClerkProviderWithRoutes() {
               <Route path="/">{() => <><LandingPage /><Prefetch pages={overviewOnly} /></>}</Route>
               <Route path="/sign-in/*?">{(params) => <LazyPage load={SignInPage} params={params} />}</Route>
               <Route path="/sign-up/*?">{(params) => <LazyPage load={SignUpPage} params={params} />}</Route>
+              <Route path="/team-invite">{() => <LazyPage load={TeamInvitePage} />}</Route>
               <Route component={Console} />
             </Switch>
           </RoutedErrorBoundary>
           <RouteFocus />
           <Toaster />
-      </QueryClientProvider>
-  );
-
-  // Without a reachable Clerk the anonymous sandbox still runs; see lib/auth.tsx.
-  if (!authEnabled || !clerkPublishableKey) return routes;
-  return (
-    <ClerkProvider
-      publishableKey={clerkPublishableKey}
-      proxyUrl={clerkProxyUrl}
-      signInUrl={`${basePath}/sign-in`}
-      signUpUrl={`${basePath}/sign-up`}
-      routerPush={(to) => setLocation(stripBase(to))}
-      routerReplace={(to) => setLocation(stripBase(to), { replace: true })}
-    >
-      {routes}
-    </ClerkProvider>
-  );
-}
-
-function App() {
-  useEffect(installUnsavedNavigationGuard, []);
-  return (
-    <WouterRouter base={basePath}>
-      <ClerkProviderWithRoutes />
+        </QueryClientProvider>
+      </AuthProvider>
     </WouterRouter>
   );
 }

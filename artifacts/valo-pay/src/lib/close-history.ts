@@ -15,7 +15,8 @@ export function closeHistory<T extends Close>(closes: T[], from: string, to: str
   }).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
   const first = items.at(-1), latest = items[0];
   const metrics = [
-    { label: 'Unmatched value at close', money: true, read: (row: Close) => row.data?.report?.unallocated?.kobo },
+    // The close list carries the naira value only; each close's details list money in another currency.
+    { label: 'Unmatched value in naira at close', money: true, read: (row: Close) => row.data?.report?.unallocated?.kobo },
     { label: 'Open exceptions at close', money: false, read: (row: Close) => row.data?.report?.exceptions?.openAtClose },
   ].map(({ read, ...metric }) => {
     const before = first ? read(first) : undefined, after = latest ? read(latest) : undefined;

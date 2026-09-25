@@ -7,7 +7,7 @@ import { useWorkspace } from '@/lib/workspace-context';
 import { useGetGates, useListRecords, getGetGatesQueryKey, getListRecordsQueryKey } from '@workspace/api-client-react';
 import { ShieldCheck, AlertTriangle, FileCheck, CheckCircle, Search } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
-import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
+import { formatKobo, formatDate, formatNumber, formatPercent } from '@/lib/formatters';
 import { RecordDialog } from '@/components/record-dialog';
 import { readableLabel } from '@/components/record-label';
 import { LoadProblem } from '@/components/load-problem';
@@ -86,7 +86,7 @@ export default function EvidencePage() {
     <div className="space-y-8">
       <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Evidence & readiness</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Go-live evidence</h1>
           <p className="text-muted-foreground mt-1">Track requirements, commercial terms and evidence for readiness decisions. Sample data cannot establish live readiness.</p>
         </div>
         <ExportJobControl kind="gate-pack" formats={['pdf']} label="Export evidence pack" />
@@ -182,7 +182,7 @@ export default function EvidencePage() {
             {gateOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
         </div>
-        {evidenceError ? <LoadProblem what="evidence" error={evidenceError} retry={() => { void retryEvidence(); }} busy={fetchingEvidence} /> : <ScrollFrame label="Evidence register" className="overflow-x-auto">
+        {evidenceError ? <LoadProblem what="evidence" error={evidenceError} retry={() => { void retryEvidence(); }} busy={fetchingEvidence} /> : <ScrollFrame label="Evidence register table" className="overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead className="border-b bg-secondary/30 text-muted-foreground"><tr>{['Evidence', 'Requirement or decision', 'Owner', 'Date', 'Status', 'Action'].map(label => <th key={label} scope="col" className="px-5 py-3 font-medium">{label}</th>)}</tr></thead>
             <tbody className="divide-y">
@@ -239,7 +239,7 @@ export default function EvidencePage() {
                     <td className="px-6 py-4 font-mono">{formatKobo(Number(comm.data?.averageTicketKobo || 0))}</td>
                     <td className="px-6 py-4 font-mono">{formatKobo(Number(comm.data?.licenceKobo || 0))}</td>
                     <td className="px-6 py-4 font-mono text-xs text-muted-foreground">
-                      {Number(comm.data?.usageBps || 30) / 100}% (up to {formatKobo(Number(comm.data?.usageCapKobo || 15000))} per collection)
+                      {formatPercent(Number(comm.data?.usageBps || 30) / 10000)} (up to {formatKobo(Number(comm.data?.usageCapKobo || 15000))} per collection)
                     </td>
                     <td className="px-6 py-4">
                       {comm.data?.signed ? (
@@ -285,7 +285,7 @@ export default function EvidencePage() {
               ) : reviewsError ? (
                 <tr><td colSpan={4}><LoadProblem what="reviews" error={reviewsError} retry={() => { void retryReviews(); }} busy={fetchingReviews} /></td></tr>
               ) : !reviews || reviews.items.length === 0 ? (
-                <EmptyRow colSpan={4} title="No reviews logged">Every two weeks, name the reviewer and record which tasks they confirmed: mandates, retries, payment matching and audit/dispute records.</EmptyRow>
+                <EmptyRow colSpan={4} title="No reviews logged">Every two weeks, log a review and record which tasks you confirmed: mandate operations, retries, payment matching, and audit and dispute records. The review is recorded in your name, with the time the service saves it.</EmptyRow>
               ) : (
                 reviews.items.map(rev => (
                   <tr key={rev.id} className="hover:bg-secondary/10">
@@ -324,7 +324,8 @@ export default function EvidencePage() {
             { name: 'licenceKobo', label: 'Monthly licence fee (kobo)', type: 'number', isData: true, required: true },
             { name: 'usageBps', label: 'Usage rate (basis points; 100 = 1%)', type: 'number', isData: true, required: true },
             { name: 'usageCapKobo', label: 'Usage fee cap per collection (kobo)', type: 'number', isData: true, required: true },
-            { name: 'signed', label: 'Signed', type: 'checkbox', isData: true }
+            { name: 'signed', label: 'Signed', type: 'checkbox', isData: true },
+            { name: 'effectiveDate', label: 'Takes effect on', type: 'date', isData: true, help: 'Each invoice month is billed from the latest signed terms in effect by its end, for the whole month. Leave blank for terms that apply from the start.' }
           ] : []
         }
       />

@@ -7,7 +7,7 @@
  */
 
 /**
- * The last scheduler pass that found work: its id, when it ran, how long it took and what it did.
+ * The last scheduler pass that found work: its id, when it ran, how long it took, how many batches it read and what it did, including idle sandboxes whose automatic close it paused.
  */
 export interface SchedulerRun {
   runId: string;
@@ -18,4 +18,6 @@ export interface SchedulerRun {
   closed: number;
   skipped: number;
   failed: number;
+  paused?: number;
+  batches?: number;
 }

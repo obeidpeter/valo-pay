@@ -17,7 +17,17 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   projects: [
-    { name: "database-chromium", use: { ...devices["Desktop Chrome"] } },
+    {
+      name: "database-chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        // As the other browser suites: a host without Playwright's own download names its Chromium.
+        launchOptions: {
+          executablePath:
+            process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined,
+        },
+      },
+    },
   ],
   webServer: {
     command:

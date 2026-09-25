@@ -1,12 +1,15 @@
 // Golden tests for payment observations, canonical Payments, the rule ladder,
 // exceptions and the daily close against TRD v1.1 sections 5.7, 5.8, 5.9, 7 and 10.4.
 import assert from "node:assert/strict";
+import { ZodError } from "zod";
 import { DAY, HOUR, addAttempt, addNotice, addObservation, ctxAt, liveFixture, outstandingOf, wat } from "./helpers.js";
-import { intendedDueItem, reconcile } from "../src/domain/reconciliation.js";
+import { allocatePayment, applyConfirmedAllocation, intendedDueItem, reconcile } from "../src/domain/reconciliation.js";
 import { executeAction } from "../src/domain/actions.js";
 import { buildOverview, buildReports } from "../src/domain/reports.js";
 import { makeRecord, recordsOf } from "../src/domain/records.js";
 import { addBusinessDays } from "../src/domain/calendar.js";
+import { bindCloseReviewBasis, closeReviewIssues } from "../src/domain/close-review.js";
+import { validateRecord } from "../src/domain/validation.js";
 import { seedMerchant } from "../src/lib/valopay-seed.js";
 import type { DomainState, ValopayRecord } from "../src/domain/types.js";
 
@@ -153,6 +156,127 @@ function assertOnePayment(state: DomainState, due: ValopayRecord, label: string)
   checks += 7;
 }
 
+// ---------- A settlement line proves a direct debit was collected, so a debit whose webhook never arrived is succeeded (BIL-01) ----------
+{
+  const { state, due } = liveFixture({ withFailure: false, merchantId: "settled-without-webhook" });
+  addObservation(state, { reference: "PSK-SETTLED", amountKobo: NET, grossAmountKobo: GROSS, feeKobo: FEE, batchReference: "B-SO", source: "settlement", customerId: due.customerId, dueItemId: due.id, eventId: "settled-only", occurredAt: wat("2027-07-01T07:00:00") });
+  reconcile(state, finance(wat("2027-07-01T07:05:00")));
+  const payment = recordsOf(state, "payments").find((item) => item.reference === "PSK-SETTLED")!;
+  assert.deepEqual([payment.data.channel, payment.data.collectionStatus, payment.data.settlementStatus], ["direct_debit", "succeeded", "settled"], "the settlement line settles the debit and records it as collected");
+  invariant(state);
+  checks += 1;
+}
+
+// ---------- Settlement batches follow their current lines and statement credit (ING-03, ING-07): a provider file split across two imports reconciles ----------
+{
+  const { state, due } = liveFixture({ withFailure: false, merchantId: "split-settlement" });
+  const big = recordsOf(state, "due-items").find((item) => item.amountKobo === 6_000_000)!;
+  const small = recordsOf(state, "due-items").find((item) => item.amountKobo === 1_500_000)!;
+  big.data.owner = "lms"; small.data.owner = "lms";
+  const BIG_FEE = 30_000, BIG_NET = 6_000_000 - BIG_FEE;
+  const linked = (id: string) => recordsOf(state, "exceptions").filter((item) => item.data.type === "settlement_variance" && item.data.linkedRecordId === id);
+  // Import 1: the first part of the provider file and the bank's credit for the whole batch.
+  addObservation(state, { reference: "SPLIT-L1", amountKobo: NET, grossAmountKobo: GROSS, feeKobo: FEE, batchReference: "B-SPLIT", source: "settlement", customerId: due.customerId, dueItemId: due.id, eventId: "split-l1", occurredAt: wat("2027-07-01T07:00:00") });
+  addObservation(state, { reference: "STMT-SPLIT", amountKobo: NET + BIG_NET, batchReference: "B-SPLIT", source: "statement", eventId: "split-st", occurredAt: wat("2027-07-01T08:00:00") });
+  reconcile(state, finance(wat("2027-07-01T09:00:00")));
+  const batch = recordsOf(state, "settlement-batches").find((item) => item.reference === "B-SPLIT")!;
+  assert.equal(batch.status, "variance", "half a file does not add up to the statement credit");
+  assert.equal(linked(batch.id).length, 1);
+  // Import 2: the rest of the file. The batch now matches the credit.
+  addObservation(state, { reference: "SPLIT-L2", amountKobo: BIG_NET, grossAmountKobo: 6_000_000, feeKobo: BIG_FEE, batchReference: "B-SPLIT", source: "settlement", customerId: big.customerId, dueItemId: big.id, eventId: "split-l2", occurredAt: wat("2027-07-02T07:00:00") });
+  const close = executeAction(state, finance(wat("2027-07-02T09:00:00")), { action: "daily_close" }).record!;
+  assert.equal(batch.data.netKobo, NET + BIG_NET);
+  assert.equal(batch.status, "reconciled", "the completed batch reconciles to the statement credit");
+  assert.equal(batch.data.explanation, "Statement credit matched the settlement batch net total; it was not allocated to a customer.", "and says so, not what the first half showed");
+  assert.equal(close.data.report.variances.count, 0, "the close lists no settlement difference");
+  // Second review decision 3: a batch's variance exception closes when its condition clears, as other exceptions do.
+  assert.deepEqual(linked(batch.id).map((item) => [item.status, item.data.resolutionCode, item.data.conditionCleared?.reason]), [["closed", "condition_cleared", "settlement batch B-SPLIT is now reconciled"]], "the earlier exception closes as its condition cleared; nothing new is raised");
+  const [earlier] = linked(batch.id);
+  assert.equal(earlier!.data.notes, "Statement credit differs from gross settlement lines less recorded fees.\nUpdate on 2027-07-02 (WAT): the batch is now reconciled. Statement credit matched the settlement batch net total; it was not allocated to a customer.\nCondition cleared on 2027-07-02 (WAT): settlement batch B-SPLIT is now reconciled, so this exception was closed.", "its notes say where the batch now stands and why it closed, after what the first half showed");
+  assert.match(String(close.data.summary), / opened and 1 closed,/, "the close counts it as closed");
+  // The API and the scheduler bind the review basis: the review asks for no explanation of a settlement difference, and has no open exception left for it.
+  const issues = closeReviewIssues(bindCloseReviewBasis(state, close));
+  assert.ok(!issues.some((issue) => issue.id === `variance:${batch.id}`), "the review asks for no explanation of a settlement difference");
+  assert.deepEqual(issues.filter((issue) => issue.id === `item:${earlier!.id}` && issue.unresolved), [], "and no open exception asks for an owner");
+  // A later close with nothing new leaves the batch and its exception exactly as they were.
+  const settled = JSON.stringify([batch, earlier]);
+  reconcile(state, finance(wat("2027-07-03T09:00:00")));
+  assert.equal(JSON.stringify([batch, earlier]), settled, "an unchanged batch is not rewritten");
+  // A late line after the batch reconciled is a new difference: the exception its condition cleared settles nothing.
+  addObservation(state, { reference: "SPLIT-L3", amountKobo: 1_500_000 - 7_500, grossAmountKobo: 1_500_000, feeKobo: 7_500, batchReference: "B-SPLIT", source: "settlement", customerId: small.customerId, dueItemId: small.id, eventId: "split-l3", occurredAt: wat("2027-07-04T07:00:00") });
+  reconcile(state, finance(wat("2027-07-04T09:00:00")));
+  assert.equal(batch.status, "variance", "a reconciled batch that gains a line no longer matches its credit");
+  assert.equal(batch.data.explanation, "Statement credit differs from gross settlement lines less recorded fees.");
+  assert.deepEqual(linked(batch.id).map((item) => item.status), ["closed", "open"], "and that is new work");
+  // A fee variance that a later line cancels out leaves the batch waiting for its statement credit.
+  addObservation(state, { reference: "FEE-L1", amountKobo: GROSS - (FEE + 20_000), grossAmountKobo: GROSS, feeKobo: FEE + 20_000, batchReference: "B-FEES", source: "settlement", eventId: "fee-l1", occurredAt: wat("2027-07-05T07:00:00") });
+  reconcile(state, finance(wat("2027-07-05T09:00:00")));
+  const fees = recordsOf(state, "settlement-batches").find((item) => item.reference === "B-FEES")!;
+  assert.equal(fees.status, "variance");
+  addObservation(state, { reference: "FEE-L2", amountKobo: 6_000_000 - (BIG_FEE - 20_000), grossAmountKobo: 6_000_000, feeKobo: BIG_FEE - 20_000, batchReference: "B-FEES", source: "settlement", eventId: "fee-l2", occurredAt: wat("2027-07-06T07:00:00") });
+  reconcile(state, finance(wat("2027-07-06T09:00:00")));
+  assert.deepEqual([fees.data.feeVarianceKobo, fees.status, fees.data.explanation], [0, "pending", undefined], "fees that now match the schedule are no longer a variance");
+  assert.match(String(linked(fees.id)[0]!.data.notes), /\nUpdate on 2027-07-06 \(WAT\): the batch is now pending\. Its fees are within the schedule and it waits for its statement credit\.\nCondition cleared on 2027-07-06 \(WAT\): the fees of settlement batch B-FEES are now within the schedule, so this exception was closed\.$/, "and its exception says so and closes, as its condition cleared");
+  assert.deepEqual([linked(fees.id)[0]!.status, linked(fees.id)[0]!.data.resolutionCode], ["closed", "condition_cleared"]);
+  invariant(state);
+  checks += 19;
+}
+
+// ---------- A settlement batch Finance added by hand takes the provider's lines when they arrive (ING-03) ----------
+{
+  const { state, due } = liveFixture({ withFailure: false, merchantId: "hand-batch" });
+  const typed = { grossKobo: GROSS, feeKobo: FEE, netKobo: NET };
+  const input = { name: "Settlement batch B-HAND", reference: "B-HAND", status: "pending", data: { provider: "Sandbox Rail", batchReference: "B-HAND", ...typed } };
+  validateRecord(state, finance(wat("2027-07-01T06:00:00")), "settlement-batches", input);
+  const batch = makeRecord(state, "settlement-batches", input);
+  addObservation(state, { reference: "STMT-HAND", amountKobo: NET, batchReference: "B-HAND", source: "statement", eventId: "hand-st", occurredAt: wat("2027-07-01T06:30:00") });
+  reconcile(state, finance(wat("2027-07-01T06:45:00")));
+  assert.equal(batch.status, "reconciled", "a batch entered by hand reconciles to its statement credit");
+  addObservation(state, { reference: "HAND-L1", amountKobo: NET, grossAmountKobo: GROSS, feeKobo: FEE, batchReference: "B-HAND", source: "settlement", customerId: due.customerId, dueItemId: due.id, eventId: "hand-l1", occurredAt: wat("2027-07-01T07:00:00") });
+  assert.doesNotThrow(() => executeAction(state, finance(wat("2027-07-01T09:00:00")), { action: "daily_close" }), "the provider's line does not stop the close");
+  assert.deepEqual([batch.status, batch.data.lineObservationIds?.length, batch.data.grossKobo, batch.data.feeKobo, batch.data.netKobo, batch.data.expectedFeeKobo], ["reconciled", 1, GROSS, FEE, NET, FEE], "the provider's lines rebuild the totals");
+  assert.deepEqual(batch.data.enteredTotals, { ...typed, currency: "NGN" }, "and the totals Finance typed are kept beside them, with their currency");
+  assert.equal(due.status, "paid", "the line's payment is matched as usual");
+  // PostgreSQL's jsonb returns the typed totals' keys in its own order; an edit that leaves them as stored is still accepted.
+  const { grossKobo, feeKobo, netKobo } = batch.data.enteredTotals!;
+  batch.data.enteredTotals = { feeKobo, netKobo, grossKobo };
+  assert.doesNotThrow(() => validateRecord(state, finance(wat("2027-07-01T10:00:00")), "settlement-batches", { ...structuredClone(batch), name: "Settlement batch B-HAND (typed)" }, true), "renaming a batch whose lines have arrived is accepted");
+  invariant(state);
+  checks += 6;
+}
+
+// ---------- The record API cannot set what reconciliation copies onto a settlement batch; the totals Finance edits move it (ING-03, ING-07) ----------
+{
+  const { state, due } = liveFixture({ withFailure: false, merchantId: "batch-platform-fields" });
+  addObservation(state, { reference: "EDIT-L1", amountKobo: NET, grossAmountKobo: GROSS, feeKobo: FEE, batchReference: "B-EDIT", source: "settlement", customerId: due.customerId, dueItemId: due.id, eventId: "edit-l1", occurredAt: wat("2027-07-01T07:00:00") });
+  const credit = addObservation(state, { reference: "STMT-EDIT", amountKobo: NET + 1_000_000, batchReference: "B-EDIT", source: "statement", eventId: "edit-st", occurredAt: wat("2027-07-01T08:00:00") });
+  reconcile(state, finance(wat("2027-07-01T09:00:00")));
+  const batch = recordsOf(state, "settlement-batches").find((item) => item.reference === "B-EDIT")!;
+  assert.deepEqual([batch.status, batch.data.statementObservationId, batch.data.statementNetKobo], ["variance", credit.id, NET + 1_000_000]);
+  const ctx = finance(wat("2027-07-01T10:00:00"));
+  // What PATCH /records/settlement-batches/:id validates: the stored batch with the submitted fields merged into its data.
+  const patch = (data: Record<string, unknown>) => ({ ...structuredClone(batch), data: { ...structuredClone(batch.data), ...data } });
+  const line = recordsOf(state, "observations").find((item) => item.reference === "EDIT-L1")!;
+  const copied: [string, unknown][] = [["statementNetKobo", NET], ["statementObservationId", line.id], ["lineObservationIds", []], ["linePaymentIds", []], ["expectedFeeKobo", FEE + 20_000], ["feeVarianceKobo", 20_000], ["enteredTotals", { grossKobo: GROSS, feeKobo: FEE, netKobo: NET }]];
+  for (const [key, value] of copied) {
+    assert.throws(() => validateRecord(state, ctx, "settlement-batches", patch({ [key]: value }), true), new RegExp(`Settlement batch ${key} is recorded by reconciliation`), `the record API cannot set ${key}`);
+  }
+  assert.throws(() => validateRecord(state, ctx, "settlement-batches", { name: "b", status: "pending", reference: "B-TYPED", data: { provider: "Sandbox Rail", grossKobo: GROSS, feeKobo: FEE, netKobo: NET, statementObservationId: credit.id, statementNetKobo: NET } }), /is recorded by reconciliation/, "nor give a new batch a statement credit");
+  // The console's edit dialog sends the stored data back with the fields it edits.
+  assert.doesNotThrow(() => validateRecord(state, ctx, "settlement-batches", { ...patch({}), name: "Settlement batch B-EDIT (renamed)" }, true), "an edit that leaves them as stored is accepted");
+  reconcile(state, finance(wat("2027-07-02T09:00:00")));
+  assert.deepEqual([batch.status, batch.data.explanation], ["variance", "Statement credit differs from gross settlement lines less recorded fees."], "the batch still follows its linked statement credit");
+  // Finance corrects the provider's fee: the next reconciliation recomputes the fee variance and names both differences.
+  const edit = patch({ feeKobo: FEE + 20_000, netKobo: NET - 20_000 });
+  validateRecord(state, ctx, "settlement-batches", edit, true);
+  Object.assign(batch, edit);
+  reconcile(state, finance(wat("2027-07-02T10:00:00")));
+  assert.deepEqual([batch.status, batch.data.feeVarianceKobo], ["variance", 20_000], "the fee variance follows the edited fee");
+  assert.equal(batch.data.explanation, `Statement credit differs from gross settlement lines less recorded fees. Provider fees of ${FEE + 20_000} kobo differ from the schedule's ${FEE} kobo by 20000 kobo.`, "and the explanation names both differences");
+  invariant(state);
+  checks += copied.length + 6;
+}
+
 // ---------- Exception catalogue (EXC-02, Appendix A): owners and business-day SLAs, so the overdue share means something ----------
 {
   const state = seedMerchant("exceptions");
@@ -279,4 +403,160 @@ function assertOnePayment(state: DomainState, due: ValopayRecord, label: string)
   checks += 15;
 }
 
-console.log(`Reconciliation golden tests passed (${checks} checks): three-source replay in six orders, duplicate evidence, allocation ceiling, fee schedule, exception catalogue, final attempts, reversal vocabulary, precision audit, mandate operations and hand-back.`);
+// UX-C01: a reviewed proposal cannot silently become another match, or exceed
+// balances changed while Finance was reviewing it. These are server checks.
+{
+  for (const action of ['confirm_allocation', 'reject_allocation']) {
+    const { state, due } = liveFixture({ withFailure: false, merchantId: `proposal-${action}` });
+    const payment = makeRecord(state, 'payments', { amountKobo: GROSS, customerId: due.customerId, data: { allocatedKobo: 0 } });
+    const ctx = finance(wat('2027-07-01T11:00:00'));
+    const proposal = allocatePayment(state, ctx, payment, due, GROSS, 'R5', 'probable', false);
+    const input = { action, recordId: payment.id, reason: 'Checked the displayed proposal.', data: { proposalId: proposal.id, proposalUpdatedAt: proposal.updatedAt } };
+    const before = structuredClone(state);
+    assert.throws(() => executeAction(state, ctx, { ...input, data: { ...input.data, proposalId: 'another-proposal' } }), (error: any) => error.status === 409);
+    assert.deepEqual(state, before, 'A changed proposal is refused before any record is changed.');
+    assert.throws(() => executeAction(state, ctx, { ...input, data: { ...input.data, proposalUpdatedAt: '2027-01-01T00:00:00Z' } }), (error: any) => error.status === 409);
+    executeAction(state, ctx, input);
+    assert.equal(proposal.status, action === 'confirm_allocation' ? 'confirmed' : 'superseded');
+    const committed = structuredClone(state);
+    assert.throws(() => executeAction(state, ctx, input), /no proposed allocation/);
+    assert.deepEqual(state, committed, 'A repeated decision cannot apply the payment twice.');
+    if (action === 'confirm_allocation') {
+      assert.throws(() => applyConfirmedAllocation(state, ctx, proposal), /already applied/);
+      assert.deepEqual(state, committed);
+      checks += 2;
+    }
+    checks += 7;
+  }
+  const { state, due } = liveFixture({ withFailure: false, merchantId: 'proposal-balance-change' });
+  const payment = makeRecord(state, 'payments', { amountKobo: GROSS, customerId: due.customerId, data: { allocatedKobo: 0 } });
+  const ctx = finance(wat('2027-07-01T11:00:00'));
+  const proposal = allocatePayment(state, ctx, payment, due, GROSS, 'R5', 'probable', false);
+  due.data.outstandingKobo = GROSS - 1;
+  const before = structuredClone(state);
+  assert.throws(() => executeAction(state, ctx, { action: 'confirm_allocation', recordId: payment.id, reason: 'Review before another receipt arrived.', data: { proposalId: proposal.id, proposalUpdatedAt: proposal.updatedAt } }), (error: any) => error.status === 409 && /balance now outstanding/.test(error.message));
+  assert.deepEqual(state, before, 'A reduced instalment ceiling blocks the allocation without partial changes.');
+  checks += 2;
+}
+
+// UX-B01: a decision always names the proposal it was made on. Without proposalId or proposalUpdatedAt it is
+// refused, naming what is missing, before anything is read or changed; the version is compared as an instant.
+{
+  const named = (...fields: string[]) => (error: unknown) => error instanceof ZodError && JSON.stringify(error.issues.map((issue) => issue.path.join('.'))) === JSON.stringify(fields);
+  for (const action of ['confirm_allocation', 'reject_allocation']) {
+    const { state, due } = liveFixture({ withFailure: false, merchantId: `proposal-pair-${action}` });
+    const payment = makeRecord(state, 'payments', { amountKobo: GROSS, customerId: due.customerId, data: { allocatedKobo: 0 } });
+    const ctx = finance(wat('2027-07-01T11:00:00'));
+    const proposal = allocatePayment(state, ctx, payment, due, GROSS, 'R5', 'probable', false);
+    const input = { action, recordId: payment.id, reason: 'Checked the displayed proposal.' };
+    const before = structuredClone(state);
+    assert.throws(() => executeAction(state, ctx, input), named('data.proposalId', 'data.proposalUpdatedAt'), 'a decision without the pair is refused, naming both fields');
+    assert.throws(() => executeAction(state, ctx, { ...input, data: {} }), named('data.proposalId', 'data.proposalUpdatedAt'));
+    assert.throws(() => executeAction(state, ctx, { ...input, data: { proposalId: proposal.id } }), named('data.proposalUpdatedAt'), 'a missing version is named');
+    assert.throws(() => executeAction(state, ctx, { ...input, data: { proposalUpdatedAt: proposal.updatedAt } }), named('data.proposalId'), 'a missing proposal is named');
+    assert.throws(() => executeAction(state, ctx, { ...input, data: { proposalId: '', proposalUpdatedAt: proposal.updatedAt } }), named('data.proposalId'), 'an empty proposal is missing');
+    assert.throws(() => executeAction(state, ctx, { ...input, data: { proposalId: proposal.id, proposalUpdatedAt: 'yesterday' } }), named('data.proposalUpdatedAt'), 'a version that is not a date and time is named');
+    assert.deepEqual(state, before, 'nothing is changed by a refused decision');
+    // The same instant written with an offset is the version it names.
+    const offset = new Date(Date.parse(proposal.updatedAt) + 3_600_000).toISOString().replace('Z', '+01:00');
+    executeAction(state, ctx, { ...input, data: { proposalId: proposal.id, proposalUpdatedAt: offset } });
+    assert.equal(proposal.status, action === 'confirm_allocation' ? 'confirmed' : 'superseded', 'the same instant written with an offset names the version');
+    checks += 8;
+  }
+}
+
+for (const status of ['cancelled', 'closed', 'in_dispute'] as const) {
+  const {state,due}=liveFixture({withFailure:false,merchantId:`proposal-${status}`});
+  const payment=makeRecord(state,'payments',{amountKobo:GROSS,customerId:due.customerId,data:{allocatedKobo:0}});
+  const ctx=finance(wat('2027-07-01T11:00:00'));
+  const proposal=allocatePayment(state,ctx,payment,due,GROSS,'R5','probable',false);
+  due.status=status;
+  const before=structuredClone(state);
+  assert.throws(()=>applyConfirmedAllocation(state,ctx,proposal),(error:any)=>error.status===409 && /instalment is/.test(error.message));
+  assert.deepEqual(state,before,'Changed eligibility cannot be overwritten by an old proposal.');
+  assert.throws(()=>allocatePayment(state,ctx,payment,due,GROSS,'manual','manual',false),(error:any)=>error.status===409);
+  assert.deepEqual(state,before,'Manual allocation checks eligibility before creating any record.');
+  checks+=4;
+}
+
+// Automatic matching must quarantine an ineligible strong reference without
+// redirecting it to another obligation or rolling back unrelated valid receipts.
+for (const status of ['cancelled', 'closed', 'in_dispute', 'unpaid_final'] as const) {
+  for (const linkBy of ['attempt', 'observation'] as const) {
+    const { state, due } = liveFixture({ withFailure: false, merchantId: `batch-${status}-${linkBy}` });
+    const observedAt = wat('2027-06-30T06:20:00');
+    const ctx = finance(wat('2027-06-30T07:00:00'));
+    due.status = status;
+    const stopped = structuredClone(due);
+    const alternative = makeRecord(state, 'due-items', {
+      name: 'Another instalment for the same customer', status: 'scheduled', reference: 'DO-NOT-REDIRECT',
+      customerId: due.customerId, amountKobo: GROSS,
+      data: { ...due.data, dueDate: '2027-06-30', owner: 'lms' },
+    });
+    const healthy = recordsOf(state, 'due-items').find(item => item.customerId !== due.customerId && item.status === 'scheduled' && item.amountKobo === 6_000_000)!;
+    const reference = `STOPPED-${status}-${linkBy}`;
+    if (linkBy === 'attempt') addAttempt(state, due, { status: 'succeeded', occurredAt: observedAt, providerReference: reference });
+    const blockedObservation = addObservation(state, {
+      reference, amountKobo: GROSS, source: 'webhook', customerId: due.customerId,
+      ...(linkBy === 'observation' ? { dueItemId: due.id } : {}),
+      narration: alternative.reference, eventId: 'stopped-receipt', occurredAt: observedAt,
+    });
+    addObservation(state, { reference: 'VALID-IN-SAME-BATCH', amountKobo: healthy.amountKobo, source: 'webhook', customerId: healthy.customerId, dueItemId: healthy.id, eventId: 'valid-receipt', occurredAt: observedAt });
+    assert.doesNotThrow(() => reconcile(state, ctx), 'A stopped instalment cannot abort reconciliation of other receipts.');
+    const payment = recordsOf(state, 'payments').find(item => item.reference === reference)!;
+    assert.equal(blockedObservation.status, 'resolved', 'The receipt is still recorded as evidence.');
+    assert.equal(payment.status, 'unallocated');
+    assert.match(String(payment.data.explanation), /unallocated for Finance review/);
+    assert.equal(recordsOf(state, 'allocations').filter(item => item.data.paymentId === payment.id).length, 0);
+    assert.deepEqual(due, stopped, 'Matching cannot reopen a stopped instalment.');
+    assert.equal(outstandingOf(alternative), GROSS, 'A strong reference is not redirected by a weaker rule.');
+    assert.equal(healthy.status, 'paid', 'A valid later receipt in the same batch is allocated.');
+    reconcile(state, finance(wat('2027-07-02T07:00:00')));
+    assert.equal(payment.status, 'unallocated');
+    assert.equal(recordsOf(state, 'exceptions').filter(item => item.data.linkedRecordId === payment.id && item.data.type === 'unallocated_payment').length, 1, 'Existing Finance ageing rules retain the unresolved payment.');
+    assert.equal(recordsOf(state, 'allocations').filter(item => item.data.dueItemId === healthy.id && item.status === 'confirmed').length, 1, 'A subsequent close does not duplicate the healthy allocation.');
+    invariant(state);
+    checks += 11;
+  }
+}
+
+// R4 (including ambiguous narration) and R5 cannot propose the original gross
+// instalment amount after another receipt has reduced the outstanding balance.
+for (const rule of ['R4-unique', 'R4-ambiguous', 'R5'] as const) {
+  const { state, due } = liveFixture({ withFailure: false, merchantId: `batch-partial-${rule}` });
+  const observedAt = wat('2027-06-30T06:20:00');
+  const ctx = finance(wat('2027-06-30T07:00:00'));
+  due.data.dueDate = '2027-06-30';
+  const candidates = [due];
+  if (rule === 'R4-ambiguous') candidates.push(makeRecord(state, 'due-items', {
+    name: 'Second partially paid instalment', status: 'scheduled', reference: 'OTHER-PARTIAL-LOAN',
+    customerId: due.customerId, amountKobo: GROSS, data: { ...due.data, owner: 'lms' },
+  }));
+  for (const [index, candidate] of candidates.entries()) {
+    const partial = makeRecord(state, 'payments', {
+      name: 'Earlier partial receipt', status: 'unallocated', reference: `PARTIAL-${index}`,
+      customerId: candidate.customerId, amountKobo: GROSS / 2,
+      data: { allocatedKobo: 0, observedAt: wat('2027-06-29T06:00:00') },
+    });
+    allocatePayment(state, ctx, partial, candidate, GROSS / 2, 'R7', 'manual', false);
+  }
+  const before = candidates.map(candidate => structuredClone(candidate));
+  const healthy = recordsOf(state, 'due-items').find(item => item.customerId !== due.customerId && item.status === 'scheduled' && item.amountKobo === 6_000_000)!;
+  addObservation(state, {
+    reference: 'GROSS-AFTER-PARTIAL', amountKobo: GROSS, source: 'transfer', customerId: due.customerId,
+    ...(rule.startsWith('R4') ? { narration: candidates.map(candidate => candidate.reference).join(' and ') } : {}),
+    eventId: 'gross-after-partial', occurredAt: observedAt,
+  });
+  addObservation(state, { reference: 'VALID-AFTER-PARTIAL', amountKobo: healthy.amountKobo, source: 'webhook', customerId: healthy.customerId, dueItemId: healthy.id, eventId: 'valid-after-partial', occurredAt: observedAt });
+  assert.doesNotThrow(() => reconcile(state, ctx), `${rule}: a balance mismatch cannot abort the batch.`);
+  const payment = recordsOf(state, 'payments').find(item => item.reference === 'GROSS-AFTER-PARTIAL')!;
+  assert.equal(payment.status, 'unallocated', `${rule}: the gross receipt needs Finance review.`);
+  assert.equal(recordsOf(state, 'allocations').filter(item => item.data.paymentId === payment.id).length, 0, 'No impossible proposal is created.');
+  assert.deepEqual(candidates, before, 'Previously reduced balances are unchanged.');
+  assert.equal(healthy.status, 'paid');
+  assert.equal(recordsOf(state, 'allocations').filter(item => item.data.dueItemId === healthy.id && item.status === 'confirmed').length, 1);
+  invariant(state);
+  checks += 6;
+}
+
+console.log(`Reconciliation golden tests passed (${checks} checks): three-source replay in six orders, duplicate evidence, allocation ceiling, fee schedule, settlement batches that follow their lines and statement credit, hand-entered batches, batch fields only reconciliation records, exception catalogue, final attempts, reversal vocabulary, precision audit, mandate operations, hand-back, stale proposal protection, decisions that must name their proposal and safe automatic batch matching.`);

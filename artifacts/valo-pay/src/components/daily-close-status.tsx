@@ -1,3 +1,4 @@
+import { closeRules } from '@workspace/valopay-schema';
 import { formatCount, formatDate } from '@/lib/formatters';
 
 /** Reports carry free-form operational data; missing status must never imply a running service. */
@@ -6,9 +7,18 @@ export function DailyCloseStatus({ value, showHistory = false }: { value: unknow
   let message = 'Automatic close status is unavailable. Refresh this page or run a close manually.';
   let warning = false;
   if (schedule) {
-    if (schedule.enabled === false) message = 'Automatic daily close is off for this lender. Run closes manually.';
-    else if (schedule.runtimeState === 'off') message = 'Automatic daily close is off on this service. Run closes manually.';
-    else if (schedule.runtimeState === 'stopped' || schedule.runtimeState === 'not_started') {
+    if (schedule.enabled === false) {
+      message = typeof schedule.pausedForInactivityAt === 'string'
+        ? `Automatic daily close paused on ${formatDate(schedule.pausedForInactivityAt)} because nobody changed this sandbox for ${closeRules.idleSandboxDays} days. Switch it on again in Settings, or run closes manually.`
+        : 'Automatic daily close is off for this lender. Run closes manually.';
+    } else if (schedule.runtimeState === 'off') message = 'Automatic daily close is off on this service. Run closes manually.';
+    // A separate scheduled job runs the closes: this service cannot see when it runs next, but a close it missed is still missed.
+    else if (schedule.runtimeState === 'external') {
+      if (schedule.missed === true) {
+        message = `Scheduled close at ${schedule.time} WAT missed: ${formatCount(Number(schedule.overdueMinutes), 'minute')} past its time. Daily closes run from a scheduled job, which has not closed this lender. Run a daily close and ask an administrator to check the job.`;
+        warning = true;
+      } else message = 'Daily closes run from a scheduled job.';
+    } else if (schedule.runtimeState === 'stopped' || schedule.runtimeState === 'not_started') {
       message = 'Automatic daily close is unavailable. Run a close manually while the service recovers.';
       warning = true;
     } else if (schedule.serviceIssue === 'failed' || schedule.serviceIssue === 'delayed') {
@@ -17,7 +27,10 @@ export function DailyCloseStatus({ value, showHistory = false }: { value: unknow
         : 'The automatic close service has stopped checking on time. Run a close manually and ask an administrator to check the service.';
       warning = true;
     } else if (schedule.serviceIssue === 'starting') message = 'Automatic daily close is starting. No next run is confirmed yet.';
-    else if (schedule.automatic === true && schedule.missed === true) {
+    else if (schedule.automatic === true && Number(schedule.failedAttempts) > 0 && typeof schedule.retryAt === 'string') {
+      message = `The automatic close for this lender failed ${formatCount(Number(schedule.failedAttempts), 'time')}. Next attempt: ${formatDate(schedule.retryAt)}. Run a daily close manually, and ask an administrator to check this lender if it fails again.`;
+      warning = true;
+    } else if (schedule.automatic === true && schedule.missed === true) {
       message = `Scheduled close at ${schedule.time} WAT missed: ${formatCount(Number(schedule.overdueMinutes), 'minute')} past its time. Run a daily close or ask an administrator to investigate.`;
       warning = true;
     } else if (schedule.automatic === true && Number(schedule.overdueMinutes) > 0 && typeof schedule.nextAt === 'string') {

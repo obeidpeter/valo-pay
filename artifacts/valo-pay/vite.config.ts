@@ -27,6 +27,18 @@ if (!basePath) {
   );
 }
 
+// Outside Replit, whose router sends /api to the API server, the development
+// server forwards /api to the API process itself, keeping the browser on one
+// origin as the API's origin rule requires. VALOPAY_DEV_API_ORIGIN names that
+// process; by default the API server's port, 8080, on this machine.
+const apiOrigin = process.env.VALOPAY_DEV_API_ORIGIN || 'http://127.0.0.1:8080';
+
+if (!/^https?:\/\/[^/?#]+$/.test(apiOrigin)) {
+  throw new Error(
+    'VALOPAY_DEV_API_ORIGIN must be an http or https origin such as http://127.0.0.1:8080, without a path.',
+  );
+}
+
 export default defineConfig({
   base: basePath,
   plugins: [
@@ -69,6 +81,8 @@ export default defineConfig({
     strictPort: true,
     host: '0.0.0.0',
     allowedHosts: true,
+    // The Host header is kept, so the API sees the console's own origin.
+    proxy: { '/api': { target: apiOrigin } },
     fs: {
       strict: true,
     },

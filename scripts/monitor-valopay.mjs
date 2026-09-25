@@ -28,7 +28,11 @@ async function readJson(response) {
   } finally { await reader.cancel().catch(() => {}); }
 }
 
-/** One probe, no customer records, no log bodies, no provider requests. */
+/**
+ * One probe, no customer records, no log bodies, no provider requests. `expectScheduler`: true or 'on' expects the
+ * API process to run the scheduled closes with a fresh successful check; 'external' expects it to leave them to a
+ * separate scheduled job and say so (VALOPAY_CLOSE_SCHEDULER=external), since off would hide missed closes.
+ */
 export async function probeService({ origin, expectScheduler = false, fetchImpl = fetch, now = Date.now(), allowLocal = false, timeoutMs = 8000 }) {
   const base = checkedOrigin(origin, allowLocal);
   const get = async path => {
@@ -41,7 +45,10 @@ export async function probeService({ origin, expectScheduler = false, fetchImpl 
   const codes = [];
   if (health.status !== 'fulfilled' || health.value?.status !== 'ok') codes.push('service_unavailable');
   if (ready.status !== 'fulfilled' || ready.value?.status !== 'ok' || ready.value?.checks?.database?.status !== 'ok') codes.push('database_unready');
-  if (expectScheduler && health.status === 'fulfilled') {
+  if (expectScheduler === 'external' && health.status === 'fulfilled') {
+    // The job's own runs are not visible here: they show in its run history and its close.one_shot lines.
+    if (health.value?.scheduler?.state !== 'external') codes.push('scheduler_not_external');
+  } else if (expectScheduler && health.status === 'fulfilled') {
     const scheduler = health.value?.scheduler;
     const interval = Number(scheduler?.intervalMs);
     const successAt = Date.parse(scheduler?.lastSuccessAt || '');
@@ -79,9 +86,9 @@ export async function sendWebhook(urlText, event, { fetchImpl = fetch, allowLoca
   finally { clearTimeout(timer); }
 }
 
-export async function sendEmail(event, { apiKey, from, to = 'obeidpeter1@gmail.com', fetchImpl = fetch, timeoutMs = 8000 }) {
+export async function sendEmail(event, { apiKey, from, to, fetchImpl = fetch, timeoutMs = 8000 }) {
   const address = /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/;
-  if (!apiKey || !address.test(from || '') || !address.test(to)) throw new Error('Email delivery needs a configured provider and verified sender.');
+  if (!apiKey || !address.test(from || '') || !address.test(to || '')) throw new Error('Email delivery needs a configured provider, verified sender and recipient.');
   const abort = new AbortController(); const timer = setTimeout(() => abort.abort(), timeoutMs);
   try {
     const response = await fetchImpl('https://api.resend.com/emails', { method: 'POST', redirect: 'error', signal: abort.signal,
@@ -94,28 +101,56 @@ export async function sendEmail(event, { apiKey, from, to = 'obeidpeter1@gmail.c
   finally { clearTimeout(timer); }
 }
 
+const USAGE = 'Use: pnpm run check:operations [--deliver], with the origin and receiver in the environment (docs/operational-rehearsals.md).';
+/** A mistake on the command line, described in its own words. */
+export class UsageError extends Error {}
+/** A setting the monitor cannot run without, or cannot read, named but never shown with a value. */
+export class MissingSetting extends Error {}
+/**
+ * What VALOPAY_MONITOR_EXPECT_SCHEDULER asks of the probed host's scheduler, in any case: 'on', 'external', or
+ * nothing when unset. Any other value stops the monitor rather than checking nothing, since a mistyped expectation
+ * would otherwise go unnoticed.
+ */
+export function schedulerExpectation(value) {
+  if (value === undefined || value === '') return false;
+  const expected = value.toLowerCase();
+  if (expected === 'on' || expected === 'external') return expected;
+  throw new MissingSetting('VALOPAY_MONITOR_EXPECT_SCHEDULER must be on or external when it is set (docs/operational-rehearsals.md).');
+}
+/** The one option. A leading `--`, which `pnpm run check:operations -- --deliver` passes on, is skipped. An unknown option is named; any other word is only counted, since it could be a receiver address or a key pasted by mistake. */
+export function monitorArguments(argv) {
+  const args = argv[0] === '--' ? argv.slice(1) : argv;
+  for (const [index, arg] of args.entries()) {
+    // An option is named, but not a value given with it (--name=value), which could be a credential.
+    const option = /^(--?[A-Za-z][\w-]{0,40})(=?)/.exec(arg), named = option && (option[2] || option[0] === arg) ? option[1] : undefined;
+    if (arg !== '--deliver') throw new UsageError(named ? `${named === '--deliver' ? 'The option --deliver takes no value' : `Unknown option ${named}`}${option[2] ? ' (its value is not repeated here)' : ''}.` : `Argument ${index + 1} is not an option (not repeated here, in case it is a credential).`);
+  }
+  return { deliver: args.includes('--deliver') };
+}
+
 async function main() {
-  const deliver = process.argv.includes('--deliver');
-  if (process.argv.slice(2).some(arg => arg !== '--deliver')) throw new Error('Only --deliver is supported. Configure the origin and receiver in the environment.');
+  const { deliver } = monitorArguments(process.argv.slice(2));
   const origin = process.env.VALOPAY_MONITOR_ORIGIN;
-  if (!origin) throw new Error('Set VALOPAY_MONITOR_ORIGIN.');
-  const probe = await probeService({ origin, expectScheduler: process.env.VALOPAY_MONITOR_EXPECT_SCHEDULER === 'on' });
+  if (!origin) throw new MissingSetting('VALOPAY_MONITOR_ORIGIN is not set: set it to the HTTPS origin of the service to probe (docs/operational-rehearsals.md).');
+  const probe = await probeService({ origin, expectScheduler: schedulerExpectation(process.env.VALOPAY_MONITOR_EXPECT_SCHEDULER) });
   if (!deliver) { console.log(JSON.stringify({ ...probe, mode: 'dry-run', delivery: 'not attempted' })); return; }
   const receiver = process.env.VALOPAY_MONITOR_ALERT_URL;
   const owner = process.env.VALOPAY_MONITOR_OWNER;
   const statePath = process.env.VALOPAY_MONITOR_STATE_FILE;
   const emailKey = process.env.VALOPAY_ALERT_RESEND_KEY;
   const sender = process.env.VALOPAY_ALERT_FROM;
-  if ((!receiver && !(emailKey && sender)) || !owner || !statePath) throw new Error('Configure a receiver or email provider, alert owner and monitor state file.');
+  const recipient = process.env.VALOPAY_ALERT_TO;
+  if ((!receiver && !(emailKey && sender && recipient)) || !owner || !statePath) throw new Error('Configure a receiver or email provider with sender and recipient, alert owner and monitor state file.');
   const target = resolve(statePath);
   let previous;
   try { previous = JSON.parse(await readFile(target, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('The monitor state could not be read; refusing to reset incident history.'); }
-  const result = await deliverTransition(probe, previous, event => receiver ? sendWebhook(receiver, event) : sendEmail(event, { apiKey: emailKey, from: sender }), { owner });
+  const result = await deliverTransition(probe, previous, event => receiver ? sendWebhook(receiver, event) : sendEmail(event, { apiKey: emailKey, from: sender, to: recipient }), { owner });
   await mkdir(dirname(target), { recursive: true });
   const temporary = `${target}.next`;
   await writeFile(temporary, JSON.stringify(result.state), { mode: 0o600 });
   await rename(temporary, target);
   console.log(JSON.stringify({ ...probe, delivered: result.delivered }));
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(() => { console.error('Operational monitoring failed. Check configuration, probe connectivity and the alert receiver. Credentials and response bodies are not logged.'); process.exitCode = 1; });
+// Only a usage mistake or a missing origin is described: any other failure could carry a receiver address, a key or a response body.
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) main().catch(error => { console.error(error instanceof UsageError ? `${error.message} ${USAGE}` : error instanceof MissingSetting ? error.message : 'Operational monitoring failed. Check configuration, probe connectivity and the alert receiver. Credentials and response bodies are not logged.'); process.exitCode = 1; });

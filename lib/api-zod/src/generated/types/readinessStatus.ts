@@ -9,7 +9,7 @@ import type { ReadinessStatusChecks } from './readinessStatusChecks';
 import type { ReadinessStatusStatus } from './readinessStatusStatus';
 
 /**
- * The readiness answer: ok, or degraded while the database does not answer.
+ * The readiness answer: ok, or degraded while the database does not answer or lacks a table, column, unique index or check constraint this build needs.
  */
 export interface ReadinessStatus {
   status: ReadinessStatusStatus;

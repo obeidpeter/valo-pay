@@ -1,7 +1,10 @@
 // API smoke checks use a fresh, synthetic sandbox only; never production data.
+// This script must never be pointed at a production host.
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-const base=`https://${process.env.REPLIT_DEV_DOMAIN}`;
+const domain=process.env.REPLIT_DEV_DOMAIN;
+if(!domain||!/^[a-z0-9.-]+\.replit\.dev(?::\d+)?$/i.test(domain))throw new Error("Refusing to run: REPLIT_DEV_DOMAIN must be a *.replit.dev host.");
+const base=`https://${domain}`;
 // Compatibility test: an existing browser must keep its sandbox after the rename.
 const legacyToken=randomBytes(32).toString("hex");
 let cookie=`valo_sandbox=${legacyToken}`,merchantId="",checks=0;
@@ -16,7 +19,8 @@ async function call(path,{method="GET",body,key,expected=200,foreign=false}={}){
  return data;
 }
 const workspace=await call("workspace");assert.equal(workspace.merchants.length,2);assert.equal(workspace.productionEnabled,false);merchantId=workspace.merchants[0].id;
-assert.equal(cookie,`valopay_sandbox=${legacyToken}`,"Legacy sandbox cookie must migrate without changing its token.");
+// On HTTPS the current cookie is __Host-valopay_sandbox; the answer sets it first, then clears the legacy one.
+assert.equal(cookie,`__Host-valopay_sandbox=${legacyToken}`,"Legacy sandbox cookie must migrate without changing its token.");
 const restoredWorkspace=await call("workspace");
 assert.deepEqual(restoredWorkspace.merchants.map(m=>m.id),workspace.merchants.map(m=>m.id),"Renamed cookie must retain the same lender workspaces.");
 for(const path of ["overview","reports","gates","settings","records/mandates","records/exceptions","records/payments","openapi.json"])await call(path);
@@ -26,7 +30,9 @@ const due=(await list("due-items")).find(d=>d.status==="scheduled"&&d.amountKobo
 assert(due);
 await call("records/due-items",{method:"POST",expected:400,body:{name:"Floor refusal",customerId:due.customerId,amountKobo:499999,reference:"SMOKE-FLOOR",data:{dueDate:"2027-01-10",owner:"lms",mandateId:due.data.mandateId}}});
 await call("actions",{method:"POST",expected:400,body:{action:"request_instruction",reason:"Must remain blocked"}});
-await call("imports",{method:"POST",expected:403,body:{kind:"customers",csv:"name\nSynthetic",syntheticOnly:false,commit:true}});
+await call("imports",{method:"POST",expected:403,body:{kind:"customers",csv:"row_id,name\nr1,Synthetic",identityColumn:"row_id",syntheticOnly:false,commit:true}});
+// Every quick-import row needs a source row ID: a file without its row ID column is refused, naming what to map.
+await call("imports",{method:"POST",expected:400,body:{kind:"customers",csv:"name,consentProvenance\nSynthetic,Synthetic consent",identityColumn:"row_id",syntheticOnly:true,commit:false}});
 await call("records/customers",{expected:404,foreign:true});
 const customers=await list("customers");
 await call(`customers/${customers[0].id}/timeline`);
@@ -40,7 +46,11 @@ await action("run_reconciliation");
 assert.equal((await list("payments")).length,payments.length,"Reconciliation replay must not create another payment.");
 const pending=payments.find(p=>p.status==="proposed");
 if(pending){
- await action("confirm_allocation",pending.id);
+ // A decision names the proposal it was made on: its id and the version read.
+ const proposal=(await list("allocations")).find(a=>a.data.paymentId===pending.id&&a.status==="proposed");
+ assert(proposal,"A proposed payment must have its proposed allocation.");
+ await call("actions",{method:"POST",expected:400,body:{action:"confirm_allocation",recordId:pending.id,reason:"Must name the proposal"}});
+ await action("confirm_allocation",pending.id,{data:{proposalId:proposal.id,proposalUpdatedAt:proposal.updatedAt}});
  const allocations=await list("allocations");
  assert(allocations.filter(a=>a.data.paymentId===pending.id&&a.status==="confirmed").reduce((sum,a)=>sum+a.amountKobo,0)<=pending.amountKobo);
 }

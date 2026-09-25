@@ -1,11 +1,13 @@
 import {
-  ABSOLUTE_TICKET_FLOOR_KOBO, PLATFORM_OWNER, activationWorkflows, defaultStatus, describeIssues,
-  editableKinds, exceptionCatalogue, exceptionTransitions, experimentRules, isActionOnlyStatus, mandateTransitions, normaliseFailureCode,
-  normaliseOwner, policyGuardrails, recordDataSchemas, recordStatuses, resolveExceptionType, roles, isKnownFailureCode, templateTextProblems,
+  ABSOLUTE_TICKET_FLOOR_KOBO, PLATFORM_OWNER, activationWorkflows, currencyMinorUnit, defaultStatus, describeIssues,
+  editableKinds, exceptionCatalogue, exceptionTransitions, executionOwners, experimentRules, isActionOnlyStatus, mandateTransitions, normaliseFailureCode,
+  normaliseOwner, policyGuardrails, recordDataSchemas, recordStatuses, recordTextLimits, resolveExceptionType, roles, isKnownFailureCode, isRealDate, templateTextProblems,
 } from "@workspace/valopay-schema";
+import { isDeepStrictEqual } from "node:util";
+import type { ZodIssue } from "zod";
 import { assertNoRealBankDetails, findRecord, masked, recordsOf } from "./records";
 import type { Context, DomainState, RecordOf, TypedRecord, ValopayRecord } from "./types";
-import { addBusinessDays } from "./calendar";
+import { addBusinessDays, watDate } from "./calendar";
 import { countedAttempts, minimumTicketKobo, policySummary } from "./policy-engine";
 
 const roleSet = new Set<string>(roles);
@@ -13,8 +15,8 @@ const editable = new Set<string>(editableKinds);
 const statuses: Record<string, readonly string[]> = recordStatuses;
 
 function requireRole(ctx: Context, allowed: string[]): void {
-  if (!roleSet.has(ctx.role)) throw new Error("This demo role is not recognised. Choose one of the available roles.");
-  if (!allowed.includes(ctx.role)) throw new Error(`${ctx.role} is not permitted to make this change.`);
+  if (!roleSet.has(ctx.role)) throw Object.assign(new Error("This demo role is not recognised. Choose one of the available roles."), { status: 403 });
+  if (!allowed.includes(ctx.role)) throw Object.assign(new Error(`${ctx.role} is not permitted to make this change.`), { status: 403 });
 }
 
 function positiveInteger(value: unknown, label: string, allowZero = false): void {
@@ -23,19 +25,29 @@ function positiveInteger(value: unknown, label: string, allowZero = false): void
   }
 }
 
-function isoDate(value: unknown, label: string): void {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/.test(value) || Number.isNaN(Date.parse(value))) {
-    throw new Error(`${label} must use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z.`);
-  }
-}
+/**
+ * A rule a record failed, as the import collects them: the field it concerns (a record field or a data key), the
+ * refusal in the record API's words, and what failed where the import words it for the operator's column.
+ */
+export type ValidationProblem = { field?: string; message: string; rule?: ProblemRule };
+/** What failed: a missing value, a value outside its choices, a date, a length, an amount, a true or false, a link that names no record, a status only an action sets, or a schema issue. */
+export type ProblemRule =
+  | { type: "required" } | { type: "choice"; options: readonly string[]; value: unknown } | { type: "date" } | { type: "length"; max: number }
+  | { type: "amount" } | { type: "boolean" } | { type: "link"; kind: string; value: string } | { type: "starting-status"; value: string }
+  | { type: "issue"; issue: ZodIssue };
+type Refuse = (field: string | undefined, message: string, rule?: ProblemRule) => void;
+const throwFirst: Refuse = (_field, message) => { throw new Error(message); };
 
-function validateDates(value: unknown, key = ""): void {
+/** Every date-like field (named ...At, ...Date or ...Deadline) is a real calendar date as written: 2026-02-30 is refused, not read as 2 March (isRealDate). */
+function validateDates(value: unknown, refuse: Refuse, key = ""): void {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     Object.entries(value as Record<string, unknown>).forEach(([childKey, child]) => {
-      if (/(At|Date|Deadline)$/.test(childKey) && child !== undefined && child !== null) isoDate(child, childKey);
-      validateDates(child, childKey);
+      if (/(At|Date|Deadline)$/.test(childKey) && child !== undefined && child !== null && (typeof child !== "string" || !isRealDate(child))) {
+        refuse(childKey, `${childKey} must use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z, and name a real date.`, { type: "date" });
+      }
+      validateDates(child, refuse, childKey);
     });
-  } else if (Array.isArray(value)) value.forEach((child) => validateDates(child, key));
+  } else if (Array.isArray(value)) value.forEach((child) => validateDates(child, refuse, key));
 }
 
 function parent<K extends string>(state: DomainState, id: unknown, kind: K, label: string): RecordOf<K> {
@@ -45,12 +57,16 @@ function parent<K extends string>(state: DomainState, id: unknown, kind: K, labe
   return item;
 }
 
-/** Typed data fields per kind from the shared schema; coerced values are written back so what is stored is what was validated. */
-function parseData(kind: string, data: Record<string, any>): void {
+/** Typed data fields per kind from the shared schema; coerced values are written back so what is stored is what was validated. Collecting, each issue is its own problem. */
+function parseData(kind: string, data: Record<string, any>, problems?: ValidationProblem[]): void {
   const schema = (recordDataSchemas as Record<string, { safeParse: (value: unknown) => { success: true; data: Record<string, unknown> } | { success: false; error: any } }>)[kind];
   if (!schema) return;
   const result = schema.safeParse(data);
-  if (!result.success) throw new Error(`Invalid ${kind} data: ${describeIssues(result.error)}`);
+  if (!result.success && !problems) throw new Error(`Invalid ${kind} data: ${describeIssues(result.error)}`);
+  if (!result.success) {
+    for (const issue of result.error.issues as ZodIssue[]) problems!.push({ ...(issue.path.length ? { field: String(issue.path[0]) } : {}), message: `${issue.path.join(".") || "data"}: ${issue.message}`, rule: { type: "issue", issue } });
+    return;
+  }
   Object.assign(data, result.data);
 }
 
@@ -58,6 +74,22 @@ function parseData(kind: string, data: Record<string, any>): void {
 export function cutoverComplete(cutover: TypedRecord<"cutovers">): boolean {
   const data = cutover.data;
   return cutover.status === "ready" && data.incumbentDisabled === true && data.externalAttemptsImported === true && data.dualRunComplete === true && Boolean(data.accountableUser) && Boolean(data.confirmation);
+}
+
+/** When collection ownership was last handed back (DEB-12), or null if it never was. */
+export function lastHandBackAt(state: DomainState): string | null {
+  return recordsOf(state, "cutovers").filter((item) => item.status === "handed_back").map((item) => String(item.data.handedBackAt || item.createdAt)).sort().at(-1) ?? null;
+}
+
+/**
+ * DEB-11 and DEB-12: Valo Pay may hold collection ownership only under a
+ * complete contract.  A hand-back ends every contract recorded before it,
+ * because the incumbent schedules were re-enabled, so only one recorded
+ * after the last hand-back counts.
+ */
+export function cutoverInForce(state: DomainState): boolean {
+  const handedBack = lastHandBackAt(state);
+  return recordsOf(state, "cutovers").some((item) => cutoverComplete(item) && (handedBack === null || item.createdAt > handedBack));
 }
 
 function assertTransition(kind: string, from: string, to: string): void {
@@ -83,36 +115,69 @@ function assertTransition(kind: string, from: string, to: string): void {
   if (isActionOnlyStatus(kind, to)) throw new Error("Use the action for this record to set this status.");
 }
 
+/**
+ * Checks a record before it is created or updated. Record create and edit stop at the first failing rule, which is
+ * thrown. The import passes `problems` to collect every failing rule in a row instead: a rule that fails is noted
+ * there and the checks go on, skipping only those that need what failed. A refusal of the whole request (a kind that
+ * cannot be written, a role) is still thrown.
+ */
 export function validateRecord(
   state: DomainState,
   ctx: Context,
   kind: string,
   input: Partial<ValopayRecord> & { data?: Record<string, any> },
   isUpdate = false,
+  problems?: ValidationProblem[],
 ): void {
+  const refuse: Refuse = problems ? (field, message, rule) => { problems.push({ ...(field ? { field } : {}), message, ...(rule ? { rule } : {}) }); } : throwFirst;
+  /** A check that throws: at once for record create and edit; noted while collecting, when it answers undefined. */
+  const attempt = <T>(field: string | undefined, run: () => T, rule?: (error: Error & { status?: unknown }) => ProblemRule | undefined): T | undefined => {
+    if (!problems) return run();
+    try { return run(); } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error)), found = rule?.(failure);
+      problems.push({ ...(field ? { field } : {}), message: failure.message, ...(found ? { rule: found } : {}) });
+      return undefined;
+    }
+  };
+  /** A linked record of this lender (parent), or undefined while collecting when there is none. */
+  const link = <K extends string>(field: string, id: unknown, linked: K, label: string): RecordOf<K> | undefined =>
+    attempt(field, () => parent(state, id, linked, label), (error) => typeof id !== "string" || !id ? { type: "required" } : error.status === 404 ? { type: "link", kind: linked, value: id } : undefined);
   // A data field named like an object's own machinery is refused before anything else looks at the
   // object: JSON can carry such a key, and code that copies fields would otherwise inherit from it.
   for (const key of Object.keys(input.data ?? {})) {
     if (key === "__proto__" || key === "constructor" || key === "prototype") throw new Error(`data.${key} is not an allowed field.`);
   }
-  assertNoRealBankDetails(input);
-  validateDates(input);
+  // A record is named: an empty name used to be saved as the kind's name ("customers").
+  if (typeof input.name === "string" && !input.name.trim()) refuse("name", "name cannot be empty. Enter a name for this record.", { type: "required" });
+  // Indexed text is bounded, so an over-long value is refused here, naming its field, and never fails at the index.
+  for (const field of ["status", "reference", "customerId"] as const) {
+    const value = input[field];
+    if (typeof value === "string" && value.length > recordTextLimits[field]) refuse(field, `${field} is at most ${recordTextLimits[field]} characters.`, { type: "length", max: recordTextLimits[field] });
+  }
+  if (!problems) assertNoRealBankDetails(input);
+  else for (const [key, value] of [...Object.entries(input).filter(([key]) => key !== "data"), ...Object.entries(input.data ?? {})]) attempt(key, () => assertNoRealBankDetails(value, key));
+  validateDates(input, refuse);
   if (!editable.has(kind)) throw new Error(`${kind} cannot be created or edited directly.`);
-  if (!roleSet.has(ctx.role) || ctx.role === "Read-only") throw new Error("This demo role has read-only access.");
+  if (!roleSet.has(ctx.role) || ctx.role === "Read-only") throw Object.assign(new Error("This demo role has read-only access."), { status: 403 });
   if (input.merchantId && input.merchantId !== state.merchant.id) throw new Error("Linked records must belong to the same lender workspace.");
-  if (input.amountKobo !== undefined) positiveInteger(input.amountKobo, "amountKobo", true);
+  if (input.amountKobo !== undefined) attempt("amountKobo", () => positiveInteger(input.amountKobo, "amountKobo", true), () => ({ type: "amount" }));
   if (input.status && statuses[kind] && !statuses[kind].includes(input.status)) {
-    throw new Error(`Invalid ${kind} status. Allowed: ${statuses[kind].join(", ")}.`);
+    refuse("status", `Invalid ${kind} status. Allowed: ${statuses[kind].join(", ")}.`, { type: "choice", options: statuses[kind], value: input.status });
   }
   const data: Record<string, any> = input.data || (input.data = {});
   const existing = isUpdate && input.id ? findRecord(state, input.id, kind) : undefined;
+  for (const field of ['case', 'importIdentity']) {
+    if (JSON.stringify(data[field]) !== JSON.stringify(existing?.data[field])) refuse(field, `Use the dedicated workflow to change ${field === 'case' ? 'case coordination' : 'import provenance'}.`);
+  }
+  // The rules a resolution follows are resolve_exception's to record (resolutionRuleVersion).
+  if (kind === "exceptions" && data.resolutionRuleVersion !== existing?.data.resolutionRuleVersion) throw new Error("An exception's resolution rule version is recorded by Resolve exception and cannot be changed here.");
   if (isUpdate && !existing) throw new Error("An update requires the existing record id.");
   if (existing?.status === "approved" && (kind === "policies" || kind === "templates")) {
     throw new Error("Approved versions cannot be edited. Create a new draft version instead.");
   }
   if (existing && input.status && input.status !== existing.status) assertTransition(kind, existing.status, input.status);
   if (!isUpdate && input.status && isActionOnlyStatus(kind, input.status)) {
-    throw new Error(`New ${kind} records cannot start ${input.status}; that status is set by a domain action.`);
+    refuse("status", `New ${kind} records cannot start ${input.status}; that status is set by a domain action.`, { type: "starting-status", value: input.status });
   }
   if (kind === "due-items" && data.owner !== undefined) data.owner = normaliseOwner(data.owner) ?? data.owner;
   if (kind === "settlement-batches") {
@@ -131,24 +196,24 @@ export function validateRecord(
       }
     }
   }
-  parseData(kind, data);
+  parseData(kind, data, problems);
 
   if (kind === "customers") {
     requireRole(ctx, ["Admin", "Operations", "Finance"]);
-    if (data.accountMasked !== undefined && !masked(data.accountMasked)) throw new Error("Mask the account number, for example •••• 1234. Do not enter a full account number.");
-    if (data.phoneMasked !== undefined && !masked(data.phoneMasked)) throw new Error("Mask the phone number, for example +234 •••• 32. Do not enter a full phone number.");
+    if (data.accountMasked !== undefined && !masked(data.accountMasked)) refuse("accountMasked", "Mask the account number, for example •••• 1234. Do not enter a full account number.");
+    if (data.phoneMasked !== undefined && !masked(data.phoneMasked)) refuse("phoneMasked", "Mask the phone number, for example +234 •••• 32. Do not enter a full phone number.");
   }
   if (kind === "mandates") {
     requireRole(ctx, ["Admin", "Operations"]);
-    parent(state, input.customerId, "customers", "A mandate customer");
-    positiveInteger(input.amountKobo, "Mandate limit");
-    if (!activationWorkflows.includes(data.workflow)) throw new Error("Select a supported activation workflow.");
+    link("customerId", input.customerId, "customers", "A mandate customer");
+    attempt("amountKobo", () => positiveInteger(input.amountKobo, "Mandate limit"), () => ({ type: "amount" }));
+    if (!activationWorkflows.includes(data.workflow)) refuse("workflow", "Select a supported activation workflow.", { type: "choice", options: activationWorkflows, value: data.workflow });
     const consentKeys = ["consentPolicyId", "consentPolicyVersion", "consentPolicySummary", "policyVersionHistory"] as const;
     if (data.policyId) {
-      const policy = parent(state, data.policyId, "policies", "mandate policyId");
+      const policy = link("policyId", data.policyId, "policies", "mandate policyId");
       // RET-07 and MAN-02: the consent record carries the policy version and its text as it stood.  A mandate that
       // predates pinning is pinned to the version it has been running under on its next write; callers never set these.
-      if (!existing?.data.consentPolicyId) {
+      if (policy && !existing?.data.consentPolicyId) {
         data.consentPolicyId = policy.id;
         data.consentPolicyVersion = Number(policy.data.version || 1);
         data.consentPolicySummary = policySummary(policy);
@@ -161,6 +226,10 @@ export function validateRecord(
     if (existing && ["consentEvidence", "workflow", "origin"].some((key) => JSON.stringify(data[key]) !== JSON.stringify(existing.data[key]))) {
       throw new Error("Existing consent evidence cannot be changed. Reissue the mandate with a new consent record.");
     }
+    // MAN-02: the customer consented to this limit; a different limit needs a new consent record.
+    if (existing && input.amountKobo !== existing.amountKobo) {
+      throw new Error("The debit limit is part of the customer's consent and cannot be changed here. Reissue the mandate with new consent evidence for the new limit.");
+    }
     if (existing?.data.policyId && data.policyId !== existing.data.policyId) throw new Error("Use Apply policy version to change the version for this mandate and record the required notice and consent.");
     if (existing && consentKeys.some((key) => existing.data[key] !== undefined && JSON.stringify(data[key]) !== JSON.stringify(existing.data[key]))) {
       throw new Error("Use Apply policy version to update the version covered by consent.");
@@ -168,61 +237,75 @@ export function validateRecord(
   }
   if (kind === "due-items") {
     requireRole(ctx, ["Admin", "Operations", "Finance"]);
-    parent(state, input.customerId, "customers", "A due item customer");
-    positiveInteger(input.amountKobo, "Due amount");
+    link("customerId", input.customerId, "customers", "A due item customer");
+    attempt("amountKobo", () => positiveInteger(input.amountKobo, "Due amount"), () => ({ type: "amount" }));
     const amount = Number(input.amountKobo);
-    if (amount < ABSOLUTE_TICKET_FLOOR_KOBO) throw new Error("The minimum debit is ₦5,000. Amounts below this cannot be approved.");
+    if (amount < ABSOLUTE_TICKET_FLOOR_KOBO) refuse("amountKobo", "The minimum debit is ₦5,000. Amounts below this cannot be approved.");
     const minimum = minimumTicketKobo(state);
     if (amount < minimum) {
       const override = data.overrideReason || data.adminOverrideReason;
       const preserved = existing && existing.amountKobo === input.amountKobo && (existing.data.overrideReason || existing.data.adminOverrideReason) === override;
-      if (!override || (!preserved && ctx.role !== "Admin")) throw new Error(`Debits from ₦5,000 to below the lender minimum of ₦${(minimum / 100).toLocaleString("en-NG")} need an Admin to record an override reason.`);
+      if (!override || (!preserved && ctx.role !== "Admin")) refuse("amountKobo", `Debits from ₦5,000 to below the lender minimum of ₦${(minimum / 100).toLocaleString("en-NG")} need an Admin to record an override reason.`);
     }
-    if (!isUpdate && input.status !== "scheduled") throw new Error("New instalments must start as scheduled. Their payment status updates when payments are allocated.");
-    if (!normaliseOwner(data.owner)) throw new Error("Choose who is responsible for collecting this instalment: Valo Pay, the loan management system, the lender team or the provider.");
+    if (!isUpdate && input.status !== "scheduled") refuse("status", "New instalments must start as scheduled. Their payment status updates when payments are allocated.");
+    if (!normaliseOwner(data.owner)) refuse("owner", "Choose who is responsible for collecting this instalment: Valo Pay, the loan management system, the lender team or the provider.", { type: "choice", options: executionOwners, value: data.owner });
     if (data.mandateId) {
-      const mandate = parent(state, data.mandateId, "mandates", "dueItem mandateId");
-      if (mandate.customerId !== input.customerId) throw new Error("Choose a mandate that belongs to the customer on this instalment.");
+      const mandate = link("mandateId", data.mandateId, "mandates", "dueItem mandateId");
+      if (mandate && mandate.customerId !== input.customerId) refuse("mandateId", "Choose a mandate that belongs to the customer on this instalment.");
     }
-    if (data.owner === PLATFORM_OWNER && !recordsOf(state, "cutovers").some(cutoverComplete)) {
-      throw new Error("Valo Pay cannot take collection ownership until the handover agreement and parallel-run day are complete, with a named responsible user and written confirmation.");
+    if (data.owner === PLATFORM_OWNER && !cutoverInForce(state)) {
+      const handedBack = lastHandBackAt(state);
+      refuse("owner", handedBack
+        ? `Valo Pay cannot take collection ownership again until a new handover agreement, recorded after the hand-back on ${watDate(Date.parse(handedBack))}, and its parallel-run day are complete, with a named responsible user and written confirmation.`
+        : "Valo Pay cannot take collection ownership until the handover agreement and parallel-run day are complete, with a named responsible user and written confirmation.");
     }
     if (data.outstandingKobo !== undefined && (!Number.isInteger(data.outstandingKobo) || data.outstandingKobo < 0 || data.outstandingKobo > input.amountKobo!)) {
-      throw new Error("Outstanding balance cannot exceed the due amount.");
+      refuse("outstandingKobo", "Outstanding balance cannot exceed the due amount.");
     }
   }
   if (kind === "attempts") {
     requireRole(ctx, ["Admin", "Operations"]);
     if (isUpdate) throw new Error("Recorded debit attempts cannot be edited.");
-    const due = parent(state, data.dueItemId, "due-items", "attempt dueItemId");
-    if (due.customerId !== input.customerId) throw new Error("The debit attempt and instalment must belong to the same customer.");
-    if (input.amountKobo !== due.amountKobo) throw new Error("The debit attempt amount must match the instalment amount.");
+    const due = link("dueItemId", data.dueItemId, "due-items", "attempt dueItemId");
+    if (due && due.customerId !== input.customerId) refuse("customerId", "The debit attempt and instalment must belong to the same customer.");
+    if (due && input.amountKobo !== due.amountKobo) refuse("amountKobo", "The debit attempt amount must match the instalment amount.");
     if (data.source !== "external" || data.simulated !== true) {
-      throw new Error("Only sample records of external debit attempts can be imported. They cannot be edited later, and no debit instruction is available.");
+      refuse(undefined, "Only sample records of external debit attempts can be imported. They cannot be edited later, and no debit instruction is available.");
     }
     if (input.status === "failed") {
       if (data.failureCode !== undefined && !isKnownFailureCode(data.failureCode)) data.rawFailureCode = String(data.failureCode);
       data.failureCode = normaliseFailureCode(data.failureCode);
     }
-    if (!Number.isInteger(data.number) || data.number < 1) data.number = countedAttempts(state, due.id).length + 1;
+    if (due && (!Number.isInteger(data.number) || data.number < 1)) data.number = countedAttempts(state, due.id).length + 1;
   }
   if (kind === "observations") {
     requireRole(ctx, ["Admin", "Operations", "Finance"]);
-    if (!input.reference) throw new Error("Enter the original provider reference for this payment evidence.");
-    if (input.customerId) parent(state, input.customerId, "customers", "observation customer");
+    if (!input.reference) refuse("reference", "Enter the original provider reference for this payment evidence.");
+    if (input.customerId) link("customerId", input.customerId, "customers", "observation customer");
     if (isUpdate) throw new Error("Saved payment evidence cannot be edited. Add a new record to correct it.");
+    // Evidence of money received; an absent amount would be saved as 0.
+    if (!Number.isSafeInteger(input.amountKobo) || Number(input.amountKobo) < 1) refuse("amountKobo", "Enter the amount received. Payment evidence must be for more than ₦0.", input.amountKobo === undefined ? { type: "required" } : undefined);
+    // A gross is what was collected before fees came off, so it is never less than what was received.
+    if (data.grossAmountKobo !== undefined && Number(data.grossAmountKobo) < Number(input.amountKobo)) refuse("grossAmountKobo", "The gross amount cannot be less than the amount received. Enter the amount collected before fees, or leave the gross amount blank.");
     if (data.paymentId !== undefined || data.resolutionKey !== undefined || input.status === "resolved") {
-      throw new Error("Valo Pay determines how payment evidence is matched. Do not set its resolution when creating it.");
+      refuse(undefined, "Valo Pay determines how payment evidence is matched. Do not set its resolution when creating it.");
     }
     if (data.dueItemId) {
-      const due = parent(state, data.dueItemId, "due-items", "observation dueItemId");
-      if (due.customerId !== input.customerId) throw new Error("The payment evidence and linked instalment must belong to the same customer.");
+      const due = link("dueItemId", data.dueItemId, "due-items", "observation dueItemId");
+      if (due && due.customerId !== input.customerId) refuse("dueItemId", "The payment evidence and linked instalment must belong to the same customer.");
     }
   }
   if (kind === "policies") {
     requireRole(ctx, ["Admin"]);
     if (!isUpdate && input.status && input.status !== "draft") throw new Error("Policies are created as drafts only.");
+    // RET-01: the reviewer approves the rules that were submitted, so they are frozen until a reviewer rejects them.
+    if (existing?.status === "submitted") throw new Error("A submitted policy cannot be edited. A reviewer must reject it before its author can make changes.");
     if (data.reviewer !== undefined && data.reviewer !== existing?.data.reviewer) throw new Error("The policy reviewer is recorded during approval and cannot be changed here.");
+    for (const key of ["previousVersionId", "approvedAt", "submittedAt", "rejectedAt"]) {
+      if (JSON.stringify(data[key]) !== JSON.stringify(existing?.data[key])) throw new Error(`Policy ${key} is recorded by its review or version action and cannot be changed here.`);
+    }
+    // The API numbers versions: 1 on create, and new_policy_version after the whole history.
+    if (existing && JSON.stringify(data.version) !== JSON.stringify(existing.data.version)) throw new Error("Policy version numbers are assigned when a new draft version is created.");
     const maxAttempts = data.maxAttempts ?? policyGuardrails.defaultMaxAttempts;
     const spacing = data.spacingHours ?? policyGuardrails.defaultSpacingHours;
     const firstNotice = data.firstNoticeHours ?? policyGuardrails.defaultFirstNoticeHours;
@@ -259,7 +342,7 @@ export function validateRecord(
   }
   if (kind === "exceptions" && data.linkedRecordId) {
     const linked = state.records.find((item) => item.id === data.linkedRecordId);
-    if (!linked || linked.merchantId !== state.merchant.id) throw new Error("Link the exception to a record in this lender workspace.");
+    if (!linked || linked.merchantId !== state.merchant.id) throw Object.assign(new Error("Link the exception to a record in this lender workspace."), { status: 404 });
   }
   if (kind === "commercial" && data.designPartner && !data.signedFullPriceTerms) {
     // A discounted design-partner entry is allowed, but it cannot be treated as proof of a real Test 3 sale.
@@ -267,6 +350,10 @@ export function validateRecord(
   }
   if (kind === "cutovers") {
     requireRole(ctx, ["Admin"]);
+    const handedBack = lastHandBackAt(state);
+    if (input.status === "ready" && existing && existing.status !== "ready" && handedBack !== null && existing.createdAt <= handedBack) {
+      throw new Error(`This cutover contract ended with the hand-back on ${watDate(Date.parse(handedBack))}. Record a new cutover contract to take collection ownership again.`);
+    }
     if (input.status === "ready" && existing?.status !== "ready") {
       const candidate = { ...(existing ?? { id: "", merchantId: "", kind, name: "", reference: "", amountKobo: 0, customerId: "", createdAt: "", updatedAt: "" }), status: "ready", data } as TypedRecord<"cutovers">;
       if (!cutoverComplete(candidate)) throw new Error("The handover is ready only after the previous collection system is disabled in writing, external attempts are imported, the parallel-run day is complete, and a named responsible user has confirmed.");
@@ -275,10 +362,34 @@ export function validateRecord(
   }
   if (["evidence", "experiments"].includes(kind)) requireRole(ctx, ["Admin"]);
   if (["commercial", "costs", "settlement-batches"].includes(kind)) requireRole(ctx, ["Admin", "Finance"]);
+  // SCH-04: the business calendar decides when collections run, so only the roles that run them maintain it.
+  if (kind === "calendar") requireRole(ctx, ["Admin", "Operations"]);
+  // MEA-05: a fortnightly review is recorded by its reviewer at the service's time; neither is typed in.
+  if (kind === "reviews" && !isUpdate) {
+    if (data.reviewer !== undefined && data.reviewer !== ctx.actor) throw new Error("The reviewer is the person recording the review. Sign in as the reviewer to record it, and leave the reviewer out.");
+    if (data.reviewedAt !== undefined) throw new Error("The review time is recorded by the service when the review is saved. Leave the review date out.");
+    data.reviewer = ctx.actor;
+    data.reviewedAt = ctx.now;
+  }
   if (kind === "settlement-batches") {
     for (const key of ["grossKobo", "feeKobo", "netKobo"]) positiveInteger(data[key], key, true);
     if (data.grossKobo - data.feeKobo !== data.netKobo) throw new Error("The net settlement amount must equal the gross amount minus fees.");
     if (!isUpdate && input.status !== (defaultStatus["settlement-batches"] ?? "pending")) throw new Error("New settlement batches must start as pending. Reconciliation updates their status.");
+    // Decision on currencies: a batch holds one currency, naira unless given, and its amounts are in its smallest unit.
+    // One the provider's lines build takes its first line's, which reconciliation records.
+    if (data.currency === undefined || data.currency === null || data.currency === "") data.currency = isUpdate ? existing?.data.currency : "NGN";
+    if (data.currency === undefined) delete data.currency;
+    else {
+      const code = typeof data.currency === "string" ? data.currency.trim().toUpperCase() : "";
+      if (currencyMinorUnit(code) === undefined) throw new Error("Enter the batch currency as an ISO 4217 code with a minor unit, such as NGN or USD.");
+      data.currency = code;
+      if (Array.isArray(existing?.data.lineObservationIds) && code !== String(existing!.data.currency || "NGN").toUpperCase()) throw new Error("A settlement batch built from the provider's lines is in its first line's currency, which reconciliation records; it cannot be changed here.");
+    }
+    // Reconciliation copies these from the provider's lines, the fee schedule and the linked statement credit, and derives the status from them.
+    // Compared by value: jsonb returns enteredTotals' keys in its own order.
+    for (const key of ["statementObservationId", "statementNetKobo", "statementOtherCurrencies", "lineObservationIds", "linePaymentIds", "otherCurrencyLineIds", "expectedFeeKobo", "feeVarianceKobo", "enteredTotals"]) {
+      if (!isDeepStrictEqual(data[key], existing?.data[key])) throw new Error(`Settlement batch ${key} is recorded by reconciliation and cannot be changed here.`);
+    }
   }
 }
 

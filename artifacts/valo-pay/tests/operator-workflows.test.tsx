@@ -16,7 +16,9 @@ describe('permissions before a workflow starts', () => {
     const user = userEvent.setup(); renderApp('/customers');
     await screen.findByText('Ada Okonkwo');
     const add = screen.getByRole('button', { name: 'Add customer' });
-    expect(add.hasAttribute('disabled')).toBe(true);
+    expect(add.getAttribute('aria-disabled')).toBe('true');
+    expect(add.hasAttribute('disabled')).toBe(false);
+    add.focus(); expect(document.activeElement).toBe(add);
     const reason = document.getElementById(add.getAttribute('aria-describedby')!);
     expect(reason?.textContent).toBe('Requires Admin, Operations or Finance.');
     await user.click(add);
@@ -29,10 +31,10 @@ describe('permissions before a workflow starts', () => {
   it('lets Operations run reconciliation but explains why confirming a match needs Finance', async () => {
     api.role = 'Operations'; renderApp('/reconciliation');
     const confirm = await screen.findByRole('button', { name: 'Confirm' });
-    expect(confirm.hasAttribute('disabled')).toBe(true);
+    expect(confirm.getAttribute('aria-disabled')).toBe('true');
     expect(document.getElementById(confirm.getAttribute('aria-describedby')!)?.textContent).toBe('Requires Admin or Finance.');
-    expect(screen.getByRole('button', { name: 'Run reconciliation' }).hasAttribute('disabled')).toBe(false);
-    expect(screen.getByRole('button', { name: 'Add batch' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Run reconciliation' }).getAttribute('aria-disabled')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Add batch' }).getAttribute('aria-disabled')).toBe('true');
   });
 
   it('requires a different reviewer for an authored template', async () => {
@@ -40,10 +42,10 @@ describe('permissions before a workflow starts', () => {
     api.mutate(state => { const template = state.records.find(record => record.kind === 'templates')!; template.status = 'submitted'; template.data.author = 'Sandbox Compliance reviewer'; });
     renderApp('/policies');
     const request = await screen.findByRole('button', { name: 'Request changes' });
-    expect(request.hasAttribute('disabled')).toBe(true);
+    expect(request.getAttribute('aria-disabled')).toBe('true');
     expect(document.getElementById(request.getAttribute('aria-describedby')!)?.textContent).toContain('You cannot review your own submission');
     const section = screen.getByRole('heading', { name: 'Notification templates' }).closest('section')!;
-    expect(within(section).getByRole('button', { name: 'Approve' }).hasAttribute('disabled')).toBe(true);
+    expect(within(section).getByRole('button', { name: 'Approve' }).getAttribute('aria-disabled')).toBe('true');
   });
 
   it('stops a dialog submission if the workspace role changes while it is open', async () => {

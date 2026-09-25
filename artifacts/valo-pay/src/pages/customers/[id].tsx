@@ -5,7 +5,9 @@ import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetCustomerHistory, getGetCustomerHistoryQueryKey, } from '@workspace/api-client-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { formatKobo, formatDate, formatCompactDate, formatCount } from '@/lib/formatters';
+import { formatRecordMoney, otherCurrencyEntries } from '@/lib/currencies';
 import { ArrowLeft, Clock, FileText, CheckCircle, AlertTriangle } from 'lucide-react';
 import { CustomerAvatar, StatusBadge, readableLabel } from '@/components/record-label';
 import { Link, useParams, useSearch, useSearchParams } from 'wouter';
@@ -14,8 +16,12 @@ import { NotFoundNotice } from '@/pages/not-found';
 import { LoadProblem } from '@/components/load-problem';
 import { RecordPagination } from '@/components/record-pagination';
 import { useUrlPagination } from '@/lib/use-url-pagination';
+import { keepRowsWhilePaging } from '@/lib/use-record-pagination';
 import { safeCustomerReturnTo } from '@/lib/record-navigation';
 import { useHashTarget } from '@/lib/use-hash-target';
+
+/** The sections' pagers: one history request carries every section's page, so a failed page replaces the whole history. */
+const sectionPagers = ['customer mandates', 'customer instalments', 'customer payments', 'history events'] as const;
 
 const watStamp = (iso: unknown) => typeof iso === 'string' && Number.isFinite(Date.parse(iso)) ? formatDate(iso) : 'not recorded';
 
@@ -28,6 +34,15 @@ function decisionDetail(data: Record<string, any>): string {
     notice ? `Customer notice: ${readableLabel(notice.purpose)}${notice.requiredBy ? `, due by ${watStamp(notice.requiredBy)}` : ''}${notice.evidenced ? '. Provider acceptance recorded.' : '. Provider acceptance not recorded.'}` : '',
     `Policy version: ${String(data.policyVersion || 'not recorded')}${data.experimentArm ? ` · experiment group: ${readableLabel(data.experimentArm)}` : ''}.`,
   ].filter(Boolean).join(' ');
+}
+
+/** How an allocation was made, then the reason recorded with it: an automatic match names its rule and whether it was certain. */
+function allocationDetail(data: Record<string, any>): string {
+  const rule = String(data.rule || 'not recorded');
+  const how = data.automatic === true ? `Matched automatically${data.confidence === 'certain' ? ' and with certainty' : ''} by rule ${rule}.`
+    : data.confidence === 'manual' ? ''
+    : `Proposed by rule ${rule}${data.confidence ? ` as ${String(data.confidence)}` : ''} for Finance to confirm.`;
+  return [how, String(data.explanation || '')].filter(Boolean).join(' ');
 }
 
 /** The address is a customer page, but the current lender has no customer with that reference. */
@@ -58,27 +73,32 @@ export default function CustomerTimelinePage() {
     mandatesLimit:mandatePage.pageSize, mandatesOffset:mandatePage.offset,
     dueItemsLimit:duePage.pageSize, dueItemsOffset:duePage.offset,
     paymentsLimit:paymentPage.pageSize, paymentsOffset:paymentPage.offset};
-  const { data: timeline, isLoading, isFetching, error, refetch } = useGetCustomerHistory(id!,queryParams,
-    {query:{enabled:!!merchantId && !!id && sameLender,queryKey:getGetCustomerHistoryQueryKey(id!,queryParams)}});
+  const historyKey = getGetCustomerHistoryQueryKey(id!,queryParams), client = useQueryClient();
+  // Paging a section keeps this customer's history shown until the next page arrives, so its pager and the control pressed stay.
+  const { data: timeline, isLoading, isFetching, isPlaceholderData, error, refetch } = useGetCustomerHistory(id!,queryParams,
+    {query:{enabled:!!merchantId && !!id && sameLender,queryKey:historyKey,placeholderData:keepRowsWhilePaging(historyKey,client)}});
   const focusedRecord = timeline?.focusedRecord;
   // Correct every out-of-range section together so one URL update cannot undo another.
   const [, setSearch] = useSearchParams();
   useEffect(() => {
-    if (!timeline) return;
+    // The previous page's history, shown while this one loads, says nothing of where this page is.
+    if (!timeline || isPlaceholderData) return;
     const sections = [['events','history-',historyPage],['mandates','mandate-',mandatePage],['dueItems','due-',duePage],['payments','payment-',paymentPage]] as const;
     if (!sections.some(([key,,page])=>timeline.offsets[key]!==page.offset)) return;
     setSearch(current=>{const next=new URLSearchParams(current);for(const [key,prefix,page] of sections) if(timeline.offsets[key]!==page.offset) next.set(prefix+'page',String(Math.floor(timeline.offsets[key]/page.pageSize)+1));return next;},{replace:true});
-  },[timeline,historyPage.offset,mandatePage.offset,duePage.offset,paymentPage.offset]);
+  },[timeline,isPlaceholderData,historyPage.offset,mandatePage.offset,duePage.offset,paymentPage.offset]);
   useHashTarget(`record-${requestedRecord}`, !!focusedRecord && !error);
 
 
   if (!merchantId) return null;
   if (!sameLender) return <NotFoundNotice title="Choose the linked lender" primary={{ href: '/collections', label: 'Go to collections' }} secondary={{ href: '/customers', label: 'Go to customers' }}><p>This link belongs to {workspace?.merchants.find(merchant => merchant.id === search.get('lender'))?.name || 'another lender'}. Select that lender using the lender menu to review this customer.</p></NotFoundNotice>;
-  if (isLoading) return <Loading what="the customer history" />;
+  if (isLoading) return <Loading what="the customer history" heading />;
   if ((error as { status?: number } | null)?.status === 404) return <MissingCustomer id={String(id)} />;
-  if (error || !timeline) return <LoadProblem what="customer history" error={error} retry={() => { void refetch(); }} busy={isFetching} />;
+  if (error || !timeline) return <div className="space-y-4"><h1 className="text-2xl font-bold tracking-tight">Customer history</h1><LoadProblem what="customer history" pager={sectionPagers} error={error} retry={() => { void refetch(); }} busy={isFetching} /></div>;
 
   const { customer, position, events, mandates, dueItems, payments } = timeline;
+  // Money in another currency that the customer's payments hold unapplied, never added to the naira credit.
+  const otherCredit = otherCurrencyEntries(position?.unallocatedOtherCurrencies, 'payment');
 
   return (
     <div className="space-y-6">
@@ -126,6 +146,13 @@ export default function CustomerTimelinePage() {
                 <span className="text-sm text-muted-foreground">Unapplied credit</span>
                 <span className="text-lg font-bold font-mono">{formatKobo(Number(position?.unallocatedKobo || 0))}</span>
               </div>
+              {/* A list under its label, each currency on a line of its own, as the card is narrow beside the history. */}
+              {otherCredit.length > 0 && <div>
+                <span id="other-credit" className="text-sm text-muted-foreground">Unapplied in other currencies</span>
+                <ul aria-labelledby="other-credit" className="mt-1 space-y-0.5 text-right text-sm">
+                  {otherCredit.map(({ code, money, counted }) => <li key={code}><span className="whitespace-nowrap font-mono font-semibold">{money}</span> <span className="ml-1 whitespace-nowrap text-muted-foreground">({counted})</span></li>)}
+                </ul>
+              </div>}
               <p className="text-[11px] text-muted-foreground">{String(position?.note || 'Calculated from instalments and recorded payments. We never hold money.')}</p>
             </div>
           </div>
@@ -136,7 +163,7 @@ export default function CustomerTimelinePage() {
         <h2 className="font-semibold">{focusedRecord ? `Selected ${readableLabel(focusedRecord.kind).toLowerCase()}` : 'Collection record unavailable'}</h2>
         {focusedRecord ? <>
           <p className="mt-2 font-medium">{focusedRecord.name} · {focusedRecord.reference}</p>
-          <p className="mt-1 text-sm">{formatKobo(focusedRecord.amountKobo)} · {readableLabel(focusedRecord.status)} · {formatDate(focusedRecord.createdAt)}</p>
+          <p className="mt-1 text-sm">{formatRecordMoney(focusedRecord, focusedRecord.amountKobo)} · {readableLabel(focusedRecord.status)} · {formatDate(focusedRecord.createdAt)}</p>
           {focusedRecord.data?.failureCode ? <p className="mt-2 text-sm">Failure reason: {readableLabel(focusedRecord.data.failureCode)}</p> : null}
           {focusedRecord.kind === 'due-items' && <p className="mt-2 text-sm">Outstanding: {formatKobo(Number(focusedRecord.data?.outstandingKobo ?? focusedRecord.amountKobo))} · Due: {watStamp(focusedRecord.data?.dueDate)}</p>}
           <p className="mt-2 text-xs text-muted-foreground">Review the customer's records below before deciding the next step.</p>
@@ -168,7 +195,7 @@ export default function CustomerTimelinePage() {
                 ))
               )}
             </div>
-            {timeline.totals.mandates > 25 && <RecordPagination pagination={mandatePage} total={timeline.totals.mandates} label="customer mandates" />}
+            {timeline.totals.mandates > 25 && <RecordPagination pagination={mandatePage} total={timeline.totals.mandates} busy={isPlaceholderData} label="customer mandates" />}
           </section>
 
           {/* Due Items & Payments */}
@@ -196,7 +223,7 @@ export default function CustomerTimelinePage() {
                   ))
                 )}
               </div>
-              {timeline.totals.dueItems > 25 && <RecordPagination pagination={duePage} total={timeline.totals.dueItems} label="customer instalments" />}
+              {timeline.totals.dueItems > 25 && <RecordPagination pagination={duePage} total={timeline.totals.dueItems} busy={isPlaceholderData} label="customer instalments" />}
             </section>
 
             <section className="bg-card border rounded-xl shadow-sm overflow-hidden">
@@ -212,7 +239,7 @@ export default function CustomerTimelinePage() {
                     <div key={payment.id} className="p-4">
                       <div className="flex justify-between items-baseline mb-1">
                         <span className="font-mono text-sm">{payment.reference}</span>
-                        <span className="font-mono font-medium text-success">{formatKobo(payment.amountKobo)}</span>
+                        <span className="font-mono font-medium text-success">{formatRecordMoney(payment, payment.amountKobo)}</span>
                       </div>
                       <div className="flex justify-between items-center mt-2">
                         <span className="text-xs text-muted-foreground">{formatCompactDate(payment.createdAt)}</span>
@@ -222,7 +249,7 @@ export default function CustomerTimelinePage() {
                   ))
                 )}
               </div>
-              {timeline.totals.payments > 25 && <RecordPagination pagination={paymentPage} total={timeline.totals.payments} label="customer payments" />}
+              {timeline.totals.payments > 25 && <RecordPagination pagination={paymentPage} total={timeline.totals.payments} busy={isPlaceholderData} label="customer payments" />}
             </section>
           </div>
         </div>
@@ -248,10 +275,13 @@ export default function CustomerTimelinePage() {
                       <time dateTime={event.createdAt} className="text-[11px] text-muted-foreground mb-1.5">{formatDate(event.createdAt)}</time>
                       <span className="text-sm font-semibold" title={event.id}>{event.name || readableLabel(event.kind)}</span>
                       {event.amountKobo > 0 && (
-                        <span className="text-sm font-mono mt-1">{formatKobo(event.amountKobo)}</span>
+                        <span className="text-sm font-mono mt-1">{formatRecordMoney(event, event.amountKobo)}</span>
                       )}
                       {event.kind === 'retry-decisions' && (
                         <span className="text-xs leading-relaxed text-muted-foreground mt-2">{decisionDetail((event.data || {}) as Record<string, any>)}</span>
+                      )}
+                      {event.kind === 'allocations' && (
+                        <span className="text-xs leading-relaxed text-muted-foreground mt-2">{allocationDetail((event.data || {}) as Record<string, any>)}</span>
                       )}
                       <span className="mt-2"><StatusBadge status={event.status} /></span>
                     </div>
@@ -260,7 +290,7 @@ export default function CustomerTimelinePage() {
               </ol>
             )}
           </ScrollFrame>
-          {timeline.totals.events > 25 && <RecordPagination pagination={historyPage} total={timeline.totals.events} label="history events" />}
+          {timeline.totals.events > 25 && <RecordPagination pagination={historyPage} total={timeline.totals.events} busy={isPlaceholderData} label="history events" />}
         </div>
       </div>
     </div>

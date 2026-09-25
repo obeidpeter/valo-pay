@@ -6,7 +6,9 @@
  * OpenAPI spec version: 1.1.0
  */
 import type { DatabaseCheck } from './databaseCheck';
+import type { SchemaCheck } from './schemaCheck';
 
 export type ReadinessStatusChecks = {
   database: DatabaseCheck;
+  schema: SchemaCheck;
 };

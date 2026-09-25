@@ -1,0 +1,70 @@
+import { useState } from "react";
+import {
+  OrganizationSwitcher,
+  useClerk,
+  useReverification,
+} from "@clerk/react";
+import { Button } from "./ui/button";
+import { PilotError } from "./pilot-ui";
+import { answerProblem, readAnswer, UNREADABLE_ANSWER } from "@/lib/answers";
+
+/** Clerk's organisation switcher, account security and re-verification for a signed-in staff member (StaffSession renders it under Clerk's provider). */
+export function VerifiedSession() {
+  const clerk = useClerk(),
+    [error, setError] = useState<unknown>(null),
+    [message, setMessage] = useState(""),
+    [busy, setBusy] = useState(false);
+  const verify = useReverification(() =>
+    fetch("/api/v1/team/verify", {
+      method: "POST",
+      credentials: "same-origin",
+    }),
+  );
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-muted-foreground">
+        Select your provisioned organisation. Use account security to enrol an
+        authenticator, then verify both factors before making a pilot change.
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <OrganizationSwitcher hidePersonal />
+        <Button variant="outline" onClick={() => clerk.openUserProfile()}>
+          Account security
+        </Button>
+        <Button
+          variant="outline"
+          busy={busy}
+          onClick={() => {
+            setBusy(true);
+            setError(null);
+            setMessage("");
+            void verify()
+              .then(async (response) => {
+                if (!response) return;
+                const result = await response.json().catch(() => undefined);
+                if (!response.ok)
+                  throw new Error(
+                    result?.error || "Verification could not be completed.",
+                  );
+                // Only the confirmation the contract describes counts as verified. The
+                // schemas load with the pages that use them: this component is also
+                // part of the shell's workspace failure notice, which stays small.
+                const { messageSchema } = await import("@workspace/valopay-schema");
+                if (!readAnswer(messageSchema, result))
+                  throw answerProblem(UNREADABLE_ANSWER);
+                setMessage("Identity verified. Retry your original request.");
+              })
+              .catch(setError)
+              .finally(() => setBusy(false));
+          }}
+        >
+          Verify identity
+        </Button>
+      </div>
+      <PilotError error={error} fallback="Verification could not be completed. Try again." />
+      <p role="status" className="text-sm">
+        {message}
+      </p>
+    </div>
+  );
+}

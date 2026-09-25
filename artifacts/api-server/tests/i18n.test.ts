@@ -1,11 +1,12 @@
 // The market's letters and conventions: a search that ignores case and marks,
-// counts with their nouns in the right number, and exports that spell Yoruba
-// and Igbo names as their bearers write them, in the PDF and in a spreadsheet.
+// counts with their nouns in the right number, money exact to the kobo, and
+// exports that spell Yoruba and Igbo names as their bearers write them, in the
+// PDF and in a spreadsheet.
 import assert from "node:assert/strict";
 
 // The store and export modules reach the database module, which insists on an address before anything here runs; nothing in this file touches a database.
 process.env["DATABASE_URL"] ??= "postgres://postgres@127.0.0.1:1/valopay-unused";
-const { counted } = await import("@workspace/valopay-schema");
+const { counted, nairaText } = await import("@workspace/valopay-schema");
 const { foldForSearch, pageRecords } = await import("../src/lib/valopay-list.js");
 const { seedMerchant } = await import("../src/lib/valopay-seed.js");
 const { buildDisputePack, packFonts, renderDisputePackPdf } = await import("../src/lib/valopay-packs.js");
@@ -40,6 +41,16 @@ assert.equal(counted(2, "observation"), "2 observations");
 assert.equal(counted(1234, "record"), "1,234 records");
 checks += 4;
 
+// ---- Money in messages is exact to the kobo, however large ----
+assert.equal(nairaText(2_500_000), "NGN 25,000.00");
+assert.equal(nairaText(0), "NGN 0.00");
+assert.equal(nairaText(-150), "NGN -1.50");
+assert.equal(nairaText(-5), "NGN -0.05", "a credit under a naira keeps its sign");
+assert.equal(nairaText(8_496_439_859_216_957), "NGN 84,964,398,592,169.57", "dividing by 100 as a float printed .56");
+assert.equal(nairaText(Number.MAX_SAFE_INTEGER), "NGN 90,071,992,547,409.91");
+assert.equal(nairaText(-Number.MAX_SAFE_INTEGER), "NGN -90,071,992,547,409.91");
+checks += 7;
+
 // ---- The PDF spells the names: its own typeface, not a WinAnsi standard font ----
 const fonts = packFonts();
 assert.ok(fonts.regular.length > 50_000 && fonts.bold.length > 50_000, "both weights of the typeface are shipped");
@@ -59,8 +70,8 @@ const csvText = csv.bytes.toString("utf8");
 assert.ok(csvText.startsWith("﻿"), "the CSV starts with the byte order mark");
 assert.ok(csvText.includes("Dami Adéyẹmí") && csvText.includes("Chiamaka Ọbi"), "the CSV carries the names unchanged");
 assert.equal(csv.contentType, "text/csv; charset=utf-8");
-const preview = importCsv(state, ctx, { kind: "customers", syntheticOnly: true, commit: false, csv: "﻿name,reference,consentProvenance,bankName,accountMasked,phoneMasked\r\nỌlá Adébáyọ̀,IMP-C001,Synthetic imported consent,Sandbox Bank,•••• 0001,+234 ••• ••01\r\n" });
+const preview = importCsv(state, ctx, { kind: "customers", syntheticOnly: true, commit: false, identityColumn: "reference", csv: "﻿name,reference,consentProvenance,bankName,accountMasked,phoneMasked\r\nỌlá Adébáyọ̀,IMP-C001,Synthetic imported consent,Sandbox Bank,•••• 0001,+234 ••• ••01\r\n" });
 assert.equal((preview as { valid: number }).valid, 1, "a file saved by a spreadsheet program, mark and all, is read");
 checks += 4;
 
-console.log(`Internationalisation tests passed (${checks} checks): accent-insensitive search, counts with nouns, the pack's own typeface spelling Yoruba and Igbo names, CSV byte order mark in and out.`);
+console.log(`Internationalisation tests passed (${checks} checks): accent-insensitive search, counts with nouns, money in messages exact to the kobo, the pack's own typeface spelling Yoruba and Igbo names, CSV byte order mark in and out.`);

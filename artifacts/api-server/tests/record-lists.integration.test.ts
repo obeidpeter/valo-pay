@@ -5,7 +5,9 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { Server } from "node:http";
 import type { DomainState } from "../src/domain/types.js";
-import { pageRecords, type ListQuery } from "../src/lib/valopay-list.js";
+import { allocationChoices, pageRecords, type ListQuery } from "../src/lib/valopay-list.js";
+import { allocationPayer } from "../src/domain/reconciliation.js";
+import { canTakeAllocation } from "@workspace/valopay-schema";
 
 if (process.env.VALOPAY_RUN_INTEGRATION !== "1") {
   console.log("Set VALOPAY_RUN_INTEGRATION=1 to run record list and stale-edit integration tests.");
@@ -17,6 +19,7 @@ const { customerTimeline } = await import("../src/domain/timeline.js");
 const { buildConsoleSettings } = await import("../src/lib/valopay-close-views.js");
 const { default: express } = await import("express");
 const { default: router } = await import("../src/routes/valopay.js");
+const { errorHandler } = await import("../src/lib/error-handler.js");
 const auth = () => Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true });
 const token = randomBytes(32).toString("hex"), otherToken = randomBytes(32).toString("hex"), editingToken = randomBytes(32).toString("hex");
 const request = (value = token) => ({ headers: { cookie: `valopay_sandbox=${value}` }, secure: false, auth: auth() }) as any;
@@ -58,6 +61,52 @@ try {
     const actual = await inWorkspace(request(), response(), context => listRecords(context, merchantId, "customers", query));
     assert.deepEqual(actual, pageRecords(customers, query), `DB page preserves search/filter/total contract: ${JSON.stringify(query)}`);
   }
+  // The allocation picker's list: PostgreSQL keeps just the instalments a manual allocation accepts, as pageRecords
+  // does, whatever their status, balance, a balance that is not a whole number, is not a number or is missing.
+  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at)
+    SELECT $1 || '-due-' || i, $2, 'due-items', 'Picker instalment ' || i,
+      (ARRAY['scheduled','in_collection','partially_paid','paid','unpaid_final','in_dispute','cancelled','closed'])[1 + i % 8], 'PICK-' || i, 1000000, '',
+      CASE WHEN i % 5 = 0 THEN jsonb_build_object('synthetic',true) WHEN i % 7 = 0 THEN jsonb_build_object('synthetic',true,'outstandingKobo',1.5)
+        WHEN i % 11 = 0 THEN jsonb_build_object('synthetic',true,'outstandingKobo','not a number')
+        ELSE jsonb_build_object('synthetic',true,'outstandingKobo',CASE WHEN i % 3 = 0 THEN 0 ELSE 600000 END) END,
+      '2027-03-01'::timestamptz + i*interval '1 second', '2027-03-01'::timestamptz + i*interval '1 second'
+    FROM generate_series(1,60) i`, [prefix, merchantId]);
+  const dues = (await inWorkspace(request(), response(), context => loadState(context, merchantId, "share"))).records.filter(row => row.kind === "due-items");
+  const choices = dues.filter(canTakeAllocation);
+  assert.ok(choices.length > 10 && choices.length < dues.length, "the fixture has instalments on both sides");
+  for (const query of [{ allocatable: "true", limit: 25 }, { allocatable: "true", limit: 25, offset: 25 }, { allocatable: "true", search: "picker instalment 1", limit: 5 }, { allocatable: "true", customerId: dues[0]!.customerId }, { allocatable: "false", limit: 25 }] as ListQuery[]) {
+    const actual = await inWorkspace(request(), response(), context => listRecords(context, merchantId, "due-items", query));
+    assert.deepEqual(actual, pageRecords(dues, query), `DB page keeps the allocation rule: ${JSON.stringify(query)}`);
+  }
+  assert.equal((await inWorkspace(request(), response(), context => listRecords(context, merchantId, "due-items", { allocatable: "true", limit: 1 }))).total, choices.length, "total counts the choices");
+  await assert.rejects(() => inWorkspace(request(), response(), context => listRecords(context, merchantId, "payments", { allocatable: "true" })), (error: any) => error.status === 400 && /instalments only/.test(error.message), "allocatable is refused for another kind");
+  // One payment's choices (paymentId): PostgreSQL applies the payer rule of its manual allocation, as the in-memory list does.
+  const seededDues = dues.filter(row => row.customerId);
+  const [payer, other] = [...new Set(seededDues.map(row => row.customerId))];
+  const namedDue = seededDues.find(row => row.customerId === other)!;
+  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,amount_kobo,customer_id,data,created_at,updated_at) VALUES
+    ($1 || '-pay-payer',$2,'payments','Payer named','unallocated','PICK-PAY-1',1000000,$3,'{"synthetic":true,"allocatedKobo":0}','2027-03-02','2027-03-02'),
+    ($1 || '-pay-named',$2,'payments','Instalment named','unallocated','PICK-PAY-2',1000000,'',jsonb_build_object('synthetic',true,'allocatedKobo',0,'dueItemId',$4::text),'2027-03-02','2027-03-02'),
+    ($1 || '-pay-none',$2,'payments','Nothing named','unallocated','PICK-PAY-3',1000000,'','{"synthetic":true,"allocatedKobo":0}','2027-03-02','2027-03-02'),
+    ($1 || '-pay-usd',$2,'payments','Dollars','unallocated','PICK-PAY-4',100000,$3,'{"synthetic":true,"allocatedKobo":0,"currency":"USD"}','2027-03-02','2027-03-02'),
+    ($1 || '-pay-back',$2,'payments','Reversed','returned','PICK-PAY-5',1000000,$3,'{"synthetic":true,"allocatedKobo":0,"reversalStatus":"reversed"}','2027-03-02','2027-03-02')`, [prefix, merchantId, payer, namedDue.id]);
+  const everyChoice = await inWorkspace(request(), response(), context => listRecords(context, merchantId, "due-items", { allocatable: "true" }));
+  for (const [suffix, customer] of [["payer", payer], ["named", other], ["none", undefined], ["usd", null], ["back", null]] as const) {
+    const paymentId = `${prefix}-pay-${suffix}`;
+    for (const query of [{ allocatable: "true", paymentId, limit: 25 }, { allocatable: "true", paymentId, limit: 2, offset: 1 }, { allocatable: "true", paymentId, search: "loan", limit: 5 }, { allocatable: "true", paymentId, customerId: payer }] as ListQuery[]) {
+      const actual = await inWorkspace(request(), response(), context => listRecords(context, merchantId, "due-items", query));
+      const payment = (await inWorkspace(request(), response(), context => loadState(context, merchantId, "share"))).records.find(row => row.id === paymentId)!;
+      const choices = allocationChoices(query, allocationPayer(payment, suffix === "named" ? other : undefined));
+      assert.deepEqual(actual, choices ? pageRecords(dues, choices) : { items: [], total: 0 }, `DB page keeps the payment's payer rule: ${suffix} ${JSON.stringify(query)}`);
+      if (customer === null) assert.equal(actual.total, 0, `a payment no allocation accepts has no choices: ${suffix}`);
+      else if (customer !== undefined) assert.ok(actual.items.every(row => row.customerId === customer) && (!query.customerId || query.customerId === customer || actual.total === 0), `only the payer's instalments: ${suffix}`);
+      else if (!query.search && !query.customerId) assert.equal(actual.total, everyChoice.total, "a payment that names no payer or instalment takes every choice");
+    }
+  }
+  await assert.rejects(() => inWorkspace(request(), response(), context => listRecords(context, merchantId, "due-items", { allocatable: "true", paymentId: "missing" })), (error: any) => error.status === 404 && /Payment not found/.test(error.message), "a payment the lender does not have is a 404");
+  await assert.rejects(() => inWorkspace(request(), response(), context => listRecords(context, merchantId, "due-items", { paymentId: `${prefix}-pay-payer` })), (error: any) => error.status === 400 && /allocatable=true/.test(error.message), "paymentId without allocatable=true is refused");
+  // The payer may be the customer the scoped reads below compare with the baseline, which has none of these payments.
+  await pool.query("DELETE FROM valopay_records WHERE merchant_id = $1 AND id = ANY($2)", [merchantId, ["payer", "named", "none", "usd", "back"].map(suffix => `${prefix}-pay-${suffix}`)]);
   const timing: number[] = [];
   for (let i = 0; i < 5; i++) {
     const start = performance.now();
@@ -105,9 +154,9 @@ try {
   const customer = editState.records.find(row => row.kind === "customers")!;
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { (req as any).auth = auth(); (req as any).log = { info() {} }; next(); });
+  app.use((req, _res, next) => { (req as any).auth = auth(); (req as any).log = { info() {}, warn() {}, error() {} }; next(); });
   app.use("/api", router);
-  app.use((error: any, _req: any, res: any, _next: any) => res.status(error.status || 500).json({ error: error.message }));
+  app.use(errorHandler);
   server = await new Promise<Server>(resolve => { const running = app.listen(0, "127.0.0.1", () => resolve(running)); });
   const address = server.address(); assert.ok(address && typeof address !== "string");
   const base = `http://127.0.0.1:${address.port}/api/v1`;
@@ -138,6 +187,17 @@ try {
   assert.equal(suspended.status, 200, JSON.stringify(suspended.body));
   assert.equal((await api("/actions", "POST", { ...suspend, action: "mandate_cancel" }, "cancel-stale")).status, 409);
   assert.deepEqual(await api("/actions", "POST", suspend, "suspend-once"), suspended);
+  // Audit item 13: an instalment's status follows an amount edit, and the API alone numbers policy versions.
+  const paidDue = editState.records.find(row => row.kind === "due-items" && row.reference === "DEMO-LOAN-1001")!;
+  assert.equal(paidDue.status, "paid");
+  const raised = await api(`/records/due-items/${paidDue.id}`, "PATCH", { amountKobo: 3_000_000, expectedUpdatedAt: paidDue.updatedAt }, "raise-paid-due");
+  assert.equal(raised.status, 200, JSON.stringify(raised.body));
+  assert.deepEqual([raised.body.status, raised.body.data.outstandingKobo], ["partially_paid", 500_000], "a paid instalment raised above what was paid is part-paid again");
+  const reduced = await api(`/records/due-items/${paidDue.id}`, "PATCH", { amountKobo: 2_500_000, expectedUpdatedAt: raised.body.updatedAt }, "reduce-paid-due");
+  assert.deepEqual([reduced.status, reduced.body.status, reduced.body.data.outstandingKobo], [200, "paid", 0], "reduced to what was paid, it is paid");
+  const draftPolicy = editState.records.find(row => row.kind === "policies")!;
+  const renumbered = await api(`/records/policies/${draftPolicy.id}`, "PATCH", { data: { version: 2 }, expectedUpdatedAt: draftPolicy.updatedAt });
+  assert.equal(renumbered.status, 400, JSON.stringify(renumbered.body)); assert.match(renumbered.body.error, /version numbers are assigned/);
   const roleChange = { action: "set_role", data: { role: "Operations" } };
   const roleChanged = await api("/actions", "POST", roleChange, "role-switch-once");
   assert.equal(roleChanged.status, 200);
@@ -147,7 +207,8 @@ try {
   const jobs = await inWorkspace(request(editingToken), response(), async context => {
     const state = await loadState(context, editingMerchant);
     const result = ["failed", "running"].map(status => {
-      const job = queueExport(state, context, { kind: "customers", format: "csv" }, "/private/synthetic-tests");
+      // The persona is Operations now: it exports mandates, since the customer register is for Admin, Finance and Compliance reviewer (export_sensitive).
+      const job = queueExport(state, context, { kind: "mandates", format: "csv" }, "/private/synthetic-tests");
       const record = state.records.find(row => row.id === job.id)!;
       record.status = status; Object.assign(record.data, { lastError: "Synthetic failure", leaseToken: "expired-claim", leaseExpiresAt: new Date(Date.parse(context.now) - 1).toISOString() });
       return { id: job.id, objectName: record.data.objectName, updatedAt: record.updatedAt };
@@ -165,7 +226,7 @@ try {
       assert.ok(Date.parse(record.updatedAt) > Date.parse(job.updatedAt));
     }, "read");
   }
-  console.log("Record list integration passed: 10k rows, scoped paging/counts, exact search, history totals, tenant isolation, stale edits and successful replay.");
+  console.log("Record list integration passed: 10k rows, scoped paging/counts, exact search, history totals, tenant isolation, stale edits, successful replay, instalment statuses that follow an edit and API-assigned policy versions.");
 } finally {
   if (server) await new Promise<void>((resolve, reject) => server!.close(error => error ? reject(error) : resolve()));
   // Leave other suites' fixtures untouched, and do not make scheduler tests

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deadlineInstant, deadlineOrder, isDueToday, isDeadlineOverdue, isOverdue, queueDay } from '@/lib/queue-filters';
+import { deadlineOrder, isDueToday, isOverdue, queueDay } from '@/lib/queue-filters';
 
 describe('queue deadlines in West Africa Time', () => {
   it('keeps a date-only instalment due all day, and uses Lagos midnight for today', () => {
@@ -21,11 +21,16 @@ describe('queue deadlines in West Africa Time', () => {
     expect(isDueToday(undefined)).toBe(false);
     expect(deadlineOrder(undefined, deadline)).toBeGreaterThan(0);
     expect(deadlineOrder(undefined, undefined)).toBe(0);
-    // Imported exception deadlines follow the API's instant comparison;
-    // instalment dates continue to last the entire WAT day.
-    const sameDay = Date.parse('2026-09-18T10:00:00Z');
-    expect(isDeadlineOverdue('2026-09-18', sameDay)).toBe(true);
+  });
+
+  it('keeps a day-only exception or activation deadline due all day, as the API does (23 September audit)', () => {
+    // An imported deadline without a time used to be overdue from 01:00 WAT on its own date.
+    const sameDay = Date.parse('2026-09-18T10:00:00Z'), lastInstant = Date.parse('2026-09-18T22:59:59.999Z');
     expect(isOverdue('2026-09-18', sameDay)).toBe(false);
-    expect(deadlineInstant('2026-09-18')).toBe('2026-09-18T00:00:00.000Z');
+    expect(isOverdue('2026-09-18', lastInstant)).toBe(false);
+    expect(isOverdue('2026-09-18', lastInstant + 1)).toBe(true);
+    expect(isDueToday('2026-09-18', sameDay)).toBe(true);
+    // An impossible date is no deadline, as the API reads it, rather than a text comparison.
+    expect(isOverdue('2026-02-30', Date.parse('2027-01-01T00:00:00Z'))).toBe(false);
   });
 });

@@ -8,7 +8,9 @@
 
 export type PerformActionParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };

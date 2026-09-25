@@ -1,4 +1,10 @@
-import { createHash } from "node:crypto";
+import {
+  counted,
+  legacyCollatedCompare,
+  sameJson,
+  WAT_OFFSET_MS,
+} from "@workspace/valopay-schema";
+import { canonicalDigest } from "../lib/digests";
 
 /**
  * Synthetic Credit Desk. This module has no provider client, payment command or
@@ -306,6 +312,30 @@ function stamp(value: string): number {
     );
   return Date.parse(value);
 }
+/**
+ * The same West Africa Time day and time `months` calendar months after an
+ * instant, or the month's last day when it is shorter: a monthly repayment
+ * date, so each month carries one repayment.
+ */
+export function monthsAfter(value: string, months: number): string {
+  const wat = new Date(stamp(value) + WAT_OFFSET_MS);
+  const target = new Date(
+    Date.UTC(
+      wat.getUTCFullYear(),
+      wat.getUTCMonth() + months,
+      1,
+      wat.getUTCHours(),
+      wat.getUTCMinutes(),
+      wat.getUTCSeconds(),
+      wat.getUTCMilliseconds(),
+    ),
+  );
+  const lastDay = new Date(
+    Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  target.setUTCDate(Math.min(wat.getUTCDate(), lastDay));
+  return new Date(target.getTime() - WAT_OFFSET_MS).toISOString();
+}
 function integer(value: number, label: string, minimum = 0): number {
   if (!Number.isSafeInteger(value) || value < minimum)
     return fail(
@@ -341,18 +371,10 @@ function median(values: number[]): number {
     ? sorted[middle]!
     : checked((BigInt(sorted[middle - 1]!) + BigInt(sorted[middle]!)) / 2n);
 }
-function canonical(value: unknown): string {
-  if (value === undefined) return "null";
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  return `{${Object.entries(value)
-    .filter(([, item]) => item !== undefined)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`)
-    .join(",")}}`;
-}
+// Snapshot hashes and the IDs derived from them are stored with each
+// assessment and review: they keep the form they were first written in.
 function hash(value: unknown): string {
-  return createHash("sha256").update(canonical(value)).digest("hex");
+  return canonicalDigest(value, "legacy-en-us-omit");
 }
 function freeze<T>(value: T): T {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -718,10 +740,12 @@ export function assessCredit(
       "Supply the lender's proposed repayment schedule including all charges.",
     );
   const scheduleByMonth = new Map<string, number>();
+  // Two calendar years, so a 24-month schedule fits even when it spans 29 February.
+  const horizon = stamp(monthsAfter(input.asOf, 24));
   for (const payment of input.repaymentSchedule) {
     const due = stamp(payment.dueAt);
     integer(payment.amountKobo, "Scheduled repayment", 1);
-    if (due <= asOf || due > asOf + 730 * DAY)
+    if (due <= asOf || due > horizon)
       fail(
         "INVALID_REPAYMENT_DATE",
         "Repayments must follow the assessment and fit within the two-year synthetic horizon.",
@@ -772,7 +796,7 @@ export function assessCredit(
     const key = `${tx.sourceId}:${tx.id}`,
       prior = unique.get(key);
     if (prior) {
-      if (canonical(prior) !== canonical(tx))
+      if (!sameJson(prior, tx))
         issue(
           "CONFLICTING_DUPLICATE",
           "The same transaction reference has conflicting evidence.",
@@ -817,7 +841,7 @@ export function assessCredit(
   let grossInflows = 0,
     unknownInflows = 0;
   for (const tx of (authorisedToInfer ? [...unique.values()] : []).sort(
-    (a, b) => transactionRef(a).localeCompare(transactionRef(b)),
+    (a, b) => legacyCollatedCompare(transactionRef(a), transactionRef(b)),
   )) {
     const date = stamp(tx.bookedAt),
       ref = transactionRef(tx),
@@ -1098,7 +1122,7 @@ export function assessCredit(
         label: "Income regularity",
         maximum: 25,
         points: mulDiv(features.activeIncomePeriods, 25, periodCount),
-        reason: `Confirmed recurring income appears in ${features.activeIncomePeriods} of ${periodCount} observed 30-day periods.`,
+        reason: `Confirmed recurring income appears in ${features.activeIncomePeriods} of ${counted(periodCount, "observed 30-day period")}.`,
       },
       {
         code: "residual_capacity",
@@ -1126,7 +1150,7 @@ export function assessCredit(
               : liquidityRatio >= 5_000
                 ? 5
                 : 0,
-        reason: `${consolidatedBalances.length} aligned booked closing balances support the observed buffer.`,
+        reason: `${counted(consolidatedBalances.length, "aligned booked closing balance supports", "aligned booked closing balances support")} the observed buffer.`,
       },
       {
         code: "commitment_behaviour",
@@ -1138,7 +1162,7 @@ export function assessCredit(
             : input.repaymentHistory.missedPayments === 1
               ? 10
               : 0,
-        reason: `${input.repaymentHistory.missedPayments} missed repayment(s) in the supplied verified history. This does not establish complete bureau coverage.`,
+        reason: `${counted(input.repaymentHistory.missedPayments, "missed repayment")} in the supplied verified history. This does not establish complete bureau coverage.`,
       },
       {
         code: "income_variability",
@@ -1188,10 +1212,10 @@ export function assessCredit(
     .sort();
   const inputSnapshot = {
     ...input,
-    sources: [...input.sources].sort((a, b) => a.id.localeCompare(b.id)),
-    grants: [...input.grants].sort((a, b) => a.id.localeCompare(b.id)),
+    sources: [...input.sources].sort((a, b) => legacyCollatedCompare(a.id, b.id)),
+    grants: [...input.grants].sort((a, b) => legacyCollatedCompare(a.id, b.id)),
     transactions: [...unique.values()].sort((a, b) =>
-      transactionRef(a).localeCompare(transactionRef(b)),
+      legacyCollatedCompare(transactionRef(a), transactionRef(b)),
     ),
   };
   const snapshotHash = hash(inputSnapshot);
@@ -1505,11 +1529,10 @@ export function createSyntheticCreditInput(options: {
       sourceAsOf: options.now,
     },
     requestedPrincipalKobo: 24_000_000,
-    repaymentSchedule: [
-      { dueAt: at(30), amountKobo: 9_000_000 },
-      { dueAt: at(60), amountKobo: 9_000_000 },
-      { dueAt: at(90), amountKobo: 9_000_000 },
-    ],
+    repaymentSchedule: [1, 2, 3].map((month) => ({
+      dueAt: monthsAfter(options.now, month),
+      amountKobo: 9_000_000,
+    })),
   };
   if (options.scenario === "thin_file") {
     input.sources[0]!.coverageStart = at(-30);

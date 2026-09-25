@@ -31,7 +31,7 @@ describe("accessibility", () => {
     ["/exceptions", "Exceptions"],
     ["/policies", "Policies & templates"],
     ["/reports", "Reports & analytics"],
-    ["/evidence", "Evidence & readiness"],
+    ["/evidence", "Go-live evidence"],
     ["/audit", "Audit log"],
     ["/settings", "Settings & administration"],
   ])("finds no violation on %s", async (path, heading) => {

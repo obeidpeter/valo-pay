@@ -26,6 +26,11 @@ export function normaliseOwner(raw: unknown): ExecutionOwner | undefined {
   if (value === "valo" || value === "valopay" || value === "valo_pay") return "valopay";
   return (executionOwners as readonly string[]).includes(value) ? (value as ExecutionOwner) : undefined;
 }
+/** DEB-12: who a hand-back returns collection to: the owner the cutover contract names, or the loan management system when it names none the platform may hand back to. */
+export function handBackFallbackOwner(contractOwner: unknown): HandBackOwner {
+  const owner = normaliseOwner(contractOwner);
+  return isHandBackOwner(owner) ? owner : "lms";
+}
 
 /** MAN-15 activation workflow registry types. */
 export const activationWorkflows = ["transfer_to_activate", "hosted_consent"] as const;
@@ -96,6 +101,76 @@ export function normaliseRefundStatus(raw: unknown): (typeof refundStatuses)[num
   if (raw === "refunded" || raw === "recorded_externally") return "refunded";
   if (raw === "requested") return "requested";
   return "none";
+}
+/**
+ * All of a payment's money went back to the payer: a provider reversal, or a
+ * refund recorded outside Valo Pay that returned the whole amount. A refund
+ * recorded before its amount was kept is read as the whole payment. What such
+ * a payment has not already applied is neither allocatable nor customer
+ * credit, and it is nobody's open work. A refund of part of it, such as an
+ * overpayment's excess, leaves the rest with the lender.
+ */
+export function paymentMoneyReturned(payment: { amountKobo?: unknown; data?: { reversalStatus?: unknown; refundStatus?: unknown; refundedKobo?: unknown } | null } | null | undefined): boolean {
+  if (!payment) return false;
+  if (normaliseReversalStatus(payment.data?.reversalStatus) === "reversed") return true;
+  return normaliseRefundStatus(payment.data?.refundStatus) === "refunded" && paymentRefundedKobo(payment) >= Number(payment.amountKobo || 0);
+}
+/**
+ * What a payment still holds that is not applied to an instalment: the
+ * customer's credit, and what Finance may allocate. What a refund returned is
+ * not held, so after a refund of an overpayment's excess only the money that
+ * stayed can be applied again if its allocation is superseded.
+ */
+export function paymentUnappliedKobo(payment: { amountKobo?: unknown; data?: { allocatedKobo?: unknown; reversalStatus?: unknown; refundStatus?: unknown; refundedKobo?: unknown } | null } | null | undefined): number {
+  if (!payment || paymentMoneyReturned(payment)) return 0;
+  return Math.max(0, Number(payment.amountKobo || 0) - Number(payment.data?.allocatedKobo || 0) - paymentRefundedKobo(payment));
+}
+/**
+ * REC-04: a payment whose money waits for Finance to allocate it: an
+ * unallocated payment, or the unapplied rest of one that is partly applied
+ * (partial, or overpaid after its instalment was settled), holding money it
+ * has not applied. A proposal, a duplicate hold, returned money and a payment
+ * with nothing unapplied, such as one an earlier build made for ₦0, wait for
+ * no one. Finance's payments queue, the unallocated ageing and the close
+ * totals read payments through this.
+ */
+export function paymentAwaitsAllocation(payment: { status?: unknown; amountKobo?: unknown; data?: { allocatedKobo?: unknown; reversalStatus?: unknown; refundStatus?: unknown; refundedKobo?: unknown } | null } | null | undefined): boolean {
+  if (!payment) return false;
+  return (payment.status === "unallocated" || payment.status === "partial" || payment.status === "overpaid") && paymentUnappliedKobo(payment) > 0;
+}
+/**
+ * What a refund returned to the payer: data.refundedKobo as recorded, or the
+ * whole payment for a refund recorded before the amount was kept.
+ */
+export function paymentRefundedKobo(payment: { amountKobo?: unknown; data?: { refundStatus?: unknown; refundedKobo?: unknown } | null } | null | undefined): number {
+  if (!payment || normaliseRefundStatus(payment.data?.refundStatus) !== "refunded") return 0;
+  const recorded = payment.data?.refundedKobo;
+  return typeof recorded === "number" && Number.isSafeInteger(recorded) && recorded >= 0 ? recorded : Number(payment.amountKobo || 0);
+}
+/**
+ * The applied money that stands: what a payment applied to instalments, less
+ * whatever of it a refund returned, and nothing once the payment was reversed.
+ * Billing, the uplift report and the overview read collections through this.
+ */
+export function paymentAppliedKobo(payment: { amountKobo?: unknown; data?: { allocatedKobo?: unknown; reversalStatus?: unknown; refundStatus?: unknown; refundedKobo?: unknown } | null } | null | undefined): number {
+  if (!payment || normaliseReversalStatus(payment.data?.reversalStatus) === "reversed") return 0;
+  return Math.max(0, Math.min(Number(payment.data?.allocatedKobo || 0), Number(payment.amountKobo || 0) - paymentRefundedKobo(payment)));
+}
+/** Instalment statuses that take no allocation, whatever is still owed. */
+export const allocationClosedStatuses = ["cancelled", "closed", "in_dispute"] as const;
+/** What an instalment still owes: its outstanding balance, or its whole amount before it has one. */
+export function instalmentOutstandingKobo(due: { amountKobo: number; data?: { outstandingKobo?: unknown } | null }): number {
+  const outstanding = due.data?.outstandingKobo;
+  return Number.isInteger(outstanding) ? Number(outstanding) : due.amountKobo;
+}
+/**
+ * An instalment that can take an allocation now: it still owes something and
+ * is not cancelled, closed or in dispute. A manual allocation is refused for
+ * any other, and the allocation picker lists only these (the record list's
+ * `allocatable`), so its count is the count of choices.
+ */
+export function canTakeAllocation(due: { status: string; amountKobo: number; data?: { outstandingKobo?: unknown } | null }): boolean {
+  return instalmentOutstandingKobo(due) > 0 && !(allocationClosedStatuses as readonly string[]).includes(due.status);
 }
 
 /** Why a customer message was sent. */

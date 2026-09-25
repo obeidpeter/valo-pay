@@ -27,6 +27,11 @@ args = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
 [services.production.run.env]
 PORT = "8080"
 NODE_ENV = "production"
+# Anonymous sandboxes nobody has changed for 30 days are deleted as new ones are created (docs/deployment.md).
+VALOPAY_EXPIRED_WORKSPACE_CLEANUP = "on"
+# No Clerk SDK telemetry, and no telemetry notice among the log lines.
+CLERK_TELEMETRY_DISABLED = "1"
 
+# Readiness, not liveness: a build whose database lacks a table or column it needs does not go live.
 [services.production.health.startup]
-path = "/api/healthz"
+path = "/api/readyz"

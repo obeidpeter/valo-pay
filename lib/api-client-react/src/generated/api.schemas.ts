@@ -5,6 +5,9 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
+/**
+ * running: this process schedules the daily closes. off: it schedules none (VALOPAY_CLOSE_SCHEDULER=off). external: it schedules none because a separate scheduled job runs them with the one-shot close pass (VALOPAY_CLOSE_SCHEDULER=external), which this process cannot observe. not_started and stopped: the scheduler has not started yet, or has stopped.
+ */
 export type SchedulerStatusState = typeof SchedulerStatusState[keyof typeof SchedulerStatusState];
 
 
@@ -12,11 +15,12 @@ export const SchedulerStatusState = {
   not_started: 'not_started',
   running: 'running',
   off: 'off',
+  external: 'external',
   stopped: 'stopped',
 } as const;
 
 /**
- * The last scheduler pass that found work: its id, when it ran, how long it took and what it did.
+ * The last scheduler pass that found work: its id, when it ran, how long it took, how many batches it read and what it did, including idle sandboxes whose automatic close it paused.
  */
 export interface SchedulerRun {
   runId: string;
@@ -27,12 +31,15 @@ export interface SchedulerRun {
   closed: number;
   skipped: number;
   failed: number;
+  paused?: number;
+  batches?: number;
 }
 
 /**
  * Whether closes are scheduled in this process, how often it looks, when it last looked and its last pass with work.
  */
 export interface SchedulerStatus {
+  /** running: this process schedules the daily closes. off: it schedules none (VALOPAY_CLOSE_SCHEDULER=off). external: it schedules none because a separate scheduled job runs them with the one-shot close pass (VALOPAY_CLOSE_SCHEDULER=external), which this process cannot observe. not_started and stopped: the scheduler has not started yet, or has stopped. */
   state: SchedulerStatusState;
   /** @nullable */
   intervalMs: number | null;
@@ -73,6 +80,27 @@ export interface DatabaseCheck {
   latencyMs: number;
 }
 
+/**
+ * ok: every table, column, unique index, check constraint and read index this build needs is present. indexes_missing: ready, but a read index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table, column, unique index or check constraint is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and where it comes from.
+ */
+export type SchemaCheckStatus = typeof SchemaCheckStatus[keyof typeof SchemaCheckStatus];
+
+
+export const SchemaCheckStatus = {
+  ok: 'ok',
+  indexes_missing: 'indexes_missing',
+  incomplete: 'incomplete',
+  unchecked: 'unchecked',
+} as const;
+
+/**
+ * Whether the database holds every table, column, unique index, check constraint and read index this build needs: ok, indexes_missing (ready, some reads slower), incomplete (not ready) or unchecked while the database does not answer. The server log, not the answer, names what is missing.
+ */
+export interface SchemaCheck {
+  /** ok: every table, column, unique index, check constraint and read index this build needs is present. indexes_missing: ready, but a read index a migration adds is missing, so some reads are slower until it is applied. incomplete: a table, column, unique index or check constraint is missing, so the instance is not ready. unchecked: the database did not answer. The server log names what is missing and where it comes from. */
+  status: SchemaCheckStatus;
+}
+
 export type ReadinessStatusStatus = typeof ReadinessStatusStatus[keyof typeof ReadinessStatusStatus];
 
 
@@ -83,10 +111,11 @@ export const ReadinessStatusStatus = {
 
 export type ReadinessStatusChecks = {
   database: DatabaseCheck;
+  schema: SchemaCheck;
 };
 
 /**
- * The readiness answer: ok, or degraded while the database does not answer.
+ * The readiness answer: ok, or degraded while the database does not answer or lacks a table, column, unique index or check constraint this build needs.
  */
 export interface ReadinessStatus {
   status: ReadinessStatusStatus;
@@ -100,7 +129,7 @@ export interface ReadinessStatus {
 export interface RecordData {[key: string]: unknown}
 
 /**
- * A stored record of any kind, with its lender, status, reference, amount in kobo and data.
+ * A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency's minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount's currency: that amount is in kobo.
  */
 export interface ValopayRecord {
   id: string;
@@ -117,30 +146,42 @@ export interface ValopayRecord {
 }
 
 /**
- * A new record: only the name is required; the kind's default status applies when none is given.
+ * A new record: only the name is required, and it cannot be empty; the kind's default status applies when none is given. A status is at most 100 characters, a reference 200 and a customerId 100.
  */
 export interface RecordInput {
+  /** @minLength 1 */
   name: string;
+  /** @maxLength 100 */
   status?: string;
+  /** @maxLength 200 */
   reference?: string;
   /** @minimum 0 */
   amountKobo?: number;
+  /** @maxLength 100 */
   customerId?: string;
   data?: RecordData;
 }
 
 /**
- * The fields to change on a record; omitted fields keep their values.
+ * The fields to change on a record, with the version they were made on (expectedUpdatedAt, required); omitted fields keep their values. In data, a field sent as null is removed. A name cannot be empty, and a status, reference or customerId is bounded as a new record's is.
  */
 export interface RecordUpdate {
+  /** @minLength 1 */
   name?: string;
+  /** @maxLength 100 */
   status?: string;
+  /** @maxLength 200 */
   reference?: string;
   /** @minimum 0 */
   amountKobo?: number;
+  /** @maxLength 100 */
   customerId?: string;
   data?: RecordData;
-  expectedUpdatedAt?: string;
+  /**
+     * Required: the updatedAt of the record as the edit read it. A request without it is refused (400, naming it); a record changed since is 409. Compared as an instant.
+     * @minLength 1
+     */
+  expectedUpdatedAt: string;
 }
 
 /**
@@ -161,6 +202,17 @@ export interface Merchant {
 }
 
 /**
+ * Whether the server authorises a demo persona or a provisioned staff membership.
+ */
+export type WorkspaceAccessMode = typeof WorkspaceAccessMode[keyof typeof WorkspaceAccessMode];
+
+
+export const WorkspaceAccessMode = {
+  sandbox: 'sandbox',
+  staff: 'staff',
+} as const;
+
+/**
  * The caller's workspace: who is acting, in which role, whether they signed in, and the lenders and roles available.
  */
 export interface Workspace {
@@ -172,6 +224,10 @@ export interface Workspace {
   merchants: Merchant[];
   roles: string[];
   productionEnabled: boolean;
+  /** Whether the server authorises a demo persona or a provisioned staff membership. */
+  accessMode?: WorkspaceAccessMode;
+  /** Opaque workspace/user scope for browser preferences; never an authorisation credential. */
+  viewerScope?: string;
 }
 
 /**
@@ -198,6 +254,9 @@ export interface Alert {
   linkedRecordId?: string;
 }
 
+/**
+ * The close service as this process sees it (the health answer's scheduler state). With external a separate scheduled job runs the closes: nothing is advertised as automatic, but a close that job has not run is still missed.
+ */
 export type EffectiveCloseScheduleRuntimeState = typeof EffectiveCloseScheduleRuntimeState[keyof typeof EffectiveCloseScheduleRuntimeState];
 
 
@@ -205,6 +264,7 @@ export const EffectiveCloseScheduleRuntimeState = {
   not_started: 'not_started',
   running: 'running',
   off: 'off',
+  external: 'external',
   stopped: 'stopped',
 } as const;
 
@@ -221,7 +281,7 @@ export const EffectiveCloseScheduleServiceIssue = {
 } as const;
 
 /**
- * Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender.
+ * Lender schedule combined with the actual scheduler service status. nextAt is present only when automatic closes are available; run history belongs only to this lender. failedAttempts and retryAt describe failed automatic attempts at the pending time (retryAt only while automatic closes are available); pausedForInactivityAt says when the scheduler switched off the automatic close of a sandbox nobody changed. Answers from earlier builds may lack these three fields.
  */
 export interface EffectiveCloseSchedule {
   time: string;
@@ -229,6 +289,7 @@ export interface EffectiveCloseSchedule {
   automatic: boolean;
   /** @nullable */
   nextAt: string | null;
+  /** The close service as this process sees it (the health answer's scheduler state). With external a separate scheduled job runs the closes: nothing is advertised as automatic, but a close that job has not run is still missed. */
   runtimeState: EffectiveCloseScheduleRuntimeState;
   /** @nullable */
   serviceIssue: EffectiveCloseScheduleServiceIssue;
@@ -243,6 +304,11 @@ export interface EffectiveCloseSchedule {
   lastCheckedAt: string | null;
   /** @nullable */
   lastErrorAt: string | null;
+  failedAttempts?: number;
+  /** @nullable */
+  retryAt?: string | null;
+  /** @nullable */
+  pausedForInactivityAt?: string | null;
 }
 
 /**
@@ -272,7 +338,7 @@ export interface RecordList {
 }
 
 /**
- * An action to run: its name, the record it applies to, the reason for it and any data it needs.
+ * An action to run: its name, the record it applies to, the reason for it and any data it needs. For confirm_allocation and reject_allocation, data is an AllocationDecisionData: both of its fields are required.
  */
 export interface ActionInput {
   action: string;
@@ -303,7 +369,7 @@ export const ImportInputAmountUnit = {
 } as const;
 
 /**
- * A synthetic CSV to preview or commit for one kind, with an optional column mapping.
+ * A synthetic CSV to preview or commit for one kind, with its source row ID column and an optional column mapping.
  */
 export interface ImportInput {
   kind: string;
@@ -313,15 +379,22 @@ export interface ImportInput {
   mapping?: RecordData;
   /** Unit used by source amount values; defaults to kobo for existing API clients. The console requires an explicit choice. */
   amountUnit?: ImportInputAmountUnit;
+  /**
+     * Required: the CSV header of the column that holds each row's source row ID, a different, non-empty value of up to 160 characters on every row. A file without that column, or a value blank or repeated, is refused (400) naming what to map. The row ID is kept with the record, so it is screened under its column's header: a raw account number is refused (400), as in a saved batch. The column is the row's identity and fills no field unless the mapping maps it to one or it is headed reference or eventId. Rows are recognised across quick imports by the lender's one quick-import source and the row ID: a row imported before with the same data is skipped as a duplicate, and one with different data is a row error.
+     * @maxLength 100
+     */
+  identityColumn: string;
 }
 
 /**
- * The outcome of one imported row.
+ * The outcome of one imported row: valid, invalid or duplicate (already imported). An invalid row's message names each failing rule's column in the operator's words; detail keeps the record API's words.
  */
 export interface ImportRow {
   row: number;
   status: string;
   message: string;
+  /** An invalid row's problems in the record API's words, field names included, beside the message's words for the operator's columns. */
+  detail?: string;
 }
 
 export type ImportResultPreviewItem = {
@@ -331,7 +404,7 @@ export type ImportResultPreviewItem = {
 };
 
 /**
- * How many rows were valid, invalid and imported, and each row's outcome.
+ * How many rows were valid, invalid and imported, and each row's outcome. warnings, when present, says which name or reference came from a fallback (the reference, a row number or a generated reference) while a column was left unused, and the check and the commit are not refused for it.
  */
 export interface ImportResult {
   valid: number;
@@ -341,6 +414,7 @@ export interface ImportResult {
   columns?: string[];
   preview?: ImportResultPreviewItem[];
   skipped?: number;
+  warnings?: string[];
 }
 
 /**
@@ -378,11 +452,31 @@ export interface Gates {
 }
 
 /**
+ * Money in currencies other than naira, by currency code: how many payments hold it and their amount in that currency's minor unit (cents for USD). It is never added to a naira total.
+ */
+export interface OtherCurrencies {[key: string]: {
+  count: number;
+  amount: number;
+}}
+
+/**
+ * A customer's position (REC-05), derived from every related record: the naira obligations, allocations, outstanding balance and unapplied credit (unallocatedKobo, naira only), and, only when the customer's payments in another currency hold unapplied money, that money by currency beside it (unallocatedOtherCurrencies), as the dispute pack lists it.
+ */
+export interface CustomerPosition {
+  obligationsKobo: number;
+  allocatedKobo: number;
+  outstandingKobo: number;
+  unallocatedKobo: number;
+  unallocatedOtherCurrencies?: OtherCurrencies;
+  note: string;
+}
+
+/**
  * A customer, their derived position, and every related event, mandate, due item and payment.
  */
 export interface Timeline {
   customer: ValopayRecord;
-  position: RecordData;
+  position: CustomerPosition;
   events: ValopayRecord[];
   mandates: ValopayRecord[];
   dueItems: ValopayRecord[];
@@ -404,7 +498,7 @@ export interface Settings {
 }
 
 /**
- * The execution settings to change; every field is optional.
+ * The execution settings to change, with the revision they were made on (expectedRevision, required); every other field is optional.
  */
 export interface SettingsInput {
   executionStart?: number;
@@ -418,7 +512,11 @@ export interface SettingsInput {
   notificationCostAlertKobo?: number;
   closeTime?: string;
   scheduledCloseEnabled?: boolean;
-  expectedRevision?: string;
+  /**
+     * Required: the revision of the settings as the edit read them (GET /v1/settings). A request without it is refused (400, naming it); settings changed since are 409.
+     * @minLength 1
+     */
+  expectedRevision: string;
 }
 
 export type ExportInputFormat = typeof ExportInputFormat[keyof typeof ExportInputFormat];
@@ -436,6 +534,7 @@ export const ExportInputFormat = {
 export interface ExportInput {
   kind: string;
   customerId?: string;
+  closeReviewId?: string;
   format: ExportInputFormat;
 }
 
@@ -449,13 +548,33 @@ export const ExportResultStatus = {
   failed: 'failed',
 } as const;
 
+export type ExportResultStage = typeof ExportResultStage[keyof typeof ExportResultStage];
+
+
+export const ExportResultStage = {
+  queued: 'queued',
+  checking: 'checking',
+  rendering: 'rendering',
+  uploading: 'uploading',
+  confirming: 'confirming',
+  ready: 'ready',
+  failed: 'failed',
+} as const;
+
 /**
- * Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. Optional status retains compatibility with older immediate-export responses.
+ * Saved export job identity, status and retry details. Checksum, generatedAt and file size appear only when ready; the download route rejects unfinished jobs. expiredAt appears only after an approved retention run deleted the job's file, and is the time of that deletion, not a scheduled expiry: the download and the retry then answer 410, and a ready job keeps its checksum. retentionRunId names that run, whose deletion receipt an administrator opens with GET /v1/lifecycle/runs/{id}. No answer gives a ready file an expiry date, because a file is removed only by an approved retention run, apart from an idle anonymous sandbox, which the expiry sweep deletes whole with its files (docs/deployment.md); a hold or an evidence link can keep a file for longer than the lender's retention period. Optional status retains compatibility with older immediate-export responses.
  */
 export interface ExportResult {
   id: string;
   downloadUrl: string;
   status?: ExportResultStatus;
+  stage?: ExportResultStage;
+  lastProgressAt?: string;
+  stalled?: boolean;
+  retryAllowed?: boolean;
+  recoveryAt?: string;
+  expiredAt?: string;
+  retentionRunId?: string;
   kind?: string;
   format?: string;
   customerId?: string;
@@ -471,7 +590,7 @@ export interface ExportResult {
 export type QueuePageCounts = {[key: string]: number};
 
 /**
- * A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states.
+ * A bounded priority queue page with complete filter counts, available owners and types, the applied offset and lender-scoped linked records. Counts are calculated before pagination. asOf is the timestamp used to determine overdue and due-today states: a deadline written as a day alone (YYYY-MM-DD) is due all that West Africa Time day and overdue once it ends, one with a time passes at that instant, and one that is not a real date is no deadline.
  */
 export interface QueuePage {
   items: ValopayRecord[];
@@ -525,7 +644,7 @@ export interface CustomerHistoryCounts {
  */
 export interface CustomerHistory {
   customer: ValopayRecord;
-  position: RecordData;
+  position: CustomerPosition;
   events: ValopayRecord[];
   mandates: ValopayRecord[];
   dueItems: ValopayRecord[];
@@ -535,36 +654,1033 @@ export interface CustomerHistory {
   focusedRecord?: ValopayRecord;
 }
 
-export type ConnectedWorkspaceMode = typeof ConnectedWorkspaceMode[keyof typeof ConnectedWorkspaceMode];
-
-
-export const ConnectedWorkspaceMode = {
-  synthetic: 'synthetic',
-} as const;
-
 /**
- * Synthetic connected workspace. Credit and Cash views carry evidence, permissions and refusal states. Every gate has liveEnabled false. No read creates sample records.
+ * The data confirm_allocation and reject_allocation require (POST /v1/actions, recordId the payment): the proposed allocation the decision was made on, by its id and the updatedAt it was read with. Both are required: a request without either is refused (400, naming data.proposalId or data.proposalUpdatedAt) and saves nothing. A proposal another has replaced, or that has changed since it was read, is 409; a payment with no proposal left to decide is refused (400). Other fields are ignored.
  */
-export interface ConnectedWorkspace {
-  mode: ConnectedWorkspaceMode;
-  revision: string;
-  asOf: string;
-  role: string;
-  entity: RecordData;
-  customers: RecordData[];
-  consents: ValopayRecord[];
-  purposes: RecordData[];
-  gates: RecordData[];
-  payments: RecordData;
-  credit: RecordData;
-  cash: RecordData;
+export interface AllocationDecisionData {
+  /**
+     * The id of the proposed allocation reviewed (the allocation record, not the payment).
+     * @minLength 1
+     */
+  proposalId: string;
+  /** The proposed allocation's updatedAt as it was read: an RFC 3339 date and time with Z or an offset. It is compared as an instant, so the same instant written another way names the same version. */
+  proposalUpdatedAt: string;
 }
 
 /**
- * Action-specific data is validated by the server. Names use consent, payment, credit or cash prefixes. Every action requires a current whole-workspace revision and a reason. No input can enable live routes.
+ * One field a request got wrong: its dotted path (a query value or header by its name) and what is wrong with it.
+ */
+export interface ErrorDetail {
+  /** The field, query value or header, as a dotted path; empty for the body as a whole. */
+  field: string;
+  message: string;
+}
+
+/**
+ * Present when staff access was refused: why.
+ */
+export type ErrorBodyCode = typeof ErrorBodyCode[keyof typeof ErrorBodyCode];
+
+
+export const ErrorBodyCode = {
+  pilot_disabled: 'pilot_disabled',
+  configuration_invalid: 'configuration_invalid',
+  authentication_required: 'authentication_required',
+  session_invalid: 'session_invalid',
+  membership_required: 'membership_required',
+  membership_inactive: 'membership_inactive',
+  role_not_permitted: 'role_not_permitted',
+  mfa_required: 'mfa_required',
+  reverification_required: 'reverification_required',
+} as const;
+
+/**
+ * Present when the request's Idempotency-Key has an operations-journal entry whose state is known: completed (a request with the key was saved), running (another attempt with the key is still running it), pending (its outcome is not confirmed yet) or cancelled (nothing sent with the key was or can be saved).
+ */
+export type ErrorBodyOperation = typeof ErrorBodyOperation[keyof typeof ErrorBodyOperation];
+
+
+export const ErrorBodyOperation = {
+  pending: 'pending',
+  running: 'running',
+  completed: 'completed',
+  cancelled: 'cancelled',
+} as const;
+
+/**
+ * The body of every refusal and failure: what happened in plain words and the request's reference, with the fields validation refused (at most 20, and how many there were), the staff-access refusal code, whether nothing was saved (committed false) and the state of the request's journal entry (operation).
+ */
+export interface ErrorBody {
+  /** What happened, in plain words: a refusal in its rule's own wording, a failure in general words. */
+  error: string;
+  /** The request's reference, also sent as X-Request-Id; quoting it finds the request in the log. */
+  requestId: string;
+  /**
+     * Present when validation failed: the first 20 fields at most, each with what is wrong with it.
+     * @maxItems 20
+     */
+  details?: ErrorDetail[];
+  /**
+     * Present with details: how many problems validation found, which may be more than details lists.
+     * @minimum 0
+     */
+  detailCount?: number;
+  /** Present when staff access was refused: why. */
+  code?: ErrorBodyCode;
+  /** Present on a failure that saved nothing: the transaction was rolled back, so the request may be sent again as new. For a request with an Idempotency-Key it is decided for the key: present only when nothing sent with the key was or can be saved (its journal entry is cancelled, or nothing was saved under it before this request failed), never while a request with the key was saved or is still running. A read's 500 never carries it. */
+  committed?: false;
+  /** Present when the request's Idempotency-Key has an operations-journal entry whose state is known: completed (a request with the key was saved), running (another attempt with the key is still running it), pending (its outcome is not confirmed yet) or cancelled (nothing sent with the key was or can be saved). */
+  operation?: ErrorBodyOperation;
+}
+
+export type CreditAssessmentResultState = typeof CreditAssessmentResultState[keyof typeof CreditAssessmentResultState];
+
+
+export const CreditAssessmentResultState = {
+  review_pending: 'review_pending',
+  insufficient_evidence: 'insufficient_evidence',
+  blocked: 'blocked',
+} as const;
+
+export type CreditAssessmentResultEvidenceStatus = typeof CreditAssessmentResultEvidenceStatus[keyof typeof CreditAssessmentResultEvidenceStatus];
+
+
+export const CreditAssessmentResultEvidenceStatus = {
+  adequate: 'adequate',
+  insufficient: 'insufficient',
+  blocked: 'blocked',
+} as const;
+
+export type CreditAssessmentResultEvidenceIssuesItemSeverity = typeof CreditAssessmentResultEvidenceIssuesItemSeverity[keyof typeof CreditAssessmentResultEvidenceIssuesItemSeverity];
+
+
+export const CreditAssessmentResultEvidenceIssuesItemSeverity = {
+  blocking: 'blocking',
+  warning: 'warning',
+} as const;
+
+export type CreditAssessmentResultEvidenceIssuesItem = {
+  code: string;
+  message: string;
+  severity: CreditAssessmentResultEvidenceIssuesItemSeverity;
+  sourceId?: string;
+};
+
+export type CreditAssessmentResultEvidenceGrantVersionsItem = {
+  id: string;
+  version: number;
+};
+
+export type CreditAssessmentResultEvidence = {
+  status: CreditAssessmentResultEvidenceStatus;
+  issues: CreditAssessmentResultEvidenceIssuesItem[];
+  coverageDays: number;
+  /** @minimum 0 */
+  sourceCount: number;
+  /** @nullable */
+  latestSourceAsOf: string | null;
+  /** @nullable */
+  earliestSourceAsOf: string | null;
+  /** @nullable */
+  reviewValidUntil: string | null;
+  requiredAccountIds: string[];
+  grantVersions: CreditAssessmentResultEvidenceGrantVersionsItem[];
+};
+
+export type CreditAssessmentResultFeaturesExcludedTransactionsItem = {
+  reference: string;
+  reason: string;
+};
+
+/**
+ * @nullable
+ */
+export type CreditAssessmentResultFeatures = {
+  codeVersion: 'credit-features-synthetic-v1';
+  currency: 'NGN';
+  periodDays: 30;
+  periodCount: number;
+  monthlyIncomeKobo: number[];
+  sustainableMonthlyIncomeKobo: number;
+  observedEssentialMonthlyKobo: number;
+  essentialMonthlyKobo: number;
+  verifiedCommitmentsMonthlyKobo: number;
+  declaredCommitmentsMonthlyKobo: number;
+  totalCommitmentsMonthlyKobo: number;
+  activeIncomePeriods: number;
+  /** @nullable */
+  incomeVolatilityBps: number | null;
+  /** @nullable */
+  largestPayerShareBps: number | null;
+  /** @nullable */
+  liquidityBufferKobo: number | null;
+  unknownInflowKobo: number;
+  unknownInflowBps: number;
+  includedTransactionRefs: string[];
+  excludedTransactions: CreditAssessmentResultFeaturesExcludedTransactionsItem[];
+  duplicatesIgnored: number;
+} | null;
+
+export type CreditAssessmentResultScoreBand = typeof CreditAssessmentResultScoreBand[keyof typeof CreditAssessmentResultScoreBand];
+
+
+export const CreditAssessmentResultScoreBand = {
+  stronger: 'stronger',
+  review: 'review',
+  weaker: 'weaker',
+} as const;
+
+export type CreditAssessmentResultScoreFactorsItem = {
+  code: string;
+  label: string;
+  points: number;
+  maximum: number;
+  reason: string;
+};
+
+/**
+ * @nullable
+ */
+export type CreditAssessmentResultScore = {
+  type: 'rulecard';
+  value: number;
+  maximum: 100;
+  band: CreditAssessmentResultScoreBand;
+  rulecardVersion: string;
+  factors: CreditAssessmentResultScoreFactorsItem[];
+  disclaimer: string;
+} | null;
+
+export type CreditAssessmentResultAffordabilityRepaymentMonthsItem = {
+  month: string;
+  amountKobo: number;
+  stressedAfterPaymentKobo: number;
+};
+
+/**
+ * @nullable
+ */
+export type CreditAssessmentResultAffordability = {
+  incomeStressBps: number;
+  stressedMonthlyIncomeKobo: number;
+  baselineResidualKobo: number;
+  stressedResidualKobo: number;
+  monthlyCapacityKobo: number;
+  peakScheduledMonthlyKobo: number;
+  scheduledTotalKobo: number;
+  requestedPrincipalKobo: number;
+  indicativePrincipalCapacityKobo: number;
+  termDays: number;
+  /** @nullable */
+  debtServiceBps: number | null;
+  repaymentMonths: CreditAssessmentResultAffordabilityRepaymentMonthsItem[];
+  scheduleAffordable: boolean;
+} | null;
+
+export type CreditAssessmentResultPolicyRecommendation = typeof CreditAssessmentResultPolicyRecommendation[keyof typeof CreditAssessmentResultPolicyRecommendation];
+
+
+export const CreditAssessmentResultPolicyRecommendation = {
+  review_recommended: 'review_recommended',
+  policy_not_met: 'policy_not_met',
+  insufficient_evidence: 'insufficient_evidence',
+} as const;
+
+export type CreditAssessmentResultPolicy = {
+  id: string;
+  version: number;
+  recommendation: CreditAssessmentResultPolicyRecommendation;
+  reasons: string[];
+};
+
+/**
+ * An illustrative synthetic credit assessment: evidence, features, rule score, affordability and policy recommendation. Never a probability of default or a lending decision; features, score and affordability are null when the evidence or authority does not allow them.
+ */
+export interface CreditAssessmentResult {
+  id: string;
+  tenantId: string;
+  applicantId: string;
+  applicationRef: string;
+  version: number;
+  /** @nullable */
+  previousResultId: string | null;
+  mode: 'synthetic';
+  createdAt: string;
+  assessedAsOf: string;
+  createdBy: string;
+  state: CreditAssessmentResultState;
+  evidence: CreditAssessmentResultEvidence;
+  /** @nullable */
+  features: CreditAssessmentResultFeatures;
+  /** @nullable */
+  score: CreditAssessmentResultScore;
+  /** @nullable */
+  affordability: CreditAssessmentResultAffordability;
+  policy: CreditAssessmentResultPolicy;
+  snapshotHash: string;
+  requiredReview: true;
+  billable: false;
+  restrictions: string[];
+}
+
+export type CreditReviewOutcome = typeof CreditReviewOutcome[keyof typeof CreditReviewOutcome];
+
+
+export const CreditReviewOutcome = {
+  approve: 'approve',
+  amend_terms: 'amend_terms',
+  decline: 'decline',
+  request_information: 'request_information',
+} as const;
+
+/**
+ * A recorded sandbox review of one assessment version; never an actual lending decision and never moves funds.
+ */
+export interface CreditReview {
+  id: string;
+  assessmentId: string;
+  assessmentVersion: number;
+  tenantId: string;
+  applicantId: string;
+  reviewer: string;
+  reviewedAt: string;
+  outcome: CreditReviewOutcome;
+  rationale: string;
+  applicantExplanation: string;
+  reasonCodes: string[];
+  override: boolean;
+  /** @nullable */
+  overrideRationale: string | null;
+  mode: 'synthetic';
+  actualLendingDecision: false;
+  fundsMoved: false;
+  authentication: 'simulated_sandbox_review';
+}
+
+export type CreditDeskPermissionsItem = {
+  customerId: string;
+  accountRead: boolean;
+  creditAssessment: boolean;
+};
+
+export type CreditDeskAssessmentsItem = {
+  id: string;
+  customerId: string;
+  customerName: string;
+  scenario: string;
+  createdAt: string;
+  createdBy: string;
+  permissionRestricted: boolean;
+  result: CreditAssessmentResult;
+  reviews: CreditReview[];
+};
+
+export type CreditDeskScenariosItem = typeof CreditDeskScenariosItem[keyof typeof CreditDeskScenariosItem];
+
+
+export const CreditDeskScenariosItem = {
+  ready: 'ready',
+  thin_file: 'thin_file',
+  stale: 'stale',
+  refused: 'refused',
+  high_commitments: 'high_commitments',
+} as const;
+
+export type CreditDeskModelWeightsItem = {
+  label: string;
+  maximum: number;
+};
+
+export type CreditDeskModel = {
+  name: string;
+  version: string;
+  status: string;
+  validation: string;
+  weights: CreditDeskModelWeightsItem[];
+};
+
+export type CreditDeskGate = {
+  id: 'G-CREDIT';
+  enabled: false;
+  requirements: string[];
+};
+
+/**
+ * The Credit Desk: the current permissions of each applicant holding any (the applicants are the workspace's customers, listed once; one not listed here holds neither), assessments with their reviews, the illustrative rulecard and the closed credit gate.
+ */
+export interface CreditDesk {
+  mode: 'synthetic';
+  liveEnabled: false;
+  canAssess: boolean;
+  canReview: boolean;
+  actor: string;
+  permissions: CreditDeskPermissionsItem[];
+  assessments: CreditDeskAssessmentsItem[];
+  scenarios: CreditDeskScenariosItem[];
+  model: CreditDeskModel;
+  gate: CreditDeskGate;
+}
+
+export type CashForecastStatus = typeof CashForecastStatus[keyof typeof CashForecastStatus];
+
+
+export const CashForecastStatus = {
+  planning_estimate: 'planning_estimate',
+  unknown_opening_balance: 'unknown_opening_balance',
+} as const;
+
+export type CashForecastScenariosItemName = typeof CashForecastScenariosItemName[keyof typeof CashForecastScenariosItemName];
+
+
+export const CashForecastScenariosItemName = {
+  base: 'base',
+  downside: 'downside',
+} as const;
+
+export type CashForecastScenariosItemPointsItem = {
+  day: number;
+  date: string;
+  inflowMinor: number;
+  outflowMinor: number;
+  closingMinor: number;
+  afterPlanningBufferMinor: number;
+  shortfallMinor: number;
+};
+
+export type CashForecastScenariosItem = {
+  name: CashForecastScenariosItemName;
+  points: CashForecastScenariosItemPointsItem[];
+};
+
+/**
+ * Base and downside cash forecasts from approved commitments: a planning estimate, not an available balance.
+ */
+export interface CashForecast {
+  tenantId: string;
+  legalEntityId: string;
+  currency: string;
+  asOf: string;
+  version: string;
+  inputHash: string;
+  status: CashForecastStatus;
+  openingMinor: number;
+  persistenceBaselineMinor: number;
+  planningBufferMinor: number;
+  scenarios: CashForecastScenariosItem[];
+  includedCommitmentIds: string[];
+  excludedCommitmentIds: string[];
+  warnings: string[];
+}
+
+export type ErpManifestInvoiceAllocationsItem = {
+  invoiceId: string;
+  invoiceVersion: string;
+  amountMinor: number;
+};
+
+export type ErpManifestCreditNotesItem = {
+  id: string;
+  invoiceId: string;
+  amountMinor: number;
+  approved: boolean;
+  version: string;
+};
+
+/**
+ * A reviewed accounting export: what an ERP would receive. The service never posts it.
+ */
+export interface ErpManifest {
+  schema: 'valo.erp.review-export.v1';
+  companyId: string;
+  invoiceAllocations: ErpManifestInvoiceAllocationsItem[];
+  creditNotes?: ErpManifestCreditNotesItem[];
+  grossMinor: number;
+  netMinor: number;
+  feeMinor: number;
+  mappingVersion: string;
+  requestHash: string;
+  reviewer: string;
+  status: 'not_posted';
+  synthetic: true;
+  manifestHash: string;
+}
+
+export type VatScheduleStatus = typeof VatScheduleStatus[keyof typeof VatScheduleStatus];
+
+
+export const VatScheduleStatus = {
+  review_required: 'review_required',
+  reconciled_for_review: 'reconciled_for_review',
+} as const;
+
+export type VatScheduleLinesItemKind = typeof VatScheduleLinesItemKind[keyof typeof VatScheduleLinesItemKind];
+
+
+export const VatScheduleLinesItemKind = {
+  sales_invoice: 'sales_invoice',
+  sales_credit_note: 'sales_credit_note',
+  purchase_invoice: 'purchase_invoice',
+  purchase_credit_note: 'purchase_credit_note',
+} as const;
+
+export type VatScheduleLinesItem = {
+  invoiceId: string;
+  kind: VatScheduleLinesItemKind;
+  netMinor: number;
+  vatMinor: number;
+  taxCode: string;
+  paidMinor: number;
+  evidenceComplete: boolean;
+};
+
+/**
+ * A VAT evidence review schedule reconciled to the ledger control: never a filed return or a payment.
+ */
+export interface VatSchedule {
+  tenantId: string;
+  legalEntityId: string;
+  currency: string;
+  period: string;
+  configurationVersion: string;
+  outputVatMinor: number;
+  eligibleInputVatMinor: number;
+  blockedInputVatMinor: number;
+  expectedClosingMinor: number;
+  ledgerClosingMinor: number;
+  varianceMinor: number;
+  status: VatScheduleStatus;
+  filingStatus: 'not_submitted';
+  paymentStatus: 'not_initiated';
+  lines: VatScheduleLinesItem[];
+  missingEvidence: string[];
+  excludedBankCreditsMinor: number;
+  evidenceHash: string;
+}
+
+export type PayrollPlanScope = {
+  tenantId: string;
+  legalEntityId: string;
+  currency: string;
+};
+
+export type PayrollPlanFundingStatus = typeof PayrollPlanFundingStatus[keyof typeof PayrollPlanFundingStatus];
+
+
+export const PayrollPlanFundingStatus = {
+  ready_for_review: 'ready_for_review',
+  shortfall: 'shortfall',
+  unknown: 'unknown',
+} as const;
+
+export type PayrollPlanApprovalStatus = typeof PayrollPlanApprovalStatus[keyof typeof PayrollPlanApprovalStatus];
+
+
+export const PayrollPlanApprovalStatus = {
+  draft: 'draft',
+  approved: 'approved',
+} as const;
+
+export type PayrollPlanItemsItemStatus = typeof PayrollPlanItemsItemStatus[keyof typeof PayrollPlanItemsItemStatus];
+
+
+export const PayrollPlanItemsItemStatus = {
+  planned: 'planned',
+  exported: 'exported',
+  submitted: 'submitted',
+  succeeded: 'succeeded',
+  failed: 'failed',
+  unknown: 'unknown',
+  reversed: 'reversed',
+} as const;
+
+export type PayrollPlanItemsItem = {
+  id: string;
+  employeeReference: string;
+  beneficiaryReference: string;
+  beneficiaryVersion: string;
+  netMinor: number;
+  status: PayrollPlanItemsItemStatus;
+  idempotencyKey: string;
+  evidenceReference?: string;
+};
+
+export type PayrollPlanEvidenceAuthority = {
+  maker: string;
+  checker: string;
+  identityHash: string;
+};
+
+/**
+ * A funding plan for an approved net-pay run: maker, checker, funding state and each item's state. It pays nobody.
+ */
+export interface PayrollPlan {
+  kind: 'payroll_funding_plan';
+  scope: PayrollPlanScope;
+  runId: string;
+  runVersion: string;
+  sourceHash: string;
+  maker: string;
+  sourceApprover: string;
+  sourceAccountId: string;
+  paymentDate: string;
+  asOf: string;
+  balanceAsOf: string;
+  reviewVersion: number;
+  totalNetMinor: number;
+  requiredMinor: number;
+  /** @nullable */
+  availableMinor: number | null;
+  /** @nullable */
+  shortfallMinor: number | null;
+  commitmentsMinor: number;
+  estimatedFeesMinor: number;
+  bufferMinor: number;
+  fundingStatus: PayrollPlanFundingStatus;
+  approvalStatus: PayrollPlanApprovalStatus;
+  items: PayrollPlanItemsItem[];
+  frozenHash: string;
+  checker?: string;
+  approvedHash?: string;
+  evidenceAuthority?: PayrollPlanEvidenceAuthority;
+  liveDispatchAllowed: false;
+}
+
+export type PayrollManifestScope = {
+  tenantId: string;
+  legalEntityId: string;
+  currency: string;
+};
+
+export type PayrollManifestItemsItem = {
+  id: string;
+  beneficiaryReference: string;
+  beneficiaryVersion: string;
+  netMinor: number;
+  idempotencyKey: string;
+};
+
+/**
+ * An approved payroll bank export: the unsent items and their totals. It does not reserve funds or prove payment.
+ */
+export interface PayrollManifest {
+  scope: PayrollManifestScope;
+  runId: string;
+  runVersion: string;
+  sourceAccountId: string;
+  paymentDate: string;
+  checker: string;
+  approvedHash: string;
+  /** @minimum 0 */
+  itemCount: number;
+  totalMinor: number;
+  items: PayrollManifestItemsItem[];
+  paymentStatus: 'not_evidenced';
+  manifestHash: string;
+  warning: string;
+}
+
+export type CashDeskScope = {
+  tenantId: string;
+  legalEntityId: string;
+  currency: string;
+};
+
+export type CashDeskAccountsItem = {
+  tenantId: string;
+  legalEntityId: string;
+  currency: string;
+  id: string;
+  name: string;
+  source: string;
+  sourceDefinition: string;
+  authorised: boolean;
+  bookedMinor: number;
+  /** @nullable */
+  availableMinor: number | null;
+  /** @nullable */
+  pendingMinor: number | null;
+  balanceAsOf: string;
+  fetchedAt: string;
+  coverageComplete: boolean;
+};
+
+export type CashDeskPositionsItem = {
+  currency: string;
+  bookedMinor: number;
+  /** @nullable */
+  availableMinor: number | null;
+  /** @nullable */
+  pendingMinor: number | null;
+  incomeMinor: number;
+  expenseMinor: number;
+  /** @minimum 0 */
+  accountCount: number;
+  omittedAccountIds: string[];
+  /** @nullable */
+  oldestBalanceAsOf: string | null;
+  /** @nullable */
+  latestFetchedAt: string | null;
+  qualified: boolean;
+  warnings: string[];
+};
+
+export type CashDeskCommitmentsItemDirection = typeof CashDeskCommitmentsItemDirection[keyof typeof CashDeskCommitmentsItemDirection];
+
+
+export const CashDeskCommitmentsItemDirection = {
+  inflow: 'inflow',
+  outflow: 'outflow',
+} as const;
+
+export type CashDeskCommitmentsItemSource = typeof CashDeskCommitmentsItemSource[keyof typeof CashDeskCommitmentsItemSource];
+
+
+export const CashDeskCommitmentsItemSource = {
+  invoice: 'invoice',
+  bill: 'bill',
+  payroll: 'payroll',
+  recurring_assumption: 'recurring_assumption',
+} as const;
+
+export type CashDeskCommitmentsItem = {
+  tenantId: string;
+  legalEntityId: string;
+  currency: string;
+  id: string;
+  label: string;
+  direction: CashDeskCommitmentsItemDirection;
+  amountMinor: number;
+  dueAt: string;
+  knownAt: string;
+  approved: boolean;
+  source: CashDeskCommitmentsItemSource;
+  version: string;
+};
+
+export type CashDeskErpDraftsItemDraftInputScope = {
+  tenantId: string;
+  legalEntityId: string;
+  currency: string;
+};
+
+export type CashDeskErpDraftsItemDraftInputMappingProvider = typeof CashDeskErpDraftsItemDraftInputMappingProvider[keyof typeof CashDeskErpDraftsItemDraftInputMappingProvider];
+
+
+export const CashDeskErpDraftsItemDraftInputMappingProvider = {
+  xero: 'xero',
+  odoo: 'odoo',
+  export: 'export',
+} as const;
+
+export type CashDeskErpDraftsItemDraftInputMapping = {
+  tenantId: string;
+  legalEntityId: string;
+  currency: string;
+  companyId: string;
+  provider: CashDeskErpDraftsItemDraftInputMappingProvider;
+  version: string;
+  active: boolean;
+  contactId: string;
+  bankLedgerCode: string;
+  revenueAccountCode: string;
+  feeAccountCode: string;
+  taxCode: string;
+  financeApproved: boolean;
+};
+
+export type CashDeskErpDraftsItemDraftInputInvoicesItem = {
+  tenantId: string;
+  legalEntityId: string;
+  currency: string;
+  id: string;
+  companyId: string;
+  contactId: string;
+  version: string;
+  outstandingMinor: number;
+  taxCode: string;
+};
+
+export type CashDeskErpDraftsItemDraftInputAllocationsItem = {
+  invoiceId: string;
+  invoiceVersion: string;
+  amountMinor: number;
+};
+
+export type CashDeskErpDraftsItemDraftInputCreditNotesItem = {
+  id: string;
+  invoiceId: string;
+  amountMinor: number;
+  approved: boolean;
+  version: string;
+};
+
+export type CashDeskErpDraftsItemDraftInputSource = typeof CashDeskErpDraftsItemDraftInputSource[keyof typeof CashDeskErpDraftsItemDraftInputSource];
+
+
+export const CashDeskErpDraftsItemDraftInputSource = {
+  bank_evidence: 'bank_evidence',
+  synthetic: 'synthetic',
+} as const;
+
+export type CashDeskErpDraftsItemDraftInput = {
+  scope: CashDeskErpDraftsItemDraftInputScope;
+  maker: string;
+  postingDate: string;
+  canonicalReceiptId: string;
+  bankReference: string;
+  grossMinor: number;
+  feeMinor: number;
+  netMinor: number;
+  mapping: CashDeskErpDraftsItemDraftInputMapping;
+  invoices: CashDeskErpDraftsItemDraftInputInvoicesItem[];
+  allocations: CashDeskErpDraftsItemDraftInputAllocationsItem[];
+  creditNotes?: CashDeskErpDraftsItemDraftInputCreditNotesItem[];
+  source: CashDeskErpDraftsItemDraftInputSource;
+  alreadyRecordedReceiptIds?: string[];
+  closedThrough?: string;
+};
+
+export type CashDeskErpDraftsItemDraftStatus = typeof CashDeskErpDraftsItemDraftStatus[keyof typeof CashDeskErpDraftsItemDraftStatus];
+
+
+export const CashDeskErpDraftsItemDraftStatus = {
+  proposed: 'proposed',
+  blocked: 'blocked',
+  already_recorded: 'already_recorded',
+  reviewed: 'reviewed',
+} as const;
+
+export type CashDeskErpDraftsItemDraftResidualsItem = {
+  invoiceId: string;
+  beforeMinor: number;
+  paymentMinor: number;
+  creditNoteMinor: number;
+  afterMinor: number;
+};
+
+export type CashDeskErpDraftsItemDraftReview = {
+  reviewer: string;
+  approvedHash: string;
+};
+
+export type CashDeskErpDraftsItemDraft = {
+  kind: 'erp_receipt_draft';
+  input: CashDeskErpDraftsItemDraftInput;
+  idempotencyKey: string;
+  requestHash: string;
+  status: CashDeskErpDraftsItemDraftStatus;
+  reasons: string[];
+  residuals: CashDeskErpDraftsItemDraftResidualsItem[];
+  review?: CashDeskErpDraftsItemDraftReview;
+  liveDispatchAllowed: false;
+};
+
+export type CashDeskErpDraftsItem = {
+  id: string;
+  status: string;
+  name: string;
+  createdAt: string;
+  draft: CashDeskErpDraftsItemDraft;
+  manifest?: ErpManifest;
+};
+
+export type CashDeskVatExportsItem = {
+  id: string;
+  createdAt: string;
+  schedule: VatSchedule;
+  reviewer: string;
+};
+
+export type CashDeskPayrollPlansItemSummaryCounts = {
+  /** @minimum 0 */
+  planned: number;
+  /** @minimum 0 */
+  exported: number;
+  /** @minimum 0 */
+  submitted: number;
+  /** @minimum 0 */
+  succeeded: number;
+  /** @minimum 0 */
+  failed: number;
+  /** @minimum 0 */
+  unknown: number;
+  /** @minimum 0 */
+  reversed: number;
+};
+
+export type CashDeskPayrollPlansItemSummaryStatus = typeof CashDeskPayrollPlansItemSummaryStatus[keyof typeof CashDeskPayrollPlansItemSummaryStatus];
+
+
+export const CashDeskPayrollPlansItemSummaryStatus = {
+  completed: 'completed',
+  partially_completed: 'partially_completed',
+  needs_reconciliation: 'needs_reconciliation',
+  submitted: 'submitted',
+  exported_unpaid: 'exported_unpaid',
+  planning: 'planning',
+} as const;
+
+export type CashDeskPayrollPlansItemSummary = {
+  /** @minimum 0 */
+  itemCount: number;
+  totalNetMinor: number;
+  counts: CashDeskPayrollPlansItemSummaryCounts;
+  status: CashDeskPayrollPlansItemSummaryStatus;
+  liveDispatchAllowed: false;
+};
+
+export type CashDeskPayrollPlansItem = {
+  id: string;
+  status: string;
+  plan: PayrollPlan;
+  summary: CashDeskPayrollPlansItemSummary;
+  manifest?: PayrollManifest;
+};
+
+export type CashDeskPayrollReconciliationItemItemsItemStatus = typeof CashDeskPayrollReconciliationItemItemsItemStatus[keyof typeof CashDeskPayrollReconciliationItemItemsItemStatus];
+
+
+export const CashDeskPayrollReconciliationItemItemsItemStatus = {
+  planned: 'planned',
+  exported: 'exported',
+  submitted: 'submitted',
+  succeeded: 'succeeded',
+  failed: 'failed',
+  unknown: 'unknown',
+  reversed: 'reversed',
+} as const;
+
+export type CashDeskPayrollReconciliationItemItemsItem = {
+  id: string;
+  employeeReference: string;
+  netMinor: number;
+  status: CashDeskPayrollReconciliationItemItemsItemStatus;
+};
+
+export type CashDeskPayrollReconciliationItem = {
+  id: string;
+  runId: string;
+  items: CashDeskPayrollReconciliationItemItemsItem[];
+};
+
+export type CashDeskPermissions = {
+  read: boolean;
+  erp: boolean;
+  payroll: boolean;
+};
+
+/**
+ * The Cash Desk: a separate sample SME's accounts, positions, commitments, forecast, accounting drafts, VAT schedules and payroll plans, as its permissions allow.
+ */
+export interface CashDesk {
+  initialised: boolean;
+  scope: CashDeskScope;
+  name: string;
+  accounts: CashDeskAccountsItem[];
+  positions: CashDeskPositionsItem[];
+  commitments: CashDeskCommitmentsItem[];
+  forecast: CashForecast | null;
+  erpDrafts: CashDeskErpDraftsItem[];
+  vat: VatSchedule | null;
+  vatExports: CashDeskVatExportsItem[];
+  payrollPlans: CashDeskPayrollPlansItem[];
+  payrollReconciliation: CashDeskPayrollReconciliationItem[];
+  permissions: CashDeskPermissions;
+  limitations: string[];
+}
+
+export type ConnectedWorkspaceEntity = {
+  id: string;
+  name: string;
+  workspaceOwner: string;
+};
+
+export type ConnectedWorkspaceCustomersItem = {
+  id: string;
+  name: string;
+  reference: string;
+};
+
+export type ConnectedWorkspaceConsentsItemEffectiveStatus = typeof ConnectedWorkspaceConsentsItemEffectiveStatus[keyof typeof ConnectedWorkspaceConsentsItemEffectiveStatus];
+
+
+export const ConnectedWorkspaceConsentsItemEffectiveStatus = {
+  active: 'active',
+  revoked: 'revoked',
+  expired: 'expired',
+} as const;
+
+export type ConnectedWorkspaceConsentsItem = ValopayRecord & {
+  effectiveStatus: ConnectedWorkspaceConsentsItemEffectiveStatus;
+};
+
+export type ConnectedWorkspacePurposesItemId = typeof ConnectedWorkspacePurposesItemId[keyof typeof ConnectedWorkspacePurposesItemId];
+
+
+export const ConnectedWorkspacePurposesItemId = {
+  account_read: 'account_read',
+  credit_assessment: 'credit_assessment',
+  merchant_account_read: 'merchant_account_read',
+  erp_draft: 'erp_draft',
+  payroll_prepare: 'payroll_prepare',
+} as const;
+
+export type ConnectedWorkspacePurposesItem = {
+  id: ConnectedWorkspacePurposesItemId;
+  label: string;
+};
+
+export type ConnectedWorkspaceGatesItem = {
+  id: string;
+  name: string;
+  requires: string;
+  status: 'not_enabled';
+  liveEnabled: false;
+};
+
+export type ConnectedWorkspacePaymentsDuesItem = {
+  id: string;
+  name: string;
+  reference: string;
+  customerId: string;
+  customerName: string;
+  outstandingKobo: number;
+  blocked: boolean;
+};
+
+export type ConnectedWorkspacePayments = {
+  intents: ValopayRecord[];
+  dues: ConnectedWorkspacePaymentsDuesItem[];
+};
+
+/**
+ * Synthetic connected workspace: granular consents with their effective state, bound sample payment intents, the Credit and Cash Desks and the live gates, every one closed. No read creates sample records.
+ */
+export interface ConnectedWorkspace {
+  mode: 'synthetic';
+  revision: string;
+  asOf: string;
+  role: string;
+  entity: ConnectedWorkspaceEntity;
+  customers: ConnectedWorkspaceCustomersItem[];
+  consents: ConnectedWorkspaceConsentsItem[];
+  purposes: ConnectedWorkspacePurposesItem[];
+  gates: ConnectedWorkspaceGatesItem[];
+  payments: ConnectedWorkspacePayments;
+  credit: CreditDesk;
+  cash: CashDesk;
+}
+
+export type ConnectedActionInputData = {[key: string]: unknown};
+
+/**
+ * Action-specific data is validated by the server. Names use consent, payment, credit or cash prefixes. Every action requires the workspace's current revision and a reason: the revision changes with anything the workspace shows or its actions read (the lender and its settings, customers, the instalments it offers, a checkout names or a receipt was applied to and their attempts, connected records, and pay-by-bank receipts with their allocations), not with the lender's history (closes, the audit trail, exports, settled instalments or other payments). No input can enable live routes.
  */
 export interface ConnectedActionInput {
-  /** @maxLength 80 */
+  /**
+     * @minLength 1
+     * @maxLength 80
+     */
   action: string;
   /** @maxLength 100 */
   recordId?: string;
@@ -573,50 +1689,2644 @@ export interface ConnectedActionInput {
      * @maxLength 500
      */
   reason: string;
-  data?: RecordData;
+  data?: ConnectedActionInputData;
   /** @maxLength 80 */
   expectedRevision: string;
 }
 
-export type ConnectedActionResultMode = typeof ConnectedActionResultMode[keyof typeof ConnectedActionResultMode];
-
-
-export const ConnectedActionResultMode = {
-  synthetic: 'synthetic',
-} as const;
+export type CashActionOutcomeData = {
+  manifest?: ErpManifest | VatSchedule | PayrollManifest;
+  synthetic: true;
+  externalInstructionPerformed?: false;
+};
 
 /**
- * Committed sample operation. Cash actions include their record and outcome inside record; use the refreshed workspace view for display. A receipt is evidence from the server simulator only.
+ * What a Cash Desk action did: its message, the record it saved or changed, and any export it prepared.
+ */
+export interface CashActionOutcome {
+  message: string;
+  record?: ValopayRecord;
+  data: CashActionOutcomeData;
+}
+
+/**
+ * Committed sample operation, in the shape its action gives (connectedActionResultFor in lib/valopay-schema): a cash.* action answers its outcome with the Cash Desk record it saved or changed (absent only when the Cash Desk was already set up) and, for an export, the manifest it prepared; every other action answers the record it produced or changed, of the lender the request named: a consent for consent.*, a checkout for payment.*, an assessment for credit.assess and a review for credit.review. A receipt is evidence from the server simulator only.
  */
 export interface ConnectedActionResult {
   message: string;
-  record: RecordData;
-  mode: ConnectedActionResultMode;
+  record: ValopayRecord | CashActionOutcome;
+  mode: 'synthetic';
   externalInstructionPerformed: false;
+}
+
+/**
+ * A confirmation in plain words; nothing else changed that the caller needs to read back.
+ */
+export interface Message {
+  message: string;
+}
+
+export type OperationSummaryDetailsItem = {
+  name: string;
+  value: string;
+};
+
+/**
+ * What an entry asked, safe to show: the action or route in plain words, the kind and ID of the record it names, and at most three short fields the request named (an action, a decision, a status, a kind or a format). Read from the stored request by field, never whole; it never holds a name, reference, reason, amount or file.
+ */
+export interface OperationSummary {
+  action: string;
+  /** @nullable */
+  targetKind: string | null;
+  /** @nullable */
+  targetId: string | null;
+  /** @maxItems 3 */
+  details: OperationSummaryDetailsItem[];
+}
+
+export type OperationViewStatus = typeof OperationViewStatus[keyof typeof OperationViewStatus];
+
+
+export const OperationViewStatus = {
+  pending: 'pending',
+  completed: 'completed',
+  cancelled: 'cancelled',
+} as const;
+
+/**
+ * One journal entry: what was asked, by whom, in which role, and whether the service confirmed it. Original request bodies stay private; `summary` says what the request asked, and is null when payload encryption sealed the request or retention removed its payload. A completed entry names the record it produced (`recordId` and `recordKind`, the kind of that record: `exports` for an export, whatever kind it exports). A refused entry is cancelled and its message says why.
+ */
+export interface OperationView {
+  id: string;
+  label: string;
+  actor: string;
+  role: string;
+  status: OperationViewStatus;
+  createdAt: string;
+  updatedAt: string;
+  message: string;
+  /** @nullable */
+  recordId: string | null;
+  /** @nullable */
+  recordKind: string | null;
+  summary: OperationSummary | null;
+}
+
+/**
+ * The caller's journal for one lender, newest first, 25 rows a page.
+ */
+export interface OperationList {
+  /** @maxItems 25 */
+  items: OperationView[];
+  /** @minimum 0 */
+  total: number;
+  /** @minimum 0 */
+  offset: number;
+}
+
+/**
+ * How many of the caller's requests in the lender wait for confirmation.
+ */
+export interface PendingOperations {
+  /** @minimum 0 */
+  pending: number;
+}
+
+/**
+ * The original route's answer, recovered or re-run under the current validation and authorisation; its shape is that route's response.
+ */
+export interface OperationReplayResult {[key: string]: unknown}
+
+/**
+ * Record counts that place the lender on the pilot journey: customers, committed batches, receipts, open and unassigned cases, closes and ready exports.
+ */
+export interface JourneyCounts {
+  /** @minimum 0 */
+  customers: number;
+  /** @minimum 0 */
+  batches: number;
+  /** @minimum 0 */
+  receipts: number;
+  /** @minimum 0 */
+  openCases: number;
+  /** @minimum 0 */
+  unassignedCases: number;
+  /** @minimum 0 */
+  closes: number;
+  /** @minimum 0 */
+  exports: number;
+}
+
+export type PilotJourneyAccessMode = typeof PilotJourneyAccessMode[keyof typeof PilotJourneyAccessMode];
+
+
+export const PilotJourneyAccessMode = {
+  sandbox: 'sandbox',
+  staff: 'staff',
+} as const;
+
+/**
+ * The lender, the caller's access mode and the counts behind the journey view. Synthetic throughout.
+ */
+export interface PilotJourney {
+  lender: Merchant;
+  accessMode: PilotJourneyAccessMode;
+  actor: string;
+  syntheticOnly: true;
+  counts: JourneyCounts;
+}
+
+/**
+ * Import batches newest first, 25 a page, with their source identity, quality totals and check counts but not their rows. A batch saved before check summaries were stored is listed without check counts while the key service cannot open its check.
+ */
+export interface ImportBatchList {
+  /** @maxItems 25 */
+  items: ValopayRecord[];
+  /** @minimum 0 */
+  total: number;
+  /** @minimum 0 */
+  offset: number;
+}
+
+/**
+ * One batch with its source rows (import operator roles only) and every saved revision.
+ */
+export interface ImportBatchDetail {
+  batch: ValopayRecord;
+  revisions: ValopayRecord[];
+}
+
+/**
+ * The batch version being committed; a stale version is refused (409).
+ */
+export interface BatchVersion {
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  expectedUpdatedAt: string;
+}
+
+export type ImportBatchInputKind = typeof ImportBatchInputKind[keyof typeof ImportBatchInputKind];
+
+
+export const ImportBatchInputKind = {
+  customers: 'customers',
+  mandates: 'mandates',
+  'due-items': 'due-items',
+  attempts: 'attempts',
+  observations: 'observations',
+} as const;
+
+export type ImportBatchInputMapping = {[key: string]: string};
+
+export type ImportBatchInputAmountUnit = typeof ImportBatchInputAmountUnit[keyof typeof ImportBatchInputAmountUnit];
+
+
+export const ImportBatchInputAmountUnit = {
+  naira: 'naira',
+  kobo: 'kobo',
+} as const;
+
+/**
+ * A synthetic source batch: source, source batch ID, record kind, mapping, identity column, amount unit and up to 500 CSV rows. syntheticOnly must be true; raw bank details are refused.
+ */
+export interface ImportBatchInput {
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  name: string;
+  kind: ImportBatchInputKind;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  source: string;
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  sourceBatchId: string;
+  /** @pattern ^\d{4}-\d{2}-\d{2}$ */
+  businessDate?: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  sourceExpectationId?: string;
+  /**
+     * @minLength 1
+     * @maxLength 1500000
+     */
+  csv: string;
+  mapping?: ImportBatchInputMapping;
+  amountUnit: ImportBatchInputAmountUnit;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  identityColumn: string;
+  syntheticOnly: true;
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  expectedUpdatedAt?: string;
+}
+
+/**
+ * A person who can own a case or review a close: demo roles in the sandbox, active staff with lender access on a staff host.
+ */
+export interface Assignee {
+  actor: string;
+  name: string;
+  role: string;
+}
+
+/**
+ * A record the case can cite as evidence.
+ */
+export interface EvidenceLink {
+  id: string;
+  name: string;
+  reference: string;
+  kind: string;
+}
+
+/**
+ * One exception with the people it can be handed to, its handover events and the records it can cite.
+ */
+export interface CaseDetail {
+  record: ValopayRecord;
+  assignees: Assignee[];
+  events: ValopayRecord[];
+  evidence: EvidenceLink[];
+}
+
+export type CaseInputAction = typeof CaseInputAction[keyof typeof CaseInputAction];
+
+
+export const CaseInputAction = {
+  claim: 'claim',
+  handover: 'handover',
+  update: 'update',
+} as const;
+
+/**
+ * A case handover or update: assignee, next action and its time, note and evidence, with the version being changed.
+ */
+export interface CaseInput {
+  action: CaseInputAction;
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  expectedUpdatedAt: string;
+  /** @maxLength 256 */
+  assignee?: string;
+  /**
+     * @minLength 3
+     * @maxLength 2000
+     */
+  note: string;
+  /**
+     * @minLength 3
+     * @maxLength 240
+     */
+  nextAction: string;
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  nextActionAt: string;
+  /**
+     * @maxItems 20
+     * @items.minLength 1
+     * @items.maxLength 100
+     */
+  evidenceIds?: string[];
+}
+
+export type PilotLenderInputSegment = typeof PilotLenderInputSegment[keyof typeof PilotLenderInputSegment];
+
+
+export const PilotLenderInputSegment = {
+  Consumer_lending: 'Consumer lending',
+  Cooperative: 'Cooperative',
+  Asset_finance: 'Asset finance',
+  Business_finance: 'Business finance',
+} as const;
+
+/**
+ * A new synthetic lender: name and segment. A sandbox workspace holds at most five lenders, the two samples included.
+ */
+export interface PilotLenderInput {
+  /**
+     * @minLength 2
+     * @maxLength 100
+     */
+  name: string;
+  segment: PilotLenderInputSegment;
+}
+
+export type StaffMemberRole = typeof StaffMemberRole[keyof typeof StaffMemberRole];
+
+
+export const StaffMemberRole = {
+  Admin: 'Admin',
+  Operations: 'Operations',
+  Finance: 'Finance',
+  Compliance_reviewer: 'Compliance reviewer',
+  'Read-only': 'Read-only',
+} as const;
+
+export type StaffMemberStatus = typeof StaffMemberStatus[keyof typeof StaffMemberStatus];
+
+
+export const StaffMemberStatus = {
+  active: 'active',
+  suspended: 'suspended',
+  revoked: 'revoked',
+} as const;
+
+/**
+ * A staff membership: its role, state, expiry and version.
+ */
+export interface StaffMember {
+  id: string;
+  actor: string;
+  name: string;
+  role: StaffMemberRole;
+  status: StaffMemberStatus;
+  expiresAt: string;
+  updatedAt: string;
+}
+
+export type StaffAccessRole = typeof StaffAccessRole[keyof typeof StaffAccessRole];
+
+
+export const StaffAccessRole = {
+  Admin: 'Admin',
+  Operations: 'Operations',
+  Finance: 'Finance',
+  Compliance_reviewer: 'Compliance reviewer',
+  'Read-only': 'Read-only',
+} as const;
+
+export type StaffAccessStatus = typeof StaffAccessStatus[keyof typeof StaffAccessStatus];
+
+
+export const StaffAccessStatus = {
+  active: 'active',
+  suspended: 'suspended',
+  revoked: 'revoked',
+} as const;
+
+/**
+ * A membership's role and state, before or after a change.
+ */
+export interface StaffAccess {
+  role: StaffAccessRole;
+  status: StaffAccessStatus;
+}
+
+/**
+ * A membership change that grants Admin, Finance or Compliance reviewer and waits for a second administrator: who asked, when and why. Approving it applies exactly this change; a later change to the membership leaves it out of date, and it is no longer listed.
+ */
+export interface StaffChangeRequest {
+  id: string;
+  memberId: string;
+  name: string;
+  from: StaffAccess;
+  to: StaffAccess;
+  reason: string;
+  requestedBy: string;
+  requestedAt: string;
+}
+
+export type StaffMemberChangeRole = typeof StaffMemberChangeRole[keyof typeof StaffMemberChangeRole];
+
+
+export const StaffMemberChangeRole = {
+  Admin: 'Admin',
+  Operations: 'Operations',
+  Finance: 'Finance',
+  Compliance_reviewer: 'Compliance reviewer',
+  'Read-only': 'Read-only',
+} as const;
+
+export type StaffMemberChangeStatus = typeof StaffMemberChangeStatus[keyof typeof StaffMemberChangeStatus];
+
+
+export const StaffMemberChangeStatus = {
+  active: 'active',
+  suspended: 'suspended',
+  revoked: 'revoked',
+} as const;
+
+/**
+ * A membership change's answer: the membership as it now stands, what happened in plain words, and the waiting request when the change needs a second administrator (the membership is then unchanged).
+ */
+export interface StaffMemberChange {
+  id: string;
+  actor: string;
+  name: string;
+  role: StaffMemberChangeRole;
+  status: StaffMemberChangeStatus;
+  expiresAt: string;
+  updatedAt: string;
+  message: string;
+  pendingChange: StaffChangeRequest | null;
+}
+
+export type StaffDirectoryMemberRole = typeof StaffDirectoryMemberRole[keyof typeof StaffDirectoryMemberRole];
+
+
+export const StaffDirectoryMemberRole = {
+  Admin: 'Admin',
+  Operations: 'Operations',
+  Finance: 'Finance',
+  Compliance_reviewer: 'Compliance reviewer',
+  'Read-only': 'Read-only',
+} as const;
+
+export type StaffDirectoryMemberStatus = typeof StaffDirectoryMemberStatus[keyof typeof StaffDirectoryMemberStatus];
+
+
+export const StaffDirectoryMemberStatus = {
+  active: 'active',
+  suspended: 'suspended',
+  revoked: 'revoked',
+} as const;
+
+/**
+ * A membership in the team directory, with the lenders it may open; an administrator opens every lender and lists none. A viewer who is not an administrator sees only the colleagues who share a lender with them, only the lenders they share, and no one's expiry but their own (expiresAt null).
+ */
+export interface StaffDirectoryMember {
+  id: string;
+  actor: string;
+  name: string;
+  role: StaffDirectoryMemberRole;
+  status: StaffDirectoryMemberStatus;
+  /** @nullable */
+  expiresAt: string | null;
+  updatedAt: string;
+  lenderIds: string[];
+  allLenders: boolean;
+}
+
+export type StaffInvitationRole = typeof StaffInvitationRole[keyof typeof StaffInvitationRole];
+
+
+export const StaffInvitationRole = {
+  Admin: 'Admin',
+  Operations: 'Operations',
+  Finance: 'Finance',
+  Compliance_reviewer: 'Compliance reviewer',
+  'Read-only': 'Read-only',
+} as const;
+
+export type StaffInvitationStatus = typeof StaffInvitationStatus[keyof typeof StaffInvitationStatus];
+
+
+export const StaffInvitationStatus = {
+  pending: 'pending',
+  accepted: 'accepted',
+  revoked: 'revoked',
+} as const;
+
+export type StaffInvitationApproval = typeof StaffInvitationApproval[keyof typeof StaffInvitationApproval];
+
+
+export const StaffInvitationApproval = {
+  not_required: 'not_required',
+  awaiting: 'awaiting',
+  approved: 'approved',
+} as const;
+
+/**
+ * A pending, accepted or revoked invitation, who sent it and whether it waits for, or has, the second administrator's approval an Admin, Finance or Compliance reviewer invitation needs; the token is shown once, at creation.
+ */
+export interface StaffInvitation {
+  id: string;
+  email: string;
+  role: StaffInvitationRole;
+  status: StaffInvitationStatus;
+  expiresAt: string;
+  invitedBy: string;
+  approval: StaffInvitationApproval;
+  /** @nullable */
+  approvedBy: string | null;
+}
+
+/**
+ * One entry of the team's access history.
+ */
+export interface StaffEvent {
+  id: string;
+  actor: string;
+  action: string;
+  subject: string;
+  detail: RecordData;
+  createdAt: string;
+}
+
+export type StaffDirectoryMode = typeof StaffDirectoryMode[keyof typeof StaffDirectoryMode];
+
+
+export const StaffDirectoryMode = {
+  sandbox: 'sandbox',
+  staff: 'staff',
+} as const;
+
+/**
+ * The team as the caller may see it: members as StaffDirectoryMember describes; lenders, invitations, changes awaiting a second administrator and history for administrators. In the sandbox every list, lenders included, is empty and the message says why.
+ */
+export interface StaffDirectory {
+  mode: StaffDirectoryMode;
+  actor: string;
+  members: StaffDirectoryMember[];
+  lenders: Merchant[];
+  /** @maxItems 100 */
+  invitations: StaffInvitation[];
+  /** @maxItems 100 */
+  changes: StaffChangeRequest[];
+  /** @maxItems 100 */
+  events: StaffEvent[];
+  message: string;
+}
+
+export type InvitationInputRole = typeof InvitationInputRole[keyof typeof InvitationInputRole];
+
+
+export const InvitationInputRole = {
+  Admin: 'Admin',
+  Operations: 'Operations',
+  Finance: 'Finance',
+  Compliance_reviewer: 'Compliance reviewer',
+  'Read-only': 'Read-only',
+} as const;
+
+/**
+ * An invitation: email address and pilot role.
+ */
+export interface InvitationInput {
+  /** @maxLength 254 */
+  email: string;
+  role: InvitationInputRole;
+}
+
+export type InvitationCreatedApproval = typeof InvitationCreatedApproval[keyof typeof InvitationCreatedApproval];
+
+
+export const InvitationCreatedApproval = {
+  not_required: 'not_required',
+  awaiting: 'awaiting',
+} as const;
+
+/**
+ * The invitation, its one-time acceptance token and whether it waits for a second administrator's approval; no email is sent.
+ */
+export interface InvitationCreated {
+  id: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  token: string;
+  approval: InvitationCreatedApproval;
+  message: string;
+}
+
+/**
+ * The acceptance token from the invitation link.
+ */
+export interface AcceptInvitationInput {
+  /** @pattern ^[a-f0-9]{64}$ */
+  token: string;
+}
+
+export type InvitationAcceptedRole = typeof InvitationAcceptedRole[keyof typeof InvitationAcceptedRole];
+
+
+export const InvitationAcceptedRole = {
+  Admin: 'Admin',
+  Operations: 'Operations',
+  Finance: 'Finance',
+  Compliance_reviewer: 'Compliance reviewer',
+  'Read-only': 'Read-only',
+} as const;
+
+/**
+ * Confirmation of the new membership and its role.
+ */
+export interface InvitationAccepted {
+  message: string;
+  role: InvitationAcceptedRole;
+}
+
+export type MembershipInputRole = typeof MembershipInputRole[keyof typeof MembershipInputRole];
+
+
+export const MembershipInputRole = {
+  Admin: 'Admin',
+  Operations: 'Operations',
+  Finance: 'Finance',
+  Compliance_reviewer: 'Compliance reviewer',
+  'Read-only': 'Read-only',
+} as const;
+
+export type MembershipInputStatus = typeof MembershipInputStatus[keyof typeof MembershipInputStatus];
+
+
+export const MembershipInputStatus = {
+  active: 'active',
+  suspended: 'suspended',
+  revoked: 'revoked',
+} as const;
+
+/**
+ * A membership change: role, state, the version being changed and the reason.
+ */
+export interface MembershipInput {
+  role: MembershipInputRole;
+  status: MembershipInputStatus;
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  expectedUpdatedAt: string;
+  /**
+     * @minLength 3
+     * @maxLength 500
+     */
+  reason: string;
+}
+
+/**
+ * The lenders a non-administrator membership may open, with the version being changed and the reason.
+ */
+export interface StaffLenderAccessInput {
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  expectedUpdatedAt: string;
+  /**
+     * @maxItems 250
+     * @items.minLength 1
+     * @items.maxLength 100
+     */
+  lenderIds: string[];
+  /**
+     * @minLength 10
+     * @maxLength 1000
+     */
+  reason: string;
+}
+
+export type StaffLenderAccessRole = typeof StaffLenderAccessRole[keyof typeof StaffLenderAccessRole];
+
+
+export const StaffLenderAccessRole = {
+  Admin: 'Admin',
+  Operations: 'Operations',
+  Finance: 'Finance',
+  Compliance_reviewer: 'Compliance reviewer',
+  'Read-only': 'Read-only',
+} as const;
+
+export type StaffLenderAccessStatus = typeof StaffLenderAccessStatus[keyof typeof StaffLenderAccessStatus];
+
+
+export const StaffLenderAccessStatus = {
+  active: 'active',
+  suspended: 'suspended',
+  revoked: 'revoked',
+} as const;
+
+/**
+ * The membership with its saved lender access.
+ */
+export interface StaffLenderAccess {
+  id: string;
+  actor: string;
+  name: string;
+  role: StaffLenderAccessRole;
+  status: StaffLenderAccessStatus;
+  expiresAt: string;
+  updatedAt: string;
+  lenderIds: string[];
+  allLenders: false;
+  message: string;
+}
+
+export type ReadinessCheckId = typeof ReadinessCheckId[keyof typeof ReadinessCheckId];
+
+
+export const ReadinessCheckId = {
+  identity: 'identity',
+  mfa: 'mfa',
+  origin: 'origin',
+  database: 'database',
+  encryption: 'encryption',
+} as const;
+
+export type ReadinessCheckState = typeof ReadinessCheckState[keyof typeof ReadinessCheckState];
+
+
+export const ReadinessCheckState = {
+  verified_this_request: 'verified_this_request',
+  configured: 'configured',
+  configured_not_verified: 'configured_not_verified',
+  not_configured: 'not_configured',
+} as const;
+
+/**
+ * One readiness control (identity, MFA, origins, database isolation, encryption) with its state on this host and what it means.
+ */
+export interface ReadinessCheck {
+  id: ReadinessCheckId;
+  name: string;
+  state: ReadinessCheckState;
+  detail: string;
+}
+
+/**
+ * The staff-access and encryption controls as this request observed them. Describes configuration; never reveals secrets.
+ */
+export interface AccessReadiness {
+  syntheticOnly: true;
+  canCommission: boolean;
+  checkedAt: string;
+  checks: ReadinessCheck[];
+}
+
+/**
+ * The result of sealing and opening a synthetic payload with the configured managed key.
+ */
+export interface EncryptionVerification {
+  message: string;
+  checkedAt: string;
+  verified: true;
+}
+
+/**
+ * How many stored payloads one bounded run protected, and whether another run is needed.
+ */
+export interface PayloadProtection {
+  message: string;
+  /** @minimum 0 */
+  protectedCount: number;
+  mayHaveMore: boolean;
+}
+
+export type ReverificationRequiredClerkErrorMetadata = {
+  reverification: string;
+};
+
+export type ReverificationRequiredClerkError = {
+  type: 'forbidden';
+  reason: 'reverification-error';
+  metadata: ReverificationRequiredClerkErrorMetadata;
+};
+
+/**
+ * The identity provider's instruction to verify a second factor again; the console's sign-in component answers it.
+ */
+export interface ReverificationRequired {
+  clerk_error: ReverificationRequiredClerkError;
+}
+
+export type ProgressStepState = typeof ProgressStepState[keyof typeof ProgressStepState];
+
+
+export const ProgressStepState = {
+  not_started: 'not_started',
+  in_progress: 'in_progress',
+  awaiting_review: 'awaiting_review',
+  completed: 'completed',
+  blocked: 'blocked',
+} as const;
+
+/**
+ * One pilot step with its state, the evidence behind that state and what is still missing.
+ */
+export interface ProgressStep {
+  id: string;
+  name: string;
+  /** @pattern ^/ */
+  href: string;
+  state: ProgressStepState;
+  evidence: string[];
+  missing: string[];
+}
+
+export type PilotAccessMode = typeof PilotAccessMode[keyof typeof PilotAccessMode];
+
+
+export const PilotAccessMode = {
+  sandbox: 'sandbox',
+  staff: 'staff',
+} as const;
+
+export type PilotAccessState = typeof PilotAccessState[keyof typeof PilotAccessState];
+
+
+export const PilotAccessState = {
+  configured: 'configured',
+  not_configured: 'not_configured',
+} as const;
+
+/**
+ * Whether real staff access is enabled on this host and what demo progress does not establish.
+ */
+export interface PilotAccess {
+  mode: PilotAccessMode;
+  state: PilotAccessState;
+  message: string;
+}
+
+/**
+ * The lender's progress through onboarding, ingestion, reconciliation, exceptions, close review and export, derived from its records.
+ */
+export interface PilotProgress {
+  lender: Merchant;
+  syntheticOnly: true;
+  access: PilotAccess;
+  steps: ProgressStep[];
+}
+
+/**
+ * A discrepancy or unresolved item the preparer must answer, and whether it remains open at the close.
+ */
+export interface CloseReviewIssue {
+  id: string;
+  label: string;
+  detail: string;
+  unresolved: boolean;
+}
+
+/**
+ * A close review record with whether its snapshot still matches the close and its source evidence.
+ */
+export type CloseReviewRecord = ValopayRecord & {
+  current: boolean;
+};
+
+/**
+ * One close with the discrepancies a reviewer must answer, why it cannot be reviewed now (if so), pending financial corrections and its reviews.
+ */
+export interface CloseReviewEntry {
+  close: ValopayRecord;
+  issues: CloseReviewIssue[];
+  /** @nullable */
+  problem: string | null;
+  /** @minimum 0 */
+  pendingFinancialCorrections: number;
+  reviews: CloseReviewRecord[];
+}
+
+export type CloseReviewListAccessMode = typeof CloseReviewListAccessMode[keyof typeof CloseReviewListAccessMode];
+
+
+export const CloseReviewListAccessMode = {
+  sandbox: 'sandbox',
+  staff: 'staff',
+} as const;
+
+/**
+ * The 25 newest closes with their reviews, the Finance reviewers available and who the caller is, so the console can enforce separation of duties.
+ */
+export interface CloseReviewList {
+  /** @maxItems 25 */
+  closes: CloseReviewEntry[];
+  /** @minimum 0 */
+  total: number;
+  actor: string;
+  reviewers: Assignee[];
+  accessMode: CloseReviewListAccessMode;
+  ownPrincipal: string;
+}
+
+export type PrepareCloseReviewInputDiscrepancyResponsesItem = {
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  issueId: string;
+  /**
+     * @minLength 10
+     * @maxLength 3000
+     */
+  explanation: string;
+};
+
+/**
+ * A close review preparation: the close and its version, an independent Finance reviewer, the preparation note and a response to every discrepancy.
+ */
+export interface PrepareCloseReviewInput {
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  closeId: string;
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  expectedUpdatedAt: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  reviewer: string;
+  /**
+     * @minLength 10
+     * @maxLength 3000
+     */
+  preparationNote: string;
+  /** @maxItems 500 */
+  discrepancyResponses: PrepareCloseReviewInputDiscrepancyResponsesItem[];
+  /** @maxLength 3000 */
+  unresolvedAcceptance?: string;
+}
+
+export type DecideCloseReviewInputAction = typeof DecideCloseReviewInputAction[keyof typeof DecideCloseReviewInputAction];
+
+
+export const DecideCloseReviewInputAction = {
+  approve: 'approve',
+  return: 'return',
+} as const;
+
+export type DecideCloseReviewInputSourceExceptionsItem = {
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  issueId: string;
+  /**
+     * @minLength 10
+     * @maxLength 3000
+     */
+  reason: string;
+  /**
+     * @minLength 5
+     * @maxLength 1000
+     */
+  evidence: string;
+};
+
+/**
+ * A review decision: approve or reject with the version being decided, a note and an answer to every source exception.
+ */
+export interface DecideCloseReviewInput {
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  expectedUpdatedAt: string;
+  action: DecideCloseReviewInputAction;
+  /**
+     * @minLength 10
+     * @maxLength 3000
+     */
+  note: string;
+  /** @maxItems 500 */
+  sourceExceptions?: DecideCloseReviewInputSourceExceptionsItem[];
+}
+
+export type ImportCorrectionPreviewInputChanges = {
+  /**
+     * @minLength 2
+     * @maxLength 160
+     */
+  name?: string;
+  /** @maxLength 40 */
+  phoneMasked?: string;
+  /**
+     * @minimum 500000
+     * @maximum 9007199254740991
+     */
+  amountKobo?: number;
+  /** @pattern ^\d{4}-\d{2}-\d{2}$ */
+  dueDate?: string;
+};
+
+/**
+ * The batch, the imported record with its version, and the supported field changes to compare.
+ */
+export interface ImportCorrectionPreviewInput {
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  batchId: string;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  targetId: string;
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  expectedUpdatedAt: string;
+  changes: ImportCorrectionPreviewInputChanges;
+  syntheticOnly: true;
+}
+
+export type ImportCorrectionPreviewDifferencesItemField = typeof ImportCorrectionPreviewDifferencesItemField[keyof typeof ImportCorrectionPreviewDifferencesItemField];
+
+
+export const ImportCorrectionPreviewDifferencesItemField = {
+  name: 'name',
+  phoneMasked: 'phoneMasked',
+  amountKobo: 'amountKobo',
+  dueDate: 'dueDate',
+} as const;
+
+export type ImportCorrectionPreviewDifferencesItem = {
+  field: ImportCorrectionPreviewDifferencesItemField;
+  before: string | number | null;
+  after: string | number;
+};
+
+export type ImportCorrectionPreviewAffectedItem = {
+  id: string;
+  kind: string;
+  name: string;
+  reference: string;
+  status: string;
+  updatedAt: string;
+};
+
+/**
+ * The before/after comparison, the records the change touches, any blockers and the digest a proposal must quote.
+ */
+export interface ImportCorrectionPreview {
+  merchantId: string;
+  batchId: string;
+  targetId: string;
+  targetKind: string;
+  source: string;
+  rowId: string;
+  targetUpdatedAt: string;
+  financial: boolean;
+  previewDigest: string;
+  differences: ImportCorrectionPreviewDifferencesItem[];
+  affected: ImportCorrectionPreviewAffectedItem[];
+  blockers: string[];
+  consequence: string;
+}
+
+export type ImportCorrectionProposalInputChanges = {
+  /**
+     * @minLength 2
+     * @maxLength 160
+     */
+  name?: string;
+  /** @maxLength 40 */
+  phoneMasked?: string;
+  /**
+     * @minimum 500000
+     * @maximum 9007199254740991
+     */
+  amountKobo?: number;
+  /** @pattern ^\d{4}-\d{2}-\d{2}$ */
+  dueDate?: string;
+};
+
+/**
+ * A proposal quoting the preview digest, naming an independent Finance reviewer, with the reason and evidence.
+ */
+export interface ImportCorrectionProposalInput {
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  batchId: string;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  targetId: string;
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  expectedUpdatedAt: string;
+  changes: ImportCorrectionProposalInputChanges;
+  syntheticOnly: true;
+  /** @pattern ^[a-f0-9]{64}$ */
+  previewDigest: string;
+  /**
+     * @minLength 1
+     * @maxLength 180
+     */
+  reviewer: string;
+  /**
+     * @minLength 10
+     * @maxLength 1000
+     */
+  reason: string;
+  /**
+     * @minLength 5
+     * @maxLength 1000
+     */
+  evidence: string;
+}
+
+export type ImportCorrectionDecisionInputAction = typeof ImportCorrectionDecisionInputAction[keyof typeof ImportCorrectionDecisionInputAction];
+
+
+export const ImportCorrectionDecisionInputAction = {
+  approve: 'approve',
+  reject: 'reject',
+  withdraw: 'withdraw',
+} as const;
+
+/**
+ * Approve, reject or withdraw, quoting the proposal digest, with a reason.
+ */
+export interface ImportCorrectionDecisionInput {
+  /** @pattern ^[a-f0-9]{64}$ */
+  proposalDigest: string;
+  action: ImportCorrectionDecisionInputAction;
+  /**
+     * @minLength 10
+     * @maxLength 1000
+     */
+  reason: string;
+}
+
+export type ImportCorrectionViewStatus = typeof ImportCorrectionViewStatus[keyof typeof ImportCorrectionViewStatus];
+
+
+export const ImportCorrectionViewStatus = {
+  awaiting_review: 'awaiting_review',
+  approved: 'approved',
+  rejected: 'rejected',
+  withdrawn: 'withdrawn',
+} as const;
+
+export type ImportCorrectionViewDecisionAction = typeof ImportCorrectionViewDecisionAction[keyof typeof ImportCorrectionViewDecisionAction];
+
+
+export const ImportCorrectionViewDecisionAction = {
+  approve: 'approve',
+  reject: 'reject',
+  withdraw: 'withdraw',
+} as const;
+
+/**
+ * @nullable
+ */
+export type ImportCorrectionViewDecision = {
+  id: string;
+  action: ImportCorrectionViewDecisionAction;
+  actor: string;
+  principalId: string;
+  reason: string;
+  at: string;
+} | null;
+
+/**
+ * A proposal with its preview, its decision if any, and whether the comparison is still current.
+ */
+export interface ImportCorrectionView {
+  id: string;
+  merchantId: string;
+  createdAt: string;
+  proposedBy: string;
+  proposedPrincipal: string;
+  reviewer: string;
+  reason: string;
+  evidence: string;
+  proposalDigest: string;
+  status: ImportCorrectionViewStatus;
+  current: boolean;
+  preview: ImportCorrectionPreview;
+  /** @nullable */
+  decision: ImportCorrectionViewDecision;
+}
+
+export type ImportCorrectionListTargetsItem = {
+  id: string;
+  kind: string;
+  name: string;
+  reference: string;
+  updatedAt: string;
+  rowId: string;
+  amountKobo: number;
+  /** @nullable */
+  dueDate: string | null;
+  phoneMasked: string;
+  supported: boolean;
+  status: string;
+};
+
+export type ImportCorrectionListReviewersItem = {
+  actor: string;
+  name: string;
+  role: string;
+};
+
+/**
+ * The batch's imported records, its proposals and the Finance reviewers available.
+ */
+export interface ImportCorrectionList {
+  batchId: string;
+  actor: string;
+  ownPrincipal: string;
+  role: string;
+  targets: ImportCorrectionListTargetsItem[];
+  proposals: ImportCorrectionView[];
+  reviewers: ImportCorrectionListReviewersItem[];
+  syntheticOnly: true;
+}
+
+export type SourceProfileInputKind = typeof SourceProfileInputKind[keyof typeof SourceProfileInputKind];
+
+
+export const SourceProfileInputKind = {
+  customers: 'customers',
+  mandates: 'mandates',
+  'due-items': 'due-items',
+  attempts: 'attempts',
+  observations: 'observations',
+} as const;
+
+export type SourceProfileInputMapping = {[key: string]: string};
+
+export type SourceProfileInputAmountUnit = typeof SourceProfileInputAmountUnit[keyof typeof SourceProfileInputAmountUnit];
+
+
+export const SourceProfileInputAmountUnit = {
+  naira: 'naira',
+  kobo: 'kobo',
+} as const;
+
+export type SourceProfileInputStatus = typeof SourceProfileInputStatus[keyof typeof SourceProfileInputStatus];
+
+
+export const SourceProfileInputStatus = {
+  active: 'active',
+  paused: 'paused',
+} as const;
+
+/**
+ * A reusable synthetic source contract: mapping, identity column, amount unit, first expected delivery, cadence, grace and expected totals.
+ */
+export interface SourceProfileInput {
+  /**
+     * @minLength 2
+     * @maxLength 120
+     */
+  name: string;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  source: string;
+  kind: SourceProfileInputKind;
+  mapping?: SourceProfileInputMapping;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  identityColumn: string;
+  amountUnit: SourceProfileInputAmountUnit;
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  firstExpectedAt: string;
+  /**
+     * @minimum 1
+     * @maximum 8760
+     */
+  cadenceHours: number;
+  /**
+     * @minimum 0
+     * @maximum 10080
+     */
+  graceMinutes: number;
+  /**
+     * @minimum 0
+     * @maximum 500
+     * @nullable
+     */
+  expectedRows?: number | null;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     * @nullable
+     */
+  expectedAmountKobo?: number | null;
+  status?: SourceProfileInputStatus;
+  syntheticOnly: true;
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  expectedUpdatedAt?: string;
+}
+
+export type SourceManifestInputFilesItemKind = typeof SourceManifestInputFilesItemKind[keyof typeof SourceManifestInputFilesItemKind];
+
+
+export const SourceManifestInputFilesItemKind = {
+  customers: 'customers',
+  mandates: 'mandates',
+  'due-items': 'due-items',
+  attempts: 'attempts',
+  observations: 'observations',
+} as const;
+
+export type SourceManifestInputFilesItem = {
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  source: string;
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  sourceBatchId: string;
+  kind: SourceManifestInputFilesItemKind;
+  /**
+     * @minimum 0
+     * @maximum 500
+     */
+  expectedRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  expectedAmountKobo: number;
+};
+
+/**
+ * The files and control totals expected for one WAT business date, or an explicit no-file declaration, with reason and evidence; a revision names the declaration it replaces.
+ */
+export interface SourceManifestInput {
+  /** @pattern ^\d{4}-\d{2}-\d{2}$ */
+  businessDate: string;
+  /** @maxItems 100 */
+  files: SourceManifestInputFilesItem[];
+  noFilesExpected: boolean;
+  /**
+     * @minLength 10
+     * @maxLength 3000
+     */
+  reason: string;
+  /**
+     * @minLength 5
+     * @maxLength 1000
+     */
+  evidence: string;
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  previousManifestId?: string;
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  expectedUpdatedAt?: string;
+  syntheticOnly: true;
+}
+
+export type SourceCompletenessManifestData = {[key: string]: unknown};
+
+/**
+ * @nullable
+ */
+export type SourceCompletenessManifest = {
+  id: string;
+  updatedAt: string;
+  data: SourceCompletenessManifestData;
+} | null;
+
+export type SourceCompletenessFilesItemKind = typeof SourceCompletenessFilesItemKind[keyof typeof SourceCompletenessFilesItemKind];
+
+
+export const SourceCompletenessFilesItemKind = {
+  customers: 'customers',
+  mandates: 'mandates',
+  'due-items': 'due-items',
+  attempts: 'attempts',
+  observations: 'observations',
+} as const;
+
+export type SourceCompletenessFilesItemReceivedOtherCurrencies = {[key: string]: {
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  count: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  amount: number;
+}};
+
+export type SourceCompletenessFilesItemStatus = typeof SourceCompletenessFilesItemStatus[keyof typeof SourceCompletenessFilesItemStatus];
+
+
+export const SourceCompletenessFilesItemStatus = {
+  complete: 'complete',
+  incomplete: 'incomplete',
+} as const;
+
+export type SourceCompletenessFilesItem = {
+  /**
+     * @minLength 1
+     * @maxLength 100
+     */
+  source: string;
+  /**
+     * @minLength 1
+     * @maxLength 120
+     */
+  sourceBatchId: string;
+  kind: SourceCompletenessFilesItemKind;
+  /**
+     * @minimum 0
+     * @maximum 500
+     */
+  expectedRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  expectedAmountKobo: number;
+  id: string;
+  /** @nullable */
+  batchId: string | null;
+  batchStatus: string;
+  /**
+     * @nullable
+     * @pattern ^\d{4}-\d{2}-\d{2}$
+     */
+  businessDate: string | null;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     * @nullable
+     */
+  receivedRows: number | null;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     * @nullable
+     */
+  receivedAmountKobo: number | null;
+  receivedOtherCurrencies?: SourceCompletenessFilesItemReceivedOtherCurrencies;
+  status: SourceCompletenessFilesItemStatus;
+  problems: string[];
+};
+
+export type SourceCompletenessActiveProfilesItem = {
+  id: string;
+  source: string;
+  kind: string;
+};
+
+export type SourceCompletenessUndeclaredItem = {
+  id: string;
+  name: string;
+  status: string;
+  source: string;
+  sourceBatchId: string;
+  kind: string;
+};
+
+export type SourceCompletenessStatus = typeof SourceCompletenessStatus[keyof typeof SourceCompletenessStatus];
+
+
+export const SourceCompletenessStatus = {
+  complete: 'complete',
+  incomplete: 'incomplete',
+} as const;
+
+export type SourceCompletenessIssuesItem = {
+  id: string;
+  label: string;
+  detail: string;
+};
+
+/**
+ * Whether the declared source files for a business date arrived complete, with each file's state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer. A declared total is in naira and is compared with the file's naira rows (receivedAmountKobo); money in other currencies is listed beside it (receivedOtherCurrencies, only when there is some), never added to it, and leaves the file incomplete. A file whose batch was committed by an earlier build is compared with the total it was committed with, which may add rows in other currencies.
+ */
+export interface SourceCompleteness {
+  /** @pattern ^\d{4}-\d{2}-\d{2}$ */
+  businessDate: string;
+  /** @nullable */
+  manifest: SourceCompletenessManifest;
+  files: SourceCompletenessFilesItem[];
+  activeProfiles: SourceCompletenessActiveProfilesItem[];
+  undeclared: SourceCompletenessUndeclaredItem[];
+  status: SourceCompletenessStatus;
+  issues: SourceCompletenessIssuesItem[];
+  /** @pattern ^[a-f0-9]{64}$ */
+  basisDigest: string;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  expectedFiles: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  completeFiles: number;
+}
+
+export type SourceBatchQualitySourceOtherCurrencies = {[key: string]: {
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  count: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  amount: number;
+}};
+
+export type SourceBatchQualityImportedOtherCurrencies = {[key: string]: {
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  count: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  amount: number;
+}};
+
+export type SourceBatchQualityStatus = typeof SourceBatchQualityStatus[keyof typeof SourceBatchQualityStatus];
+
+
+export const SourceBatchQualityStatus = {
+  checked: 'checked',
+  needs_review: 'needs_review',
+  unavailable: 'unavailable',
+} as const;
+
+/**
+ * The original committed totals and checks of a source batch. sourceAmountKobo and importedAmountKobo sum the naira rows only (a row that names no currency is naira); money in other currencies is listed beside each (sourceOtherCurrencies, importedOtherCurrencies: by code, the rows and their amount in that currency's minor unit, only when there are some), never added to it. A batch committed by an earlier build keeps the totals it was committed with, which may add rows in other currencies.
+ */
+export interface SourceBatchQuality {
+  /** @nullable */
+  profileId: string | null;
+  /** @nullable */
+  profileVersion: string | null;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  sourceRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     * @nullable
+     */
+  sourceAmountKobo: number | null;
+  sourceOtherCurrencies?: SourceBatchQualitySourceOtherCurrencies;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  importedRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     * @nullable
+     */
+  importedAmountKobo: number | null;
+  importedOtherCurrencies?: SourceBatchQualityImportedOtherCurrencies;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  duplicateRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  conflictRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  invalidRows: number;
+  status: SourceBatchQualityStatus;
+  issues: string[];
+}
+
+export type PaystackFixtureInputScenario = typeof PaystackFixtureInputScenario[keyof typeof PaystackFixtureInputScenario];
+
+
+export const PaystackFixtureInputScenario = {
+  payment: 'payment',
+  duplicate: 'duplicate',
+  amount_mismatch: 'amount_mismatch',
+  out_of_order: 'out_of_order',
+  tampered: 'tampered',
+} as const;
+
+/**
+ * A recorded Paystack test scenario to deliver to the inbox.
+ */
+export interface PaystackFixtureInput {
+  scenario: PaystackFixtureInputScenario;
+  syntheticOnly: true;
+}
+
+/**
+ * A replay of a stored provider event, with its version and the reason.
+ */
+export interface ProviderReplayInput {
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  expectedUpdatedAt: string;
+  /**
+     * @minLength 3
+     * @maxLength 500
+     */
+  reason: string;
+}
+
+export type SourceDeliveryStatus = typeof SourceDeliveryStatus[keyof typeof SourceDeliveryStatus];
+
+
+export const SourceDeliveryStatus = {
+  paused: 'paused',
+  late: 'late',
+  on_schedule: 'on_schedule',
+  awaiting_first_delivery: 'awaiting_first_delivery',
+} as const;
+
+/**
+ * Where a profile stands against its cadence: missed deliveries, the next expected time and the last committed batch.
+ */
+export interface SourceDelivery {
+  status: SourceDeliveryStatus;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  missedDeliveries: number;
+  nextExpectedAt: string;
+  /** @nullable */
+  lastCommittedAt: string | null;
+  /** @nullable */
+  lastBatchId: string | null;
+}
+
+/**
+ * A source profile record with its delivery state.
+ */
+export type SourceProfile = ValopayRecord & {
+  delivery: SourceDelivery;
+};
+
+/**
+ * A batch as the sources page lists it, with its original quality totals.
+ */
+export interface SourceBatchSummary {
+  id: string;
+  name: string;
+  source: string;
+  sourceBatchId: string;
+  kind: string;
+  status: string;
+  createdAt: string;
+  quality: SourceBatchQuality;
+}
+
+/**
+ * Counts that need attention: late sources, duplicate and conflicting rows, batches needing review.
+ */
+export interface SourceSummary {
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  lateSources: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  duplicateRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  conflictRows: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  batchesNeedingReview: number;
+}
+
+export type ProviderEventMode = typeof ProviderEventMode[keyof typeof ProviderEventMode];
+
+
+export const ProviderEventMode = {
+  fixture: 'fixture',
+  test: 'test',
+} as const;
+
+/**
+ * A stored provider event: fixture or test mode, how often it was delivered and replayed, and the guarantee that it created no financial record.
+ */
+export interface ProviderEvent {
+  id: string;
+  name: string;
+  status: string;
+  reference: string;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  amountKobo: number;
+  createdAt: string;
+  updatedAt: string;
+  mode: ProviderEventMode;
+  message: string;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  deliveryCount: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  replayCount: number;
+  financialRecordsCreated: 0;
+}
+
+/**
+ * The read-only Paystack test inbox: its fixed test-only state, the stored events and how many were quarantined or duplicated.
+ */
+export interface PaystackInbox {
+  mode: 'test_only';
+  externalConnectionVerified: false;
+  canRunFixtures: boolean;
+  state: 'configuration_required';
+  message: string;
+  /** @maxItems 50 */
+  events: ProviderEvent[];
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  total: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  quarantined: number;
+  /**
+     * @minimum 0
+     * @maximum 9007199254740991
+     */
+  duplicates: number;
+}
+
+/**
+ * Everything the sources page shows for one lender and business date.
+ */
+export interface SourcesView {
+  completeness: SourceCompleteness;
+  profiles: SourceProfile[];
+  batches: SourceBatchSummary[];
+  summary: SourceSummary;
+  paystack: PaystackInbox;
+}
+
+/**
+ * Whether the fixture was accepted or recognised as a duplicate, and the stored event.
+ */
+export interface PaystackFixtureResult {
+  accepted: boolean;
+  duplicate: boolean;
+  event: ProviderEvent;
+}
+
+/**
+ * The event's payload as Paystack sent it.
+ */
+export type PaystackTestEventData = {[key: string]: unknown};
+
+/**
+ * A Paystack test event exactly as Paystack signed it. The signature covers these bytes, so the body is authenticated before it is parsed. charge.success and the two direct-debit authorisation events are recorded; any other signed event is acknowledged and recorded as ignored.
+ */
+export interface PaystackTestEvent {
+  event: string;
+  /** The event's payload as Paystack sent it. */
+  data: PaystackTestEventData;
+}
+
+/**
+ * The acknowledgement Paystack receives: the signed event is saved in the mapped lender's inbox, or recognised as a repeat delivery of one already saved.
+ */
+export interface PaystackDeliveryReceipt {
+  accepted: true;
+  duplicate: boolean;
+}
+
+export type PersonalWorkViewScope = typeof PersonalWorkViewScope[keyof typeof PersonalWorkViewScope];
+
+
+export const PersonalWorkViewScope = {
+  mine: 'mine',
+  team: 'team',
+} as const;
+
+export type PersonalWorkViewFilter = typeof PersonalWorkViewFilter[keyof typeof PersonalWorkViewFilter];
+
+
+export const PersonalWorkViewFilter = {
+  all: 'all',
+  overdue: 'overdue',
+  handover: 'handover',
+  review: 'review',
+  unread: 'unread',
+} as const;
+
+export type PersonalWorkViewItemsItemType = typeof PersonalWorkViewItemsItemType[keyof typeof PersonalWorkViewItemsItemType];
+
+
+export const PersonalWorkViewItemsItemType = {
+  case: 'case',
+  handover: 'handover',
+  review: 'review',
+} as const;
+
+export type PersonalWorkViewItemsItem = {
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  id: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  eventId: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  sourceId: string;
+  sourceVersion: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  sourceDigest: string;
+  type: PersonalWorkViewItemsItemType;
+  title: string;
+  nextAction: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  assignee: string;
+  assigneeName: string;
+  /** @nullable */
+  dueAt: string | null;
+  overdue: boolean;
+  escalated: boolean;
+  /** @nullable */
+  escalationReason: string | null;
+  /** @nullable */
+  reviewCurrent: boolean | null;
+  /** @pattern ^/ */
+  href: string;
+  /** @nullable */
+  readAt: string | null;
+  canAcknowledge: boolean;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     * @nullable
+     */
+  assignmentEventId: string | null;
+  /** @nullable */
+  notice: string | null;
+};
+
+export type PersonalWorkViewCounts = {
+  /** @minimum 0 */
+  all: number;
+  /** @minimum 0 */
+  overdue: number;
+  /** @minimum 0 */
+  handover: number;
+  /** @minimum 0 */
+  review: number;
+  /** @minimum 0 */
+  unread: number;
+  /** @minimum 0 */
+  escalated: number;
+};
+
+export type PersonalWorkViewWorkloadItem = {
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  actor: string;
+  name: string;
+  /** @minimum 0 */
+  total: number;
+  /** @minimum 0 */
+  overdue: number;
+  /** @minimum 0 */
+  handovers: number;
+  /** @minimum 0 */
+  reviews: number;
+  /** @minimum 0 */
+  escalated: number;
+};
+
+export type PersonalWorkViewHistoryItemAction = typeof PersonalWorkViewHistoryItemAction[keyof typeof PersonalWorkViewHistoryItemAction];
+
+
+export const PersonalWorkViewHistoryItemAction = {
+  read: 'read',
+  acknowledge: 'acknowledge',
+} as const;
+
+export type PersonalWorkViewHistoryItem = {
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  id: string;
+  action: PersonalWorkViewHistoryItemAction;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  sourceId: string;
+  summary: string;
+  at: string;
+  /** @pattern ^/ */
+  href: string;
+};
+
+/**
+ * The caller's (or, for administrators, the team's) cases, handovers, reviews and notifications, paged and counted.
+ */
+export interface PersonalWorkView {
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  merchantId: string;
+  lenderName: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  actor: string;
+  role: string;
+  asOf: string;
+  syntheticOnly: true;
+  canViewTeam: boolean;
+  canWork: boolean;
+  scope: PersonalWorkViewScope;
+  filter?: PersonalWorkViewFilter;
+  /** @maxItems 50 */
+  items: PersonalWorkViewItemsItem[];
+  /** @minimum 0 */
+  total: number;
+  /** @minimum 0 */
+  offset: number;
+  /**
+     * @minimum 1
+     * @maximum 50
+     */
+  limit: number;
+  counts: PersonalWorkViewCounts;
+  /** @maxItems 100 */
+  workload: PersonalWorkViewWorkloadItem[];
+  /** @minimum 0 */
+  workloadTotal: number;
+  /** @maxItems 10 */
+  history: PersonalWorkViewHistoryItem[];
+  escalationRule: string;
+}
+
+/**
+ * The item being acknowledged, with its version.
+ */
+export interface WorkReceiptInput {
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  sourceId: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  eventId: string;
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  expectedUpdatedAt: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  expectedDigest: string;
+}
+
+export type WorkReceiptAction = typeof WorkReceiptAction[keyof typeof WorkReceiptAction];
+
+
+export const WorkReceiptAction = {
+  read: 'read',
+  acknowledge: 'acknowledge',
+} as const;
+
+/**
+ * The recorded acknowledgement: who, what, and when.
+ */
+export interface WorkReceipt {
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  id: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  merchantId: string;
+  action: WorkReceiptAction;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  sourceId: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  eventId: string;
+  /**
+     * @minLength 1
+     * @maxLength 300
+     */
+  actor: string;
+  at: string;
+  duplicate: boolean;
+  syntheticOnly: true;
+  financialStatusChanged: false;
+}
+
+export type LifecycleViewPolicy = {
+  /**
+     * @minimum 1
+     * @maximum 3650
+     * @nullable
+     */
+  rawCsvDays: number | null;
+  /**
+     * @minimum 1
+     * @maximum 3650
+     * @nullable
+     */
+  journalPayloadDays: number | null;
+  /**
+     * @minimum 1
+     * @maximum 3650
+     * @nullable
+     */
+  exportFileDays: number | null;
+  auditTrail: 'retain';
+};
+
+export type LifecycleViewMinimumDays = {
+  /** @minimum 1 */
+  rawCsvDays: number;
+  /** @minimum 1 */
+  journalPayloadDays: number;
+  /** @minimum 1 */
+  exportFileDays: number;
+};
+
+export type LifecycleViewTargetsItemKind = typeof LifecycleViewTargetsItemKind[keyof typeof LifecycleViewTargetsItemKind];
+
+
+export const LifecycleViewTargetsItemKind = {
+  raw_csv: 'raw_csv',
+  journal_payload: 'journal_payload',
+  export_file: 'export_file',
+} as const;
+
+export type LifecycleViewTargetsItemStatus = typeof LifecycleViewTargetsItemStatus[keyof typeof LifecycleViewTargetsItemStatus];
+
+
+export const LifecycleViewTargetsItemStatus = {
+  committed: 'committed',
+  completed: 'completed',
+  cancelled: 'cancelled',
+  ready: 'ready',
+  failed: 'failed',
+} as const;
+
+export type LifecycleViewTargetsItemEvidenceItemReason = typeof LifecycleViewTargetsItemEvidenceItemReason[keyof typeof LifecycleViewTargetsItemEvidenceItemReason];
+
+
+export const LifecycleViewTargetsItemEvidenceItemReason = {
+  open_case: 'open_case',
+  approved_close_review: 'approved_close_review',
+} as const;
+
+export type LifecycleViewTargetsItemEvidenceItem = {
+  reason: LifecycleViewTargetsItemEvidenceItemReason;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  recordId: string;
+};
+
+export type LifecycleViewTargetsItem = {
+  kind: LifecycleViewTargetsItemKind;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  merchantId: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  sourceId: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  version: string;
+  createdAt: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  label: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  digest: string;
+  status: LifecycleViewTargetsItemStatus;
+  held: boolean;
+  /** @maxItems 10 */
+  evidence: LifecycleViewTargetsItemEvidenceItem[];
+};
+
+export type LifecycleViewHoldsItemKind = typeof LifecycleViewHoldsItemKind[keyof typeof LifecycleViewHoldsItemKind];
+
+
+export const LifecycleViewHoldsItemKind = {
+  raw_csv: 'raw_csv',
+  journal_payload: 'journal_payload',
+  export_file: 'export_file',
+} as const;
+
+export type LifecycleViewHoldsItem = {
+  kind: LifecycleViewHoldsItemKind;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  sourceId: string;
+  reason: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  actor: string;
+  at: string;
+};
+
+export type LifecycleViewRunsItemStatus = typeof LifecycleViewRunsItemStatus[keyof typeof LifecycleViewRunsItemStatus];
+
+
+export const LifecycleViewRunsItemStatus = {
+  preview: 'preview',
+  approved: 'approved',
+  running: 'running',
+  completed: 'completed',
+  attention: 'attention',
+} as const;
+
+export type LifecycleViewRunsItemCandidatesItemKind = typeof LifecycleViewRunsItemCandidatesItemKind[keyof typeof LifecycleViewRunsItemCandidatesItemKind];
+
+
+export const LifecycleViewRunsItemCandidatesItemKind = {
+  raw_csv: 'raw_csv',
+  journal_payload: 'journal_payload',
+  export_file: 'export_file',
+} as const;
+
+export type LifecycleViewRunsItemCandidatesItemStatus = typeof LifecycleViewRunsItemCandidatesItemStatus[keyof typeof LifecycleViewRunsItemCandidatesItemStatus];
+
+
+export const LifecycleViewRunsItemCandidatesItemStatus = {
+  committed: 'committed',
+  completed: 'completed',
+  cancelled: 'cancelled',
+  ready: 'ready',
+  failed: 'failed',
+} as const;
+
+export type LifecycleViewRunsItemCandidatesItem = {
+  kind: LifecycleViewRunsItemCandidatesItemKind;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  merchantId: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  sourceId: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  version: string;
+  createdAt: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  label: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  digest: string;
+  status: LifecycleViewRunsItemCandidatesItemStatus;
+};
+
+export type LifecycleViewRunsItemReceiptsItemKind = typeof LifecycleViewRunsItemReceiptsItemKind[keyof typeof LifecycleViewRunsItemReceiptsItemKind];
+
+
+export const LifecycleViewRunsItemReceiptsItemKind = {
+  raw_csv: 'raw_csv',
+  journal_payload: 'journal_payload',
+  export_file: 'export_file',
+} as const;
+
+export type LifecycleViewRunsItemReceiptsItemStatus = typeof LifecycleViewRunsItemReceiptsItemStatus[keyof typeof LifecycleViewRunsItemReceiptsItemStatus];
+
+
+export const LifecycleViewRunsItemReceiptsItemStatus = {
+  deleted: 'deleted',
+  already_absent: 'already_absent',
+  blocked: 'blocked',
+  failed: 'failed',
+} as const;
+
+export type LifecycleViewRunsItemReceiptsItem = {
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  id: string;
+  kind: LifecycleViewRunsItemReceiptsItemKind;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  sourceId: string;
+  status: LifecycleViewRunsItemReceiptsItemStatus;
+  at: string;
+  detail: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  actor: string;
+};
+
+export type LifecycleViewRunsItem = {
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  id: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  merchantId: string;
+  status: LifecycleViewRunsItemStatus;
+  updatedAt: string;
+  createdAt: string;
+  expiresAt: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  previewDigest: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  policyRevision: string;
+  /** @maxItems 100 */
+  candidates: LifecycleViewRunsItemCandidatesItem[];
+  /** @minimum 0 */
+  candidateCount: number;
+  /** @minimum 0 */
+  moreEligible: number;
+  /** @nullable */
+  preparedBy?: string | null;
+  /** @nullable */
+  approvedBy: string | null;
+  /** @nullable */
+  approvedAt: string | null;
+  /** @maxItems 100 */
+  receipts: LifecycleViewRunsItemReceiptsItem[];
+  /** @minimum 0 */
+  successful: number;
+  /** @minimum 0 */
+  remaining: number;
+  auditRetained: true;
+  financialRecordsRetained: true;
+  syntheticOnly: true;
+};
+
+/**
+ * The lender's retention policy, the shortest periods it may set (minimumDays) and whether a second administrator approves runs (secondApprover), holds, bounded inventory of what the policy would touch, and saved retention runs.
+ */
+export interface LifecycleView {
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  merchantId: string;
+  lenderName: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  actor: string;
+  asOf: string;
+  policy: LifecycleViewPolicy;
+  minimumDays?: LifecycleViewMinimumDays;
+  secondApprover?: boolean;
+  /** @pattern ^[a-f0-9]{64}$ */
+  policyRevision: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  holdRevision: string;
+  /** @minimum 0 */
+  eligibleCount: number;
+  /** @minimum 0 */
+  evidenceTotal: number;
+  /** @maxItems 100 */
+  targets: LifecycleViewTargetsItem[];
+  /** @minimum 0 */
+  targetTotal: number;
+  /** @minimum 0 */
+  targetOffset: number;
+  /** @maxItems 100 */
+  holds: LifecycleViewHoldsItem[];
+  /** @minimum 0 */
+  holdTotal: number;
+  /** @maxItems 10 */
+  runs: LifecycleViewRunsItem[];
+  auditRetained: true;
+  financialRecordsRetained: true;
+  syntheticOnly: true;
+}
+
+export type LifecycleRunViewStatus = typeof LifecycleRunViewStatus[keyof typeof LifecycleRunViewStatus];
+
+
+export const LifecycleRunViewStatus = {
+  preview: 'preview',
+  approved: 'approved',
+  running: 'running',
+  completed: 'completed',
+  attention: 'attention',
+} as const;
+
+export type LifecycleRunViewCandidatesItemKind = typeof LifecycleRunViewCandidatesItemKind[keyof typeof LifecycleRunViewCandidatesItemKind];
+
+
+export const LifecycleRunViewCandidatesItemKind = {
+  raw_csv: 'raw_csv',
+  journal_payload: 'journal_payload',
+  export_file: 'export_file',
+} as const;
+
+export type LifecycleRunViewCandidatesItemStatus = typeof LifecycleRunViewCandidatesItemStatus[keyof typeof LifecycleRunViewCandidatesItemStatus];
+
+
+export const LifecycleRunViewCandidatesItemStatus = {
+  committed: 'committed',
+  completed: 'completed',
+  cancelled: 'cancelled',
+  ready: 'ready',
+  failed: 'failed',
+} as const;
+
+export type LifecycleRunViewCandidatesItem = {
+  kind: LifecycleRunViewCandidatesItemKind;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  merchantId: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  sourceId: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  version: string;
+  createdAt: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  label: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  digest: string;
+  status: LifecycleRunViewCandidatesItemStatus;
+};
+
+export type LifecycleRunViewReceiptsItemKind = typeof LifecycleRunViewReceiptsItemKind[keyof typeof LifecycleRunViewReceiptsItemKind];
+
+
+export const LifecycleRunViewReceiptsItemKind = {
+  raw_csv: 'raw_csv',
+  journal_payload: 'journal_payload',
+  export_file: 'export_file',
+} as const;
+
+export type LifecycleRunViewReceiptsItemStatus = typeof LifecycleRunViewReceiptsItemStatus[keyof typeof LifecycleRunViewReceiptsItemStatus];
+
+
+export const LifecycleRunViewReceiptsItemStatus = {
+  deleted: 'deleted',
+  already_absent: 'already_absent',
+  blocked: 'blocked',
+  failed: 'failed',
+} as const;
+
+export type LifecycleRunViewReceiptsItem = {
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  id: string;
+  kind: LifecycleRunViewReceiptsItemKind;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  sourceId: string;
+  status: LifecycleRunViewReceiptsItemStatus;
+  at: string;
+  detail: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  actor: string;
+};
+
+/**
+ * One retention run: its reviewed manifest, who prepared it, approval state and per-item receipts.
+ */
+export interface LifecycleRunView {
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  id: string;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  merchantId: string;
+  status: LifecycleRunViewStatus;
+  updatedAt: string;
+  createdAt: string;
+  expiresAt: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  previewDigest: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  policyRevision: string;
+  /** @maxItems 100 */
+  candidates: LifecycleRunViewCandidatesItem[];
+  /** @minimum 0 */
+  candidateCount: number;
+  /** @minimum 0 */
+  moreEligible: number;
+  /** @nullable */
+  preparedBy?: string | null;
+  /** @nullable */
+  approvedBy: string | null;
+  /** @nullable */
+  approvedAt: string | null;
+  /** @maxItems 100 */
+  receipts: LifecycleRunViewReceiptsItem[];
+  /** @minimum 0 */
+  successful: number;
+  /** @minimum 0 */
+  remaining: number;
+  auditRetained: true;
+  financialRecordsRetained: true;
+  syntheticOnly: true;
+}
+
+export type RetentionPolicyInputPolicy = {
+  /**
+     * @minimum 1
+     * @maximum 3650
+     * @nullable
+     */
+  rawCsvDays: number | null;
+  /**
+     * @minimum 1
+     * @maximum 3650
+     * @nullable
+     */
+  journalPayloadDays: number | null;
+  /**
+     * @minimum 1
+     * @maximum 3650
+     * @nullable
+     */
+  exportFileDays: number | null;
+  auditTrail: 'retain';
+};
+
+/**
+ * The retention periods per kind, with the version being changed and the reason.
+ */
+export interface RetentionPolicyInput {
+  policy: RetentionPolicyInputPolicy;
+  /** @pattern ^[a-f0-9]{64}$ */
+  expectedRevision: string;
+  /**
+     * @minLength 10
+     * @maxLength 500
+     */
+  reason: string;
+}
+
+export type RetentionHoldInputKind = typeof RetentionHoldInputKind[keyof typeof RetentionHoldInputKind];
+
+
+export const RetentionHoldInputKind = {
+  raw_csv: 'raw_csv',
+  journal_payload: 'journal_payload',
+  export_file: 'export_file',
+} as const;
+
+/**
+ * A hold on one item, or its release, with the reason.
+ */
+export interface RetentionHoldInput {
+  kind: RetentionHoldInputKind;
+  /**
+     * @minLength 1
+     * @maxLength 200
+     */
+  sourceId: string;
+  held: boolean;
+  /** @pattern ^[a-f0-9]{64}$ */
+  expectedHoldRevision: string;
+  /**
+     * @minLength 10
+     * @maxLength 500
+     */
+  reason: string;
+}
+
+/**
+ * Which kinds to preview and the reason for the run.
+ */
+export interface LifecyclePreviewInput {
+  /** @pattern ^[a-f0-9]{64}$ */
+  expectedPolicyRevision: string;
+}
+
+/**
+ * Approval of a previewed run, quoting its manifest digest.
+ */
+export interface LifecycleApproveInput {
+  /** An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00. The service stores and compares the UTC instant. */
+  expectedUpdatedAt: string;
+  /** @pattern ^[a-f0-9]{64}$ */
+  previewDigest: string;
+  /**
+     * @minLength 10
+     * @maxLength 500
+     */
+  reason: string;
+}
+
+/**
+ * Execution of an approved run, quoting its manifest digest, in bounded batches.
+ */
+export interface LifecycleExecuteInput {
+  /** @pattern ^[a-f0-9]{64}$ */
+  previewDigest: string;
 }
 
 export type GetOverviewParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };
 
 export type ListRecordsParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 /**
- * Text matched, ignoring case and accents, against the name, reference, status and data.
+ * Text matched, ignoring case and accents, against the record's name, its reference and the text and number values in its data, nested ones included; never a field's name, true, false or null.
  */
 search?: string;
 /**
- * Only records in this status; omitted or "all" for every status.
+ * Only records in this status; omitted or "all" for every status. Saved exports (kind exports) also take "expired", which is derived rather than stored: the exports whose file an approved retention run removed (fileDeletedAt), whatever their job's status. "ready" and "failed" then list only the exports whose file remains.
  */
 status?: string;
 /**
- * Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views.
+ * Page size, from 1 to 500; a value outside that range is refused (400). Omitted, a kind that grows with history (audit, closes, exports, notifications, retry-decisions) returns its newest 500 with nextOffset to page on, and any other kind its whole filtered set, for existing relationship and balance views.
  * @minimum 1
  * @maximum 500
  */
@@ -627,7 +4337,7 @@ limit?: number;
  */
 offset?: number;
 /**
- * ISO timestamp; only records updated at or after it (incremental sync).
+ * An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00; only records updated at or after that instant (incremental sync). A number, a date without a time, a time without Z or an offset, or a year outside 0001 to 9999 is refused (400, naming updatedSince).
  */
 updatedSince?: string;
 /**
@@ -638,50 +4348,80 @@ customerId?: string;
  * Only this exact record ID, in the selected kind and lender.
  */
 id?: string;
+/**
+ * Instalments (due-items) only. true lists just the instalments that can take an allocation now: those that still owe an amount and are not cancelled, closed or in dispute, and with paymentId only those a manual allocation of that payment accepts, so total counts the choices. Omitted or false lists every instalment. Refused (400) for any other kind.
+ */
+allocatable?: ListRecordsAllocatable;
+/**
+ * With allocatable=true, the payment whose choices are listed: the instalments a manual allocation of it accepts, by the payer rule that allocation applies. A payment with a recorded payer takes only its payer's instalments; one whose evidence named no payer but names an instalment takes only that instalment's customer's; one that names neither takes any customer's. A payment in another currency than naira, whose money went back or with nothing left to allocate takes none, so the list is empty. A payment the lender does not have is a 404; without allocatable=true, paymentId is refused (400).
+ * @minLength 1
+ * @maxLength 100
+ */
+paymentId?: string;
 };
+
+export type ListRecordsAllocatable = typeof ListRecordsAllocatable[keyof typeof ListRecordsAllocatable];
+
+
+export const ListRecordsAllocatable = {
+  true: 'true',
+  false: 'false',
+} as const;
 
 export type CreateRecordParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };
 
 export type UpdateRecordParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };
 
 export type PerformActionParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };
 
 export type ImportRecordsParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };
 
 export type GetCustomerTimelineParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };
 
 export type GetReportsParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 /**
- * Default true for compatibility. The console passes false and loads paged close summaries separately.
+ * Default true for compatibility: the close array, where closes more than a week before the latest carry their summary (GET /v1/close-history/{id} returns any close whole). The console passes false and loads paged close summaries separately.
  */
 includeCloses?: GetReportsIncludeCloses;
 };
@@ -696,49 +4436,63 @@ export const GetReportsIncludeCloses = {
 
 export type GetGatesParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };
 
 export type GetSettingsParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };
 
 export type UpdateSettingsParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };
 
 export type CreateExportParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };
 
 export type GetExportJobParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };
 
 export type RetryExportJobParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };
 
 export type DownloadExportParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };
@@ -747,7 +4501,9 @@ export type GetOpenApiDocument200 = { [key: string]: unknown };
 
 export type ListQueueParams = {
 /**
- * The active lender, belonging to the caller’s workspace.
+ * The active lender, belonging to the caller’s workspace. Missing or empty, the request is refused with 400 naming merchantId.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 /**
@@ -796,7 +4552,9 @@ q?: string;
 
 export type ListReconciliationParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 /**
@@ -825,7 +4583,9 @@ q?: string;
 
 export type ListCloseHistoryParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 /**
@@ -854,14 +4614,18 @@ offset?: number;
 
 export type GetCloseDetailParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };
 
 export type GetCustomerHistoryParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 /**
@@ -921,14 +4685,410 @@ paymentsOffset?: number;
 
 export type GetConnectedWorkspaceParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };
 
 export type PerformConnectedActionParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type ListOperationsParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+/**
+ * Rows to skip in the newest-first order; pages hold 25 rows.
+ * @minimum 0
+ * @maximum 100000
+ */
+offset?: number;
+};
+
+export type CountPendingOperationsParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type RetryOperationParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type CancelOperationParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type GetPilotJourneyParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type ListImportBatchesParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+/**
+ * Rows to skip in the newest-first order; pages hold 25 rows.
+ * @minimum 0
+ * @maximum 100000
+ */
+offset?: number;
+};
+
+export type SaveImportBatchParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type GetImportBatchParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type SaveImportBatchRevisionParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type CommitImportBatchParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type GetCaseParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type CoordinateCaseParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type GetPilotProgressParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type ListCloseReviewsParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type PrepareCloseReviewParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type DecideCloseReviewParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type ListImportCorrectionsParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+/**
+ * The committed import batch whose records may be corrected.
+ * @minLength 1
+ * @maxLength 100
+ */
+batchId: string;
+};
+
+export type ProposeImportCorrectionParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type PreviewImportCorrectionParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type DecideImportCorrectionParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type GetSourcesParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+/**
+ * The WAT business date to report completeness for; defaults to the current one.
+ * @pattern ^\d{4}-\d{2}-\d{2}$
+ */
+businessDate?: string;
+};
+
+export type CreateSourceProfileParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type SaveSourceProfileParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type SaveSourceManifestParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type RunPaystackFixtureParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type ReplayProviderEventParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type GetPersonalWorkParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+/**
+ * The caller's own work, or (administrators) the whole team's.
+ */
+scope?: GetPersonalWorkScope;
+/**
+ * Only overdue items, handovers, reviews or unread notifications.
+ */
+filter?: GetPersonalWorkFilter;
+/**
+ * Rows to skip.
+ * @minimum 0
+ * @maximum 100000
+ */
+offset?: number;
+/**
+ * Page size; defaults to 25.
+ * @minimum 1
+ * @maximum 50
+ */
+limit?: number;
+};
+
+export type GetPersonalWorkScope = typeof GetPersonalWorkScope[keyof typeof GetPersonalWorkScope];
+
+
+export const GetPersonalWorkScope = {
+  mine: 'mine',
+  team: 'team',
+} as const;
+
+export type GetPersonalWorkFilter = typeof GetPersonalWorkFilter[keyof typeof GetPersonalWorkFilter];
+
+
+export const GetPersonalWorkFilter = {
+  all: 'all',
+  overdue: 'overdue',
+  handover: 'handover',
+  review: 'review',
+  unread: 'unread',
+} as const;
+
+export type ReadNotificationParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type AcknowledgeHandoverParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type GetLifecycleParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+/**
+ * Rows to skip in the newest-first order; pages hold 25 rows.
+ * @minimum 0
+ * @maximum 100000
+ */
+offset?: number;
+};
+
+export type GetLifecycleRunParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type SaveRetentionPolicyParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type SetRetentionHoldParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type PreviewLifecycleRunParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type ApproveLifecycleRunParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
+};
+
+export type ExecuteLifecycleRunParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 };

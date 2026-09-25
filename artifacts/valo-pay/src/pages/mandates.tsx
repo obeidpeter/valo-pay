@@ -11,20 +11,24 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useWorkspace } from '@/lib/workspace-context';
 import { permissionReason } from '@/lib/permissions';
 import { useListRecords, getListRecordsQueryKey, } from '@workspace/api-client-react';
-import { formatKobo, formatDate } from '@/lib/formatters';
+import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { RecordDialog } from '@/components/record-dialog';
 import { useQueryClient } from '@tanstack/react-query';
 import { activationWorkflows, mandateFrequencies } from '@workspace/valopay-schema';
 import { RecordLabel, StatusBadge, readableLabel } from '@/components/record-label';
-import { deadlineInstant, isDueToday, isDeadlineOverdue as isOverdue, useQueueFilters } from '@/lib/queue-filters';
+import { isDueToday, isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { nairaToKobo } from '@/lib/money-input';
 import { MandateActionContext } from '@/components/mandate-action-context';
 import { recordDestination, safeCollectionReturnTo } from '@/lib/record-navigation';
 import { useHashTarget } from '@/lib/use-hash-target';
 import { usePagedQueue } from '@/lib/use-paged-queue';
 import { SavedQueueViews } from '@/components/saved-queue-views';
-import { RecordPagination } from '@/components/record-pagination';
+import { RecordPagination, usePageProblemFocus } from '@/components/record-pagination';
+import { DiscardOriginalRequest } from '@/components/discard-original-request';
+import { KEPT_IN_OPERATIONS, OpenOperations } from '@/components/pilot-ui';
+import { keepRowsWhilePaging, searchWithoutSubmitting, useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
+import { LoadProblem } from '@/components/load-problem';
 
 const mandateViews = ['all', 'awaiting-activation', 'overdue', 'due-today'] as const;
 const emptyMandate = { name: '', customerId: '', amountKobo: '', reference: '', workflow: 'hosted_consent', consentEvidence: '', consentGaps: '', policyId: '', frequency: 'monthly' };
@@ -44,6 +48,9 @@ export default function MandatesPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formErrors, setFormErrors] = useState<string[]>([]);
   const pendingErrorFocus = useRef<string | null>(null);
+  // The queue's problem notice, which takes the pager's focus when a page press fails.
+  const listProblem = useRef<HTMLDivElement>(null);
+  const listAgain = usePageProblemFocus(listProblem, 'mandates');
   const { view, setView } = useQueueFilters(mandateViews, 'all');
   const [search, setSearch] = useSearchParams();
   const targetId = search.get('record');
@@ -64,20 +71,31 @@ export default function MandatesPage() {
   const createSession = useRef({ scope: draftScope });
   if (createSession.current.scope !== draftScope) createSession.current = { scope: draftScope };
   const { confirmDiscard } = useUnsavedChanges(isCreateOpen && JSON.stringify(draft) !== JSON.stringify(emptyMandate));
-  const changeCreateOpen = (open: boolean) => { if (open || confirmDiscard()) { if (!open) setDraft(emptyMandate); setIsCreateOpen(open); } };
+  const changeCreateOpen = (open: boolean) => { if (!open && (createMandate.isPending || createMandate.hasUnconfirmedOutcome)) return; if (open || confirmDiscard()) { if (!open) { setDraft(emptyMandate); setCustomerSearch(''); setChosenCustomer(null); } setIsCreateOpen(open); } };
   useEffect(() => () => { createSession.current = { scope: 'unmounted' }; }, []);
   useEffect(() => {
     setSelectedMandate(null); setIsDialogOpen(false); setIsCreateOpen(false);
-    setFieldErrors({}); setFormErrors([]); setDraft(emptyMandate);
+    setFieldErrors({}); setFormErrors([]); setDraft(emptyMandate); setCustomerSearch(''); setChosenCustomer(null);
   }, [merchantId]);
   const queryClient = useQueryClient();
 
-  const { data, isLoading, error, refetch, pagination } = usePagedQueue('mandates', { view, record: targetId ? wrongLender ? 'unavailable' : targetId : undefined });
-  const { data: customers } = useListRecords(
+  const { data, isLoading, isPlaceholderData, error, refetch, pagination } = usePagedQueue('mandates', { view, record: targetId ? wrongLender ? 'unavailable' : targetId : undefined });
+  // The customer picker asks for one searchable page of customers, never the whole book (a pilot lender's was about 400 KB).
+  const [customerSearch, setCustomerSearch] = useState('');
+  const { search: customerTerm, searchPending: customerSearchPending } = useDebouncedSearch(customerSearch, draftScope);
+  const customerPage = useRecordPagination(`${draftScope}:${customerTerm}`);
+  const customerParams = { merchantId: merchantId!, search: customerTerm, limit: customerPage.pageSize, offset: customerPage.offset };
+  // Paging keeps the choices shown, and so the pager and the control pressed, until the next page arrives.
+  const customersKey = getListRecordsQueryKey('customers', customerParams);
+  const { data: customers, error: customersError, isFetching: fetchingCustomers, refetch: retryCustomers } = useListRecords(
     'customers',
-    { merchantId: merchantId! },
-    { query: { enabled: !!merchantId && isCreateOpen, queryKey: getListRecordsQueryKey('customers', { merchantId: merchantId! }) } }
+    customerParams,
+    { query: { enabled: !!merchantId && isCreateOpen && !customerSearchPending, queryKey: customersKey, placeholderData: keepRowsWhilePaging(customersKey, queryClient) } }
   );
+  // The chosen customer stays in the list while the person searches or pages on.
+  const [chosenCustomer, setChosenCustomer] = useState<{ value: string; label: string } | null>(null);
+  const customerOptions = (customers?.items || []).map(customer => ({ value: customer.id, label: `${customer.name} · ${customer.reference}` }));
+  if (chosenCustomer && chosenCustomer.value === draft.customerId && !customerOptions.some(option => option.value === chosenCustomer.value)) customerOptions.unshift(chosenCustomer);
   useHashTarget(`record-${targetId || ''}`, !!targetId && !isLoading && !error && !wrongLender);
   const { data: policies } = useListRecords(
     'policies',
@@ -93,7 +111,8 @@ export default function MandatesPage() {
         queryClient.invalidateQueries();
         if (submitted !== createSession.current) return;
         setIsCreateOpen(false);
-        setDraft(emptyMandate);
+        // The next mandate starts afresh, as after Cancel: no search and no customer chosen.
+        setDraft(emptyMandate); setCustomerSearch(''); setChosenCustomer(null);
         setFieldErrors({}); setFormErrors([]);
       },
       onError: (error: unknown, _variables, submitted) => {
@@ -115,8 +134,10 @@ export default function MandatesPage() {
 
   const submitCreate = (event: React.FormEvent) => {
     event.preventDefault();
+    if (createMandate.isPending) return;
     const blocked = permissionReason(workspace, { kind: 'mandates' });
     if (blocked) { setFormErrors([blocked]); return; }
+    if (createMandate.hasUnconfirmedOutcome) { void createMandate.retryUnconfirmed().catch(() => undefined); return; }
     const errors: Record<string, string> = {};
     for (const field of requiredFields) {
       const value = String(draft[field.name] ?? '').trim();
@@ -165,7 +186,7 @@ export default function MandatesPage() {
   const views: Array<{ key: typeof view; label: string; count: number | string }> = [
     { key: 'all', label: 'All mandates' }, { key: 'awaiting-activation', label: 'Awaiting activation' },
     { key: 'overdue', label: 'Overdue activation' }, { key: 'due-today', label: 'Activation due today' },
-  ].map(item => ({ ...item, key: item.key as typeof view, count: data?.counts[item.key] ?? '…' }));
+  ].map(item => ({ ...item, key: item.key as typeof view, count: typeof data?.counts[item.key] === 'number' ? formatNumber(data.counts[item.key]!) : '…' }));
   if (!merchantId) return null;
 
   return (
@@ -191,7 +212,7 @@ export default function MandatesPage() {
         {isLoading ? (
           <Loading what="mandates" />
         ) : error ? (
-          <div role="alert" className="p-6 text-sm"><p>Mandates could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => refetch()}>Try again</Button></div>
+          <div ref={listProblem} role="alert" className="p-6 text-sm"><p>Mandates could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => { listAgain(); void refetch(); }}>Try again</Button></div>
         ) : targetId && shown.length === 0 ? (
           <EmptyState title={wrongLender ? 'This mandate link belongs to another lender' : 'The selected mandate is unavailable'} action={<Button size="sm" variant="outline" onClick={leaveSelectedRecord}>View mandate queue</Button>}>
             {wrongLender ? 'Switch to the lender you were reviewing to open this record.' : 'The record could not be found for the active lender. Return to collections to check its linked mandate.'}
@@ -222,7 +243,7 @@ export default function MandatesPage() {
                     <td className="px-6 py-4"><StatusBadge status={mandate.status} /></td>
                     <td className="px-6 py-4 font-mono">{formatKobo(mandate.amountKobo)}</td>
                     <td className="px-6 py-4 text-xs text-muted-foreground" title={readableLabel(mandate.data?.workflow || 'standard')}>{readableLabel(mandate.data?.workflow || 'standard')}</td>
-                    <td className="px-6 py-4 text-xs"><p>{formatDate(deadlineInstant(mandate.data?.activationDeadline))}</p>{mandate.status === 'pending_activation' && isOverdue(mandate.data?.activationDeadline, now) && <p className="mt-1 font-semibold text-destructive">Overdue · follow up or reissue</p>}{mandate.status === 'pending_activation' && !isOverdue(mandate.data?.activationDeadline, now) && isDueToday(mandate.data?.activationDeadline, now) && <p className="mt-1 font-semibold text-warning-strong">Activation due today</p>}</td>
+                    <td className="px-6 py-4 text-xs"><p>{formatDate(String(mandate.data?.activationDeadline || ''))}</p>{mandate.status === 'pending_activation' && isOverdue(mandate.data?.activationDeadline, now) && <p className="mt-1 font-semibold text-destructive">Overdue · follow up or reissue</p>}{mandate.status === 'pending_activation' && !isOverdue(mandate.data?.activationDeadline, now) && isDueToday(mandate.data?.activationDeadline, now) && <p className="mt-1 font-semibold text-warning-strong">Activation due today</p>}</td>
                     <td className="px-6 py-4 text-right space-x-2">
                       {mandate.status === 'active' && <Button size="sm" variant="outline" className="h-7 text-xs" action="mandate_suspend" record={mandate} onClick={() => handleAction(mandate, 'mandate_suspend')}>Suspend</Button>}
                       {mandate.status === 'suspended' && <Button size="sm" variant="outline" className="h-7 text-xs" action="mandate_reinstate" record={mandate} onClick={() => handleAction(mandate, 'mandate_reinstate')}>Resume</Button>}
@@ -238,7 +259,7 @@ export default function MandatesPage() {
             </table>
           </ScrollFrame>
         )}
-        {!isLoading && !error && !targetId && <RecordPagination pagination={pagination} total={data?.total || 0} label="mandates" />}
+        {!isLoading && !error && !targetId && <RecordPagination pagination={pagination} total={data?.total || 0} busy={isPlaceholderData} label="mandates" />}
       </div>
 
       {replacements.length > 0 && <section aria-label="Reissued mandates" className="rounded-xl border bg-card p-5 text-sm">
@@ -266,7 +287,10 @@ export default function MandatesPage() {
           action={actionKind}
           policyName={approvedVersionOptions.find(policy => policy.value === values.policyId)?.label}
         />}
-        fields={actionKind === 'mandate_reissue' ? [{ name: 'consentEvidence', label: 'New consent evidence reference (reissuing creates a new mandate)', type: 'text', isData: true, required: true }]
+        fields={actionKind === 'mandate_reissue' ? [
+            { name: 'consentEvidence', label: 'New consent evidence reference (reissuing creates a new mandate)', type: 'text', isData: true, required: true },
+            { name: 'amountKobo', label: 'Debit limit the new consent covers', type: 'number', isData: true, required: true },
+          ]
           : actionKind === 'notify_policy_change' ? [{ name: 'policyId', label: 'Approved policy version (the notice is simulated and is not proof of delivery)', type: 'select', isData: true, required: true, options: approvedVersionOptions }]
           : actionKind === 'apply_policy_version' ? [
             { name: 'policyId', label: 'Approved policy version to apply', type: 'select', isData: true, required: true, options: approvedVersionOptions },
@@ -281,12 +305,20 @@ export default function MandatesPage() {
             <Dialog.Title className="text-lg font-semibold">Create synthetic mandate</Dialog.Title>
             <Dialog.Description className="mt-1 text-sm text-muted-foreground">Use synthetic details only. This records a mandate in the sandbox; it sends no instruction to a bank.</Dialog.Description>
             <form noValidate className="mt-5 space-y-4" onSubmit={submitCreate}>
-              <fieldset disabled={createMandate.isPending} className="contents">
-              {(formErrors.length > 0 || Object.keys(fieldErrors).length > 0) && (
+              {createMandate.hasUnconfirmedOutcome && <FormAlert title="Mandate creation outcome unconfirmed"><p>The response was lost or unavailable. This mandate may already exist. Keep these details unchanged and retry the original request to recover its result without creating a second mandate. {KEPT_IN_OPERATIONS}</p><div className="mt-2 flex flex-wrap items-center gap-3"><OpenOperations /><DiscardOriginalRequest disabled={createMandate.isPending} onDiscard={() => { createMandate.abandonUnconfirmed(); setFormErrors([]); setFieldErrors({}); }} /></div></FormAlert>}
+              <fieldset disabled={createMandate.isPending || createMandate.hasUnconfirmedOutcome} className="contents">
+              {!createMandate.hasUnconfirmedOutcome && (formErrors.length > 0 || Object.keys(fieldErrors).length > 0) && (
                 <FormAlert title={formErrors[0] ?? attentionTitle(Object.keys(fieldErrors).length)}>{formErrors.slice(1).map(message => <p key={message}>{message}</p>)}</FormAlert>
               )}
               <MandateField label="Mandate name" value={draft.name} id="mandate-name" error={fieldErrors.name} onChange={value => change('name', value)} required />
-              <MandateSelect label="Customer" value={draft.customerId} id="mandate-customerId" error={fieldErrors.customerId} onChange={value => change('customerId', value)} required options={(customers?.items || []).map(customer => ({ value: customer.id, label: `${customer.name} · ${customer.reference}` }))} />
+              <div className="space-y-2">
+                <label className="grid gap-1 text-sm font-medium">Search customers<input type="search" value={customerSearch} onKeyDown={searchWithoutSubmitting} onChange={event => { setCustomerSearch(event.target.value); customerPage.setPage(0); }} placeholder="Name or reference" className={controlClass} /></label>
+                <MandateSelect label="Customer" value={draft.customerId} id="mandate-customerId" error={fieldErrors.customerId} onChange={value => { change('customerId', value); setChosenCustomer(customerOptions.find(option => option.value === value) ?? null); }} required options={customerOptions} />
+                {customersError ? <LoadProblem what="customer choices" pager="customer choices" error={customersError} retry={() => { void retryCustomers(); }} busy={fetchingCustomers} /> : <>
+                  {(fetchingCustomers || customerSearchPending) && <p role="status" className="text-xs text-muted-foreground">Loading customer choices…</p>}
+                  {customers && !customerSearchPending && <RecordPagination pagination={customerPage} total={customers.total} busy={fetchingCustomers} label="customer choices" />}
+                </>}
+              </div>
               <MandateField label="Debit limit (₦)" inputMode="decimal" value={draft.amountKobo} id="mandate-amountKobo" error={fieldErrors.amountKobo} onChange={value => change('amountKobo', value)} required />
               <MandateField label="Provider reference" value={draft.reference} id="mandate-reference" error={fieldErrors.reference} onChange={value => change('reference', value)} required />
               <MandateSelect label="Activation method" value={draft.workflow} id="mandate-workflow" error={fieldErrors.workflow} onChange={value => change('workflow', value)} required options={activationWorkflows.map(workflow => ({ value: workflow, label: readableLabel(workflow) }))} />
@@ -297,8 +329,8 @@ export default function MandatesPage() {
               <MandateSelect label="Frequency" value={draft.frequency} id="mandate-frequency" error={fieldErrors.frequency} onChange={value => change('frequency', value)} required options={mandateFrequencies.map(frequency => ({ value: frequency, label: frequency.charAt(0).toUpperCase() + frequency.slice(1) }))} />
               </fieldset>
               <div className="flex justify-end gap-2 border-t pt-4">
-                <Button type="button" variant="outline" onClick={() => changeCreateOpen(false)}>Cancel</Button>
-                <Button kind="mandates" type="submit" busy={createMandate.isPending} busyLabel="Creating mandate…">Create mandate</Button>
+                <Button type="button" variant="outline" disabled={createMandate.isPending || createMandate.hasUnconfirmedOutcome} onClick={() => changeCreateOpen(false)}>Cancel</Button>
+                <Button kind="mandates" type="submit" busy={createMandate.isPending} busyLabel={createMandate.hasUnconfirmedOutcome ? 'Recovering result…' : 'Creating mandate…'}>{createMandate.hasUnconfirmedOutcome ? 'Retry original mandate request' : 'Create mandate'}</Button>
               </div>
             </form>
           </Dialog.Content>

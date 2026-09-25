@@ -3,18 +3,64 @@ import {
   activationWorkflows, adjustmentReasons, alertSeverities, attemptSources, closeTriggers, collectionStatuses, exceptionSeverities, executionOwners, experimentArms,
   handBackOwners, mandateFrequencies, mandateOrigins, notificationChannels, observationSources, paymentChannels, refundStatuses, retryDecisionKinds, reversalStatuses, settlementStatuses,
 } from "./enums";
-import type { RecordKind } from "./kinds";
+import { importKinds, type RecordKind } from "./kinds";
+import { sourceBatchQualitySchema, expectedSourceFileSchema } from "./source-quality";
+import { importCorrectionPreviewSchema } from "./import-corrections";
+import { lifecycleCandidateSchema, lifecycleKindSchema, lifecycleReceiptStatusSchema, retentionPolicySchema } from "./lifecycle";
+import { WAT_OFFSET_MS } from "./policy";
 
-/** ISO date (YYYY-MM-DD) or a UTC ISO timestamp with millisecond precision or less. */
-export const isoDateOrTimestamp = z.string().regex(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/, "Use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z.").refine((value) => !Number.isNaN(Date.parse(value)), "Enter a valid date.");
-/** A day as YYYY-MM-DD. */
-export const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD, for example 2026-09-18.").refine((value) => !Number.isNaN(Date.parse(value)), "Enter a valid date.");
+const DAY_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+/**
+ * Whether a day (YYYY-MM-DD) or a UTC timestamp to the millisecond names a
+ * real date and time exactly as written, from the year 0001 (PostgreSQL has
+ * no year 0). Date.parse rolls 2026-02-30 over to 2 March and 24:00 over to
+ * the next day; this refuses both.
+ */
+export function isRealDate(value: string): boolean {
+  const day = DAY_ONLY.test(value);
+  if (!day && !UTC_TIMESTAMP.test(value)) return false;
+  const time = Date.parse(day ? `${value}T00:00:00.000Z` : value), written = day ? 10 : 19;
+  return Number.isFinite(time) && !value.startsWith("0000") && new Date(time).toISOString().slice(0, written) === value.slice(0, written);
+}
+/**
+ * When a deadline passes, in milliseconds: a timestamp at its instant, and a
+ * date-only deadline (YYYY-MM-DD) at the end of that day in West Africa Time
+ * (23:59:59.999 WAT), so it lasts the whole day. NaN for an impossible date,
+ * which is no deadline, as the SQL queues read it.
+ */
+export function deadlineEnds(value: unknown): number {
+  const text = typeof value === "string" ? value : "";
+  if (DAY_ONLY.test(text)) return isRealDate(text) ? Date.parse(`${text}T00:00:00.000Z`) + 24 * 60 * 60 * 1000 - WAT_OFFSET_MS - 1 : NaN;
+  return UTC_TIMESTAMP.test(text) && !isRealDate(text) ? NaN : Date.parse(text);
+}
+/** Whether a deadline has passed at `now` (an instant in milliseconds, or ISO text): after its instant, or once its WAT day is over. */
+export function deadlinePassed(value: unknown, now: number | string): boolean {
+  return deadlineEnds(value) < (typeof now === "number" ? now : Date.parse(now));
+}
+
+/**
+ * The longest a record's indexed text may be, in characters. Status, reference
+ * and customerId are columns of the record indexes, and a payment evidence
+ * record's eventId is in its unique index; PostgreSQL refuses an index entry
+ * over about 2,700 bytes. Longer text is refused as input, naming its field
+ * (400), before anything is saved.
+ */
+export const recordTextLimits = { status: 100, reference: 200, customerId: 100, eventId: 200 } as const;
+
+/** ISO date (YYYY-MM-DD) or a UTC ISO timestamp with millisecond precision or less, naming a real date. */
+export const isoDateOrTimestamp = z.string().regex(/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z)?$/, "Use YYYY-MM-DD or a UTC timestamp such as 2026-09-18T07:00:00Z.").refine(isRealDate, "Enter a valid date.");
+/** A day as YYYY-MM-DD, naming a real date. */
+export const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD, for example 2026-09-18.").refine(isRealDate, "Enter a valid date.");
 /** An amount in kobo: a non-negative safe integer. */
 export const kobo = z.number({ invalid_type_error: 'Enter an amount as a number.' }).int('Enter a whole number in kobo (100 kobo = ₦1).').min(0, 'The amount cannot be negative.').max(Number.MAX_SAFE_INTEGER, 'The amount is too large.');
 const versionNumber = z.coerce.number().int().min(1);
 /** Every record the platform writes is marked synthetic; a provider-accepted notice clears it (NOT-10). */
 const common = { synthetic: z.boolean().optional() };
-const money = z.object({ count: z.number().int().min(0), kobo: z.number().int() });
+/** Money in another currency than naira, by currency code: how many payments, and their amount in that currency's minor unit as each payment stores it. It is never added to a naira total. */
+const otherCurrencies = z.record(z.object({ count: z.number().int().min(0), amount: z.number().int() }));
+/** Records and their money: count takes every one whatever its currency, kobo sums naira only, and otherCurrencies lists money in another currency beside it. */
+const money = z.object({ count: z.number().int().min(0), kobo: z.number().int(), otherCurrencies: otherCurrencies.optional() });
 
 /** A headline metric as the overview and the reports return it, and as each close freezes it. */
 export const metricSchema = z.object({ key: z.string(), label: z.string(), value: z.number(), unit: z.string(), detail: z.string() });
@@ -41,8 +87,8 @@ export const closeReportSchema = z.object({
   unallocated: money.extend({ olderThan24Hours: z.number().int().min(0) }),
   possibleDuplicates: money,
   variances: z.object({
-    count: z.number().int().min(0), feeVarianceKobo: z.number().int(),
-    batches: z.array(z.object({ batchId: z.string(), reference: z.string(), feeVarianceKobo: z.number().int(), netKobo: z.number().int(), statementNetKobo: z.number().int().nullable(), explanation: z.string().nullable() })),
+    count: z.number().int().min(0), feeVarianceKobo: z.number().int(), otherCurrencies: otherCurrencies.optional(),
+    batches: z.array(z.object({ batchId: z.string(), reference: z.string(), currency: z.string().optional(), feeVarianceKobo: z.number().int(), netKobo: z.number().int(), statementNetKobo: z.number().int().nullable(), explanation: z.string().nullable() })),
   }),
   exceptions: z.object({
     opened: z.object({ count: z.number().int(), byType: z.record(z.number().int()) }),
@@ -68,6 +114,25 @@ export type MetricData = z.infer<typeof metricSchema>;
 export type AlertData = z.infer<typeof alertSchema>;
 /** A customer's derived position: obligations, payment evidence and the outstanding amount. */
 export type CustomerPositionData = z.infer<typeof positionSchema>;
+
+// Shapes the platform's own kinds share. Every field of those kinds is optional: the schemas type what
+// the workflows write and read, and a record an earlier build wrote may lack a field added since.
+/** How PostgreSQL keeps a protected field (protected-payloads.ts): a sealed envelope instead of the value. */
+const sealedPayload = z.object({ protectedPayload: z.literal(1) }).passthrough();
+/** A whole record as another record keeps a copy of it: a close under review, an imported record before and after a correction. Its data is as untyped as a stored record's. */
+const recordCopy = z.object({
+  id: z.string(), merchantId: z.string(), kind: z.string(), name: z.string(), status: z.string(), reference: z.string(),
+  amountKobo: z.number(), customerId: z.string(), createdAt: z.string(), updatedAt: z.string(), data: z.record(z.any()),
+});
+/** A case assignment as case events record it before and after a change. */
+const caseAssignment = z.object({
+  assignee: z.string(), assigneeName: z.string(), nextAction: z.string(), nextActionAt: z.string(), evidenceIds: z.array(z.string()),
+  eventId: z.string(), handoverEventId: z.string(),
+}).partial().passthrough();
+/** What every Cash Desk record carries: its legal entity, who acted and why. The plan or schedule itself is the connected-cash domain's type. */
+const cashDesk = { ...common, entityId: z.string(), actor: z.string(), reason: z.string() };
+/** An object whose shape a domain module types (a parsed Paystack event, a credit result, a payroll plan): as open as a stored record's data. */
+const domainObject = z.record(z.any());
 
 /**
  * Per-kind data schemas, one for every record kind: the fields a caller may
@@ -131,6 +196,14 @@ export const recordDataSchemas = {
     giveUpRule: z.string().optional(),
     lastActionReason: z.string().optional(),
     handedBackAt: isoDateOrTimestamp.optional(),
+    /**
+     * The latest release from dispute: a customer dispute resolved as not upheld, or Finance's release with a reason; who,
+     * when, why, the status the balance gave it and the last counted attempt, whose disputed debit does not freeze it again.
+     */
+    disputeRelease: z.object({
+      via: z.enum(["not_upheld", "finance_release"]), releasedAt: isoDateOrTimestamp, releasedBy: z.string(), reason: z.string(),
+      exceptionId: z.string().optional(), attemptId: z.string().nullable(), status: z.string(), outstandingKobo: kobo,
+    }).optional(),
   }).passthrough(),
   attempts: z.object({
     ...common,
@@ -149,13 +222,23 @@ export const recordDataSchemas = {
     reversed: z.boolean().optional(),
     reversedAt: isoDateOrTimestamp.optional(),
     paymentId: z.string().optional(),
+    /** Set when Operations resolved the attempt's unknown outcome: what it showed before and the resolution that confirmed it. */
+    outcomeConfirmation: z.object({
+      exceptionId: z.string(),
+      resolutionCode: z.string(),
+      previousStatus: z.string(),
+      previousFailureCode: z.string().optional(),
+      previousRawFailureCode: z.string().optional(),
+      confirmedAt: isoDateOrTimestamp,
+      confirmedBy: z.string(),
+    }).optional(),
   }).passthrough(),
   observations: z.object({
     ...common,
     source: z.enum(observationSources),
     dueItemId: z.string().optional(),
     provider: z.string().optional(),
-    eventId: z.string().optional(),
+    eventId: z.string().max(recordTextLimits.eventId, `An event ID is at most ${recordTextLimits.eventId} characters.`).optional(),
     narration: z.string().optional(),
     batchReference: z.string().optional(),
     feeKobo: kobo.optional(),
@@ -171,6 +254,14 @@ export const recordDataSchemas = {
     resolutionKey: z.string().optional(),
     resolvedAt: isoDateOrTimestamp.optional(),
     duplicateSettlementLine: z.boolean().optional(),
+    /** A settlement line for a collection another batch already counts: the batch it is counted in. */
+    countedInBatchId: z.string().optional(),
+    /** A settlement line in another currency than its batch (settlementBatchId): linked to it as evidence, never added to its totals. */
+    otherCurrencyLine: z.boolean().optional(),
+    /** A statement credit in another currency than the batch it names: linked to it, never matched to its net total. */
+    otherCurrencyCredit: z.boolean().optional(),
+    /** A statement credit repeating one already counted for its batch (same reference and amount): it adds nothing. */
+    duplicateStatementCredit: z.boolean().optional(),
     reversalApplied: z.boolean().optional(),
     statementNetKobo: z.number().int().optional(),
     linePaymentIds: z.array(z.string()).optional(),
@@ -202,6 +293,22 @@ export const recordDataSchemas = {
     refundReference: z.string().optional(),
     refundRecordedAt: isoDateOrTimestamp.optional(),
     refundRecordedExternally: z.boolean().optional(),
+    /** What the refund returned to the payer: the money the payment had not applied, or the whole receipt for a pay-by-bank refund. A refund recorded without it is read as the whole payment. */
+    refundedKobo: kobo.optional(),
+    /** Instalments Finance said this payment does not belong to; automatic matching never proposes them again. */
+    rejectedDueItemIds: z.array(z.string()).optional(),
+    /** Evidence named no payer, so Finance identified the payer when it applied the payment: who, when, why and through which allocation. */
+    payerIdentification: z.object({ customerId: z.string(), identifiedBy: z.string(), identifiedAt: isoDateOrTimestamp, reason: z.string(), dueItemId: z.string(), allocationId: z.string() }).optional(),
+    /** Identifications withdrawn once a review or rejection took the match that made them out of use, with nothing of the payment applied: each as recorded, and who withdrew it, when and why. */
+    payerIdentificationHistory: z.array(z.object({ customerId: z.string(), identifiedBy: z.string(), identifiedAt: isoDateOrTimestamp, reason: z.string(), dueItemId: z.string(), allocationId: z.string(), withdrawnBy: z.string(), withdrawnAt: isoDateOrTimestamp, withdrawnReason: z.string() })).optional(),
+    /** Finance's resolution of a suspected duplicate held on this payment; "distinct_payments" means it is never held again for the same reason. */
+    duplicateReview: z.object({ exceptionId: z.string(), resolutionCode: z.string(), reviewedBy: z.string(), reviewedAt: isoDateOrTimestamp }).optional(),
+    /** Made from evidence that conflicted with another payment sharing its reference, or came through another connection than the payment with its reference, once Finance resolved that exception. */
+    evidenceConflict: z.object({ paymentId: z.string(), exceptionId: z.string(), resolutionCode: z.string() }).optional(),
+    /** The amount came from a settlement line that stated only what it paid out: the debit's own gross raises it, whatever is applied, until its money goes back. */
+    grossUnstated: z.boolean().optional(),
+    /** A pay-by-bank receipt Finance confirmed after its outcome stayed unknown: the masked reference of the evidence that it arrived. */
+    evidenceReference: z.string().optional(),
     duplicateSettlementLine: z.boolean().optional(),
     statementObservationId: z.string().optional(),
     settlementBatchId: z.string().optional(),
@@ -228,6 +335,10 @@ export const recordDataSchemas = {
     confirmedAt: isoDateOrTimestamp.optional(),
     supersededReason: z.string().optional(),
     supersededBy: z.string().optional(),
+    /** Set when a precision review marked the match wrong, so a later "correct" verdict can apply it again. */
+    supersededByReview: z.boolean().optional(),
+    /** When a match marked wrong was reviewed as correct and applied again. */
+    reinstatedAt: isoDateOrTimestamp.optional(),
   }).passthrough(),
   /** Customer messages (NOT-01 to NOT-10): purpose, class, the provider's acceptance and delivery evidence and the cost. */
   notifications: z.object({
@@ -251,25 +362,38 @@ export const recordDataSchemas = {
     reason: z.string().optional(),
     simulated: z.boolean().optional(),
   }).passthrough(),
+  /**
+   * A settlement batch holds one currency (currency): its gross, fee, net, expected fee, fee variance and statement
+   * total are in that currency's smallest unit, whatever their Kobo names say.
+   */
   "settlement-batches": z.object({
     ...common,
     provider: z.string().optional(),
     batchReference: z.string().min(1),
+    /** The ISO 4217 code, in capitals, of the batch's money: its first counted line's, or what Finance entered (naira unless given). A batch an earlier build saved without one is in naira. */
+    currency: z.string().optional(),
     grossKobo: kobo,
     feeKobo: kobo,
     netKobo: kobo,
     lineObservationIds: z.array(z.string()).optional(),
     linePaymentIds: z.array(z.string()).optional(),
+    /** Settlement lines in another currency than the batch: linked to it as evidence and reported, never in its totals. */
+    otherCurrencyLineIds: z.array(z.string()).optional(),
     expectedFeeKobo: z.number().int().optional(),
     assumedFeeKobo: z.number().int().optional(),
     feeVarianceKobo: z.number().int().optional(),
     statementNetKobo: z.number().int().nullable().optional(),
     statementObservationId: z.string().optional(),
+    /** Statement credits that name the batch in another currency than its own, by currency: never matched to its net total. */
+    statementOtherCurrencies: otherCurrencies.optional(),
     explanation: z.string().nullable().optional(),
     reconciledAt: isoDateOrTimestamp.optional(),
+    /** Totals Finance typed for a hand-entered batch, and their currency, kept when the provider's lines rebuilt them. */
+    enteredTotals: z.object({ grossKobo: kobo, feeKobo: kobo, netKobo: kobo, currency: z.string().optional() }).optional(),
   }).passthrough(),
   exceptions: z.object({
     ...common,
+    case: z.object({ assignee: z.string(), assigneeName: z.string(), nextAction: z.string(), nextActionAt: isoDateOrTimestamp, evidenceIds: z.array(z.string()),eventId:z.string().optional(),handoverEventId:z.string().optional() }).optional(),
     type: z.string().min(1),
     severity: z.enum(exceptionSeverities).optional(),
     owner: z.string().optional(),
@@ -281,6 +405,25 @@ export const recordDataSchemas = {
     resolvedBy: z.string().optional(),
     resolvedAt: isoDateOrTimestamp.optional(),
     legacyType: z.boolean().optional(),
+    /** The state that raised the exception; a resolved exception is not raised again while this is unchanged. */
+    condition: z.string().optional(),
+    /** For an unknown outcome resolved as failed: the failure code the provider confirmed. */
+    confirmedFailureCode: z.string().optional(),
+    /** The kind of the linked record when it is not the kind the type usually names: connected-intents for a pay-by-bank checkout. */
+    linkedKind: z.string().optional(),
+    /** Set when the platform closed the exception because its condition cleared (resolutionCode condition_cleared): when, in whose action and why. */
+    conditionCleared: z.object({ at: isoDateOrTimestamp, by: z.string(), reason: z.string() }).optional(),
+    /**
+     * The currency of amountKobo when it is not naira: the ISO 4217 code, in capitals, of the money the exception is
+     * about (a payment or payment evidence in another currency), whose minor units amountKobo then holds. Absent for naira.
+     */
+    currency: z.string().optional(),
+    /** On a settlement_variance: the conditions of the reports of a collection counted in two batches it carries beside its own; its resolution settles them too. */
+    countedTwice: z.array(z.string()).optional(),
+    /** On a settlement_variance: the conditions of the reports of a settlement line in another currency than its batch it carries beside its own; its resolution settles them too. */
+    otherCurrencyLines: z.array(z.string()).optional(),
+    /** The rules the resolution was recorded under (resolutionRuleVersion), which resolve_exception records; absent on one an earlier build recorded. */
+    resolutionRuleVersion: z.number().int().optional(),
   }).passthrough(),
   policies: z.object({
     ...common,
@@ -473,14 +616,22 @@ export const recordDataSchemas = {
     designPartnerDiscount: z.object({ rate: z.number(), kobo: z.number().int(), note: z.string().optional() }).optional(),
     recoveryFee: z.object({ enabled: z.boolean(), lines: z.array(z.object({ dueItemId: z.string(), reference: z.string(), attemptId: z.string(), firstFailureAt: isoDateOrTimestamp.optional(), windowClosedAt: isoDateOrTimestamp, feeKobo: z.number().int() })), kobo: z.number().int(), note: z.string().optional() }).optional(),
     subtotals: z.record(z.number()).optional(),
-    usageLines: z.array(z.object({ paymentId: z.string(), paymentReference: z.string(), allocatedKobo: kobo, feeKobo: kobo, allocationIds: z.array(z.string()).optional() })),
+    /** feeKobo is the public price, discountRate the design-partner share taken off it, and chargedKobo what the line charged; lines issued before the last two were kept take the invoice's rate. */
+    usageLines: z.array(z.object({ paymentId: z.string(), paymentReference: z.string(), allocatedKobo: kobo, feeKobo: kobo, discountRate: z.number().min(0).max(1).optional(), chargedKobo: kobo.optional(), allocationIds: z.array(z.string()).optional() })),
     adjustments: z.array(z.object({
       reason: z.enum(adjustmentReasons),
       paymentId: z.string(),
       paymentReference: z.string(),
       originalInvoiceId: z.string(),
       originalInvoiceReference: z.string().optional(),
+      /** What this invoice carries, priced at the rate of the invoice that first billed the collection. Lines issued before feeDeltaKobo was kept carry the public-price change, discounted with the rest of their invoice. */
       kobo: z.number().int(),
+      /** The change in the public-price fee. */
+      feeDeltaKobo: z.number().int().optional(),
+      /** The design-partner share the collection was first billed under. */
+      discountRate: z.number().min(0).max(1).optional(),
+      /** What the collection had been charged net before this line. */
+      billedChargedKobo: z.number().int().optional(),
       billedFeeKobo: z.number().int().optional(),
       currentFeeKobo: z.number().int().optional(),
       billedAllocatedKobo: z.number().int().optional(),
@@ -490,6 +641,127 @@ export const recordDataSchemas = {
     })),
     totals: z.object({ netKobo: z.number().int(), vatBps: z.number().int().min(0), vatKobo: z.number().int(), totalKobo: z.number().int(), creditNote: z.boolean().optional() }),
   }).passthrough(),
+  // The kinds only the platform writes (domainRecordKinds): every field optional.
+  /** A saved source batch: its settings, the importer's check and, once committed, the records it created. Storage seals the CSV and check. */
+  "import-batches": z.object({
+    ...common,
+    name: z.string(), kind: z.enum(importKinds), source: z.string(), sourceBatchId: z.string(), businessDate: isoDay, sourceExpectationId: z.string(),
+    csv: z.union([z.string(), sealedPayload]), mapping: z.record(z.string()), amountUnit: z.enum(["naira", "kobo"]), identityColumn: z.string(), syntheticOnly: z.boolean(),
+    rowIds: z.array(z.string()), revision: z.number().int().min(1), checkedBy: z.string(), checkedAt: isoDateOrTimestamp,
+    /** The importer's row-by-row result (sealed in storage); the summary keeps its counts open. */
+    check: z.record(z.any()),
+    checkSummary: z.object({ valid: z.number().int(), invalid: z.number().int(), imported: z.number().int(), skipped: z.number().int() }),
+    sourceQuality: sourceBatchQualitySchema,
+    committedAt: isoDateOrTimestamp, committedBy: z.string(), recordIds: z.array(z.string()),
+    /** Set when a retention run erased the raw CSV; the batch, its totals and the imported records remain. */
+    rawCsvRemovedAt: isoDateOrTimestamp, rawCsvRetentionRunId: z.string(),
+  }).partial().passthrough(),
+  /** One saved revision of a source batch's settings, with its check counts. */
+  "import-revisions": z.object({
+    ...common, batchId: z.string(), revision: z.number().int().min(1), actor: z.string(), mapping: z.record(z.string()), amountUnit: z.enum(["naira", "kobo"]),
+    valid: z.number().int(), invalid: z.number().int(), skipped: z.number().int(),
+  }).partial().passthrough(),
+  /** A proposed correction to one imported record (immutable): the records before and after, the comparison and the digests its approval checks again. */
+  "import-corrections": z.object({
+    ...common, batchId: z.string(), targetId: z.string(), input: z.record(z.any()), before: recordCopy, after: recordCopy,
+    impactDigest: z.string(), preview: importCorrectionPreviewSchema.partial().passthrough(), proposedBy: z.string(), proposedPrincipal: z.string(),
+    reviewer: z.string(), reason: z.string(), evidence: z.string(), proposalDigest: z.string(),
+  }).partial().passthrough(),
+  /** A decision on a proposed import correction (immutable). */
+  "import-correction-events": z.object({
+    ...common, proposalId: z.string(), targetId: z.string(), batchId: z.string(), proposalDigest: z.string(), action: z.enum(["approve", "reject", "withdraw"]),
+    actor: z.string(), principalId: z.string(), reason: z.string(),
+  }).partial().passthrough(),
+  /** A source's reusable import contract and delivery expectation; its source and record type never change. */
+  "source-profiles": z.object({
+    ...common, source: z.string(), kind: z.string(), mapping: z.record(z.string()), identityColumn: z.string(), amountUnit: z.enum(["naira", "kobo"]),
+    firstExpectedAt: isoDateOrTimestamp, cadenceHours: z.number().int(), graceMinutes: z.number().int(), expectedRows: z.number().int().nullable(),
+    expectedAmountKobo: z.number().int().nullable(), syntheticOnly: z.boolean(), changedBy: z.string(),
+  }).partial().passthrough(),
+  /** The files a lender expects for one business day with their control totals (immutable; a change is a new revision). */
+  "source-manifests": z.object({
+    ...common, businessDate: isoDay, timezone: z.string(), files: z.array(expectedSourceFileSchema.extend({ id: z.string() })), noFilesExpected: z.boolean(),
+    reason: z.string(), evidence: z.string(), revision: z.number().int().min(1), previousManifestId: z.string().nullable(), declaredBy: z.string(), declaredAt: isoDateOrTimestamp,
+  }).partial().passthrough(),
+  /** A Paystack test or fixture delivery, never a financial record: the parsed event, its payload digest and its delivery and replay history. */
+  "provider-events": z.object({
+    ...common, provider: z.string(), mode: z.enum(["fixture", "test"]), connectionId: z.string(), event: domainObject, dedupeKey: z.string(), payloadDigest: z.string(),
+    deliveryCount: z.number().int().min(0), firstReceivedAt: isoDateOrTimestamp, lastReceivedAt: isoDateOrTimestamp, message: z.string(), financialRecordsCreated: z.number().int(),
+    replayHistory: z.array(z.object({ at: isoDateOrTimestamp, actor: z.string(), reason: z.string(), result: z.string() }).partial().passthrough()),
+  }).partial().passthrough(),
+  /** Finance's independent review of one daily close: the frozen close, the preparer's explanations and the reviewer's decision. */
+  "close-reviews": z.object({
+    ...common, closeId: z.string(), reviewNumber: z.number().int().min(1), preparedBy: z.string(), preparedPrincipal: z.string(), preparedAt: isoDateOrTimestamp, reviewer: z.string(),
+    snapshot: recordCopy, snapshotDigest: z.string(), inputDigest: z.string(), preparationNote: z.string(),
+    discrepancyResponses: z.array(z.object({ issueId: z.string(), explanation: z.string() }).passthrough()), unresolvedAcceptance: z.string(),
+    decidedBy: z.string(), decidedPrincipal: z.string(), decidedAt: isoDateOrTimestamp, decisionNote: z.string(),
+    sourceExceptions: z.array(z.object({ issueId: z.string(), reason: z.string(), evidence: z.string() }).passthrough()),
+  }).partial().passthrough(),
+  /** A step in a close review's history: prepared, approved or returned (immutable). */
+  "close-review-events": z.object({
+    ...common, reviewId: z.string(), closeId: z.string(), action: z.enum(["prepared", "approve", "return"]), actor: z.string(), reviewer: z.string(), note: z.string(), snapshotDigest: z.string(),
+  }).partial().passthrough(),
+  /** A claim, handover or next-action update on a case, with the assignment before and after (immutable). */
+  "case-events": z.object({
+    ...common, exceptionId: z.string(), actor: z.string(), action: z.enum(["claim", "handover", "update"]), note: z.string(), before: caseAssignment, after: caseAssignment,
+  }).partial().passthrough(),
+  /** A person's read or acknowledgement receipt for a work item (immutable); it changes no case, review or money. */
+  "work-events": z.object({
+    ...common, action: z.enum(["read", "acknowledge"]), sourceId: z.string(), eventId: z.string(), assignmentEventId: z.string().nullable(), sourceVersion: z.string(),
+    sourceDigest: z.string(), actor: z.string(), summary: z.string(), href: z.string(),
+  }).partial().passthrough(),
+  /** A saved retention policy (immutable; the newest applies). */
+  "retention-policies": z.object({ ...common, policy: retentionPolicySchema, actor: z.string(), reason: z.string(), sequence: z.number().int().min(1) }).partial().passthrough(),
+  /** A retention hold placed on or released from one source (immutable; the newest per source applies). */
+  "retention-holds": z.object({
+    ...common, kind: lifecycleKindSchema, sourceId: z.string(), held: z.boolean(), reason: z.string(), expectedHoldRevision: z.string(), actor: z.string(), sequence: z.number().int().min(1),
+  }).partial().passthrough(),
+  /** A deletion run: the previewed candidates, the digests approval checks, and who prepared and approved it. */
+  "retention-runs": z.object({
+    ...common, candidates: z.array(lifecycleCandidateSchema), previewDigest: z.string(), policyRevision: z.string(), moreEligible: z.number().int().min(0),
+    expiresAt: isoDateOrTimestamp, preparedBy: z.string(), approvedBy: z.string(), approvedAt: isoDateOrTimestamp, approvalReason: z.string(),
+  }).partial().passthrough(),
+  /** The executor's verified outcome for one candidate of a deletion run (immutable). */
+  "retention-receipts": z.object({
+    ...common, runId: z.string(), kind: lifecycleKindSchema, sourceId: z.string(), sourceDigest: z.string(), version: z.string(), result: lifecycleReceiptStatusSchema,
+    detail: z.string(), actor: z.string(), sequence: z.number().int().min(1),
+  }).partial().passthrough(),
+  /** A simulated consent: its purpose, subject, scope and expiry, and its revocation. */
+  "connected-consents": z.object({
+    ...common, purpose: z.string(), subjectId: z.string(), days: z.number().int(), entityId: z.string(), version: z.number().int(), expiresAt: z.string(), grantedBy: z.string(),
+    authority: z.string(), noticeVersion: z.string(), source: z.string(), intentId: z.string(), amountKobo: z.number().int(), currency: z.string(), beneficiaryId: z.string(),
+    dueItemId: z.string(), revokedAt: isoDateOrTimestamp, revokedBy: z.string(),
+  }).partial().passthrough(),
+  /** A sample pay-by-bank checkout: the instalment, its expiry, its event history and the receipt or refund it led to. */
+  "connected-intents": z.object({
+    ...common, dueItemId: z.string(), currency: z.string(), beneficiary: z.string(), beneficiaryId: z.string(), rail: z.string(), expiresAt: isoDateOrTimestamp, createdBy: z.string(),
+    events: z.array(z.object({ at: isoDateOrTimestamp, status: z.string(), detail: z.string() }).passthrough()), consentId: z.string(), paymentId: z.string(),
+    observationId: z.string(), receiptReference: z.string(), confirmedAt: isoDateOrTimestamp,
+    refundRequest: z.object({ maker: z.string(), reason: z.string(), at: isoDateOrTimestamp }).passthrough(),
+    /** The unknown-outcome exception a checkout whose outcome stayed unknown for 24 hours was raised under. */
+    outcomeExceptionId: z.string(),
+    /** Finance's resolution of an outcome that stayed unknown: the outcome it recorded, with the evidence for a payment confirmed as received. */
+    outcomeResolution: z.object({
+      exceptionId: z.string(), resolutionCode: z.string(), outcome: z.enum(["confirmed", "failed"]), evidenceReference: z.string().optional(),
+      resolvedBy: z.string(), resolvedAt: isoDateOrTimestamp, reason: z.string(),
+    }).passthrough(),
+  }).partial().passthrough(),
+  /** A synthetic credit assessment (immutable): the engine's result (connected-credit.ts) and how it was started. */
+  "connected-credit-assessments": z.object({
+    ...common, result: domainObject, scenario: z.string(), createdBy: z.string(), reason: z.string(), rulesStatus: z.string(), scheduleSource: z.string(),
+  }).partial().passthrough(),
+  /** A reviewer's decision on a credit assessment (immutable). */
+  "connected-credit-reviews": z.object({ ...common, assessmentRecordId: z.string(), review: domainObject, authentication: z.string(), reason: z.string() }).partial().passthrough(),
+  /** The Cash Desk's sample SME workspace. */
+  "connected-cash-workspace": z.object({ ...cashDesk, workspace: domainObject }).partial().passthrough(),
+  /** A saved cash forecast with its input version. */
+  "connected-cash-forecasts": z.object({ ...cashDesk, forecast: domainObject }).partial().passthrough(),
+  /** An accounting (ERP) draft and its review. */
+  "connected-cash-erp": z.object({ ...cashDesk, draft: domainObject }).partial().passthrough(),
+  /** A VAT evidence schedule and its reviewer. */
+  "connected-cash-vat": z.object({ ...cashDesk, schedule: domainObject, reviewer: z.string() }).partial().passthrough(),
+  /** A payroll funding plan. */
+  "connected-cash-payroll": z.object({ ...cashDesk, plan: domainObject }).partial().passthrough(),
 } as const satisfies Record<RecordKind, z.ZodTypeAny>;
 
 /** The map of every kind's data schema. */

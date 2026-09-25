@@ -52,8 +52,11 @@ export interface DomainState {
 /** Who is acting, in which role, and when (the database clock at the start of the transaction). */
 export interface Context {
   actor: string;
+  principalId?: string;
   role: string;
   now: string;
+  /** A provisioned staff member ('staff'), or the anonymous sandbox's one person playing every role ('sandbox' or absent): second-person rules are enforced only for staff. */
+  accessMode?: 'sandbox' | 'staff';
 }
 
 /** A named measurement for the overview and the reports. */

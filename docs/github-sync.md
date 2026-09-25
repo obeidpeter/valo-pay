@@ -35,7 +35,7 @@ node scripts/github-sync.mjs
 node scripts/github-sync.mjs --push
 ```
 
-The utility targets only the public `obeidpeter/valo-pay` repository, as approved by its owner. Public means anyone can read the uploaded source. It sends reviewed source contents, never Git history or credentials, through the Replit GitHub connector. It checks common secret patterns but cannot prove arbitrary content is safe: review new files before uploading.
+Its connector client, `@replit/connectors-sdk`, is a development dependency of the scripts package (`scripts/package.json`), not of the application, so it is installed with the workspace but never reaches the API or the console. The utility targets only the public `obeidpeter/valo-pay` repository, as approved by its owner. Public means anyone can read the uploaded source. It sends reviewed source contents, never Git history or credentials, through the Replit GitHub connector. It checks common secret patterns but cannot prove arbitrary content is safe: review new files before uploading.
 
 The Git panel and this script use different authentication paths. A working
 GitHub connector does not by itself verify Git panel authentication. Check

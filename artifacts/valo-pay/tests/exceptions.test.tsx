@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { installFakeApi, type FakeApi } from "./fake-api";
-import { renderApp, screen, userEvent, within } from "./harness";
+import { renderApp, screen, userEvent, waitFor, within } from "./harness";
+import { makeRecord } from "../../api-server/src/domain/records";
+import { raiseException, reconcile } from "../../api-server/src/domain/reconciliation";
+import { providerFeeKobo } from "@workspace/valopay-schema";
+import { countedTwiceEffect, otherCurrencyLinesEffect } from "@/components/exception-context";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -16,10 +20,270 @@ describe("exceptions", () => {
     expect(within(screen.getByRole('table')).getAllByText("Unallocated payment")).toHaveLength(2);
 
     await user.click(screen.getByRole("tab", { name: "High severity (1)" }));
+    expect(screen.getByRole('tabpanel', { name: 'High severity (1)' })).toBeTruthy();
     expect(within(screen.getByRole('table')).getByText("Missing consent evidence")).toBeTruthy();
     expect(within(screen.getByRole('table')).queryByText("Unallocated payment")).toBeNull();
 
     await user.click(screen.getByRole("tab", { name: "Resolved (0)" }));
     expect(await screen.findByText("Nothing resolved yet")).toBeTruthy();
+  });
+
+  it('keeps the issue evidence and a return to the filtered queue in customer review', async () => {
+    const user = userEvent.setup();
+    const exception = api.state().records.find(record => record.kind === 'exceptions' && record.customerId && record.data.type === 'unallocated_payment')!;
+    const customer = api.state().records.find(record => record.id === exception.customerId)!;
+    renderApp('/exceptions?view=open&owner=Finance&type=unallocated_payment');
+    const row = (await screen.findByText(customer.name)).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: 'Resolve' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Resolve exception' });
+    const context = within(dialog).getByRole('region', { name: 'Exception context' });
+    expect(context.textContent).toContain(String(exception.data.notes));
+    const destination = within(context).getByRole('link', { name: 'Review customer history' }).getAttribute('href')!;
+    const params = new URL(destination, 'https://test.invalid').searchParams;
+    const returnParams = new URL(params.get('returnTo')!, 'https://test.invalid');
+    expect(returnParams.pathname).toBe('/exceptions');
+    expect(returnParams.searchParams.get('owner')).toBe('Finance');
+    expect(returnParams.searchParams.get('type')).toBe('unallocated_payment');
+    expect(returnParams.searchParams.get('lender')).toBe(api.merchantIds[0]);
+    expect(api.calls.some(call => call.method === 'POST')).toBe(false);
+  });
+
+  it('offers joining held evidence to its payment only where it was held for its connection alone', async () => {
+    const user = userEvent.setup();
+    const finance = () => ({ actor: 'Sandbox Finance', role: 'Finance', now: api.now });
+    const [line, clash] = api.mutate(state => {
+      const due = state.records.find(record => record.kind === 'due-items' && record.reference === 'DEMO-LOAN-1005')!;
+      const other = state.records.find(record => record.kind === 'customers' && record.id !== due.customerId)!;
+      makeRecord(state, 'observations', { name: 'Webhook', status: 'unresolved', reference: 'PSK-SET-1', amountKobo: 2_500_000, customerId: due.customerId, data: { source: 'webhook', eventId: 'w1', provider: 'Sandbox Rail' } });
+      reconcile(state, finance());
+      // The settlement file spells the connection its own way; another payer's evidence under the same reference conflicts.
+      const held = makeRecord(state, 'observations', { name: 'Settlement line', status: 'unresolved', reference: 'PSK-SET-1', amountKobo: 2_487_500, customerId: due.customerId, data: { source: 'settlement', eventId: 's1', provider: 'Sandbox Rail Settlements', grossAmountKobo: 2_500_000, feeKobo: 12_500, batchReference: 'B-1' } });
+      const conflicting = makeRecord(state, 'observations', { name: 'Card', status: 'unresolved', reference: 'PSK-SET-1', amountKobo: 2_500_000, customerId: other.id, data: { source: 'card', eventId: 'c1', provider: 'Sandbox Rail' } });
+      reconcile(state, finance());
+      return [held, conflicting];
+    });
+    renderApp('/exceptions?view=open&type=suspected_duplicate');
+    const codesFor = async (evidence: { id: string }) => {
+      const exception = api.state().records.find(record => record.kind === 'exceptions' && record.data.linkedRecordId === evidence.id)!;
+      const row = (await screen.findByText(String(exception.data.notes))).closest('tr')!;
+      await user.click(within(row).getByRole('button', { name: 'Resolve' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Resolve exception' });
+      const labels = within(within(dialog).getByLabelText(/How was this resolved/)).getAllByRole('option').map(option => option.textContent);
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Resolve exception' })).toBeNull());
+      return labels;
+    };
+    expect(await codesFor(line)).toEqual(expect.arrayContaining(['Same payment; evidence joined to it', 'Not money; evidence set aside', 'Distinct payments']));
+    const conflictCodes = await codesFor(clash);
+    expect(conflictCodes).toContain('Not money; evidence set aside');
+    expect(conflictCodes).not.toContain('Same payment; evidence joined to it');
+  });
+
+  // Third review of the audit fixes, finding 3: the dialog said resolving only records an outcome, whatever the
+  // reconciliation then did with the evidence, and the page never showed the service's answer or moved focus to it.
+  it('says what each resolution of held evidence does, then shows the service\'s answer and moves focus to it', async () => {
+    const user = userEvent.setup();
+    const finance = () => ({ actor: 'Sandbox Finance', role: 'Finance', now: api.now });
+    const line = api.mutate(state => {
+      const due = state.records.find(record => record.kind === 'due-items' && record.reference === 'DEMO-LOAN-1005')!;
+      makeRecord(state, 'observations', { name: 'Webhook', status: 'unresolved', reference: 'PSK-SET-1', amountKobo: 2_500_000, customerId: due.customerId, data: { source: 'webhook', eventId: 'w1', provider: 'Sandbox Rail' } });
+      reconcile(state, finance());
+      const held = makeRecord(state, 'observations', { name: 'Settlement line', status: 'unresolved', reference: 'PSK-SET-1', amountKobo: 2_487_500, customerId: due.customerId, data: { source: 'settlement', eventId: 's1', provider: 'Sandbox Rail Settlements', grossAmountKobo: 2_500_000, feeKobo: 12_500, batchReference: 'B-1' } });
+      reconcile(state, finance());
+      return held;
+    });
+    const exception = api.state().records.find(record => record.kind === 'exceptions' && record.data.linkedRecordId === line.id)!;
+    renderApp('/exceptions?view=open&type=suspected_duplicate');
+    const row = (await screen.findByText(String(exception.data.notes))).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: 'Resolve' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Resolve exception' });
+    const code = within(dialog).getByLabelText(/How was this resolved/);
+    const outcome = () => within(dialog).getByText(/^Record outcome:/).parentElement!.textContent!;
+    const generic = 'It does not allocate a payment, issue a refund, reissue a mandate or move money.';
+    await user.selectOptions(code, 'same_payment');
+    expect(outcome()).toContain('The next reconciliation joins this evidence to the payment this exception names');
+    expect(outcome()).not.toContain(generic);
+    await user.selectOptions(code, 'not_money');
+    expect(outcome()).toContain('The next reconciliation sets this evidence aside for good');
+    await user.selectOptions(code, 'distinct_payments');
+    expect(outcome()).toContain('The next reconciliation records this evidence as a payment of its own.');
+    await user.selectOptions(code, 'confirmed_duplicate_refund');
+    expect(outcome()).toContain('The next reconciliation records this evidence as a payment of its own, held until its refund is recorded.');
+    expect(outcome()).not.toContain(generic);
+
+    await user.selectOptions(code, 'same_payment');
+    await user.type(within(dialog).getByLabelText(/^Reason/), 'The settlement file names the same collection.');
+    await user.click(within(dialog).getByRole('button', { name: 'Resolve exception' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Resolve exception' })).toBeNull());
+    const answer = await screen.findByRole('status', { name: 'Resolution recorded' });
+    expect(answer.textContent).toContain('Exception resolution recorded. The next reconciliation joins this payment evidence to payment PSK-SET-1 as more evidence of it: no second payment is made.');
+    // The resolved exception leaves the open queue with its Resolve button, so reading continues from the answer.
+    await waitFor(() => expect(screen.queryByText(String(exception.data.notes))).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(answer));
+  });
+
+  it('says what each resolution of a reversal waiting for its payment does, and shows the answer', async () => {
+    const user = userEvent.setup();
+    const reversal = api.mutate((state, ctx) => {
+      const waiting = makeRecord(state, 'observations', { name: 'Unseen reversal', status: 'unresolved', reference: 'NEVER-SEEN-1', amountKobo: 500_000, customerId: '', data: { source: 'webhook', eventId: 'r1', provider: 'Sandbox Rail', reversed: true, occurredAt: new Date(Date.parse(api.now) - 3 * 86_400_000).toISOString() } });
+      reconcile(state, { ...ctx, actor: 'Sandbox Finance', role: 'Finance' });
+      return waiting;
+    });
+    const exception = api.state().records.find(record => record.kind === 'exceptions' && record.data.linkedRecordId === reversal.id)!;
+    expect(exception.data.type).toBe('provider_status_mismatch');
+    renderApp(`/exceptions?record=${exception.id}`);
+    await user.click(await screen.findByRole('button', { name: 'Resolve' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Resolve exception' });
+    const code = within(dialog).getByLabelText(/How was this resolved/);
+    // Only the two codes that decide it are offered, each named for what it does to the reversal rather than by the
+    // generic mismatch's labels, and the box says to leave the exception open while Finance checks.
+    expect(within(code).getAllByRole('option').map(option => option.textContent)).toEqual(['Choose an option', 'Provider state adopted; reversal waits for its payment', 'Platform state confirmed; reversal set aside for good']);
+    // A payment that arrives meanwhile is reversed only through the reversal's own connection (fourth review, finding 4),
+    // and only when it agrees with the reversal: one naming another payer, currency or amount is held too (its review).
+    const before = within(dialog).getByText('Record an outcome after reviewing the evidence.').parentElement!.textContent;
+    expect(before).toContain('Leave this exception open while you check with the provider which collection the reversal reverses: if its payment arrives meanwhile through the same connection and agrees with it, the reversal applies to it; if the payment comes through another connection, or names another payer, currency or amount, the reversal is held for you with an exception of its own. Either way this exception closes.');
+    expect(before).not.toContain('if its payment arrives meanwhile, the reversal applies to it');
+    expect(before).not.toContain('through the same connection, the reversal applies to it');
+    const outcome = () => within(dialog).getByText(/^Record outcome:/).parentElement!.textContent!;
+    await user.selectOptions(code, 'provider_state_adopted');
+    expect(within(dialog).getByText(/^Record outcome:/).textContent).toBe('Record outcome: Provider state adopted; reversal waits for its payment');
+    expect(outcome()).toContain('The reversal keeps waiting for its payment, with no new exception: the reconciliation that records that payment reverses it');
+    await user.selectOptions(code, 'platform_state_confirmed');
+    expect(within(dialog).getByText(/^Record outcome:/).textContent).toBe('Record outcome: Platform state confirmed; reversal set aside for good');
+    expect(outcome()).toContain('The next reconciliation sets the reversal aside for good: it reverses nothing, even if its payment arrives later.');
+    expect(outcome()).not.toContain('It does not allocate a payment');
+    await user.type(within(dialog).getByLabelText(/^Reason/), 'The provider confirmed no such collection.');
+    await user.click(within(dialog).getByRole('button', { name: 'Resolve exception' }));
+    const answer = await screen.findByRole('status', { name: 'Resolution recorded' });
+    expect(answer.textContent).toMatch(/Exception resolution recorded\. This reversal evidence is set aside at the next reconciliation/);
+    // Its Resolve button goes with the resolution, so focus moves to the answer; the exception, shown alone, names its resolution the same way.
+    await waitFor(() => expect(document.activeElement).toBe(answer));
+    expect(await screen.findByText('Resolution: Platform state confirmed; reversal set aside for good')).toBeTruthy();
+  });
+
+  it('keeps the generic labels and words for a provider status mismatch that is not a waiting reversal', async () => {
+    const user = userEvent.setup();
+    const mismatch = api.mutate((state, ctx) => raiseException(state, ctx, 'provider_status_mismatch', { notes: 'The provider shows the mandate active; the platform shows it pending activation.' }));
+    renderApp(`/exceptions?record=${mismatch.id}`);
+    await user.click(await screen.findByRole('button', { name: 'Resolve' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Resolve exception' });
+    const code = within(dialog).getByLabelText(/How was this resolved/);
+    expect(within(code).getAllByRole('option').map(option => option.textContent)).toEqual(['Choose an option', 'Provider state adopted', 'Platform state confirmed', 'Escalated to provider']);
+    await user.selectOptions(code, 'provider_state_adopted');
+    expect(within(dialog).getByText(/^Record outcome:/).textContent).toBe('Record outcome: Provider state adopted');
+    expect(within(dialog).getByText(/^Record outcome:/).parentElement!.textContent).toContain('It does not allocate a payment, issue a refund, reissue a mandate or move money.');
+  });
+
+  // Third review, a residual: an exception raised for money in another currency holds that money's minor units, and the
+  // row and the resolve dialog showed them as naira (₦1,000.00 for a USD 1,000.00 payment).
+  it('shows an exception about money in another currency in that currency, in its row and its resolve dialog', async () => {
+    const user = userEvent.setup();
+    const exception = api.mutate((state, ctx) => {
+      const ada = state.records.find(record => record.kind === 'customers' && record.name === 'Ada Okonkwo')!;
+      const card = makeRecord(state, 'observations', { name: 'USD card', status: 'unresolved', reference: 'CARD-USD-1', amountKobo: 100_000, customerId: ada.id, data: { source: 'card', eventId: 'usd-1', provider: 'Sandbox Rail', currency: 'USD' } });
+      reconcile(state, { ...ctx, actor: 'Sandbox Finance', role: 'Finance' });
+      return state.records.find(record => record.kind === 'exceptions' && record.data.linkedRecordId === card.data.paymentId)!;
+    });
+    expect([exception.amountKobo, exception.data.currency]).toEqual([100_000, 'USD']);
+    renderApp(`/exceptions?record=${exception.id}`);
+    const row = (await screen.findByRole('button', { name: 'Resolve' })).closest('tr')!;
+    const shown = (element: Element) => element.textContent!.replace(/ /g, ' ');
+    expect(shown(row)).toContain('USD 1,000.00');
+    expect(shown(row)).not.toContain('₦1,000.00');
+    await user.click(within(row).getByRole('button', { name: 'Resolve' }));
+    const context = within(await screen.findByRole('dialog', { name: 'Resolve exception' })).getByRole('region', { name: 'Exception context' });
+    expect(shown(within(context).getByText('Amount').nextElementSibling!)).toBe('USD 1,000.00');
+  });
+
+  // Third review, a residual: a Finance resolution of an exception that carries a report of a collection counted in two
+  // settlement batches (countedTwice) settles that report too, and the dialog said only that it records the outcome.
+  it('says that resolving an exception that carries a counted-twice report settles that report too', async () => {
+    const user = userEvent.setup();
+    const carrier = api.mutate((state, ctx) => {
+      const finance = { ...ctx, actor: 'Sandbox Finance', role: 'Finance' };
+      const [first, second] = state.records.filter(record => record.kind === 'due-items' && record.status === 'scheduled');
+      const line = (due: typeof first, reference: string, batchReference: string, eventId: string, feeKobo: number) => makeRecord(state, 'observations', { name: 'Settlement line', status: 'unresolved', reference, amountKobo: due!.amountKobo - feeKobo, customerId: due!.customerId, data: { source: 'settlement', eventId, provider: 'Sandbox Rail', batchReference, grossAmountKobo: due!.amountKobo, feeKobo } });
+      line(first, 'PSK-X1', 'B-1', 'x1', providerFeeKobo(first!.amountKobo));
+      // B-2's fees differ from the schedule, so it is in variance with an exception open for it.
+      line(second, 'PSK-X2', 'B-2', 'x2', providerFeeKobo(second!.amountKobo) + 50_000);
+      reconcile(state, finance);
+      // The provider lists collection PSK-X1, which B-1 counts, again in B-2: B-2's open exception carries the report.
+      line(first, 'PSK-X1', 'B-2', 'x1-again', providerFeeKobo(first!.amountKobo));
+      reconcile(state, finance);
+      const batch = state.records.find(record => record.kind === 'settlement-batches' && record.reference === 'B-2')!;
+      return state.records.find(record => record.kind === 'exceptions' && record.data.linkedRecordId === batch.id)!;
+    });
+    expect((carrier.data.countedTwice as string[]).length).toBe(1);
+    renderApp(`/exceptions?record=${carrier.id}`);
+    await user.click(await screen.findByRole('button', { name: 'Resolve' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Resolve exception' });
+    const settles = 'This exception also carries the provider\'s report of a collection counted in two settlement batches. Resolving it settles that report too, whichever outcome you record: it is not raised again, so check both payouts with the provider first.';
+    expect(within(dialog).getByText('Record an outcome after reviewing the evidence.').parentElement!.textContent).toContain(settles);
+    await user.selectOptions(within(dialog).getByLabelText(/How was this resolved/), 'provider_corrected');
+    const outcome = within(dialog).getByText(/^Record outcome:/).parentElement!.textContent!;
+    expect(outcome).toContain(settles);
+    expect(outcome).toContain('It does not allocate a payment, issue a refund, reissue a mandate or move money.');
+    // An exception that carries no such report says nothing of one, and one that carries several names how many.
+    expect(countedTwiceEffect({ ...carrier, data: { ...carrier.data, countedTwice: [] } })).toBeUndefined();
+    expect(countedTwiceEffect({ ...carrier, data: { ...carrier.data, countedTwice: ['a', 'b'] } })).toContain('carries 2 of the provider\'s reports of collections counted in two settlement batches. Resolving it settles those reports too');
+  });
+
+  // Decision on currencies in settlement batches: a line in another currency than its batch is reported, and an
+  // exception already open for the batch carries the report (otherCurrencyLines) and settles it when resolved.
+  it('says that resolving an exception that carries a line in another currency settles that report too', async () => {
+    const user = userEvent.setup();
+    const carrier = api.mutate((state, ctx) => {
+      const finance = { ...ctx, actor: 'Sandbox Finance', role: 'Finance' };
+      const [due] = state.records.filter(record => record.kind === 'due-items' && record.status === 'scheduled');
+      // B-3's fees differ from the schedule, so it is in variance with an exception open for it; then a dollar line names it.
+      makeRecord(state, 'observations', { name: 'Settlement line', status: 'unresolved', reference: 'PSK-N3', amountKobo: due!.amountKobo - providerFeeKobo(due!.amountKobo) - 50_000, customerId: due!.customerId, data: { provider: state.merchant.provider, source: 'settlement', grossAmountKobo: due!.amountKobo, feeKobo: providerFeeKobo(due!.amountKobo) + 50_000, batchReference: 'B-3', eventId: 'n3', occurredAt: api.now } });
+      reconcile(state, finance);
+      makeRecord(state, 'observations', { name: 'Settlement line', status: 'unresolved', reference: 'PSK-U3', amountKobo: 99_500, customerId: due!.customerId, data: { provider: state.merchant.provider, source: 'settlement', grossAmountKobo: 100_000, feeKobo: 500, batchReference: 'B-3', eventId: 'u3', occurredAt: api.now, currency: 'USD' } });
+      reconcile(state, finance);
+      const batch = state.records.find(record => record.kind === 'settlement-batches' && record.reference === 'B-3')!;
+      return state.records.find(record => record.kind === 'exceptions' && record.data.linkedRecordId === batch.id)!;
+    });
+    expect((carrier.data.otherCurrencyLines as string[]).length).toBe(1);
+    renderApp(`/exceptions?record=${carrier.id}`);
+    await user.click(await screen.findByRole('button', { name: 'Resolve' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Resolve exception' });
+    const settles = 'This exception also carries the report of a settlement line in another currency than its batch, which the batch does not count. Resolving it settles that report too, whichever outcome you record: it is not raised again, so check with the provider which batch pays the line out first.';
+    expect(within(dialog).getByText('Record an outcome after reviewing the evidence.').parentElement!.textContent).toContain(settles);
+    expect(otherCurrencyLinesEffect({ ...carrier, data: { ...carrier.data, otherCurrencyLines: [] } })).toBeUndefined();
+    expect(otherCurrencyLinesEffect({ ...carrier, data: { ...carrier.data, otherCurrencyLines: ['a', 'b'] } })).toContain('carries 2 reports of settlement lines in another currency than their batch');
+  });
+
+  it('shows a stored exception without a severity as having none, never as low', async () => {
+    // An earlier edit could clear it; the queue then ranks it below low and the High filter leaves it out.
+    const exception = api.mutate((state) => {
+      const record = state.records.find((item) => item.kind === 'exceptions' && item.status === 'open' && item.data.severity === 'medium')!;
+      delete record.data.severity;
+      return record;
+    });
+    renderApp(`/exceptions?record=${exception.id}`);
+    const row = (await screen.findByRole('button', { name: 'Edit' })).closest('tr')!;
+    expect(row.textContent).toContain('No severity');
+    expect(row.textContent).not.toMatch(/\blow\b/i);
+  });
+
+  it('never clears a severity: the edit dialog requires one', async () => {
+    const user = userEvent.setup();
+    const exception = api.state().records.find((record) => record.kind === 'exceptions' && record.status === 'open' && record.data.severity === 'high' && !record.data.case)!;
+    renderApp(`/exceptions?record=${exception.id}`);
+    await user.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit exception' });
+    const severity = within(dialog).getByLabelText(/^Severity/) as HTMLSelectElement;
+    expect(severity.value).toBe('high');
+    await user.selectOptions(severity, '');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByText('Severity is required. Choose an option.')).toBeTruthy();
+    expect(document.activeElement).toBe(severity);
+    expect(api.calls.filter((call) => call.method === 'PATCH')).toEqual([]);
+    expect(api.state().records.find((record) => record.id === exception.id)!.data.severity).toBe('high');
+    // Choosing one saves it.
+    await user.selectOptions(severity, 'medium');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.state().records.find((record) => record.id === exception.id)!.data.severity).toBe('medium');
   });
 });

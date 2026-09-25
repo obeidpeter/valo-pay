@@ -68,6 +68,10 @@ it("records and revokes one purpose without pretending to connect a bank", async
     name: "Permissions & readiness",
     level: 1,
   });
+  await user.selectOptions(
+    screen.getByLabelText("Subject"),
+    api.state().records.find((r) => r.kind === "customers")!.id,
+  );
   await user.type(
     screen.getByLabelText("Reason for granting permission"),
     "Review a sample credit application",
@@ -79,6 +83,12 @@ it("records and revokes one purpose without pretending to connect a bank", async
     name: "Review revocation",
   });
   await user.click(revoke);
+  const review = screen.getByRole("region", { name: "Permission to revoke" });
+  expect(review.textContent).toContain("Read applicant accounts");
+  expect(review.textContent).toContain("Other purposes stay unchanged");
+  expect(document.activeElement).toBe(
+    screen.getByLabelText("Reason for revoking permission"),
+  );
   await user.type(
     screen.getByLabelText("Reason for revoking permission"),
     "Applicant withdrew this sample permission",

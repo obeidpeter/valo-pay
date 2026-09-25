@@ -5,22 +5,25 @@
  * Valo Pay collections and connected banking sandbox API. All monetary fields are integer minor units (NGN kobo). Real data and all outbound provider instructions are disabled in connected modules.
  * OpenAPI spec version: 1.1.0
  */
+import type { ListRecordsAllocatable } from './listRecordsAllocatable';
 
 export type ListRecordsParams = {
 /**
- * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants.
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
  */
 merchantId: string;
 /**
- * Text matched, ignoring case and accents, against the name, reference, status and data.
+ * Text matched, ignoring case and accents, against the record's name, its reference and the text and number values in its data, nested ones included; never a field's name, true, false or null.
  */
 search?: string;
 /**
- * Only records in this status; omitted or "all" for every status.
+ * Only records in this status; omitted or "all" for every status. Saved exports (kind exports) also take "expired", which is derived rather than stored: the exports whose file an approved retention run removed (fileDeletedAt), whatever their job's status. "ready" and "failed" then list only the exports whose file remains.
  */
 status?: string;
 /**
- * Page size, capped at 500 when supplied. Omitted returns the complete filtered kind for existing relationship and balance views.
+ * Page size, from 1 to 500; a value outside that range is refused (400). Omitted, a kind that grows with history (audit, closes, exports, notifications, retry-decisions) returns its newest 500 with nextOffset to page on, and any other kind its whole filtered set, for existing relationship and balance views.
  * @minimum 1
  * @maximum 500
  */
@@ -31,7 +34,7 @@ limit?: number;
  */
 offset?: number;
 /**
- * ISO timestamp; only records updated at or after it (incremental sync).
+ * An RFC 3339 date and time with Z or an offset, such as 2026-09-18T08:00:00+01:00; only records updated at or after that instant (incremental sync). A number, a date without a time, a time without Z or an offset, or a year outside 0001 to 9999 is refused (400, naming updatedSince).
  */
 updatedSince?: string;
 /**
@@ -42,4 +45,14 @@ customerId?: string;
  * Only this exact record ID, in the selected kind and lender.
  */
 id?: string;
+/**
+ * Instalments (due-items) only. true lists just the instalments that can take an allocation now: those that still owe an amount and are not cancelled, closed or in dispute, and with paymentId only those a manual allocation of that payment accepts, so total counts the choices. Omitted or false lists every instalment. Refused (400) for any other kind.
+ */
+allocatable?: ListRecordsAllocatable;
+/**
+ * With allocatable=true, the payment whose choices are listed: the instalments a manual allocation of it accepts, by the payer rule that allocation applies. A payment with a recorded payer takes only its payer's instalments; one whose evidence named no payer but names an instalment takes only that instalment's customer's; one that names neither takes any customer's. A payment in another currency than naira, whose money went back or with nothing left to allocate takes none, so the list is empty. A payment the lender does not have is a 404; without allocatable=true, paymentId is refused (400).
+ * @minLength 1
+ * @maxLength 100
+ */
+paymentId?: string;
 };

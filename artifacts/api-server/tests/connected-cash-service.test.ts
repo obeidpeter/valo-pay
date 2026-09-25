@@ -46,8 +46,9 @@ let checks = 0;
 assert.equal(cashView(state, operations).initialised, false);
 assert.equal(state.records.length, 0);
 checks += 2;
-assert.throws(() => act("cash.initialize"), /permission/i);
-checks++;
+assert.throws(() => act("cash.initialize"), (error: any) => /permission/i.test(error.message) && error.status === 403);
+assert.throws(() => act("cash.initialize", finance), (error: any) => /requires Admin or Operations access/.test(error.message) && error.status === 403);
+checks += 2;
 for (const purpose of ["merchant_account_read", "erp_draft", "payroll_prepare"])
   makeRecord(state, "connected-consents", {
     status: "active",
@@ -260,6 +261,58 @@ checks++;
 state.settings.environment = "production";
 assert.throws(() => act("cash.forecast"), /synthetic sandbox/);
 checks++;
+// Tax periods are West Africa Time months, and a forecast keeps an approved
+// outflow that is past its due date, still unpaid, as due now.
+{
+  const early = "2026-09-30T23:30:00.000Z"; // 00:30 WAT on 1 October
+  const sme: DomainState = {
+    merchant: structuredClone(state.merchant),
+    records: [],
+    settings: { environment: "sandbox" },
+  };
+  const as = (ctx: Context, at: string) => ({ ...ctx, now: at });
+  const run = (ctx: Context, action: string) =>
+    runCashAction(sme, ctx, {
+      action,
+      data: {},
+      reason: "Verify the sample periods and forecast",
+    }).record!;
+  assert.equal(
+    cashView(sme, as(operations, early)).vat!.period,
+    "2026-10",
+    "the preview's tax period is October in WAT, though UTC still says September",
+  );
+  for (const purpose of ["merchant_account_read", "erp_draft"])
+    makeRecord(sme, "connected-consents", {
+      status: "active",
+      createdAt: early,
+      data: {
+        purpose,
+        subjectId: "sme",
+        entityId: "lender-one:sme",
+        expiresAt: "2026-10-30T10:00:00Z",
+      },
+    });
+  run(as(operations, early), "cash.initialize");
+  assert.equal(
+    run(as(finance, early), "cash.vat.export").data.schedule.period,
+    "2026-10",
+  );
+  // Six and a half days on, the sample supplier bill (due after six) is overdue,
+  // and the sample invoice receipt (due after five) is not counted on.
+  const forecast = run(
+    as(operations, "2026-10-07T11:30:00.000Z"),
+    "cash.forecast",
+  ).data.forecast;
+  assert.ok(forecast.includedCommitmentIds.includes("sample-supplier"));
+  assert.ok(forecast.excludedCommitmentIds.includes("sample-invoice"));
+  assert.equal(
+    forecast.scenarios[0].points[0].outflowMinor,
+    660_000_000 + 360_000_000,
+    "the overdue bill counts as due now, beside the payroll due within the week",
+  );
+  checks += 5;
+}
 console.log(
   `Cash Desk service: ${checks} lifecycle, permission, approval and export checks passed.`,
 );

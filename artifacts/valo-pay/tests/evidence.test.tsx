@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeRecord } from '../../api-server/src/domain';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { renderApp, screen, userEvent, waitFor, within } from './harness';
+import { fireEvent } from '@testing-library/react';
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -34,6 +35,19 @@ describe('evidence register and operational reviews', () => {
     expect(screen.getByText('Requirements missing')).toBeTruthy();
   });
 
+  it('records when signed terms take effect, the month from which they bill', async () => {
+    const user = userEvent.setup();
+    renderApp('/evidence');
+    const section = (await screen.findByRole('heading', { name: 'Commercial commitments' })).closest('section')!;
+    await user.click(await within(section).findByRole('button', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit commercial terms' });
+    expect(within(dialog).getByText(/^Each invoice month is billed from the latest signed terms in effect by its end, for the whole month\./)).toBeTruthy();
+    await user.click(within(dialog).getByRole('checkbox', { name: /^Signed/ }));
+    fireEvent.change(within(dialog).getByLabelText(/^Takes effect on/), { target: { value: '2027-07-15' } });
+    await user.click(within(dialog).getByRole('button', { name: /Save/ }));
+    await waitFor(() => expect(api.state().records.find(record => record.kind === 'commercial')?.data).toMatchObject({ signed: true, effectiveDate: '2027-07-15' }));
+  });
+
   it('shows load failures instead of saying commercial commitments and reviews are empty', async () => {
     const user = userEvent.setup();
     api.failNext(/^\/v1\/records\/commercial$/, { status: 503, error: 'Service temporarily unavailable.' });
@@ -49,6 +63,14 @@ describe('evidence register and operational reviews', () => {
     expect(await screen.findByText('No reviews logged')).toBeTruthy();
   });
 
+  it('says, before the first review, that a review is recorded in the signed-in person\'s name, as its dialog records it', async () => {
+    renderApp('/evidence');
+    const empty = (await screen.findByText('No reviews logged')).closest('tr')!;
+    // The dialog no longer takes a reviewer, so the row must not ask for one.
+    expect(empty.textContent).not.toMatch(/name the reviewer/i);
+    expect(empty.textContent).toContain('The review is recorded in your name, with the time the service saves it.');
+  });
+
   it('reports export failures and leaves an Open link when the browser blocks the new tab', async () => {
     const user = userEvent.setup();
     vi.spyOn(window, 'open').mockReturnValue(null);
@@ -56,28 +78,31 @@ describe('evidence register and operational reviews', () => {
     renderApp('/evidence');
     const exportButton = await screen.findByRole('button', { name: 'Export evidence pack' });
     await user.click(exportButton);
-    expect(await screen.findByText('Evidence pack not generated')).toBeTruthy();
-    await user.click(exportButton);
+    expect(await screen.findByText('Evidence pack request could not be confirmed')).toBeTruthy();
+    expect(exportButton.hasAttribute('disabled')).toBe(true);
+    await user.click(screen.getByRole('button', { name: 'Retry original request' }));
     const link = await screen.findByRole('link', { name: 'Open evidence pack' });
     expect(link.getAttribute('href')).toMatch(/\/exports\//);
     expect(window.open).toHaveBeenCalledWith(link.getAttribute('href'), '_blank');
   });
 
-  it('saves the named tasks and review date, keeping partial reviews distinct from complete reviews', async () => {
+  it('records the named tasks in the reviewer\'s own name at the service\'s time, keeping partial reviews distinct from complete reviews', async () => {
     const user = userEvent.setup();
     renderApp('/evidence');
     await user.click(await screen.findByRole('button', { name: 'Log review' }));
     const dialog = screen.getByRole('dialog');
+    // MEA-05: nobody types a reviewer or a date; the review is the signed-in person's, at the time the service saves it.
+    expect(within(dialog).queryByLabelText(/Reviewer name|Review date/)).toBeNull();
+    expect(within(dialog).getByText(/Sandbox Admin \(you\)/)).toBeTruthy();
     await user.click(within(dialog).getByRole('button', { name: 'Save review' }));
-    expect(await screen.findByText('Choose the date the review took place.')).toBeTruthy();
-    await user.type(within(dialog).getByLabelText('Review date'), '2026-09-01');
+    expect(await screen.findByText('Describe what was checked and any tasks still outstanding.')).toBeTruthy();
     await user.click(within(dialog).getByRole('checkbox', { name: 'Mandate operations' }));
     await user.click(within(dialog).getByRole('checkbox', { name: 'Payment matching' }));
     await user.type(within(dialog).getByRole('textbox', { name: 'Review notes' }), 'Checked mandates and matches; retries and dispute records still need review.');
     await user.click(within(dialog).getByRole('button', { name: 'Save review' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     const record = api.state().records.find(record => record.kind === 'reviews');
-    expect(record?.data).toMatchObject({ confirmedJobs: ['mandates', 'reconciliation'], reviewedAt: '2026-09-01' });
+    expect(record?.data).toMatchObject({ confirmedJobs: ['mandates', 'reconciliation'], reviewer: 'Sandbox Admin', reviewedAt: api.now });
     expect(await screen.findByText('Mandate operations, Payment matching')).toBeTruthy();
     expect(screen.getByText('Review recorded')).toBeTruthy();
   });

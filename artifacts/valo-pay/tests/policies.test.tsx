@@ -23,6 +23,25 @@ describe('policy and template review', () => {
     await screen.findByText(/Example Lender: Your payment of ₦25,000.00/);
   });
 
+  it('tests a submitted version on the instalments its policy governs before anyone approves it', async () => {
+    api.mutate(state => {
+      const previous = state.records.find(record => record.kind === 'policies')!;
+      previous.status = 'approved';
+      state.records.push({ ...structuredClone(previous), id: 'policy-next', status: 'submitted', data: { ...previous.data, version: 2, previousVersionId: previous.id, spacingHours: 72 } });
+    });
+    const user = userEvent.setup();
+    renderApp('/policies');
+    const row = (await screen.findByText('Version 2')).closest('.p-6') as HTMLElement;
+    await user.click(within(row).getByRole('button', { name: 'Test this version' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Test this policy version' });
+    await user.type(within(dialog).getByLabelText('Reason *'), 'What would version 2 do?');
+    await user.click(within(dialog).getByRole('button', { name: 'Run policy simulation' }));
+    expect(await within(dialog).findByText(/^Version 2 is not approved: this shows what it would do if it were approved and applied\./)).toBeTruthy();
+    expect(within(dialog).queryByText('No instalments use this policy yet.')).toBeNull();
+    expect(api.calls.find(call => (call.body as { action?: string })?.action === 'backtest_policy')?.body).toMatchObject({ recordId: 'policy-next' });
+    expect(api.state().records.find(record => record.id === 'policy-next')?.status).toBe('submitted');
+  });
+
   it('shows changed limits, spacing and both notice periods before a policy is approved', async () => {
     api.mutate(state => {
       const previous = state.records.find(record => record.kind === 'policies')!;
@@ -89,6 +108,32 @@ describe('policy and template review', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Create draft version' }));
     await screen.findByText('Version 2');
     expect(api.state().records.find(record => record.kind === 'policies' && record.data.version === 2)?.data.previousVersionId).toBe(previous.id);
+  });
+
+  it('leaves the version number to the API when a policy is drafted or edited', async () => {
+    api.role = 'Admin';
+    const seeded = api.state().records.find(record => record.kind === 'policies')!;
+    const user = userEvent.setup();
+    renderApp('/policies');
+    await user.click(await screen.findByRole('button', { name: 'Edit draft' }));
+    let dialog = await screen.findByRole('dialog', { name: 'Edit policy draft' });
+    expect(within(dialog).queryByLabelText(/^Version/)).toBeNull();
+    const spacing = within(dialog).getByLabelText(/^Time between attempts/);
+    await user.clear(spacing); await user.type(spacing, '72');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.state().records.find(record => record.id === seeded.id)?.data.spacingHours).toBe(72));
+    expect(api.state().records.find(record => record.id === seeded.id)?.data.version).toBe(1);
+
+    await user.click(screen.getByRole('button', { name: 'Draft a policy' }));
+    dialog = await screen.findByRole('dialog', { name: 'Draft new policy' });
+    expect(within(dialog).queryByLabelText(/^Version/)).toBeNull();
+    await user.type(within(dialog).getByLabelText(/^Policy name/), 'Short-term loan policy');
+    for (const [label, value] of [[/^Maximum attempts/, '3'], [/^Time between attempts/, '48'], [/^Notice before first attempt/, '48'], [/^Notice before each retry/, '24'], [/^How the policy meets each required rule/, 'Synthetic mapping for review.']] as const) {
+      await user.type(within(dialog).getByLabelText(label), value);
+    }
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.state().records.find(record => record.kind === 'policies' && record.name === 'Short-term loan policy')?.data.version).toBe(1));
+    await waitFor(() => expect(screen.getAllByText('Version 1')).toHaveLength(2));
   });
 
   it('updates the synthetic template preview while editing without interpreting markup', async () => {

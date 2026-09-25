@@ -1,63 +1,44 @@
 import { useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "./workspace-context";
-import { submissionFingerprint } from "./safe-mutations";
+import {
+  definitiveRefusal,
+  nothingSaved,
+  outcomeIsUnconfirmed,
+  requestClosed,
+  submissionFingerprint,
+} from "./safe-mutations";
+import { useUnsavedChanges } from "./unsaved-changes";
+import { answerProblem, readAnswer, UNREADABLE_ANSWER } from "./answers";
+import { connectedActionResultFor, connectedViewSchema, type ConnectedView as SharedConnectedView } from "@workspace/valopay-schema";
 
-export interface ConnectedRecord {
-  id: string;
-  name: string;
-  reference: string;
-  status: string;
-  amountKobo: number;
-  customerId: string;
-  createdAt: string;
-  updatedAt: string;
-  data: Record<string, any>;
-  effectiveStatus?: string;
-}
-export interface ConnectedView {
-  mode: "synthetic";
-  revision: string;
-  asOf: string;
-  role: string;
-  entity: { id: string; name: string; workspaceOwner: string };
-  customers: Array<{ id: string; name: string; reference: string }>;
-  consents: ConnectedRecord[];
-  purposes: Array<{ id: string; label: string }>;
-  gates: Array<{
-    id: string;
-    name: string;
-    requires: string;
-    status: string;
-    liveEnabled: false;
-  }>;
-  payments: {
-    intents: ConnectedRecord[];
-    dues: Array<{
-      id: string;
-      name: string;
-      reference: string;
-      customerId: string;
-      customerName: string;
-      outstandingKobo: number;
-      blocked: boolean;
-    }>;
-  };
-  credit: any;
-  cash: any;
-}
-async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
+/** A consent or payment intent as the connected view lists it; its data is read field by field. */
+export type ConnectedRecord = Omit<SharedConnectedView["payments"]["intents"][number], "data"> & { data: Record<string, any>; effectiveStatus?: string };
+/** The connected workspace as the shared schema reads it, its consents and intents with data read field by field. */
+export type ConnectedView = Omit<SharedConnectedView, "consents" | "payments"> & {
+  consents: Array<ConnectedRecord & { effectiveStatus: SharedConnectedView["consents"][number]["effectiveStatus"] }>;
+  payments: Omit<SharedConnectedView["payments"], "intents"> & { intents: ConnectedRecord[] };
+};
+/** Shown for a connected action whose answer does not confirm the expected sample result: the action may have been saved. */
+const UNCONFIRMED_SAMPLE = "The response did not confirm the expected sample result. Retry the original request to recover its outcome.";
+async function request(url: string, options: RequestInit = {}): Promise<unknown> {
   const response = await fetch(url, {
     credentials: "same-origin",
     ...options,
     signal: options.signal ?? AbortSignal.timeout(25000),
     headers: { "Content-Type": "application/json", ...options.headers },
   });
-  const body = await response.json();
+  // A proxy's HTML error page is not JSON: the status still says what happened (a 5xx is worth repeating).
+  const body = await response.json().catch(() => undefined);
   if (!response.ok)
     throw Object.assign(
-      new Error(body.error || "The request could not be completed."),
-      { status: response.status },
+      new Error(body?.error || "The request could not be completed."),
+      { status: response.status, data: body ?? {} },
+    );
+  // An unreadable success is no confirmation: without a status, a write stays unconfirmed.
+  if (body === undefined)
+    throw new Error(
+      "The service returned an unreadable answer. Retry the original request to recover its outcome.",
     );
   return body;
 }
@@ -70,6 +51,14 @@ export function useConnected() {
     fingerprint: string;
     key: string;
     body: string;
+    input: {
+      action: string;
+      data: Record<string, unknown>;
+      recordId?: string;
+      reason: string;
+    };
+    unconfirmed: boolean;
+    pending: boolean;
   } | null>(null);
   if (previousScope.current !== scope) {
     previousScope.current = scope;
@@ -78,11 +67,18 @@ export function useConnected() {
   const query = useQuery<ConnectedView>({
     queryKey: ["connected", merchantId],
     enabled: !!merchantId,
-    queryFn: ({ signal }) =>
-      request(
-        `/api/v1/connected?merchantId=${encodeURIComponent(merchantId!)}`,
-        { signal },
-      ),
+    queryFn: async ({ signal }) => {
+      // The view the API checked, read through the same schema: a malformed answer is a load problem, never a page.
+      const view = readAnswer(
+        connectedViewSchema,
+        await request(
+          `/api/v1/connected?merchantId=${encodeURIComponent(merchantId!)}`,
+          { signal },
+        ),
+      );
+      if (!view) throw answerProblem(UNREADABLE_ANSWER);
+      return view;
+    },
     staleTime: 10000,
   });
   const mutation = useMutation({
@@ -99,6 +95,17 @@ export function useConnected() {
       // request after a lost/ambiguous response so the server can replay its
       // committed answer even though the workspace now has a newer revision.
       const fingerprint = submissionFingerprint({ scope, input });
+      if (attempt.current?.pending)
+        throw new Error(
+          "The original request is still in progress. Wait for its result.",
+        );
+      if (
+        attempt.current?.unconfirmed &&
+        attempt.current.fingerprint !== fingerprint
+      )
+        throw new Error(
+          "The previous request has an unconfirmed outcome. Retry the original request before changing it.",
+        );
       if (!attempt.current || attempt.current.fingerprint !== fingerprint)
         attempt.current = {
           fingerprint,
@@ -107,10 +114,14 @@ export function useConnected() {
             ...input,
             expectedRevision: query.data.revision,
           }),
+          input: structuredClone(input),
+          unconfirmed: false,
+          pending: false,
         };
       const current = attempt.current;
+      current.pending = true;
       try {
-        await request(
+        const result = await request(
           `/api/v1/connected/actions?merchantId=${encodeURIComponent(merchantId)}`,
           {
             method: "POST",
@@ -118,23 +129,42 @@ export function useConnected() {
             body: current.body,
           },
         );
+        // Only the confirmation this action gives counts, with its record in this lender (a Cash Desk action's
+        // outcome, every other action's record): anything else leaves the outcome unconfirmed.
+        if (!readAnswer(connectedActionResultFor(current.input.action, merchantId), result)) throw answerProblem(UNCONFIRMED_SAMPLE);
         if (attempt.current === current) attempt.current = null;
       } catch (error) {
         // A definite request rejection did not commit; a reviewed retry may
         // use the newly fetched revision. Network/timeout/5xx stays ambiguous.
-        const status = (error as { status?: number }).status;
+        // A later authentication/revision rejection can happen before replay
+        // lookup. It does not prove that an earlier unknown write failed,
+        // unless the service says the key's journal entry is cancelled: then
+        // nothing sent with the key was saved or can be.
+        current.unconfirmed = requestClosed(error)
+          ? false
+          : current.unconfirmed || outcomeIsUnconfirmed(error);
+        // A finished request (refused for good, or saved nothing) cannot run
+        // again under its key: the next action needs a new one. A 401 or 429
+        // is not final (any journal entry it left stays pending), so the same
+        // action keeps its key, as in useSafeMutation.
         if (
-          status &&
-          status >= 400 &&
-          status < 500 &&
-          attempt.current === current
+          !current.unconfirmed &&
+          attempt.current === current &&
+          (requestClosed(error) ||
+            nothingSaved(error) ||
+            definitiveRefusal(error))
         )
           attempt.current = null;
         throw error;
+      } finally {
+        current.pending = false;
       }
     },
     onSettled: () => client.invalidateQueries(),
   });
+  useUnsavedChanges(
+    mutation.isPending || Boolean(attempt.current?.unconfirmed),
+  );
   return {
     ...query,
     run: async (
@@ -146,6 +176,19 @@ export function useConnected() {
       await mutation.mutateAsync({ action, data, recordId, reason });
     },
     pending: mutation.isPending,
+    scope,
+    hasUnconfirmedOutcome: Boolean(attempt.current?.unconfirmed),
+    retryUnconfirmed: async () => {
+      if (!attempt.current?.unconfirmed)
+        throw new Error("There is no unconfirmed request to retry.");
+      await mutation.mutateAsync(attempt.current.input);
+    },
+    /** Forgets the original request and its key after the person chose to discard it: the next action is new. */
+    abandonUnconfirmed: () => {
+      if (attempt.current?.pending) return;
+      attempt.current = null;
+      mutation.reset();
+    },
     canWrite: !!workspace && workspace.role !== "Read-only",
   };
 }

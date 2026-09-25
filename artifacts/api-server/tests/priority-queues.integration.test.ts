@@ -32,6 +32,27 @@ try {
     SELECT $1 || '-queue-attempt-' || lpad(i::text,5,'0'),$1,'attempts','Queue attempt ' || i,'failed','QATT-' || i,$2,
       jsonb_build_object('synthetic',true,'dueItemId',$1 || '-queue-due-' || lpad(i::text,5,'0'),'occurredAt','2026-09-18T12:00:00Z'),1000000
     FROM generate_series(1,2000) i`, [merchantId, customer.id]);
+  // Date-only deadlines on today's and yesterday's West Africa Time dates (23 September audit, API item 5): each is
+  // due all of its WAT day and overdue only after it, in every queue, as the reference queue and the alerts read it.
+  const watToday = new Date(Date.now() + 3_600_000).toISOString().slice(0, 10), watYesterday = new Date(Date.now() + 3_600_000 - 86_400_000).toISOString().slice(0, 10);
+  const dated: Record<string, string> = {};
+  for (const [label, date] of [['today', watToday], ['yesterday', watYesterday]] as const) {
+    dated[`exception-${label}`] = `${merchantId}-dated-exception-${label}`; dated[`mandate-${label}`] = `${merchantId}-dated-mandate-${label}`; dated[`due-${label}`] = `${merchantId}-dated-due-${label}`;
+    await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data,amount_kobo) VALUES
+      ($1,$4,'exceptions','Dated exception','open','DEX-' || $1,$5,jsonb_build_object('synthetic',true,'severity','low','owner','Finance','type','unallocated_payment','dueBy',$7::text),1000000),
+      ($2,$4,'mandates','Dated mandate','pending_activation','DMN-' || $2,$5,jsonb_build_object('synthetic',true,'workflow','hosted_consent','consentEvidence','Synthetic','activationDeadline',$7::text),5000000),
+      ($3,$4,'due-items','Dated instalment','scheduled','DDU-' || $3,$5,jsonb_build_object('synthetic',true,'mandateId',$6::text,'owner','lender','dueDate',$7::text),1000000)`,
+      [dated[`exception-${label}`], dated[`mandate-${label}`], dated[`due-${label}`], merchantId, customer.id, mandate.id, date]);
+  }
+  for (const [queue, kind] of [['exceptions', 'exception'], ['mandates', 'mandate'], ['collections', 'due']] as const) {
+    await inWorkspace(request(), response(), async ctx => {
+      // A target is located among the view's filtered rows: its page holds it only when the view does.
+      const inView = async (view: string, id: string) => (await listQueue(ctx, merchantId, queue, { view, target: id, limit: 100 })).items.some(row => row.id === id);
+      const today = dated[`${kind}-today`]!, yesterday = dated[`${kind}-yesterday`]!;
+      assert.deepEqual([await inView('overdue', today), await inView('due-today', today)], [false, true], `${queue}: a date-only deadline on today's WAT date is due today, not overdue`);
+      assert.deepEqual([await inView('overdue', yesterday), await inView('due-today', yesterday)], [true, false], `${queue}: yesterday's is overdue`);
+    }, 'read');
+  }
   const baseline = await inWorkspace(request(), response(), ctx => loadState(ctx, merchantId, 'share'), 'read');
   const normalise = (page: ReturnType<typeof pageQueue>) => ({ ...page, related: page.related.sort((a, b) => a.id.localeCompare(b.id)) });
   const timings: number[] = [];
@@ -59,7 +80,58 @@ try {
   assert.equal(sibling.related.length, 0);
   console.log(JSON.stringify({ benchmark: 'priority-queue-pages', syntheticRows: 6000, pages: timings.length, medianMs: Math.round([...timings].sort((a, b) => a - b)[Math.floor(timings.length / 2)]!), maximumMs: Math.round(Math.max(...timings)), note: 'Disposable CI database; not a production latency guarantee.' }));
   await assert.rejects(() => inWorkspace(request(), response(), ctx => listQueue(ctx, merchantId, 'collections', { view: 'invalid' }), 'read'), (error: any) => error.status === 400);
-  console.log('Priority queue integration passed: 6,000 rows, all filters, complete counts, bounded pages, deep links, related-record scoping and malformed legacy dates.');
+  // Pilot scale: 6,000 instalments, each with a failed attempt. Every attempt
+  // reads its instalment by key; comparing every attempt with every instalment
+  // took over two seconds a page at this size and grew with its square.
+  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data,amount_kobo)
+    SELECT $1 || '-scale-due-' || lpad(i::text,5,'0'),$1,'due-items','Scale instalment ' || i,'scheduled','SDUE-' || i,$2,
+      jsonb_build_object('synthetic',true,'mandateId',$3::text,'owner','valopay','dueDate',CASE WHEN i%2=0 THEN '2026-09-18' ELSE '2026-09-20' END),1000000
+    FROM generate_series(1,4000) i`, [merchantId, customer.id, mandate.id]);
+  await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data,amount_kobo)
+    SELECT $1 || '-scale-attempt-' || lpad(i::text,5,'0'),$1,'attempts','Scale attempt ' || i,'failed','SATT-' || i,$2,
+      jsonb_build_object('synthetic',true,'dueItemId',$1 || '-scale-due-' || lpad(i::text,5,'0'),'occurredAt','2026-09-18T12:00:00Z'),1000000
+    FROM generate_series(1,4000) i`, [merchantId, customer.id]);
+  await pool.query('ANALYZE valopay_records');
+  const scaled = await inWorkspace(request(), response(), ctx => loadState(ctx, merchantId, 'share'), 'read');
+  for (const view of ['failed', 'overdue', 'all']) {
+    await inWorkspace(request(), response(), async ctx => {
+      const start = performance.now();
+      const actual = await listQueue(ctx, merchantId, 'collections', { view, limit: 25 });
+      const elapsed = performance.now() - start;
+      assert.deepEqual(normalise(actual), normalise(pageQueue(scaled.records, 'collections', { view, limit: 25 }, ctx.now)), `collections at pilot scale: ${view}`);
+      assert.ok(elapsed < 2000, `A pilot-scale collections page (${view}) returns in ${Math.round(elapsed)} ms.`);
+    }, 'read');
+  }
+  // A lender loaded since the last ANALYZE, which the statistics describe as
+  // empty. Each attempt still reads its instalment by primary key; as a plain
+  // join PostgreSQL scanned all of the lender's instalments for every row
+  // (22 s for a 25,000-record lender, past the request statement limit).
+  await pool.query('ALTER TABLE valopay_records SET (autovacuum_enabled = false)');
+  try {
+    tokens.push(randomBytes(32).toString('hex'));
+    const unanalysedId = (await inWorkspace(request(tokens[2]), response(), listMerchants))[0]!.id;
+    const seeded = await inWorkspace(request(tokens[2]), response(), ctx => loadState(ctx, unanalysedId, 'share'), 'read');
+    const payer = seeded.records.find(row => row.kind === 'customers')!, payerMandate = seeded.records.find(row => row.kind === 'mandates')!;
+    await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data,amount_kobo)
+      SELECT $1 || '-fresh-due-' || lpad(i::text,5,'0'),$1,'due-items','Fresh instalment ' || i,'scheduled','FDUE-' || i,$2,
+        jsonb_build_object('synthetic',true,'mandateId',$3::text,'owner','valopay','dueDate','2026-09-18'),1000000
+      FROM generate_series(1,6000) i`, [unanalysedId, payer.id, payerMandate.id]);
+    await pool.query(`INSERT INTO valopay_records(id,merchant_id,kind,name,status,reference,customer_id,data,amount_kobo)
+      SELECT $1 || '-fresh-attempt-' || lpad(i::text,5,'0'),$1,'attempts','Fresh attempt ' || i,'failed','FATT-' || i,$2,
+        jsonb_build_object('synthetic',true,'dueItemId',$1 || '-fresh-due-' || lpad(i::text,5,'0'),'occurredAt','2026-09-18T12:00:00Z'),1000000
+      FROM generate_series(1,6000) i`, [unanalysedId, payer.id]);
+    const loaded = await inWorkspace(request(tokens[2]), response(), ctx => loadState(ctx, unanalysedId, 'share'), 'read');
+    for (const view of ['failed', 'all']) {
+      await inWorkspace(request(tokens[2]), response(), async ctx => {
+        const start = performance.now();
+        const actual = await listQueue(ctx, unanalysedId, 'collections', { view, limit: 25 });
+        const elapsed = performance.now() - start;
+        assert.deepEqual(normalise(actual), normalise(pageQueue(loaded.records, 'collections', { view, limit: 25 }, ctx.now)), `collections before ANALYZE: ${view}`);
+        assert.ok(elapsed < 2000, `A collections page (${view}) for a lender loaded since the last ANALYZE returns in ${Math.round(elapsed)} ms.`);
+      }, 'read');
+    }
+  } finally { await pool.query('ALTER TABLE valopay_records RESET (autovacuum_enabled)'); }
+  console.log('Priority queue integration passed: 6,000 rows, all filters, complete counts, bounded pages, deep links, related-record scoping, malformed legacy dates, date-only deadlines due all of their WAT day in every queue, a 14,000-row collections queue in linear time, and the same for a lender loaded since the last ANALYZE.');
 } finally {
   const principals = tokens.map(token => createHash('sha256').update(`demo:${token}`).digest('hex'));
   const scope = 'SELECT id FROM valopay_merchants WHERE workspace_id IN (SELECT id FROM valopay_workspaces WHERE principal_hash=ANY($1::text[]))';

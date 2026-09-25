@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { renderApp, screen, userEvent, waitFor, within } from './harness';
-import { importErrorCsv, safeCsvCell } from '@/components/import-wizard';
+import { importErrorCsv, safeCsvCell } from '@/components/import-results';
 import { formatKobo } from '@/lib/formatters';
 import axe from 'axe-core';
 import { queryClient } from '@/App';
@@ -70,7 +70,7 @@ describe('template review lifecycle', () => {
     const message = within(dialog).getByLabelText(/Message \(include/);
     const before = api.state().records.find(record => record.kind === 'templates')!.data.text;
     await user.clear(message); await user.paste(`${before} {{unknown}}`);
-    expect(within(dialog).getByText(/Unknown placeholder/)).toBeTruthy();
+    expect(within(dialog).getByText(/Unknown placeholder \{\{unknown\}\}\. Use only/)).toBeTruthy();
     await user.click(within(dialog).getByRole('button', { name: 'Save' }));
     await screen.findByRole('alert');
     expect(api.state().records.find(record => record.kind === 'templates')!.data.text).toBe(before);
@@ -86,9 +86,12 @@ describe('guided synthetic CSV imports', () => {
     const csv = 'Full name,External ref,Consent\n"Sample, Person",CSV-GUIDED-1,"Synthetic\nconsent"';
     await user.upload(screen.getByLabelText('Choose CSV file'), new File([csv], 'synthetic.csv', { type: 'text/csv' }));
     await waitFor(() => expect((screen.getByLabelText('CSV content') as HTMLTextAreaElement).value).toBe(csv));
-    await user.click(screen.getByRole('button', { name: 'Check data' }));
+    // The columns are matched from the file's header before any check, and a check needs the row ID column.
     await screen.findByRole('group', { name: 'Match columns' });
-    await user.selectOptions(screen.getByLabelText('Map Full name'), 'name');
+    expect(screen.getByRole('button', { name: 'Check data' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByText('Choose the row ID column under Match columns before checking: every row needs a source row ID.')).toBeTruthy();
+    await user.selectOptions(screen.getByLabelText('Row ID column *'), 'External ref');
+    expect((screen.getByLabelText('Map Full name') as HTMLSelectElement).value).toBe('name');
     await user.selectOptions(screen.getByLabelText('Map External ref'), 'reference');
     await user.selectOptions(screen.getByLabelText('Map Consent'), 'consentProvenance');
     expect(screen.getByRole('button', { name: 'Import data' }).hasAttribute('disabled')).toBe(true);
@@ -97,10 +100,10 @@ describe('guided synthetic CSV imports', () => {
     expect(screen.getByText('Sample, Person')).toBeTruthy();
     expect((await axe.run(document.body, { rules: { 'color-contrast': { enabled: false }, 'target-size': { enabled: false }, 'scrollable-region-focusable': { enabled: false } } })).violations).toEqual([]);
     await user.click(screen.getByRole('button', { name: 'Import data' }));
-    await screen.findByText(/1 imported · 0 skipped as duplicates · 0 rows to fix/);
+    await screen.findByText(/1 imported · 0 skipped as already imported · 0 rows to fix/);
     expect(api.state().records.filter(record => record.reference === 'CSV-GUIDED-1')).toHaveLength(1);
     await user.click(screen.getByRole('button', { name: 'Check data' }));
-    await screen.findByText(/0 imported · 1 skipped as duplicates · 0 rows to fix/);
+    await screen.findByText(/0 imported · 1 skipped as already imported · 0 rows to fix/);
     expect(screen.getByRole('button', { name: 'Import data' }).hasAttribute('disabled')).toBe(true);
   });
 
@@ -109,13 +112,13 @@ describe('guided synthetic CSV imports', () => {
     await user.click(await screen.findByRole('button', { name: 'Import sample data' }));
     await user.selectOptions(screen.getByLabelText('Import as'), 'customers');
     const input = screen.getByLabelText('CSV content');
-    await user.click(input); await user.paste('name,reference,consentProvenance\nValid,CSV-VALID,Synthetic\nInvalid,CSV-BAD,');
+    await user.click(input); await user.paste('row_id,name,reference,consentProvenance\nr1,Valid,CSV-VALID,Synthetic\nr2,Invalid,CSV-BAD,');
     await user.click(screen.getByRole('button', { name: 'Check data' }));
-    await screen.findByText(/0 imported · 0 skipped as duplicates · 1 rows to fix · 1 valid rows/);
+    await screen.findByText(/0 imported · 0 skipped as already imported · 1 row to fix · 1 valid row/);
     expect(screen.getByRole('button', { name: 'Import data' }).hasAttribute('disabled')).toBe(true);
     expect(screen.getByRole('button', { name: 'Download errors CSV' })).toBeTruthy();
     expect(api.state().records.some(record => record.reference === 'CSV-VALID')).toBe(false);
-    await user.clear(input); await user.paste('name,reference,consentProvenance\nCorrected,CSV-VALID,Synthetic');
+    await user.clear(input); await user.paste('row_id,name,reference,consentProvenance\nr1,Corrected,CSV-VALID,Synthetic');
     expect(screen.getByRole('button', { name: 'Import data' }).hasAttribute('disabled')).toBe(true);
     await user.click(screen.getByRole('button', { name: 'Check data' }));
     await screen.findByText('Checked and ready. Review the preview, then select Import data.');
@@ -125,8 +128,9 @@ describe('guided synthetic CSV imports', () => {
   it('neutralises spreadsheet formulas and quotes in exported error CSV', () => {
     expect(safeCsvCell(' =HYPERLINK("example")')).toBe('"\' =HYPERLINK(""example"")"');
     expect(safeCsvCell('\t@SUM(A1)')).toBe('"\'\t@SUM(A1)"');
-    const csv = importErrorCsv([{ row: 2, status: 'invalid', message: '=malicious()' }, { row: 3, status: 'valid', message: 'Ready' }]);
+    const csv = importErrorCsv([{ row: 2, status: 'invalid', message: '=malicious()', detail: '@detail()' }, { row: 3, status: 'valid', message: 'Ready' }]);
     expect(csv).toContain('"\'=malicious()"');
+    expect(csv.split('\r\n')).toEqual(['\uFEFF"Row","Status","What to fix","Technical detail"', '"2","invalid","\'=malicious()","\'@detail()"']);
     expect(csv).not.toContain('Ready');
     expect(csv.startsWith('\uFEFF')).toBe(true);
   });

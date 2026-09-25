@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { installFakeApi } from "../tests/fake-api";
+import { makeRecord } from "../../api-server/src/domain/records";
 if (process.env.VALOPAY_BROWSER_TEST !== "1")
   throw new Error("Use the isolated browser-test command.");
 let api: ReturnType<typeof installFakeApi>;
@@ -11,32 +12,40 @@ function reset() {
   api?.uninstall();
   api = installFakeApi({ now: "2026-09-19T12:00:00.000Z" });
   api.mutate((state) => {
-    const mandate = state.records.find(
-      (r) => r.kind === "mandates" && r.status === "pending_activation",
-    )!;
-    const due = state.records.find(
-      (r) => r.kind === "due-items" && r.data.mandateId === mandate.id,
-    )!;
     const allocation = state.records.find(
       (r) => r.kind === "allocations" && r.status === "proposed",
     )!;
+    const payment = state.records.find((r) => r.id === allocation.data.paymentId)!;
+    const due = state.records.find((r) => r.id === allocation.data.dueItemId)!;
+    const mandate = state.records.find((r) => r.id === due.data.mandateId)!;
     for (let i = 0; i < 55; i++) {
+      // Each proposal needs its own receipt and instalment. Sharing the seed
+      // payment would create 56 competing proposals and make a paged decision
+      // correctly fail the server's specific-proposal check.
+      const mandateId = randomUUID(), dueItemId = randomUUID(), paymentId = randomUUID();
       state.records.push({
         ...structuredClone(mandate),
-        id: randomUUID(),
+        id: mandateId,
         reference: `BROWSER-MND-${String(i).padStart(2, "0")}`,
         data: { ...mandate.data, activationDeadline: "2026-01-01T00:00:00Z" },
       });
       state.records.push({
         ...structuredClone(due),
-        id: randomUUID(),
+        id: dueItemId,
         reference: `BROWSER-DUE-${String(i).padStart(2, "0")}`,
-        data: { ...due.data, dueDate: "2026-01-01" },
+        data: { ...due.data, mandateId, dueDate: "2026-01-01" },
+      });
+      state.records.push({
+        ...structuredClone(payment),
+        id: paymentId,
+        reference: `BROWSER-PAY-${String(i).padStart(2, "0")}`,
+        data: { ...payment.data, dueItemId, proposedDueItemId: dueItemId },
       });
       state.records.push({
         ...structuredClone(allocation),
         id: randomUUID(),
         reference: `BROWSER-MATCH-${String(i).padStart(2, "0")}`,
+        data: { ...allocation.data, paymentId, dueItemId },
       });
       state.records.push({
         ...structuredClone(due),
@@ -75,13 +84,33 @@ createServer(async (req, res) => {
       res.end("ok");
       return;
     }
+    if (url.pathname === "/__test/aged-batches" && req.method === "POST") {
+      // Committed import batches old enough for a 30-day raw CSV retention policy.
+      const count = Number(url.searchParams.get("count") || 1);
+      api.mutate((state) => {
+        for (let i = 0; i < count; i++) {
+          const at = new Date(Date.parse(api.now) - (60 - i) * 86_400_000).toISOString();
+          makeRecord(state, "import-batches", { name: `Aged sample import ${i + 1}`, status: "committed", createdAt: at, updatedAt: at, data: { csv: `reference,name\nAGED-${i + 1},Sample customer`, committedAt: at, rowIds: [`aged-${i + 1}`], recordIds: [], check: { valid: 1, invalid: 0, imported: 1, rows: [], preview: [] } } });
+        }
+      });
+      res.end("ok");
+      return;
+    }
     if (url.pathname.startsWith("/api/")) {
       const chunks: Buffer[] = [];
       for await (const chunk of req) chunks.push(Buffer.from(chunk));
       const body = Buffer.concat(chunks).toString();
+      // Forward every header the console sent (Idempotency-Key among them); only hop-by-hop ones are dropped.
+      const headers: Record<string, string> = {};
+      for (const [name, value] of Object.entries(req.headers)) {
+        if (["host", "connection", "content-length", "transfer-encoding", "keep-alive"].includes(name)) continue;
+        if (typeof value === "string") headers[name] = value;
+        else if (Array.isArray(value)) headers[name] = value.join(", ");
+      }
+      if (!headers["content-type"]) headers["content-type"] = "application/json";
       const result = await fetch(url, {
         method: req.method,
-        headers: { "content-type": "application/json" },
+        headers,
         ...(body ? { body } : {}),
       });
       res.writeHead(

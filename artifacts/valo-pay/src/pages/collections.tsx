@@ -1,6 +1,6 @@
 import { QueueSearch } from '@/components/queue-search';
 import { QueueFreshness } from '@/components/queue-freshness';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'wouter';
 import { useLocationProperty } from 'wouter/use-browser-location';
 import { ScrollFrame } from '@/components/scroll-frame';
@@ -12,15 +12,16 @@ import { SavedQueueViews } from '@/components/saved-queue-views';
 import { FileText, Upload } from 'lucide-react';
 import { PermissionButton as Button } from '@/components/permission-button';
 import { RecordDialog } from '@/components/record-dialog';
+import { notifyDone } from '@/lib/notify';
 import { ImportWizard } from '@/components/import-wizard';
 import { confirmUnsavedChanges } from '@/lib/unsaved-changes';
 import { failureCodeList } from '@workspace/valopay-schema';
 import { RecordLabel, StatusBadge, readableLabel } from '@/components/record-label';
-import { formatKobo, formatDate } from '@/lib/formatters';
+import { formatKobo, formatDate, formatNumber } from '@/lib/formatters';
 import { deadlineOrder, isOverdue, useQueueFilters } from '@/lib/queue-filters';
 import { collectionReturnTo, recordDestination } from '@/lib/record-navigation';
 import { useHashTarget } from '@/lib/use-hash-target';
-import { RecordPagination } from '@/components/record-pagination';
+import { RecordPagination, usePageProblemFocus } from '@/components/record-pagination';
 
 const collectionViews = ['all', 'overdue', 'due-today', 'failed'] as const;
 const isUnpaid = (status: string) => !['paid', 'closed', 'cancelled'].includes(status);
@@ -30,6 +31,9 @@ export default function CollectionsPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [actionError, setActionError] = useState('');
   const { view, owner, setView, setOwner } = useQueueFilters(collectionViews, 'all');
+  // The queue's problem notice, which takes the pager's focus when a page press fails.
+  const listProblem = useRef<HTMLDivElement>(null), listLabel = view === 'failed' ? 'failed attempts' : 'instalments';
+  const listAgain = usePageProblemFocus(listProblem, listLabel);
   const [search] = useSearchParams();
   const targetHash = useLocationProperty(() => window.location.hash);
   
@@ -83,7 +87,7 @@ export default function CollectionsPage() {
   const views: Array<{ key: typeof view; label: string; count: number | string }> = [
     { key: 'all', label: 'All instalments' }, { key: 'overdue', label: 'Overdue' },
     { key: 'due-today', label: 'Due today' }, { key: 'failed', label: 'Failed attempts' },
-  ].map(item => ({ ...item, key: item.key as typeof view, count: data?.counts[item.key] ?? '…' }));
+  ].map(item => ({ ...item, key: item.key as typeof view, count: typeof data?.counts[item.key] === 'number' ? formatNumber(data.counts[item.key]!) : '…' }));
   if (!merchantId) return null;
   const nextAction = (item: typeof instalments[number] | undefined, attempt: typeof failedAttempts[number] | undefined) => {
     const rowId = attempt?.id || item?.id;
@@ -135,8 +139,8 @@ export default function CollectionsPage() {
               <div className="flex flex-wrap gap-2" role="group" aria-label="Collection views">
                 {views.map(option => <Button key={option.key} size="sm" variant={view === option.key ? 'default' : 'ghost'} aria-pressed={view === option.key} onClick={() => setView(option.key)}>{option.label} ({option.count})</Button>)}
               </div>
-              <label className="flex items-center gap-2 text-sm sm:ml-auto">Owner
-                <select aria-label="Filter collections by owner" className="max-w-60 rounded-md border bg-background px-3 py-2" value={owner} onChange={event => setOwner(event.target.value)}>
+              <label className="flex w-full min-w-0 flex-col gap-2 text-sm sm:ml-auto sm:w-auto sm:flex-row sm:items-center">Owner
+                <select aria-label="Filter collections by owner" className="w-full min-w-0 max-w-full rounded-md border bg-background px-3 py-2 sm:w-auto sm:max-w-60" value={owner} onChange={event => setOwner(event.target.value)}>
                   <option value="">All owners</option>
                   {owners.map(value => <option key={value} value={value}>{readableLabel(value)}</option>)}
                 </select>
@@ -161,7 +165,7 @@ export default function CollectionsPage() {
                   {isLoadingDue || isLoadingAttempts ? (
                     <LoadingRow colSpan={7} what="collections" />
                   ) : dueError && !data ? (
-                    <tr><td colSpan={7} className="p-6"><div role="alert"><p>Collections could not be loaded completely.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => { refetchDue(); refetchAttempts(); }}>Try again</Button></div></td></tr>
+                    <tr><td colSpan={7} className="p-6"><div ref={listProblem} role="alert"><p>Collections could not be loaded completely.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => { listAgain(); refetchDue(); refetchAttempts(); }}>Try again</Button></div></td></tr>
                   ) : displayed.length === 0 ? (
                     <EmptyRow colSpan={7} title={search.get('q')?.trim() ? 'No results match your search' : view === 'all' && !owner ? 'No instalments recorded' : 'No collections match these filters'}>{search.get('q')?.trim() ? 'Try another name or reference, or clear the search. Your status and owner filters will stay selected.' : view === 'all' && !owner ? 'Open Import sample data to add synthetic instalments using a sample CSV.' : 'Choose All instalments and All owners to see the full list.'}</EmptyRow>
                   ) : (
@@ -175,6 +179,7 @@ export default function CollectionsPage() {
                         <td className="max-w-56 px-4 py-3 text-xs leading-relaxed">{nextAction(item, attempt)}</td>
                         <td className="px-4 py-3 text-right">
                           {item && <div className="flex flex-col items-end gap-2"><Button size="sm" variant="outline" className="h-7 text-xs" action="backtest_policy" record={item} onClick={() => handleAction(item, 'backtest_policy')}>Test policy</Button>
+                          {item.status === 'in_dispute' && <Button size="sm" variant="outline" className="h-7 text-xs" action="release_dispute" record={item} onClick={() => handleAction(item, 'release_dispute')}>Release from dispute</Button>}
                           {isUnpaid(item.status) && <Button size="sm" variant="ghost" className="h-7 text-xs" action="simulate_failure" record={item} onClick={() => handleAction(item, 'simulate_failure')}>Simulate failure</Button>}</div>}
                         </td>
                       </tr>
@@ -183,7 +188,7 @@ export default function CollectionsPage() {
                 </tbody>
               </table>
             </ScrollFrame>
-            {!isLoadingDue && !isLoadingAttempts && !dueError && !attemptsError && <RecordPagination pagination={pagination} total={data?.total || 0} label={view === 'failed' ? 'failed attempts' : 'instalments'} />}
+            {!isLoadingDue && !isLoadingAttempts && !dueError && !attemptsError && <RecordPagination pagination={pagination} total={data?.total || 0} busy={queue.isPlaceholderData} label={listLabel} />}
           </section>
         </div>
       </div>
@@ -193,8 +198,13 @@ export default function CollectionsPage() {
         record={selectedItem}
         isOpen={isDialogOpen}
         onOpenChange={setIsDialogOpen}
-        title={actionKind === 'simulate_failure' ? 'Simulate collection failure' : 'Test retry policy'}
+        title={actionKind === 'simulate_failure' ? 'Simulate collection failure' : actionKind === 'release_dispute' ? 'Release instalment from dispute' : 'Test retry policy'}
         actionMutation={actionKind}
+        onDone={response => { if (actionKind === 'release_dispute' && response?.message) notifyDone('Released from dispute', String(response.message)); }}
+        context={actionKind === 'release_dispute' && selectedItem ? <section aria-label="Release context" className="space-y-2 rounded-lg border bg-secondary/10 p-4 text-sm">
+          <p className="font-medium">{selectedItem.reference} · {formatKobo(Number(selectedItem.data?.outstandingKobo ?? selectedItem.amountKobo))} outstanding</p>
+          <p>Releasing takes the instalment out of dispute. Its status then follows its balance, and collection and allocation resume, so a payment waiting for it can be applied. An open customer dispute exception for it is closed because its condition cleared. Record why the instalment may be collected again; the reason is saved in the audit log.</p>
+        </section> : undefined}
         fields={
           actionKind === 'simulate_failure' ? 
             [{ name: 'failureCode', label: 'Failure reason', type: 'select', options: failureCodeList.map(code => ({ label: readableLabel(code), value: code })), isData: true, required: true }] :

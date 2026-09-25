@@ -54,17 +54,15 @@ beforeEach(() => {
     run: vi.fn().mockResolvedValue(undefined),
     refetch: vi.fn(),
     data: {
+      customers: [
+        { id: "customer-a", name: "Sample Applicant", reference: "SYN-CUSTOMER" },
+      ],
       credit: {
         canAssess: true,
         canReview: false,
         actor: "Sandbox Operations",
-        customers: [
-          {
-            id: "customer-a",
-            name: "Sample Applicant",
-            reference: "SYN-CUSTOMER",
-            permissions: { accountRead: true, creditAssessment: true },
-          },
+        permissions: [
+          { customerId: "customer-a", accountRead: true, creditAssessment: true },
         ],
         assessments: [],
         model: {
@@ -84,7 +82,7 @@ beforeEach(() => {
 });
 describe("Credit Desk synthetic journeys", () => {
   it("shows missing separate permissions and a working setup destination", () => {
-    mocks.api.data.credit.customers[0].permissions.creditAssessment = false;
+    mocks.api.data.credit.permissions[0].creditAssessment = false;
     render(<CreditDeskPage />);
     expect(
       screen.getByRole("heading", { level: 1, name: "Credit Desk" }),
@@ -135,7 +133,7 @@ describe("Credit Desk synthetic journeys", () => {
     expect(screen.getByText("Ready for lender review")).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "Evidence" }));
     expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(
-      "credit-tab-evidence",
+      screen.getByRole("tab", { name: "Evidence" }).id,
     );
     expect(screen.getByText("Immutable evidence fingerprint")).toBeTruthy();
     expect(screen.getByText("90 days")).toBeTruthy();
@@ -239,5 +237,62 @@ describe("Credit Desk synthetic journeys", () => {
         ) as HTMLTextAreaElement
       ).value,
     ).toBe("");
+  });
+  it("rejects excess decimal places beside the amount, preserves the form and submits exact kobo after correction", async () => {
+    const user = userEvent.setup();
+    render(<CreditDeskPage />);
+    const principal = screen.getByLabelText("Requested principal (₦)");
+    await user.clear(principal);
+    await user.type(principal, "240000.005");
+    await user.type(
+      screen.getByLabelText("Reason for this assessment"),
+      "Review this exact sample application amount",
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Run sample assessment/ }),
+    );
+    expect(mocks.api.run).not.toHaveBeenCalled();
+    expect(principal.getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement).toBe(principal);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "no more than 2 decimal places",
+    );
+    expect((principal as HTMLInputElement).value).toBe("240000.005");
+    await user.clear(principal);
+    await user.type(principal, "240,000.29");
+    await user.click(
+      screen.getByRole("button", { name: /Run sample assessment/ }),
+    );
+    expect(mocks.api.run.mock.calls[0][1].principalKobo).toBe(24_000_029);
+  });
+  it("moves between assessment details with arrow, Home and End keys and one tab stop", async () => {
+    mocks.api.data.credit.assessments = [assessment()];
+    const user = userEvent.setup();
+    render(<CreditDeskPage />);
+    const assessmentTab = screen.getByRole("tab", { name: "Assessment" });
+    assessmentTab.focus();
+    await user.keyboard("{ArrowRight}");
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("tab", { name: "Evidence" })
+          .getAttribute("aria-selected"),
+      ).toBe("true"),
+    );
+    expect(screen.getByRole("tabpanel").textContent).toContain(
+      "Immutable evidence fingerprint",
+    );
+    await user.keyboard("{End}");
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("tab", { name: "Review history" }),
+      ),
+    );
+    await user.keyboard("{Home}");
+    await waitFor(() => expect(document.activeElement).toBe(assessmentTab));
+    expect(
+      screen.getAllByRole("tab").filter((element) => element.tabIndex === 0),
+    ).toHaveLength(1);
+    expect(mocks.api.run).not.toHaveBeenCalled();
   });
 });
