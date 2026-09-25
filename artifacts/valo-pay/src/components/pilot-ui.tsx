@@ -1,6 +1,7 @@
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { Link } from "wouter";
 import { Button } from "./ui/button";
+import { usePageProblemFocus } from "./record-pagination";
 import { saidBy } from "@/lib/notify";
 import { DiscardOriginalRequest } from "./discard-original-request";
 
@@ -52,7 +53,8 @@ export const UNJOURNALED_WRITE_PROBLEM =
  * gave none (no answer, or a proxy's error page). A read and a change need
  * different fallbacks: a failed read changed nothing and is simply tried
  * again, while a change may have been saved and is checked where it is
- * recorded (`READ_PROBLEM` by default).
+ * recorded (`READ_PROBLEM` by default). A read's problem that took the place
+ * of its list's page buttons after a page press takes their focus.
  */
 export function PilotError({
   error,
@@ -63,8 +65,11 @@ export function PilotError({
   retry?: () => void;
   fallback?: string;
 }) {
+  const notice = useRef<HTMLDivElement>(null);
+  usePageProblemFocus(notice);
   return error ? (
     <div
+      ref={notice}
       role="alert"
       className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm"
     >

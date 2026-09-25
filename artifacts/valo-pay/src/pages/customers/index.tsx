@@ -5,6 +5,7 @@ import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useListRecords, getListRecordsQueryKey } from '@workspace/api-client-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { formatNumber } from '@/lib/formatters';
 import { Search, UserPlus, ArrowRight, Users } from 'lucide-react';
 import { CustomerAvatar, StatusBadge } from '@/components/record-label';
@@ -29,11 +30,11 @@ export default function CustomersPage() {
   const { search: settledSearch, searchPending } = useDebouncedSearch(search, merchantId);
   const params = { merchantId: merchantId!, search: settledSearch || undefined, limit: pagination.pageSize, offset: pagination.offset };
   
-  const customersKey = getListRecordsQueryKey('customers', params);
+  const customersKey = getListRecordsQueryKey('customers', params), client = useQueryClient();
   const customersQuery = useListRecords(
     'customers',
     params,
-    { query: { enabled: !!merchantId && sameLender && !searchPending, queryKey: customersKey, placeholderData: keepRowsWhilePaging(customersKey) } }
+    { query: { enabled: !!merchantId && sameLender && !searchPending, queryKey: customersKey, placeholderData: keepRowsWhilePaging(customersKey, client) } }
   );
   const { data, isLoading, isFetching, error, refetch } = customersQuery;
   const rowTargets = useMemo(() => data?.items.map(customer => `record-${customer.id}`) || [], [data]);

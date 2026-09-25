@@ -6,6 +6,7 @@ import { makeRecord } from '../../api-server/src/domain/records';
 import { queueExport } from '../../api-server/src/lib/export-jobs';
 import { saveImportBatch } from '../../api-server/src/domain/pilot-workflow';
 import { lifecyclePolicy, saveLifecyclePolicy } from '../../api-server/src/domain/lifecycle';
+import { queryClient } from '@/App';
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -325,4 +326,89 @@ describe('paging a fixed-step list by keyboard', () => {
     expect(document.activeElement).toBe(next);
     await screen.findByText('Saved request 25');
   }, 30_000);
+});
+
+// Third review of the audit fixes, finding 5: a page whose request had failed showed the previous page's rows as its own
+// whenever it was fetched again (a refresh, a return to the tab), and the problem notice that replaced a pressed pager
+// left keyboard focus on the page body.
+describe('a page that fails to load', () => {
+  const press = async (user: ReturnType<typeof userEvent.setup>, control: HTMLElement) => { control.focus(); await user.keyboard('{Enter}'); };
+  const unavailable = { status: 503, error: 'The service is unavailable for a moment.' };
+  const sixty = (kind: string, pick: (record: { status: string; reference: string }) => boolean, changes: (index: number) => Record<string, unknown> = () => ({})) => api.mutate(state => {
+    const sample = state.records.find(record => record.kind === kind && pick(record))!;
+    state.records.push(...Array.from({ length: 60 }, (_, index) => ({ ...structuredClone(sample), id: randomUUID(), reference: `PAGER-${kind}-${index}`, ...changes(index) })));
+  });
+  /** Sixty customers, the newest first: Pager customer 59 heads the first page. */
+  const sixtyCustomers = () => api.mutate(state => {
+    const sample = state.records.find(record => record.kind === 'customers')!;
+    state.records = state.records.filter(record => record.kind !== 'customers');
+    state.records.push(...Array.from({ length: 60 }, (_, index) => ({ ...structuredClone(sample), id: randomUUID(), name: `Pager customer ${String(index).padStart(2, '0')}`, reference: `PAGER-${index}`, createdAt: new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString() })));
+  });
+
+  it('never shows the previous page\'s rows as its own once its request has failed, whatever fetches it again', async () => {
+    const user = userEvent.setup();
+    sixtyCustomers();
+    renderApp('/customers');
+    await screen.findByText('Pager customer 59');
+    api.failNext(/^\/v1\/records\/customers$/, unavailable);
+    await press(user, screen.getByRole('button', { name: 'Next page of customers' }));
+    expect(await screen.findByText('Unable to load customers')).toBeTruthy();
+    // Fetched again, as a refresh or a return to the tab does: the page waits as a page of its own, with none of page 1's rows.
+    const release = api.hold(/^\/v1\/records\/customers$/);
+    const again = queryClient.refetchQueries({ type: 'active' });
+    await waitFor(() => expect(screen.queryByText('Unable to load customers')).toBeNull());
+    expect(screen.queryByText('Pager customer 59')).toBeNull();
+    expect(screen.queryByText(/^26–50 of 60 customers$/)).toBeNull();
+    release();
+    await again;
+    await screen.findByText('Pager customer 34');
+    expect(screen.queryByText('Pager customer 59')).toBeNull();
+  });
+
+  /** Presses Next with its page's request failing: the list's problem notice replaces its pager and takes the focus. */
+  async function failingNext(user: ReturnType<typeof userEvent.setup>, next: HTMLElement, request: RegExp, notice: RegExp) {
+    api.failNext(request, unavailable);
+    await press(user, next);
+    const alert = (await screen.findAllByRole('alert')).find(element => notice.test(element.textContent || ''))!;
+    expect(alert).toBeTruthy();
+    await waitFor(() => expect(next.isConnected).toBe(false));
+    const retry = within(alert).queryByRole('button', { name: /^Try again/ });
+    await waitFor(() => expect(document.activeElement).toBe(retry ?? alert));
+  }
+
+  it('moves focus to the notice that replaced the pager: Customers, the Exceptions queue and a Reconciliation table', async () => {
+    const user = userEvent.setup();
+    sixtyCustomers();
+    sixty('exceptions', record => record.status === 'open');
+    sixty('payments', record => record.reference === 'SBX-UNIDENTIFIED-001');
+    const { unmount } = renderApp('/customers');
+    await failingNext(user, await screen.findByRole('button', { name: 'Next page of customers' }), /^\/v1\/records\/customers$/, /^Unable to load customers/);
+    unmount();
+    const exceptions = renderApp('/exceptions');
+    await failingNext(user, await screen.findByRole('button', { name: 'Next page of exceptions' }), /^\/v1\/queues\/exceptions$/, /^Exceptions could not be loaded/);
+    exceptions.unmount();
+    renderApp('/reconciliation');
+    // A table's notice has no button of its own (Refresh queue sits above), so the notice itself takes the focus.
+    await failingNext(user, await screen.findByRole('button', { name: 'Next page of unallocated payments' }, { timeout: 10_000 }), /^\/v1\/reconciliation\/payments$/, /^Unallocated payments could not be loaded/);
+  }, 30_000);
+
+  it('moves focus to the notice that replaced the page buttons of a pilot list', async () => {
+    api.mutate((state, ctx) => { for (let index = 0; index < 60; index++) saveImportBatch(state, ctx, { name: `Paged batch ${index}`, kind: 'customers', source: 'Pilot sample', sourceBatchId: `paged-${index}`, csv: `source_row_id,name,reference\nrow-${index},Paged customer ${index},PAGED-${index}`, mapping: {}, amountUnit: 'naira', identityColumn: 'source_row_id', syntheticOnly: true }); });
+    const user = userEvent.setup();
+    renderApp('/imports');
+    await failingNext(user, await screen.findByRole('button', { name: 'Next batches' }, { timeout: 10_000 }), /^\/v1\/pilot\/batches$/, /^The service is unavailable for a moment\./);
+  }, 30_000);
+
+  it('moves focus to the notice that replaced a picker\'s pager, inside its dialog', async () => {
+    const user = userEvent.setup();
+    sixty('due-items', record => record.status === 'scheduled');
+    renderApp('/reconciliation');
+    const payments = (await screen.findByRole('heading', { name: 'Unallocated payments' })).parentElement!.parentElement!;
+    const row = (await within(payments).findByText('SBX-UNIDENTIFIED-001')).closest('tr')!;
+    await user.click(within(row).getByRole('button', { name: 'Allocate' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Allocate payment' });
+    await within(dialog).findByText(/^1–25 of \d+ instalment choices$/);
+    await failingNext(user, within(dialog).getByRole('button', { name: 'Next page of instalment choices' }), /^\/v1\/records\/due-items$/, /^Unable to load instalment choices/);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
 });

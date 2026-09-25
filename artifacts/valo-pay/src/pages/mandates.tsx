@@ -24,7 +24,7 @@ import { recordDestination, safeCollectionReturnTo } from '@/lib/record-navigati
 import { useHashTarget } from '@/lib/use-hash-target';
 import { usePagedQueue } from '@/lib/use-paged-queue';
 import { SavedQueueViews } from '@/components/saved-queue-views';
-import { RecordPagination } from '@/components/record-pagination';
+import { RecordPagination, usePageProblemFocus } from '@/components/record-pagination';
 import { DiscardOriginalRequest } from '@/components/discard-original-request';
 import { keepRowsWhilePaging, searchWithoutSubmitting, useDebouncedSearch, useRecordPagination } from '@/lib/use-record-pagination';
 import { LoadProblem } from '@/components/load-problem';
@@ -47,6 +47,9 @@ export default function MandatesPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formErrors, setFormErrors] = useState<string[]>([]);
   const pendingErrorFocus = useRef<string | null>(null);
+  // The queue's problem notice, which takes the pager's focus when a page press fails.
+  const listProblem = useRef<HTMLDivElement>(null);
+  usePageProblemFocus(listProblem);
   const { view, setView } = useQueueFilters(mandateViews, 'all');
   const [search, setSearch] = useSearchParams();
   const targetId = search.get('record');
@@ -86,7 +89,7 @@ export default function MandatesPage() {
   const { data: customers, error: customersError, isFetching: fetchingCustomers, refetch: retryCustomers } = useListRecords(
     'customers',
     customerParams,
-    { query: { enabled: !!merchantId && isCreateOpen && !customerSearchPending, queryKey: customersKey, placeholderData: keepRowsWhilePaging(customersKey) } }
+    { query: { enabled: !!merchantId && isCreateOpen && !customerSearchPending, queryKey: customersKey, placeholderData: keepRowsWhilePaging(customersKey, queryClient) } }
   );
   // The chosen customer stays in the list while the person searches or pages on.
   const [chosenCustomer, setChosenCustomer] = useState<{ value: string; label: string } | null>(null);
@@ -208,7 +211,7 @@ export default function MandatesPage() {
         {isLoading ? (
           <Loading what="mandates" />
         ) : error ? (
-          <div role="alert" className="p-6 text-sm"><p>Mandates could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => refetch()}>Try again</Button></div>
+          <div ref={listProblem} role="alert" className="p-6 text-sm"><p>Mandates could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => refetch()}>Try again</Button></div>
         ) : targetId && shown.length === 0 ? (
           <EmptyState title={wrongLender ? 'This mandate link belongs to another lender' : 'The selected mandate is unavailable'} action={<Button size="sm" variant="outline" onClick={leaveSelectedRecord}>View mandate queue</Button>}>
             {wrongLender ? 'Switch to the lender you were reviewing to open this record.' : 'The record could not be found for the active lender. Return to collections to check its linked mandate.'}

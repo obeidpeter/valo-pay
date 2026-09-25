@@ -38,7 +38,7 @@ function LifecycleControls() {
   useFocusWhenLost(messageRef, message);
   // Paging the retained sources keeps the view shown, and so the page buttons and the one pressed, until the next page arrives.
   const lifecycleKey = ['lifecycle', merchantId, workspace?.actor, { offset }];
-  const query = useQuery({ queryKey: lifecycleKey, enabled: !!merchantId && workspace?.role === 'Admin', placeholderData: keepRowsWhilePaging(lifecycleKey), queryFn: async ({ signal }) => {
+  const query = useQuery({ queryKey: lifecycleKey, enabled: !!merchantId && workspace?.role === 'Admin', placeholderData: keepRowsWhilePaging(lifecycleKey, cache), queryFn: async ({ signal }) => {
     const data = await pilotRequest(lenderPath('/lifecycle', merchantId, offset), lifecycleViewSchema, { signal });
     if (data.merchantId !== merchantId || data.actor !== workspace?.actor) throw new Error('The response did not match this lender and administrator. Refresh the page.');
     return data;

@@ -15,7 +15,7 @@ import { RecordDialog } from '@/components/record-dialog';
 import { exceptionSeverities, failureCodeList, resolutionCodesForException, resolveExceptionType } from '@workspace/valopay-schema';
 import { readableLabel, RecordLabel, StatusBadge } from '@/components/record-label';
 import { isDueToday, isOverdue, useQueueFilters } from '@/lib/queue-filters';
-import { RecordPagination } from '@/components/record-pagination';
+import { RecordPagination, usePageProblemFocus } from '@/components/record-pagination';
 import { ExceptionContext } from '@/components/exception-context';
 import { useHashTarget } from '@/lib/use-hash-target';
 import { useFocusWhenLost } from '@/lib/focus';
@@ -44,6 +44,9 @@ export default function ExceptionsPage() {
   useFocusWhenLost(resolvedRef, resolved);
   const { view: filter, owner, type, setView: setFilter, setOwner, setType } = useQueueFilters(exceptionViews, 'open');
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  // The queue's problem notice, which takes the pager's focus when a page press fails.
+  const listProblem = useRef<HTMLDivElement>(null);
+  usePageProblemFocus(listProblem);
   useEffect(() => { setSelectedEx(null); setIsDialogOpen(false); setResolved(null); }, [merchantId]);
   /** WAI-ARIA tabs: one tab stop for the group, arrows and Home/End move the selection and the focus together. */
   const onTabKeyDown = (event: React.KeyboardEvent, index: number, keys: Array<typeof filter>) => {
@@ -127,7 +130,7 @@ export default function ExceptionsPage() {
         {isLoading ? (
           <Loading what="exceptions" />
         ) : error && !data ? (
-          <div role="alert" className="p-6 text-sm"><p>Exceptions could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => refetch()}>Try again</Button></div>
+          <div ref={listProblem} role="alert" className="p-6 text-sm"><p>Exceptions could not be loaded.</p><Button className="mt-3" size="sm" variant="outline" onClick={() => refetch()}>Try again</Button></div>
         ) : targetId && items.length === 0 ? (
           <EmptyState title={wrongLender ? 'This exception link belongs to another lender' : 'The selected exception is unavailable'} action={<Button size="sm" variant="outline" onClick={leaveSelectedRecord}>View exception queue</Button>}>
             {wrongLender ? 'Switch to the lender you were reviewing to open this exception.' : 'It could not be found for the active lender. Open the exception queue to find it.'}

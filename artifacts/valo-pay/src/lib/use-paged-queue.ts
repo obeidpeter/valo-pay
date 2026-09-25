@@ -21,7 +21,7 @@ export function usePagedQueue(queue: 'exceptions' | 'mandates' | 'collections', 
   const target = located === scope ? undefined : filters.target;
   const params = { ...filters, target, merchantId: merchantId!, limit: pagination.pageSize, offset: pagination.offset };
   const queryKey = getListQueueQueryKey(queue, params);
-  const query = useListQueue(queue, params, { query: { enabled: !!merchantId, queryKey, placeholderData: keepRowsWhilePaging(queryKey) } });
+  const query = useListQueue(queue, params, { query: { enabled: !!merchantId, queryKey, placeholderData: keepRowsWhilePaging(queryKey, client) } });
   useEffect(() => {
     // The previous page's rows, shown while this one loads, say nothing of where this page is.
     if (!query.data || query.isPlaceholderData) return;

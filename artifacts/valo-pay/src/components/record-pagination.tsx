@@ -1,5 +1,6 @@
-import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { Button } from '@/components/ui/button';
+import { focusLost } from '@/lib/focus';
 import { formatNumber } from '@/lib/formatters';
 import { RECORD_PAGE_SIZES, type RecordPaginationState } from '@/lib/use-record-pagination';
 
@@ -50,13 +51,16 @@ function useKeptInView(busy: boolean) {
 type Control = 'previous' | 'next' | 'size';
 /** Where focus may go when the control pressed cannot take it: the pressed one first, then the others. */
 const fallbacks: Record<Control, Control[]> = { previous: ['previous', 'next', 'size'], next: ['next', 'previous', 'size'], size: ['size', 'next', 'previous'] };
-/** The pager control a person last pressed, by the pager's label, until that pager shows the page asked for or the person does something else. */
-let pressed: { label: string; control: Control; until: number; release: () => void } | null = null;
+/**
+ * The pager control a person last pressed, by the pager's label, until that pager shows the page asked for or the person
+ * does something else; `gone` while that pager is off the page, as when a notice that the page failed took its place.
+ */
+let pressed: { label: string; control: Control; until: number; gone: boolean; release: () => void } | null = null;
 function press(label: string, control: Control) {
   pressed?.release();
   // A key or a pointer press after this one is the person moving on; the one that pressed the control came before it.
   const events = ['keydown', 'pointerdown'] as const;
-  const held = { label, control, until: Date.now() + 30_000, release: () => {
+  const held = { label, control, until: Date.now() + 30_000, gone: false, release: () => {
     for (const event of events) document.removeEventListener(event, held.release, true);
     if (pressed === held) pressed = null;
   } };
@@ -76,12 +80,34 @@ function usePagerFocus(label: string, busy: boolean) {
   useLayoutEffect(() => {
     const held = pressed;
     if (!held || held.label !== label) return;
+    held.gone = false;
     if (Date.now() > held.until) { held.release(); return; }
     const target = fallbacks[held.control].map(control => controls[control].current).find(element => element?.isConnected && !element.disabled);
     if (target && document.activeElement !== target) target.focus();
     if (!busy) held.release();
   });
+  // A pager that goes while its press is held leaves the focus to what took its place (usePageProblemFocus).
+  useLayoutEffect(() => () => { if (pressed?.label === label) pressed.gone = true; }, [label]);
   return controls;
+}
+
+/**
+ * A list's problem notice that took the place of its pager after a page press (the page asked for failed to load) takes
+ * the focus the pager control had, rather than leaving it on the page body, the main region or the top of a dialog: its
+ * Try again, or the notice itself when it has none. Until the person's next key or pointer press, the notice takes it
+ * again whenever it returns, as when the list is fetched again and fails again.
+ */
+export function usePageProblemFocus(notice: RefObject<HTMLElement | null>) {
+  useLayoutEffect(() => {
+    const held = pressed, element = notice.current;
+    if (!held?.gone || !element?.isConnected || Date.now() > held.until) return;
+    const active = document.activeElement;
+    if (!(focusLost() || active === document.getElementById('main') || (active?.getAttribute('role') === 'dialog' && active.contains(element)))) return;
+    const target = element.querySelector<HTMLButtonElement>('button:not(:disabled)') ?? element;
+    // A notice is not a keyboard stop, but it can hold focus so reading continues from it.
+    if (target === element && !element.hasAttribute('tabindex')) element.tabIndex = -1;
+    target.focus();
+  });
 }
 
 /**

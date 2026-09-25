@@ -5,6 +5,7 @@ import { EmptyState } from '@/components/empty-state';
 import { Loading } from '@/components/loading';
 import { useWorkspace } from '@/lib/workspace-context';
 import { useGetCustomerHistory, getGetCustomerHistoryQueryKey, } from '@workspace/api-client-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { formatKobo, formatDate, formatCompactDate, formatCount } from '@/lib/formatters';
 import { ArrowLeft, Clock, FileText, CheckCircle, AlertTriangle } from 'lucide-react';
 import { CustomerAvatar, StatusBadge, readableLabel } from '@/components/record-label';
@@ -68,10 +69,10 @@ export default function CustomerTimelinePage() {
     mandatesLimit:mandatePage.pageSize, mandatesOffset:mandatePage.offset,
     dueItemsLimit:duePage.pageSize, dueItemsOffset:duePage.offset,
     paymentsLimit:paymentPage.pageSize, paymentsOffset:paymentPage.offset};
-  const historyKey = getGetCustomerHistoryQueryKey(id!,queryParams);
+  const historyKey = getGetCustomerHistoryQueryKey(id!,queryParams), client = useQueryClient();
   // Paging a section keeps this customer's history shown until the next page arrives, so its pager and the control pressed stay.
   const { data: timeline, isLoading, isFetching, isPlaceholderData, error, refetch } = useGetCustomerHistory(id!,queryParams,
-    {query:{enabled:!!merchantId && !!id && sameLender,queryKey:historyKey,placeholderData:keepRowsWhilePaging(historyKey)}});
+    {query:{enabled:!!merchantId && !!id && sameLender,queryKey:historyKey,placeholderData:keepRowsWhilePaging(historyKey,client)}});
   const focusedRecord = timeline?.focusedRecord;
   // Correct every out-of-range section together so one URL update cannot undo another.
   const [, setSearch] = useSearchParams();

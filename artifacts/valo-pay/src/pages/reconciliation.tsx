@@ -1,7 +1,7 @@
 import { QueueSearch } from '@/components/queue-search';
 import { QueueFreshness } from '@/components/queue-freshness';
 import { useSafePerformAction as usePerformAction } from '@/lib/safe-mutations';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ScrollFrame } from '@/components/scroll-frame';
 import { EmptyRow } from '@/components/empty-state';
 import { LoadingRow } from '@/components/loading';
@@ -18,7 +18,7 @@ import { nairaToKobo } from '@/lib/money-input';
 import { notifyDone, saidBy } from '@/lib/notify';
 import { useHashTarget } from '@/lib/use-hash-target';
 import { safeCollectionReturnTo } from '@/lib/record-navigation';
-import { RecordPagination } from '@/components/record-pagination';
+import { RecordPagination, usePageProblemFocus } from '@/components/record-pagination';
 import { useUrlPagination } from '@/lib/use-url-pagination';
 import { keepRowsWhilePaging, searchWithoutSubmitting, useDebouncedSearch } from '@/lib/use-record-pagination';
 import { useReconciliationPage } from '@/lib/use-reconciliation-page';
@@ -30,6 +30,13 @@ const paymentAvailable = (record: any): number => paymentUnappliedKobo(record);
 /** Money a payment or its evidence holds, in its own currency: a USD card payment's cents are never shown as kobo. */
 const moneyOf = (record: any, amount: number): string => formatMinor(amount, String(record?.data?.currency || 'NGN'));
 const instalmentOutstanding = (record: any): number => Math.max(0, Number(record?.data?.outstandingKobo ?? record?.amountKobo ?? 0));
+
+/** A table whose rows could not be loaded (Refresh queue tries again); after a page press it takes the pager's focus. */
+function TableProblem({ colSpan, children }: { colSpan: number; children: ReactNode }) {
+  const notice = useRef<HTMLParagraphElement>(null);
+  usePageProblemFocus(notice);
+  return <tr><td colSpan={colSpan} className="p-5"><p ref={notice} role="alert" className="text-sm text-destructive">{children}</p></td></tr>;
+}
 
 function MatchEvidence({ allocation, payment, instalment, customer, decision }: { allocation: any; payment: any; instalment: any; customer?: any; decision: string }) {
   const available = paymentAvailable(payment), outstanding = instalmentOutstanding(instalment);
@@ -104,7 +111,7 @@ export default function ReconciliationPage() {
   const choiceParams={merchantId:merchantId!,search:allocationTerm,limit:choicePage.pageSize,offset:choicePage.offset,allocatable:'true' as const,...(actionKind==='manual_allocate'&&selectedRecord?.id?{paymentId:String(selectedRecord.id)}:{})};
   // Paging keeps the choices shown, and so the pager and the control pressed, until the next page arrives.
   const choicesKey=getListRecordsQueryKey('due-items',choiceParams);
-  const choicesQuery=useListRecords('due-items',choiceParams,{query:{enabled:!!merchantId && isDialogOpen && actionKind==='manual_allocate' && !allocationSearchPending,queryKey:choicesKey,placeholderData:keepRowsWhilePaging(choicesKey)}});
+  const choicesQuery=useListRecords('due-items',choiceParams,{query:{enabled:!!merchantId && isDialogOpen && actionKind==='manual_allocate' && !allocationSearchPending,queryKey:choicesKey,placeholderData:keepRowsWhilePaging(choicesKey,queryClient)}});
   const rows=[...(proposals?.related||[]),...(payments?.related||[]),...(allPayments?.related||[]),...(observations?.related||[]),...(confirmedAllocations?.related||[])];
   const customerById=new Map(rows.filter(r=>r.kind==='customers').map(r=>[r.id,r]));
   const paymentById=new Map(rows.filter(r=>r.kind==='payments').map(r=>[r.id,r]));
@@ -238,7 +245,7 @@ export default function ReconciliationPage() {
                 {isLoadingProposals ? (
                   <LoadingRow colSpan={6} what="proposed matches" />
                 ) : proposalsError && !proposals ? (
-                  <tr><td colSpan={6} className="p-5"><p role="alert" className="text-sm text-destructive">Proposed matches could not be loaded. Use Refresh queue above to try again.</p></td></tr>
+                  <TableProblem colSpan={6}>Proposed matches could not be loaded. Use Refresh queue above to try again.</TableProblem>
                 ) : proposalRows.length === 0 ? (
                   <EmptyRow colSpan={6} title={q ? 'No results match your search' : "No proposed matches to review"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Possible payment matches appear here when they need Finance to confirm them. Run reconciliation to check for new matches.</>}</EmptyRow>
                 ) : (
@@ -279,7 +286,7 @@ export default function ReconciliationPage() {
           <div className="border-b p-4"><h2 className="font-semibold">Possible duplicate payments</h2><p className="mt-1 text-xs text-muted-foreground">These payments are held for Finance review and are never allocated automatically.</p></div>
           <ScrollFrame label="Possible duplicate payments table" className="overflow-x-auto [overflow-anchor:none]">
             <table className="min-w-[650px] w-full text-left text-sm"><thead className="border-b bg-secondary/30 text-muted-foreground"><tr><th className="p-4 font-medium">Payment</th><th className="p-4 font-medium">Customer</th><th className="p-4 font-medium">Reason for review</th><th className="p-4 text-right font-medium">Amount</th><th className="p-4 text-right font-medium">Next step</th></tr></thead>
-              <tbody className="divide-y">{isLoadingAllPayments ? <LoadingRow colSpan={5} what="possible duplicate payments" /> : allPaymentsError && !allPayments ? <tr><td colSpan={5} className="p-4"><p role="alert" className="text-destructive">Possible duplicate payments could not be loaded. Use Refresh queue above to try again.</p></td></tr> : duplicates.length === 0 ? <EmptyRow colSpan={5} title={q ? 'No results match your search' : "No possible duplicates"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Payments needing a duplicate check will appear here.</>}</EmptyRow> : duplicates.map(payment => <tr key={payment.id}>
+              <tbody className="divide-y">{isLoadingAllPayments ? <LoadingRow colSpan={5} what="possible duplicate payments" /> : allPaymentsError && !allPayments ? <TableProblem colSpan={5}>Possible duplicate payments could not be loaded. Use Refresh queue above to try again.</TableProblem> : duplicates.length === 0 ? <EmptyRow colSpan={5} title={q ? 'No results match your search' : "No possible duplicates"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Payments needing a duplicate check will appear here.</>}</EmptyRow> : duplicates.map(payment => <tr key={payment.id}>
                 <td className="p-4"><RecordLabel record={payment} id={payment.id} /></td><td className="p-4"><RecordLabel record={customerById.get(String(payment.customerId))} id={payment.customerId} customer /></td>
                 <td className="p-4 text-xs text-muted-foreground">{String(payment.data?.explanation || 'Check the provider references and recorded evidence before deciding whether this is a separate payment.')}</td>
                 <td className="p-4 text-right font-mono">{moneyOf(payment, payment.amountKobo)}</td><td className="p-4 text-right"><Link className="inline-flex min-h-9 items-center text-xs font-medium underline underline-offset-4" href="/exceptions?type=suspected_duplicate">Review exceptions</Link></td>
@@ -313,7 +320,7 @@ export default function ReconciliationPage() {
                 {isLoadingPayments ? (
                   <LoadingRow colSpan={3} what="unallocated payments" />
                 ) : paymentsError && !payments ? (
-                  <tr><td colSpan={3} className="p-5"><p role="alert" className="text-sm text-destructive">Unallocated payments could not be loaded. Use Refresh queue above to try again.</p></td></tr>
+                  <TableProblem colSpan={3}>Unallocated payments could not be loaded. Use Refresh queue above to try again.</TableProblem>
                 ) : paymentRows.length === 0 ? (
                   <EmptyRow colSpan={3} title={q ? 'No results match your search' : "No unallocated payments"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Payments appear here while they hold money no instalment has: unallocated payments, and the rest of a payment allocated in part. There are none waiting in this list.</>}</EmptyRow>
                 ) : (
@@ -361,7 +368,7 @@ export default function ReconciliationPage() {
                 {isLoadingObs ? (
                   <LoadingRow colSpan={3} what="unresolved payment evidence" />
                 ) : observationsError && !observations ? (
-                  <tr><td colSpan={3} className="p-5"><p role="alert" className="text-sm text-destructive">Payment evidence could not be loaded. Use Refresh queue above to try again.</p></td></tr>
+                  <TableProblem colSpan={3}>Payment evidence could not be loaded. Use Refresh queue above to try again.</TableProblem>
                 ) : observationRows.length === 0 ? (
                   <EmptyRow colSpan={3} title={q ? 'No results match your search' : "No unresolved payment evidence"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Provider records and bank statement entries appear here when they cannot be linked to a payment or settlement batch.</>}</EmptyRow>
                 ) : (
@@ -407,7 +414,7 @@ export default function ReconciliationPage() {
                 {isLoadingAudit ? (
                   <LoadingRow colSpan={7} what="the match review sample" />
                 ) : auditError && !confirmedAllocations ? (
-                  <tr><td colSpan={7} className="p-5"><p role="alert" className="text-sm text-destructive">The match review sample could not be loaded. Use Refresh queue above to try again.</p></td></tr>
+                  <TableProblem colSpan={7}>The match review sample could not be loaded. Use Refresh queue above to try again.</TableProblem>
                 ) : auditSample.length === 0 ? (
                   <EmptyRow colSpan={7} title={q ? 'No results match your search' : "No automatic matches to review yet"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>A daily close selects a sample from the last completed month's automatic matches rated certain. Finance can then check whether those matches are correct.</>}</EmptyRow>
                 ) : (
@@ -456,7 +463,7 @@ export default function ReconciliationPage() {
                 {isLoadingBatches ? (
                   <LoadingRow colSpan={6} what="settlement batches" />
                 ) : batchesError && !batches ? (
-                  <tr><td colSpan={6} className="p-5"><p role="alert" className="text-sm text-destructive">Settlement batches could not be loaded. Use Refresh queue above to try again.</p></td></tr>
+                  <TableProblem colSpan={6}>Settlement batches could not be loaded. Use Refresh queue above to try again.</TableProblem>
                 ) : !batches || batches.items.length === 0 ? (
                   <EmptyRow colSpan={6} title={q ? 'No results match your search' : "No settlement batches"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>A batch groups payments in one provider settlement report. Add a synthetic batch or import a settlement report to see it here.</>}</EmptyRow>
                 ) : (
