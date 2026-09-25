@@ -3178,7 +3178,7 @@ export type SourceCompletenessIssuesItem = {
 };
 
 /**
- * Whether the declared source files for a business date arrived complete, with each file's state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer. A declared total is in naira and is compared with the file's naira rows (receivedAmountKobo); money in other currencies is listed beside it (receivedOtherCurrencies, only when there is some), never added to it, and leaves the file incomplete.
+ * Whether the declared source files for a business date arrived complete, with each file's state, the profiles that expect a delivery by that date, undeclared batches and the issues Finance must answer. A declared total is in naira and is compared with the file's naira rows (receivedAmountKobo); money in other currencies is listed beside it (receivedOtherCurrencies, only when there is some), never added to it, and leaves the file incomplete. A file whose batch was committed before 25 September 2026 is compared with the total it was committed with, which may add rows in other currencies.
  */
 export interface SourceCompleteness {
   /** @pattern ^\d{4}-\d{2}-\d{2}$ */
@@ -3240,7 +3240,7 @@ export const SourceBatchQualityStatus = {
 } as const;
 
 /**
- * The original committed totals and checks of a source batch. sourceAmountKobo and importedAmountKobo sum the naira rows only (a row that names no currency is naira); money in other currencies is listed beside each (sourceOtherCurrencies, importedOtherCurrencies: by code, the rows and their amount in that currency's minor unit, only when there are some), never added to it. A batch committed before this keeps the totals it was committed with.
+ * The original committed totals and checks of a source batch. sourceAmountKobo and importedAmountKobo sum the naira rows only (a row that names no currency is naira); money in other currencies is listed beside each (sourceOtherCurrencies, importedOtherCurrencies: by code, the rows and their amount in that currency's minor unit, only when there are some), never added to it. A batch committed before 25 September 2026 keeps the totals it was committed with, which may add rows in other currencies.
  */
 export interface SourceBatchQuality {
   /** @nullable */

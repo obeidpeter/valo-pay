@@ -7,6 +7,7 @@ import { renderApp, screen, userEvent, waitFor, within } from './harness';
 import { SourceCompletenessPanel } from '@/components/source-manifest-editor';
 import { csvAmountToKobo, majorToMinor, minorToMajor, moneyText } from '@workspace/valopay-schema';
 import { importCsv } from '../../api-server/src/lib/valopay-import';
+import { makeRecord } from '../../api-server/src/domain/records';
 import { ctxAt, wat } from '../../api-server/tests/helpers';
 
 let api: FakeApi;
@@ -162,6 +163,26 @@ describe('CSV amount units', () => {
     render(<Router hook={memoryLocation({ path: '/sources' }).hook}><SourceCompletenessPanel completeness={{ businessDate: '2026-09-22', completeFiles: 0, expectedFiles: 1, status: 'incomplete', issues: [], files: [file], manifest: null }} /></Router>);
     expect(screen.getByText(/^Received:/).textContent).toBe('Received: 4 rows · ₦15.00 and USD\u00a010.00 (1 row)');
     expect(screen.getByText(/^Declared:/).textContent).toBe('Declared: 4 rows · ₦15.00');
+  });
+
+  // Review of the integration fixes, finding 2: a batch committed before totals were kept by currency keeps the totals it
+  // was committed with, which may add every row's smallest unit, but Sources and the completeness panel said no total does.
+  it('says that a batch committed before totals were kept by currency may add currencies into its totals', async () => {
+    api.mutate(state => makeRecord(state, 'import-batches', { name: 'Older currency rows', status: 'committed', createdAt: wat('2026-09-01T10:00:00'), data: {
+      kind: 'observations', source: 'Card processor', sourceBatchId: 'older-001', amountUnit: 'naira', identityColumn: 'source_row_id', mapping: {}, committedAt: wat('2026-09-01T10:05:00'),
+      csv: 'source_row_id,reference,customerId,amount,currency,source,eventId\no1,OLD-JPY-1,DEMO-C1001,"1,000",JPY,webhook,evt-o-j1\no2,OLD-USD-1,DEMO-C1001,10.00,USD,webhook,evt-o-u1\no3,OLD-NGN-1,DEMO-C1001,10.00,NGN,webhook,evt-o-n1',
+      // As an earlier build stored it: JPY 1,000, USD 10.00 and NGN 10.00 added into one "naira" total.
+      sourceQuality: { profileId: null, profileVersion: null, sourceRows: 3, sourceAmountKobo: 3_000, importedRows: 3, importedAmountKobo: 3_000, duplicateRows: 0, conflictRows: 0, invalidRows: 0, status: 'checked', issues: [] },
+    } }));
+    const view = renderApp('/sources');
+    const row = (await screen.findByRole('link', { name: 'Older currency rows' })).closest('tr')!;
+    expect([...row.querySelectorAll('td')].slice(1, 3).map(cell => cell.textContent)).toEqual(['3₦30.00', '3₦30.00']);
+    const totals = within(screen.getByRole('heading', { name: 'Source totals & import evidence' }).closest('section')!).getByText(/^Source totals include/).textContent!;
+    expect(totals).toContain('never added to it. A batch committed before 25 September 2026 keeps the totals it was committed with, which may add rows in other currencies.');
+    view.unmount();
+    const file = { id: 'f1', source: 'Card processor', sourceBatchId: 'older-001', kind: 'observations', expectedRows: 3, expectedAmountKobo: 3_000, batchId: null, batchStatus: 'committed', businessDate: '2026-09-01', receivedRows: 3, receivedAmountKobo: 3_000, status: 'complete', problems: [] };
+    render(<Router hook={memoryLocation({ path: '/sources' }).hook}><SourceCompletenessPanel completeness={{ businessDate: '2026-09-01', completeFiles: 1, expectedFiles: 1, status: 'complete', issues: [], files: [file], manifest: null }} /></Router>);
+    expect(screen.getByText(/^A file counts only when/).textContent).toContain('stays incomplete for Finance to review. A file whose batch was committed before 25 September 2026 is compared with the total it was committed with, which may add rows in other currencies.');
   });
 
   it('reads and writes a form amount in its currency\'s major unit exactly', () => {
