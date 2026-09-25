@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useRef, type ReactNode, type RefObject } from "react";
 import { Link } from "wouter";
 import { Button } from "./ui/button";
 import { usePageProblemFocus } from "./record-pagination";
@@ -60,16 +60,22 @@ export function PilotError({
   error,
   retry,
   fallback = READ_PROBLEM,
+  noticeRef,
 }: {
   error: unknown;
   retry?: () => void;
   fallback?: string;
+  /** The notice, for a page that moves focus to it. */
+  noticeRef?: RefObject<HTMLDivElement | null>;
 }) {
   const notice = useRef<HTMLDivElement>(null);
   usePageProblemFocus(notice);
   return error ? (
     <div
-      ref={notice}
+      ref={(element) => {
+        notice.current = element;
+        if (noticeRef) noticeRef.current = element;
+      }}
       role="alert"
       className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm"
     >
@@ -92,9 +98,12 @@ export function RecoveryNotice({
   mutation,
   persistent = true,
   next,
+  noticeRef,
 }: {
   persistent?: boolean;
   next?: () => HTMLElement | null | undefined;
+  /** Whichever notice shows, a lost answer's or a refusal's, for a page that moves focus to it. */
+  noticeRef?: RefObject<HTMLDivElement | null>;
   mutation: {
     hasUnconfirmedOutcome: boolean;
     isPending: boolean;
@@ -105,6 +114,7 @@ export function RecoveryNotice({
 }) {
   return mutation.hasUnconfirmedOutcome ? (
     <div
+      ref={noticeRef}
       role="alert"
       className="space-y-3 rounded-lg border border-warning-border bg-warning/20 p-4 text-sm"
     >
@@ -141,6 +151,6 @@ export function RecoveryNotice({
       </div>
     </div>
   ) : (
-    <PilotError error={mutation.error} fallback={persistent ? JOURNALED_WRITE_PROBLEM : UNJOURNALED_WRITE_PROBLEM} />
+    <PilotError error={mutation.error} fallback={persistent ? JOURNALED_WRITE_PROBLEM : UNJOURNALED_WRITE_PROBLEM} noticeRef={noticeRef} />
   );
 }

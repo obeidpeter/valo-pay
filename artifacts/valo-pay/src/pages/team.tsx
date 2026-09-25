@@ -238,9 +238,11 @@ export default function TeamPage() {
  */
 function Member({ member, editable, shared, lenders }: { member: any; editable: boolean; shared: boolean; lenders: any[] }) {
   const change = usePilotMutation(), grant = usePilotMutation();
-  // The button that made a change goes with that form, so focus then goes to what the change did.
-  const changed = useRef<HTMLParagraphElement>(null), granted = useRef<HTMLParagraphElement>(null);
+  // The button that made a change goes with that form, so focus then goes to what the change did; and a change the
+  // service refused, or whose answer was lost, sends it to the problem notice that says so.
+  const changed = useRef<HTMLParagraphElement>(null), granted = useRef<HTMLParagraphElement>(null), problem = useRef<HTMLDivElement>(null);
   useFocusWhenLost(changed, change.data);
+  useFocusWhenLost(problem, change.error);
   useFocusWhenLost(granted, grant.data);
   const count = member.lenderIds?.length || 0;
   return (
@@ -254,8 +256,8 @@ function Member({ member, editable, shared, lenders }: { member: any; editable: 
       </div>
       {/* Someone who is not an administrator is sent only the lenders they share with a colleague, so that is what a colleague's row counts. */}
       <p className="text-sm text-muted-foreground">{member.role === "Admin" ? "All lenders in this workspace" : shared ? formatCount(count, "lender you share", "lenders you share") : formatCount(count, "permitted lender")}</p>
-      {editable && <AccessForm key={`access:${member.updatedAt}`} member={member} mutation={change} />}
-      <RecoveryNotice mutation={change} persistent={false} />
+      {editable && <AccessForm key={`access:${member.updatedAt}`} member={member} mutation={change} answer={() => changed.current ?? problem.current} />}
+      <RecoveryNotice mutation={change} persistent={false} noticeRef={problem} />
       {change.data?.message && <p ref={changed} role="status" className="text-sm">{change.data.message}</p>}
       {editable && member.role !== "Admin" && member.status === "active" && <LenderGrants key={`lenders:${member.updatedAt}`} member={member} lenders={lenders} mutation={grant} />}
       <RecoveryNotice mutation={grant} persistent={false} />
@@ -264,8 +266,11 @@ function Member({ member, editable, shared, lenders }: { member: any; editable: 
   );
 }
 
-/** A membership's role and access as one version of it stands, and the change sent against that version. */
-function AccessForm({ member, mutation }: { member: any; mutation: ReturnType<typeof usePilotMutation> }) {
+/**
+ * A membership's role and access as one version of it stands, and the change sent against that version. `answer` is
+ * where the member's card says what a change did or why it did not happen.
+ */
+function AccessForm({ member, mutation, answer }: { member: any; mutation: ReturnType<typeof usePilotMutation>; answer: () => HTMLElement | null }) {
   const [role, setRole] = useState(member.role),
     [status, setStatus] = useState(member.status),
     [reason, setReason] = useState(""),
@@ -344,9 +349,17 @@ function AccessForm({ member, mutation }: { member: any; mutation: ReturnType<ty
         </Button>
       </form>
       <Dialog open={confirming} onOpenChange={(open) => { if (!open) setConfirming(false); }}>
-        {/* Revoke access sends the change, whose new version replaces this form and its button: focus waits on the page's
-            main region, if the answer has not already moved it, for the member's kept message, which then takes it. */}
-        <DialogContent onCloseAutoFocus={(event) => { if (!revoking.current) return restoreFocus(event); revoking.current = false; event.preventDefault(); if (focusLost()) focusMain(); }}>
+        {/* Revoke access sends the change, whose new version replaces this form and its button: focus goes to what the card
+            says of it if that is already there, and otherwise waits on the page's main region for it, which then takes it. */}
+        <DialogContent onCloseAutoFocus={(event) => {
+          if (!revoking.current) return restoreFocus(event);
+          revoking.current = false; event.preventDefault();
+          if (!focusLost()) return;
+          const said = answer();
+          if (!said?.isConnected) return focusMain();
+          if (!said.hasAttribute("tabindex")) said.tabIndex = -1;
+          said.focus();
+        }}>
           <DialogHeader>
             <DialogTitle>Revoke {member.name}’s access?</DialogTitle>
             <DialogDescription>
