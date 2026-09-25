@@ -20,6 +20,29 @@ assert.deepEqual(journalReceipt({ id: "record-1", kind: "customers", name: "Synt
 assert.deepEqual(journalReceipt({ message: "Daily close complete.", record: { id: "close-1", kind: "closes", data: { report: { rows: Array.from({ length: 500 }, () => "x") } } }, data: { closeId: "close-1" } }), { record: { id: "close-1", kind: "closes" } }, "An action keeps a reference to the record it saved, not the record.");
 assert.deepEqual(journalReceipt({ id: "run-1", status: "approved", candidates: [] }), { id: "run-1" }, "A result without a record kind keeps its ID.");
 for (const answer of [{ message: "Audit log check complete.", data: { valid: true } }, null, undefined, "text", [{ id: "x" }], { id: 7 }]) assert.deepEqual(journalReceipt(answer), {}, "An answer that names no record keeps nothing.");
+// An export job's answer names the kind of record it exports, not its own: its reference is to an export.
+assert.deepEqual(journalReceipt({ id: "export-1", kind: "customers", format: "csv", status: "queued", downloadUrl: "/api/v1/exports/export-1/download?merchantId=m" }), { id: "export-1", kind: "exports" }, "An export is kept as a reference to the export, not to a customer.");
+{
+  // Backlog item UX-B02-X3: what Operations says of an entry's request, from its method, path and a few short body fields.
+  const { summariseRequest } = await import("../src/lib/operation-summary.js");
+  const { recoverableRequest } = await import("../src/lib/operation-recovery.js");
+  const facts = (method: string, path: string, rest: Record<string, string | null> = {}) => ({ method, path, action: null, decision: null, status: null, kind: null, format: null, target: null, targetKind: null, ...rest });
+  assert.deepEqual(summariseRequest(facts("PATCH", "/v1/records/customers/cus%201", { status: "inactive" })), { summary: { action: "Change a record", targetKind: "customers", targetId: "cus 1", details: [{ name: "Status", value: "inactive" }] }, resultKind: "customers", resultOverrides: false }, "a record update names its record, from the path, and the status it sets");
+  assert.deepEqual(summariseRequest(facts("POST", "/v1/actions", { action: "mandate_suspend", target: "mnd-1", targetKind: "mandates" }))?.summary, { action: "Mandate suspend", targetKind: "mandates", targetId: "mnd-1", details: [] }, "an action is named in words, with the record its recordId names");
+  assert.deepEqual(summariseRequest(facts("POST", "/v1/exports", { kind: "customers", format: "csv" })), { summary: { action: "Request an export", targetKind: null, targetId: null, details: [{ name: "Kind", value: "customers" }, { name: "Format", value: "csv" }] }, resultKind: "exports", resultOverrides: true }, "an export's answer is an export, whatever kind it exports");
+  assert.deepEqual(summariseRequest(facts("POST", "/v1/pilot/cases/exc-1", { action: "claim" }))?.summary, { action: "Update a case", targetKind: "exceptions", targetId: "exc-1", details: [{ name: "Action", value: "claim" }] });
+  assert.equal(summariseRequest(facts("POST", "/v1/lifecycle/runs/run-1/approve"))?.resultKind, "retention-runs", "an answer that names no kind is the kind its route saves");
+  assert.equal(summariseRequest(facts("POST", "/v1/team/invitations")), null, "a route the journal does not record has no summary");
+  assert.equal(summariseRequest({ ...facts("POST", "/v1/actions"), method: null, path: null }), null, "nor has a sealed or purged request");
+  // Every route the journal records is named in words, whatever its ids.
+  const journaled = ["PATCH /v1/records/customers/x", "PATCH /v1/settings", "POST /v1/actions", "POST /v1/imports", "POST /v1/connected/actions", "POST /v1/records/customers", "POST /v1/exports", "POST /v1/exports/x/retry", "POST /v1/pilot/batches", "POST /v1/pilot/batches/x/save", "POST /v1/pilot/batches/x/commit", "POST /v1/pilot/cases/x", "POST /v1/pilot/import-corrections", "POST /v1/pilot/import-corrections/x/decision", "POST /v1/pilot/close-reviews/prepare", "POST /v1/pilot/close-reviews/x/decision", "POST /v1/sources/manifests", "POST /v1/sources/profiles", "POST /v1/sources/profiles/x/save", "POST /v1/sources/paystack/fixtures", "POST /v1/sources/events/x/replay", "POST /v1/work/notifications/read", "POST /v1/work/handovers/acknowledge", "POST /v1/lifecycle/policy", "POST /v1/lifecycle/holds", "POST /v1/lifecycle/runs", "POST /v1/lifecycle/runs/x/approve", "POST /v1/lifecycle/runs/x/execute"];
+  for (const route of journaled) {
+    const [method, path] = route.split(" ") as [string, string];
+    assert.ok(recoverableRequest(method, path, { commit: true, action: "daily_close" }), `${route} is journaled`);
+    const described = summariseRequest(facts(method, path, { action: "daily_close" }));
+    assert.ok(described && /^[A-Z][a-z]/.test(described.summary.action) && !described.summary.action.includes("/"), `${route} is named in words: ${described?.summary.action}`);
+  }
+}
 {
   const state = seed();
   appendAudit(state, { actor: "System", role: "Admin", now: "2026-01-01T00:00:00.000Z" }, "test", "workspace", "Synthetic test");

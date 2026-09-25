@@ -37,6 +37,7 @@ import type {
   ConnectedActionResult,
   ConnectedWorkspace,
   CoordinateCaseParams,
+  CountPendingOperationsParams,
   CreateExportParams,
   CreateRecordParams,
   CreateSourceProfileParams,
@@ -109,6 +110,7 @@ import type {
   PaystackFixtureInput,
   PaystackFixtureResult,
   PaystackTestEvent,
+  PendingOperations,
   PerformActionParams,
   PerformConnectedActionParams,
   PersonalWorkView,
@@ -2647,6 +2649,91 @@ export function useListOperations<TData = Awaited<ReturnType<typeof listOperatio
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getListOperationsQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getCountPendingOperationsUrl = (params: CountPendingOperationsParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/v1/operations/pending?${stringifiedParams}` : `/api/v1/operations/pending`
+}
+
+/**
+ * How many of the caller's journal entries in this lender are pending: requests the service received whose outcome was never confirmed. Read-only; the console shows it on the Operations link.
+ * @summary Count the caller's unconfirmed requests
+ */
+export const countPendingOperations = async (params: CountPendingOperationsParams, options?: Parameters<typeof customFetch>[1]): Promise<PendingOperations> => {
+
+  return customFetch<PendingOperations>(getCountPendingOperationsUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getCountPendingOperationsQueryKey = (params?: CountPendingOperationsParams,) => {
+    return [
+    `/api/v1/operations/pending`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getCountPendingOperationsQueryOptions = <TData = Awaited<ReturnType<typeof countPendingOperations>>, TError = ErrorType<ErrorBody>>(params: CountPendingOperationsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof countPendingOperations>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getCountPendingOperationsQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof countPendingOperations>>> = ({ signal }) => countPendingOperations(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof countPendingOperations>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type CountPendingOperationsQueryResult = NonNullable<Awaited<ReturnType<typeof countPendingOperations>>>
+export type CountPendingOperationsQueryError = ErrorType<ErrorBody>
+
+
+/**
+ * @summary Count the caller's unconfirmed requests
+ */
+
+export function useCountPendingOperations<TData = Awaited<ReturnType<typeof countPendingOperations>>, TError = ErrorType<ErrorBody>>(
+ params: CountPendingOperationsParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof countPendingOperations>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getCountPendingOperationsQueryOptions(params,options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

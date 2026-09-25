@@ -1697,6 +1697,24 @@ export interface Message {
   message: string;
 }
 
+export type OperationSummaryDetailsItem = {
+  name: string;
+  value: string;
+};
+
+/**
+ * What an entry asked, safe to show: the action or route in plain words, the kind and ID of the record it names, and at most three short fields the request named (an action, a decision, a status, a kind or a format). Read from the stored request by field, never whole; it never holds a name, reference, reason, amount or file.
+ */
+export interface OperationSummary {
+  action: string;
+  /** @nullable */
+  targetKind: string | null;
+  /** @nullable */
+  targetId: string | null;
+  /** @maxItems 3 */
+  details: OperationSummaryDetailsItem[];
+}
+
 export type OperationViewStatus = typeof OperationViewStatus[keyof typeof OperationViewStatus];
 
 
@@ -1707,7 +1725,7 @@ export const OperationViewStatus = {
 } as const;
 
 /**
- * One journal entry: what was asked, by whom, in which role, and whether the service confirmed it. Original request bodies stay private; a completed entry names the record it produced. A refused entry is cancelled and its message says why.
+ * One journal entry: what was asked, by whom, in which role, and whether the service confirmed it. Original request bodies stay private; `summary` says what the request asked, and is null when payload encryption sealed the request or retention removed its payload. A completed entry names the record it produced (`recordId` and `recordKind`, the kind of that record: `exports` for an export, whatever kind it exports). A refused entry is cancelled and its message says why.
  */
 export interface OperationView {
   id: string;
@@ -1722,6 +1740,7 @@ export interface OperationView {
   recordId: string | null;
   /** @nullable */
   recordKind: string | null;
+  summary: OperationSummary | null;
 }
 
 /**
@@ -1734,6 +1753,14 @@ export interface OperationList {
   total: number;
   /** @minimum 0 */
   offset: number;
+}
+
+/**
+ * How many of the caller's requests in the lender wait for confirmation.
+ */
+export interface PendingOperations {
+  /** @minimum 0 */
+  pending: number;
 }
 
 /**
@@ -4616,6 +4643,15 @@ merchantId: string;
  * @maximum 100000
  */
 offset?: number;
+};
+
+export type CountPendingOperationsParams = {
+/**
+ * The lender (a merchant in the API) the request is scoped to; one of the caller's workspace merchants. Missing or empty, the request is refused with 400 naming merchantId, on every operation.
+ * @minLength 1
+ * @maxLength 100
+ */
+merchantId: string;
 };
 
 export type RetryOperationParams = {

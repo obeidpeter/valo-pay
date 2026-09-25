@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspace } from "@/lib/workspace-context";
 import { lenderPath, pilotRequest, usePilotMutation } from "@/lib/pilot";
-import { operationListSchema } from "@workspace/valopay-schema";
+import { operationListSchema, type OperationSummary } from "@workspace/valopay-schema";
 import {
   PilotError,
   PilotHeading,
@@ -13,6 +13,14 @@ import { Button } from "@/components/ui/button";
 import { PageButtons } from "@/components/record-pagination";
 import { keepRowsWhilePaging } from "@/lib/use-record-pagination";
 import { formatDate, formatNumber } from "@/lib/formatters";
+import { recordPage } from "@/lib/record-navigation";
+import { readableLabel } from "@/components/record-label";
+
+/** What a request asked, in one line: the record it names and the few fields it named. */
+function summaryLine(summary: OperationSummary): string {
+  const record = [summary.targetKind && readableLabel(summary.targetKind), summary.targetId].filter(Boolean).join(" ");
+  return [record && `Record: ${record}`, ...summary.details.map((detail) => `${detail.name}: ${detail.value}`)].filter(Boolean).join(" · ");
+}
 
 export default function OperationsPage() {
   const { merchantId, workspace } = useWorkspace(),
@@ -61,37 +69,31 @@ export default function OperationsPage() {
         {message || (list.isLoading ? "Loading saved operations…" : "")}
       </p>
       <div className="space-y-3">
-        {list.data?.items.map((item: any) => (
+        {list.data?.items.map((item) => {
+          // What the request asked, read from a few of its fields (never its body): the record it names can be
+          // checked where its kind is shown, and a saved result opened there.
+          const target = item.summary?.targetId && item.status !== "completed" ? recordPage(item.summary.targetKind, item.summary.targetId, merchantId || "") : null;
+          const saved = item.status === "completed" && item.recordId ? recordPage(item.recordKind, item.recordId, merchantId || "") : null;
+          const line = item.summary ? summaryLine(item.summary) : "";
+          return (
           <article
             key={item.id}
             className="flex flex-col justify-between gap-4 rounded-xl border bg-card p-5 sm:flex-row"
           >
             <div className="min-w-0 space-y-2">
-              <h2 className="font-semibold capitalize">{item.label}</h2>
+              <h2 className={`font-semibold ${item.summary ? "" : "capitalize"}`}>{item.summary?.action ?? item.label}</h2>
+              {line && <p className="break-all text-sm">{line}</p>}
               <p className="text-sm text-muted-foreground">{item.message}</p>
-              {item.status === "completed" &&
-                item.recordId &&
-                [
-                  "customers",
-                  "exceptions",
-                  "import-batches",
-                  "closes",
-                ].includes(item.recordKind) && (
-                  <Link
-                    className="inline-block text-sm text-primary underline"
-                    href={
-                      item.recordKind === "customers"
-                        ? `/customers/${item.recordId}`
-                        : item.recordKind === "exceptions"
-                          ? `/cases/${item.recordId}`
-                          : item.recordKind === "closes"
-                            ? "/reports"
-                            : "/imports"
-                    }
-                  >
-                    Open saved result
-                  </Link>
-                )}
+              {target && (
+                <Link className="inline-block text-sm text-primary underline" href={target}>
+                  Open the record
+                </Link>
+              )}
+              {saved && (
+                <Link className="inline-block text-sm text-primary underline" href={saved}>
+                  Open saved result
+                </Link>
+              )}
               <p className="text-xs text-muted-foreground">
                 {formatDate(item.createdAt)} · {item.role}
               </p>
@@ -132,7 +134,8 @@ export default function OperationsPage() {
               )}
             </div>
           </article>
-        ))}
+          );
+        })}
       </div>
       {list.data?.total === 0 && (
         <p className="rounded-xl border bg-card p-8 text-sm text-muted-foreground">

@@ -6,6 +6,8 @@
 // GET /v1/lifecycle. Only a retry from Operations, which sends the request through its route again, and approving or
 // executing a retention run an earlier build prepared, whose digests covered the stored request, read one. The
 // database sends the API every jsonb value a query selects; this suite counts those that carry the bodies' marker.
+// Operations also summarises each request (backlog item UX-B02-X3) from its method, path and a few short body fields,
+// which the database extracts by jsonb operators and sends as text: this suite counts text values with the marker too.
 import assert from "node:assert/strict";
 import express from "express";
 import { once } from "node:events";
@@ -16,11 +18,12 @@ assert.ok(["localhost", "127.0.0.1", "[::1]"].includes(new URL(process.env.DATAB
 for (const name of ["VALOPAY_STAFF_ACCESS", "VALOPAY_RUNTIME_ISOLATION", "VALOPAY_PAYLOAD_ENCRYPTION"]) process.env[name] = "off";
 const { pool } = await import("@workspace/db");
 const marker = `journal-reads-${randomUUID()}`;
-let bodyReads = 0, journalRows = 0;
-// Each connection counts the jsonb values it receives that hold the marker (a stored request is the only one), and
-// the rows of the journal it receives.
+let bodyReads = 0, textReads = 0, journalRows = 0;
+// Each connection counts the jsonb values it receives that hold the marker (a stored request is the only one), the
+// text values that hold it, and the rows of the journal it receives.
 pool.on("connect", (client) => {
   client.setTypeParser(3802, "text", (text: string) => { if (text.includes(marker)) bodyReads += 1; return JSON.parse(text); });
+  client.setTypeParser(25, "text", (text: string) => { if (text.includes(marker)) textReads += 1; return text; });
   const query = client.query.bind(client) as (...args: unknown[]) => unknown;
   (client as unknown as { query: typeof query }).query = (...args) => {
     const result = query(...args);
@@ -37,11 +40,11 @@ app.use((req, _res, next) => { (req as any).auth = Object.assign(() => ({ userId
 app.use("/api", router); app.use(errorHandler);
 const server = app.listen(0, "127.0.0.1"); await once(server, "listening");
 const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api`, cookie = `valopay_sandbox=${randomBytes(32).toString("hex")}`;
-/** A request's status, answer and how many stored bodies and journal rows the API received while it ran. */
+/** A request's status, answer and how many stored bodies, text values with the marker and journal rows the API received while it ran. */
 async function call(path: string, method = "GET", body?: unknown, key?: string) {
-  const before = bodyReads, rowsBefore = journalRows;
+  const before = bodyReads, textBefore = textReads, rowsBefore = journalRows;
   const response = await fetch(base + path, { method, headers: { "Content-Type": "application/json", Cookie: cookie, ...(key ? { "Idempotency-Key": key } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  return { status: response.status, data: await response.json() as any, bodyReads: bodyReads - before, journalRows: journalRows - rowsBefore };
+  return { status: response.status, data: await response.json() as any, bodyReads: bodyReads - before, textReads: textReads - textBefore, journalRows: journalRows - rowsBefore };
 }
 const ok = (result: { status: number; data: any }) => { assert.equal(result.status, 200, JSON.stringify(result.data)); return result.data; };
 let workspaceId: string | undefined;
@@ -72,7 +75,9 @@ try {
   // ---- Operations lists what it shows, reading the receipt's refusal and record reference by jsonb operators ----
   const listed = await call(`/v1/operations?merchantId=${lender}`);
   assert.equal(listed.bodyReads, 0, "the Operations list reads no stored request");
+  assert.equal(listed.textReads, 0, "nor any part of one but its summary's fields");
   assert.equal(ok(listed).total, 5);
+  for (const hidden of [marker, "Large keyed write", "Refused large write", "Unconfirmed large write", "READS-", "Synthetic consent"]) assert.equal(JSON.stringify(listed.data).includes(hidden), false, `the list shows no ${hidden}`);
   const item = (key: string) => listed.data.items.find((candidate: any) => candidate.id === (listedIds.get(key)));
   const listedIds = new Map<string, string>();
   for (const key of [...saved.map((write) => write.key), refusedKey, pendingKey]) listedIds.set(key, (await entry(key)).id);
@@ -83,15 +88,21 @@ try {
   assert.equal(item(refusedKey).status, "cancelled");
   assert.match(item(refusedKey).message, /^The service refused this request: .+ Correct it and submit it again\.$/, "a refused request shows the reason it was given");
   assert.deepEqual([item(pendingKey).status, item(pendingKey).recordId, item(pendingKey).message], ["pending", null, "Completion has not been confirmed. Check the original request."]);
+  // Each entry says what it asked, from its path: a new customer record. Its name, reference and consent are not read.
+  for (const key of listedIds.keys()) assert.deepEqual(item(key).summary, { action: "Create a record", targetKind: "customers", targetId: null, details: [] });
   const paged = await call(`/v1/operations?merchantId=${lender}&offset=3`);
-  assert.deepEqual([paged.bodyReads, ok(paged).items.length, paged.data.total], [0, 2, 5]);
-  checks += 9;
+  assert.deepEqual([paged.bodyReads, paged.textReads, ok(paged).items.length, paged.data.total], [0, 0, 2, 5]);
+  // The count the console shows on its Operations link: the one pending entry, counted without reading it.
+  const pendingCount = await call(`/v1/operations/pending?merchantId=${lender}`);
+  assert.deepEqual([ok(pendingCount), pendingCount.bodyReads, pendingCount.textReads], [{ pending: 1 }, 0, 0]);
+  checks += 13;
 
   // ---- A repeat of a saved key, a cancel and a retry: only the retry opens the request, to send it again ----
   const repeated = await call(customers, "POST", saved[0]!.body, saved[0]!.key);
   assert.deepEqual([repeated.status, repeated.data, repeated.bodyReads], [200, saved[0]!.record, 0], "a repeat of a saved key replays its answer without reading the stored request");
   const cancelled = await call(`/v1/operations/${listedIds.get(pendingKey)}/cancel?merchantId=${lender}`, "POST", {});
   assert.deepEqual([cancelled.status, cancelled.bodyReads], [200, 0], "a cancel reads no stored request");
+  assert.deepEqual(ok(await call(`/v1/operations/pending?merchantId=${lender}`)), { pending: 0 }, "a cancelled request no longer waits");
   const retried = await call(`/v1/operations/${listedIds.get(saved[1]!.key)}/retry?merchantId=${lender}`, "POST", {});
   assert.deepEqual([retried.status, retried.data, retried.bodyReads], [200, saved[1]!.record, 1], "a retry opens its own request, and only it");
   checks += 3;
@@ -213,7 +224,40 @@ try {
   // The preview, the approval and the execution are requests of their own, retained and too recent to delete.
   assert.deepEqual([after.targetTotal, after.eligibleCount], [first.targetTotal - 100 + 3, first.eligibleCount - 100], "the purged requests are no longer retained or counted");
   checks += 8;
-  console.log(`Journal reads PostgreSQL integration passed (${checks} checks): the Operations list, the retention view, policy, preview, approval and execution, a repeat of a key and a cancel read no stored request; a retry reads its own; a run an earlier build prepared matches its sources as before, reading each once; and with ${retained.length} retained requests a retention request reads a page of them.`);
+
+  // ---- Backlog item UX-B02-X3: each entry says what it asked, and nothing of its body but a few short fields ----
+  // A change to a record whose outcome never came back, an action the service refused, whose reason holds the marker,
+  // and two entries stored as others are: an export an earlier build completed, which kept its answer's kind, and a
+  // request sealed by payload encryption.
+  const [target] = ok(await call(customers)).items as Array<{ id: string }>;
+  const mandate = (ok(await call(`/v1/records/mandates?merchantId=${lender}`)).items as Array<{ id: string }>)[0]!;
+  const changeKey = randomUUID(), actionKey = randomUUID();
+  const change = await call(`/v1/records/customers/${encodeURIComponent(target!.id)}?merchantId=${lender}`, "PATCH", { status: "not_a_status", name: `Private ${marker}`, data: { note: marker } }, changeKey);
+  assert.equal(change.status, 400, JSON.stringify(change.data));
+  await pool.query("UPDATE valopay_operations SET status='pending',receipt=NULL WHERE merchant_id=$1 AND request_key=$2", [lender, changeKey]);
+  const action = await call(`/v1/actions?merchantId=${lender}`, "POST", { action: "mandate_suspend", recordId: mandate.id, reason: marker, data: { unknown: marker } }, actionKey);
+  assert.ok([200, 400, 409].includes(action.status), JSON.stringify(action.data));
+  const stored = async (key: string, request: unknown, status: string, receipt: unknown) => {
+    const id = `summary-${randomUUID()}`;
+    await pool.query(`INSERT INTO valopay_operations(id,merchant_id,owner,actor,role,request_key,request_hash,request,label,status,receipt,created_at,updated_at)
+      SELECT $1,$2,owner,actor,role,$3,$4,$5,'Save exports',$6,$7,now(),now() FROM valopay_operations WHERE merchant_id=$2 AND request_key=$8`, [id, lender, key, `hash-${key}`, request, status, receipt, changeKey]);
+    return id;
+  };
+  const exported = await stored(randomUUID(), { method: "POST", path: "/v1/exports", body: { kind: "customers", format: "csv" } }, "completed", { id: "export-earlier", kind: "customers" });
+  const sealed = await stored(randomUUID(), { protectedPayload: 1, key: "projects/p/locations/l/keyRings/r/cryptoKeys/k", wrappedKey: "a", iv: "b", tag: "c", ciphertext: marker }, "pending", null);
+  const summarised = await call(`/v1/operations?merchantId=${lender}`);
+  assert.deepEqual([summarised.bodyReads, summarised.textReads], [0, 0], "the summaries read no body, and no field but theirs");
+  assert.equal(JSON.stringify(ok(summarised)).includes(marker), false, "nothing the bodies hold beyond those fields is shown");
+  const shownAs = (id: string) => summarised.data.items.find((candidate: any) => candidate.id === id);
+  const changeId = (await entry(changeKey)).id, actionId = (await entry(actionKey)).id;
+  assert.deepEqual(shownAs(changeId).summary, { action: "Change a record", targetKind: "customers", targetId: target!.id, details: [{ name: "Status", value: "not_a_status" }] }, "a change names its record and the status it sent");
+  assert.deepEqual(shownAs(actionId).summary, { action: "Mandate suspend", targetKind: "mandates", targetId: mandate.id, details: [] }, "an action names the record its recordId names, and that record's kind");
+  assert.deepEqual([shownAs(exported).recordId, shownAs(exported).recordKind, shownAs(exported).summary.action], ["export-earlier", "exports", "Request an export"], "an export's saved result is the export, whatever kind it exports");
+  assert.equal(shownAs(sealed).summary, null, "a sealed request is not opened for its summary");
+  const counted = await call(`/v1/operations/pending?merchantId=${lender}`);
+  assert.deepEqual([ok(counted), counted.bodyReads, counted.textReads], [{ pending: 2 }, 0, 0], "the changed record and the sealed request wait");
+  checks += 10;
+  console.log(`Journal reads PostgreSQL integration passed (${checks} checks): the Operations list, its summaries and pending count, the retention view, policy, preview, approval and execution, a repeat of a key and a cancel read no stored request; a retry reads its own; a run an earlier build prepared matches its sources as before, reading each once; and with ${retained.length} retained requests a retention request reads a page of them.`);
 } finally {
   server.close(); await once(server, "close");
   if (workspaceId) {

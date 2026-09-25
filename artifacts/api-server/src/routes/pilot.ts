@@ -18,6 +18,7 @@ import {
   messageSchema,
   operationListSchema,
   pathId,
+  pendingOperationsSchema,
   pilotJourneySchema,
   staffChangeResultSchema,
   staffDirectorySchema,
@@ -27,6 +28,7 @@ import {
   inWorkspace,
   loadState,
   listOperations,
+  countPendingOperations,
   cancelOperation,
   caseAssignees,
   staffDirectory,
@@ -80,6 +82,18 @@ router.get("/v1/operations", async (req, res) => {
           operationListSchema,
           await listOperations(ctx, q.merchantId, q.offset),
         ),
+      "read",
+    ),
+  );
+});
+router.get("/v1/operations/pending", async (req, res) => {
+  const q = lenderQuery(req);
+  res.json(
+    await inWorkspace(
+      req,
+      res,
+      async (ctx) =>
+        contractAnswer(pendingOperationsSchema, await countPendingOperations(ctx, q.merchantId)),
       "read",
     ),
   );
