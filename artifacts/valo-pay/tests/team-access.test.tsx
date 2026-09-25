@@ -185,6 +185,43 @@ for (const how of ["refused", "lost"] as const) it(`moves focus to the member's 
   await waitFor(() => expect(document.activeElement).toBe(notice));
 });
 
+// Fourth review of the audit fixes, finding 3: a refused or lost Save lender access still left focus on the page body, as
+// its fieldset waits disabled, while its notice sat unfocused in the member's card.
+for (const how of ["refused", "lost"] as const) it(`moves focus to the member's lender access notice when Save lender access is ${how}`, async () => {
+  const user = userEvent.setup();
+  liveTeam();
+  const send = globalThis.fetch;
+  let answer = () => { /* replaced by the gate's resolver */ };
+  const gate = new Promise<void>((resolve) => { answer = resolve; });
+  globalThis.fetch = async (input, options) => {
+    const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+    if (new URL(url, "http://localhost").pathname !== "/api/v1/team/members/m-ops/lenders" || options?.method !== "PATCH") return send(input, options);
+    await gate;
+    if (how === "lost") throw new TypeError("Failed to fetch");
+    return new Response(JSON.stringify({ error: "This membership changed after you opened it. Refresh Team & access and review it before changing it again.", requestId: "fix60-409" }), { status: 409, headers: { "Content-Type": "application/json" } });
+  };
+  renderApp("/team");
+  await screen.findByRole("heading", { name: "Chidi Ops" });
+  const form = within(within(card("Chidi Ops")).getByRole("group", { name: "Lenders available to Chidi Ops" }));
+  await user.click(form.getAllByRole("checkbox").find((box) => !(box as HTMLInputElement).checked)!);
+  await user.type(form.getByLabelText("Reason for lender access change for Chidi Ops"), "Needs the second lender for cover");
+  const save = form.getByRole("button", { name: "Save lender access" }) as HTMLButtonElement;
+  save.focus();
+  await user.keyboard("{Enter}");
+  // The form waits disabled for the answer. A browser then moves the focus from the button to the page body, where jsdom
+  // leaves it on the button (and will not blur a disabled one): move it there as the browser does.
+  await waitFor(() => expect(save.disabled).toBe(true));
+  const stand = document.body.appendChild(document.createElement("span"));
+  stand.tabIndex = -1;
+  stand.focus();
+  stand.remove();
+  expect(document.activeElement).toBe(document.body);
+  answer();
+  const notice = (await within(card("Chidi Ops")).findAllByRole("alert"))[0]!;
+  expect(notice.textContent).toContain(how === "refused" ? "This membership changed after you opened it." : "Outcome not confirmed");
+  await waitFor(() => expect(document.activeElement).toBe(notice));
+});
+
 it("keeps the confirmation of saved lender access, which gives the membership a new version", async () => {
   const user = userEvent.setup();
   liveTeam();

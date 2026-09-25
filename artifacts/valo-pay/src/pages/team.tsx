@@ -239,11 +239,13 @@ export default function TeamPage() {
 function Member({ member, editable, shared, lenders }: { member: any; editable: boolean; shared: boolean; lenders: any[] }) {
   const change = usePilotMutation(), grant = usePilotMutation();
   // The button that made a change goes with that form, so focus then goes to what the change did; and a change the
-  // service refused, or whose answer was lost, sends it to the problem notice that says so.
-  const changed = useRef<HTMLParagraphElement>(null), granted = useRef<HTMLParagraphElement>(null), problem = useRef<HTMLDivElement>(null);
+  // service refused, or whose answer was lost, sends it to the problem notice that says so, as does lender access,
+  // whose form waits disabled for the answer.
+  const changed = useRef<HTMLParagraphElement>(null), granted = useRef<HTMLParagraphElement>(null), problem = useRef<HTMLDivElement>(null), grantProblem = useRef<HTMLDivElement>(null);
   useFocusWhenLost(changed, change.data);
   useFocusWhenLost(problem, change.error);
   useFocusWhenLost(granted, grant.data);
+  useFocusWhenLost(grantProblem, grant.error);
   const count = member.lenderIds?.length || 0;
   return (
     <article className="space-y-3 rounded-lg border p-4">
@@ -260,7 +262,7 @@ function Member({ member, editable, shared, lenders }: { member: any; editable: 
       <RecoveryNotice mutation={change} persistent={false} noticeRef={problem} />
       {change.data?.message && <p ref={changed} role="status" className="text-sm">{change.data.message}</p>}
       {editable && member.role !== "Admin" && member.status === "active" && <LenderGrants key={`lenders:${member.updatedAt}`} member={member} lenders={lenders} mutation={grant} />}
-      <RecoveryNotice mutation={grant} persistent={false} />
+      <RecoveryNotice mutation={grant} persistent={false} noticeRef={grantProblem} />
       {grant.isSuccess && <p ref={granted} role="status" className="text-sm">Lender access saved.</p>}
     </article>
   );

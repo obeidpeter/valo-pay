@@ -485,3 +485,31 @@ test("Try again on a page of Customers that failed keeps the focus, whether the 
   await tryAgainKeepsFocus(page, page, "customers", answer);
 });
 
+// Fourth review of the audit fixes, finding 3: a refused or lost Save lender access left focus on the page body, while its
+// notice sat unfocused in the member's card.
+for (const how of ["refused", "lost"] as const) test(`a ${how} Save lender access moves focus to the member's notice`, async ({ page, request }) => {
+  await staffAdministrator(page);
+  const lenders = (await (await request.get("/api/v1/workspace")).json()).merchants;
+  const person = (id: string, name: string, role: string) => ({ id, actor: `Clerk:user_${id}`, name, role, status: "active", expiresAt: inDays(60), updatedAt: inDays(-1), lenderIds: role === "Admin" ? [] : [lenders[0].id], allLenders: role === "Admin" });
+  const members = [person("admin_a", "Ada Admin", "Admin"), person("admin_b", "Bola Admin", "Admin"), person("ops", "Chidi Ops", "Operations")];
+  await page.route("**/api/v1/team", (route) => route.request().method() === "GET" ? route.fulfill({ json: { mode: "staff", actor: "Clerk:user_admin_a", members, lenders, invitations: [], changes: [], events: [], message: "Verified staff access." } }) : route.fallback());
+  await page.route(/\/api\/v1\/team\/members\/ops\/lenders$/, async (route) => {
+    await slowly();
+    if (how === "lost") return route.abort("connectionreset");
+    return route.fulfill({ status: 409, json: { error: "This membership changed after you opened it. Refresh Team & access and review it before changing it again.", requestId: "fix60-409" } });
+  });
+  await page.goto("/team");
+  const card = page.locator("article").filter({ has: page.getByRole("heading", { name: "Chidi Ops" }) });
+  await card.getByRole("checkbox", { checked: false }).first().check();
+  await card.getByLabel("Reason for lender access change for Chidi Ops").fill("Needs the second lender for cover");
+  const save = card.getByRole("button", { name: "Save lender access" });
+  await save.focus();
+  await page.keyboard.press("Enter");
+  // The form waits disabled for the answer. Chromium then moves the focus to the page body; a browser that leaves it on
+  // the disabled button is made to do the same, so every browser checks where it goes from there.
+  await expect(save).toBeDisabled();
+  await page.evaluate(() => { const active = document.activeElement as HTMLElement | null; if (active?.matches(":disabled")) active.blur(); });
+  const notice = card.getByRole("alert").filter({ hasText: how === "refused" ? "This membership changed after you opened it." : "Outcome not confirmed" }).first();
+  await expect(notice).toBeVisible();
+  await expect(notice).toBeFocused();
+});
