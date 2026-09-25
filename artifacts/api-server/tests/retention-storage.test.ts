@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { deleteRetainedExport } from '../src/lib/export-download';
 process.env.DATABASE_URL||='postgres://unused:unused@127.0.0.1:1/unused';
-const {assertFinalState}=await import('../src/lib/valopay-store');
+const {assertFinalState,removeSweptExportFiles,overrideSweptExportRemoval}=await import('../src/lib/valopay-store');
 const {seedMerchant}=await import('../src/lib/valopay-seed');
 const {makeRecord}=await import('../src/domain/records');
 const {saveLifecyclePolicy,lifecyclePolicy,lifecyclePreview,approveLifecycleRun,eraseLifecycleRawCsv,recordLifecycleReceipt}=await import('../src/domain/lifecycle');
@@ -32,4 +32,19 @@ const forged=structuredClone(snapshot);delete forged.records.find(r=>r.id===batc
 assert.throws(()=>assertFinalState(snapshot,forged,state.merchant.id,ctx.now),/immutable/);
 state.records.find(r=>r.id===batch.id)!.name='Unrelated hidden change';
 assert.throws(()=>assertFinalState(snapshot,state,state.merchant.id,ctx.now),/immutable/);
-console.log('Retention storage checks passed: ownership, checksum, generation fence, absent-file retry and narrow immutable-record exception.');
+// A swept sandbox's export files: one private storage refuses, or one not reached in the time allowed, is named in the log and never fails the sweep.
+{
+ const tried:string[]=[],lines:Array<Record<string,unknown>>=[];
+ const file=(exportId:string,checksum?:string)=>({merchantId:'swept-lender',exportId,bucket:'private-bucket',objectName:`exports/swept-lender/${exportId}.json`,...(checksum?{checksum}:{})});
+ const restore=overrideSweptExportRemoval(async swept=>{tried.push(swept.exportId);if(swept.exportId==='refused')throw new Error('Synthetic storage outage');if(swept.exportId==='slow')await new Promise(resolve=>setTimeout(resolve,1200));return 'deleted';});
+ try{
+  await removeSweptExportFiles([file('ready','a'.repeat(64)),file('refused'),file('slow'),file('late','b'.repeat(64))],{warn:fields=>lines.push(fields as Record<string,unknown>)},1000);
+  assert.deepEqual(tried,['ready','refused','slow'],'removals start one at a time until the time allowed is spent');
+  assert.deepEqual(lines.map(({err,...fields})=>({...fields,...(err?{err:(err as Error).message}:{})})),[
+   {event:'workspace.sweep_file_left',reason:'failed',merchantId:'swept-lender',exportId:'refused',bucket:'private-bucket',objectName:'exports/swept-lender/refused.json',err:'Synthetic storage outage'},
+   {event:'workspace.sweep_file_left',reason:'time_limit',merchantId:'swept-lender',exportId:'late',bucket:'private-bucket',objectName:'exports/swept-lender/late.json'},
+  ],'each file left is named by its lender, export, bucket and object name');
+  await removeSweptExportFiles([file('refused')],{warn:()=>{throw new Error('Synthetic log failure');}});
+ }finally{restore();}
+}
+console.log('Retention storage checks passed: ownership, checksum, generation fence, absent-file retry, narrow immutable-record exception and the files a sandbox sweep leaves.');
