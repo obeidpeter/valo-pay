@@ -36,6 +36,27 @@ describe('console efficiency', () => {
     expect(api.calls.filter(call => call.method === 'POST')).toEqual([]);
   });
 
+  // Backlog item UX-B06-X1: views saved before search text stopped being stored kept it under the v1 keys, which nothing
+  // read or removed; and a stored view's search was still applied when opened.
+  it('removes the views an earlier build saved with search text, and never applies a stored search', async () => {
+    const user = userEvent.setup();
+    const lender = api.merchantIds[0]!;
+    localStorage.setItem(`valopay-queue-views-v1:${lender}:exceptions`, JSON.stringify([{ name: 'Old', view: 'open', owner: '', type: '', q: 'Ada Okonkwo' }]));
+    localStorage.setItem(`valopay-queue-views-v1:${api.merchantIds[1]}:mandates`, '[]');
+    localStorage.setItem('valopay-theme', 'dark');
+    localStorage.setItem(`valopay-queue-views-v2:Sandbox Admin:${lender}:exceptions`, JSON.stringify([{ name: 'Edited by hand', view: 'overdue', owner: 'Finance', type: '', q: 'private-customer-search' }]));
+    renderApp('/exceptions');
+    await screen.findByRole('tab', { name: /All open \(\d+\)/ });
+    expect(Object.keys(localStorage).filter(key => key.startsWith('valopay-queue-views-v1:'))).toEqual([]);
+    expect(localStorage.getItem('valopay-theme')).toBe('dark');
+    await user.click(screen.getByText('Saved views'));
+    await user.click(screen.getByRole('button', { name: 'Edited by hand' }));
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('owner')).toBe('Finance'));
+    expect(new URLSearchParams(window.location.search).has('q')).toBe(false);
+    await user.click(screen.getByRole('button', { name: 'Delete saved view Edited by hand' }));
+    expect(localStorage.getItem(`valopay-queue-views-v2:Sandbox Admin:${lender}:exceptions`)).toBe('[]');
+  });
+
   it('does not claim a view was saved when browser storage fails', async () => {
     const user = userEvent.setup();
     renderApp('/collections');

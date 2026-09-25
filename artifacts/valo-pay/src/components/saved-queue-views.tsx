@@ -1,20 +1,31 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'wouter';
 import { Bookmark, Trash2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { useWorkspace } from '@/lib/workspace-context';
 
-type SavedView = { name: string; view: string; owner: string; type: string; q?: string };
+/** A view keeps its filters, never search text: a search stored by hand is dropped as the view is read. */
+type SavedView = { name: string; view: string; owner: string; type: string };
 function readViews(key: string, views: readonly string[]): SavedView[] {
   try {
     const saved: unknown = JSON.parse(localStorage.getItem(key) || '[]');
     if (!Array.isArray(saved)) return [];
-    return saved.filter((item): item is SavedView => !!item && typeof item === 'object' && typeof item.name === 'string' && item.name.length > 0 && item.name.length <= 40 && views.includes(item.view) && typeof item.owner === 'string' && item.owner.length <= 200 && (item.q === undefined || typeof item.q === 'string' && item.q.length <= 200) && typeof item.type === 'string' && item.type.length <= 200).slice(0, 10);
+    return saved.filter((item): item is SavedView => !!item && typeof item === 'object' && typeof item.name === 'string' && item.name.length > 0 && item.name.length <= 40 && views.includes(item.view) && typeof item.owner === 'string' && item.owner.length <= 200 && typeof item.type === 'string' && item.type.length <= 200)
+      .slice(0, 10).map(({ name, view, owner, type }) => ({ name, view, owner, type }));
   } catch { return []; }
+}
+/** Views an earlier build saved, with their search text, under keys nothing reads: removed when saved views show, so a
+ * browser holds them no longer than its first visit to a queue with this build. */
+const EARLIER_VIEWS = 'valopay-queue-views-v1:';
+function removeEarlierViews() {
+  try {
+    for (const key of Object.keys(localStorage)) if (key.startsWith(EARLIER_VIEWS)) localStorage.removeItem(key);
+  } catch { /* storage blocked: nothing can be read from it either */ }
 }
 
 export function SavedQueueViews({ queue, views, fallback }: { queue: string; views: readonly string[]; fallback: string }) {
   const { merchantId, workspace } = useWorkspace();
+  useEffect(removeEarlierViews, []);
   const scope = workspace?.viewerScope || workspace?.actor || 'anonymous';
   return merchantId ? <SavedViews key={`${scope}:${merchantId}:${queue}`} storageKey={`valopay-queue-views-v2:${scope}:${merchantId}:${queue}`} views={views} fallback={fallback} /> : null;
 }
@@ -36,7 +47,7 @@ function SavedViews({ storageKey, views, fallback }: { storageKey: string; views
           setSearch(current => {
             const next = new URLSearchParams(current);
             for (const key of ['view', 'owner', 'type', 'q', 'page', 'record', 'lender', 'returnTo', 'dueItem']) next.delete(key);
-            for (const key of ['view', 'owner', 'type', 'q'] as const) if (item[key]) next.set(key, item[key]!);
+            for (const key of ['view', 'owner', 'type'] as const) if (item[key]) next.set(key, item[key]);
             return next;
           });
           setMessage(`Opened ${item.name}.`);
