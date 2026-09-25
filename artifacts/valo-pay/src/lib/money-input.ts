@@ -5,6 +5,6 @@ export { MoneyInputError, nairaToKobo, koboToNaira, majorToMinor, minorToMajor }
 export function moneyFieldLabel(label: string, currency = 'NGN'): string {
   const code = currency.trim().toUpperCase() || 'NGN', unit = code === 'NGN' ? '₦' : code;
   if (/\([^)]*kobo[^)]*\)/i.test(label)) return label.replace(/\([^)]*kobo[^)]*\)/i, `(${unit})`);
-  if (code !== 'NGN' && label.includes('(₦)')) return label.replace('(₦)', `(${unit})`);
-  return label.includes(`(${unit})`) ? label : `${label} (${unit})`;
+  if (code === 'NGN') return label.includes('₦') ? label : `${label} (₦)`;
+  return label.includes('(₦)') ? label.replace('(₦)', `(${unit})`) : `${label} (${unit})`;
 }
