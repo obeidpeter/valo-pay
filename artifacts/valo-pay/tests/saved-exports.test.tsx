@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { renderApp, screen, userEvent, waitFor } from './harness';
+import { renderApp, screen, userEvent, waitFor, within } from './harness';
+import { formatDate } from '@/lib/formatters';
 import { installFakeApi, type FakeApi } from './fake-api';
 import { queueExport } from '../../api-server/src/lib/export-jobs';
 import { makeRecord } from '../../api-server/src/domain/records';
+import { approveLifecycleRun, lifecyclePolicy, lifecyclePreview, saveLifecyclePolicy } from '../../api-server/src/domain/lifecycle';
+import { executeApprovedRun } from '../../api-server/src/domain/lifecycle-run';
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi({ queuedExports: true }); });
@@ -75,4 +78,32 @@ it('lists removed files under File expired, never under Completed or Needs retry
   await waitFor(()=>expect(rows()).toEqual(['Needs retry']));
   await user.selectOptions(filter,'all');
   await waitFor(()=>expect(rows()).toEqual(['File expired','Needs retry','File expired','Completed']));
+});
+it('names the retention run that removed a file and opens its deletion receipt under Data retention, however many runs follow it',async()=>{
+  const user=userEvent.setup(),minute=(n:number)=>new Date(Date.UTC(2026,8,25,10,n)).toISOString();
+  api.now=minute(0);
+  const id=api.mutate(state=>makeRecord(state,'exports',{status:'ready',name:'Synthetic customers',createdAt:'2026-06-01T09:00:00.000Z',data:{kind:'customers',format:'json',checksum:'c'.repeat(64),generatedAt:'2026-06-01T09:00:00.000Z',byteLength:12}}).id);
+  api.mutate((state,ctx)=>saveLifecyclePolicy(state,ctx,{policy:{rawCsvDays:null,journalPayloadDays:null,exportFileDays:30,auditTrail:'retain'},expectedRevision:lifecyclePolicy(state).revision,reason:'Remove synthetic export files after thirty days.'}));
+  // The stored file, as the store's retention inventory lists it.
+  const file=[{kind:'export_file' as const,merchantId:api.merchantIds[0]!,sourceId:id,version:'generation-1',createdAt:'2026-06-01T09:00:00.000Z',label:'Private export file',digest:'d'.repeat(64),status:'ready' as const}];
+  // The run that removes the file, then ten newer previews: Data retention lists only the newest ten runs.
+  const run=api.mutate((state,ctx)=>lifecyclePreview(state,ctx,{expectedPolicyRevision:lifecyclePolicy(state).revision},file));
+  for(let n=1;n<=10;n++){api.now=minute(n);api.mutate((state,ctx)=>lifecyclePreview(state,ctx,{expectedPolicyRevision:lifecyclePolicy(state).revision},file));}
+  api.now=minute(11);
+  const ctx=api.mutate((state,ctx)=>{approveLifecycleRun(state,ctx,run.id,{expectedUpdatedAt:run.updatedAt,previewDigest:run.previewDigest,reason:'Approved the exact synthetic export file.'},file);return ctx;});
+  // As the Data retention page's execute leaves it (fake-api.ts).
+  const state=api.state();
+  expect((await executeApprovedRun(state,ctx,run.id,file,async candidate=>{Object.assign(state.records.find(record=>record.id===candidate.sourceId)!.data,{fileDeletedAt:ctx.now,fileRetentionRunId:run.id});return 'deleted';})).status).toBe('completed');
+  renderApp(`/exports?job=${id}`);
+  await screen.findByText('Saved export file has expired');
+  expect(screen.getByText(`Retention run: ${run.id}`)).toBeTruthy();
+  await user.click(screen.getByRole('link',{name:'Open its deletion receipt'}));
+  const receipts=(await screen.findByRole('heading',{name:'Saved deletion receipts'})).parentElement!;
+  expect(screen.getByText(`Retention run ${run.id} is open below with its saved deletion receipts.`)).toBeTruthy();
+  expect(within(receipts).getByText(id).closest('li')!.textContent).toMatch(/^Export file · deleted/);
+  // The page's list of saved runs holds the newest ten, which no longer include it.
+  const listed=screen.getByRole('heading',{name:'Saved deletion runs'}).closest('section')!.querySelectorAll('li');
+  expect(listed).toHaveLength(10);
+  expect([...listed].some(item=>item.textContent!.includes(formatDate(minute(0))))).toBe(false);
+  expect(api.calls.some(call=>call.method==='GET'&&call.path===`/v1/lifecycle/runs/${run.id}`)).toBe(true);
 });

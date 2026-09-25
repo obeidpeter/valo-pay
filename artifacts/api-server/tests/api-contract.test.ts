@@ -83,6 +83,14 @@ await section("error body and statuses", () => {
   checks += 6;
 });
 
+// ---- 1a. A removed export file: the run holding its deletion receipt ----
+await section("removed export files", () => {
+  const result = schemas.ExportResult;
+  assert.deepEqual(result.properties.retentionRunId, { type: "string" }, "ExportResult names the retention run that removed its file");
+  assert.match(result.description, /retentionRunId names that run, whose deletion receipt an administrator opens with GET \/v1\/lifecycle\/runs\/\{id\}/);
+  checks += 2;
+});
+
 // ---- 1b. A repeat after retention: every write whose key the journal records lists 410, and only those ----
 await section("410 on repeated keys", () => {
   for (const entry of writes) {

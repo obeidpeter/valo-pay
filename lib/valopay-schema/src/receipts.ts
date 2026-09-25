@@ -47,13 +47,13 @@ export const settingsViewSchema = z.object({
   closeSchedule: effectiveCloseScheduleSchema.optional(), revision: z.string().optional(),
 }).strict();
 
-/** A saved export job's identity, status and retry details; checksum, generation time and size once it is ready; expiredAt, the time an approved retention run deleted its file, once one has, never a scheduled expiry (ExportResult). */
+/** A saved export job's identity, status and retry details; checksum, generation time and size once it is ready; expiredAt, the time an approved retention run deleted its file, once one has, never a scheduled expiry, and retentionRunId, that run, which holds the deletion receipt (ExportResult). */
 export const exportResultSchema = z.object({
   id: z.string(), downloadUrl: z.string(),
   status: z.enum(["queued", "running", "ready", "failed"]).optional(),
   stage: z.enum(["queued", "checking", "rendering", "uploading", "confirming", "ready", "failed"]).optional(),
   lastProgressAt: z.string().optional(), stalled: z.boolean().optional(), retryAllowed: z.boolean().optional(),
-  recoveryAt: z.string().optional(), expiredAt: z.string().optional(), kind: z.string().optional(), format: z.string().optional(),
+  recoveryAt: z.string().optional(), expiredAt: z.string().optional(), retentionRunId: z.string().optional(), kind: z.string().optional(), format: z.string().optional(),
   customerId: z.string().optional(), requestedAt: z.string().optional(), attempts: count.optional(), checksum: z.string().optional(),
   generatedAt: z.string().optional(), byteLength: count.optional(), generationMs: count.optional(), error: z.string().optional(),
 }).strict();

@@ -307,6 +307,10 @@ try {
   await pool.query(`UPDATE valopay_records SET status='ready', data=data || jsonb_build_object('fileDeletedAt', $3::text, 'fileRetentionRunId', $4::text, 'checksum', repeat('a', 64)) WHERE merchant_id=$1 AND id=$2`, [lender, job.id, new Date().toISOString(), run.id]);
   assert.equal((await call(q(`/v1/exports/${job.id}/download`))).status, 410, "the file retention deleted is not downloaded");
   assert.equal((await call(q(`/v1/exports/${job.id}/retry`), "POST")).status, 410, "nor generated again under the same identity");
+  // Its status answer says when, and names the run that holds the deletion receipt, which an administrator opens by that name.
+  const expired = ok(await call(q(`/v1/exports/${job.id}`)));
+  assert.deepEqual([typeof expired.expiredAt, expired.retentionRunId], ["string", run.id], "the status answer names the run that removed the file");
+  assert.equal(ok(await call(q(`/v1/lifecycle/runs/${expired.retentionRunId}`))).id, run.id);
 
   // ---- A full export queue says when to retry: an eleventh waiting export is refused (429, Retry-After 30) ----
   for (let index = 0; index < 10; index++) ok(await call(q("/v1/exports"), "POST", { kind: "customers", format: "json" }));
