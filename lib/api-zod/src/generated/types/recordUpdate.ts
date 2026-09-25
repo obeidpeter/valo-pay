@@ -8,7 +8,7 @@
 import type { RecordData } from './recordData';
 
 /**
- * The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed. A name cannot be empty, and a status, reference or customerId is bounded as a new record's is.
+ * The fields to change on a record, with the version they were made on (expectedUpdatedAt, required); omitted fields keep their values. In data, a field sent as null is removed. A name cannot be empty, and a status, reference or customerId is bounded as a new record's is.
  */
 export interface RecordUpdate {
   /** @minLength 1 */
@@ -22,5 +22,9 @@ export interface RecordUpdate {
   /** @maxLength 100 */
   customerId?: string;
   data?: RecordData;
-  expectedUpdatedAt?: string;
+  /**
+     * Required: the updatedAt of the record as the edit read it. A request without it is refused (400, naming it); a record changed since is 409. Compared as an instant.
+     * @minLength 1
+     */
+  expectedUpdatedAt: string;
 }

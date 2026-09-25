@@ -306,7 +306,7 @@ try {
   const post = (body: string, headers: Record<string, string> = {}) => fetch(`${base}/api/v1/webhooks/test`, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body });
   const undecodable = await fetch(`${base}/api/v1/customers/%E0%A4%A/history?merchantId=offline-lender`);
   assert.deepEqual([undecodable.status, await errorOf(undecodable)], [400, "The address is not valid: it holds a malformed percent-encoded character. Check the link and try again."], "a path that cannot be decoded is a 400");
-  const keyedUndecodable = await fetch(`${base}/api/v1/records/customers/%25%?merchantId=offline-lender`, { method: "PATCH", headers: { "Content-Type": "application/json", "Idempotency-Key": "edge-inputs-0001" }, body: JSON.stringify({ name: "x" }) });
+  const keyedUndecodable = await fetch(`${base}/api/v1/records/customers/%25%?merchantId=offline-lender`, { method: "PATCH", headers: { "Content-Type": "application/json", "Idempotency-Key": "edge-inputs-0001" }, body: JSON.stringify({ name: "x", expectedUpdatedAt: "2026-09-19T12:00:00.000Z" }) });
   assert.equal(keyedUndecodable.status, 400, "a keyed write to such a path is refused before its journal entry is made");
   // A compressed body is refused before it is read, 415 with Accept-Encoding: identity (RFC 9110): the parser never
   // inflates one, so two kilobytes on the wire can no longer become two megabytes to parse (the review of 4edd897,

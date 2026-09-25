@@ -163,7 +163,7 @@ export interface RecordInput {
 }
 
 /**
- * The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed. A name cannot be empty, and a status, reference or customerId is bounded as a new record's is.
+ * The fields to change on a record, with the version they were made on (expectedUpdatedAt, required); omitted fields keep their values. In data, a field sent as null is removed. A name cannot be empty, and a status, reference or customerId is bounded as a new record's is.
  */
 export interface RecordUpdate {
   /** @minLength 1 */
@@ -177,7 +177,11 @@ export interface RecordUpdate {
   /** @maxLength 100 */
   customerId?: string;
   data?: RecordData;
-  expectedUpdatedAt?: string;
+  /**
+     * Required: the updatedAt of the record as the edit read it. A request without it is refused (400, naming it); a record changed since is 409. Compared as an instant.
+     * @minLength 1
+     */
+  expectedUpdatedAt: string;
 }
 
 /**
@@ -334,7 +338,7 @@ export interface RecordList {
 }
 
 /**
- * An action to run: its name, the record it applies to, the reason for it and any data it needs.
+ * An action to run: its name, the record it applies to, the reason for it and any data it needs. For confirm_allocation and reject_allocation, data is an AllocationDecisionData: both of its fields are required.
  */
 export interface ActionInput {
   action: string;
@@ -487,7 +491,7 @@ export interface Settings {
 }
 
 /**
- * The execution settings to change; every field is optional.
+ * The execution settings to change, with the revision they were made on (expectedRevision, required); every other field is optional.
  */
 export interface SettingsInput {
   executionStart?: number;
@@ -501,7 +505,11 @@ export interface SettingsInput {
   notificationCostAlertKobo?: number;
   closeTime?: string;
   scheduledCloseEnabled?: boolean;
-  expectedRevision?: string;
+  /**
+     * Required: the revision of the settings as the edit read them (GET /v1/settings). A request without it is refused (400, naming it); settings changed since are 409.
+     * @minLength 1
+     */
+  expectedRevision: string;
 }
 
 export type ExportInputFormat = typeof ExportInputFormat[keyof typeof ExportInputFormat];
@@ -637,6 +645,19 @@ export interface CustomerHistory {
   totals: CustomerHistoryCounts;
   offsets: CustomerHistoryCounts;
   focusedRecord?: ValopayRecord;
+}
+
+/**
+ * The data confirm_allocation and reject_allocation require (POST /v1/actions, recordId the payment): the proposed allocation the decision was made on, by its id and the updatedAt it was read with. Both are required: a request without either is refused (400, naming data.proposalId or data.proposalUpdatedAt) and saves nothing. A proposal another has replaced, or that has changed since it was read, is 409; a payment with no proposal left to decide is refused (400). Other fields are ignored.
+ */
+export interface AllocationDecisionData {
+  /**
+     * The id of the proposed allocation reviewed (the allocation record, not the payment).
+     * @minLength 1
+     */
+  proposalId: string;
+  /** The proposed allocation's updatedAt as it was read: an RFC 3339 date and time with Z or an offset. It is compared as an instant, so the same instant written another way names the same version. */
+  proposalUpdatedAt: string;
 }
 
 /**

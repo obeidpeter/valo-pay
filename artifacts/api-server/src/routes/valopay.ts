@@ -29,6 +29,14 @@ const kinds=new Set<string>(recordKinds);
 const listRecordsQuery=S.ListRecordsQueryParams.extend({updatedSince:instantInputSchema.optional()});
 function safeKind(value:unknown):string { const kind=z.string().parse(value,{path:["kind"]});if(!kinds.has(kind))fail("Unknown resource.",404);return kind; }
 /**
+ * An edit's body, parsed before the lender is loaded, and the version it names,
+ * checked in the lender's transaction: a keyed repeat is answered from its
+ * receipt first, so an edit an earlier build saved without a version keeps its
+ * result, and any other edit without one is refused (400, naming it).
+ */
+const recordEdit=S.UpdateRecordBody.omit({expectedUpdatedAt:true}),recordVersion=S.UpdateRecordBody.pick({expectedUpdatedAt:true});
+const settingsEdit=S.UpdateSettingsBody.omit({expectedRevision:true}),settingsVersion=S.UpdateSettingsBody.pick({expectedRevision:true});
+/**
  * What a write's audit entry takes from its request, as the route's schema
  * parsed it: the action a route runs by name, the record its body names and
  * the reason. A route passes only fields its schema has.
@@ -124,14 +132,14 @@ router.post("/v1/records/:kind",async(req,res)=>{
  res.json(result);
 });
 router.patch("/v1/records/:kind/:id",async(req,res)=>{
- const kind=safeKind(req.params.kind),{id}=S.UpdateRecordParams.parse(req.params),body=S.UpdateRecordBody.parse(req.body);
+ const kind=safeKind(req.params.kind),{id}=S.UpdateRecordParams.parse(req.params),body=recordEdit.parse(req.body);
  const result=await withState(req,res,(state,ctx)=>{
+  // Every edit names the version it was made on (the contract requires expectedUpdatedAt), a coordinated case's included.
+  const {expectedUpdatedAt}=recordVersion.parse(req.body);
   const old=state.records.find(r=>r.kind===kind&&r.id===id);if(!old)fail("Record not found.",404);
-  if (kind === 'exceptions' && old.data.case && !body.expectedUpdatedAt) fail('Refresh this coordinated case before editing it.',409);
   if (kind === 'exceptions' && old.data.case?.assignee && old.data.case.assignee !== ctx.actor && ctx.role !== 'Admin') fail('Ask the case assignee or an administrator to make this change.',403);
-  assertRecordVersion(old,body.expectedUpdatedAt);
-  const {expectedUpdatedAt: _version,...changes}=body;
-  const input={...old,...changes,data:{...mergeData(old.data,body.data),synthetic:true} as Record<string,any>,updatedAt:ctx.now};
+  assertRecordVersion(old,expectedUpdatedAt);
+  const input={...old,...body,data:{...mergeData(old.data,body.data),synthetic:true} as Record<string,any>,updatedAt:ctx.now};
   assertNoDirectImportedCorrection(old,input);
   // An instalment's balance is rebuilt from its allocations and its status follows it.
   if(kind==="due-items")return amendDueItem(state,ctx,old as TypedRecord<"due-items">,input as TypedRecord<"due-items">);
@@ -208,10 +216,11 @@ router.get("/v1/settings",async(req,res)=>{
  res.json(await inWorkspace(req,res,async ctx=>contractAnswer(S.GetSettingsResponse,buildConsoleSettings(await loadSettingsView(ctx,merchantId),ctx.role,ctx.now,schedulerStatus())),"read"));
 });
 router.patch("/v1/settings",async(req,res)=>{
- const body=S.UpdateSettingsBody.parse(req.body);
+ const body=settingsEdit.parse(req.body);
  const result=await withState(req,res,(state,ctx)=>{
+  const {expectedRevision}=settingsVersion.parse(req.body);
   if(ctx.role!=="Admin")fail("Only an Admin can change lender settings.",403);
-  assertSettingsVersion(state.settings,body.expectedRevision);
+  assertSettingsVersion(state.settings,expectedRevision);
   const start=body.executionStart??state.settings.executionStart??executionWindow.defaultStartHour,end=body.executionEnd??state.settings.executionEnd??executionWindow.defaultEndHour;
   if(start<executionWindow.earliestHour||end>executionWindow.latestHour||start>=end)fail(`Set the collection window between ${executionWindow.earliestHour}:00 and ${executionWindow.latestHour}:00 West Africa Time, with the start before the end.`);
   if(body.minimumTicketKobo!==undefined&&body.minimumTicketKobo<ABSOLUTE_TICKET_FLOOR_KOBO)fail("The minimum debit is ₦5,000. This limit cannot be overridden.");
@@ -220,8 +229,7 @@ router.patch("/v1/settings",async(req,res)=>{
   for(const key of ["unallocatedAlertThreshold","notificationCostAlertKobo"] as const)if(body[key]!==undefined&&(!Number.isInteger(body[key])||Number(body[key])<0))fail(`${key} must be a whole number of zero or more.`);
   if(body.closeTime!==undefined&&!isCloseTime(body.closeTime))fail("closeTime must use HH:MM in West Africa Time, for example 07:00.");
   const previous={time:closeTimeOf(state.settings),enabled:state.settings.scheduledCloseEnabled!==false};
-  const {expectedRevision: _revision,...preferences}=body;
-  Object.assign(state.settings,preferences);
+  Object.assign(state.settings,body);
   // REC-01: a changed close time or a switched-on schedule starts from its next occurrence; an unchanged save leaves a pending close pending.
   rescheduleAfterSettings(state,previous,ctx.now);
   return buildConsoleSettings(state,ctx.role,ctx.now,schedulerStatus());

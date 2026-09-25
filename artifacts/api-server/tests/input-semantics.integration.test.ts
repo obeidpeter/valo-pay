@@ -97,7 +97,7 @@ try {
     field(await call(q("/v1/records/costs"), "POST", { name: "Long status", status: long, data: { category: "hosting" } }), "status");
     field(await call(q("/v1/records/customers"), "POST", { name: "Long reference", reference: long, data: { consentProvenance: "Synthetic fixture" } }), "reference");
     field(await call(q("/v1/records/exceptions"), "POST", { name: "Long customer", customerId: long, data: { type: "unallocated_payment", severity: "low" } }), "customerId");
-    field(await call(q(`/v1/records/customers/${victim.id}`), "PATCH", { reference: long }), "reference");
+    field(await call(q(`/v1/records/customers/${victim.id}`), "PATCH", { reference: long, expectedUpdatedAt: victim.updatedAt }), "reference");
     const evidence = await call(q("/v1/records/observations"), "POST", { name: "Long event", reference: "OBS-LONG-EVENT", customerId: victim.id, amountKobo: 150000, data: { source: "webhook", eventId: long } });
     assert.deepEqual([evidence.status, /eventId/.test(evidence.data.error)], [400, true], `an over-long event ID is refused, naming eventId: ${JSON.stringify(evidence.data).slice(0, 300)}`);
     // An imported row is checked the same way: invalid in a preview, and a commit saves nothing.
@@ -128,7 +128,7 @@ try {
     assert.deepEqual([approve.status, execute.status], [404, 404], "an unknown retention run is 404 to approve and to execute");
     // An over-long id is refused the same way on every route, naming the parameter.
     const overLong = "i".repeat(101);
-    for (const [method, path, body] of [["PATCH", `/v1/records/customers/${overLong}`, { name: "x" }], ["POST", `/v1/pilot/cases/${overLong}`, {}], ["GET", `/v1/customers/${overLong}/history`, undefined], ["GET", `/v1/exports/${overLong}`, undefined], ["POST", `/v1/exports/${overLong}/retry`, {}], ["GET", `/v1/close-history/${overLong}`, undefined], ["POST", `/v1/lifecycle/runs/${overLong}/execute`, { previewDigest: "a".repeat(64) }], ["POST", `/v1/sources/events/${overLong}/replay`, { expectedUpdatedAt: new Date().toISOString(), reason: "Replay an unknown event." }], ["POST", `/v1/operations/${overLong}/retry`, {}], ["POST", `/v1/operations/${overLong}/cancel`, {}]] as const) {
+    for (const [method, path, body] of [["PATCH", `/v1/records/customers/${overLong}`, { name: "x", expectedUpdatedAt: new Date().toISOString() }], ["POST", `/v1/pilot/cases/${overLong}`, {}], ["GET", `/v1/customers/${overLong}/history`, undefined], ["GET", `/v1/exports/${overLong}`, undefined], ["POST", `/v1/exports/${overLong}/retry`, {}], ["GET", `/v1/close-history/${overLong}`, undefined], ["POST", `/v1/lifecycle/runs/${overLong}/execute`, { previewDigest: "a".repeat(64) }], ["POST", `/v1/sources/events/${overLong}/replay`, { expectedUpdatedAt: new Date().toISOString(), reason: "Replay an unknown event." }], ["POST", `/v1/operations/${overLong}/retry`, {}], ["POST", `/v1/operations/${overLong}/cancel`, {}]] as const) {
       const answer = await call(q(path), method, body);
       assert.deepEqual([answer.status, (answer.data.details ?? []).map((detail: { field: string }) => detail.field)], [400, ["id"]], `${method} ${path.slice(0, 40)} refuses an over-long id naming id: ${JSON.stringify(answer.data).slice(0, 300)}`);
     }
@@ -153,8 +153,8 @@ try {
     assert.deepEqual([empty.status, (empty.data.details ?? []).map((detail: { field: string }) => detail.field)], [400, ["name"]], "an empty name is refused, naming name");
     const blank = await call(q("/v1/records/customers"), "POST", { name: "   ", data: { consentProvenance: "Synthetic fixture" } });
     assert.deepEqual([blank.status, /name cannot be empty/.test(blank.data.error)], [400, true], "a blank name is refused");
-    const renamed = await call(q(`/v1/records/customers/${named.id}`), "PATCH", { name: "" });
-    assert.equal(renamed.status, 400, "an edit cannot empty a name");
+    const renamed = await call(q(`/v1/records/customers/${named.id}`), "PATCH", { name: "", expectedUpdatedAt: named.updatedAt });
+    assert.deepEqual([renamed.status, (renamed.data.details ?? []).map((detail: { field: string }) => detail.field)], [400, ["name"]], "an edit cannot empty a name");
     checks += 7;
   }
 } finally {

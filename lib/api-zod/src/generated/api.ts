@@ -288,7 +288,7 @@ export const CreateRecordResponse = zod.object({
 
 
 /**
- * Editable kinds only; an approved, preregistered or closed version is immutable. data is merged over the stored data as a merge patch: a field left out keeps its value and a field sent as null is removed, which is how an edit clears an optional field. Send expectedUpdatedAt from the edit's original record to reject stale changes with 409. An identical successful Idempotency-Key replay returns its original result before checking the version.
+ * Editable kinds only; an approved, preregistered or closed version is immutable. data is merged over the stored data as a merge patch: a field left out keeps its value and a field sent as null is removed, which is how an edit clears an optional field. expectedUpdatedAt is required: the updatedAt of the record the edit was made on. A request without it is refused (400, naming it) and saves nothing; a record changed since is 409, leaving the edit unapplied. An identical successful Idempotency-Key replay returns its original result before checking the version.
  * @summary Update a record
  */
 export const updateRecordPathIdMax = 100;
@@ -328,6 +328,7 @@ export const updateRecordBodyCustomerIdMax = 100;
 
 
 
+
 export const UpdateRecordBody = zod.object({
   "name": zod.string().min(1).optional(),
   "status": zod.string().max(updateRecordBodyStatusMax).optional(),
@@ -335,8 +336,8 @@ export const UpdateRecordBody = zod.object({
   "amountKobo": zod.number().int().min(updateRecordBodyAmountKoboMin).optional(),
   "customerId": zod.string().max(updateRecordBodyCustomerIdMax).optional(),
   "data": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
-  "expectedUpdatedAt": zod.string().optional()
-}).describe('The fields to change on a record; omitted fields keep their values. In data, a field sent as null is removed. A name cannot be empty, and a status, reference or customerId is bounded as a new record\'s is.')
+  "expectedUpdatedAt": zod.string().min(1).describe('Required: the updatedAt of the record as the edit read it. A request without it is refused (400, naming it); a record changed since is 409. Compared as an instant.')
+}).describe('The fields to change on a record, with the version they were made on (expectedUpdatedAt, required); omitted fields keep their values. In data, a field sent as null is removed. A name cannot be empty, and a status, reference or customerId is bounded as a new record\'s is.')
 
 export const UpdateRecordResponse = zod.object({
   "id": zod.string(),
@@ -354,7 +355,7 @@ export const UpdateRecordResponse = zod.object({
 
 
 /**
- * Every action is audited, most require a reason, and the persona's role applies; the catalogue of actions is in docs/frontend-contract.md.
+ * Every action is audited, most require a reason, and the persona's role applies; the catalogue of actions is in docs/frontend-contract.md. confirm_allocation and reject_allocation require data.proposalId and data.proposalUpdatedAt (AllocationDecisionData), with recordId the payment: a request without either is refused (400, naming it) and saves nothing. A proposal another has replaced, or that has changed since it was read, is 409; a payment with no proposal left to decide is refused (400). expectedUpdatedAt is optional, except for resolve_exception on a coordinated case; sent, it is the updatedAt of the record recordId names, and a record changed since is 409.
  * @summary Run a domain action on the lender's state
  */
 export const performActionQueryMerchantIdMax = 100;
@@ -380,7 +381,7 @@ export const PerformActionBody = zod.object({
   "reason": zod.string().optional(),
   "data": zod.record(zod.string(), zod.unknown()).optional().describe('A record\'s data: the fields the kind\'s schema declares, and anything else a caller stored.'),
   "expectedUpdatedAt": zod.string().optional()
-}).describe('An action to run: its name, the record it applies to, the reason for it and any data it needs.')
+}).describe('An action to run: its name, the record it applies to, the reason for it and any data it needs. For confirm_allocation and reject_allocation, data is an AllocationDecisionData: both of its fields are required.')
 
 export const PerformActionResponse = zod.object({
   "message": zod.string(),
@@ -716,7 +717,7 @@ export const GetSettingsResponse = zod.object({
 
 
 /**
- * Admin only. Send expectedRevision from the settings originally opened; 409 leaves outdated edits unapplied. The revision covers editable preferences and is unaffected by scheduler cursor changes. An identical successful Idempotency-Key replay returns its original result before checking the version.
+ * Admin only. expectedRevision is required: the revision of the settings originally opened. A request without it is refused (400, naming it) and saves nothing; 409 leaves outdated edits unapplied. The revision covers editable preferences and is unaffected by scheduler cursor changes. An identical successful Idempotency-Key replay returns its original result before checking the version.
  * @summary Change a lender's execution settings
  */
 export const updateSettingsQueryMerchantIdMax = 100;
@@ -736,6 +737,9 @@ export const UpdateSettingsHeader = zod.object({
   "Idempotency-Key": zod.string().min(updateSettingsHeaderIdempotencyKeyMin).max(updateSettingsHeaderIdempotencyKeyMax).optional().describe('Optional: without one the write still runs, but a lost answer cannot be recovered and a repeat may apply twice. With one, the request is journaled in Operations and repeatable. 8 to 200 characters, one per unchanged intention. The same key with different input is refused (409). A key whose request was refused cannot run again: its journal entry is closed. A repeat after a lost answer returns the original result, checked before the version; once the lender\'s retention policy has removed that stored result, the repeat is refused (410). A repeat while the request is still running is answered 503 with Retry-After and operation running, and leaves it to finish. The result is kept with the request\'s journal entry, so a key names one request of the person who sent it, in its lender.')
 })
 
+
+
+
 export const UpdateSettingsBody = zod.object({
   "executionStart": zod.number().int().optional(),
   "executionEnd": zod.number().int().optional(),
@@ -748,8 +752,8 @@ export const UpdateSettingsBody = zod.object({
   "notificationCostAlertKobo": zod.number().int().optional(),
   "closeTime": zod.string().optional(),
   "scheduledCloseEnabled": zod.boolean().optional(),
-  "expectedRevision": zod.string().optional()
-}).describe('The execution settings to change; every field is optional.')
+  "expectedRevision": zod.string().min(1).describe('Required: the revision of the settings as the edit read them (GET /v1/settings). A request without it is refused (400, naming it); settings changed since are 409.')
+}).describe('The execution settings to change, with the revision they were made on (expectedRevision, required); every other field is optional.')
 
 export const UpdateSettingsResponse = zod.object({
   "merchant": zod.object({

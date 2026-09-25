@@ -38,7 +38,7 @@ function concrete(entry: { path: string; operation: Record<string, any> }): stri
   });
 }
 /** A body the journal treats as recoverable, where the route needs one to be. */
-const journalBody = (path: string) => path === "/v1/imports" ? { commit: true } : path === "/v1/actions" ? { action: "confirm_allocation" } : {};
+const journalBody = (path: string) => path === "/v1/imports" ? { commit: true } : path === "/v1/actions" ? { action: "run_reconciliation" } : {};
 
 // ---- 1. The error body and the statuses every operation can return ----
 await section("error body and statuses", () => {
@@ -205,6 +205,35 @@ try {
   checks += 2;
   });
 
+  // An edit names the version it was made on (UX-B01-GEN). The version is checked in the lender's transaction, once a
+  // keyed repeat has been answered from its stored result, so an edit with it, without it or with an empty one reaches
+  // the lender (here, the database-limit answer); the rest of the body is checked before the lender is read.
+  // allocation-decisions.integration.test.ts pins the refusal by name and the repeat. From another client address, so
+  // the request limit these checks share stays clear.
+  await section("versions edits require", async () => {
+    const elsewhere = { "X-Forwarded-For": "198.51.100.25" };
+    const edits: Array<[string, Record<string, unknown>, string, string, Record<string, unknown>, string]> = [
+      ["/v1/records/customers/a?merchantId=offline-lender", { name: "Renamed customer" }, "expectedUpdatedAt", "2026-09-19T12:00:00.000+01:00", { name: "" }, "name"],
+      ["/v1/settings?merchantId=offline-lender", { closeTime: "07:00" }, "expectedRevision", "a".repeat(64), { executionStart: "nine" }, "executionStart"],
+    ];
+    for (const [path, body, field, version, invalid, named] of edits) {
+      for (const [label, sent] of [["without", body], ["with an empty", { ...body, [field]: "" }], ["with", { ...body, [field]: version }]] as const) {
+        const answer = await send("PATCH", path, sent, elsewhere);
+        assert.equal(answer.status, 503, `PATCH ${path} ${label} ${field} reaches the lender: ${JSON.stringify(answer.data)}`);
+      }
+      const refused = await send("PATCH", path, invalid, elsewhere);
+      assert.deepEqual([refused.status, fields(refused.data)], [400, [named]], `PATCH ${path} with an invalid ${named} and no ${field} is refused before the lender is read, naming only ${named}: ${JSON.stringify(refused.data)}`);
+      documented("PATCH", path, refused);
+      checks += 5;
+    }
+    // The contract says so, and names the data an allocation decision requires.
+    assert.deepEqual(schemas.RecordUpdate.required, ["expectedUpdatedAt"], "a record edit requires expectedUpdatedAt");
+    assert.deepEqual(schemas.SettingsInput.required, ["expectedRevision"], "a settings edit requires expectedRevision");
+    assert.deepEqual(schemas.AllocationDecisionData?.required, ["proposalId", "proposalUpdatedAt"], "an allocation decision's data requires the proposal and its version");
+    assert.match(spec.paths["/v1/actions"].post.description, /confirm_allocation and reject_allocation require data\.proposalId and data\.proposalUpdatedAt/, "the action's description names the pair");
+    checks += 4;
+  });
+
   // The service's own refusals carry the documented error body.
   await section("documented refusals", async () => {
   assert.ok(schemas.ErrorBody, "the contract describes the error body");
@@ -238,5 +267,5 @@ if (failures.length) {
   process.exit(1);
 }
 
-console.log(`API contract checks passed (${checks} checks): the error body and statuses, the Idempotency-Key each write takes and the 410 of a repeat after retention, a missing merchantId, unreadable bodies on writes without one, offset date-times and the documented refusals.`);
+console.log(`API contract checks passed (${checks} checks): the error body and statuses, the Idempotency-Key each write takes and the 410 of a repeat after retention, a missing merchantId, unreadable bodies on writes without one, offset date-times, the versions edits require and the documented refusals.`);
 process.exit(0);

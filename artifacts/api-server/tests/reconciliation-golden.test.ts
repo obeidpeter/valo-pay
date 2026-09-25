@@ -1,6 +1,7 @@
 // Golden tests for payment observations, canonical Payments, the rule ladder,
 // exceptions and the daily close against TRD v1.1 sections 5.7, 5.8, 5.9, 7 and 10.4.
 import assert from "node:assert/strict";
+import { ZodError } from "zod";
 import { DAY, HOUR, addAttempt, addNotice, addObservation, ctxAt, liveFixture, outstandingOf, wat } from "./helpers.js";
 import { allocatePayment, applyConfirmedAllocation, intendedDueItem, reconcile } from "../src/domain/reconciliation.js";
 import { executeAction } from "../src/domain/actions.js";
@@ -414,7 +415,6 @@ function assertOnePayment(state: DomainState, due: ValopayRecord, label: string)
     const before = structuredClone(state);
     assert.throws(() => executeAction(state, ctx, { ...input, data: { ...input.data, proposalId: 'another-proposal' } }), (error: any) => error.status === 409);
     assert.deepEqual(state, before, 'A changed proposal is refused before any record is changed.');
-    assert.throws(() => executeAction(state, ctx, { ...input, data: { proposalId: proposal.id } }), (error: any) => error.status === 409);
     assert.throws(() => executeAction(state, ctx, { ...input, data: { ...input.data, proposalUpdatedAt: '2027-01-01T00:00:00Z' } }), (error: any) => error.status === 409);
     executeAction(state, ctx, input);
     assert.equal(proposal.status, action === 'confirm_allocation' ? 'confirmed' : 'superseded');
@@ -437,6 +437,32 @@ function assertOnePayment(state: DomainState, due: ValopayRecord, label: string)
   assert.throws(() => executeAction(state, ctx, { action: 'confirm_allocation', recordId: payment.id, reason: 'Review before another receipt arrived.', data: { proposalId: proposal.id, proposalUpdatedAt: proposal.updatedAt } }), (error: any) => error.status === 409 && /balance now outstanding/.test(error.message));
   assert.deepEqual(state, before, 'A reduced instalment ceiling blocks the allocation without partial changes.');
   checks += 2;
+}
+
+// UX-B01: a decision always names the proposal it was made on. Without proposalId or proposalUpdatedAt it is
+// refused, naming what is missing, before anything is read or changed; the version is compared as an instant.
+{
+  const named = (...fields: string[]) => (error: unknown) => error instanceof ZodError && JSON.stringify(error.issues.map((issue) => issue.path.join('.'))) === JSON.stringify(fields);
+  for (const action of ['confirm_allocation', 'reject_allocation']) {
+    const { state, due } = liveFixture({ withFailure: false, merchantId: `proposal-pair-${action}` });
+    const payment = makeRecord(state, 'payments', { amountKobo: GROSS, customerId: due.customerId, data: { allocatedKobo: 0 } });
+    const ctx = finance(wat('2027-07-01T11:00:00'));
+    const proposal = allocatePayment(state, ctx, payment, due, GROSS, 'R5', 'probable', false);
+    const input = { action, recordId: payment.id, reason: 'Checked the displayed proposal.' };
+    const before = structuredClone(state);
+    assert.throws(() => executeAction(state, ctx, input), named('data.proposalId', 'data.proposalUpdatedAt'), 'a decision without the pair is refused, naming both fields');
+    assert.throws(() => executeAction(state, ctx, { ...input, data: {} }), named('data.proposalId', 'data.proposalUpdatedAt'));
+    assert.throws(() => executeAction(state, ctx, { ...input, data: { proposalId: proposal.id } }), named('data.proposalUpdatedAt'), 'a missing version is named');
+    assert.throws(() => executeAction(state, ctx, { ...input, data: { proposalUpdatedAt: proposal.updatedAt } }), named('data.proposalId'), 'a missing proposal is named');
+    assert.throws(() => executeAction(state, ctx, { ...input, data: { proposalId: '', proposalUpdatedAt: proposal.updatedAt } }), named('data.proposalId'), 'an empty proposal is missing');
+    assert.throws(() => executeAction(state, ctx, { ...input, data: { proposalId: proposal.id, proposalUpdatedAt: 'yesterday' } }), named('data.proposalUpdatedAt'), 'a version that is not a date and time is named');
+    assert.deepEqual(state, before, 'nothing is changed by a refused decision');
+    // The same instant written with an offset is the version it names.
+    const offset = new Date(Date.parse(proposal.updatedAt) + 3_600_000).toISOString().replace('Z', '+01:00');
+    executeAction(state, ctx, { ...input, data: { proposalId: proposal.id, proposalUpdatedAt: offset } });
+    assert.equal(proposal.status, action === 'confirm_allocation' ? 'confirmed' : 'superseded', 'the same instant written with an offset names the version');
+    checks += 8;
+  }
 }
 
 for (const status of ['cancelled', 'closed', 'in_dispute'] as const) {
@@ -533,4 +559,4 @@ for (const rule of ['R4-unique', 'R4-ambiguous', 'R5'] as const) {
   checks += 6;
 }
 
-console.log(`Reconciliation golden tests passed (${checks} checks): three-source replay in six orders, duplicate evidence, allocation ceiling, fee schedule, settlement batches that follow their lines and statement credit, hand-entered batches, batch fields only reconciliation records, exception catalogue, final attempts, reversal vocabulary, precision audit, mandate operations, hand-back, stale proposal protection and safe automatic batch matching.`);
+console.log(`Reconciliation golden tests passed (${checks} checks): three-source replay in six orders, duplicate evidence, allocation ceiling, fee schedule, settlement batches that follow their lines and statement credit, hand-entered batches, batch fields only reconciliation records, exception catalogue, final attempts, reversal vocabulary, precision audit, mandate operations, hand-back, stale proposal protection, decisions that must name their proposal and safe automatic batch matching.`);

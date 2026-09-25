@@ -93,6 +93,18 @@ async function action(context, name, recordId, data, expected = 200) {
   }, expected);
 }
 
+/** A record as its lender holds it now: an edit probe names its current version, so only the rule under test refuses it. */
+async function current(context, kind, id) {
+  const [record] = (await expectStatus(context, `records/${kind}?id=${encodeURIComponent(id)}`)).items;
+  assert(record, `${kind} ${id} is listed`);
+  return record;
+}
+
+/** The settings revision a lender's own settings page reads. */
+async function revision(context) {
+  return (await expectStatus(context, "settings")).revision;
+}
+
 async function createRecord(context, kind, body, { key, merchantId = context.merchantId, expected = 200 } = {}) {
   return expectStatus(context, `records/${kind}`, { method: "POST", body, key, merchantId }, expected);
 }
@@ -154,7 +166,8 @@ const safeCustomer = {
 };
 await expectFailure(contextB, "records/customers", { method: "POST", body: safeCustomer, merchantId: contextA.merchantId });
 await expectFailure(contextB, "actions", { method: "POST", body: { action: "run_reconciliation" }, merchantId: contextA.merchantId });
-await expectFailure(contextB, "settings", { method: "PATCH", body: { executionStart: 7 }, merchantId: contextA.merchantId });
+// With a well-formed revision (its own lender's), so only the lender boundary refuses it.
+await expectFailure(contextB, "settings", { method: "PATCH", body: { executionStart: 7, expectedRevision: await revision(contextB) }, merchantId: contextA.merchantId });
 await expectFailure(contextB, "imports", {
   method: "POST",
   body: { kind: "customers", csv: "name,consentProvenance\nForeign,Synthetic", syntheticOnly: true, commit: false },
@@ -267,8 +280,8 @@ assert.equal((await list(contextA, "audit")).length, invalidLinkBefore, "Invalid
 await action(contextA, "set_role", undefined, { role: "Read-only" });
 const readOnlyCount = (await list(contextA, "customers")).length;
 await expectFailure(contextA, "records/customers", { method: "POST", body: { ...safeCustomer, reference: "SEC-READONLY-CREATE" } });
-await expectFailure(contextA, `records/customers/${customerA.id}`, { method: "PATCH", body: { name: "Read-only mutation" } });
-await expectFailure(contextA, "settings", { method: "PATCH", body: { executionStart: 7 } });
+await expectFailure(contextA, `records/customers/${customerA.id}`, { method: "PATCH", body: { name: "Read-only mutation", expectedUpdatedAt: (await current(contextA, "customers", customerA.id)).updatedAt } });
+await expectFailure(contextA, "settings", { method: "PATCH", body: { executionStart: 7, expectedRevision: await revision(contextA) } });
 await expectFailure(contextA, "actions", {
   method: "POST",
   body: { action: "manual_allocate", recordId: "00000000-0000-0000-0000-000000000000", reason: "Read-only mutation", data: { dueItemId: dueA.id, amountKobo: 500000 } },
@@ -393,7 +406,7 @@ await action(contextA, "submit_policy", policyDraft.id);
 await action(contextA, "set_role", undefined, { role: "Compliance reviewer" });
 await action(contextA, "approve_policy", policyDraft.id);
 await action(contextA, "set_role", undefined, { role: "Admin" });
-await expectFailure(contextA, `records/policies/${policyDraft.id}`, { method: "PATCH", body: { data: { spacingHours: 72 } } });
+await expectFailure(contextA, `records/policies/${policyDraft.id}`, { method: "PATCH", body: { data: { spacingHours: 72 }, expectedUpdatedAt: (await current(contextA, "policies", policyDraft.id)).updatedAt } });
 await expectFailure(contextA, "actions", { method: "POST", body: { action: "submit_policy", recordId: policyDraft.id, reason: "Approved policy is frozen" } });
 await expectFailure(contextA, "actions", { method: "POST", body: { action: "reject_policy", recordId: policyDraft.id, reason: "Approved policy is frozen" } });
 
@@ -405,7 +418,7 @@ await action(contextA, "submit_template", templateDraft.id);
 await action(contextA, "set_role", undefined, { role: "Compliance reviewer" });
 await action(contextA, "approve_template", templateDraft.id);
 await action(contextA, "set_role", undefined, { role: "Admin" });
-await expectFailure(contextA, `records/templates/${templateDraft.id}`, { method: "PATCH", body: { data: { text: "changed {{merchant}} {{amount}} {{date}} {{contact}}" } } });
+await expectFailure(contextA, `records/templates/${templateDraft.id}`, { method: "PATCH", body: { data: { text: "changed {{merchant}} {{amount}} {{date}} {{contact}}" }, expectedUpdatedAt: (await current(contextA, "templates", templateDraft.id)).updatedAt } });
 await expectFailure(contextA, "actions", { method: "POST", body: { action: "submit_template", recordId: templateDraft.id, reason: "Approved template is frozen" } });
 
 const frozenExperiment = await createRecord(contextA, "experiments", {
@@ -421,18 +434,18 @@ const frozenExperiment = await createRecord(contextA, "experiments", {
   },
 });
 await action(contextA, "preregister_experiment", frozenExperiment.id);
-await expectFailure(contextA, `records/experiments/${frozenExperiment.id}`, { method: "PATCH", body: { data: { minPerArm: 11 } } });
+await expectFailure(contextA, `records/experiments/${frozenExperiment.id}`, { method: "PATCH", body: { data: { minPerArm: 11 }, expectedUpdatedAt: (await current(contextA, "experiments", frozenExperiment.id)).updatedAt } });
 await expectFailure(contextA, "actions", { method: "POST", body: { action: "preregister_experiment", recordId: frozenExperiment.id, reason: "Frozen experiment is immutable" } });
 // Readiness evidence-register drafts are editable; audit/review/close/export
 // snapshots, rather than every resource called evidence, are immutable.
 const auditSnapshot = (await list(contextA, "audit"))[0];
-await expectFailure(contextA, `records/audit/${auditSnapshot.id}`, { method: "PATCH", body: { name: "Rewritten audit" } });
+await expectFailure(contextA, `records/audit/${auditSnapshot.id}`, { method: "PATCH", body: { name: "Rewritten audit", expectedUpdatedAt: auditSnapshot.updatedAt } });
 await expectFailure(contextA, `records/audit/${auditSnapshot.id}`, { method: "DELETE" });
 const reviewSnapshot = await createRecord(contextA, "reviews", { name: "Synthetic security review", data: { synthetic: true } });
-await expectFailure(contextA, `records/reviews/${reviewSnapshot.id}`, { method: "PATCH", body: { name: "Rewritten review" } });
+await expectFailure(contextA, `records/reviews/${reviewSnapshot.id}`, { method: "PATCH", body: { name: "Rewritten review", expectedUpdatedAt: reviewSnapshot.updatedAt } });
 await action(contextA, "daily_close");
 const closeSnapshot = (await list(contextA, "closes"))[0];
-await expectFailure(contextA, `records/closes/${closeSnapshot.id}`, { method: "PATCH", body: { name: "Rewritten close" } });
+await expectFailure(contextA, `records/closes/${closeSnapshot.id}`, { method: "PATCH", body: { name: "Rewritten close", expectedUpdatedAt: closeSnapshot.updatedAt } });
 
 // A fresh export is downloadable only to its lender and its checksum is the stored checksum.
 const exportResult = await expectStatus(contextA, "exports", {
@@ -445,7 +458,7 @@ assert.equal(download.bytes.subarray(0, 4).toString(), "%PDF");
 assert.equal(createHash("sha256").update(download.bytes).digest("hex"), exportResult.checksum);
 const exportRecord = (await list(contextA, "exports")).find((item) => item.id === exportResult.id);
 assert(exportRecord);
-await expectFailure(contextA, `records/exports/${exportResult.id}`, { method: "PATCH", body: { name: "Rewritten export" } });
+await expectFailure(contextA, `records/exports/${exportResult.id}`, { method: "PATCH", body: { name: "Rewritten export", expectedUpdatedAt: exportRecord.updatedAt } });
 assert.equal(exportRecord.data.objectName, undefined, "Collection APIs must not expose object storage paths.");
 assert.equal(exportRecord.data.bucket, undefined, "Collection APIs must not expose object storage buckets.");
 await expectFailure(contextB, `exports/${exportResult.id}/download`, { binary: true, merchantId: contextA.merchantId });

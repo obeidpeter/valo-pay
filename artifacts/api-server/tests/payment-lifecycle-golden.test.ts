@@ -53,13 +53,15 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
 {
   const { state, due } = liveFixture({ withFailure: false, merchantId: "returned-reversal" });
   const { payment, proposal } = proposedTransfer(state, due, "TRF-REV");
+  // What Finance's screen shows of the proposal before the reversal withdraws it.
+  const seen = { proposalId: proposal.id, proposalUpdatedAt: proposal.updatedAt };
   equal([payment.status, proposal.status, proposal.data.rule], ["proposed", "proposed", "R5"], "R5 proposes the transfer for Finance");
   addObservation(state, { reference: "TRF-REV", amountKobo: GROSS, source: "webhook", customerId: due.customerId, eventId: "rev", occurredAt: wat("2027-07-02T09:00:00"), reversed: true });
   reconcile(state, finance(wat("2027-07-02T09:05:00")));
   equal(payment.status, "returned", "a reversed payment is returned, not unallocated");
   equal([proposal.status, proposal.data.supersededReason], ["superseded", "Payment reversed by the provider."], "its pending proposal is withdrawn with the reason");
   equal(payment.data.proposedDueItemId, undefined, "no proposal is shown on the payment");
-  assert.throws(() => executeAction(state, finance(wat("2027-07-02T10:00:00")), { action: "confirm_allocation", recordId: payment.id, reason: "Stale screen" }), /no proposed allocation/); checks += 1;
+  assert.throws(() => executeAction(state, finance(wat("2027-07-02T10:00:00")), { action: "confirm_allocation", recordId: payment.id, reason: "Stale screen", data: seen }), /no proposed allocation/); checks += 1;
   refused(() => executeAction(state, finance(wat("2027-07-02T10:00:00")), { action: "manual_allocate", recordId: payment.id, reason: "By hand", data: { dueItemId: due.id, amountKobo: GROSS } }), /reversed by the provider\. Its money went back/, 409, "a reversed payment cannot be allocated by hand");
   refused(() => executeAction(state, finance(wat("2027-07-02T10:00:00")), { action: "record_refund", recordId: payment.id, reason: "Refunded", data: { reference: "RF-REV" } }), /already went back/, 409, "a reversed payment cannot also be refunded");
   equal(positionFor(state, due.customerId).unallocatedKobo, 0, "reversed money is not customer credit");
@@ -149,12 +151,13 @@ function secondInstalment(state: DomainState, due: TypedRecord<"due-items">, amo
   const { state, due } = liveFixture({ withFailure: false, merchantId: "stale-proposal" });
   const second = secondInstalment(state, due);
   const { payment, proposal } = proposedTransfer(state, due, "TRF-STALE");
+  const seen = { proposalId: proposal.id, proposalUpdatedAt: proposal.updatedAt };
   executeAction(state, finance(wat("2027-07-01T11:00:00")), { action: "manual_allocate", recordId: payment.id, reason: "Customer asked for instalment 6", data: { dueItemId: second.id, amountKobo: GROSS } });
   equal([payment.status, payment.data.allocatedKobo], ["allocated", GROSS], "the payment is fully applied to the instalment Finance chose");
   equal([proposal.status, payment.data.proposedDueItemId], ["superseded", undefined], "the proposal that no longer fits is withdrawn");
   refused(() => executeAction(state, finance(wat("2027-07-01T11:02:00")), { action: "record_refund", recordId: payment.id, reason: "Returned", data: { reference: "RF-STALE" } }), /nothing unapplied to refund/, 409, "a payment whose money is all applied has nothing a refund recorded here can return");
   equal([payment.status, payment.data.refundStatus, payment.data.refundedKobo], ["allocated", "none", undefined], "and the refused refund records nothing");
-  assert.throws(() => executeAction(state, finance(wat("2027-07-01T11:05:00")), { action: "reject_allocation", recordId: payment.id, reason: "Old screen" }), /no proposed allocation/); checks += 1;
+  assert.throws(() => executeAction(state, finance(wat("2027-07-01T11:05:00")), { action: "reject_allocation", recordId: payment.id, reason: "Old screen", data: seen }), /no proposed allocation/); checks += 1;
   for (const day of ["2027-07-02", "2027-07-03"]) reconcile(state, finance(wat(`${day}T07:00:00`)));
   equal([payment.status, allocationsFor(state, payment).filter((item) => item.status === "confirmed").length], ["allocated", 1], "later closes leave the applied payment alone");
   invariant(state);
