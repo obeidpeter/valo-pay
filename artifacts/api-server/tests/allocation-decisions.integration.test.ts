@@ -7,7 +7,9 @@
 // (rejected, then replaced when reconciliation ran again) is 409, and one
 // without the pair is refused, naming what it lacks: neither saves anything,
 // and each closes its journal entry as cancelled. An edit without the version
-// it was made on (UX-B01-GEN) is refused in the same way.
+// it was made on (UX-B01-GEN) is refused in the same way. Both are refused once
+// a keyed repeat has been answered and the lender is loaded, so a repeat of an
+// edit an earlier build saved without its version gets its stored result.
 import assert from "node:assert/strict";
 import express from "express";
 import { once } from "node:events";
@@ -22,7 +24,10 @@ process.env.CLERK_SECRET_KEY ??= "sk_test_placeholder";
 const { pool } = await import("@workspace/db");
 const { default: router } = await import("../src/routes/index");
 const { errorHandler } = await import("../src/lib/error-handler");
-const { lenderConnections } = await import("../src/lib/valopay-store");
+const store = await import("../src/lib/valopay-store");
+const { requestFingerprint } = await import("../src/lib/digests");
+const { buildConsoleSettings } = await import("../src/lib/valopay-close-views");
+const { schedulerStatus } = await import("../src/lib/close-scheduler");
 
 const quiet = { info() {}, warn() {}, error() {} };
 const app = express();
@@ -41,12 +46,15 @@ const base = `http://127.0.0.1:${(server.address() as any).port}/api`;
 const cookie = `valopay_sandbox=${randomBytes(32).toString("hex")}`;
 type Answer = { status: number; data: any; operation: string | null };
 /** A request as the console sends a write: with its own Idempotency-Key, so the journal records it. */
-async function call(path: string, method = "GET", body?: unknown): Promise<Answer> {
-  const response = await fetch(base + path, { method, headers: { "Content-Type": "application/json", Cookie: cookie, ...(method === "GET" ? {} : { "Idempotency-Key": randomUUID() }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+async function call(path: string, method = "GET", body?: unknown, key = method === "GET" ? undefined : randomUUID()): Promise<Answer> {
+  const response = await fetch(base + path, { method, headers: { "Content-Type": "application/json", Cookie: cookie, ...(key ? { "Idempotency-Key": key } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   return { status: response.status, data: await response.json(), operation: response.headers.get("X-Valopay-Operation") };
 }
 const ok = (result: Answer) => { assert.equal(result.status, 200, JSON.stringify(result.data).slice(0, 800)); return result.data; };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** A request as a route makes it, for work the test runs in the store directly. */
+const sandboxRequest = (merchantId: string) => ({ headers: { cookie }, query: { merchantId }, secure: false, log: quiet, auth: Object.assign(() => ({ userId: null }), { [Symbol.for("@clerk/express.auth")]: true }) }) as any;
+const sandboxResponse = { cookie() {} } as any;
 let workspaceId: string | undefined;
 let checks = 0;
 try {
@@ -108,7 +116,7 @@ try {
       await holder.query("BEGIN");
       await holder.query("SELECT 1 FROM valopay_merchants WHERE id=$1 FOR UPDATE", [lender]);
       const answers = Promise.all(send());
-      const expected = Math.min(2, lenderConnections);
+      const expected = Math.min(2, store.lenderConnections);
       for (let attempt = 0; attempt < 150 && await lockWaiters() < expected; attempt++) await sleep(20);
       assert.ok(await lockWaiters() >= expected, "both decisions reached the lender before either ran");
       await sleep(100);
@@ -161,6 +169,26 @@ try {
       await refusedUnsaved(refused, before, `a decision without ${missing.join(" and ")}`);
       checks += 1;
     }
+    // The pair is checked once the lender is loaded, before the payment or its proposal is read: a decision without it
+    // waits behind another writer to the lender, as any decision does, and is then refused by name.
+    {
+      const before = await saved(), holder = await pool.connect();
+      let refused: Answer | undefined;
+      try {
+        await holder.query("BEGIN");
+        await holder.query("SELECT 1 FROM valopay_merchants WHERE id=$1 FOR UPDATE", [lender]);
+        const waiting = decide("reject_allocation", payment.id).then((answer) => { refused = answer; return answer; });
+        const lockWaiters = async () => Number((await pool.query("SELECT count(*) AS n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'")).rows[0].n);
+        for (let attempt = 0; attempt < 150 && await lockWaiters() < 1; attempt++) await sleep(20);
+        await sleep(100);
+        assert.deepEqual([await lockWaiters() > 0, refused?.status], [true, undefined], `a decision without the pair waits for the lender: ${JSON.stringify(refused?.data)}`);
+        await holder.query("COMMIT");
+        await waiting;
+      } finally { await holder.query("ROLLBACK").catch(() => undefined); holder.release(); }
+      assert.deepEqual([refused!.status, fields(refused!)], [400, ["data.proposalId", "data.proposalUpdatedAt"]], `then it is refused by name: ${JSON.stringify(refused!.data)}`);
+      await refusedUnsaved(refused!, before, "a decision without the pair sent while the lender was busy");
+      checks += 2;
+    }
     // The current proposal, its version written as the same instant with an offset, is confirmed once.
     const offset = new Date(Date.parse(second.updatedAt) + 3_600_000).toISOString().replace("Z", "+01:00");
     const confirmed = ok(await decide("confirm_allocation", payment.id, { proposalId: second.id, proposalUpdatedAt: offset }));
@@ -168,18 +196,60 @@ try {
     checks += 2;
   }
 
-  // ---- 3. An edit without the version it was made on is refused by name, and saves nothing ----
+  // ---- 3. An edit without the version it was made on, or with an empty one, is refused by name, and saves nothing ----
   {
     const customer = ok(await call(q("/v1/records/customers"), "POST", { name: "Versioned edit customer", reference: `DECISION-EDIT-${run}`, data: { consentProvenance: "Synthetic fixture" } }));
     const settings = ok(await call(q("/v1/settings")));
     const fields = (answer: Answer) => (answer.data.details ?? []).map((detail: { field: string }) => detail.field);
     for (const [path, body, field, version] of [[`/v1/records/customers/${customer.id}`, { name: "Renamed without a version" }, "expectedUpdatedAt", customer.updatedAt], ["/v1/settings", { contactRoute: "Changed without a revision" }, "expectedRevision", settings.revision]] as const) {
-      const before = await saved();
-      const refused = await call(q(path), "PATCH", body);
-      assert.deepEqual([refused.status, fields(refused)], [400, [field]], `PATCH ${path} without ${field}: ${JSON.stringify(refused.data)}`);
-      await refusedUnsaved(refused, before, `PATCH ${path} without ${field}`);
+      for (const [label, sent] of [["without", body], ["with an empty", { ...body, [field]: "" }]] as const) {
+        const before = await saved();
+        const refused = await call(q(path), "PATCH", sent);
+        assert.deepEqual([refused.status, fields(refused)], [400, [field]], `PATCH ${path} ${label} ${field}: ${JSON.stringify(refused.data)}`);
+        await refusedUnsaved(refused, before, `PATCH ${path} ${label} ${field}`);
+        checks += 1;
+      }
       ok(await call(q(path), "PATCH", { ...body, [field]: version }));
-      checks += 2;
+      checks += 1;
+    }
+  }
+
+  // ---- 4. An edit an earlier build saved without its version: a keyed repeat, or a retry from Operations, gets its result ----
+  {
+    /**
+     * A keyed PATCH as an earlier build, which did not require the version, ran it: journaled, applied with no version
+     * check, audited, and its answer kept for its repeats. Resolves to its journal entry and its answer.
+     */
+    const savedByEarlierBuild = async (path: string, body: Record<string, unknown>, key: string, objectId: string, apply: (state: any, ctx: any) => unknown) => {
+      const earlier = sandboxRequest(lender);
+      const { id } = await store.inWorkspace(earlier, sandboxResponse, (ctx) => store.prepareOperation(ctx, lender, key, { method: "PATCH", path, body }));
+      store.bindOperation(earlier, id, lender, true);
+      const answer = await store.inWorkspace(earlier, sandboxResponse, async (ctx) => {
+        const state = await store.loadState(ctx, lender, "update");
+        const result = apply(state, ctx), changes = store.settleChanges(ctx, state), stored = JSON.parse(JSON.stringify(result));
+        store.appendAudit(state, ctx, `patch.${path.split("/").slice(2).join(".")}`, objectId, "Synthetic workspace operation", changes);
+        await store.saveState(ctx, state);
+        await store.saveIdempotency(ctx, store.receiptOf(earlier, lender, key, "workspace").id, requestFingerprint({ path, method: "PATCH", body, actor: ctx.actor }), stored);
+        return stored;
+      });
+      return { id, answer };
+    };
+    const customer = ok(await call(q("/v1/records/customers"), "POST", { name: "Edited by an earlier build", reference: `DECISION-EARLIER-${run}`, data: { consentProvenance: "Synthetic fixture" } }));
+    const edits: Array<[string, Record<string, unknown>, string, (state: any, ctx: any) => unknown]> = [
+      [`/v1/records/customers/${customer.id}`, { name: "Renamed by an earlier build" }, customer.id, (state) => Object.assign(state.records.find((item: any) => item.id === customer.id), { name: "Renamed by an earlier build" })],
+      ["/v1/settings", { contactRoute: "Changed by an earlier build" }, "workspace", (state, ctx) => { Object.assign(state.settings, { contactRoute: "Changed by an earlier build" }); return buildConsoleSettings(state, ctx.role, ctx.now, schedulerStatus()); }],
+    ];
+    for (const [path, body, objectId, apply] of edits) {
+      const key = randomUUID(), { id, answer } = await savedByEarlierBuild(path, body, key, objectId, apply);
+      const before = await saved();
+      for (const [label, repeat] of [["a repeat with its key", () => call(q(path), "PATCH", body, key)], ["a retry from Operations", () => call(q(`/v1/operations/${id}/retry`), "POST")]] as const) {
+        const answered = await repeat();
+        assert.equal(answered.status, 200, `${label} of PATCH ${path} saved without a version gets its stored result: ${JSON.stringify(answered.data)}`);
+        assert.deepEqual([answered.data, answered.operation], [answer, id], `${label} of PATCH ${path}: the stored result, under its journal entry`);
+        assert.equal(await saved(), before, `${label} of PATCH ${path} saves nothing again`);
+        assert.equal(await journal(answered), "completed", `${label} of PATCH ${path}: its journal entry stays completed`);
+        checks += 4;
+      }
     }
   }
 } finally {
@@ -192,4 +262,4 @@ try {
   }
   await pool.end();
 }
-console.log(`Allocation decision checks passed (${checks} checks): two decisions for one payment sent together apply exactly one, and the payment once; a decision quoting a superseded proposal is 409 and one without proposalId and proposalUpdatedAt is refused by name, both saving nothing and cancelling their journal entries; the version is compared as an instant; and an edit without its version is refused by name.`);
+console.log(`Allocation decision checks passed (${checks} checks): two decisions for one payment sent together apply exactly one, and the payment once; a decision quoting a superseded proposal is 409 and one without proposalId and proposalUpdatedAt is refused by name, both saving nothing and cancelling their journal entries; the version is compared as an instant, and the pair is checked once the lender is loaded; an edit without its version, or with an empty one, is refused by name, and a keyed repeat of one an earlier build saved without it gets its stored result.`);

@@ -128,7 +128,8 @@ export const messageSchema = z.object({ message: z.string() }).strict();
  * The data confirm_allocation and reject_allocation require (POST /v1/actions,
  * whose recordId names the payment): the proposed match the decision was made
  * on, by its id and the version it was read with. A request without either is
- * refused, naming it, before anything is read or saved.
+ * refused, naming it, once the lender is loaded and before the payment or its
+ * proposal is read, so nothing is saved.
  */
 export const allocationDecisionDataSchema = z.object({
   proposalId: z.string().min(1, "Send the id of the proposed match you reviewed.").describe("The id of the proposed allocation reviewed (the allocation record, not the payment)."),

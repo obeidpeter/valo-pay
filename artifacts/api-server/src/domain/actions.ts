@@ -381,7 +381,7 @@ function runAction(state: DomainState, ctx: Context, input: ActionInput): Action
   }
   if (["confirm_allocation", "reject_allocation", "manual_allocate"].includes(input.action)) {
     assertActionRole(ctx, ["Admin", "Finance"]);
-    // A decision names the proposal it was made on: without the pair it is refused, naming what it lacks, before anything is read.
+    // A decision names the proposal it was made on: without the pair it is refused, naming what it lacks, before the payment is read.
     const reviewed = input.action === "manual_allocate" ? undefined : allocationDecisionDataSchema.parse(data, { path: ["data"] });
     const payment = findRecord(state, String(input.recordId), "payments");
     // Evidence that named no payer is applied only here, and applying it identifies the payer in the same action.

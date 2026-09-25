@@ -195,24 +195,25 @@ try {
   checks += 2;
   });
 
-  // An edit names the version it was made on (UX-B01-GEN): without it the edit is refused, naming the field, before
-  // the lender is read; with it the edit reaches the lender (here, the database-limit answer). From another client
-  // address, so the request limit these checks share stays clear.
+  // An edit names the version it was made on (UX-B01-GEN). The version is checked in the lender's transaction, once a
+  // keyed repeat has been answered from its stored result, so an edit with it, without it or with an empty one reaches
+  // the lender (here, the database-limit answer); the rest of the body is checked before the lender is read.
+  // allocation-decisions.integration.test.ts pins the refusal by name and the repeat. From another client address, so
+  // the request limit these checks share stays clear.
   await section("versions edits require", async () => {
     const elsewhere = { "X-Forwarded-For": "198.51.100.25" };
-    const edits: Array<[string, Record<string, unknown>, string, string]> = [
-      ["/v1/records/customers/a?merchantId=offline-lender", { name: "Renamed customer" }, "expectedUpdatedAt", "2026-09-19T12:00:00.000+01:00"],
-      ["/v1/settings?merchantId=offline-lender", { closeTime: "07:00" }, "expectedRevision", "a".repeat(64)],
+    const edits: Array<[string, Record<string, unknown>, string, string, Record<string, unknown>, string]> = [
+      ["/v1/records/customers/a?merchantId=offline-lender", { name: "Renamed customer" }, "expectedUpdatedAt", "2026-09-19T12:00:00.000+01:00", { name: "" }, "name"],
+      ["/v1/settings?merchantId=offline-lender", { closeTime: "07:00" }, "expectedRevision", "a".repeat(64), { executionStart: "nine" }, "executionStart"],
     ];
-    for (const [path, body, field, version] of edits) {
-      const missing = await send("PATCH", path, body, elsewhere);
-      assert.equal(missing.status, 400, `PATCH ${path} without ${field}: ${JSON.stringify(missing.data)}`);
-      assert.deepEqual(fields(missing.data), [field], `PATCH ${path} names ${field}`);
-      documented("PATCH", path, missing);
-      const empty = await send("PATCH", path, { ...body, [field]: "" }, elsewhere);
-      assert.deepEqual([empty.status, fields(empty.data)], [400, [field]], `PATCH ${path} with an empty ${field}: ${JSON.stringify(empty.data)}`);
-      const versioned = await send("PATCH", path, { ...body, [field]: version }, elsewhere);
-      assert.equal(versioned.status, 503, `PATCH ${path} with ${field} reaches the lender: ${JSON.stringify(versioned.data)}`);
+    for (const [path, body, field, version, invalid, named] of edits) {
+      for (const [label, sent] of [["without", body], ["with an empty", { ...body, [field]: "" }], ["with", { ...body, [field]: version }]] as const) {
+        const answer = await send("PATCH", path, sent, elsewhere);
+        assert.equal(answer.status, 503, `PATCH ${path} ${label} ${field} reaches the lender: ${JSON.stringify(answer.data)}`);
+      }
+      const refused = await send("PATCH", path, invalid, elsewhere);
+      assert.deepEqual([refused.status, fields(refused.data)], [400, [named]], `PATCH ${path} with an invalid ${named} and no ${field} is refused before the lender is read, naming only ${named}: ${JSON.stringify(refused.data)}`);
+      documented("PATCH", path, refused);
       checks += 5;
     }
     // The contract says so, and names the data an allocation decision requires.
