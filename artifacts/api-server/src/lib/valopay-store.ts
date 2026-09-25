@@ -186,9 +186,11 @@ const shortField = (field: string) => `CASE WHEN jsonb_typeof(q#>'{body,${field}
  * was given, the saved record's ID and kind, and the facts its summary is made from (summariseRequest): the request's
  * method and path and a few short body fields, read only from a request stored as JSON, never a sealed or purged one.
  * The body itself is never selected, so a lender whose entries hold large bodies costs one page of them, opened in
- * the database, and the API parses none. The record the body names is looked up for its kind alone. */
+ * the database, and the API parses none. The record the body names, and the one the answer names, are looked up for
+ * their kind alone. */
 const OPERATION_LIST = `SELECT o.id,o.label,o.actor,o.role,o.status,o.created_at,o.updated_at,o.receipt->'rejected' AS rejected,
     o.receipt->'record'->'id' AS record_id,o.receipt->'record'->'kind' AS record_kind,o.receipt->'id' AS receipt_id,o.receipt->'kind' AS receipt_kind,
+    (SELECT r.kind FROM valopay_records r WHERE r.id=o.receipt->>'id' AND r.merchant_id=o.merchant_id) AS answered_kind,
     f.method,f.path,f.action,f.decision,f.status AS body_status,f.kind,f.format,f.target,(SELECT r.kind FROM valopay_records r WHERE r.id=f.target AND r.merchant_id=o.merchant_id) AS target_kind
   FROM (SELECT id,merchant_id,label,actor,role,status,created_at,updated_at,receipt,request FROM valopay_operations
     WHERE merchant_id=$1 AND owner=$2 ORDER BY created_at DESC,id DESC LIMIT 25 OFFSET $3) o
@@ -198,7 +200,7 @@ const OPERATION_LIST = `SELECT o.id,o.label,o.actor,o.role,o.status,o.created_at
       COALESCE(${['recordId', 'targetId', 'closeId', 'batchId'].map(shortField).join(',')}) AS target
     FROM (SELECT o.request || '{}'::jsonb AS q OFFSET 0) opened WHERE NOT (q ? 'protectedPayload' OR q ? 'purged')) f ON true
   ORDER BY o.created_at DESC,o.id DESC`;
-type OperationListRow = Pick<OperationRow, 'id' | 'label' | 'actor' | 'role' | 'status' | 'created_at' | 'updated_at'> & { rejected: any; record_id: unknown; record_kind: unknown; receipt_id: unknown; receipt_kind: unknown }
+type OperationListRow = Pick<OperationRow, 'id' | 'label' | 'actor' | 'role' | 'status' | 'created_at' | 'updated_at'> & { rejected: any; record_id: unknown; record_kind: unknown; receipt_id: unknown; receipt_kind: unknown; answered_kind: string | null }
   & { method: string | null; path: string | null; action: string | null; decision: string | null; body_status: string | null; kind: string | null; format: string | null; target: string | null; target_kind: string | null };
 const operationView = (row: OperationListRow) => {
   const described = summariseRequest({ method: row.method, path: row.path, action: row.action, decision: row.decision, status: row.body_status, kind: row.kind, format: row.format, target: row.target, targetKind: row.target_kind });
@@ -209,10 +211,11 @@ const operationView = (row: OperationListRow) => {
       : row.status === 'cancelled' ? (row.rejected ? `The service refused this request: ${row.rejected.message} Correct it and submit it again.` : 'Cancelled before completion. This request cannot run again.')
       : 'Completion has not been confirmed. Check the original request.',
     // Only a compact result reference. Original payloads and export locations stay private. The saved record's kind is
-    // the answer's own, else its route's: an export's answer names the kind it exports, and some answers name none.
+    // the lender's record's, else the answer's own, else its route's: an export's answer named the kind it exports
+    // before the journal recorded the export itself, a sealed request names no route, and some answers name no kind.
     recordId: record ?? answered,
     recordKind: record ? textOrNull(row.record_kind) : !answered ? null
-      : described?.resultOverrides ? described.resultKind : textOrNull(row.receipt_kind) ?? described?.resultKind ?? null,
+      : textOrNull(row.answered_kind) ?? (described?.resultOverrides ? described.resultKind : textOrNull(row.receipt_kind) ?? described?.resultKind ?? null),
     summary: described?.summary ?? null };
 };
 /** A receipt field as the journal names it: text, or null for anything else (a sealed receipt, a count, nothing). */

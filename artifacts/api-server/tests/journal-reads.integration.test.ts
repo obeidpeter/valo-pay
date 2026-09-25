@@ -244,7 +244,13 @@ try {
     return id;
   };
   const exported = await stored(randomUUID(), { method: "POST", path: "/v1/exports", body: { kind: "customers", format: "csv" } }, "completed", { id: "export-earlier", kind: "customers" });
-  const sealed = await stored(randomUUID(), { protectedPayload: 1, key: "projects/p/locations/l/keyRings/r/cryptoKeys/k", wrappedKey: "a", iv: "b", tag: "c", ciphertext: marker }, "pending", null);
+  const sealedRequest = { protectedPayload: 1, key: "projects/p/locations/l/keyRings/r/cryptoKeys/k", wrappedKey: "a", iv: "b", tag: "c", ciphertext: marker };
+  const sealed = await stored(randomUUID(), sealedRequest, "pending", null);
+  // Fix review: an export an earlier build completed and payload encryption sealed. Its answer named the kind it
+  // exported and its sealed request cannot name its route, so the kind of the record its answer names is the lender's.
+  const sealedExport = `export-${randomUUID()}`;
+  await pool.query("INSERT INTO valopay_records(id,merchant_id,kind,name,status,data) VALUES($1,$2,'exports','Customer register','ready','{}')", [sealedExport, lender]);
+  const sealedExportId = await stored(randomUUID(), sealedRequest, "completed", { id: sealedExport, kind: "customers" });
   const summarised = await call(`/v1/operations?merchantId=${lender}`);
   assert.deepEqual([summarised.bodyReads, summarised.textReads], [0, 0], "the summaries read no body, and no field but theirs");
   assert.equal(JSON.stringify(ok(summarised)).includes(marker), false, "nothing the bodies hold beyond those fields is shown");
@@ -254,9 +260,10 @@ try {
   assert.deepEqual(shownAs(actionId).summary, { action: "Mandate suspend", targetKind: "mandates", targetId: mandate.id, details: [] }, "an action names the record its recordId names, and that record's kind");
   assert.deepEqual([shownAs(exported).recordId, shownAs(exported).recordKind, shownAs(exported).summary.action], ["export-earlier", "exports", "Request an export"], "an export's saved result is the export, whatever kind it exports");
   assert.equal(shownAs(sealed).summary, null, "a sealed request is not opened for its summary");
+  assert.deepEqual([shownAs(sealedExportId).recordId, shownAs(sealedExportId).recordKind, shownAs(sealedExportId).summary], [sealedExport, "exports", null], "a sealed export's saved result is the export too");
   const counted = await call(`/v1/operations/pending?merchantId=${lender}`);
   assert.deepEqual([ok(counted), counted.bodyReads, counted.textReads], [{ pending: 2 }, 0, 0], "the changed record and the sealed request wait");
-  checks += 10;
+  checks += 11;
   console.log(`Journal reads PostgreSQL integration passed (${checks} checks): the Operations list, its summaries and pending count, the retention view, policy, preview, approval and execution, a repeat of a key and a cancel read no stored request; a retry reads its own; a run an earlier build prepared matches its sources as before, reading each once; and with ${retained.length} retained requests a retention request reads a page of them.`);
 } finally {
   server.close(); await once(server, "close");
