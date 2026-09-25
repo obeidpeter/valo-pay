@@ -34,13 +34,15 @@ const extraFields: Record<string, string[]> = {
 const signatureOf = (kind: string, csv: string, mapping: Record<string, string>, unit: string | undefined, rowIdColumn: string | undefined) => canonicalJson([kind, csv, mapping, kind === 'customers' ? null : unit ?? null, rowIdColumn ?? '']);
 /**
  * Where each column goes: the destination the person chose, or else the row ID
- * column as the row's identity only (unless it is the reference or event ID), a
- * header that names a field of the kind as that field, amount as the amount, and
- * a recognisable header as the field it suggests while no other column fills it.
+ * column as the row's identity only (unless its header names the reference or
+ * event ID, which it fills as well), a header that names a field of the kind as
+ * that field, amount as the amount, and a recognisable header as the field it
+ * suggests while no other column fills it.
  */
 function columnMapping(kind: string, columns: string[], chosen: Record<string, string>, rowIdColumn: string, offered: string[]): Record<string, string> {
   const known = importFieldsOf(kind);
-  const direct = (header: string) => Object.hasOwn(chosen, header) ? chosen[header]! : header === rowIdColumn ? (['reference', 'eventId'].includes(header) ? header : '') : header === 'amount' ? 'amountKobo' : known.includes(header) ? header : undefined;
+  const identityOnly = (header: string) => header === rowIdColumn && !['reference', 'eventId'].includes(suggestImportField(kind, header) ?? '');
+  const direct = (header: string) => Object.hasOwn(chosen, header) ? chosen[header]! : identityOnly(header) ? '' : header === 'amount' ? 'amountKobo' : known.includes(header) ? header : undefined;
   const taken = new Set(columns.map(direct).filter(Boolean));
   return Object.fromEntries(columns.map(header => {
     const target = direct(header);
@@ -114,7 +116,7 @@ export function ImportWizard({ merchantId }: { merchantId: string }) {
   const canCommit = !denied && !locked && result && result.valid > 0 && result.invalid === 0 && previewSignature === signature;
   const duplicates = result?.skipped ?? result?.rows.filter(row => row.status === 'duplicate').length ?? 0;
   const checkedCurrent = Boolean(previewSignature && previewSignature === signature);
-  const nextStep = doImport.hasUnconfirmedOutcome ? 'Recover the previous import result before starting another.' : !csv.trim() ? '1. Choose or paste a sample CSV.' : !rowIdColumn ? '2. Choose the row ID column, then check the data.' : !result ? '2. Check the data to preview rows and match columns.' : !checkedCurrent && resultMode === 'check' ? '2. Check the data again after changing the mapping.' : result.invalid > 0 ? '2. Correct every row error, then check again.' : resultMode === 'commit' ? '3. Review the completed import below.' : result.valid === 0 ? '3. No new records to import.' : '3. Review the checked rows, then import.';
+  const nextStep = doImport.hasUnconfirmedOutcome ? 'Recover the previous import result before starting another.' : !csv.trim() ? '1. Choose or paste a sample CSV.' : !columns.length ? '2. Start the CSV with a header row that names each column, with every quote closed.' : !rowIdColumn ? '2. Choose the row ID column, then check the data.' : !result ? '2. Check the data to preview rows and match columns.' : !checkedCurrent && resultMode === 'check' ? '2. Check the data again after changing the mapping.' : result.invalid > 0 ? '2. Correct every row error, then check again.' : resultMode === 'commit' ? '3. Review the completed import below.' : result.valid === 0 ? '3. No new records to import.' : '3. Review the checked rows, then import.';
   const readFile = async (file?: File) => {
     if (!file) return;
     if (!confirmDiscard()) return;

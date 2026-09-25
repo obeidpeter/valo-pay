@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { installFakeApi, type FakeApi } from "./fake-api";
-import { renderApp, screen, userEvent, waitFor } from "./harness";
+import { renderApp, screen, userEvent, waitFor, within } from "./harness";
 import { queryClient } from "@/App";
 import {
   saveImportBatch,
@@ -110,6 +110,34 @@ it("preserves the original batch, shows before/after, and requires a different p
   expect(
     api.state().records.filter((r) => r.kind === "import-correction-events"),
   ).toHaveLength(1);
+});
+it("names the compared fields as the mapping on the same page does", async () => {
+  const { batchId, targetId } = arrange();
+  const user = userEvent.setup();
+  renderApp(`/imports?batch=${batchId}`);
+  await user.selectOptions(
+    await screen.findByLabelText("Imported record"),
+    targetId,
+  );
+  await user.clear(screen.getByLabelText("Corrected customer name"));
+  await user.type(
+    screen.getByLabelText("Corrected customer name"),
+    "Corrected sample customer",
+  );
+  await user.type(
+    screen.getByLabelText(/^Corrected masked phone/),
+    "+234 ••• ••99",
+  );
+  await user.click(screen.getByRole("button", { name: "Preview correction" }));
+  await screen.findByRole("heading", { name: "Before and after" });
+  const table = screen.getByRole("columnheader", { name: "Proposed value" })
+    .closest("table")!;
+  expect(
+    within(table)
+      .getAllByRole("row")
+      .slice(1)
+      .map((row) => row.firstElementChild!.textContent),
+  ).toEqual(["Full name", "Masked phone number"]);
 });
 it("makes stale proposal recovery explicit and lets its proposer withdraw it", async () => {
   const { batchId, targetId } = arrange();
