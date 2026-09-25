@@ -40,6 +40,7 @@ export const suites = [
   "artifacts/api-server/tests/journal-reads.integration.test.ts",
   "artifacts/api-server/tests/lender-history.integration.test.ts",
   "artifacts/api-server/tests/input-semantics.integration.test.ts",
+  "artifacts/api-server/tests/allocation-decisions.integration.test.ts",
   "artifacts/api-server/tests/export-jobs.integration.test.ts",
   "artifacts/api-server/tests/workflow-performance.integration.test.ts",
 ];
