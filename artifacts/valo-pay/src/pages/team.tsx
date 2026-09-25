@@ -242,13 +242,17 @@ function Member({ member, editable, shared, lenders }: { member: any; editable: 
   // service refused, or whose answer was lost, sends it to the problem notice that says so, as does lender access,
   // whose form waits disabled for the answer.
   const changed = useRef<HTMLParagraphElement>(null), granted = useRef<HTMLParagraphElement>(null), problem = useRef<HTMLDivElement>(null), grantProblem = useRef<HTMLDivElement>(null);
-  useFocusWhenLost(changed, change.data);
-  useFocusWhenLost(problem, change.error);
-  useFocusWhenLost(granted, grant.data);
-  useFocusWhenLost(grantProblem, grant.error);
+  // A watch lasts until the focus reaches its message, which it does not when the answer finds the person on another
+  // control. So only the card's latest request is watched, until the focus is found outside the card: what one request
+  // said never takes the focus from a later one, on this card or elsewhere on the page.
+  const card = useRef<HTMLElement>(null), granting = grant.submittedAt > change.submittedAt;
+  useFocusWhenLost(changed, granting ? undefined : change.data, card);
+  useFocusWhenLost(problem, granting ? undefined : change.error, card);
+  useFocusWhenLost(granted, granting ? grant.data : undefined, card);
+  useFocusWhenLost(grantProblem, granting ? grant.error : undefined, card);
   const count = member.lenderIds?.length || 0;
   return (
-    <article className="space-y-3 rounded-lg border p-4">
+    <article ref={card} className="space-y-3 rounded-lg border p-4">
       <div>
         <h3 className="text-sm font-semibold">{member.name}</h3>
         <p className="text-xs text-muted-foreground">

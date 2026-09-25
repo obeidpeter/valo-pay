@@ -513,3 +513,42 @@ for (const how of ["refused", "lost"] as const) test(`a ${how} Save lender acces
   await expect(notice).toBeVisible();
   await expect(notice).toBeFocused();
 });
+
+// Review of the fourth review's console fixes: the card kept watching a refused Save lender access whose answer found the
+// person in the invitation form, so creating an invitation there sent the focus back to the card's old notice.
+test("an invitation's answer takes the focus, not a member's Save lender access refused while the person was in the invitation form", async ({ page, request }) => {
+  await staffAdministrator(page);
+  const lenders = (await (await request.get("/api/v1/workspace")).json()).merchants;
+  const person = (id: string, name: string, role: string) => ({ id, actor: `Clerk:user_${id}`, name, role, status: "active", expiresAt: inDays(60), updatedAt: inDays(-1), lenderIds: role === "Admin" ? [] : [lenders[0].id], allLenders: role === "Admin" });
+  const members = [person("admin_a", "Ada Admin", "Admin"), person("admin_b", "Bola Admin", "Admin"), person("ops", "Chidi Ops", "Operations")];
+  await page.route("**/api/v1/team", (route) => route.request().method() === "GET" ? route.fulfill({ json: { mode: "staff", actor: "Clerk:user_admin_a", members, lenders, invitations: [], changes: [], events: [], message: "Verified staff access." } }) : route.fallback());
+  await page.route(/\/api\/v1\/team\/members\/ops\/lenders$/, async (route) => {
+    await pause(1500);
+    return route.fulfill({ status: 409, json: { error: "This membership changed after you opened it. Refresh Team & access and review it before changing it again.", requestId: "fix60-409" } });
+  });
+  await page.route(/\/api\/v1\/team\/invitations$/, async (route) => {
+    await slowly();
+    return route.fulfill({ status: 201, json: { id: "inv-1", token: "a".repeat(64), approval: "not_required", message: "Invitation created. Share the link directly with this person; no email has been sent. It expires in seven days." } });
+  });
+  await page.goto("/team");
+  const card = page.locator("article").filter({ has: page.getByRole("heading", { name: "Chidi Ops" }) });
+  await card.getByRole("checkbox", { checked: false }).first().check();
+  await card.getByLabel("Reason for lender access change for Chidi Ops").fill("Needs the second lender for cover");
+  const save = card.getByRole("button", { name: "Save lender access" });
+  await save.focus();
+  await page.keyboard.press("Enter");
+  await expect(save).toBeDisabled();
+  // While it waits, the person moves on to the invitation form, where the refusal finds them.
+  const email = page.getByLabel("Verified email");
+  await email.focus();
+  await expect(card.getByRole("alert").filter({ hasText: "This membership changed after you opened it." }).first()).toBeVisible();
+  await expect(email).toBeFocused();
+  await email.fill("new.colleague@example.test");
+  const create = page.getByRole("button", { name: "Create invitation" });
+  await create.focus();
+  await page.keyboard.press("Enter");
+  // The button waits disabled for the answer; a browser that leaves the focus on it is made to drop it to the page body.
+  await expect(create).toBeDisabled();
+  await page.evaluate(() => { const active = document.activeElement as HTMLElement | null; if (active?.matches(":disabled")) active.blur(); });
+  await expect.poll(() => focused(page)).toMatchObject({ tag: "p", text: expect.stringMatching(/^Invitation created\. Share the link directly/) });
+});
