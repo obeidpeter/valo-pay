@@ -129,7 +129,7 @@ export interface ReadinessStatus {
 export interface RecordData {[key: string]: unknown}
 
 /**
- * A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where data.currency names another currency (a payment, payment evidence, or an exception about money in another currency): it then holds that currency's minor units (cents for USD).
+ * A stored record of any kind, with its lender, status, reference, amount and data. amountKobo is in kobo, except where a kind with a currency field (a payment, payment evidence, or an exception about money in another currency) names another currency in data.currency: it then holds that currency's minor units (cents for USD). A data.currency on any other kind, such as a currency column an import kept as detail on an instalment, is not the amount's currency: that amount is in kobo.
  */
 export interface ValopayRecord {
   id: string;

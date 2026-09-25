@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { currencyMinorUnit, moneyText, otherCurrenciesText } from '@workspace/valopay-schema';
-import { formatMinor, formatWithOtherCurrencies } from '@/lib/currencies';
+import { formatMinor, formatRecordMoney, formatWithOtherCurrencies } from '@/lib/currencies';
 
 // Third review of the audit fixes, finding 2: the API took a currency's decimals from Node's copy of CLDR and the console
 // from the browser's, which disagree (Node 22 gave COP, HUF, IDR and PKR none and RSD two, Chromium 141 the reverse), so
@@ -59,6 +59,18 @@ describe('money in another currency: one figure in the API and in every browser'
     // Naira keeps its own ways: ₦ on the console's pages, NGN in the API's messages.
     for (const code of Intl.supportedValuesOf('currency').filter(code => code !== 'NGN')) for (const amount of [0, 7, 123_456, 9_007_199_254_740_991]) {
       expect(asTheApiWrites(formatMinor(amount, code)), code).toBe(moneyText(amount, code));
+    }
+  });
+
+  // Review of the integration fixes, finding 1: a currency column imported onto a kind with no currency field is kept as
+  // detail and its amount is in kobo, so only a kind that carries its own currency is shown in the one it names.
+  it('shows a record\'s money in the currency it names only for a kind that carries one', () => {
+    for (const kind of ['observations', 'payments', 'settlement-batches', 'exceptions']) {
+      expect(asTheApiWrites(formatRecordMoney({ kind, data: { currency: 'USD' } }, 100_000)), kind).toBe('USD 1,000.00');
+      expect(formatRecordMoney({ kind, data: {} }, 100_000), kind).toBe('₦1,000.00');
+    }
+    for (const kind of ['due-items', 'mandates', 'attempts', 'customers', 'allocations']) {
+      expect(formatRecordMoney({ kind, data: { currency: 'JPY' } }, 100_000_000), kind).toBe('₦1,000,000.00');
     }
   });
 

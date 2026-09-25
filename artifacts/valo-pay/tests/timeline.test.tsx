@@ -5,6 +5,7 @@ import { queryClient, queryDefaults } from "@/App";
 import { customerTimeline } from "../../api-server/src/domain/timeline";
 import { makeRecord } from "../../api-server/src/domain/records";
 import { reconcile } from "../../api-server/src/domain/reconciliation";
+import { importCsv } from "../../api-server/src/lib/valopay-import";
 
 let api: FakeApi;
 beforeEach(() => { api = installFakeApi(); });
@@ -73,6 +74,26 @@ describe("customer timeline", () => {
     const eventOf = (exception: { id: string }) => [...events].find((item) => item.querySelector(`[title="${exception.id}"]`))!;
     expect([eventOf(euros), eventOf(dollars)].map((item) => item.textContent!.replace(/ /g, " ").match(/Unallocated payment(.*?)Open/)?.[1])).toEqual(["EUR 20.00", "USD 1,000.00"]);
     expect(eventOf(euros).textContent).not.toContain("₦20.00");
+  });
+
+  // Review of the integration fixes, finding 1: only payment evidence reads a row's currency, so an instalment imported
+  // with a currency column holds kobo, but the page showed it in the column's currency ("JPY 100,000,000" for ₦1,000,000.00).
+  it("shows an instalment imported with a currency column in naira, as its amount is", async () => {
+    const ada = api.state().records.find((record) => record.kind === "customers" && record.name === "Ada Okonkwo")!;
+    const due = api.mutate((state, ctx) => {
+      const csv = 'row_id,name,reference,customerId,amount,dueDate,owner,currency\nd1,Yen column,DUE-CUR-JPY,DEMO-C1001,"1,000,000",2099-01-01,lms,JPY';
+      expect(importCsv(state, ctx, { kind: "due-items", csv, syntheticOnly: true, commit: true, amountUnit: "naira", identityColumn: "row_id" }).imported).toBe(1);
+      return state.records.find((record) => record.kind === "due-items" && record.reference === "DUE-CUR-JPY")!;
+    });
+    expect([due.amountKobo, due.data.currency]).toEqual([100_000_000, "JPY"]);
+    renderApp(`/customers/${ada.id}?record=${due.id}`);
+    const selected = await screen.findByRole("region", { name: "Selected collection record" });
+    await waitFor(() => expect(selected.textContent).toContain("DUE-CUR-JPY"));
+    expect(selected.textContent).toContain("₦1,000,000.00 · Scheduled");
+    expect(selected.textContent).not.toMatch(/JPY\s\d/);
+    const event = [...document.querySelectorAll("main ol > li")].find((item) => item.querySelector(`[title="${due.id}"]`))!;
+    expect(event.textContent).toContain("₦1,000,000.00");
+    expect(event.textContent).not.toMatch(/JPY\s\d/);
   });
 
   it("shows a case's amount in the currency of the money it is about", async () => {
