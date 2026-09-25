@@ -24,8 +24,11 @@ import { keepRowsWhilePaging, searchWithoutSubmitting, useDebouncedSearch } from
 import { useReconciliationPage } from '@/lib/use-reconciliation-page';
 import { LoadProblem } from '@/components/load-problem';
 import { paymentUnappliedKobo } from '@workspace/valopay-schema';
+import { formatMinor } from '@/lib/currencies';
 
 const paymentAvailable = (record: any): number => paymentUnappliedKobo(record);
+/** Money a payment or its evidence holds, in its own currency: a USD card payment's cents are never shown as kobo. */
+const moneyOf = (record: any, amount: number): string => formatMinor(amount, String(record?.data?.currency || 'NGN'));
 const instalmentOutstanding = (record: any): number => Math.max(0, Number(record?.data?.outstandingKobo ?? record?.amountKobo ?? 0));
 
 function MatchEvidence({ allocation, payment, instalment, customer, decision }: { allocation: any; payment: any; instalment: any; customer?: any; decision: string }) {
@@ -39,9 +42,9 @@ function MatchEvidence({ allocation, payment, instalment, customer, decision }: 
         <div className="rounded-md border bg-card p-3">
           <h3 className="font-semibold">Recorded payment</h3>
           <p className="mt-1 break-words font-mono text-xs">{payment?.reference || 'Payment details unavailable'}</p>
-          <p className="mt-2">Received: <strong>{payment ? formatKobo(payment.amountKobo) : 'Not available'}</strong></p>
+          <p className="mt-2">Received: <strong>{payment ? moneyOf(payment, payment.amountKobo) : 'Not available'}</strong></p>
           <p className="text-xs text-muted-foreground">{payment ? formatDate(String(payment.data?.observedAt || payment.createdAt)) : 'Reload to check this payment.'}</p>
-          <p className="mt-2">Available to allocate: {payment ? formatKobo(available) : 'Not available'}</p>
+          <p className="mt-2">Available to allocate: {payment ? moneyOf(payment, available) : 'Not available'}</p>
           <dl className="mt-3 space-y-1 text-xs"><div><dt className="inline text-muted-foreground">Receipt status: </dt><dd className="inline">{payment?.data?.collectionStatus ? readableLabel(payment.data.collectionStatus) : 'Not recorded'}</dd></div><div><dt className="inline text-muted-foreground">Settlement: </dt><dd className="inline">{payment?.data?.settlementStatus ? readableLabel(payment.data.settlementStatus) : 'Not recorded'}</dd></div><div><dt className="inline text-muted-foreground">Provider reference: </dt><dd className="inline break-all">{String(payment?.data?.providerReference || payment?.reference || 'Not recorded')}</dd></div></dl>
         </div>
         <div className="rounded-md border bg-card p-3">
@@ -146,6 +149,10 @@ export default function ReconciliationPage() {
   const isProposalDecision = actionKind === 'confirm_allocation' || actionKind === 'reject_allocation';
   const isAllocationReview = actionKind === 'review_allocation';
   const selectedPayment = isProposalDecision || isAllocationReview ? paymentById.get(String(selectedRecord?.data?.paymentId)) : selectedRecord;
+  // A payment with no payer whose evidence names an instalment takes only that instalment's customer's instalments; the
+  // page has the instalment and its customer (a named instalment that does not exist leaves every customer's offered).
+  const namedInstalment = !selectedRecord?.customerId && selectedRecord?.data?.dueItemId ? dueItemById.get(String(selectedRecord.data.dueItemId)) : undefined;
+  const namedCustomer = namedInstalment ? customerById.get(String(namedInstalment.customerId)) : undefined;
   const selectedInstalment = isProposalDecision || isAllocationReview ? dueItemById.get(String(selectedRecord?.data?.dueItemId)) : null;
 
   return (
@@ -275,7 +282,7 @@ export default function ReconciliationPage() {
               <tbody className="divide-y">{isLoadingAllPayments ? <LoadingRow colSpan={5} what="possible duplicate payments" /> : allPaymentsError && !allPayments ? <tr><td colSpan={5} className="p-4"><p role="alert" className="text-destructive">Possible duplicate payments could not be loaded. Use Refresh queue above to try again.</p></td></tr> : duplicates.length === 0 ? <EmptyRow colSpan={5} title={q ? 'No results match your search' : "No possible duplicates"}>{q ? 'Try another name or reference, or clear the search to review this queue.' : <>Payments needing a duplicate check will appear here.</>}</EmptyRow> : duplicates.map(payment => <tr key={payment.id}>
                 <td className="p-4"><RecordLabel record={payment} id={payment.id} /></td><td className="p-4"><RecordLabel record={customerById.get(String(payment.customerId))} id={payment.customerId} customer /></td>
                 <td className="p-4 text-xs text-muted-foreground">{String(payment.data?.explanation || 'Check the provider references and recorded evidence before deciding whether this is a separate payment.')}</td>
-                <td className="p-4 text-right font-mono">{formatKobo(payment.amountKobo)}</td><td className="p-4 text-right"><Link className="inline-flex min-h-9 items-center text-xs font-medium underline underline-offset-4" href="/exceptions?type=suspected_duplicate">Review exceptions</Link></td>
+                <td className="p-4 text-right font-mono">{moneyOf(payment, payment.amountKobo)}</td><td className="p-4 text-right"><Link className="inline-flex min-h-9 items-center text-xs font-medium underline underline-offset-4" href="/exceptions?type=suspected_duplicate">Review exceptions</Link></td>
               </tr>)}</tbody>
             </table>
           </ScrollFrame>
@@ -316,7 +323,7 @@ export default function ReconciliationPage() {
                         {pay.reference}
                         <div className="text-muted-foreground">{formatDate(pay.createdAt)}</div>
                       </td>
-                      <td className="px-4 py-2 text-right font-mono font-medium">{formatKobo(pay.amountKobo)}{paymentAvailable(pay) !== pay.amountKobo && <div className="text-xs font-normal text-muted-foreground">{formatKobo(paymentAvailable(pay))} left to allocate</div>}</td>
+                      <td className="px-4 py-2 text-right font-mono font-medium">{moneyOf(pay, pay.amountKobo)}{paymentAvailable(pay) !== pay.amountKobo && <div className="text-xs font-normal text-muted-foreground">{moneyOf(pay, paymentAvailable(pay))} left to allocate</div>}</td>
                       <td className="px-4 py-2 text-right space-x-2 flex justify-end items-center">
                         <Button size="sm" variant="outline" className="h-7 text-xs" action="manual_allocate" record={pay} onClick={() => handleAction(pay, 'manual_allocate')}>Allocate</Button>
                         <Button size="sm" variant="outline" className="h-8 text-xs" action="record_refund" record={pay} onClick={() => handleAction(pay, 'record_refund')} title="Record external refund" aria-label={`Record external refund for ${pay.reference}`}>
@@ -364,7 +371,7 @@ export default function ReconciliationPage() {
                         <span className="px-1.5 py-0.5 bg-secondary text-xs rounded border">{readableLabel(obs.data?.source)}</span>
                       </td>
                       <td className="px-4 py-2 font-mono text-xs truncate max-w-[120px]" title={obs.reference}>{obs.reference}</td>
-                      <td className="px-4 py-2 text-right font-mono font-medium">{formatKobo(obs.amountKobo)}</td>
+                      <td className="px-4 py-2 text-right font-mono font-medium">{moneyOf(obs, obs.amountKobo)}</td>
                     </tr>
                   ))
                 )}
@@ -506,19 +513,19 @@ export default function ReconciliationPage() {
             <p className="text-xs text-muted-foreground">Instalments that are paid, cancelled, closed or in dispute cannot take a payment and are not listed.</p>
             {choicesQuery.error ? <LoadProblem what="instalment choices" error={choicesQuery.error} retry={()=>{void choicesQuery.refetch();}} /> : <>
               {(choicesQuery.isFetching || allocationSearchPending) && <p role="status">Loading instalment choices…</p>}
-              {!allocationSearchPending && choicesQuery.data && (choicesQuery.data.total === 0 ? !choicesQuery.isFetching && <p role="status">{allocationTerm ? 'No instalment that can take a payment matches this search.' : selectedRecord?.customerId ? 'This payer has no instalment that can take a payment.' : 'No instalment can take a payment.'}</p> : <RecordPagination pagination={choicePage} total={choicesQuery.data.total} busy={choicesQuery.isFetching} label="instalment choices" />)}
+              {!allocationSearchPending && choicesQuery.data && (choicesQuery.data.total === 0 ? !choicesQuery.isFetching && <p role="status">{allocationTerm ? 'No instalment that can take a payment matches this search.' : selectedRecord?.customerId ? 'This payer has no instalment that can take a payment.' : namedInstalment ? `${namedCustomer?.name ? `${namedCustomer.name}, whose instalment its evidence names,` : `The customer of instalment ${namedInstalment.reference}, which its evidence names,`} has no instalment that can take a payment.` : 'No instalment can take a payment.'}</p> : <RecordPagination pagination={choicePage} total={choicesQuery.data.total} busy={choicesQuery.isFetching} label="instalment choices" />)}
             </>}
             <p className="font-semibold">Payment {selectedRecord?.reference}</p>
             <p>Recorded payer: <strong>{customerById.get(String(selectedRecord?.customerId))?.name || (selectedRecord?.customerId ? 'Customer name unavailable' : 'Not identified')}</strong></p>
             {!selectedRecord?.customerId ? <>
-              <p className="text-xs text-muted-foreground">Confirm the payer from the payment evidence, then choose one of their instalments. Allocating records that customer as the payer, with your reason, in the same action.{selectedRecord?.data?.dueItemId ? ' Its evidence names an instalment, so only the instalments of that instalment\'s customer are offered.' : ''}</p>
+              <p className="text-xs text-muted-foreground">Confirm the payer from the payment evidence, then choose one of their instalments. Allocating records that customer as the payer, with your reason, in the same action.{namedInstalment ? ` Its evidence names instalment ${namedInstalment.reference}${namedCustomer?.name ? ` of ${namedCustomer.name}` : ''}, so only that customer's instalments are offered.` : ''}</p>
               {due && <p>Payer to be recorded: <strong>{customerById.get(String(due.customerId))?.name || `the customer of instalment ${due.reference}`}</strong></p>}
             </> : <p className="text-xs text-muted-foreground">Only this payer's instalments are offered.</p>}
-            <p>Available to allocate: <strong>{formatKobo(available)}</strong></p>
+            <p>Available to allocate: <strong>{moneyOf(selectedRecord, available)}</strong></p>
             <p>Selected instalment outstanding: <strong>{due ? formatKobo(outstanding) : 'Choose an instalment'}</strong></p>
             {due && amount !== null && amount > 0 && amount <= available && amount <= outstanding && <p className="text-xs text-muted-foreground">After allocation: {formatKobo(available - amount)} unapplied payment; {formatKobo(outstanding - amount)} still due.</p>}
           </section>;
-        } : actionKind === 'record_refund' && selectedRecord ? <p className="text-sm">This records a refund of <strong>{formatKobo(paymentAvailable(selectedRecord))}</strong>, the money this payment has not applied. Valo Pay does not move money.</p> : undefined}
+        } : actionKind === 'record_refund' && selectedRecord ? <p className="text-sm">This records a refund of <strong>{moneyOf(selectedRecord, paymentAvailable(selectedRecord))}</strong>, the money this payment has not applied. Valo Pay does not move money.</p> : undefined}
         validate={(values): Record<string, string> => {
           if ((isProposalDecision || isAllocationReview) && (!selectedPayment || !selectedInstalment)) return { reason: 'Payment or instalment details are unavailable. Close this dialog and reload before deciding.' };
           if (actionKind === 'confirm_allocation' && (selectedRecord.amountKobo > paymentAvailable(selectedPayment) || selectedRecord.amountKobo > instalmentOutstanding(selectedInstalment))) return { reason: 'The proposed amount exceeds the payment available or instalment outstanding. Close this dialog, refresh the queue and review the changed balances.' };
